@@ -45,14 +45,14 @@
   </g>
 
   <g id="Fallback Compact" filter="url(#notchShadow)">
-    <path d="M582 0H930C923.373 0 918 5.373 918 12V34C918 40.627 912.627 46 906 46H606C599.373 46 594 40.627 594 34V12C594 5.373 588.627 0 582 0Z" fill="#000000"/>
+    <path d="M672 0H840C833.373 0 828 5.373 828 12V34C828 40.627 822.627 46 816 46H696C689.373 46 684 40.627 684 34V12C684 5.373 678.627 0 672 0Z" fill="#000000"/>
     <g id="Status / Running" aria-label="Running status icon">
-      <circle cx="626" cy="23" r="9" fill="#D7EBFF"/>
-      <circle cx="622.5" cy="23" r="1.25" fill="#0067B8"/>
-      <circle cx="626" cy="23" r="1.25" fill="#0067B8"/>
-      <circle cx="629.5" cy="23" r="1.25" fill="#0067B8"/>
+      <circle cx="709" cy="23" r="9" fill="#D7EBFF"/>
+      <circle cx="705.5" cy="23" r="1.25" fill="#0067B8"/>
+      <circle cx="709" cy="23" r="1.25" fill="#0067B8"/>
+      <circle cx="712.5" cy="23" r="1.25" fill="#0067B8"/>
     </g>
-    <text x="644" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">Working</text>
-    <text x="872" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">72%</text>
+    <text x="726" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">Working</text>
+    <text x="790" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">72%</text>
   </g>
 </svg>
