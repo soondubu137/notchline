@@ -116,19 +116,25 @@ struct CodexInNotchTests {
     @Test
     func panelFramesStayTopAttachedAndCentered() {
         let screenFrame = NSRect(x: 1_440.5, y: -120, width: 1_919, height: 1_080)
-        let compactFrame = OverlayPanelLayout.frame(
-            on: screenFrame,
-            panelSize: CGSize(width: 348, height: 46)
-        )
-        let expandedFrame = OverlayPanelLayout.frame(
-            on: screenFrame,
-            panelSize: CGSize(width: 444, height: 390)
-        )
+        let compactSize = CGSize(width: 348, height: 46)
+        let expandedSize = CGSize(width: 444, height: 390)
 
-        #expect(compactFrame.midX == screenFrame.midX)
-        #expect(expandedFrame.midX == screenFrame.midX)
-        #expect(compactFrame.maxY == screenFrame.maxY)
-        #expect(expandedFrame.maxY == screenFrame.maxY)
+        for step in 0 ... 20 {
+            let progress = CGFloat(step) / 20
+            let size = CGSize(
+                width: compactSize.width
+                    + (expandedSize.width - compactSize.width) * progress,
+                height: compactSize.height
+                    + (expandedSize.height - compactSize.height) * progress
+            )
+            let frame = OverlayPanelLayout.frame(
+                on: screenFrame,
+                panelSize: size
+            )
+
+            #expect(frame.midX == screenFrame.midX)
+            #expect(frame.maxY == screenFrame.maxY)
+        }
     }
 
     @Test @MainActor

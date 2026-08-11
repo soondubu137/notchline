@@ -4,25 +4,28 @@ struct NotchOverlayView: View {
     @EnvironmentObject private var store: DemoStore
 
     var body: some View {
-        ZStack(alignment: .top) {
-            PanelSurface(
-                geometry: store.geometry,
-                isExpanded: store.isExpanded
-            )
+        GeometryReader { proxy in
+            ZStack(alignment: .top) {
+                PanelSurface(geometry: store.geometry)
 
-            if store.isExpanded {
-                ExpandedPanelContent()
-                    .transition(.opacity.animation(contentAnimation))
-            } else {
-                CompactHeader()
-                    .transition(.opacity.animation(contentAnimation))
+                VStack(spacing: 0) {
+                    OverlayHeader()
+                        .frame(height: store.compactHeight)
+
+                    ExpandedPanelContent()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(store.isExpanded ? 1 : 0)
+                        .offset(y: store.isExpanded ? 0 : -8)
+                        .allowsHitTesting(store.isExpanded)
+                        .animation(contentAnimation, value: store.isExpanded)
+                }
+                .frame(
+                    width: proxy.size.width,
+                    height: proxy.size.height,
+                    alignment: .top
+                )
             }
         }
-        .frame(
-            width: store.currentPanelSize.width,
-            height: store.currentPanelSize.height,
-            alignment: .top
-        )
         .contentShape(Rectangle())
         .clipped()
         .onHover { isInside in
@@ -39,7 +42,7 @@ struct NotchOverlayView: View {
     private var contentAnimation: Animation {
         store.reduceMotion
             ? .easeOut(duration: 0.08)
-            : .easeInOut(duration: 0.20)
+            : .timingCurve(0.22, 1, 0.36, 1, duration: 0.28)
     }
 
     private var panelAccessibilityLabel: String {
@@ -49,61 +52,56 @@ struct NotchOverlayView: View {
 
 private struct PanelSurface: View {
     let geometry: DisplayGeometry
-    let isExpanded: Bool
 
     var body: some View {
         Image(assetName)
             .resizable(
-                capInsets: isExpanded
-                    ? EdgeInsets(top: 12, leading: 24, bottom: 12, trailing: 24)
-                    : EdgeInsets(top: 12, leading: 24, bottom: 12, trailing: 24),
+                capInsets: EdgeInsets(
+                    top: 12,
+                    leading: 24,
+                    bottom: 12,
+                    trailing: 24
+                ),
                 resizingMode: .stretch
             )
             .interpolation(.high)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var assetName: String {
-        switch (geometry, isExpanded) {
-        case (.notched, false):
+        switch geometry {
+        case .notched:
             "PanelNotchCompact"
-        case (.noNotch, false):
+        case .noNotch:
             "PanelFallbackCompact"
-        case (.notched, true):
-            "PanelNotchExpanded"
-        case (.noNotch, true):
-            "PanelFallbackExpanded"
         }
     }
 }
 
-private struct CompactHeader: View {
+private struct OverlayHeader: View {
     @EnvironmentObject private var store: DemoStore
 
     var body: some View {
-        Group {
-            if store.geometry == .notched {
-                HStack(spacing: 0) {
-                    StatusIndicatorView(status: store.status)
-                    Spacer(minLength: 0)
-                    tokenBalance
-                }
-                .padding(.horizontal, 35)
-            } else {
-                HStack(spacing: 0) {
-                    StatusIndicatorView(status: store.status)
+        HStack(spacing: 0) {
+            HStack(spacing: 8) {
+                StatusIndicatorView(status: store.status)
+
+                if store.geometry == .noNotch {
                     Text(store.status.fallbackTitle)
-                        .padding(.leading, 8)
-                    tokenBalance
-                        .padding(.leading, 16)
+                        .font(.system(size: 13, weight: .bold))
                 }
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(maxWidth: .infinity, alignment: .center)
             }
+            .fixedSize(horizontal: true, vertical: false)
+
+            Spacer(minLength: store.geometry == .notched ? 0 : 16)
+
+            tokenBalance
         }
-        .frame(height: store.compactHeight)
+        .padding(.horizontal, horizontalPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .foregroundStyle(.white)
         .contentShape(Rectangle())
+        .animation(headerAnimation, value: store.isExpanded)
     }
 
     private var tokenBalance: some View {
@@ -112,6 +110,21 @@ private struct CompactHeader: View {
             .foregroundStyle(.white)
             .fixedSize()
     }
+
+    private var horizontalPadding: CGFloat {
+        switch store.geometry {
+        case .notched:
+            store.isExpanded ? 28 : 35
+        case .noNotch:
+            store.isExpanded ? 28 : 20
+        }
+    }
+
+    private var headerAnimation: Animation {
+        store.reduceMotion
+            ? .easeOut(duration: 0.08)
+            : .timingCurve(0.22, 1, 0.36, 1, duration: 0.28)
+    }
 }
 
 private struct ExpandedPanelContent: View {
@@ -119,9 +132,6 @@ private struct ExpandedPanelContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            expandedHeader
-                .frame(height: store.compactHeight)
-
             Rectangle()
                 .fill(Color.white.opacity(0.15))
                 .frame(height: 0.5)
@@ -144,34 +154,6 @@ private struct ExpandedPanelContent: View {
             .scrollIndicators(.hidden)
         }
         .foregroundStyle(.white)
-    }
-
-    @ViewBuilder
-    private var expandedHeader: some View {
-        if store.geometry == .notched {
-            HStack(spacing: 0) {
-                StatusIndicatorView(status: store.status)
-                Spacer(minLength: 0)
-                tokenBalance
-            }
-            .padding(.horizontal, 28)
-        } else {
-            HStack(spacing: 0) {
-                StatusIndicatorView(status: store.status)
-                Text(store.status.fallbackTitle)
-                    .font(.system(size: 13, weight: .bold))
-                    .padding(.leading, 8)
-                Spacer(minLength: 16)
-                tokenBalance
-            }
-            .padding(.horizontal, 28)
-        }
-    }
-
-    private var tokenBalance: some View {
-        Text(store.tokenText)
-            .font(.system(size: 13, weight: .bold))
-            .fixedSize()
     }
 }
 

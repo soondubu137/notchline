@@ -70,6 +70,7 @@ final class OverlayPanelController {
             rootView: NotchOverlayView()
                 .environmentObject(store)
         )
+        hostingView.sizingOptions = []
         hostingView.frame = NSRect(origin: .zero, size: store.currentPanelSize)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -150,7 +151,10 @@ final class OverlayPanelController {
         }
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = store.reduceMotion ? 0.08 : 0.20
+            context.duration = store.reduceMotion ? 0.08 : 0.28
+            context.timingFunction = store.reduceMotion
+                ? CAMediaTimingFunction(name: .easeOut)
+                : CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
             context.allowsImplicitAnimation = true
             panel.animator().setFrame(targetFrame, display: true)
         } completionHandler: { [weak panel] in
