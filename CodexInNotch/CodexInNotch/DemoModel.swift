@@ -48,6 +48,16 @@ struct DisplayOption: Identifiable {
             : max(1, fallbackMenuBarHeight)
     }
 
+    var centerOcclusionWidth: CGFloat {
+        guard geometry == .notched,
+              let auxiliaryTopLeftArea,
+              let auxiliaryTopRightArea else {
+            return 0
+        }
+
+        return max(0, auxiliaryTopRightArea.minX - auxiliaryTopLeftArea.maxX)
+    }
+
     var configurationSummary: String {
         "\(geometry.title) · 菜单栏 \(Int(menuBarHeight.rounded())) pt"
     }
@@ -85,78 +95,157 @@ struct DisplayOption: Identifiable {
 }
 
 enum DemoStatus: String, CaseIterable, Identifiable {
+    case idle
     case running
-    case waitingApproval
+    case inputNeeded
+    case approvalNeeded
     case completed
-    case failed
+    case error
+    case cancelled
+    case disconnected
 
     var id: Self { self }
 
-    var fallbackTitle: String {
+    var displayName: String {
         switch self {
+        case .idle:
+            "Idle"
         case .running:
-            "Working"
-        case .waitingApproval:
-            "Waiting for Approval"
+            "Running"
+        case .inputNeeded:
+            "Input needed"
+        case .approvalNeeded:
+            "Approval needed"
         case .completed:
             "Completed"
-        case .failed:
-            "Failed"
+        case .error:
+            "Error"
+        case .cancelled:
+            "Cancelled"
+        case .disconnected:
+            "Disconnected"
         }
     }
 
     var controlTitle: String {
         switch self {
+        case .idle:
+            "空闲"
         case .running:
             "运行中"
-        case .waitingApproval:
+        case .inputNeeded:
+            "需要输入"
+        case .approvalNeeded:
             "等待批准"
         case .completed:
             "已完成"
-        case .failed:
-            "失败"
+        case .error:
+            "发生错误"
+        case .cancelled:
+            "已取消"
+        case .disconnected:
+            "连接中断"
         }
+    }
+
+    var isRunning: Bool {
+        self == .running
     }
 }
 
 struct DemoSession: Identifiable, Equatable {
     let id: UUID
+    let projectName: String
     let title: String
     let preview: String
     let status: DemoStatus
-    let isHighlighted: Bool
+    let runtimeSeconds: Int?
 
     init(
         id: UUID = UUID(),
+        projectName: String,
         title: String,
         preview: String,
         status: DemoStatus,
-        isHighlighted: Bool = false
+        runtimeSeconds: Int? = nil
     ) {
         self.id = id
+        self.projectName = projectName
         self.title = title
         self.preview = preview
         self.status = status
-        self.isHighlighted = isHighlighted
+        self.runtimeSeconds = runtimeSeconds
+    }
+
+    var runtimeText: String? {
+        runtimeSeconds.map(DurationFormatter.displayText)
+    }
+}
+
+enum DurationFormatter {
+    nonisolated static func displayText(seconds: Int) -> String {
+        let clampedSeconds = max(0, seconds)
+        let hours = clampedSeconds / 3_600
+        let minutes = (clampedSeconds % 3_600) / 60
+        let remainingSeconds = clampedSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%dh %02dm %02ds", hours, minutes, remainingSeconds)
+        }
+        if minutes > 0 {
+            return String(format: "%dm %02ds", minutes, remainingSeconds)
+        }
+        return "\(remainingSeconds)s"
+    }
+}
+
+enum UsageLevel: Equatable {
+    case healthy
+    case warning
+    case critical
+
+    init(remainingPercent: Int) {
+        switch remainingPercent {
+        case 51 ... Int.max:
+            self = .healthy
+        case 15 ... 50:
+            self = .warning
+        default:
+            self = .critical
+        }
     }
 }
 
 enum PanelMetrics {
     static let referenceCompactHeight: CGFloat = 46
     static let notchCompactWidth: CGFloat = 348
-    static let fallbackBaselineWidth: CGFloat = 168
-    static let expandedWidth: CGFloat = 444
-    static let expandedHeight: CGFloat = 390
+    static let fallbackBaselineWidth: CGFloat = 166
+    static let expandedBaselineWidth: CGFloat = 520
+    static let expandedSessionViewportHeight: CGFloat = 240
+    static let expandedHorizontalPadding: CGFloat = 24
+    static let expandedReadoutSpacing: CGFloat = 12
+    static let expandedNotchClearance: CGFloat = 8
+    static let expandedContentHeight: CGFloat = expandedSessionViewportHeight + 16
+    private static let fallbackFixedContentWidth: CGFloat = 114
+    private static let statusDotWidth: CGFloat = 8
+    private static let usageRingWidth: CGFloat = 18
 
     static func size(
         geometry: DisplayGeometry,
         isExpanded: Bool,
-        status: DemoStatus,
-        tokenText: String,
+        statusReadoutText: String,
+        expandedUsageReadoutText: String,
+        centerOcclusionWidth: CGFloat,
         compactHeight: CGFloat
     ) -> CGSize {
         guard !isExpanded else {
-            return CGSize(width: expandedWidth, height: expandedHeight)
+            return CGSize(
+                width: expandedWidth(
+                    centerOcclusionWidth: centerOcclusionWidth,
+                    usageReadoutText: expandedUsageReadoutText
+                ),
+                height: expandedHeight(compactHeight: compactHeight)
+            )
         }
 
         switch geometry {
@@ -164,20 +253,59 @@ enum PanelMetrics {
             return CGSize(width: notchCompactWidth, height: compactHeight)
         case .noNotch:
             return CGSize(
-                width: fallbackCompactWidth(status: status, tokenText: tokenText),
+                width: fallbackCompactWidth(statusReadoutText: statusReadoutText),
                 height: compactHeight
             )
         }
     }
 
-    static func fallbackCompactWidth(status: DemoStatus, tokenText: String) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: 13, weight: .bold)
-        let baselineStatusWidth = textWidth("Working", font: font)
-        let baselineTokenWidth = textWidth("72%", font: font)
-        let statusDelta = textWidth(status.fallbackTitle, font: font) - baselineStatusWidth
-        let tokenDelta = textWidth(tokenText, font: font) - baselineTokenWidth
+    static func fallbackCompactWidth(statusReadoutText: String) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let measuredWidth = fallbackFixedContentWidth + textWidth(statusReadoutText, font: font)
+        return ceil(max(fallbackBaselineWidth, measuredWidth))
+    }
 
-        return ceil(max(132, fallbackBaselineWidth + statusDelta + tokenDelta))
+    static func expandedHeight(compactHeight: CGFloat) -> CGFloat {
+        compactHeight + expandedContentHeight
+    }
+
+    static func expandedWidth(
+        centerOcclusionWidth: CGFloat,
+        usageReadoutText: String
+    ) -> CGFloat {
+        guard centerOcclusionWidth >= 1 else {
+            return expandedBaselineWidth
+        }
+
+        let requiredSideWidth = expandedHorizontalPadding
+            + max(
+                DemoStatus.allCases.map {
+                    expandedStatusReadoutWidth(status: $0)
+                }.max() ?? 0,
+                expandedUsageReadoutWidth(text: usageReadoutText)
+            )
+            + expandedNotchClearance
+        let notchSafeWidth = centerOcclusionWidth + requiredSideWidth * 2
+
+        return ceil(max(expandedBaselineWidth, notchSafeWidth))
+    }
+
+    static func expandedStatusReadoutWidth(status: DemoStatus) -> CGFloat {
+        statusDotWidth
+            + expandedReadoutSpacing
+            + textWidth(
+                status.displayName,
+                font: NSFont.systemFont(ofSize: 13, weight: .semibold)
+            )
+    }
+
+    static func expandedUsageReadoutWidth(text: String) -> CGFloat {
+        textWidth(
+            text,
+            font: NSFont.systemFont(ofSize: 13, weight: .semibold)
+        )
+            + expandedReadoutSpacing
+            + usageRingWidth
     }
 
     private static func textWidth(_ text: String, font: NSFont) -> CGFloat {
@@ -197,27 +325,52 @@ final class DemoStore: ObservableObject {
     @Published var reduceMotion = false
     @Published var lastDemoAction = "尚未选择会话"
 
-    let sessions: [DemoSession] = [
+    private let runningSessions: [DemoSession] = [
         DemoSession(
-            title: "验证 macOS 刘海窗口定位",
-            preview: "需要在本机运行窗口定位测试。",
-            status: .waitingApproval
+            projectName: "codex-in-notch",
+            title: "Confirm the final overlay interaction details",
+            preview: "Please choose whether the panel should remain open after a click.",
+            status: .inputNeeded
         ),
         DemoSession(
-            title: "实现 Codex 状态事件适配器",
-            preview: "正在核对事件顺序与状态映射……",
+            projectName: "codex-in-notch",
+            title: "Implement the Codex status event adapter",
+            preview: "Checking event order, status mapping, and reconnect behavior…",
             status: .running,
-            isHighlighted: true
+            runtimeSeconds: 384
         ),
         DemoSession(
-            title: "更新产品需求文档",
-            preview: "已更新收起与展开状态的产品要求。",
+            projectName: "design-system",
+            title: "Update product requirements",
+            preview: "The compact and expanded interaction requirements are now aligned.",
             status: .completed
         ),
         DemoSession(
-            title: "同步本地任务事件",
-            preview: "连接已中断，正在等待重新连接。",
-            status: .failed
+            projectName: "local-event-bridge",
+            title: "Reconnect the local task event stream",
+            preview: "The connection was interrupted and is waiting to retry.",
+            status: .disconnected
+        )
+    ]
+
+    private let nonRunningSessions: [DemoSession] = [
+        DemoSession(
+            projectName: "codex-in-notch",
+            title: "Confirm the final overlay interaction details",
+            preview: "Please choose whether the panel should remain open after a click.",
+            status: .inputNeeded
+        ),
+        DemoSession(
+            projectName: "design-system",
+            title: "Update product requirements",
+            preview: "The compact and expanded interaction requirements are now aligned.",
+            status: .completed
+        ),
+        DemoSession(
+            projectName: "release-checks",
+            title: "Validate the signed application bundle",
+            preview: "The validation command exited before the bundle could be inspected.",
+            status: .error
         )
     ]
 
@@ -245,12 +398,35 @@ final class DemoStore: ObservableObject {
         "\(tokenRemainingPercent)%"
     }
 
+    var sessions: [DemoSession] {
+        status.isRunning ? runningSessions : nonRunningSessions
+    }
+
+    var longestRunningDurationText: String? {
+        sessions
+            .filter { $0.status.isRunning }
+            .compactMap(\.runtimeSeconds)
+            .max()
+            .map(DurationFormatter.displayText)
+    }
+
+    var compactStatusReadoutText: String {
+        status.isRunning
+            ? longestRunningDurationText ?? status.displayName
+            : status.displayName
+    }
+
+    var expandedUsageReadoutText: String {
+        longestRunningDurationText ?? tokenText
+    }
+
     var currentPanelSize: CGSize {
         PanelMetrics.size(
             geometry: geometry,
             isExpanded: isExpanded,
-            status: status,
-            tokenText: tokenText,
+            statusReadoutText: compactStatusReadoutText,
+            expandedUsageReadoutText: expandedUsageReadoutText,
+            centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight
         )
     }

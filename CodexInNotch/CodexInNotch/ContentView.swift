@@ -93,6 +93,8 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Notch 与非 Notch 屏：悬停约 150 ms 展开，离开约 250 ms 收起。", systemImage: "cursorarrow.motionlines")
                 Label("两种模式始终贴住屏幕顶边并保持水平居中。", systemImage: "rectangle.center.inset.filled")
+                Label("展开顶栏保持菜单栏高度；Notch 屏会按中央遮挡区自动扩宽。", systemImage: "arrow.left.and.right")
+                Label("运行中显示最长会话时长；其他状态显示剩余用量。展开列表最多可见 3 条。", systemImage: "timer")
                 Label("两种模式均可按 Escape 收起；点击会话只记录模拟动作。", systemImage: "escape")
             }
             .font(.system(size: 12))

@@ -8,43 +8,114 @@ struct CodexInNotchTests {
         let size = PanelMetrics.size(
             geometry: .noNotch,
             isExpanded: false,
-            status: .running,
-            tokenText: "72%",
+            statusReadoutText: "6m 24s",
+            expandedUsageReadoutText: "6m 24s",
+            centerOcclusionWidth: 0,
             compactHeight: PanelMetrics.referenceCompactHeight
         )
 
-        #expect(size.width == 168)
+        #expect(size.width == 166)
         #expect(size.height == 46)
     }
 
     @Test @MainActor
     func fallbackWidthGrowsForLongerStatus() {
-        let workingWidth = PanelMetrics.fallbackCompactWidth(
-            status: .running,
-            tokenText: "72%"
-        )
-        let waitingWidth = PanelMetrics.fallbackCompactWidth(
-            status: .waitingApproval,
-            tokenText: "72%"
-        )
+        let workingWidth = PanelMetrics.fallbackCompactWidth(statusReadoutText: "6m 24s")
+        let waitingWidth = PanelMetrics.fallbackCompactWidth(statusReadoutText: "Approval needed")
 
         #expect(waitingWidth > workingWidth)
+        #expect(PanelMetrics.fallbackCompactWidth(statusReadoutText: "Input needed") == 198)
     }
 
     @Test @MainActor
-    func expandedSizeIsSharedByBothGeometries() {
-        for geometry in DisplayGeometry.allCases {
-            let size = PanelMetrics.size(
-                geometry: geometry,
-                isExpanded: true,
-                status: .running,
-                tokenText: "72%",
-                compactHeight: PanelMetrics.referenceCompactHeight
-            )
+    func expandedSizeUsesWiderBaselineAndKeepsCompactHeaderHeight() {
+        let noNotchSize = PanelMetrics.size(
+            geometry: .noNotch,
+            isExpanded: true,
+            statusReadoutText: "6m 24s",
+            expandedUsageReadoutText: "6m 24s",
+            centerOcclusionWidth: 0,
+            compactHeight: 24
+        )
+        let notchedSize = PanelMetrics.size(
+            geometry: .notched,
+            isExpanded: true,
+            statusReadoutText: "6m 24s",
+            expandedUsageReadoutText: "6m 24s",
+            centerOcclusionWidth: 200,
+            compactHeight: 38
+        )
 
-            #expect(size.width == 444)
-            #expect(size.height == 390)
+        #expect(noNotchSize.width == 520)
+        #expect(notchedSize.width == 520)
+        #expect(noNotchSize.height == 24 + PanelMetrics.expandedContentHeight)
+        #expect(notchedSize.height == 38 + PanelMetrics.expandedContentHeight)
+    }
+
+    @Test
+    func expandedWidthKeepsEveryStatusNameClearOfWideNotch() {
+        let centerOcclusionWidth: CGFloat = 220
+        let width = PanelMetrics.expandedWidth(
+            centerOcclusionWidth: centerOcclusionWidth,
+            usageReadoutText: "1h 02m 05s"
+        )
+        let availableSideWidth = (width - centerOcclusionWidth) / 2
+
+        for status in DemoStatus.allCases {
+            let requiredWidth = PanelMetrics.expandedHorizontalPadding
+                + PanelMetrics.expandedStatusReadoutWidth(status: status)
+                + PanelMetrics.expandedNotchClearance
+            #expect(requiredWidth <= availableSideWidth)
         }
+
+        let requiredUsageWidth = PanelMetrics.expandedHorizontalPadding
+            + PanelMetrics.expandedUsageReadoutWidth(text: "1h 02m 05s")
+            + PanelMetrics.expandedNotchClearance
+        #expect(requiredUsageWidth <= availableSideWidth)
+    }
+
+    @Test @MainActor
+    func usageThresholdsMatchTheFigmaContract() {
+        #expect(UsageLevel(remainingPercent: 51) == .healthy)
+        #expect(UsageLevel(remainingPercent: 50) == .warning)
+        #expect(UsageLevel(remainingPercent: 15) == .warning)
+        #expect(UsageLevel(remainingPercent: 14) == .critical)
+    }
+
+    @Test
+    func runtimeFormattingRemainsPreciseToTheSecond() {
+        #expect(DurationFormatter.displayText(seconds: 9) == "9s")
+        #expect(DurationFormatter.displayText(seconds: 384) == "6m 24s")
+        #expect(DurationFormatter.displayText(seconds: 3_725) == "1h 02m 05s")
+    }
+
+    @Test @MainActor
+    func expandedHeaderShowsLongestRuntimeOnlyWhileAConversationRuns() {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let store = DemoStore(displays: [display])
+
+        #expect(store.sessions.count == 4)
+        #expect(store.longestRunningDurationText == "6m 24s")
+        #expect(store.expandedUsageReadoutText == "6m 24s")
+
+        store.status = .inputNeeded
+
+        #expect(store.sessions.count == 3)
+        #expect(store.longestRunningDurationText == nil)
+        #expect(store.expandedUsageReadoutText == "72%")
+    }
+
+    @Test
+    func statusSetCoversEveryFigmaVariant() {
+        #expect(DemoStatus.allCases.count == 8)
+        #expect(DemoStatus.inputNeeded.displayName == "Input needed")
+        #expect(DemoStatus.approvalNeeded.displayName == "Approval needed")
+        #expect(DemoStatus.disconnected.displayName == "Disconnected")
     }
 
     @Test @MainActor
@@ -65,6 +136,7 @@ struct CodexInNotchTests {
 
         #expect(store.selectedDisplayID == notchedDisplay.id)
         #expect(store.geometry == .notched)
+        #expect(notchedDisplay.centerOcclusionWidth == 200)
         #expect(store.currentPanelSize.height == 38)
 
         store.selectDisplay(id: externalDisplay.id)
@@ -117,7 +189,10 @@ struct CodexInNotchTests {
     func panelFramesStayTopAttachedAndCentered() {
         let screenFrame = NSRect(x: 1_440.5, y: -120, width: 1_919, height: 1_080)
         let compactSize = CGSize(width: 348, height: 46)
-        let expandedSize = CGSize(width: 444, height: 390)
+        let expandedSize = CGSize(
+            width: 520,
+            height: PanelMetrics.expandedHeight(compactHeight: 46)
+        )
 
         for step in 0 ... 20 {
             let progress = CGFloat(step) / 20
@@ -175,6 +250,7 @@ struct CodexInNotchTests {
     ) -> DisplayOption {
         let frame = NSRect(x: CGFloat(ordinal - 1) * 1_920, y: 0, width: 1_920, height: 1_080)
         let auxiliaryHeight = hasNotch ? menuBarHeight : 0
+        let auxiliaryWidth = hasNotch ? (frame.width - 200) / 2 : 0
 
         return DisplayOption(
             id: id,
@@ -194,10 +270,20 @@ struct CodexInNotchTests {
                 right: 0
             ),
             auxiliaryTopLeftArea: hasNotch
-                ? NSRect(x: frame.minX, y: frame.maxY - menuBarHeight, width: 800, height: menuBarHeight)
+                ? NSRect(
+                    x: frame.minX,
+                    y: frame.maxY - menuBarHeight,
+                    width: auxiliaryWidth,
+                    height: menuBarHeight
+                )
                 : nil,
             auxiliaryTopRightArea: hasNotch
-                ? NSRect(x: frame.maxX - 800, y: frame.maxY - menuBarHeight, width: 800, height: menuBarHeight)
+                ? NSRect(
+                    x: frame.maxX - auxiliaryWidth,
+                    y: frame.maxY - menuBarHeight,
+                    width: auxiliaryWidth,
+                    height: menuBarHeight
+                )
                 : nil,
             fallbackMenuBarHeight: 22
         )

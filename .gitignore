@@ -7,3 +7,7 @@ Icon?
 .Trashes
 
 /development-guideline.md
+
+# Local grill-with-docs outputs
+/CONTEXT.md
+/docs/adr/
