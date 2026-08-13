@@ -52,7 +52,7 @@
       <circle cx="709" cy="23" r="1.25" fill="#0067B8"/>
       <circle cx="712.5" cy="23" r="1.25" fill="#0067B8"/>
     </g>
-    <text x="726" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">Working</text>
+    <text x="726" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">Running</text>
     <text x="790" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">72%</text>
   </g>
 </svg>

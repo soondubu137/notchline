@@ -54,7 +54,7 @@
         <circle cx="570" cy="23" r="1.25" fill="#0067B8"/>
         <circle cx="573.5" cy="23" r="1.25" fill="#0067B8"/>
       </g>
-      <text x="588" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">Working</text>      <text x="921" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">72%</text>
+      <text x="588" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">Running</text>      <text x="921" y="28" fill="#FFFFFF" font-family="Inter" font-size="13" font-weight="600">72%</text>
     </g>
     <line x1="558" y1="46.5" x2="954" y2="46.5" stroke="#FFFFFF" stroke-opacity="0.12"/>
 

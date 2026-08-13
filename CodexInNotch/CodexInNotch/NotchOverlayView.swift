@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct NotchOverlayView: View {
-    @EnvironmentObject private var store: DemoStore
+    @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
         GeometryReader { proxy in
@@ -49,13 +49,13 @@ struct NotchOverlayView: View {
     private var contentAnimation: Animation {
         store.reduceMotion
             ? .easeOut(duration: 0.08)
-            : .timingCurve(0.22, 1, 0.36, 1, duration: 0.28)
+            : .timingCurve(0.22, 1, 0.36, 1, duration: 0.20)
     }
 
     private var panelAccessibilityLabel: String {
-        let activity = store.longestRunningDurationText.map { "最长运行时间 \($0)" }
-            ?? "剩余用量 \(store.tokenRemainingPercent)%"
-        return "Codex，\(store.sessions.count) 个相关会话，状态 \(store.status.displayName)，\(activity)"
+        let usage = store.tokenRemainingPercent.map { "剩余用量 \($0)%" }
+            ?? "剩余用量不可用"
+        return "Codex，\(store.sessions.count) 个相关会话，状态 \(store.status.displayName)，\(usage)"
     }
 }
 
@@ -93,7 +93,7 @@ private struct PanelSurface: View {
 }
 
 private struct OverlayHeader: View {
-    @EnvironmentObject private var store: DemoStore
+    @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
         HStack(spacing: 0) {
@@ -140,12 +140,12 @@ private struct OverlayHeader: View {
     private var headerAnimation: Animation {
         store.reduceMotion
             ? .easeOut(duration: 0.08)
-            : .timingCurve(0.22, 1, 0.36, 1, duration: 0.28)
+            : .timingCurve(0.22, 1, 0.36, 1, duration: 0.20)
     }
 }
 
 private struct StatusReadout: View {
-    let status: DemoStatus
+    let status: MonitorStatus
     let text: String
     let showsText: Bool
     let spacing: CGFloat
@@ -156,9 +156,8 @@ private struct StatusReadout: View {
 
             if showsText {
                 Text(text)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.white.opacity(0.96))
-                    .monospacedDigit()
                     .lineLimit(1)
             }
         }
@@ -167,7 +166,7 @@ private struct StatusReadout: View {
 }
 
 private struct UsageReadout: View {
-    let remainingPercent: Int
+    let remainingPercent: Int?
     let text: String
     let showsText: Bool
 
@@ -185,16 +184,23 @@ private struct UsageReadout: View {
         }
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("剩余用量 \(remainingPercent)%")
+        .accessibilityLabel(accessibilityText)
     }
 
     private var palette: UsagePalette {
-        UsagePalette(level: UsageLevel(remainingPercent: remainingPercent))
+        UsagePalette(
+            level: UsageLevel(remainingPercent: remainingPercent ?? 0),
+            isAvailable: remainingPercent != nil
+        )
+    }
+
+    private var accessibilityText: String {
+        remainingPercent.map { "剩余用量 \($0)%" } ?? "剩余用量不可用"
     }
 }
 
 private struct UsageRing: View {
-    let remainingPercent: Int
+    let remainingPercent: Int?
 
     var body: some View {
         ZStack {
@@ -220,11 +226,14 @@ private struct UsageRing: View {
     }
 
     private var progress: CGFloat {
-        CGFloat(min(max(remainingPercent, 0), 100)) / 100
+        CGFloat(min(max(remainingPercent ?? 0, 0), 100)) / 100
     }
 
     private var palette: UsagePalette {
-        UsagePalette(level: UsageLevel(remainingPercent: remainingPercent))
+        UsagePalette(
+            level: UsageLevel(remainingPercent: remainingPercent ?? 0),
+            isAvailable: remainingPercent != nil
+        )
     }
 }
 
@@ -232,7 +241,12 @@ private struct UsagePalette {
     let remaining: Color
     let track: Color
 
-    init(level: UsageLevel) {
+    init(level: UsageLevel, isAvailable: Bool = true) {
+        guard isAvailable else {
+            remaining = Color.white.opacity(0.28)
+            track = Color.white.opacity(0.12)
+            return
+        }
         switch level {
         case .healthy:
             remaining = .white
@@ -248,7 +262,7 @@ private struct UsagePalette {
 }
 
 private struct ExpandedPanelContent: View {
-    @EnvironmentObject private var store: DemoStore
+    @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
         VStack(spacing: 0) {
@@ -257,36 +271,46 @@ private struct ExpandedPanelContent: View {
                 .frame(height: 1)
                 .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
 
-            ScrollView(.vertical) {
-                LazyVStack(spacing: 0) {
-                    ForEach(store.sessions) { session in
-                        SessionRow(session: session)
+            if store.sessions.isEmpty {
+                Text(store.emptyListMessage)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.56))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(height: PanelMetrics.thinExpandedContentHeight - 1)
+            } else {
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 0) {
+                        ForEach(store.sessions) { session in
+                            SessionRow(session: session)
+                        }
                     }
                 }
-            }
-            .frame(
-                width: store.currentPanelSize.width
-                    - PanelMetrics.expandedHorizontalPadding * 2,
-                height: PanelMetrics.expandedSessionViewportHeight
-            )
-            .scrollIndicators(.hidden)
+                .frame(
+                    width: store.currentPanelSize.width
+                        - PanelMetrics.expandedHorizontalPadding * 2,
+                    height: PanelMetrics.sessionViewportHeight(
+                        forSessionCount: store.sessions.count
+                    )
+                )
+                .scrollIndicators(.hidden)
 
-            Color.clear
-                .frame(height: 15)
+                Color.clear
+                    .frame(height: 15)
+            }
         }
         .foregroundStyle(.white)
     }
 }
 
 private struct SessionRow: View {
-    @EnvironmentObject private var store: DemoStore
-    let session: DemoSession
+    @EnvironmentObject private var store: MonitorStore
+    let session: MonitoredSession
 
     @State private var isHovered = false
 
     var body: some View {
         Button {
-            store.simulateOpening(session)
+            store.open(session)
         } label: {
             SessionRowContent(
                 session: session,
@@ -295,18 +319,25 @@ private struct SessionRow: View {
         }
         .buttonStyle(SessionRowButtonStyle())
         .frame(maxWidth: .infinity)
-        .frame(height: 80)
+        .frame(height: PanelMetrics.sessionRowHeight)
         .onHover { isHovered = $0 }
-        .accessibilityLabel(
-            "\(session.projectName)，\(session.title)，\(session.status.controlTitle)，当前内容：\(session.preview)"
-        )
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        let preview = store.showsContentPreviews
+            ? session.preview.map { "，当前内容：\($0)" } ?? ""
+            : "，内容预览已隐藏"
+        return "\(session.projectName)，\(session.title)，\(session.status.controlTitle)\(preview)"
     }
 }
 
 private struct SessionRowContent: View {
     @Environment(\.sessionRowIsPressed) private var isPressed
 
-    let session: DemoSession
+    @EnvironmentObject private var store: MonitorStore
+
+    let session: MonitoredSession
     let isHovered: Bool
 
     var body: some View {
@@ -330,13 +361,15 @@ private struct SessionRowContent: View {
                     )
                     .mask(TrailingAlphaFade())
 
-                    UntruncatedSingleLineText(
-                        text: session.preview,
-                        font: .system(size: 13, weight: .regular),
-                        color: Color.white.opacity(0.68),
-                        lineHeight: 18
-                    )
-                    .mask(TrailingAlphaFade())
+                    if store.showsContentPreviews, let preview = session.preview {
+                        UntruncatedSingleLineText(
+                            text: preview,
+                            font: .system(size: 13, weight: .regular),
+                            color: Color.white.opacity(0.68),
+                            lineHeight: 18
+                        )
+                        .mask(TrailingAlphaFade())
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -349,7 +382,11 @@ private struct SessionRowContent: View {
             .padding(.horizontal, 16)
         }
         .contentShape(Rectangle())
-        .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 80)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: PanelMetrics.sessionRowHeight,
+            maxHeight: PanelMetrics.sessionRowHeight
+        )
     }
 
     private var revealsStatusName: Bool {
@@ -368,7 +405,7 @@ private struct SessionRowContent: View {
 }
 
 private struct SessionStatusControl: View {
-    let session: DemoSession
+    let session: MonitoredSession
     let revealsStatusName: Bool
 
     var body: some View {
@@ -378,7 +415,6 @@ private struct SessionStatusControl: View {
                 Text(label)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(statusColor)
-                    .monospacedDigit()
                     .lineLimit(1)
             }
             .padding(.horizontal, 8)
@@ -390,10 +426,7 @@ private struct SessionStatusControl: View {
     }
 
     private var label: String {
-        if session.status.isRunning, let runtimeText = session.runtimeText {
-            return runtimeText
-        }
-        return session.status.displayName
+        session.status.displayName
     }
 
     private var statusColor: Color {
@@ -402,7 +435,7 @@ private struct SessionStatusControl: View {
 }
 
 private struct StatusDot: View {
-    let status: DemoStatus
+    let status: MonitorStatus
 
     var body: some View {
         Circle()
@@ -413,11 +446,11 @@ private struct StatusDot: View {
 }
 
 private enum StatusPalette {
-    static func color(for status: DemoStatus) -> Color {
+    static func color(for status: MonitorStatus) -> Color {
         switch status {
-        case .idle:
+        case .idle, .setupRequired, .unknown:
             Color(red: 0.39, green: 0.39, blue: 0.40)
-        case .running:
+        case .connecting, .running:
             Color(red: 0.04, green: 0.52, blue: 1)
         case .inputNeeded, .approvalNeeded:
             Color(red: 1, green: 0.62, blue: 0.04)
@@ -427,7 +460,7 @@ private enum StatusPalette {
             Color(red: 1, green: 0.27, blue: 0.23)
         case .cancelled:
             Color(red: 0.56, green: 0.56, blue: 0.58)
-        case .disconnected:
+        case .updateCodex, .unsupportedVersion, .disconnected:
             Color(red: 0.75, green: 0.35, blue: 0.95)
         }
     }
@@ -487,7 +520,7 @@ private extension EnvironmentValues {
 
 #Preview("Notch Expanded") {
     NotchOverlayView()
-        .environmentObject(DemoStore())
+        .environmentObject(MonitorStore())
         .frame(
             width: PanelMetrics.expandedBaselineWidth,
             height: PanelMetrics.expandedHeight(

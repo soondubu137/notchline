@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | 已澄清，待 Phase 0 集成验证 |
-| 版本 | 0.5 |
-| 日期 | 2026-08-11 |
+| 版本 | 0.6 |
+| 日期 | 2026-08-12 |
 | 目标版本 | V1 MVP |
 | 目标平台 | macOS；带物理刘海与无刘海显示器 |
 
@@ -23,7 +23,7 @@ V1 必须做到：
 1. 实时呈现当前 Codex Desktop 账户下所有 Project 与 `Chats` 中需要监视的处理轮次。
 2. 明确区分 Input needed、Approval needed、Running、Unknown、Error、Cancelled 和 Completed。
 3. 让用户点击任意会话行后进入 Codex Desktop 中完全相同的会话。
-4. 显示与 Codex Desktop 当前处理轮次一致的处理时间。
+4. Running 与其他状态使用同一状态名称机制，显示 `Running`，不显示处理时长或秒级计时。
 5. 显示当前 Desktop 账户的主额度窗口剩余比例；无法可靠读取时明确显示不可用。
 6. 在应用重启、Codex 重启、账户切换和漏失事件后重新从 Desktop 真实状态校正，不展示缓存会话。
 7. 默认提供有用的当前内容预览，同时允许用户全局隐藏所有预览。
@@ -40,6 +40,7 @@ V1 不包含：
 - 展示原始推理、工具参数、命令输出、文件差异、敏感路径或批准理由。
 - 将正文预览、会话列表快照或旧账户额度持久化。
 - 在 Notch 的被动状态中提供修复、更新或启动 Codex 的按钮。
+- 计算或展示 Running 处理时长；该能力只作为未来版本的候选功能。
 
 ## 4. 核心对象与监视范围
 
@@ -86,7 +87,7 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 | --- | --- | --- |
 | `Input needed` | Codex 等待用户回答 | 橙色状态；悬停时显示名称胶囊 |
 | `Approval needed` | Codex 等待权限决定 | 橙色状态；悬停时显示名称胶囊 |
-| `Running` | 当前轮次正在自动处理 | 蓝色时长胶囊，始终显示 |
+| `Running` | 当前轮次正在自动处理 | 蓝色 `Running` 状态名称胶囊，始终显示 |
 | `Unknown` | 只有该会话的真实状态无法可靠判定 | 中性灰状态 |
 | `Error` | 当前轮次失败 | 红色状态 |
 | `Cancelled` | 当前轮次取消或中断 | 冷灰状态 |
@@ -141,27 +142,23 @@ Disconnected 是全局集成健康问题，不能用于单会话。进入 Discon
 
 设置提供全局开关 `Show current content previews`，默认开启。关闭后：
 
-- 保留 Project、Desktop 标题、状态与 Running 时长。
+- 保留 Project、Desktop 标题与状态。
 - 完全移除预览正文，但保持会话行高度与列表几何不变。
 - 若 Desktop 尚无标题，禁止再用用户输入作为标题回退，显示 `Untitled`。
 
 单独的预览读取失败只隐藏对应预览，不把会话或全局状态改为 Disconnected。
 
-## 8. 标题、时间与额度
+## 8. 标题、额度与未来功能
 
 ### 8.1 标题
 
 优先使用 Codex Desktop 显示的会话标题。Desktop 尚无标题时，在预览开启的前提下使用本轮用户输入的安全单行截断；仍不可用或预览已关闭时显示 `Untitled`。
 
-### 8.2 处理时间
+### 8.2 处理时间（未来考虑）
 
-处理时间必须与 Codex Desktop 当前轮次上方显示的时间一致：
+V1 不计算、刷新或展示处理时长。Running 在收起态、展开汇总和会话行中都显示状态名称 `Running`；额度区域继续显示真实剩余比例，不被运行时间替换。
 
-```text
-max((completedAtMs ?? nowMs) - startedAtMs, 0)
-```
-
-它是墙钟经过时间，包含等待输入、等待批准与 Mac 睡眠期间。等待期间继续计算，但 V1 只在 Running 行显示时长；汇总存在 Running 时显示最长 Running 时长。
+未来版本可以重新评估处理时长，但必须先明确 Desktop 时间语义、等待与睡眠是否计入、可靠数据来源、无障碍文案和持续刷新带来的资源成本。在这些问题完成产品与技术验证前，不加入计时器、时长格式化或秒级验收要求。
 
 ### 8.3 主额度窗口
 
@@ -176,7 +173,7 @@ max((completedAtMs ?? nowMs) - startedAtMs, 0)
 
 - 带刘海屏幕与真实菜单栏/刘海等高，只在左侧显示 `8 × 8` 汇总圆点、右侧显示 `18 × 18` 额度圆环。
 - 无刘海屏幕使用内容驱动宽度：圆点、条件文本、额度圆环和固定边距；不得为不存在的刘海预留空白。
-- 无刘海 Running 显示最长运行时长，其他状态显示完整英文状态名。
+- 无刘海 Running 与其他状态一样显示完整英文状态名，即 `Running`。
 
 ### 9.2 展开态
 
@@ -190,7 +187,7 @@ max((completedAtMs ?? nowMs) - startedAtMs, 0)
 ### 9.3 会话行
 
 - 左侧依次为 Project、标题、当前内容预览。
-- Running 右侧始终显示状态圆点和秒级时长胶囊。
+- Running 右侧始终显示状态圆点和 `Running` 状态名称胶囊。
 - 非 Running 默认显示状态圆点，悬停时扩展为状态名称胶囊。
 - 内容接近尾部控件时连续 Alpha 渐隐；不换行、不增加行高、不显示可见省略号。
 - 行可点击，但不提供批准、输入、取消或其他 Codex 操作。
@@ -207,17 +204,20 @@ max((completedAtMs ?? nowMs) - startedAtMs, 0)
 
 ## 11. 设置
 
-V1 设置窗口只包含已经确认的两组能力：
+V1 设置窗口只包含已经确认的三组能力：
 
-1. **Codex integration**：显示连接与兼容状态，提供重新检测和移除集成。
-2. **Privacy**：`Show current content previews` 全局开关。
+1. **Display**：选择组件显示在哪个已连接显示器；选择跨启动保留，显示器临时断开时回退到可用屏幕。
+2. **Codex integration**：显示连接与兼容状态，提供重新检测和移除集成。
+3. **Privacy**：`Show current content previews` 全局开关。
 
 设置只影响 Codex in Notch。Notch 中的 `No active turns`、`Update Codex`、`Codex version unsupported` 和 `Codex disconnected` 不提供操作。
 
 ## 12. 可靠性与降级
 
 - 应用启动时列表为空，先显示 Connecting；连接后从 Desktop 当前活动轮次与未读终态重建。
+- 首次验证过 Hook 后，应用自身重启不得要求再次产生事件才能恢复连接；恢复必须同时确认当前 Codex Desktop 正在运行。
 - 实时事件负责即时变化，重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
+- 启动和常规刷新不得逐会话等待详情读取；单会话详情超时只保留该行 Unknown，不能延长 Connecting 或触发全局 Disconnected。
 - `thread/closed` 不等于删除，不可据此移除。
 - 无法识别的新枚举只让对应会话进入 Unknown；不能造成崩溃。
 - 只有实时会话状态整体不可靠时才进入 Disconnected。
@@ -230,9 +230,8 @@ Phase 0 必须证明受支持的集成路径能够可靠取得：
 1. Desktop 可导航根会话及稳定 `threadId`。
 2. 活动 Turn 与 Input/Approval/Running/终态事件。
 3. Desktop 未读、归档、删除和 Project 身份。
-4. 与 Desktop 一致的 `startedAt` / `completedAt`。
-5. 当前账户 primary rate-limit window 与账户切换。
-6. `threadId → Desktop 同一会话` 的受支持导航动作。
+4. 当前账户 primary rate-limit window 与账户切换。
+5. `threadId → Desktop 同一会话` 的受支持导航动作。
 
 Project、未读成员关系或精确导航任一无法满足时，V1 不得用 cwd、固定时间、焦点或首页 fallback 伪装完成。
 
@@ -243,7 +242,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 3. 活动轮次始终显示；终态轮次在 Desktop 已读、归档或删除后自动移除。
 4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
 5. 应用重启时不显示缓存行，连接后从 Desktop 真值恢复活动与未读终态。
-6. Running 时长逐秒变化，并与 Desktop 同一轮次显示一致。
+6. Running 在收起态、展开汇总和会话行中显示 `Running`，不出现处理时长或逐秒变化的计时文本。
 7. 点击任意行进入同一 `threadId` 会话；打开首页不算通过。
 8. 主额度窗口切换和不可用行为正确；额度失败不影响会话列表。
 9. 关闭预览后无正文泄露，缺失标题显示 `Untitled`，行高和面板几何不变。

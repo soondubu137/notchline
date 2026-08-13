@@ -2,9 +2,9 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | 已同步当前 Figma 文件 |
-| 版本 | 0.5 |
-| 日期 | 2026-08-11 |
+| 文档状态 | V1 计时调整已更新；外部 Figma 文件待同步 |
+| 版本 | 0.6 |
+| 日期 | 2026-08-12 |
 | 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
 
 ## 1. 设计原则
@@ -12,7 +12,7 @@
 1. 顶部组件是当前处理轮次的实时汇总中心，不是历史入口。
 2. 带刘海与无刘海的收起几何不同，但展开后共享同一内容结构。
 3. 展开组件始终贴住屏幕上沿、锁定水平中心；顶部汇总区只横向扩张。
-4. 状态、额度、处理时间、Project、标题和当前内容都来自真实 Codex Desktop 语义。
+4. 状态、额度、Project、标题和当前内容都来自真实 Codex Desktop 语义；V1 不展示处理时长。
 5. 无法可靠取得的数据明确降级，不用 Mock、缓存或近似值填补。
 6. 所有 Figma 文字统一使用 SF Pro；不得继续引入 Inter、SF Compact 或其他产品字体。
 
@@ -24,7 +24,7 @@
 | `01 — Getting Started` | 使用说明 | — |
 | `02 — Foundations` | 颜色、布局、字体、Motion | — |
 | `03 — Status Components` | Status Dot、Readout、Usage Ring、Badge | `107:18`, `109:34`, `137:184` |
-| `04 — Session Row` | 会话行、列表和运行时胶囊 | `112:28`, `140:201`, `196:71` |
+| `04 — Session Row` | 会话行、列表和状态名称胶囊 | `112:28`, `140:201`, `196:71` |
 | `05 — Panel` | 收起与展开 Panel 变体 | `115:82` |
 | `Notch Core` | 核心产品状态 | `118:120`, `185:310` |
 | `06 — Integration States` | 隐私、Unknown、局部降级、空和全局可用性 | `227:3` |
@@ -68,7 +68,7 @@ Unknown 是单会话状态；Disconnected 是全局集成状态，颜色与语�
 | 项目 | 值 |
 | --- | --- |
 | Notch compact | `348 × 46` 参考基线 |
-| No-notch Running compact | `166 × 46` 参考基线 |
+| No-notch `Running` compact | `168 × 46` 参考基线 |
 | No-notch Input needed compact | `198 × 46` 参考基线 |
 | Shared expanded | `520 × 302` 参考基线 |
 | Expanded header | `520 × 46` 外框，内容宽 `472` |
@@ -102,13 +102,13 @@ Compact 与 Expanded 两个 Context 都提供完整状态文本。Expanded 组�
 - 彩色圆弧从十二点方向逆时针绘制，非满环两端为圆头。
 - `> 50%` 白色，`15%–50%` 橙色，`< 15%` 红色。
 - Unavailable 为灰色圆环，不显示伪造百分比。
-- 有 Running 时 Expanded leading value 为最长 Running 时长；否则为剩余百分比。
+- Expanded leading value 始终为剩余百分比；Running 不替换额度文本。
 
 ### 4.4 Session Row
 
 每行左侧依次显示 Project、标题、当前内容；右侧为状态控件。
 
-- Running 始终显示蓝色 Runtime Badge。
+- Running 始终显示蓝色 `Running` 状态名称 Badge。
 - 非 Running 默认显示圆点，Hover 显示状态名称 Badge。
 - 左侧文字接近尾部控件时 Alpha 渐隐，不换行、不显示省略号。
 - 最多三行可见；更多行使用垂直滚动。
@@ -122,6 +122,10 @@ Panel 组件集保留 Notch Compact、No Notch Compact 和 Expanded。Expanded �
 - 展开时 header 只横向扩张。
 - 内容区使用 `256`，三行视口使用 `240`，底部保留 `15`。
 - 现有 `Notch Core` Running Desktop 画板已按 `1512` 屏幕重新居中到 `x = 496`。
+
+### 4.6 未来考虑：处理时长
+
+V1 不包含 Runtime Badge、逐秒计时或“最长运行时长”汇总。未来如重新设计处理时长，必须先在 PRD 与技术设计中明确权威时间语义、等待/睡眠行为、无障碍文案和刷新成本，再新增独立探索画板；不得直接改变 V1 的 `Running` 状态组件。
 
 ## 5. 实时监视列表
 
@@ -165,7 +169,7 @@ Input needed
 
 ### 6.1 Content previews hidden
 
-- 保留 Project、Desktop 标题、状态与 Running 时长。
+- 保留 Project、Desktop 标题与状态。
 - 未生成 Desktop 标题的会话显示 `Untitled`。
 - 不显示正文预览，不改变行高。
 
@@ -175,7 +179,7 @@ Input needed
 
 ### 6.3 Quota unavailable
 
-额度环为灰色 unavailable，但会话列表、状态、时长和点击能力继续工作。该场景表达局部降级，不是 Disconnected。
+额度环为灰色 unavailable，但会话列表、状态和点击能力继续工作。该场景表达局部降级，不是 Disconnected。
 
 ### 6.4 Monitoring lifecycle
 
@@ -217,7 +221,7 @@ Input needed
 ### 8.2 Privacy
 
 - `Show current content previews` 默认 On。
-- Off 时说明 Project、标题、状态和时长仍然显示。
+- Off 时说明 Project、标题和状态仍然显示。
 - 明确提示 prompt fallback 被禁用，缺失标题为 `Untitled`。
 
 不在 V1 设置画板中加入登录启动、动画、通知、模型选择或其他尚未确认的功能。
@@ -251,7 +255,7 @@ Input needed
 旁白示例：
 
 ```text
-Codex，三个当前轮次，其中一个需要输入，最长运行三分四十二秒，额度剩余百分之七十二
+Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 确认未读生命周期，Project Codex in Notch，需要输入
 检查未知事件，Chats，状态未知
 ```
@@ -267,6 +271,8 @@ Codex，三个当前轮次，其中一个需要输入，最长运行三分四十
 - [x] No active turns、Connecting、Disconnected、Update、unsupported、setup 薄层。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
+- [x] V1 Running 规范使用状态名称，不包含 Runtime Badge 或计时汇总。
+- [ ] 将外部 Figma 文件中的既有 Runtime Badge 与时长示例同步为 `Running`。
 - [ ] 不同真实菜单栏高度与至少两种物理刘海设备的原生几何验证。
 - [ ] 真实 Codex 集成事件、Project、未读和精确导航的 Phase 0 能力验证。
 

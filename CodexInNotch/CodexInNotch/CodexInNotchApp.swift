@@ -20,16 +20,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MonitorStore.shared.stopMonitoring()
+    }
 }
 
 @main
 struct CodexInNotchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var store = DemoStore.shared
+    @StateObject private var store = MonitorStore.shared
 
     var body: some Scene {
-        WindowGroup("Codex in Notch — UI Demo") {
-            ContentView()
+        WindowGroup("Codex in Notch") {
+            ProductRootView()
+                .environmentObject(store)
+        }
+        .windowResizability(.contentSize)
+
+        Settings {
+            AppSettingsView()
                 .environmentObject(store)
         }
         .windowResizability(.contentSize)

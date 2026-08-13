@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class OverlayPanelController {
-    private let store: DemoStore
+    private let store: MonitorStore
     private let panel: OverlayPanel
     private var cancellables = Set<AnyCancellable>()
     private var localEventMonitor: Any?
@@ -13,7 +13,7 @@ final class OverlayPanelController {
     private var pendingFrameUpdateShouldAnimate: Bool?
     private var hasShownPanel = false
 
-    init(store: DemoStore) {
+    init(store: MonitorStore) {
         self.store = store
         self.panel = OverlayPanel(
             contentRect: NSRect(
@@ -80,7 +80,8 @@ final class OverlayPanelController {
     private func bindStore() {
         let animatedChanges: [AnyPublisher<Void, Never>] = [
             store.$status.map { _ in () }.eraseToAnyPublisher(),
-            store.$tokenRemainingPercent.map { _ in () }.eraseToAnyPublisher(),
+            store.$quota.map { _ in () }.eraseToAnyPublisher(),
+            store.$sessions.map { _ in () }.eraseToAnyPublisher(),
             store.$isExpanded.map { _ in () }.eraseToAnyPublisher(),
             store.$reduceMotion.map { _ in () }.eraseToAnyPublisher()
         ]
@@ -141,6 +142,10 @@ final class OverlayPanelController {
             panelSize: size
         )
 
+        guard panel.frame != targetFrame else {
+            return
+        }
+
         guard animated, hasShownPanel else {
             panel.setFrame(targetFrame, display: true)
             panel.contentView?.layoutSubtreeIfNeeded()
@@ -151,7 +156,7 @@ final class OverlayPanelController {
         }
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = store.reduceMotion ? 0.08 : 0.28
+            context.duration = store.reduceMotion ? 0.08 : 0.20
             context.timingFunction = store.reduceMotion
                 ? CAMediaTimingFunction(name: .easeOut)
                 : CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
