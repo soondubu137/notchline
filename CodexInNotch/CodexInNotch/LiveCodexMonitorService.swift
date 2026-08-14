@@ -21,6 +21,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private let client: any CodexAppServerCommunicating
     private let hookEvents: HookEventRepository
     private let hookInstaller: CodexHookInstaller
+    private let projectMetadata: any DesktopProjectMetadataProviding
     private let desktopProcessIdentifierProvider: @MainActor @Sendable () -> pid_t?
     private var cachedQuota = QuotaSnapshot.unavailable
     private var quotaReadAt: Date?
@@ -49,6 +50,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         client: any CodexAppServerCommunicating = CodexAppServerClient(),
         hookEvents: HookEventRepository = HookEventRepository(),
         hookInstaller: CodexHookInstaller = CodexHookInstaller(),
+        projectMetadata: any DesktopProjectMetadataProviding =
+            CodexDesktopProjectMetadataRepository(),
         desktopProcessIdentifierProvider: @escaping @MainActor @Sendable () -> pid_t? = {
             LiveCodexMonitorService.desktopProcessIdentifier()
         }
@@ -56,6 +59,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         self.client = client
         self.hookEvents = hookEvents
         self.hookInstaller = hookInstaller
+        self.projectMetadata = projectMetadata
         self.desktopProcessIdentifierProvider = desktopProcessIdentifierProvider
     }
 
@@ -99,6 +103,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
 
         do {
             try await client.connect()
+            let projectSnapshot = await projectMetadata.snapshot()
 
             if hasLiveHookObservation {
                 let cachedThreadIDs = Set(
@@ -132,6 +137,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     from: hookState.turns,
                     listedThreads: listedThreads,
                     listedThreadsObservedAt: listedThreadsObservedAt,
+                    projectMetadata: projectSnapshot,
                     showsContentPreviews: showsContentPreviews
                 )
                 scheduleQuotaRefreshIfNeeded()
@@ -140,10 +146,16 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                         availability: .ready,
                         sessions: sessions.sorted(by: CodexSnapshotParser.monitorOrder),
                         quota: cachedQuota,
-                        diagnostic: hookDiagnostic
-                            ?? (sessions.contains(where: { $0.status == .completed })
-                            ? "已完成轮次会保留到归档或删除；当前公开协议尚未提供 Desktop 已读状态。"
-                            : nil)
+                        diagnostic: combinedDiagnostic(
+                            hookDiagnostic,
+                            sessions.contains(where: { $0.status == .completed })
+                                ? "已完成轮次会保留到归档或删除；当前公开协议尚未提供 Desktop 已读状态。"
+                                : nil,
+                            projectDiagnostic(
+                                for: sessions,
+                                metadata: projectSnapshot
+                            )
+                        )
                     )
                 )
             }
@@ -185,6 +197,9 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                 }
                 return CodexSnapshotParser.activeSession(
                     from: thread,
+                    projectName: projectSnapshot.resolution(
+                        for: threadID
+                    ).displayName,
                     showsContentPreviews: showsContentPreviews
                 )
             }
@@ -196,7 +211,10 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     availability: .ready,
                     sessions: sessions,
                     quota: cachedQuota,
-                    diagnostic: nil
+                    diagnostic: projectDiagnostic(
+                        for: sessions,
+                        metadata: projectSnapshot
+                    )
                 )
             )
         } catch let error as CodexAppServerError {
@@ -397,6 +415,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         from states: [HookTurnState],
         listedThreads: [JSONValue],
         listedThreadsObservedAt: Date?,
+        projectMetadata: DesktopProjectMetadataSnapshot,
         showsContentPreviews: Bool
     ) async -> [MonitoredSession] {
         var sessions: [MonitoredSession] = []
@@ -451,6 +470,9 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             if let session = CodexSnapshotParser.session(
                 from: state,
                 thread: fullThread,
+                projectName: projectMetadata.resolution(
+                    for: state.threadID
+                ).displayName,
                 allowsAppServerStatusCorrection: canApplyListedStatus,
                 showsContentPreviews: showsContentPreviews
             ) {
@@ -532,10 +554,14 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     thread: fullThread
                 )
             }
+            let projectSnapshot = await projectMetadata.snapshot()
             if let fullThread,
                let session = CodexSnapshotParser.session(
                    from: state,
                    thread: fullThread,
+                   projectName: projectSnapshot.resolution(
+                       for: state.threadID
+                   ).displayName,
                    showsContentPreviews: showsContentPreviews
                ) {
                 if [.completed, .error, .cancelled].contains(session.status) {
@@ -648,6 +674,30 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private func remember(_ snapshot: MonitorSnapshot) -> MonitorSnapshot {
         lastTrustedSnapshot = snapshot
         return snapshot
+    }
+
+    private func projectDiagnostic(
+        for sessions: [MonitoredSession],
+        metadata: DesktopProjectMetadataSnapshot
+    ) -> String? {
+        let unavailableCount = sessions.filter {
+            $0.projectName == DesktopProjectMetadataSnapshot.unavailableProjectName
+        }.count
+        let unresolvedDiagnostic = unavailableCount > 0
+            ? "\(unavailableCount) 个会话缺少可验证的 Desktop Project 映射；未回退为 Chats。"
+            : nil
+        return combinedDiagnostic(metadata.diagnostic, unresolvedDiagnostic)
+    }
+
+    private func combinedDiagnostic(_ diagnostics: String?...) -> String? {
+        let messages: [String] = diagnostics.compactMap { diagnostic -> String? in
+            guard let diagnostic,
+                  !diagnostic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return diagnostic
+        }
+        return messages.isEmpty ? nil : messages.joined(separator: " ")
     }
 
     private func snapshotPreservingTrustedState(
@@ -845,6 +895,7 @@ enum CodexSnapshotParser {
 
     nonisolated static func activeSession(
         from thread: JSONValue,
+        projectName: String,
         showsContentPreviews: Bool = true
     ) -> MonitoredSession? {
         guard isEligibleRootThread(thread),
@@ -864,7 +915,6 @@ enum CodexSnapshotParser {
             Date(timeIntervalSince1970: $0)
         }
 
-        let projectName = thread["section"]?["name"]?.stringValue ?? "Chats"
         let privacySafeTitle = normalizedTitle(thread["name"]?.stringValue)
             ?? "Untitled"
         let threadPreview = showsContentPreviews
@@ -924,6 +974,7 @@ enum CodexSnapshotParser {
     nonisolated static func session(
         from state: HookTurnState,
         thread: JSONValue?,
+        projectName: String,
         allowsAppServerStatusCorrection: Bool = true,
         showsContentPreviews: Bool = true
     ) -> MonitoredSession? {
@@ -979,7 +1030,7 @@ enum CodexSnapshotParser {
         return MonitoredSession(
             threadID: state.threadID,
             turnID: state.turnID,
-            projectName: thread?["section"]?["name"]?.stringValue ?? "Chats",
+            projectName: projectName,
             title: title,
             privacySafeTitle: privacySafeTitle,
             preview: preview,

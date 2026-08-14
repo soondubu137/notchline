@@ -682,8 +682,8 @@ struct CodexInNotchTests {
             "name": .string("Implement monitor"),
             "preview": .string("Original prompt"),
             "section": .object([
-                "id": .string("project-1"),
-                "name": .string("Codex in Notch")
+                "id": .string("section-1"),
+                "name": .string("Pinned")
             ]),
             "status": .object([
                 "type": .string("active"),
@@ -706,7 +706,10 @@ struct CodexInNotchTests {
             ])
         ])
 
-        let session = CodexSnapshotParser.activeSession(from: thread)
+        let session = CodexSnapshotParser.activeSession(
+            from: thread,
+            projectName: "Codex in Notch"
+        )
 
         #expect(session?.threadID == "thread-1")
         #expect(session?.turnID == "turn-1")
@@ -714,6 +717,121 @@ struct CodexInNotchTests {
         #expect(session?.status == .inputNeeded)
         #expect(session?.preview == "Please choose a value")
         #expect(session?.startedAt == Date(timeIntervalSince1970: 1_000))
+    }
+
+    @Test @MainActor
+    func desktopProjectMetadataResolvesLocalRemoteChatsAndUnknown() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "local-projects": [
+                "local-1": ["name": "codex-in-notch"]
+            ],
+            "remote-projects": [
+                ["id": "remote-1", "label": "Remote workspace"]
+            ],
+            "thread-project-assignments": [
+                "thread-local": [
+                    "projectKind": "local",
+                    "projectId": "local-1"
+                ],
+                "thread-remote": [
+                    "projectKind": "remote",
+                    "projectId": "remote-1"
+                ]
+            ],
+            "projectless-thread-ids": ["thread-chat"]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let repository = CodexDesktopProjectMetadataRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.source == .current)
+        #expect(
+            snapshot.resolution(for: "thread-local")
+                == .project("codex-in-notch")
+        )
+        #expect(
+            snapshot.resolution(for: "thread-remote")
+                == .project("Remote workspace")
+        )
+        #expect(snapshot.resolution(for: "thread-chat") == .chats)
+        #expect(snapshot.resolution(for: "thread-missing") == .unavailable)
+    }
+
+    @Test @MainActor
+    func desktopProjectMetadataUsesBackupThenRetainsLastKnownGood() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let backupFile = URL(fileURLWithPath: stateFile.path + ".bak")
+        try Data("not-json".utf8).write(to: stateFile)
+        let validBackup = try JSONSerialization.data(withJSONObject: [
+            "local-projects": ["project-1": ["name": "Project"]],
+            "thread-project-assignments": [
+                "thread-1": [
+                    "projectKind": "local",
+                    "projectId": "project-1"
+                ]
+            ],
+            "projectless-thread-ids": []
+        ])
+        try validBackup.write(to: backupFile, options: .atomic)
+
+        let repository = CodexDesktopProjectMetadataRepository(
+            stateFileURL: stateFile
+        )
+        let backup = await repository.snapshot()
+        #expect(backup.source == .backup)
+        #expect(backup.resolution(for: "thread-1") == .project("Project"))
+
+        try Data("also-not-json".utf8).write(to: backupFile)
+        let retained = await repository.snapshot()
+        #expect(retained.source == .lastKnownGood)
+        #expect(retained.resolution(for: "thread-1") == .project("Project"))
+        #expect(retained.diagnostic?.contains("最近一次有效映射") == true)
+    }
+
+    @Test @MainActor
+    func desktopProjectMetadataNeverTreatsMissingAssignmentAsChats() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "thread-project-assignments": [:],
+            "projectless-thread-ids": ["explicit-chat"]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let repository = CodexDesktopProjectMetadataRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.resolution(for: "explicit-chat").displayName == "Chats")
+        #expect(
+            snapshot.resolution(for: "missing").displayName
+                == DesktopProjectMetadataSnapshot.unavailableProjectName
+        )
     }
 
     @Test @MainActor
@@ -727,7 +845,12 @@ struct CodexInNotchTests {
             ])
         ])
 
-        #expect(CodexSnapshotParser.activeSession(from: thread) == nil)
+        #expect(
+            CodexSnapshotParser.activeSession(
+                from: thread,
+                projectName: "Chats"
+            ) == nil
+        )
     }
 
     @Test @MainActor
@@ -783,11 +906,19 @@ struct CodexInNotchTests {
         ])
 
         #expect(
-            CodexSnapshotParser.session(from: state, thread: correctedThread)?.status
+            CodexSnapshotParser.session(
+                from: state,
+                thread: correctedThread,
+                projectName: "Chats"
+            )?.status
                 == .running
         )
         #expect(
-            CodexSnapshotParser.session(from: state, thread: threadLevelOnly)?.status
+            CodexSnapshotParser.session(
+                from: state,
+                thread: threadLevelOnly,
+                projectName: "Chats"
+            )?.status
                 == .running
         )
         var historicalState = state
@@ -795,7 +926,8 @@ struct CodexInNotchTests {
         #expect(
             CodexSnapshotParser.session(
                 from: historicalState,
-                thread: threadLevelOnly
+                thread: threadLevelOnly,
+                projectName: "Chats"
             )?.status == .approvalNeeded
         )
         var terminalState = state
@@ -804,11 +936,16 @@ struct CodexInNotchTests {
         #expect(
             CodexSnapshotParser.session(
                 from: terminalState,
-                thread: threadLevelOnly
+                thread: threadLevelOnly,
+                projectName: "Chats"
             )?.status == .completed
         )
         #expect(
-            CodexSnapshotParser.session(from: state, thread: differentActiveTurn)?.status
+            CodexSnapshotParser.session(
+                from: state,
+                thread: differentActiveTurn,
+                projectName: "Chats"
+            )?.status
                 == .approvalNeeded
         )
     }
@@ -842,6 +979,7 @@ struct CodexInNotchTests {
 
         let session = CodexSnapshotParser.activeSession(
             from: thread,
+            projectName: "Chats",
             showsContentPreviews: false
         )
 
@@ -1144,13 +1282,29 @@ struct CodexInNotchTests {
         let installer = CodexHookInstaller(paths: paths)
         try await installer.install(showsContentPreviews: true)
 
+        let projectStateFile = paths.supportDirectory
+            .appendingPathComponent(".codex-global-state.json")
+        let projectState = try JSONSerialization.data(withJSONObject: [
+            "local-projects": [
+                "project-1": ["name": "Codex in Notch"]
+            ],
+            "thread-project-assignments": [
+                "thread-1": [
+                    "projectKind": "local",
+                    "projectId": "project-1"
+                ]
+            ],
+            "projectless-thread-ids": []
+        ])
+        try projectState.write(to: projectStateFile, options: .atomic)
+
         let listedThread = JSONValue.object([
             "id": .string("thread-1"),
             "ephemeral": .bool(false),
             "parentThreadId": .null,
             "threadSource": .string("user"),
             "name": .string("Fast startup"),
-            "section": .object(["name": .string("Codex in Notch")]),
+            "section": .object(["name": .string("Pinned")]),
             "status": .object([
                 "type": .string("active"),
                 "activeFlags": .array([])
@@ -1177,7 +1331,10 @@ struct CodexInNotchTests {
                 paths: paths,
                 liveEventCutoff: .distantPast
             ),
-            hookInstaller: installer
+            hookInstaller: installer,
+            projectMetadata: CodexDesktopProjectMetadataRepository(
+                stateFileURL: projectStateFile
+            )
         )
 
         let ready = await service.fetchSnapshot(showsContentPreviews: true)
@@ -1188,6 +1345,7 @@ struct CodexInNotchTests {
         #expect(ready.sessions.count == 1)
         #expect(ready.sessions.first?.status == .running)
         #expect(ready.sessions.first?.turnID == "turn-1")
+        #expect(ready.sessions.first?.projectName == "Codex in Notch")
         #expect(afterTimeout.availability == .ready)
         #expect(afterTimeout.sessions == ready.sessions)
         #expect(afterTimeout.diagnostic?.contains("保留最近状态") == true)

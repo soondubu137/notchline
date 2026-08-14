@@ -2,9 +2,9 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | 已澄清，待 Phase 0 集成验证 |
-| 版本 | 0.6 |
-| 日期 | 2026-08-12 |
+| 文档状态 | Desktop Project 身份已实现；Desktop 未读能力仍待 Phase 0 验证 |
+| 版本 | 0.7 |
+| 日期 | 2026-08-14 |
 | 目标版本 | V1 MVP |
 | 目标平台 | macOS；带物理刘海与无刘海显示器 |
 
@@ -68,6 +68,7 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 - Project 必须是 Codex Desktop 左侧边栏中用户创建的 Project 实体；它可以对应一个或多个仓库。
 - 无 Project 归属的会话显示 `Chats`。
 - 禁止从 `cwd`、Git 根目录或路径最后一级推导 Project。
+- 当前公开 App Server 不提供 Desktop Project 身份；经产品批准，可使用 [`non-public-app-server-features.md`](non-public-app-server-features.md) 登记的严格只读私有适配器。只有 Desktop 的 `projectless-thread-ids` 明确命中时才显示 `Chats`；缺失或损坏必须显示 `Project unavailable` 并 fail closed。
 
 ## 5. 首次安装引导
 
@@ -267,3 +268,4 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 
 - 统一术语见 [`CONTEXT.md`](../CONTEXT.md)。
 - 范围、未读生命周期和 Project 身份见 [`docs/adr`](adr/)。
+- 所有未完全通过公开 App Server 实现的生产能力及其版本风险见 [`non-public-app-server-features.md`](non-public-app-server-features.md)。
