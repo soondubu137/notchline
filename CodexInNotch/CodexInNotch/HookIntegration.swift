@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum HookSetupStatus: Equatable, Sendable {
@@ -69,6 +70,12 @@ struct HookIntegrationPaths: Sendable {
 }
 
 actor CodexHookInstaller {
+    private enum ManagedInstallationState {
+        case missing
+        case current
+        case upgradeable
+    }
+
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
 
@@ -81,8 +88,20 @@ actor CodexHookInstaller {
     }
 
     func status(hasObservedEvent: Bool) -> HookSetupStatus {
-        guard isInstalled else { return .notInstalled }
+        guard installationState != .missing else { return .notInstalled }
         return hasObservedEvent ? .active : .reviewRequired
+    }
+
+    @discardableResult
+    func upgradeManagedHookIfNeeded() throws -> Bool {
+        guard installationState == .upgradeable else { return false }
+
+        try writeCurrentHookScript()
+        try writeSettings(
+            showsContentPreviews: storedShowsContentPreviews,
+            managedScript: Self.hookScript
+        )
+        return true
     }
 
     func install(showsContentPreviews: Bool) throws {
@@ -97,16 +116,11 @@ actor CodexHookInstaller {
             attributes: [.posixPermissions: 0o700]
         )
 
-        try Self.hookScript.write(
-            to: paths.script,
-            atomically: true,
-            encoding: .utf8
+        try writeCurrentHookScript()
+        try writeSettings(
+            showsContentPreviews: showsContentPreviews,
+            managedScript: Self.hookScript
         )
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: paths.script.path
-        )
-        try writeSettings(showsContentPreviews: showsContentPreviews)
         try mergeHooksConfiguration()
     }
 
@@ -140,14 +154,31 @@ actor CodexHookInstaller {
         "/usr/bin/python3 \"\(paths.script.path)\""
     }
 
-    private var isInstalled: Bool {
+    private var installationState: ManagedInstallationState {
         guard fileManager.isExecutableFile(atPath: paths.script.path),
               let installedScript = try? String(
                   contentsOf: paths.script,
                   encoding: .utf8
               ),
-              installedScript == Self.hookScript,
-              let data = try? Data(contentsOf: paths.hooksConfiguration),
+              hasManagedHookRegistration else {
+            return .missing
+        }
+
+        let installedDigest = Self.digest(of: installedScript)
+        if installedScript == Self.hookScript {
+            return storedManagedHookDigest == installedDigest
+                ? .current
+                : .upgradeable
+        }
+        if storedManagedHookDigest == installedDigest
+            || Self.legacyManagedHookDigests.contains(installedDigest) {
+            return .upgradeable
+        }
+        return .missing
+    }
+
+    private var hasManagedHookRegistration: Bool {
+        guard let data = try? Data(contentsOf: paths.hooksConfiguration),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let hooks = root["hooks"] as? [String: Any] else {
             return false
@@ -166,9 +197,46 @@ actor CodexHookInstaller {
         }
     }
 
-    private func writeSettings(showsContentPreviews: Bool) throws {
+    private var storedSettings: [String: Any] {
+        guard let data = try? Data(contentsOf: paths.settings),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return root
+    }
+
+    private var storedShowsContentPreviews: Bool {
+        storedSettings["showsContentPreviews"] as? Bool ?? true
+    }
+
+    private var storedManagedHookDigest: String? {
+        storedSettings[Self.managedHookDigestKey] as? String
+    }
+
+    private func writeCurrentHookScript() throws {
+        try Self.hookScript.write(
+            to: paths.script,
+            atomically: true,
+            encoding: .utf8
+        )
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: paths.script.path
+        )
+    }
+
+    private func writeSettings(
+        showsContentPreviews: Bool,
+        managedScript: String? = nil
+    ) throws {
+        var settings = storedSettings
+        settings["showsContentPreviews"] = showsContentPreviews
+        if let managedScript {
+            settings[Self.managedHookDigestKey] = Self.digest(of: managedScript)
+            settings[Self.managedHookVersionKey] = Self.currentManagedHookVersion
+        }
         let data = try JSONSerialization.data(
-            withJSONObject: ["showsContentPreviews": showsContentPreviews],
+            withJSONObject: settings,
             options: [.prettyPrinted, .sortedKeys]
         )
         try data.write(to: paths.settings, options: .atomic)
@@ -176,6 +244,12 @@ actor CodexHookInstaller {
             [.posixPermissions: 0o600],
             ofItemAtPath: paths.settings.path
         )
+    }
+
+    nonisolated private static func digest(of script: String) -> String {
+        SHA256.hash(data: Data(script.utf8)).map {
+            String(format: "%02x", $0)
+        }.joined()
     }
 
     private func mergeHooksConfiguration() throws {
@@ -304,6 +378,17 @@ actor CodexHookInstaller {
         )
     }
 
+    private static let managedHookDigestKey = "managedHookSHA256"
+    private static let managedHookVersionKey = "managedHookVersion"
+    private static let currentManagedHookVersion = 1
+
+    // Releases before managed-hook metadata used this exact helper. Recognizing
+    // its digest provides a one-time safe migration without accepting arbitrary
+    // executable files at the managed path.
+    private static let legacyManagedHookDigests: Set<String> = [
+        "064bacb3aa56c5fb7399c192fe51fa8e1d8dfda24f6c61b72869448cbced839b"
+    ]
+
     private static let hookScript = #"""
 #!/usr/bin/python3
 import json
@@ -370,6 +455,7 @@ struct HookTurnState: Sendable {
     var lifecycleStatus: MonitorStatus
     var pendingInput: HookPendingInputEvidence?
     var isApprovalPending: Bool
+    var isTerminalStatusPending: Bool = false
     var startedAt: Date
     var lastEventAt: Date
     var hasLiveBoundary: Bool
@@ -379,7 +465,12 @@ struct HookTurnState: Sendable {
 
     nonisolated var status: MonitorStatus {
         switch lifecycleStatus {
-        case .unknown, .completed, .error, .cancelled:
+        case .unknown:
+            // A live Stop establishes a terminal boundary but not its outcome.
+            // Keep the last user-visible active state while App Server resolves
+            // completed/failed/interrupted instead of flashing Unknown.
+            return isTerminalStatusPending && hasLiveBoundary ? .running : .unknown
+        case .completed, .error, .cancelled:
             return lifecycleStatus
         default:
             if pendingInput != nil {
@@ -537,11 +628,19 @@ actor HookEventRepository {
         return snapshot(didConsumeEvents: true, diagnostic: diagnostic)
     }
 
-    func removeThreads(notIn unarchivedThreadIDs: Set<String>) -> HookStateSnapshot {
+    func removeThreads(
+        notIn unarchivedThreadIDs: Set<String>,
+        snapshotStartedAt: Date
+    ) -> HookStateSnapshot {
         let originalCount = turnsByThreadID.count
         let now = Date()
         turnsByThreadID = turnsByThreadID.filter {
             if unarchivedThreadIDs.contains($0.key) {
+                return true
+            }
+            // A list request that began before the latest Hook boundary cannot
+            // prove that the new Turn was archived or deleted.
+            if snapshotStartedAt < $0.value.lastEventAt {
                 return true
             }
             // A prompt hook can arrive just before the state DB is updated.
@@ -581,10 +680,12 @@ actor HookEventRepository {
         threadID: String,
         turnID: String,
         isInputPending: Bool,
-        isApprovalPending: Bool
+        isApprovalPending: Bool,
+        snapshotStartedAt: Date
     ) -> Bool {
         guard var state = turnsByThreadID[threadID],
               state.turnID == turnID,
+              snapshotStartedAt >= state.lastEventAt,
               ![.completed, .error, .cancelled].contains(
                   state.lifecycleStatus
               ) else {
@@ -594,6 +695,7 @@ actor HookEventRepository {
         state.lifecycleStatus = .running
         state.pendingInput = isInputPending ? .appServerSnapshot : nil
         state.isApprovalPending = isApprovalPending
+        state.isTerminalStatusPending = false
         state.hasLiveBoundary = true
         turnsByThreadID[threadID] = state
         return true
@@ -602,11 +704,13 @@ actor HookEventRepository {
     func resolveTerminalStatus(
         threadID: String,
         turnID: String,
-        status: MonitorStatus
+        status: MonitorStatus,
+        snapshotStartedAt: Date
     ) -> Bool {
         guard [.completed, .error, .cancelled].contains(status),
               var state = turnsByThreadID[threadID],
-              state.turnID == turnID else {
+              state.turnID == turnID,
+              snapshotStartedAt >= state.lastEventAt else {
             return false
         }
         guard state.status != status
@@ -617,6 +721,27 @@ actor HookEventRepository {
         state.lifecycleStatus = status
         state.pendingInput = nil
         state.isApprovalPending = false
+        state.isTerminalStatusPending = false
+        turnsByThreadID[threadID] = state
+        return true
+    }
+
+    func markTerminalStatusUnresolved(
+        threadID: String,
+        turnID: String,
+        snapshotStartedAt: Date
+    ) -> Bool {
+        guard var state = turnsByThreadID[threadID],
+              state.turnID == turnID,
+              snapshotStartedAt >= state.lastEventAt,
+              state.lifecycleStatus == .unknown,
+              state.isTerminalStatusPending else {
+            return false
+        }
+
+        // Unknown is appropriate only after an authoritative resolution attempt
+        // failed or returned no status, not as the routine Stop intermediate state.
+        state.isTerminalStatusPending = false
         turnsByThreadID[threadID] = state
         return true
     }
@@ -690,7 +815,11 @@ actor HookEventRepository {
                 observedLiveEvent: true,
                 turns: &turns
             ) {
-                $0.isApprovalPending = true
+                // PermissionRequest says that the approval pipeline ran. It does
+                // not prove a human is still needed: automatic review can resolve
+                // the request without surfacing an approval UI. The fresh App
+                // Server waitingOnApproval flag is the authoritative evidence.
+                $0.isApprovalPending = false
             }
         case "PreToolUse" where event.toolName == "request_user_input":
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
@@ -740,6 +869,7 @@ actor HookEventRepository {
                 $0.lifecycleStatus = .unknown
                 $0.pendingInput = nil
                 $0.isApprovalPending = false
+                $0.isTerminalStatusPending = isLiveEvent
                 $0.assistantPreview = event.lastAssistantMessage
             }
         default:

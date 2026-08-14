@@ -7,8 +7,10 @@ struct NotchOverlayView: View {
         GeometryReader { proxy in
             ZStack(alignment: .top) {
                 PanelSurface(
-                    geometry: store.geometry,
-                    isExpanded: store.isExpanded
+                    cornerRadius: PanelMetrics.surfaceCornerRadius(
+                        geometry: store.geometry,
+                        menuBarHeight: store.compactHeight
+                    )
                 )
 
                 VStack(spacing: 0) {
@@ -60,35 +62,71 @@ struct NotchOverlayView: View {
 }
 
 private struct PanelSurface: View {
-    let geometry: DisplayGeometry
-    let isExpanded: Bool
+    let cornerRadius: CGFloat
 
     var body: some View {
-        Image(assetName)
-            .resizable(
-                capInsets: EdgeInsets(
-                    top: 12,
-                    leading: 24,
-                    bottom: 12,
-                    trailing: 24
-                ),
-                resizingMode: .stretch
-            )
-            .interpolation(.high)
+        PanelContour(cornerRadius: cornerRadius)
+            .fill(.black)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    private var assetName: String {
-        if isExpanded {
-            return "PanelNotchCompact"
-        }
+private struct PanelContour: Shape {
+    let cornerRadius: CGFloat
 
-        switch geometry {
-        case .notched:
-            return "PanelNotchCompact"
-        case .noNotch:
-            return "PanelFallbackCompact"
-        }
+    func path(in rect: CGRect) -> Path {
+        let radius = min(
+            max(0, cornerRadius),
+            min(rect.height / 2, rect.width / 4)
+        )
+        let controlOffset = radius * 0.552_284_749_8
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addCurve(
+            to: CGPoint(x: rect.maxX - radius, y: rect.minY + radius),
+            control1: CGPoint(x: rect.maxX - controlOffset, y: rect.minY),
+            control2: CGPoint(
+                x: rect.maxX - radius,
+                y: rect.minY + radius - controlOffset
+            )
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius))
+        path.addCurve(
+            to: CGPoint(x: rect.maxX - 2 * radius, y: rect.maxY),
+            control1: CGPoint(
+                x: rect.maxX - radius,
+                y: rect.maxY - radius + controlOffset
+            ),
+            control2: CGPoint(
+                x: rect.maxX - 2 * radius + controlOffset,
+                y: rect.maxY
+            )
+        )
+        path.addLine(to: CGPoint(x: rect.minX + 2 * radius, y: rect.maxY))
+        path.addCurve(
+            to: CGPoint(x: rect.minX + radius, y: rect.maxY - radius),
+            control1: CGPoint(
+                x: rect.minX + 2 * radius - controlOffset,
+                y: rect.maxY
+            ),
+            control2: CGPoint(
+                x: rect.minX + radius,
+                y: rect.maxY - radius + controlOffset
+            )
+        )
+        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.minY + radius))
+        path.addCurve(
+            to: CGPoint(x: rect.minX, y: rect.minY),
+            control1: CGPoint(
+                x: rect.minX + radius,
+                y: rect.minY + radius - controlOffset
+            ),
+            control2: CGPoint(x: rect.minX + controlOffset, y: rect.minY)
+        )
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -204,29 +242,35 @@ private struct UsageRing: View {
 
     var body: some View {
         ZStack {
-            Circle()
-                .stroke(palette.track, lineWidth: 2)
-
-            if progress >= 0.999 {
+            if remainingProgress <= 0 {
+                Circle()
+                    .stroke(palette.track, lineWidth: 2)
+            } else {
                 Circle()
                     .stroke(palette.remaining, lineWidth: 2)
-            } else if progress > 0 {
-                Circle()
-                    .trim(from: 0, to: progress)
-                    .stroke(
-                        palette.remaining,
-                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-                    .scaleEffect(x: -1, y: 1)
+
+                if consumedProgress > 0 {
+                    Circle()
+                        .trim(from: 0, to: consumedProgress)
+                        .stroke(
+                            palette.track,
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .scaleEffect(x: -1, y: 1)
+                }
             }
         }
         .frame(width: 18, height: 18)
         .accessibilityHidden(true)
     }
 
-    private var progress: CGFloat {
+    private var remainingProgress: CGFloat {
         CGFloat(min(max(remainingPercent ?? 0, 0), 100)) / 100
+    }
+
+    private var consumedProgress: CGFloat {
+        1 - remainingProgress
     }
 
     private var palette: UsagePalette {
@@ -266,17 +310,21 @@ private struct ExpandedPanelContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(Color.white.opacity(0.15))
-                .frame(height: 1)
-                .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
+            sessionRegion
+            ExpandedPanelFooter()
+        }
+        .foregroundStyle(.white)
+    }
 
+    @ViewBuilder
+    private var sessionRegion: some View {
+        Group {
             if store.sessions.isEmpty {
                 Text(store.emptyListMessage)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.56))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .frame(height: PanelMetrics.thinExpandedContentHeight - 1)
+                    .frame(height: PanelMetrics.thinExpandedBodyHeight)
             } else {
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 0) {
@@ -293,12 +341,52 @@ private struct ExpandedPanelContent: View {
                     )
                 )
                 .scrollIndicators(.hidden)
-
-                Color.clear
-                    .frame(height: 15)
             }
         }
-        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.15))
+                .frame(height: 1)
+                .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
+        }
+    }
+}
+
+private struct ExpandedPanelFooter: View {
+    @Environment(\.openSettings) private var openSettings
+    @EnvironmentObject private var store: MonitorStore
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(store.expandedFooterText)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.68))
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Button {
+                openSettings()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16, weight: .regular))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.white.opacity(0.68))
+            .accessibilityLabel("Open Settings")
+            .help("Open Settings")
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: PanelMetrics.expandedFooterHeight)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.15))
+                .frame(height: 1)
+        }
+        .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
     }
 }
 

@@ -27,6 +27,44 @@ struct CodexInNotchTests {
         #expect(PanelMetrics.fallbackCompactWidth(statusReadoutText: "Input needed") == 200)
     }
 
+    @Test
+    func noNotchCornerRadiusScalesBelowNativeNotchHeight() {
+        #expect(
+            PanelMetrics.surfaceCornerRadius(
+                geometry: .noNotch,
+                menuBarHeight: 46
+            ) == 10
+        )
+        #expect(
+            PanelMetrics.surfaceCornerRadius(
+                geometry: .noNotch,
+                menuBarHeight: 38
+            ) == 10
+        )
+        #expect(
+            PanelMetrics.surfaceCornerRadius(
+                geometry: .noNotch,
+                menuBarHeight: 19
+            ) == 5
+        )
+
+        let standardExternalDisplayRadius = PanelMetrics.surfaceCornerRadius(
+            geometry: .noNotch,
+            menuBarHeight: 24
+        )
+        #expect(abs(standardExternalDisplayRadius - 6.316) < 0.001)
+    }
+
+    @Test
+    func notchedSurfaceKeepsCurrentCornerRadius() {
+        #expect(
+            PanelMetrics.surfaceCornerRadius(
+                geometry: .notched,
+                menuBarHeight: 24
+            ) == 10
+        )
+    }
+
     @Test @MainActor
     func expandedSizeUsesWiderBaselineAndKeepsCompactHeaderHeight() {
         let noNotchSize = PanelMetrics.size(
@@ -80,6 +118,52 @@ struct CodexInNotchTests {
         #expect(UsageLevel(remainingPercent: 50) == .warning)
         #expect(UsageLevel(remainingPercent: 15) == .warning)
         #expect(UsageLevel(remainingPercent: 14) == .critical)
+    }
+
+    @Test
+    func todayTokenUsageUsesStandardCompactNumberFormatting() {
+        #expect(UsageSummaryFormatter.compactTokenCount(13_400) == "13.4K")
+        #expect(UsageSummaryFormatter.compactTokenCount(323_000) == "323K")
+        #expect(UsageSummaryFormatter.compactTokenCount(2_800_000) == "2.8M")
+        #expect(UsageSummaryFormatter.compactTokenCount(1_030_000_000) == "1.03B")
+        #expect(UsageSummaryFormatter.compactTokenCount(999) == "999")
+    }
+
+    @Test
+    func resetTextUsesLocalCalendarDays() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let now = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 13,
+            hour: 10
+        )))
+        let laterToday = try #require(calendar.date(byAdding: .hour, value: 8, to: now))
+        let tomorrow = try #require(calendar.date(byAdding: .day, value: 1, to: now))
+        let threeDays = try #require(calendar.date(byAdding: .day, value: 3, to: now))
+
+        #expect(
+            UsageSummaryFormatter.resetText(
+                resetsAt: laterToday,
+                now: now,
+                calendar: calendar
+            ) == "Resets today"
+        )
+        #expect(
+            UsageSummaryFormatter.resetText(
+                resetsAt: tomorrow,
+                now: now,
+                calendar: calendar
+            ) == "Resets in 1 day"
+        )
+        #expect(
+            UsageSummaryFormatter.resetText(
+                resetsAt: threeDays,
+                now: now,
+                calendar: calendar
+            ) == "Resets in 3 days"
+        )
     }
 
     @Test @MainActor
@@ -542,6 +626,52 @@ struct CodexInNotchTests {
         #expect(quota.resetsAt == Date(timeIntervalSince1970: 2_000))
     }
 
+    @Test
+    func accountUsageParserSelectsTheLocalTodayBucket() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let now = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 13,
+            hour: 12
+        )))
+        let response = JSONValue.object([
+            "dailyUsageBuckets": .array([
+                .object([
+                    "startDate": .string("2026-08-12"),
+                    "tokens": .number(9_999)
+                ]),
+                .object([
+                    "startDate": .string("2026-08-13"),
+                    "tokens": .number(13_400)
+                ])
+            ])
+        ])
+
+        #expect(
+            CodexSnapshotParser.todayTokenCount(
+                from: response,
+                now: now,
+                calendar: calendar
+            ) == 13_400
+        )
+        #expect(
+            CodexSnapshotParser.todayTokenCount(
+                from: .object(["dailyUsageBuckets": .array([])]),
+                now: now,
+                calendar: calendar
+            ) == 0
+        )
+        #expect(
+            CodexSnapshotParser.todayTokenCount(
+                from: .object([:]),
+                now: now,
+                calendar: calendar
+            ) == nil
+        )
+    }
+
     @Test @MainActor
     func activeThreadParserUsesProjectWaitingFlagAndPublicPreview() {
         let thread = JSONValue.object([
@@ -809,7 +939,7 @@ struct CodexInNotchTests {
             )
             let expectedContentHeight = CGFloat(visibleSessionCount)
                 * PanelMetrics.sessionRowHeight
-                + 16
+                + PanelMetrics.expandedFooterHeight
             #expect(store.expandedContentHeight == expectedContentHeight)
             #expect(
                 store.currentPanelSize.height
@@ -907,6 +1037,99 @@ struct CodexInNotchTests {
         #expect(!didOpenMissingTarget)
         #expect(failureStore.isExpanded)
         #expect(failureStore.lastIntegrationMessage.contains("未能接受"))
+    }
+
+    @Test @MainActor
+    func startupWithLegacyManagedHookAndNoTurnsIsIdle() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+
+        // Recreate an installation from before managed Hook hashes were
+        // persisted. The helper remains executable and registered.
+        try legacyManagedHookScript.write(
+            to: paths.script,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: paths.script.path
+        )
+        try JSONSerialization.data(
+            withJSONObject: ["showsContentPreviews": false],
+            options: [.prettyPrinted, .sortedKeys]
+        ).write(to: paths.settings, options: .atomic)
+
+        #expect(await installer.status(hasObservedEvent: true) == .active)
+
+        // Persist trust without creating a live Turn, then simulate a fresh app
+        // launch while Codex Desktop is still running.
+        let terminalEvent = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "SessionEnd",
+            "session_id": "thread-finished"
+        ])
+        try terminalEvent.write(
+            to: paths.eventsDirectory.appendingPathComponent("trusted.json")
+        )
+        let seedRepository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        let seededState = await seedRepository.consumeEvents()
+        #expect(seededState.hasObservedEvent)
+        #expect(seededState.turns.isEmpty)
+
+        let client = CodexAppServerStub(
+            listedThreads: [],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookInstaller: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadListRequests(
+            client,
+            atLeast: 1,
+            completed: true
+        )
+        let methods = await client.requestedMethods()
+        let upgradedScript = try String(
+            contentsOf: paths.script,
+            encoding: .utf8
+        )
+        let settingsData = try Data(contentsOf: paths.settings)
+        let settings = try #require(
+            JSONSerialization.jsonObject(with: settingsData) as? [String: Any]
+        )
+        await service.disconnect()
+
+        #expect(snapshot.availability == .ready)
+        #expect(snapshot.sessions.isEmpty)
+        #expect(
+            MonitorAggregation.status(
+                availability: snapshot.availability,
+                sessions: snapshot.sessions
+            ) == .idle
+        )
+        #expect(upgradedScript.contains(#"payload.get("tool_use_id")"#))
+        #expect(settings["showsContentPreviews"] as? Bool == false)
+        #expect(settings["managedHookSHA256"] as? String != nil)
+        #expect(settings["managedHookVersion"] as? Int == 1)
+        #expect(methods.contains("thread/list"))
+        #expect(!methods.contains("thread/loaded/list"))
+        #expect(!methods.contains("thread/read"))
     }
 
     @Test @MainActor
@@ -1038,6 +1261,11 @@ struct CodexInNotchTests {
         let restored = await restoredService.fetchSnapshot(
             showsContentPreviews: false
         )
+        try await waitForThreadListRequests(
+            restoredClient,
+            atLeast: 1,
+            completed: true
+        )
         let methods = await restoredClient.requestedMethods()
         await restoredService.disconnect()
 
@@ -1049,7 +1277,68 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
-    func newHookBoundaryRefreshesAppServerFlagsBeforeCorrection() async throws {
+    func idleToRunningDoesNotWaitForSlowThreadList() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+        let trusted = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "SessionEnd",
+            "session_id": "thread-finished"
+        ])
+        try trusted.write(
+            to: paths.eventsDirectory.appendingPathComponent("0.json")
+        )
+
+        let client = CodexAppServerStub(
+            listedThreads: [],
+            loadedListResults: [],
+            threadListDelayNanoseconds: 2_000_000_000
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        let idle = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadListRequests(client, atLeast: 1)
+        #expect(idle.availability == .ready)
+        #expect(idle.sessions.isEmpty)
+
+        let prompt = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ])
+        try prompt.write(
+            to: paths.eventsDirectory.appendingPathComponent("1.json")
+        )
+
+        let startedAt = Date()
+        let running = await service.fetchSnapshot(showsContentPreviews: false)
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let threadListRequests = await client.requestCount(method: "thread/list")
+        await service.disconnect()
+
+        #expect(running.sessions.first?.status == .running)
+        #expect(elapsed < 1.5)
+        #expect(threadListRequests == 1)
+    }
+
+    @Test @MainActor
+    func permissionRequestAloneDoesNotPublishApprovalNeeded() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
             try? FileManager.default.removeItem(
@@ -1095,9 +1384,15 @@ struct CodexInNotchTests {
 
         let initial = await service.fetchSnapshot(showsContentPreviews: false)
         #expect(initial.sessions.first?.status == .running)
+        try await waitForThreadListRequests(
+            client,
+            atLeast: 1,
+            completed: true
+        )
+        await client.setThreadListDelayNanoseconds(2_000_000_000)
 
         let approval = try JSONSerialization.data(withJSONObject: [
-            "received_at": timestamp + 1,
+            "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "PermissionRequest",
             "session_id": "thread-1",
             "turn_id": "turn-1"
@@ -1105,11 +1400,33 @@ struct CodexInNotchTests {
         try approval.write(
             to: paths.eventsDirectory.appendingPathComponent("1.json")
         )
-        let corrected = await service.fetchSnapshot(showsContentPreviews: false)
+        let startedAt = Date()
+        let approvalSnapshot = await service.fetchSnapshot(
+            showsContentPreviews: false
+        )
+        let elapsed = Date().timeIntervalSince(startedAt)
+        try await waitForThreadListRequests(client, atLeast: 2)
+
+        let input = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "request_user_input",
+            "tool_use_id": "tool-1"
+        ])
+        try input.write(
+            to: paths.eventsDirectory.appendingPathComponent("2.json")
+        )
+        let inputSnapshot = await service.fetchSnapshot(
+            showsContentPreviews: false
+        )
         let threadListRequests = await client.requestCount(method: "thread/list")
         await service.disconnect()
 
-        #expect(corrected.sessions.first?.status == .running)
+        #expect(approvalSnapshot.sessions.first?.status == .running)
+        #expect(inputSnapshot.sessions.first?.status == .inputNeeded)
+        #expect(elapsed < 1.5)
         #expect(threadListRequests == 2)
     }
 
@@ -1152,8 +1469,14 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let startedAt = Date()
         let first = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadListRequests(
+            client,
+            atLeast: 1,
+            completed: true
+        )
+        let startedAt = Date()
+        let second = await service.fetchSnapshot(showsContentPreviews: false)
         let elapsed = Date().timeIntervalSince(startedAt)
         for _ in 0..<50 {
             if await client.requestCount(method: "thread/read") > 0 {
@@ -1161,18 +1484,122 @@ struct CodexInNotchTests {
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
-        let second = await service.fetchSnapshot(showsContentPreviews: false)
+        let third = await service.fetchSnapshot(showsContentPreviews: false)
         let methods = await client.requestedMethods()
         await service.disconnect()
 
         #expect(first.availability == .ready)
         #expect(first.sessions.first?.status == .unknown)
         #expect(second.availability == .ready)
+        #expect(third.availability == .ready)
         // The detail stub sleeps for two seconds. Keep enough headroom for
         // parallel MainActor test scheduling while still proving fetchSnapshot
         // did not await the detail request.
         #expect(elapsed < 1.5)
         #expect(methods.filter { $0 == "thread/read" }.count == 1)
+    }
+
+    @Test @MainActor
+    func liveStopTransitionsDirectlyFromRunningToCompleted() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+        let prompt = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-terminal",
+            "turn_id": "turn-terminal"
+        ])
+        try prompt.write(
+            to: paths.eventsDirectory.appendingPathComponent("0.json")
+        )
+
+        let listedThread = JSONValue.object([
+            "id": .string("thread-terminal"),
+            "ephemeral": .bool(false),
+            "threadSource": .string("user"),
+            "updatedAt": .number(Date().timeIntervalSince1970),
+            "status": .object([
+                "type": .string("active"),
+                "activeFlags": .array([])
+            ]),
+            "turns": .array([
+                .object([
+                    "id": .string("turn-terminal"),
+                    "status": .string("inProgress")
+                ])
+            ])
+        ])
+        let completedThread = JSONValue.object([
+            "id": .string("thread-terminal"),
+            "ephemeral": .bool(false),
+            "threadSource": .string("user"),
+            "turns": .array([
+                .object([
+                    "id": .string("turn-terminal"),
+                    "status": .string("completed")
+                ])
+            ])
+        ])
+        let client = CodexAppServerStub(
+            listedThreads: [listedThread],
+            loadedListResults: [],
+            threadReadDelayNanoseconds: 200_000_000,
+            threadReadResult: .success(.object(["thread": completedThread]))
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        let initial = await service.fetchSnapshot(showsContentPreviews: false)
+        #expect(initial.sessions.first?.status == .running)
+        try await waitForThreadListRequests(
+            client,
+            atLeast: 1,
+            completed: true
+        )
+
+        let stop = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "Stop",
+            "session_id": "thread-terminal",
+            "turn_id": "turn-terminal"
+        ])
+        try stop.write(
+            to: paths.eventsDirectory.appendingPathComponent("1.json")
+        )
+
+        var observedStatuses: [MonitorStatus] = []
+        for _ in 0..<100 {
+            let snapshot = await service.fetchSnapshot(
+                showsContentPreviews: false
+            )
+            if let status = snapshot.sessions.first?.status {
+                observedStatuses.append(status)
+            }
+            if observedStatuses.last == .completed {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await service.disconnect()
+
+        #expect(observedStatuses.first == .running)
+        #expect(observedStatuses.last == .completed)
+        #expect(!observedStatuses.contains(.unknown))
+        #expect(await client.requestCount(method: "thread/read") == 1)
     }
 
     @Test @MainActor
@@ -1234,6 +1661,12 @@ struct CodexInNotchTests {
         let startedAt = Date()
         let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
         let elapsed = Date().timeIntervalSince(startedAt)
+        for _ in 0..<200 {
+            if await client.requestCount(method: "thread/list") > 0 {
+                break
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
         let requestedMethods = await client.requestedMethods()
         await service.disconnect()
 
@@ -1336,6 +1769,259 @@ for line in sys.stdin:
         let launchCount = try String(contentsOf: countFile, encoding: .utf8)
         await client.disconnect()
 
+        #expect(launchCount == "1")
+    }
+
+    @Test @MainActor
+    func failedLivenessProbeResetsUnresponsiveAppServer() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexInNotchTimeoutTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let executable = root.appendingPathComponent("fake_app_server.py")
+        let countFile = executable.appendingPathExtension("count")
+        let source = #"""
+#!/usr/bin/python3
+import json
+import os
+import sys
+
+count_path = os.path.abspath(__file__) + ".count"
+try:
+    with open(count_path, "r", encoding="utf-8") as handle:
+        launch = int(handle.read()) + 1
+except Exception:
+    launch = 1
+with open(count_path, "w", encoding="utf-8") as handle:
+    handle.write(str(launch))
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+        if "id" not in request:
+            continue
+        if request.get("method") == "initialize" or launch > 1:
+            print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+    except Exception:
+        pass
+"""#
+        try source.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+
+        let client = CodexAppServerClient(
+            executableURL: executable,
+            requestTimeoutNanoseconds: 2_000_000_000,
+            livenessProbeGraceNanoseconds: 50_000_000,
+            livenessProbeTimeoutNanoseconds: 100_000_000
+        )
+        try await client.connect()
+
+        do {
+            _ = try await client.request(
+                method: "business/read",
+                params: nil,
+                timeoutNanoseconds: 100_000_000
+            )
+            Issue.record("Expected business/read to time out")
+        } catch let error as CodexAppServerError {
+            #expect(error == .timeout(method: "business/read"))
+        }
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try await client.connect()
+        _ = try await client.request(method: "recovered/probe", params: nil)
+        let launchCount = try String(contentsOf: countFile, encoding: .utf8)
+        await client.disconnect()
+
+        #expect(launchCount == "2")
+    }
+
+    @Test @MainActor
+    func concurrentBusinessTimeoutsDoNotBypassSuccessfulLivenessProbe() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexInNotchProbeTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let executable = root.appendingPathComponent("fake_app_server.py")
+        let countFile = executable.appendingPathExtension("count")
+        let probeFile = executable.appendingPathExtension("probe")
+        let source = #"""
+#!/usr/bin/python3
+import json
+import os
+import sys
+
+count_path = os.path.abspath(__file__) + ".count"
+probe_path = os.path.abspath(__file__) + ".probe"
+try:
+    with open(count_path, "r", encoding="utf-8") as handle:
+        launch = int(handle.read()) + 1
+except Exception:
+    launch = 1
+with open(count_path, "w", encoding="utf-8") as handle:
+    handle.write(str(launch))
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+        if "id" not in request:
+            continue
+        method = request.get("method")
+        if method == "thread/loaded/list":
+            with open(probe_path, "w", encoding="utf-8") as handle:
+                handle.write("ok")
+            result = {"data": []}
+        elif method in ("initialize", "after/probe"):
+            result = {}
+        else:
+            continue
+        print(json.dumps({"id": request["id"], "result": result}), flush=True)
+    except Exception:
+        pass
+"""#
+        try source.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+
+        let client = CodexAppServerClient(
+            executableURL: executable,
+            requestTimeoutNanoseconds: 2_000_000_000,
+            livenessProbeGraceNanoseconds: 300_000_000,
+            livenessProbeTimeoutNanoseconds: 100_000_000
+        )
+        try await client.connect()
+
+        let timeoutErrors = await withTaskGroup(
+            of: CodexAppServerError?.self,
+            returning: [CodexAppServerError].self
+        ) { group in
+            for method in ["first/read", "second/read"] {
+                group.addTask {
+                    do {
+                        _ = try await client.request(
+                            method: method,
+                            params: nil,
+                            timeoutNanoseconds: 100_000_000
+                        )
+                        Issue.record("Expected \(method) to time out")
+                        return nil
+                    } catch let error as CodexAppServerError {
+                        return error
+                    } catch {
+                        Issue.record("Unexpected error for \(method): \(error)")
+                        return nil
+                    }
+                }
+            }
+
+            var errors: [CodexAppServerError] = []
+            for await error in group {
+                if let error {
+                    errors.append(error)
+                }
+            }
+            return errors
+        }
+        #expect(timeoutErrors.count == 2)
+        #expect(timeoutErrors.contains(.timeout(method: "first/read")))
+        #expect(timeoutErrors.contains(.timeout(method: "second/read")))
+
+        try await Task.sleep(nanoseconds: 450_000_000)
+        _ = try await client.request(method: "after/probe", params: nil)
+        let launchCount = try String(contentsOf: countFile, encoding: .utf8)
+        await client.disconnect()
+
+        #expect(FileManager.default.fileExists(atPath: probeFile.path))
+        #expect(launchCount == "1")
+    }
+
+    @Test @MainActor
+    func lateResponseDuringGracePeriodPreventsLivenessProbe() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexInNotchLateResponseTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let executable = root.appendingPathComponent("fake_app_server.py")
+        let countFile = executable.appendingPathExtension("count")
+        let probeFile = executable.appendingPathExtension("probe")
+        let source = #"""
+#!/usr/bin/python3
+import json
+import os
+import sys
+import time
+
+count_path = os.path.abspath(__file__) + ".count"
+probe_path = os.path.abspath(__file__) + ".probe"
+with open(count_path, "w", encoding="utf-8") as handle:
+    handle.write("1")
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+        if "id" not in request:
+            continue
+        method = request.get("method")
+        if method == "slow/read":
+            time.sleep(0.15)
+        if method == "thread/loaded/list":
+            with open(probe_path, "w", encoding="utf-8") as handle:
+                handle.write("unexpected")
+            result = {"data": []}
+        else:
+            result = {}
+        print(json.dumps({"id": request["id"], "result": result}), flush=True)
+    except Exception:
+        pass
+"""#
+        try source.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+
+        let client = CodexAppServerClient(
+            executableURL: executable,
+            requestTimeoutNanoseconds: 2_000_000_000,
+            livenessProbeGraceNanoseconds: 300_000_000,
+            livenessProbeTimeoutNanoseconds: 100_000_000
+        )
+        try await client.connect()
+
+        do {
+            _ = try await client.request(
+                method: "slow/read",
+                params: nil,
+                timeoutNanoseconds: 100_000_000
+            )
+            Issue.record("Expected slow/read to time out")
+        } catch let error as CodexAppServerError {
+            #expect(error == .timeout(method: "slow/read"))
+        }
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        _ = try await client.request(method: "after/late-response", params: nil)
+        let launchCount = try String(contentsOf: countFile, encoding: .utf8)
+        await client.disconnect()
+
+        #expect(!FileManager.default.fileExists(atPath: probeFile.path))
         #expect(launchCount == "1")
     }
 
@@ -1463,7 +2149,7 @@ for line in sys.stdin:
             liveEventCutoff: .distantPast
         )
         let waitingSnapshot = await repository.consumeEvents()
-        #expect(waitingSnapshot.turns.first?.status == .approvalNeeded)
+        #expect(waitingSnapshot.turns.first?.status == .running)
 
         let stop = try JSONSerialization.data(withJSONObject: [
             "received_at": timestamp + 3,
@@ -1483,9 +2169,18 @@ for line in sys.stdin:
         #expect(snapshot.hasObservedEvent)
         #expect(turn.threadID == "thread-1")
         #expect(turn.turnID == "turn-1")
-        #expect(turn.status == .unknown)
+        #expect(turn.lifecycleStatus == .unknown)
+        #expect(turn.isTerminalStatusPending)
+        #expect(turn.status == .running)
         #expect(turn.promptPreview == "private prompt")
         #expect(turn.assistantPreview == "private answer")
+        let markedUnresolved = await repository.markTerminalStatusUnresolved(
+            threadID: "thread-1",
+            turnID: "turn-1",
+            snapshotStartedAt: Date(timeIntervalSince1970: timestamp + 4)
+        )
+        #expect(markedUnresolved)
+        #expect(await repository.consumeEvents().turns.first?.status == .unknown)
         #expect(!persistedText.contains("private prompt"))
         #expect(!persistedText.contains("private answer"))
         #expect(!persistedText.contains("thread-1"))
@@ -1657,8 +2352,8 @@ for line in sys.stdin:
             "turn_id": "turn-2",
             "tool_use_id": "bash-2"
         ], named: "9.json")
-        let approval = await repository.consumeEvents()
-        #expect(approval.turns.first?.status == .approvalNeeded)
+        let permissionRequest = await repository.consumeEvents()
+        #expect(permissionRequest.turns.first?.status == .running)
     }
 
     @Test @MainActor
@@ -1755,22 +2450,44 @@ for line in sys.stdin:
             paths: paths,
             liveEventCutoff: .distantPast
         )
-        #expect(await repository.consumeEvents().turns.first?.status == .approvalNeeded)
+        #expect(await repository.consumeEvents().turns.first?.status == .running)
 
         let ignoredDifferentTurn = await repository.reconcileActiveStatus(
             threadID: "thread-1",
             turnID: "other-turn",
             isInputPending: false,
-            isApprovalPending: false
+            isApprovalPending: false,
+            snapshotStartedAt: Date(timeIntervalSince1970: 102)
         )
         #expect(!ignoredDifferentTurn)
+        #expect(await repository.consumeEvents().turns.first?.status == .running)
+
+        let ignoredStaleSnapshot = await repository.reconcileActiveStatus(
+            threadID: "thread-1",
+            turnID: "turn-1",
+            isInputPending: false,
+            isApprovalPending: false,
+            snapshotStartedAt: Date(timeIntervalSince1970: 100.5)
+        )
+        #expect(!ignoredStaleSnapshot)
+        #expect(await repository.consumeEvents().turns.first?.status == .running)
+
+        let appliedApproval = await repository.reconcileActiveStatus(
+            threadID: "thread-1",
+            turnID: "turn-1",
+            isInputPending: false,
+            isApprovalPending: true,
+            snapshotStartedAt: Date(timeIntervalSince1970: 102)
+        )
+        #expect(appliedApproval)
         #expect(await repository.consumeEvents().turns.first?.status == .approvalNeeded)
 
         let appliedInput = await repository.reconcileActiveStatus(
             threadID: "thread-1",
             turnID: "turn-1",
             isInputPending: true,
-            isApprovalPending: true
+            isApprovalPending: true,
+            snapshotStartedAt: Date(timeIntervalSince1970: 102)
         )
         #expect(appliedInput)
         #expect(await repository.consumeEvents().turns.first?.status == .inputNeeded)
@@ -1779,7 +2496,8 @@ for line in sys.stdin:
             threadID: "thread-1",
             turnID: "turn-1",
             isInputPending: false,
-            isApprovalPending: false
+            isApprovalPending: false,
+            snapshotStartedAt: Date(timeIntervalSince1970: 102)
         )
         #expect(appliedRunning)
         #expect(await repository.consumeEvents().turns.first?.status == .running)
@@ -1787,7 +2505,8 @@ for line in sys.stdin:
         let appliedTerminal = await repository.resolveTerminalStatus(
             threadID: "thread-1",
             turnID: "turn-1",
-            status: .completed
+            status: .completed,
+            snapshotStartedAt: Date(timeIntervalSince1970: 102)
         )
         #expect(appliedTerminal)
         #expect(await repository.consumeEvents().turns.first?.status == .completed)
@@ -1796,7 +2515,8 @@ for line in sys.stdin:
             threadID: "thread-1",
             turnID: "turn-1",
             isInputPending: false,
-            isApprovalPending: false
+            isApprovalPending: false,
+            snapshotStartedAt: Date(timeIntervalSince1970: 103)
         )
         #expect(!refusedReopen)
         #expect(await repository.consumeEvents().turns.first?.status == .completed)
@@ -1916,6 +2636,82 @@ for line in sys.stdin:
             hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")
         )
     }
+
+    private func waitForThreadListRequests(
+        _ client: CodexAppServerStub,
+        atLeast expectedCount: Int,
+        completed: Bool = false
+    ) async throws {
+        for _ in 0..<200 {
+            let count = completed
+                ? await client.completedThreadListRequestCount()
+                : await client.requestCount(method: "thread/list")
+            if count >= expectedCount {
+                return
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        Issue.record(
+            "Expected at least \(expectedCount) \(completed ? "completed " : "")thread/list requests"
+        )
+    }
+
+    private var legacyManagedHookScript: String {
+        #"""
+#!/usr/bin/python3
+import json
+import os
+import sys
+import time
+import uuid
+
+SUPPORT = os.path.dirname(os.path.abspath(__file__))
+EVENTS = os.path.join(SUPPORT, "events")
+SETTINGS = os.path.join(SUPPORT, "hook-settings.json")
+
+def previews_enabled():
+    try:
+        with open(SETTINGS, "r", encoding="utf-8") as handle:
+            return bool(json.load(handle).get("showsContentPreviews", True))
+    except Exception:
+        return False
+
+try:
+    payload = json.load(sys.stdin)
+    event = {
+        "event_id": str(uuid.uuid4()),
+        "received_at": time.time(),
+        "hook_event_name": payload.get("hook_event_name"),
+        "session_id": payload.get("session_id"),
+        "turn_id": payload.get("turn_id"),
+        "cwd": payload.get("cwd"),
+        "tool_name": payload.get("tool_name"),
+        "reason": payload.get("reason"),
+    }
+    if previews_enabled():
+        prompt = payload.get("prompt")
+        assistant = payload.get("last_assistant_message")
+        if isinstance(prompt, str):
+            event["prompt"] = prompt[:240]
+        if isinstance(assistant, str):
+            event["last_assistant_message"] = assistant[:240]
+
+    os.makedirs(EVENTS, mode=0o700, exist_ok=True)
+    filename = "%020d-%s.json" % (time.time_ns(), event["event_id"])
+    target = os.path.join(EVENTS, filename)
+    temporary = target + ".tmp"
+    with open(temporary, "x", encoding="utf-8") as handle:
+        os.chmod(temporary, 0o600)
+        json.dump(event, handle, separators=(",", ":"))
+    os.replace(temporary, target)
+except Exception:
+    pass
+
+# Stop hooks require JSON on stdout. An empty object is a no-op for every
+# configured event and never changes Codex behavior.
+print("{}")
+"""#
+    }
 }
 
 private actor NavigationTargetCheckerStub: CodexNavigationTargetChecking {
@@ -1939,18 +2735,27 @@ private actor NavigationTargetCheckerStub: CodexNavigationTargetChecking {
 private actor CodexAppServerStub: CodexAppServerCommunicating {
     private let listedThreads: [JSONValue]
     private let threadReadDelayNanoseconds: UInt64
+    private let threadReadResult: Result<JSONValue, CodexAppServerError>
+    private var threadListDelayNanoseconds: UInt64
     private var loadedListResults: [Result<JSONValue, CodexAppServerError>]
     private var methods: [String] = []
+    private var completedThreadListRequests = 0
     private var disconnects = 0
 
     init(
         listedThreads: [JSONValue],
         loadedListResults: [Result<JSONValue, CodexAppServerError>],
-        threadReadDelayNanoseconds: UInt64 = 0
+        threadListDelayNanoseconds: UInt64 = 0,
+        threadReadDelayNanoseconds: UInt64 = 0,
+        threadReadResult: Result<JSONValue, CodexAppServerError> = .failure(
+            .timeout(method: "thread/read")
+        )
     ) {
         self.listedThreads = listedThreads
         self.loadedListResults = loadedListResults
+        self.threadListDelayNanoseconds = threadListDelayNanoseconds
         self.threadReadDelayNanoseconds = threadReadDelayNanoseconds
+        self.threadReadResult = threadReadResult
     }
 
     func connect() async throws {}
@@ -1963,6 +2768,12 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
         methods.append(method)
         switch method {
         case "thread/list":
+            if threadListDelayNanoseconds > 0 {
+                try await Task.sleep(
+                    nanoseconds: threadListDelayNanoseconds
+                )
+            }
+            completedThreadListRequests += 1
             return .object([
                 "data": .array(listedThreads),
                 "nextCursor": .null
@@ -1989,13 +2800,18 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
                     ])
                 ])
             ])
+        case "account/usage/read":
+            return .object([
+                "summary": .object([:]),
+                "dailyUsageBuckets": .array([])
+            ])
         case "thread/read":
             if threadReadDelayNanoseconds > 0 {
                 try await Task.sleep(
                     nanoseconds: threadReadDelayNanoseconds
                 )
             }
-            throw CodexAppServerError.timeout(method: method)
+            return try threadReadResult.get()
         default:
             throw CodexAppServerError.remote(
                 code: -32601,
@@ -2014,6 +2830,14 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
 
     func requestCount(method: String) -> Int {
         methods.filter { $0 == method }.count
+    }
+
+    func completedThreadListRequestCount() -> Int {
+        completedThreadListRequests
+    }
+
+    func setThreadListDelayNanoseconds(_ delay: UInt64) {
+        threadListDelayNanoseconds = delay
     }
 
     func disconnectCount() -> Int {
@@ -2052,6 +2876,10 @@ private actor RecordingAppServerClient: CodexAppServerCommunicating {
 
     func requestedMethods() -> [String] {
         methods
+    }
+
+    func requestCount(method: String) -> Int {
+        methods.filter { $0 == method }.count
     }
 }
 

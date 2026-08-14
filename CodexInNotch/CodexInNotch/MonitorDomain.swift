@@ -178,17 +178,24 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
 struct QuotaSnapshot: Equatable, Sendable {
     let remainingPercent: Int?
     let resetsAt: Date?
+    let todayTokens: Int64?
 
     nonisolated static let unavailable = QuotaSnapshot(
         remainingPercent: nil,
-        resetsAt: nil
+        resetsAt: nil,
+        todayTokens: nil
     )
 
-    nonisolated init(remainingPercent: Int?, resetsAt: Date?) {
+    nonisolated init(
+        remainingPercent: Int?,
+        resetsAt: Date?,
+        todayTokens: Int64? = nil
+    ) {
         self.remainingPercent = remainingPercent.map {
             min(max($0, 0), 100)
         }
         self.resetsAt = resetsAt
+        self.todayTokens = todayTokens.map { max(0, $0) }
     }
 }
 
@@ -246,5 +253,51 @@ enum UsageLevel: Equatable {
         default:
             self = .critical
         }
+    }
+}
+
+enum UsageSummaryFormatter {
+    nonisolated private static let compactNumberStyle = FloatingPointFormatStyle<Double>
+        .number
+        .notation(.compactName)
+        .precision(.significantDigits(1 ... 3))
+        .locale(Locale(identifier: "en_US"))
+
+    nonisolated static func compactTokenCount(_ tokenCount: Int64) -> String {
+        Double(max(0, tokenCount)).formatted(compactNumberStyle)
+    }
+
+    nonisolated static func resetText(
+        resetsAt: Date?,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> String {
+        guard let resetsAt else { return "Reset unavailable" }
+
+        let today = calendar.startOfDay(for: now)
+        let resetDay = calendar.startOfDay(for: resetsAt)
+        let dayCount = max(
+            0,
+            calendar.dateComponents([.day], from: today, to: resetDay).day ?? 0
+        )
+
+        switch dayCount {
+        case 0:
+            return "Resets today"
+        case 1:
+            return "Resets in 1 day"
+        default:
+            return "Resets in \(dayCount) days"
+        }
+    }
+
+    nonisolated static func summary(
+        todayTokens: Int64?,
+        resetsAt: Date?,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> String {
+        let usageText = todayTokens.map(compactTokenCount) ?? "--"
+        return "\(usageText) • \(resetText(resetsAt: resetsAt, now: now, calendar: calendar))"
     }
 }

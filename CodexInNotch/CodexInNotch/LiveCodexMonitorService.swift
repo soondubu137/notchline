@@ -16,6 +16,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     nonisolated private static let threadListRefreshInterval: TimeInterval = 30
     nonisolated private static let requestRetryInterval: TimeInterval = 60
     nonisolated private static let coreRequestTimeoutNanoseconds: UInt64 = 5_000_000_000
+    nonisolated private static let backgroundThreadListTimeoutNanoseconds: UInt64 = 15_000_000_000
     nonisolated private static let detailReadTimeoutNanoseconds: UInt64 = 5_000_000_000
     private let client: any CodexAppServerCommunicating
     private let hookEvents: HookEventRepository
@@ -27,6 +28,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private var accountReadAt: Date?
     private var cachedListedThreads: [JSONValue] = []
     private var threadListReadAt: Date?
+    private var threadListRefreshTask: Task<Void, Never>?
+    private var threadListRetryAfter: Date?
     private var observedDesktopProcessIdentifier: pid_t?
     private var threadDetailsCache: [String: CachedThreadDetails] = [:]
     private var detailReadRetryAfter: [String: Date] = [:]
@@ -61,19 +64,27 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         if !showsContentPreviews {
             threadDetailsCache.removeAll()
         }
+        let hookUpgradeDiagnostic: String?
+        do {
+            try await hookInstaller.upgradeManagedHookIfNeeded()
+            hookUpgradeDiagnostic = nil
+        } catch {
+            hookUpgradeDiagnostic = "Codex Hook helper 更新失败；继续使用已安装版本：\(error.localizedDescription)"
+        }
         var hookState = await hookEvents.consumeEvents()
-        let hookDiagnostic = hookState.diagnostic
+        let hookDiagnostic = hookState.diagnostic ?? hookUpgradeDiagnostic
         let desktopProcessIdentifier = await desktopProcessIdentifierProvider()
         if hookState.hasObservedEvent,
            hookState.didConsumeEvents || observedDesktopProcessIdentifier == nil {
             observedDesktopProcessIdentifier = desktopProcessIdentifier
         }
 
+        let hasLiveHookObservation = hasCurrentHookObservation(
+            hookState: hookState,
+            desktopProcessIdentifier: desktopProcessIdentifier
+        )
         let setupStatus = await hookInstaller.status(
-            hasObservedEvent: hasCurrentHookObservation(
-                hookState: hookState,
-                desktopProcessIdentifier: desktopProcessIdentifier
-            )
+            hasObservedEvent: hasLiveHookObservation
         )
         guard setupStatus != .notInstalled else {
             return remember(
@@ -89,32 +100,38 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         do {
             try await client.connect()
 
-            let cachedThreadIDs = Set(
-                cachedListedThreads.compactMap { $0["id"]?.stringValue }
-            )
-            let containsUnlistedHookThread = hookState.turns.contains {
-                !cachedThreadIDs.contains($0.threadID)
-            }
-            let listedThreads = try await readAllUnarchivedThreads(
-                // activeFlags are only a correction source when fetched after
-                // the newest Hook boundary. A cached Running snapshot must not
-                // overwrite a just-consumed Approval/Input/Stop event.
-                forceRefresh: hookState.didConsumeEvents
-                    || containsUnlistedHookThread
-            )
-            let unarchivedThreadIDs = Set(
-                listedThreads.compactMap { $0["id"]?.stringValue }
-            )
-            if hasCurrentHookObservation(
-                hookState: hookState,
-                desktopProcessIdentifier: desktopProcessIdentifier
-            ) {
-                hookState = await hookEvents.removeThreads(
-                    notIn: unarchivedThreadIDs
+            if hasLiveHookObservation {
+                let cachedThreadIDs = Set(
+                    cachedListedThreads.compactMap { $0["id"]?.stringValue }
                 )
+                let containsUnlistedHookThread = hookState.turns.contains {
+                    !cachedThreadIDs.contains($0.threadID)
+                }
+                if hookState.didConsumeEvents
+                    || containsUnlistedHookThread
+                    || threadListRefreshIsDue {
+                    // Hook state is the low-latency source. Full-list metadata
+                    // and activeFlags are refreshed in the background so a slow
+                    // thread/list cannot hold an Idle -> Running transition for
+                    // the entire request timeout.
+                    scheduleThreadListRefreshIfNeeded()
+                }
+
+                let listedThreads = cachedListedThreads
+                let listedThreadsObservedAt = threadListReadAt
+                if let listedThreadsObservedAt {
+                    let unarchivedThreadIDs = Set(
+                        listedThreads.compactMap { $0["id"]?.stringValue }
+                    )
+                    hookState = await hookEvents.removeThreads(
+                        notIn: unarchivedThreadIDs,
+                        snapshotStartedAt: listedThreadsObservedAt
+                    )
+                }
                 let sessions = await sessions(
                     from: hookState.turns,
                     listedThreads: listedThreads,
+                    listedThreadsObservedAt: listedThreadsObservedAt,
                     showsContentPreviews: showsContentPreviews
                 )
                 scheduleQuotaRefreshIfNeeded()
@@ -130,6 +147,11 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     )
                 )
             }
+
+            let listedThreads = try await readAllUnarchivedThreads(
+                forceRefresh: false,
+                timeoutNanoseconds: Self.coreRequestTimeoutNanoseconds
+            )
 
             let loadedList = try await client.request(
                 method: "thread/loaded/list",
@@ -210,6 +232,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     }
 
     func disconnect() async {
+        threadListRefreshTask?.cancel()
+        threadListRefreshTask = nil
         quotaRefreshTask?.cancel()
         quotaRefreshTask = nil
         cancelDetailReadTasks()
@@ -220,7 +244,10 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         guard !threadID.isEmpty else { return false }
 
         try await client.connect()
-        let listedThreads = try await readAllUnarchivedThreads(forceRefresh: true)
+        let listedThreads = try await readAllUnarchivedThreads(
+            forceRefresh: true,
+            timeoutNanoseconds: Self.coreRequestTimeoutNanoseconds
+        )
         return listedThreads.contains { thread in
             thread["id"]?.stringValue == threadID
                 && CodexSnapshotParser.isEligibleRootThread(thread)
@@ -252,6 +279,9 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         await hookEvents.resetIntegrationObservation(clearTurns: true)
         try await hookInstaller.uninstall()
         observedDesktopProcessIdentifier = nil
+        threadListRefreshTask?.cancel()
+        threadListRefreshTask = nil
+        threadListRetryAfter = nil
         threadDetailsCache.removeAll()
         detailReadRetryAfter.removeAll()
         cancelDetailReadTasks()
@@ -296,7 +326,6 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                 >= Self.accountRefreshInterval
         let quotaNeedsRefresh = quotaReadAt == nil
             || now.timeIntervalSince(quotaReadAt ?? .distantPast) >= 60
-            || cachedQuota.remainingPercent == nil
         guard accountNeedsRefresh || quotaNeedsRefresh else { return }
 
         quotaRefreshTask = Task { [weak self] in
@@ -307,7 +336,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private func refreshQuotaInBackground() async {
         defer { quotaRefreshTask = nil }
         do {
-            _ = try await readQuotaIfNeeded()
+            _ = try await readAccountUsageIfNeeded()
             quotaRetryAfter = nil
         } catch {
             cachedQuota = .unavailable
@@ -316,7 +345,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
     }
 
-    private func readQuotaIfNeeded() async throws -> QuotaSnapshot {
+    private func readAccountUsageIfNeeded() async throws -> QuotaSnapshot {
         let now = Date()
         if accountReadAt == nil
             || now.timeIntervalSince(accountReadAt ?? .distantPast)
@@ -335,16 +364,30 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
 
         if let quotaReadAt,
-           now.timeIntervalSince(quotaReadAt) < 60,
-           cachedQuota.remainingPercent != nil {
+           now.timeIntervalSince(quotaReadAt) < 60 {
             return cachedQuota
         }
 
-        let response = try await client.request(
+        async let rateLimitsResponse = try? await client.request(
             method: "account/rateLimits/read",
             params: .object([:])
         )
-        let quota = CodexSnapshotParser.quota(from: response)
+        async let tokenUsageResponse = try? await client.request(
+            method: "account/usage/read",
+            params: nil
+        )
+        let responses = await (rateLimitsResponse, tokenUsageResponse)
+        let rateLimitQuota = responses.0.map {
+            CodexSnapshotParser.quota(from: $0)
+        }
+            ?? .unavailable
+        let quota = QuotaSnapshot(
+            remainingPercent: rateLimitQuota.remainingPercent,
+            resetsAt: rateLimitQuota.resetsAt,
+            todayTokens: responses.1.flatMap {
+                CodexSnapshotParser.todayTokenCount(from: $0)
+            }
+        )
         cachedQuota = quota
         quotaReadAt = now
         return quota
@@ -353,6 +396,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private func sessions(
         from states: [HookTurnState],
         listedThreads: [JSONValue],
+        listedThreadsObservedAt: Date?,
         showsContentPreviews: Bool
     ) async -> [MonitoredSession] {
         var sessions: [MonitoredSession] = []
@@ -375,6 +419,9 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
 
         for state in states {
+            let canApplyListedStatus = listedThreadsObservedAt.map {
+                $0 >= state.lastEventAt
+            } ?? false
             let listedThread = listedByID[state.threadID]
             let listedUpdatedAt = listedThread?["updatedAt"]?.doubleValue
             let cached = threadDetailsCache[state.threadID]
@@ -388,7 +435,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             let retryAllowed = detailReadRetryAfter[detailKey].map {
                 Date() >= $0
             } ?? true
-            let shouldReadDetails = state.status == .unknown
+            let shouldReadDetails = state.lifecycleStatus == .unknown
                 && listedThread != nil
                 && retryAllowed
                 && detailReadTasks[detailKey] == nil
@@ -404,16 +451,22 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             if let session = CodexSnapshotParser.session(
                 from: state,
                 thread: fullThread,
+                allowsAppServerStatusCorrection: canApplyListedStatus,
                 showsContentPreviews: showsContentPreviews
             ) {
                 sessions.append(session)
-                if [.completed, .error, .cancelled].contains(session.status) {
+                if canApplyListedStatus,
+                   let listedThreadsObservedAt,
+                   [.completed, .error, .cancelled].contains(session.status) {
                     _ = await hookEvents.resolveTerminalStatus(
                         threadID: session.threadID,
                         turnID: session.turnID,
-                        status: session.status
+                        status: session.status,
+                        snapshotStartedAt: listedThreadsObservedAt
                     )
-                } else if let activeEvidence = CodexSnapshotParser.activeEvidence(
+                } else if canApplyListedStatus,
+                          let listedThreadsObservedAt,
+                          let activeEvidence = CodexSnapshotParser.activeEvidence(
                     from: fullThread,
                     forTurnID: state.turnID,
                     allowThreadLevelEvidence: state.hasLiveBoundary
@@ -422,7 +475,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                         threadID: state.threadID,
                         turnID: state.turnID,
                         isInputPending: activeEvidence.isInputPending,
-                        isApprovalPending: activeEvidence.isApprovalPending
+                        isApprovalPending: activeEvidence.isApprovalPending,
+                        snapshotStartedAt: listedThreadsObservedAt
                     )
                 }
             }
@@ -454,6 +508,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     ) async {
         let detailKey = Self.detailReadKey(state)
         defer { detailReadTasks.removeValue(forKey: detailKey) }
+        let snapshotStartedAt = Date()
 
         do {
             let response = try await client.request(
@@ -487,7 +542,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     _ = await hookEvents.resolveTerminalStatus(
                         threadID: session.threadID,
                         turnID: session.turnID,
-                        status: session.status
+                        status: session.status,
+                        snapshotStartedAt: snapshotStartedAt
                     )
                 } else if let activeEvidence = CodexSnapshotParser.activeEvidence(
                     from: fullThread,
@@ -498,12 +554,23 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                         threadID: state.threadID,
                         turnID: state.turnID,
                         isInputPending: activeEvidence.isInputPending,
-                        isApprovalPending: activeEvidence.isApprovalPending
+                        isApprovalPending: activeEvidence.isApprovalPending,
+                        snapshotStartedAt: snapshotStartedAt
                     )
                 }
             }
+            _ = await hookEvents.markTerminalStatusUnresolved(
+                threadID: state.threadID,
+                turnID: state.turnID,
+                snapshotStartedAt: snapshotStartedAt
+            )
         } catch let error as CodexAppServerError {
             guard !Task.isCancelled else { return }
+            _ = await hookEvents.markTerminalStatusUnresolved(
+                threadID: state.threadID,
+                turnID: state.turnID,
+                snapshotStartedAt: snapshotStartedAt
+            )
             detailReadRetryAfter[detailKey] = Date().addingTimeInterval(
                 Self.requestRetryInterval
             )
@@ -512,6 +579,11 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             }
         } catch {
             guard !Task.isCancelled else { return }
+            _ = await hookEvents.markTerminalStatusUnresolved(
+                threadID: state.threadID,
+                turnID: state.turnID,
+                snapshotStartedAt: snapshotStartedAt
+            )
             detailReadRetryAfter[detailKey] = Date().addingTimeInterval(
                 Self.requestRetryInterval
             )
@@ -527,6 +599,50 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
 
     nonisolated private static func detailReadKey(_ state: HookTurnState) -> String {
         "\(state.threadID):\(state.turnID)"
+    }
+
+    private var threadListRefreshIsDue: Bool {
+        guard let threadListReadAt else { return true }
+        return Date().timeIntervalSince(threadListReadAt)
+            >= Self.threadListRefreshInterval
+    }
+
+    private func scheduleThreadListRefreshIfNeeded() {
+        let now = Date()
+        guard threadListRefreshTask == nil,
+              threadListRetryAfter.map({ now >= $0 }) ?? true else {
+            return
+        }
+
+        threadListRefreshTask = Task { [weak self] in
+            await self?.refreshThreadListInBackground()
+        }
+    }
+
+    private func refreshThreadListInBackground() async {
+        defer { threadListRefreshTask = nil }
+
+        do {
+            _ = try await readAllUnarchivedThreads(
+                forceRefresh: true,
+                timeoutNanoseconds: Self.backgroundThreadListTimeoutNanoseconds
+            )
+            guard !Task.isCancelled else { return }
+            threadListRetryAfter = nil
+        } catch let error as CodexAppServerError {
+            guard !Task.isCancelled else { return }
+            threadListRetryAfter = Date().addingTimeInterval(
+                Self.requestRetryInterval
+            )
+            if error.requiresConnectionReset {
+                await client.disconnect()
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            threadListRetryAfter = Date().addingTimeInterval(
+                Self.requestRetryInterval
+            )
+        }
     }
 
     private func remember(_ snapshot: MonitorSnapshot) -> MonitorSnapshot {
@@ -559,7 +675,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     }
 
     private func readAllUnarchivedThreads(
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        timeoutNanoseconds: UInt64
     ) async throws -> [JSONValue] {
         if !forceRefresh,
            let threadListReadAt,
@@ -571,6 +688,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         var threads: [JSONValue] = []
         var cursor: String?
         var observedCursors = Set<String>()
+        let snapshotStartedAt = Date()
 
         repeat {
             var params: [String: JSONValue] = [
@@ -597,14 +715,16 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             let page = try await client.request(
                 method: "thread/list",
                 params: .object(params),
-                timeoutNanoseconds: Self.coreRequestTimeoutNanoseconds
+                timeoutNanoseconds: timeoutNanoseconds
             )
             threads.append(contentsOf: page["data"]?.arrayValue ?? [])
             cursor = page["nextCursor"]?.stringValue
         } while cursor != nil
 
         cachedListedThreads = threads
-        threadListReadAt = Date()
+        // Use the request start, not completion, as the freshness boundary.
+        // A Hook can arrive while a slow paginated list is still in flight.
+        threadListReadAt = snapshotStartedAt
         return threads
     }
 
@@ -669,6 +789,43 @@ enum CodexSnapshotParser {
             remainingPercent: 100 - usedPercent,
             resetsAt: resetDate
         )
+    }
+
+    nonisolated static func todayTokenCount(
+        from response: JSONValue,
+        now: Date = Date(),
+        calendar: Calendar? = nil
+    ) -> Int64? {
+        guard let buckets = response["dailyUsageBuckets"]?.arrayValue else {
+            return nil
+        }
+
+        let calendar = calendar ?? localGregorianCalendar()
+        let components = calendar.dateComponents(
+            [.year, .month, .day],
+            from: now
+        )
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day else {
+            return nil
+        }
+        let todayKey = String(
+            format: "%04d-%02d-%02d",
+            year,
+            month,
+            day
+        )
+
+        return buckets.last {
+            $0["startDate"]?.stringValue == todayKey
+        }?["tokens"]?.int64Value ?? 0
+    }
+
+    nonisolated private static func localGregorianCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .autoupdatingCurrent
+        return calendar
     }
 
     nonisolated static func isEligibleRootThread(_ thread: JSONValue) -> Bool {
@@ -767,6 +924,7 @@ enum CodexSnapshotParser {
     nonisolated static func session(
         from state: HookTurnState,
         thread: JSONValue?,
+        allowsAppServerStatusCorrection: Bool = true,
         showsContentPreviews: Bool = true
     ) -> MonitoredSession? {
         if let thread, !isEligibleRootThread(thread) {
@@ -793,13 +951,19 @@ enum CodexSnapshotParser {
         let persistedTerminalStatus: MonitorStatus? = [
             .completed, .error, .cancelled
         ].contains(state.lifecycleStatus) ? state.lifecycleStatus : nil
-        let status = terminalStatus(from: matchingTurn)
-            ?? persistedTerminalStatus
-            ?? activeEvidence(
+        let appServerTerminalStatus = allowsAppServerStatusCorrection
+            ? terminalStatus(from: matchingTurn)
+            : nil
+        let appServerActiveStatus = allowsAppServerStatusCorrection
+            ? activeEvidence(
                 from: thread,
                 forTurnID: state.turnID,
                 allowThreadLevelEvidence: state.hasLiveBoundary
             )?.status
+            : nil
+        let status = appServerTerminalStatus
+            ?? persistedTerminalStatus
+            ?? appServerActiveStatus
             ?? state.status
         let preview: String?
         if !showsContentPreviews {

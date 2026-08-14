@@ -95,6 +95,8 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 
 不存在行级 `Idle` 或行级 `Disconnected`。
 
+`Approval needed` 只在当前精确 Turn 的新鲜 Desktop/App Server 状态明确包含 `waitingOnApproval` 时成立；单独收到 `PermissionRequest` 不足以证明用户需要操作，因为自动审查可能立即放行。实时 Turn 收到终态边界后，在真实 Completed/Error/Cancelled 解析完成前继续显示 Running；只有权威查询失败或无法分类时才显示 Unknown。
+
 ### 6.2 顶部汇总优先级
 
 汇总顺序为：
@@ -216,8 +218,9 @@ V1 设置窗口只包含已经确认的三组能力：
 
 - 应用启动时列表为空，先显示 Connecting；连接后从 Desktop 当前活动轮次与未读终态重建。
 - 首次验证过 Hook 后，应用自身重启不得要求再次产生事件才能恢复连接；恢复必须同时确认当前 Codex Desktop 正在运行。
-- 实时事件负责即时变化，重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
+- 实时事件负责即时变化；`thread/list` 等集合校正必须在后台合并，不能阻塞 Idle、Running、Input 或 Approval 的发布。重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
 - 启动和常规刷新不得逐会话等待详情读取；单会话详情超时只保留该行 Unknown，不能延长 Connecting 或触发全局 Disconnected。
+- 单次 App Server 请求超时保留连接与最近可信状态；若其间没有任何有效响应且连续请求都超时，应重建只读 App Server 传输，再在后续轮询恢复校正。
 - `thread/closed` 不等于删除，不可据此移除。
 - 无法识别的新枚举只让对应会话进入 Unknown；不能造成崩溃。
 - 只有实时会话状态整体不可靠时才进入 Disconnected。
@@ -238,7 +241,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 ## 14. 验收标准
 
 1. 用户提交输入后一秒内出现对应会话行；同一 Thread 的后续 Turn 不产生重复行。
-2. Input needed、Approval needed、Running、Unknown、Error、Cancelled、Completed 状态与优先级正确。
+2. Input needed、Approval needed、Running、Unknown、Error、Cancelled、Completed 状态与优先级正确；单独 PermissionRequest 不误报 Approval needed，实时终态从 Running 直接进入 Completed/Error/Cancelled，不闪现 Unknown。
 3. 活动轮次始终显示；终态轮次在 Desktop 已读、归档或删除后自动移除。
 4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
 5. 应用重启时不显示缓存行，连接后从 Desktop 真值恢复活动与未读终态。

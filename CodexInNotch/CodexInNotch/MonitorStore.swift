@@ -97,6 +97,8 @@ struct DisplayOption: Identifiable {
 
 enum PanelMetrics {
     static let referenceCompactHeight: CGFloat = 46
+    static let nativeNotchMenuBarHeight: CGFloat = 38
+    static let maximumSurfaceCornerRadius: CGFloat = 10
     static let notchCompactWidth: CGFloat = 348
     static let fallbackBaselineWidth: CGFloat = 166
     static let expandedBaselineWidth: CGFloat = 520
@@ -107,11 +109,29 @@ enum PanelMetrics {
     static let expandedHorizontalPadding: CGFloat = 24
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
-    static let expandedContentHeight: CGFloat = expandedSessionViewportHeight + 16
-    static let thinExpandedContentHeight: CGFloat = 48
+    static let expandedFooterHeight: CGFloat = 40
+    static let thinExpandedBodyHeight: CGFloat = 48
+    static let expandedContentHeight: CGFloat = expandedSessionViewportHeight
+        + expandedFooterHeight
+    static let thinExpandedContentHeight: CGFloat = thinExpandedBodyHeight
+        + expandedFooterHeight
     private static let fallbackFixedContentWidth: CGFloat = 114
     private static let statusDotWidth: CGFloat = 8
     private static let usageRingWidth: CGFloat = 18
+
+    static func surfaceCornerRadius(
+        geometry: DisplayGeometry,
+        menuBarHeight: CGFloat
+    ) -> CGFloat {
+        guard geometry == .noNotch else {
+            return maximumSurfaceCornerRadius
+        }
+
+        let proportionalRadius = maximumSurfaceCornerRadius
+            * max(0, menuBarHeight)
+            / nativeNotchMenuBarHeight
+        return min(maximumSurfaceCornerRadius, proportionalRadius)
+    }
 
     static func size(
         geometry: DisplayGeometry,
@@ -161,7 +181,8 @@ enum PanelMetrics {
         guard sessionCount > 0 else {
             return thinExpandedContentHeight
         }
-        return sessionViewportHeight(forSessionCount: sessionCount) + 16
+        return sessionViewportHeight(forSessionCount: sessionCount)
+            + expandedFooterHeight
     }
 
     static func expandedWidth(
@@ -368,6 +389,13 @@ final class MonitorStore: ObservableObject {
 
     var expandedUsageReadoutText: String {
         tokenText
+    }
+
+    var expandedFooterText: String {
+        UsageSummaryFormatter.summary(
+            todayTokens: quota.todayTokens,
+            resetsAt: quota.resetsAt
+        )
     }
 
     var emptyListMessage: String {
@@ -719,7 +747,15 @@ final class MonitorStore: ObservableObject {
                     startedAt: now.addingTimeInterval(-384)
                 )
             ],
-            quota: QuotaSnapshot(remainingPercent: 72, resetsAt: nil),
+            quota: QuotaSnapshot(
+                remainingPercent: 72,
+                resetsAt: Calendar.current.date(
+                    byAdding: .day,
+                    value: 3,
+                    to: now
+                ),
+                todayTokens: 87_500_000
+            ),
             diagnostic: "Preview data"
         )
     }

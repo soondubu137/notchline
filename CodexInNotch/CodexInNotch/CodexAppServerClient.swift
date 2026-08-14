@@ -73,6 +73,10 @@ indirect enum JSONValue: Codable, Equatable, Sendable {
         doubleValue.map(Int.init)
     }
 
+    nonisolated var int64Value: Int64? {
+        doubleValue.map(Int64.init)
+    }
+
     nonisolated var boolValue: Bool? {
         guard case let .bool(value) = self else { return nil }
         return value
@@ -243,6 +247,11 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         category: "AppServerTransport"
     )
 
+    private enum RequestPurpose {
+        case regular
+        case livenessProbe
+    }
+
     private enum ConnectionPhase: Equatable {
         case disconnected
         case connecting(Int)
@@ -260,11 +269,14 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
 
     private struct PendingRequest {
         let method: String
+        let purpose: RequestPurpose
         let continuation: CheckedContinuation<JSONValue, Error>
     }
 
     private let executableURL: URL?
     private let requestTimeoutNanoseconds: UInt64
+    private let livenessProbeGraceNanoseconds: UInt64
+    private let livenessProbeTimeoutNanoseconds: UInt64
     private var process: Process?
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
@@ -274,13 +286,20 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     private var connectionPhase = ConnectionPhase.disconnected
     private var connectionGeneration = 0
     private var connectionWaiters: [CheckedContinuation<Void, Error>] = []
+    private var responseSequence: UInt64 = 0
+    private var livenessProbeTask: Task<Void, Never>?
+    private var livenessProbeID = 0
 
     init(
         executableURL: URL? = CodexExecutableLocator.locate(),
-        requestTimeoutNanoseconds: UInt64 = 15_000_000_000
+        requestTimeoutNanoseconds: UInt64 = 15_000_000_000,
+        livenessProbeGraceNanoseconds: UInt64 = 3_000_000_000,
+        livenessProbeTimeoutNanoseconds: UInt64 = 5_000_000_000
     ) {
         self.executableURL = executableURL
         self.requestTimeoutNanoseconds = requestTimeoutNanoseconds
+        self.livenessProbeGraceNanoseconds = livenessProbeGraceNanoseconds
+        self.livenessProbeTimeoutNanoseconds = livenessProbeTimeoutNanoseconds
     }
 
     func connect() async throws {
@@ -384,6 +403,20 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         params: JSONValue?,
         timeoutNanoseconds: UInt64? = nil
     ) async throws -> JSONValue {
+        try await performRequest(
+            method: method,
+            params: params,
+            timeoutNanoseconds: timeoutNanoseconds,
+            purpose: .regular
+        )
+    }
+
+    private func performRequest(
+        method: String,
+        params: JSONValue?,
+        timeoutNanoseconds: UInt64?,
+        purpose: RequestPurpose
+    ) async throws -> JSONValue {
         guard inputHandle != nil else {
             throw CodexAppServerError.disconnected
         }
@@ -400,6 +433,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         return try await withCheckedThrowingContinuation { continuation in
             pendingRequests[requestID] = PendingRequest(
                 method: method,
+                purpose: purpose,
                 continuation: continuation
             )
 
@@ -420,6 +454,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     }
 
     func disconnect() async {
+        cancelLivenessProbe()
         connectionGeneration += 1
         connectionPhase = .disconnected
         tearDownConnection()
@@ -487,10 +522,15 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     }
 
     private func handleEnvelope(_ envelope: JSONValue) {
-        guard let id = envelope["id"]?.intValue,
-              let pending = pendingRequests.removeValue(forKey: id) else {
+        guard let id = envelope["id"]?.intValue else {
             // Notifications and server-initiated requests are deliberately
             // ignored. This client never answers approval or input requests.
+            return
+        }
+        // A late response still proves that the transport and server event loop
+        // are alive, even when its request already timed out locally.
+        responseSequence &+= 1
+        guard let pending = pendingRequests.removeValue(forKey: id) else {
             return
         }
 
@@ -517,10 +557,114 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
 
     private func timeOutRequest(id: Int) {
         guard let pending = pendingRequests.removeValue(forKey: id) else { return }
-        Self.logger.warning("Request timed out: \(pending.method, privacy: .public)")
+        Self.logger.warning(
+            "Request timed out: method=\(pending.method, privacy: .public) id=\(id, privacy: .public) outstanding=\(self.pendingRequests.count, privacy: .public)"
+        )
         pending.continuation.resume(
             throwing: CodexAppServerError.timeout(method: pending.method)
         )
+
+        guard case .regular = pending.purpose else {
+            return
+        }
+        scheduleLivenessProbeIfNeeded(triggeredBy: pending.method)
+    }
+
+    private func scheduleLivenessProbeIfNeeded(triggeredBy method: String) {
+        guard livenessProbeTask == nil,
+              case let .connected(generation) = connectionPhase else {
+            return
+        }
+
+        livenessProbeID += 1
+        let probeID = livenessProbeID
+        let baselineResponseSequence = responseSequence
+        livenessProbeTask = Task { [weak self] in
+            await self?.runLivenessProbe(
+                id: probeID,
+                connectionGeneration: generation,
+                baselineResponseSequence: baselineResponseSequence,
+                triggeredBy: method
+            )
+        }
+    }
+
+    private func runLivenessProbe(
+        id: Int,
+        connectionGeneration: Int,
+        baselineResponseSequence: UInt64,
+        triggeredBy method: String
+    ) async {
+        defer { finishLivenessProbe(id: id) }
+
+        do {
+            try await Task.sleep(nanoseconds: livenessProbeGraceNanoseconds)
+        } catch {
+            return
+        }
+
+        guard connectionPhase == .connected(connectionGeneration),
+              responseSequence == baselineResponseSequence else {
+            return
+        }
+
+        do {
+            _ = try await performRequest(
+                method: "thread/loaded/list",
+                params: .object([:]),
+                timeoutNanoseconds: livenessProbeTimeoutNanoseconds,
+                purpose: .livenessProbe
+            )
+            Self.logger.info(
+                "App Server liveness probe recovered after timeout: method=\(method, privacy: .public)"
+            )
+        } catch let error as CodexAppServerError {
+            guard connectionPhase == .connected(connectionGeneration),
+                  responseSequence == baselineResponseSequence else {
+                return
+            }
+
+            switch error {
+            case .timeout, .disconnected, .launchFailed:
+                resetUnresponsiveTransport(
+                    generation: connectionGeneration,
+                    triggeredBy: method
+                )
+            case .executableNotFound, .protocolViolation, .remote:
+                // Protocol and remote errors are responses, so handleEnvelope
+                // has already advanced responseSequence and reached the guard
+                // above only if the connection changed concurrently.
+                return
+            }
+        } catch {
+            return
+        }
+    }
+
+    private func finishLivenessProbe(id: Int) {
+        guard id == livenessProbeID else { return }
+        livenessProbeTask = nil
+    }
+
+    private func cancelLivenessProbe() {
+        livenessProbeID += 1
+        livenessProbeTask?.cancel()
+        livenessProbeTask = nil
+    }
+
+    private func resetUnresponsiveTransport(
+        generation: Int,
+        triggeredBy method: String
+    ) {
+        guard connectionPhase == .connected(generation) else { return }
+
+        Self.logger.warning(
+            "App Server liveness probe timed out after request timeout: method=\(method, privacy: .public); resetting transport"
+        )
+        connectionPhase = .disconnected
+        tearDownConnection()
+        failPendingRequests(with: CodexAppServerError.disconnected)
+        finishConnectionWaiters(with: .failure(CodexAppServerError.disconnected))
     }
 
     private func serverTerminated(
@@ -534,6 +678,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         Self.logger.warning(
             "App Server stream ended; status=\(statusText, privacy: .public) reason=\(reasonText, privacy: .public)"
         )
+        cancelLivenessProbe()
         tearDownConnection()
         connectionPhase = .disconnected
         failPendingRequests(with: CodexAppServerError.disconnected)

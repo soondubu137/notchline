@@ -2,9 +2,9 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | V1 计时调整已更新；外部 Figma 文件待同步 |
-| 版本 | 0.6 |
-| 日期 | 2026-08-12 |
+| 文档状态 | V1 SwiftUI 与外部 Figma 已同步 |
+| 版本 | 0.7 |
+| 日期 | 2026-08-13 |
 | 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
 
 ## 1. 设计原则
@@ -22,14 +22,16 @@
 | --- | --- | --- |
 | `00 — Cover & Notes` | 文件说明 | — |
 | `01 — Getting Started` | 使用说明 | — |
-| `02 — Foundations` | 颜色、布局、字体、Motion | — |
-| `03 — Status Components` | Status Dot、Readout、Usage Ring、Badge | `107:18`, `109:34`, `137:184` |
-| `04 — Session Row` | 会话行、列表和状态名称胶囊 | `112:28`, `140:201`, `196:71` |
-| `05 — Panel` | 收起与展开 Panel 变体 | `115:82` |
-| `Notch Core` | 核心产品状态 | `118:120`, `185:310` |
-| `06 — Integration States` | 隐私、Unknown、局部降级、空和全局可用性 | `227:3` |
+| `02 — Foundations` | 颜色、布局、字体、Motion、响应式圆角 | `99:38`, `99:39`, `287:2` |
+| `03 — Status Components` | Status Dot、Readout、Usage Ring、Badge | `108:18`, `153:202`, `154:24` |
+| `04 — Session Row` | 会话行、列表和状态名称胶囊 | `112:28`, `140:201`, `198:72` |
+| `05 — Panel` | 收起与展开 Panel 变体 | `115:82`, `300:253`, `300:263` |
+| `Notch Core` | 核心产品状态与不同菜单栏高度参考 | `118:73`, `185:292`, `304:630`, `304:641` |
+| `06 — Integration States` | 隐私、Unknown、局部降级、空和全局可用性 | `227:3`, `307:30` |
 | `07 — Onboarding` | 首次安装三步流程 | `232:95` |
 | `08 — Settings` | 集成管理与预览隐私 | `233:3` |
+
+截至 2026-08-13，外部 Figma 文件已按当前 SwiftUI 实现完成同步：`Usage Ring` 为 7 个合法变体，`Usage Indicator` 为 4 个合法变体，`Session Row` 为 6 个合法变体，`Panel` 为 7 个合法变体；V1 Runtime Badge 与计时示例已移除。同步范围内的文字层和 Text Styles 均使用 SF Pro。
 
 ## 3. Foundations
 
@@ -68,10 +70,11 @@ Unknown 是单会话状态；Disconnected 是全局集成状态，颜色与语�
 | 项目 | 值 |
 | --- | --- |
 | Notch compact | `348 × 46` 参考基线 |
-| No-notch `Running` compact | `168 × 46` 参考基线 |
-| No-notch Input needed compact | `198 × 46` 参考基线 |
+| No-notch `Running` compact | `168 × 46` 参考基线；`24` 高菜单栏时为 `168 × 24` |
+| No-notch Input needed compact | `200 × 46` 参考基线 |
 | Shared expanded | `520 × 302` 参考基线 |
-| Expanded header | `520 × 46` 外框，内容宽 `472` |
+| No-notch expanded / `24` 高菜单栏 | `520 × 280` 参考基线 |
+| Expanded header | 宽 `520`、高为真实 `menuBarHeight`；`46` 高时内容宽 `472` |
 | Expanded content region | `256` 高 |
 | Session viewport | `472 × 240` |
 | Session row | `472 × 80` |
@@ -81,7 +84,15 @@ Unknown 是单会话状态；Disconnected 是全局集成状态，颜色与语�
 | Usage ring | `18 × 18`, stroke `2` |
 | Row badge | `24` 高 |
 
-目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed`、`Codex version unsupported` 等最长状态名完整位于可显示区域。
+目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。例如无刘海 `24` 高菜单栏的展开参考尺寸为 `520 × 280`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed`、`Codex version unsupported` 等最长状态名完整位于可显示区域。
+
+Panel 外轮廓的基准圆角为 `10`。带物理刘海时始终使用该值；无刘海屏使用以下公式：
+
+```text
+cornerRadius = min(10, 10 × max(0, menuBarHeight) / 38)
+```
+
+因此菜单栏低于原生 MacBook Notch 基准 `38` 时，圆角约为菜单栏高度的 `26.32%`；达到或超过 `38` 时保持 `10`。Figma 的响应式示例为 `38 → 10`（`287:8`）、`24 → 6.316`（`287:12`）与 `19 → 5`（`287:16`），用于避免矮组件呈现过度胶囊化。
 
 ## 4. 核心组件
 
@@ -99,10 +110,14 @@ Compact 与 Expanded 两个 Context 都提供完整状态文本。Expanded 组�
 
 ### 4.3 Usage Ring 与 Indicator
 
-- 彩色圆弧从十二点方向逆时针绘制，非满环两端为圆头。
+- `100%` 时为全亮环；剩余量降低时，暗色弧从十二点方向逆时针增长，亮色弧同步逆时针缩短，非满环两端为圆头。
+- 亮色整环与暗色弧共用 `9pt` 中心线半径和 `2pt` 居中描边；暗色弧不得向内缩小。
+- `0%` 为全暗环；Unavailable 同样只显示完整轨道色，但其数值文案为 `--`，不得与真实 `0%` 混淆。
 - `> 50%` 白色，`15%–50%` 橙色，`< 15%` 红色。
 - Unavailable 为灰色圆环，不显示伪造百分比。
 - Expanded leading value 始终为剩余百分比；Running 不替换额度文本。
+
+Figma `Usage Ring` 组件集（`108:18`）包含 `100`、`72`、`50`、`32`、`10`、`0` 与 `Unavailable` 七个变体；`Usage Indicator`（`153:202`）包含 Healthy、Warning、Critical 与 Unavailable 四个变体。
 
 ### 4.4 Session Row
 
@@ -122,6 +137,8 @@ Panel 组件集保留 Notch Compact、No Notch Compact 和 Expanded。Expanded �
 - 展开时 header 只横向扩张。
 - 内容区使用 `256`，三行视口使用 `240`，底部保留 `15`。
 - 现有 `Notch Core` Running Desktop 画板已按 `1512` 屏幕重新居中到 `x = 496`。
+
+Figma `Panel` 组件集（`115:82`）使用 `Mode`、`Content` 与 `Menu Bar` 属性，共七个合法变体。除 `46` 高参考外，还包含无刘海 `24` 高菜单栏的 Compact Running（`300:253`，`168 × 24`，圆角 `6.316`）和 Expanded（`300:263`，`520 × 280`，圆角 `6.316`）。所有变体均使用与 SwiftUI `PanelContour` 相同的外轮廓，而不是普通 RoundedRectangle。
 
 ### 4.6 未来考虑：处理时长
 
@@ -272,7 +289,10 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
 - [x] V1 Running 规范使用状态名称，不包含 Runtime Badge 或计时汇总。
-- [ ] 将外部 Figma 文件中的既有 Runtime Badge 与时长示例同步为 `Running`。
+- [x] 外部 Figma 文件中的既有 Runtime Badge 与时长示例已同步为 `Running`。
+- [x] Usage Ring 已同步为从十二点逆时针增长的暗色消耗弧，并覆盖 `100`、`0` 与 Unavailable 边界。
+- [x] 无刘海 Panel 已同步 `38`、`24`、`19` 菜单栏高度下的响应式圆角参考。
+- [x] Figma 组件集结构合法，且同步范围内无 Inter、旧尺寸或旧计时文案残留。
 - [ ] 不同真实菜单栏高度与至少两种物理刘海设备的原生几何验证。
 - [ ] 真实 Codex 集成事件、Project、未读和精确导航的 Phase 0 能力验证。
 
