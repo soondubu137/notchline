@@ -103,10 +103,11 @@ actor CodexHookInstaller {
     nonisolated private static let managedDefinitions = [
         ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
         ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
-        ManagedHookDefinition(
-            event: "PreToolUse",
-            matcher: "^(request_user_input|request_permissions)$"
-        ),
+        // Deliberately unmatched. Registering an exact tool-name regex here
+        // means a naming detail decides whether a wait is ever observed, and a
+        // miss is silent. PostToolUse is already catch-all, so the dispatch cost
+        // is the same order; the reducer does the filtering instead.
+        ManagedHookDefinition(event: "PreToolUse", matcher: nil),
         ManagedHookDefinition(event: "PostToolUse", matcher: nil),
         ManagedHookDefinition(event: "Stop", matcher: nil),
         ManagedHookDefinition(event: "SessionEnd", matcher: nil)
@@ -477,6 +478,7 @@ try:
         "turn_id": payload.get("turn_id"),
         "tool_name": payload.get("tool_name"),
         "tool_use_id": payload.get("tool_use_id"),
+        "permission_mode": payload.get("permission_mode"),
     }
     if previews_enabled():
         prompt = payload.get("prompt")
@@ -563,6 +565,7 @@ actor HookEventRepository {
         let turnID: String?
         let toolName: String?
         let toolUseID: String?
+        let permissionMode: String?
         let prompt: String?
         let lastAssistantMessage: String?
 
@@ -573,6 +576,7 @@ actor HookEventRepository {
             case turnID = "turn_id"
             case toolName = "tool_name"
             case toolUseID = "tool_use_id"
+            case permissionMode = "permission_mode"
             case prompt
             case lastAssistantMessage = "last_assistant_message"
         }

@@ -3057,7 +3057,9 @@ for line in sys.stdin:
         )
         let exactHandler = try #require(exactHandlers.first)
 
-        #expect(exactGroup["matcher"] as? String == "^(request_user_input|request_permissions)$")
+        // PreToolUse is registered catch-all: no tool-name regex may decide
+        // whether a wait is observed.
+        #expect(exactGroup["matcher"] == nil)
         #expect(exactHandler["timeout"] as? Int == 3)
         #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
     }
