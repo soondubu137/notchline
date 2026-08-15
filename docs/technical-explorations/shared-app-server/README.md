@@ -257,23 +257,22 @@ codex app-server proxy
 | `item/permissions/requestApproval` | Approval Needed | 同上 |
 | `item/tool/requestUserInput` | Input Needed | 必须绑定 request/tool item id |
 | `serverRequest/resolved` | 清除匹配的 pending request | 只清除相同 request id；若 Turn 未终止，回到 Running |
-| `turn/completed(status: completed)` | Completed | 当前 Turn 的权威终态 |
-| `turn/completed(status: failed)` | Error | 当前 Turn 的权威终态；错误正文遵守隐私约束 |
-| `turn/completed(status: interrupted)` | Cancelled | 只有该事件可以作为强取消证据 |
+| `turn/completed(status: completed)` | Completed | 当前 Turn 已结束 |
+| `turn/completed(status: failed)` | Completed | 产品不区分结束原因；错误正文仍遵守隐私约束 |
+| `turn/completed(status: interrupted)` | Completed | 产品不区分结束原因 |
 | `thread/status/changed.activeFlags` | 辅助校正 | 不能创建 Turn、猜测 Turn id 或复活终态 Turn |
 | `item/started` / `item/completed` | 内容与阶段辅助证据 | 不得覆盖 `turn/completed` |
-| Hook `Stop` | 终态边界 fallback | 共享事件流健康时不决定 completed/failed/cancelled |
+| Hook `Stop` | Completed fallback | 同一当前 Turn 直接结束，不再解析原因 |
 
 ### 6.2 单会话状态优先级
 
 对于同一个精确 Turn，建议 reducer 使用：
 
 ```text
-权威终态
+Completed
   > 未解决的 Input request
   > 未解决的 Approval request
   > 已开始且未终止的 Running
-  > 无可信证据的 Unknown
 ```
 
 必须继续保留：
@@ -290,7 +289,7 @@ codex app-server proxy
 
 - 一个 Approval + 一个 Running。
 - 一个 Input + 一个 Approval。
-- 一个 Error + 一个仍在 Running 的 Turn。
+- 一个 Completed + 一个仍在 Running 的 Turn。
 - 多个终态与活动 Turn 并存。
 
 不得因为事件来源变为实时流而顺手修改产品优先级。
@@ -491,9 +490,9 @@ launchctl unsetenv CODEX_APP_SERVER_USE_LOCAL_DAEMON
 
 | 场景 | 必须观察到 | 不允许发生 |
 | --- | --- | --- |
-| 正常完成 | `turn/started -> turn/completed(completed)` | 中间 Unknown、Cancelled |
-| 用户取消 | `turn/started -> turn/completed(interrupted)` | 仅凭 Stop/thread snapshot 判断 Cancelled |
-| Turn 失败 | `turn/completed(failed)` | 显示 Completed 或 Cancelled |
+| 正常完成 | `turn/started -> turn/completed(completed)` | 中间产生第五种会话状态 |
+| 用户取消 | `turn/started -> turn/completed(interrupted)` | 显示取消原因而不是 Completed |
+| Turn 失败 | `turn/completed(failed)` | 显示失败原因而不是 Completed |
 | 命令审批 | requestApproval；解决后 `serverRequest/resolved` | 没有真实 pending 时显示 Approval Needed |
 | 文件修改审批 | requestApproval + resolved | Codex in Notch 回答审批 |
 | 权限请求 | permissions request + resolved | 把权限管线 Hook 单独当 pending |
@@ -521,8 +520,8 @@ launchctl unsetenv CODEX_APP_SERVER_USE_LOCAL_DAEMON
 
 ### 8.1 正确性
 
-- Cancelled 只由相同当前 Turn 的 `turn/completed(interrupted)` 建立，零误判。
-- Completed/Error/Cancelled 前不出现可见 Unknown gap。
+- 同一当前 Turn 的三种 `turn/completed` 结果与实时 Stop 都直接建立 Completed。
+- Running、Input、Approval 到 Completed 之间不出现第五种可见会话状态。
 - 没有真实 unresolved server request 时，Approval Needed 零误报。
 - Input/Approval 只由匹配 request id 关闭，零跨 Turn 清除。
 - 迟到、重复和重连补发事件不会复活 terminal Turn。
@@ -619,7 +618,7 @@ account/usage/read
 
 - response / notification / server-request envelope 分类测试。
 - notification 分片、合并、重复和乱序边界测试。
-- `turn/completed` 三种终态映射测试。
+- `turn/completed` 三种协议结果统一映射 Completed 的测试。
 - approval/input request 与 resolved 精确配对测试。
 - terminal Turn 不可复活测试。
 - 双 Thread 并发测试。
@@ -718,7 +717,7 @@ Transport transient failure
 截至 2026-08-13：
 
 - **技术可行性：有明确依据，值得 spike。** App Server 协议和 daemon 模型支持多个连接，当前 Desktop 安装包也存在连接本地 daemon 的实验路径。
-- **准确性收益：高。** 同运行时 `turn/completed` 和 request lifecycle 能直接解决 Cancelled 误判、Approval 误报以及 Running 到终态的 gap。
+- **准确性收益：高。** 同运行时 `turn/completed` 和 request lifecycle 能直接解决 Approval 误报以及 Running 到 Completed 的同步间隙。
 - **生产成熟度：不足。** Desktop 接入方式未形成公开稳定契约，多客户端 server-request routing 和只读订阅仍未证明。
 - **建议：** 优先完成 daemon + proxy + notification reducer 的隔离验证，再在用户明确授权下进行 Desktop 共享运行时实验；在全部成功标准满足前，保留当前实现作为默认路径。
 

@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | Desktop Project 身份与未读终态自动移除已实现；真实版本矩阵仍待 Phase 0 验证 |
-| 版本 | 0.9 |
-| 日期 | 2026-08-14 |
+| 版本 | 0.10 |
+| 日期 | 2026-08-15 |
 | 目标版本 | V1 MVP |
 | 目标平台 | macOS；带物理刘海与无刘海显示器 |
 
@@ -21,7 +21,7 @@ Codex in Notch 是 Codex Desktop 当前处理轮次的实时汇总中心。它�
 V1 必须做到：
 
 1. 实时呈现当前 Codex Desktop 账户下所有 Project 与 `Chats` 中需要监视的处理轮次。
-2. 明确区分 Input needed、Approval needed、Running、Unknown、Error、Cancelled 和 Completed。
+2. 会话状态只使用 Running、Input needed、Approval needed 和 Completed 四类。
 3. 让用户点击任意会话行后进入 Codex Desktop 中完全相同的会话。
 4. Running 与其他状态使用同一状态名称机制，显示 `Running`，不显示处理时长或秒级计时。
 5. 显示当前 Desktop 账户的主额度窗口剩余比例；无法可靠读取时明确显示不可用。
@@ -47,7 +47,7 @@ V1 不包含：
 ### 4.1 会话与处理轮次
 
 - 一行永远代表一个可导航根会话（Thread）。
-- 一个处理轮次（Turn）从用户提交输入时开始，在 Codex 报告 Completed、Error 或 Cancelled 时结束执行。
+- 一个处理轮次（Turn）从用户提交输入时开始，在 Codex 报告任意执行结束信号时统一进入 Completed。
 - 同一 Thread 的多个 Turn 不产生多行；新 Turn 替换该行的驱动轮次。
 - 子智能体不显示为独立行。
 
@@ -93,14 +93,11 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 | `Input needed` | Codex 等待用户回答 | 橙色状态；悬停时显示名称胶囊 |
 | `Approval needed` | Codex 等待权限决定 | 橙色状态；悬停时显示名称胶囊 |
 | `Running` | 当前轮次正在自动处理 | 蓝色 `Running` 状态名称胶囊，始终显示 |
-| `Unknown` | 只有该会话的真实状态无法可靠判定 | 中性灰状态 |
-| `Error` | 当前轮次失败 | 红色状态 |
-| `Cancelled` | 当前轮次取消或中断 | 冷灰状态 |
-| `Completed` | 当前轮次成功完成但仍未读 | 绿色状态 |
+| `Completed` | 当前轮次已经结束但仍未读 | 绿色状态 |
 
 不存在行级 `Idle` 或行级 `Disconnected`。
 
-`Approval needed` 只在当前精确 Turn 的新鲜 Desktop/App Server 状态明确包含 `waitingOnApproval` 时成立；单独收到 `PermissionRequest` 不足以证明用户需要操作，因为自动审查可能立即放行。实时 Turn 收到终态边界后，在真实 Completed/Error/Cancelled 解析完成前继续显示 Running；只有权威查询失败或无法分类时才显示 Unknown。
+`Approval needed` 只在当前精确 Turn 的新鲜 Desktop/App Server 状态明确包含 `waitingOnApproval` 时成立；单独收到 `PermissionRequest` 不足以证明用户需要操作，因为自动审查可能立即放行。`Stop` 或 App Server 的 `completed`、`failed`、`interrupted` 都是同一种产品信号：当前 Turn 已经结束，因此统一进入 Completed。
 
 ### 6.2 顶部汇总优先级
 
@@ -109,12 +106,9 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 1. Input needed
 2. Approval needed
 3. Running
-4. Unknown
-5. Error
-6. Cancelled
-7. Completed
+4. Completed
 
-Unknown 不覆盖任何已知会话状态；只有全部被监视会话都为 Unknown 时，汇总才显示 Unknown。健康且列表为空时，收起态显示 Idle。
+健康且列表为空时，收起态显示 Idle。
 
 列表使用同一优先级排序；同优先级按最近可信更新时间降序。状态变化立即重排，但用户正在滚动或悬停列表时不得强制跳动当前视口，应显示轻量的顺序更新提示。
 
@@ -124,10 +118,10 @@ Unknown 不覆盖任何已知会话状态；只有全部被监视会话都为 Un
 | --- | --- | --- | --- |
 | 健康但无监视轮次 | 空 | `No active turns` | 否 |
 | 首次尚未集成 | 空 | `Set up integration` | 引导流程中处理 |
-| 正在连接 | 空 | `Connecting to Codex`，最长 5 秒 | 否 |
+| App Server 已开始连接、会话快照尚未返回 | 空 | `Connecting to Codex`，最长 5 秒 | 否 |
 | Codex 版本过旧 | 空 | `Update Codex` | 否 |
 | Codex 版本未经验证 | 空 | `Codex version unsupported` | 否 |
-| 实时集成失效或 Codex 未运行 | 清空 | `Codex disconnected` | 否 |
+| App Server 无响应、启动失败或连接断开 | 清空 | `Codex disconnected` | 否 |
 
 Disconnected 是全局集成健康问题，不能用于单会话。进入 Disconnected 时必须清空列表，不显示最后一次可信快照。应用不自动启动 Codex；用户在 Codex 或系统中自行完成相应操作。
 
@@ -140,10 +134,7 @@ Disconnected 是全局集成健康问题，不能用于单会话。进入 Discon
 | Input needed | 当前向用户提出的问题 |
 | Approval needed | 固定通用文案 `Approval requested`；不显示命令、路径或理由 |
 | Running | 最新公开进度；没有时回退到本轮用户输入 |
-| Error | 用户可见的错误摘要 |
-| Cancelled | 取消前最后公开进度；没有时回退到本轮用户输入 |
 | Completed | 最终回答开头 |
-| Unknown | 最后一个仍被允许展示的公开片段；不得用它猜测状态 |
 
 所有预览仅在内存中存在，规范化为单行并在 UI 中 Alpha 渐隐，不显示省略号。
 
@@ -221,14 +212,15 @@ V1 设置窗口只包含已经确认的三组能力：
 
 ## 12. 可靠性与降级
 
-- 应用启动时列表为空，先显示 Connecting；连接后从 Desktop 当前活动轮次与未读终态重建。
+- 应用启动时列表为空，先显示 Connecting；App Server 成功返回会话快照后进入 Ready，空活动集合显示 Idle，有活动会话则显示对应状态。只有 App Server 无响应、启动失败或连接断开才显示 Disconnected。
+- 启动 cutoff 之前的 Hook、Stop、SessionEnd 或其他 lifecycle 信号不得创建、恢复、终止或修改当前 Turn；当前状态只能来自本次启动的快照和启动后的实时事件。
 - 首次验证过 Hook 后，应用自身重启不得要求再次产生事件才能恢复连接；恢复必须同时确认当前 Codex Desktop 正在运行。
 - 六种必需定义缺少、重复或 matcher/handler/timeout 被改变时不得显示为已连接；总开关显示 Off，并明确进入可由用户重新开启修复的状态。
 - 实时事件负责即时变化；`thread/list` 等集合校正必须在后台合并，不能阻塞 Idle、Running、Input 或 Approval 的发布。重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
-- 启动和常规刷新不得逐会话等待详情读取；单会话详情超时只保留该行 Unknown，不能延长 Connecting 或触发全局 Disconnected。
+- 启动和常规刷新不得逐会话读取详情；状态快照失败时保留该 Turn 的最后一个可信四态值，不能据此制造新的会话状态。
 - 单次 App Server 请求超时保留连接与最近可信状态；若其间没有任何有效响应且连续请求都超时，应重建只读 App Server 传输，再在后续轮询恢复校正。
 - `thread/closed` 不等于删除，不可据此移除。
-- 无法识别的新枚举只让对应会话进入 Unknown；不能造成崩溃。
+- 无法识别的新枚举不触发状态流转，并写入脱敏诊断；不能造成崩溃。
 - 只有实时会话状态整体不可靠时才进入 Disconnected。
 - Project、未读成员关系与精确导航不得使用近似值降级。
 - Desktop 未读私有状态只允许只读消费；目录监听失败时由现有轮询校正，主文件解析失败时不得根据备份、空集合或 last-known-good 新增移除决定。
@@ -248,7 +240,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 ## 14. 验收标准
 
 1. 用户提交输入后一秒内出现对应会话行；同一 Thread 的后续 Turn 不产生重复行。
-2. Input needed、Approval needed、Running、Unknown、Error、Cancelled、Completed 状态与优先级正确；单独 PermissionRequest 不误报 Approval needed，实时终态从 Running 直接进入 Completed/Error/Cancelled，不闪现 Unknown。
+2. Input needed、Approval needed、Running、Completed 四态及优先级正确；单独 PermissionRequest 不误报 Approval needed，任意执行结束信号都使当前 Turn 直接进入 Completed。
 3. 活动轮次始终显示；终态轮次在 Desktop 已读、归档或删除后自动移除。
 4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
 5. 应用重启时不显示缓存行，连接后从 Desktop 真值恢复活动与未读终态。
@@ -266,7 +258,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 
 - Figma 文件：[Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1)
 - `Notch Core`：收起与共享展开核心几何。
-- `06 — Integration States`：隐私、Unknown、额度降级、空与集成状态。
+- `06 — Integration States`：隐私、额度降级、空与集成状态。
 - `07 — Onboarding`：首次安装三步流程。
 - `08 — Settings`：预览开启/关闭与集成管理。
 

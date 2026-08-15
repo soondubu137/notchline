@@ -73,7 +73,7 @@ struct TerminalUnreadMembershipGate: Sendable {
     nonisolated mutating func shouldDisplay(
         sessionID: String,
         threadID: String,
-        status: MonitorStatus,
+        status: SessionStatus,
         terminalBoundaryAt: Date,
         unreadState: DesktopUnreadStateSnapshot,
         now: Date = Date()
@@ -119,13 +119,8 @@ struct TerminalUnreadMembershipGate: Sendable {
         entries.removeAll()
     }
 
-    nonisolated private static func isTerminal(_ status: MonitorStatus) -> Bool {
-        switch status {
-        case .completed, .error, .cancelled:
-            true
-        default:
-            false
-        }
+    nonisolated private static func isTerminal(_ status: SessionStatus) -> Bool {
+        status == .completed
     }
 }
 

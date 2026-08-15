@@ -2,9 +2,9 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | V1 SwiftUI 与外部 Figma 已同步 |
-| 版本 | 0.7 |
-| 日期 | 2026-08-13 |
+| 文档状态 | V1 SwiftUI 四态契约已同步；外部 Figma 的旧状态变体待清理 |
+| 版本 | 0.8 |
+| 日期 | 2026-08-15 |
 | 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
 
 ## 1. 设计原则
@@ -27,11 +27,11 @@
 | `04 — Session Row` | 会话行、列表和状态名称胶囊 | `112:28`, `140:201`, `198:72` |
 | `05 — Panel` | 收起与展开 Panel 变体 | `115:82`, `300:253`, `300:263` |
 | `Notch Core` | 核心产品状态与不同菜单栏高度参考 | `118:73`, `185:292`, `304:630`, `304:641` |
-| `06 — Integration States` | 隐私、Unknown、局部降级、空和全局可用性 | `227:3`, `307:30` |
+| `06 — Integration States` | 隐私、局部降级、空和全局可用性 | `227:3`, `307:30` |
 | `07 — Onboarding` | 首次安装三步流程 | `232:95` |
 | `08 — Settings` | 集成管理与预览隐私 | `233:3` |
 
-截至 2026-08-13，外部 Figma 文件已按当前 SwiftUI 实现完成同步：`Usage Ring` 为 7 个合法变体，`Usage Indicator` 为 4 个合法变体，`Session Row` 为 6 个合法变体，`Panel` 为 7 个合法变体；V1 Runtime Badge 与计时示例已移除。同步范围内的文字层和 Text Styles 均使用 SF Pro。
+当前 SwiftUI 与本文只承认四个会话状态变体：Running、Input needed、Approval needed、Completed。外部 Figma 中超过这四类的历史会话状态变体不再属于产品契约，需在下一次 Figma 同步中删除；在完成前以本文和代码为准。`Usage Ring` 的 7 个合法变体、`Usage Indicator` 的 4 个合法变体及 `Panel` 的 7 个合法变体不受本次状态收敛影响。
 
 ## 3. Foundations
 
@@ -58,12 +58,7 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 - Running：蓝色。
 - Input/Approval：橙色。
 - Completed：绿色。
-- Error：红色。
-- Cancelled：冷灰色。
-- Unknown：中性灰色。
 - Disconnected/版本不可用：紫色。
-
-Unknown 是单会话状态；Disconnected 是全局集成状态，颜色与语义不得混用。
 
 ### 3.3 Layout tokens
 
@@ -98,10 +93,9 @@ cornerRadius = min(10, 10 × max(0, menuBarHeight) / 38)
 
 ### 4.1 Status Dot
 
-`Status Dot` 包含：Idle、Running、Input Needed、Approval Needed、Completed、Error、Cancelled、Disconnected 与 Unknown。
+`Status Dot` 包含两类互不混用的状态：会话级 Running、Input Needed、Approval Needed、Completed，以及系统级 Idle、Connecting、Disconnected、Update Codex、Unsupported Version、Setup Required。
 
 - Idle 只用于健康空集合的汇总。
-- Unknown 可用于会话行与汇总；只有所有被监视会话都 Unknown 时成为汇总。
 - Disconnected 不用于会话行。
 
 ### 4.2 Status Readout
@@ -148,7 +142,7 @@ V1 不包含 Runtime Badge、逐秒计时或“最长运行时长”汇总。未
 
 ### 5.1 成员语义
 
-一行代表一个可导航根 Thread。活动 Turn 始终显示；Completed、Error、Cancelled 只在 Desktop 仍为未读时显示。Desktop 已读、归档、删除或失去可导航性后自动移除。
+一行代表一个可导航根 Thread。Running、Input needed、Approval needed 始终显示；Completed 只在 Desktop 仍为未读时显示。Desktop 已读、归档、删除或失去可导航性后自动移除。
 
 列表覆盖当前 Desktop 账户所有 Project 与 `Chats`，不跟随侧边栏选择，不展示子智能体，也不承担历史浏览。
 
@@ -158,9 +152,6 @@ V1 不包含 Runtime Badge、逐秒计时或“最长运行时长”汇总。未
 Input needed
 > Approval needed
 > Running
-> Unknown
-> Error
-> Cancelled
 > Completed
 ```
 
@@ -173,10 +164,7 @@ Input needed
 | Input needed | 当前问题 |
 | Approval needed | 固定 `Approval requested` |
 | Running | 最新公开进度，回退到本轮输入 |
-| Error | 用户可见错误摘要 |
-| Cancelled | 最后公开进度，回退到本轮输入 |
-| Completed | final answer 开头 |
-| Unknown | 最后允许展示的公开片段 |
+| Completed | final answer 开头；没有时保留最后公开进度 |
 
 禁止 raw reasoning、工具参数、命令输出、diff、敏感路径和批准理由。
 
@@ -190,19 +178,15 @@ Input needed
 - 未生成 Desktop 标题的会话显示 `Untitled`。
 - 不显示正文预览，不改变行高。
 
-### 6.2 Unknown stays local
-
-单行 Unknown 使用中性灰 Badge。画板同时存在 Input needed 与 Running，用来证明 Unknown 不覆盖已知的高优先级汇总状态。
-
-### 6.3 Quota unavailable
+### 6.2 Quota unavailable
 
 额度环为灰色 unavailable，但会话列表、状态和点击能力继续工作。该场景表达局部降级，不是 Disconnected。
 
-### 6.4 Monitoring lifecycle
+### 6.3 Monitoring lifecycle
 
 注释卡明确：提交输入后入列；活动 Turn 始终保留；终态只在 Desktop 未读时保留；已读、归档、删除或失去可导航性后自动移除；Notch 不主动标记已读。
 
-### 6.5 Thin states
+### 6.4 Thin states
 
 | 状态 | 展开正文 | 操作 |
 | --- | --- | --- |
@@ -266,7 +250,7 @@ Input needed
 ## 10. 无障碍
 
 - 所有状态必须有文字或可访问名称，不能只依赖颜色。
-- Unknown 与 Disconnected 使用不同文案与语义。
+- 系统级状态与四个会话级状态使用不同文案与语义。
 - 隐私关闭后旁白不读取已隐藏正文。
 - 长状态名称在带刘海 Expanded 几何中必须完整可读。
 - Reduce Motion 不影响状态可理解性。
@@ -276,7 +260,7 @@ Input needed
 ```text
 Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 确认未读生命周期，Project Codex in Notch，需要输入
-检查未知事件，Chats，状态未知
+等待审批，Chats，需要批准
 ```
 
 ## 11. 验证清单
@@ -286,7 +270,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] 三行 `472 × 80` 视口与滚动契约。
 - [x] SF Pro 文件级字体统一。
 - [x] 隐私关闭场景。
-- [x] Unknown 与 quota unavailable 局部降级。
+- [x] Quota unavailable 局部降级。
 - [x] No active turns、Connecting、Disconnected、Update、unsupported、setup 薄层。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
@@ -295,6 +279,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] Usage Ring 已同步为从十二点逆时针增长的暗色消耗弧，并覆盖 `100`、`0` 与 Unavailable 边界。
 - [x] 无刘海 Panel 已同步 `38`、`24`、`19` 菜单栏高度下的响应式圆角参考。
 - [x] Figma 组件集结构合法，且同步范围内无 Inter、旧尺寸或旧计时文案残留。
+- [ ] 从外部 Figma 删除不属于四态模型的历史会话状态变体。
 - [ ] 不同真实菜单栏高度与至少两种物理刘海设备的原生几何验证。
 - [ ] 真实 Codex 集成事件、Project、未读和精确导航的 Phase 0 能力验证。
 

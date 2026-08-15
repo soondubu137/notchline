@@ -542,10 +542,9 @@ enum HookPendingInputEvidence: Sendable {
 struct HookTurnState: Sendable {
     let threadID: String
     let turnID: String
-    var lifecycleStatus: MonitorStatus
+    var sessionStatus: SessionStatus
     var pendingInput: HookPendingInputEvidence?
     var isApprovalPending: Bool
-    var isTerminalStatusPending: Bool = false
     var startedAt: Date
     var lastEventAt: Date
     var hasLiveBoundary: Bool
@@ -553,40 +552,27 @@ struct HookTurnState: Sendable {
     var promptPreview: String?
     var assistantPreview: String?
 
-    nonisolated var status: MonitorStatus {
-        switch lifecycleStatus {
-        case .unknown:
-            // A live Stop establishes a terminal boundary but not its outcome.
-            // Keep the last user-visible active state while App Server resolves
-            // completed/failed/interrupted instead of flashing Unknown.
-            return isTerminalStatusPending && hasLiveBoundary ? .running : .unknown
-        case .completed, .error, .cancelled:
-            return lifecycleStatus
-        default:
-            if pendingInput != nil {
-                return .inputNeeded
-            }
-            if isApprovalPending {
-                return .approvalNeeded
-            }
-            return .running
-        }
+    nonisolated var status: SessionStatus {
+        sessionStatus
     }
 }
 
 struct HookStateSnapshot: Sendable {
     let hasObservedEvent: Bool
+    let hasObservedLiveEvent: Bool
     let turns: [HookTurnState]
     let didConsumeEvents: Bool
     let diagnostic: String?
 
     nonisolated init(
         hasObservedEvent: Bool,
+        hasObservedLiveEvent: Bool,
         turns: [HookTurnState],
         didConsumeEvents: Bool = false,
         diagnostic: String? = nil
     ) {
         self.hasObservedEvent = hasObservedEvent
+        self.hasObservedLiveEvent = hasObservedLiveEvent
         self.turns = turns
         self.didConsumeEvents = didConsumeEvents
         self.diagnostic = diagnostic
@@ -627,6 +613,7 @@ actor HookEventRepository {
     private let fileManager: FileManager
     private let liveEventCutoff: Date
     private var hasObservedEvent: Bool
+    private var hasObservedLiveEvent: Bool
     private var turnsByThreadID: [String: HookTurnState]
 
     init(
@@ -640,11 +627,12 @@ actor HookEventRepository {
 
         if let data = try? Data(contentsOf: paths.state),
            let persisted = try? JSONDecoder().decode(PersistedState.self, from: data) {
-            // A valid event proves the installed hook was trusted at least once.
-            // Runtime liveness is still checked independently against the current
-            // Codex Desktop process before this marker is used.
+            // A valid event proves only that the installed hook was trusted at
+            // least once. This persisted marker is configuration health evidence;
+            // it is never restored as current Desktop runtime evidence.
             self.hasObservedEvent = persisted.hasObservedEvent
                 ?? !(persisted.turns ?? []).isEmpty
+            self.hasObservedLiveEvent = false
             // A persisted Turn is historical by definition. Restoring it would
             // turn the last observed Running/Input/Approval into a false claim
             // about the current Desktop runtime.
@@ -658,6 +646,7 @@ actor HookEventRepository {
             }
         } else {
             self.hasObservedEvent = false
+            self.hasObservedLiveEvent = false
             self.turnsByThreadID = [:]
         }
     }
@@ -677,6 +666,7 @@ actor HookEventRepository {
 
         var candidateTurns = turnsByThreadID
         var validURLs: [URL] = []
+        var didConsumeLiveEvents = false
         var diagnostic: String?
 
         for url in urls {
@@ -686,8 +676,24 @@ actor HookEventRepository {
                 quarantineInvalidEvent(at: url)
                 continue
             }
+
+            // Files left behind before this repository was created are backlog,
+            // not a snapshot of the current Desktop runtime. They may prove that
+            // the managed hook has executed before, but no historical event type
+            // is allowed to create or mutate a current Turn.
+            guard event.receivedAt.isFinite else {
+                diagnostic = "忽略了一个缺少稳定身份或不受支持的 Hook 事件。"
+                quarantineInvalidEvent(at: url)
+                continue
+            }
+            guard Date(timeIntervalSince1970: event.receivedAt) >= liveEventCutoff else {
+                validURLs.append(url)
+                continue
+            }
+
             if reduce(event, into: &candidateTurns) {
                 validURLs.append(url)
+                didConsumeLiveEvents = true
             } else {
                 diagnostic = "忽略了一个缺少稳定身份或不受支持的 Hook 事件。"
                 quarantineInvalidEvent(at: url)
@@ -700,13 +706,16 @@ actor HookEventRepository {
 
         let previousTurns = turnsByThreadID
         let previouslyObservedEvent = hasObservedEvent
+        let previouslyObservedLiveEvent = hasObservedLiveEvent
         turnsByThreadID = candidateTurns
         hasObservedEvent = true
+        hasObservedLiveEvent = hasObservedLiveEvent || didConsumeLiveEvents
         do {
             try persist()
         } catch {
             turnsByThreadID = previousTurns
             hasObservedEvent = previouslyObservedEvent
+            hasObservedLiveEvent = previouslyObservedLiveEvent
             return snapshot(
                 diagnostic: "Hook 状态写入失败；事件已保留并会重试：\(error.localizedDescription)"
             )
@@ -715,7 +724,10 @@ actor HookEventRepository {
         for url in validURLs {
             try? fileManager.removeItem(at: url)
         }
-        return snapshot(didConsumeEvents: true, diagnostic: diagnostic)
+        return snapshot(
+            didConsumeEvents: didConsumeLiveEvents,
+            diagnostic: diagnostic
+        )
     }
 
     func removeThreads(
@@ -760,6 +772,7 @@ actor HookEventRepository {
 
     func resetIntegrationObservation(clearTurns: Bool) {
         hasObservedEvent = false
+        hasObservedLiveEvent = false
         if clearTurns {
             turnsByThreadID.removeAll()
         }
@@ -776,62 +789,56 @@ actor HookEventRepository {
         guard var state = turnsByThreadID[threadID],
               state.turnID == turnID,
               snapshotStartedAt >= state.lastEventAt,
-              ![.completed, .error, .cancelled].contains(
-                  state.lifecycleStatus
-              ) else {
+              state.sessionStatus != .completed else {
             return false
         }
 
-        state.lifecycleStatus = .running
-        state.pendingInput = isInputPending ? .appServerSnapshot : nil
-        state.isApprovalPending = isApprovalPending
-        state.isTerminalStatusPending = false
+        let signal: SessionStatusSignal
+        if isInputPending {
+            signal = .inputNeeded
+        } else if isApprovalPending {
+            signal = .approvalNeeded
+        } else {
+            signal = .running
+        }
+        let nextStatus = state.sessionStatus.transitioned(on: signal)
+        state.sessionStatus = nextStatus
+        switch nextStatus {
+        case .inputNeeded:
+            if isInputPending {
+                state.pendingInput = .appServerSnapshot
+            }
+            state.isApprovalPending = false
+        case .approvalNeeded:
+            state.pendingInput = nil
+            state.isApprovalPending = true
+        case .running, .completed:
+            state.pendingInput = nil
+            state.isApprovalPending = false
+        }
         state.hasLiveBoundary = true
         turnsByThreadID[threadID] = state
         return true
     }
 
-    func resolveTerminalStatus(
-        threadID: String,
-        turnID: String,
-        status: MonitorStatus,
-        snapshotStartedAt: Date
-    ) -> Bool {
-        guard [.completed, .error, .cancelled].contains(status),
-              var state = turnsByThreadID[threadID],
-              state.turnID == turnID,
-              snapshotStartedAt >= state.lastEventAt else {
-            return false
-        }
-        guard state.status != status
-                || state.pendingInput != nil
-                || state.isApprovalPending else {
-            return false
-        }
-        state.lifecycleStatus = status
-        state.pendingInput = nil
-        state.isApprovalPending = false
-        state.isTerminalStatusPending = false
-        turnsByThreadID[threadID] = state
-        return true
-    }
-
-    func markTerminalStatusUnresolved(
+    func markCompleted(
         threadID: String,
         turnID: String,
         snapshotStartedAt: Date
     ) -> Bool {
         guard var state = turnsByThreadID[threadID],
               state.turnID == turnID,
-              snapshotStartedAt >= state.lastEventAt,
-              state.lifecycleStatus == .unknown,
-              state.isTerminalStatusPending else {
+              snapshotStartedAt >= state.lastEventAt else {
             return false
         }
-
-        // Unknown is appropriate only after an authoritative resolution attempt
-        // failed or returned no status, not as the routine Stop intermediate state.
-        state.isTerminalStatusPending = false
+        guard state.sessionStatus != .completed
+                || state.pendingInput != nil
+                || state.isApprovalPending else {
+            return false
+        }
+        state.sessionStatus = state.sessionStatus.transitioned(on: .completed)
+        state.pendingInput = nil
+        state.isApprovalPending = false
         turnsByThreadID[threadID] = state
         return true
     }
@@ -863,11 +870,9 @@ actor HookEventRepository {
         }
 
         let receivedAt = Date(timeIntervalSince1970: event.receivedAt)
-        let isLiveEvent = receivedAt >= liveEventCutoff
 
         switch eventName {
         case "UserPromptSubmit":
-            guard isLiveEvent else { return true }
             var retiredTurnIDs = Set<String>()
             if let current = turns[threadID] {
                 if current.turnID == turnID {
@@ -885,7 +890,7 @@ actor HookEventRepository {
             turns[threadID] = HookTurnState(
                 threadID: threadID,
                 turnID: turnID,
-                lifecycleStatus: .running,
+                sessionStatus: .running,
                 pendingInput: nil,
                 isApprovalPending: false,
                 startedAt: receivedAt,
@@ -896,7 +901,6 @@ actor HookEventRepository {
                 assistantPreview: nil
             )
         case "PermissionRequest":
-            guard isLiveEvent else { return true }
             mutateExactTurn(
                 threadID: threadID,
                 turnID: turnID,
@@ -904,18 +908,15 @@ actor HookEventRepository {
                 createWith: .running,
                 observedLiveEvent: true,
                 turns: &turns
-            ) {
-                // PermissionRequest says that the approval pipeline ran. It does
-                // not prove a human is still needed: automatic review can resolve
-                // the request without surfacing an approval UI. The fresh App
-                // Server waitingOnApproval flag is the authoritative evidence.
-                $0.isApprovalPending = false
+            ) { _ in
+                // PermissionRequest only proves the approval pipeline ran. It is
+                // neither human-wait evidence nor a Running signal, so it cannot
+                // enter or leave a wait state.
             }
         case "PreToolUse" where event.toolName == "request_user_input":
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return false
             }
-            guard isLiveEvent else { return true }
             mutateExactTurn(
                 threadID: threadID,
                 turnID: turnID,
@@ -924,11 +925,14 @@ actor HookEventRepository {
                 observedLiveEvent: true,
                 turns: &turns
             ) {
+                let nextStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
+                guard nextStatus == .inputNeeded else { return }
+                $0.sessionStatus = nextStatus
                 $0.pendingInput = .hook(toolUseID: toolUseID)
+                $0.isApprovalPending = false
             }
         case "PostToolUse":
-            guard isLiveEvent,
-                  let toolUseID = stableIdentifier(event.toolUseID) else {
+            guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return true
             }
             mutateExactTurn(
@@ -942,6 +946,7 @@ actor HookEventRepository {
                 if case .hook(let pendingToolUseID)? = $0.pendingInput,
                    pendingToolUseID == toolUseID {
                     $0.pendingInput = nil
+                    $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
                 }
             }
         case "Stop":
@@ -949,17 +954,15 @@ actor HookEventRepository {
                 threadID: threadID,
                 turnID: turnID,
                 at: receivedAt,
-                createWith: .unknown,
-                observedLiveEvent: isLiveEvent,
+                createWith: .completed,
+                observedLiveEvent: true,
                 turns: &turns
             ) {
-                // Stop means the turn reached a terminal boundary, not that it
-                // succeeded. App Server turn status resolves completed/failed/
-                // interrupted on the next reconciliation.
-                $0.lifecycleStatus = .unknown
+                // The product intentionally exposes one terminal state. Stop,
+                // completed, failed, and interrupted all converge to Completed.
+                $0.sessionStatus = $0.sessionStatus.transitioned(on: .completed)
                 $0.pendingInput = nil
                 $0.isApprovalPending = false
-                $0.isTerminalStatusPending = isLiveEvent
                 $0.assistantPreview = event.lastAssistantMessage
             }
         default:
@@ -972,7 +975,7 @@ actor HookEventRepository {
         threadID: String,
         turnID: String,
         at date: Date,
-        createWith lifecycleStatus: MonitorStatus?,
+        createWith sessionStatus: SessionStatus?,
         observedLiveEvent: Bool,
         turns: inout [String: HookTurnState],
         mutation: (inout HookTurnState) -> Void
@@ -985,11 +988,11 @@ actor HookEventRepository {
             }
             state = current
         } else {
-            guard let lifecycleStatus else { return }
+            guard let sessionStatus else { return }
             state = HookTurnState(
                 threadID: threadID,
                 turnID: turnID,
-                lifecycleStatus: lifecycleStatus,
+                sessionStatus: sessionStatus,
                 pendingInput: nil,
                 isApprovalPending: false,
                 startedAt: date,
@@ -1018,6 +1021,7 @@ actor HookEventRepository {
     ) -> HookStateSnapshot {
         HookStateSnapshot(
             hasObservedEvent: hasObservedEvent,
+            hasObservedLiveEvent: hasObservedLiveEvent,
             turns: turnsByThreadID.values.sorted { $0.startedAt > $1.startedAt },
             didConsumeEvents: didConsumeEvents,
             diagnostic: diagnostic

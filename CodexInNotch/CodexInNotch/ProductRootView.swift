@@ -157,7 +157,7 @@ private struct OnboardingView: View {
             BenefitRow(
                 systemImage: "waveform.path.ecg",
                 title: "Real-time turn state",
-                detail: "Running, input, approval, terminal, and unknown states."
+                detail: "Running, input, approval, and completed states."
             )
             BenefitRow(
                 systemImage: "arrow.up.forward.app",
@@ -351,7 +351,7 @@ struct AppSettingsView: View {
                         .font(.system(size: 13, weight: .medium))
                     Text(
                         store.showsContentPreviews
-                            ? "User-visible prompt, progress, error, and final-answer snippets."
+                            ? "User-visible prompt, progress, and final-answer snippets."
                             : "Projects, titles, and status remain visible."
                     )
                     .font(.system(size: 11))

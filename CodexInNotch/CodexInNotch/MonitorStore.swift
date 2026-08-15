@@ -249,6 +249,14 @@ struct ConnectionStabilityGate {
             return true
         }
 
+        // Connecting has no trusted snapshot to preserve. Once the startup
+        // attempt confirms that App Server is unresponsive, publish that fact
+        // immediately; the grace period only protects an established state.
+        guard current != .connecting else {
+            disconnectedSince = nil
+            return true
+        }
+
         guard let disconnectedSince else {
             self.disconnectedSince = observedAt
             return false

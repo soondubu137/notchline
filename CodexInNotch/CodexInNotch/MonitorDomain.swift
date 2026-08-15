@@ -8,9 +8,6 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     case inputNeeded
     case approvalNeeded
     case completed
-    case error
-    case cancelled
-    case unknown
     case updateCodex
     case unsupportedVersion
     case disconnected
@@ -33,12 +30,6 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
             "Approval needed"
         case .completed:
             "Completed"
-        case .error:
-            "Error"
-        case .cancelled:
-            "Cancelled"
-        case .unknown:
-            "Unknown"
         case .updateCodex:
             "Update Codex"
         case .unsupportedVersion:
@@ -64,12 +55,6 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
             "等待批准"
         case .completed:
             "已完成"
-        case .error:
-            "发生错误"
-        case .cancelled:
-            "已取消"
-        case .unknown:
-            "状态未知"
         case .updateCodex:
             "需要更新 Codex"
         case .unsupportedVersion:
@@ -82,6 +67,83 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     var isRunning: Bool {
         self == .running
     }
+}
+
+enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
+    case running
+    case inputNeeded
+    case approvalNeeded
+    case completed
+
+    var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .running:
+            "Running"
+        case .inputNeeded:
+            "Input needed"
+        case .approvalNeeded:
+            "Approval needed"
+        case .completed:
+            "Completed"
+        }
+    }
+
+    var controlTitle: String {
+        switch self {
+        case .running:
+            "运行中"
+        case .inputNeeded:
+            "需要输入"
+        case .approvalNeeded:
+            "等待批准"
+        case .completed:
+            "已完成"
+        }
+    }
+
+    var isRunning: Bool {
+        self == .running
+    }
+
+    var monitorStatus: MonitorStatus {
+        switch self {
+        case .running:
+            .running
+        case .inputNeeded:
+            .inputNeeded
+        case .approvalNeeded:
+            .approvalNeeded
+        case .completed:
+            .completed
+        }
+    }
+
+    nonisolated func transitioned(on signal: SessionStatusSignal) -> SessionStatus {
+        if self == .completed {
+            return .completed
+        }
+        if case .completed = signal { return .completed }
+
+        switch (self, signal) {
+        case (_, .running):
+            return .running
+        case (.running, .inputNeeded), (.inputNeeded, .inputNeeded):
+            return .inputNeeded
+        case (.running, .approvalNeeded), (.approvalNeeded, .approvalNeeded):
+            return .approvalNeeded
+        default:
+            return self
+        }
+    }
+}
+
+enum SessionStatusSignal: Sendable {
+    case running
+    case inputNeeded
+    case approvalNeeded
+    case completed
 }
 
 enum MonitorAvailability: Equatable, Sendable {
@@ -134,7 +196,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     let title: String
     let privacySafeTitle: String
     let preview: String?
-    let status: MonitorStatus
+    let status: SessionStatus
     let startedAt: Date?
 
     nonisolated init(
@@ -144,7 +206,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         title: String,
         privacySafeTitle: String? = nil,
         preview: String?,
-        status: MonitorStatus,
+        status: SessionStatus,
         startedAt: Date?
     ) {
         self.threadID = threadID
@@ -222,18 +284,15 @@ enum MonitorAggregation {
             return availability.status
         }
 
-        let priority: [MonitorStatus] = [
+        let priority: [SessionStatus] = [
             .inputNeeded,
             .approvalNeeded,
             .running,
-            .error,
-            .completed,
-            .cancelled,
-            .unknown
+            .completed
         ]
 
         for status in priority where sessions.contains(where: { $0.status == status }) {
-            return status
+            return status.monitorStatus
         }
         return .idle
     }

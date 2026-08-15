@@ -499,7 +499,7 @@ private struct SessionStatusControl: View {
     var body: some View {
         if revealsStatusName {
             HStack(spacing: 8) {
-                StatusDot(status: session.status)
+                StatusDot(status: session.status.monitorStatus)
                 Text(label)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(statusColor)
@@ -509,7 +509,7 @@ private struct SessionStatusControl: View {
             .frame(height: 24)
             .background(statusColor.opacity(0.16), in: Capsule())
         } else {
-            StatusDot(status: session.status)
+            StatusDot(status: session.status.monitorStatus)
         }
     }
 
@@ -534,9 +534,13 @@ private struct StatusDot: View {
 }
 
 private enum StatusPalette {
+    static func color(for status: SessionStatus) -> Color {
+        color(for: status.monitorStatus)
+    }
+
     static func color(for status: MonitorStatus) -> Color {
         switch status {
-        case .idle, .setupRequired, .unknown:
+        case .idle, .setupRequired:
             Color(red: 0.39, green: 0.39, blue: 0.40)
         case .connecting, .running:
             Color(red: 0.04, green: 0.52, blue: 1)
@@ -544,10 +548,6 @@ private enum StatusPalette {
             Color(red: 1, green: 0.62, blue: 0.04)
         case .completed:
             Color(red: 0.19, green: 0.82, blue: 0.35)
-        case .error:
-            Color(red: 1, green: 0.27, blue: 0.23)
-        case .cancelled:
-            Color(red: 0.56, green: 0.56, blue: 0.58)
         case .updateCodex, .unsupportedVersion, .disconnected:
             Color(red: 0.75, green: 0.35, blue: 0.95)
         }
