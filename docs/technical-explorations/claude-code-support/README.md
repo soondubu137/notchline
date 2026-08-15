@@ -7,7 +7,8 @@
 | 探索点 | 让当前只服务 Codex Desktop 的顶部监视器同时汇总 Claude Code 会话 |
 | 目标读者 | 后续负责决策、spike 和实现的 Agent 与产品负责人 |
 | 验证基线 | Claude Desktop `1.30096.5`（bundle `com.anthropic.claudefordesktop`），内置 Claude Code CLI `2.1.229`，macOS `Darwin 25.5.0`，验证日期 `2026-08-15` |
-| 当前结论 | **状态汇总可行且比 Codex 更容易；精确导航当前无受支持实现，是唯一的产品级阻塞点** |
+| 当前结论 | **可行。导航按产品决策降级；实现可以做到稳态零轮询、零落盘、无 helper 脚本** |
+| 产品决策 | 已于 2026-08-15 确定：导航降级可接受；Apple Events 权限可接受（见 §8） |
 
 > 目录约定沿用 [`shared-app-server/README.md`](../shared-app-server/README.md)：每个探索点独立二级目录，后续实验记录追加到本文第 10 节，不覆盖早期证据。
 
@@ -35,7 +36,9 @@
 | 子智能体过滤 | **优于 Codex。** 精确而非推断 | Hook payload 带 `agent_id` / `agent_type` |
 | Desktop + CLI 统一 | **成立。** 一次集成覆盖两者 | Desktop 启动的就是同一个 CLI 二进制，且带 `--setting-sources=user,project,local` |
 | 会话标题与元数据 | **成立。** 路径由官方 Hook payload 给出 | `transcript_path`、`cwd`；标题需解析 JSONL（格式非公开） |
-| **精确导航** | **当前不可行。** 无任何受支持接口能聚焦已存在的会话 | 官方 deep link 只能新建会话；`claude://code/sessions/local_…` 实测被拒 |
+| **精确导航** | **不可行，已决定降级。** 无任何受支持接口能聚焦已存在的会话 | 官方 deep link 只能新建会话；`claude://code/sessions/local_…` 实测被拒 |
+| 原生实时状态源 | **不存在。** Hook 是唯一受支持的状态推送通道 | 五个候选源全部只描述身份或已发生的事实，见 §4.7 |
+| 实现整洁度 | **可优于 Codex 侧。** 稳态零轮询、零落盘、无 helper 脚本 | `http` hook 直推 loopback listener + 事件驱动的会话发现，见 §6 |
 | 已读自动移除 | 私有只读可行，风险等级与现有 Codex 未读适配器相同 | Desktop 侧 `lastFocusedAt` / `lastActivityAt` |
 | 额度圆环 | Desktop 用户可行；纯 CLI 用户无等价数据源 | `plan-usage-history.json` 属于 Claude Desktop 私有状态 |
 
@@ -97,7 +100,8 @@ flowchart LR
 
 要点：
 
-- 文档把该命令描述为“监视并派发并行后台会话”，但**实测同时返回 `kind: interactive` 的交互式会话**，包括由 Claude Desktop 托管的会话。这是本次调研最重要的单条发现。
+- `claude agents --help` 明确写明 `--json` 的作用是 “Print active sessions (interactive and background) as a JSON array and exit (for scripting; does not require a TTY)”。**交互式会话可见是文档承诺，不是观察到的巧合**，包括由 Claude Desktop 托管的会话。这是本次调研最重要的单条发现。
+- **该命令不返回任何状态字段。** 在本会话正处于处理中时执行，输出与空闲时完全一致。它是身份的权威来源，不是状态的来源（见 §4.7）。
 - 支持 `--all`（含已完成的后台会话）与 `--cwd <path>`。
 - 三次计时均为 0.19–0.26 秒。作为 1 秒轮询偏重，作为 5 秒轮询或事件触发后的权威读取合适。
 - 同一信息也存在于 `~/.claude/sessions/<pid>.json`（额外含 `entrypoint`、`kind`、`version`、`messagingSocketPath`）。该文件由 `claude` 进程自己持有（`lsof` 确认 pid 91157 持有 `/tmp/cc-socks/91157.sock`），**因此终端启动的 CLI 会话与 Desktop 托管会话使用同一套注册机制**。该文件格式未公开，只应作为“何时该重新查询官方命令”的 watcher 输入，不应作为数据来源。
@@ -130,7 +134,7 @@ flowchart LR
 - **但 JSONL 的记录结构本身不是公开契约。** 解析它属于私有依赖，需要按 [`AGENTS.md`](../../../AGENTS.md) 登记，并对缺失/损坏 fail closed。
 - Project 概念在 Claude Code 侧没有 Codex 那样的用户创建实体。可用的等价物是 `cwd` + `gitBranch`，或 `claude agents --json` 返回的 `name`（实测为 `codex-in-notch-f6` 这类从目录派生的名字，`nameSource: derived`）。这与当前 PRD “禁止从 cwd、Git 根目录或路径最后一级推导 Project” 的规则直接冲突，需要产品决策（见 §8）。
 
-### 4.4 导航（阻塞点）
+### 4.4 导航（已决定降级，见 §8.1）
 
 **结论：当前没有任何受支持的方式聚焦一个已经存在的 Claude Code 会话。**
 
@@ -189,6 +193,22 @@ completedTurns / model / permissionMode
 
 `fh` / `sd` 与官方 `/usage` 展示的滚动窗口对应（推测为 5 小时 / 7 天用量百分比，**未验证**）。这是 Claude Desktop 私有状态，纯 CLI 用户没有该文件。若 V1 要求额度圆环对 Claude Code 也成立，需要接受“仅 Desktop 用户可用，其余显示不可用”。
 
+### 4.7 为什么不存在“原生实时状态源”
+
+本次专门调查了“能不能不装 Hook、不轮询，直接监听一个原生真值源拿到所有会话的实时状态”。答案是**不能**。五个候选源全部实测评估如下：
+
+| 候选源 | 是什么 | 为什么不够 |
+| --- | --- | --- |
+| `claude agents --json` | 官方公开命令，返回当前活动会话 | **只有身份，没有状态。** 返回字段固定为 `pid / cwd / kind / startedAt / sessionId / name`。在本会话正处于处理中时执行，输出与空闲时完全一致，没有任何 status 字段 |
+| 会话间消息总线 `/tmp/cc-socks/<pid>.sock` | `[uds-messaging]`：NDJSON over Unix domain socket，1 MiB 单行上限，带 auth frame | **私有、需鉴权、且同样不含状态。** token 存放在 `~/.claude/sessions/<pid>.<sha256>.key`（0600），服务端校验 peer pid 与 token 匹配。CLI 自己的 peer 列表也只显示 name / kind / started，没有状态。连接它属于 §9 的 NO-GO |
+| transcript JSONL（`transcript_path`） | 官方 Hook payload 给出路径，实时 append | **记录“发生过什么”，不记录“正在等什么”。** 实测 3.3 MB 真实 transcript 的全部记录类型只有 `assistant / user / system / attachment / custom-title / ai-title / last-prompt / queue-operation`：**没有轮次结束记录，也没有待审批记录**。等待审批与等待输入这两个状态在被解决之前不产生任何写入——而它们恰恰是本产品存在的理由 |
+| Desktop `local_*.json` | Claude Desktop 私有会话状态 | `lastActivityAt` 实时更新，但 `isRunning` 只存在于 Desktop 进程的内存模型中（经其内部 MCP 暴露），未落盘。且纯 CLI 会话没有该文件 |
+| `--output-format stream-json` | 会话真正的完整事件流，Desktop 消费的就是它 | 只有会话进程的**父进程**能读到这条管道。外部应用无法附着 |
+
+结论：**Hook 是当前唯一受官方支持、能表达“此刻在等什么”的通道。** 这不是实现取舍，而是与 [`shared-app-server`](../shared-app-server/README.md) 中记录的 Codex 侧结论同源的能力边界——只不过 Claude Code 的 Hook 事件集足够细，不需要再叠加第二套证据来源。
+
+但“必须用 Hook”不等于“必须做成 Codex 侧那样”。Hook 本身是**推送**语义，配合 `type: "http"` 后整条链路可以做成应用被动监听、稳态零轮询、零落盘，见 §6。
+
 ## 5. 对现有架构的影响
 
 好消息是领域层几乎不需要动。`MonitorDomain.swift` 里的 `SessionStatus` 四态、`MonitorAvailability`、`MonitoredSession`、`MonitorAggregation` 都不含任何 Codex 语义；`HookEventRepository` 的事件 schema 与 Claude Code 的 payload 近乎逐字段对应：
@@ -238,27 +258,99 @@ flowchart LR
 5. **`CodexAppServerClient` 保持 Codex 专属**，不进入通用层。Claude Code 侧不需要等价物。
 6. **产品命名。** 仓库、App、bundle 与 UI 文案目前整体叫 Codex in Notch，扩展后需要重新命名决策。
 
-## 6. 实现路线
+## 6. 推荐实现：稳态零轮询
 
-### 6.1 路线 A：文件事件 + 官方命令（推荐首选）
+Codex 侧的形状是能力受限下的产物：1 秒轮询 + Python helper 写 0600 事件文件 + 应用消费 + 独立 App Server 子进程 + 30/60 秒多级刷新。Claude Code 侧这四样**一样都不需要**。
 
-沿用当前架构已经验证过的形状：
+```mermaid
+flowchart LR
+    subgraph launch ["仅启动时一次"]
+        cold["claude agents --json\n≈0.2s 建立已有会话集合"]
+    end
 
-- 用 `DispatchSourceFileSystemObject` + 250 ms debounce 监听 `~/.claude/sessions/` 目录（该模式在 `CodexDesktopUnreadState.swift` 已有实现）。
-- 目录变化或定时到期时执行 `claude agents --json`，作为会话集合的**权威**来源。
-- Hook 事件仍走现有落盘管线（helper 脚本原子写 0600 事件文件 → `HookEventRepository` 消费），只需替换字段映射与 hook 定义。
+    subgraph push ["稳态：全部由 Claude Code 推送"]
+        hooks["http hook async:true"]
+        listener["应用内 loopback listener"]
+        reducer["HookEventRepository\n现有 reducer 规则不变"]
+    end
 
-优点：与现有代码同构、无新权限、无常驻端口、失败面已知。
-代价：多一次进程启动（约 0.2 秒），不适合 1 秒轮询。
+    subgraph watch ["仅在会话增删时触发"]
+        watcher["~/.claude/sessions/ 目录 watcher\n250ms debounce"]
+        recheck["claude agents --json 复核"]
+    end
 
-### 6.2 路线 B：`http` hook + 应用内 loopback listener
+    cold --> reducer
+    hooks -->|"POST 每个状态迁移"| listener
+    listener --> reducer
+    watcher --> recheck
+    recheck --> reducer
+    reducer --> snapshot["MonitorSnapshot"]
+```
 
-Claude Code 支持 `type: "http"` 的 hook，直接把事件 POST 到指定 URL，配合 `async: true` 不阻塞会话。
+稳态下没有任何定时器：状态变化由 Hook 推送，会话增删由文件事件触发。`claude agents --json` 只在启动和目录变化时各执行一次。
 
-优点：零落盘、零轮询延迟、不需要安装任何 helper 脚本，事件到 UI 的延迟只受 HTTP 往返限制。
-代价：应用需要监听 loopback 端口并处理鉴权（`headers` 支持 `$VAR` 插值，可配合 `allowedEnvVars` 下发一次性 token）；端口占用、防火墙提示与"本地服务"心智负担都是新的；崩溃后 hook 会静默失败（非 2xx 按非阻塞错误处理，对用户无害但会丢事件）。
+### 6.1 传输：`http` hook 取代 helper 脚本与事件文件
 
-**建议：** 先用路线 A 做 spike 证明状态模型成立，路线 B 作为延迟优化的后续选项，不在第一版引入。
+```json
+{
+  "hooks": {
+    "Notification": [
+      { "hooks": [{
+          "type": "http",
+          "url": "http://127.0.0.1:<port>/hook",
+          "async": true,
+          "timeout": 5,
+          "headers": { "Authorization": "Bearer <install-time-token>" }
+      }]}
+    ]
+  }
+}
+```
+
+相比 Codex 侧的落盘管线：
+
+- **不需要安装任何 helper 脚本**，因此不需要脚本升级、权限校验与哈希校验逻辑。
+- **不产生事件文件**，因此不需要 0600 原子写、cutoff 分类、消费后删除与隔离目录。
+- **`async: true` 保证不阻塞用户会话**，官方文档明确后台执行。
+- **应用未运行时 hook 静默失败**（非 2xx 按非阻塞错误处理），这反而是优点：不会像落盘方案那样在应用关闭期间堆积无人消费的事件文件，也天然实现了“启动前事件不进入 reducer”这条既有规则。
+
+代价与必须处理的点：
+
+- 需要固定 loopback 端口（hook URL 写死在 settings.json 里，无法动态发现）。端口冲突需要在安装时探测并写入实际端口，冲突后重装。
+- 鉴权：安装时生成随机 token 直接写进 `headers`。它保护的只是一个 127.0.0.1 listener，不是凭证。**不要**走 `allowedEnvVars` 路线——那要求环境变量存在于会话进程环境中，而应用无法控制用户如何启动 `claude`。
+- listener 必须只绑定 `127.0.0.1`，只接受 POST，拒绝非法 token，并对请求体大小设上限。
+
+### 6.2 事件数量：4 个注册，可能只要 3 个
+
+Codex 侧安装六类定义。Claude Code 侧建议起点：
+
+| 注册 | matcher | 承担的状态 |
+| --- | --- | --- |
+| `UserPromptSubmit` | 无 | Running（新 Turn 由 `prompt_id` 建立身份） |
+| `Notification` | `*` | Approval needed（`permission_prompt`）、Input needed（`idle_prompt` / `agent_needs_input` / `elicitation_dialog`）、可能的 Completed（`agent_completed`） |
+| `Stop` | 无 | Completed |
+| `SessionEnd` | 无 | 移除行 |
+
+要点：
+
+- **`Notification` 一条注册覆盖所有通知类型。** matcher 按 `notification_type` 过滤，用 `*` 即可全收，在应用侧按 payload 的 `notification_type` 分派。这是把六类事件压缩成一条注册的关键。
+- **`PermissionRequest` / `PermissionDenied` 暂不注册。** 只有当 Phase 0 证明 `Notification(permission_prompt)` 无法表达“审批已解决”时才加回来——它们带 `tool_use_id`，可以走现有 reducer 的成对开闭模型。
+- **`Stop` 可能可以省掉。** 若 Phase 0 证明 `Notification(agent_completed)` 在普通交互会话中也触发，则注册数降到 3。文档未说明该类型是否只在后台 agent 中出现，必须实测。
+- **`SessionStart` 不需要注册。** 会话创建由目录 watcher 感知，且 `SessionStart` 不带 `prompt_id`，对状态机没有贡献。
+
+### 6.3 会话发现：事件驱动，不轮询
+
+- 启动时执行一次 `claude agents --json`，建立已有会话集合。**这就直接解决了 Codex 侧的冷启动能力边界**——不需要等待下一个生命周期事件。
+- 用 `DispatchSourceFileSystemObject` 监听 `~/.claude/sessions/` 目录 + 250 ms debounce（该模式在 [`CodexDesktopUnreadState.swift`](../../../CodexInNotch/CodexInNotch/CodexDesktopUnreadState.swift) 已有实现），变化时再执行一次 `claude agents --json` 复核。
+- 目录内容格式**不解析**，只当作“该复核了”的信号。权威数据永远来自官方命令。这样即使私有文件 schema 变化，最坏结果是复核触发变迟钝，退化到启动时的一次快照，而不是错误状态。
+
+启动时会话的状态未知，可以按 [`CONTEXT.md`](../../../CONTEXT.md) 已定义的**未知（Unknown）**发布，等第一个 Hook 事件收敛为四态之一。这比 Codex 侧“启动前会话一律不显示”严格更好。
+
+### 6.4 被否决的路线
+
+- **纯 transcript 监听（无 Hook）：** 见 §4.7。看不到等待状态，直接否决。
+- **连接会话消息总线：** 需要读取私有 token 文件并逆向未公开帧格式，属于 §9 NO-GO。
+- **沿用 Codex 的落盘 helper 管线：** 可行且与现有代码同构，但在 `http` hook 可用的前提下是纯粹的额外复杂度。仅在 Phase 0 证明 `http` hook 不可靠时作为退路。
 
 ## 7. 分阶段验证计划
 
@@ -271,14 +363,19 @@ Claude Code 支持 `type: "http"` 的 hook，直接把事件 POST 到指定 URL�
 执行前必须获得用户明确授权，因为这会修改用户的 Claude Code 配置。
 
 1. 备份现有 `~/.claude/settings.json`（本机当前**不存在**该文件，需注意首次创建与后续合并的差异）。
-2. 安装一个只做 append 的最小 hook：`UserPromptSubmit`、`PermissionRequest`、`Stop`、`SessionEnd` 各一条，写入临时目录。
-3. 在 Claude Desktop 中发起一轮对话，确认四类事件是否到达。
+2. 安装 §6.2 的四条注册，`type: "http"` 指向一个临时 loopback listener，`async: true`。
+3. 在 Claude Desktop 中发起一轮对话，确认事件是否到达。
 4. 在终端 `claude` 中重复同一验证。
-5. 确认热加载：不重启会话直接改 hook 定义，观察是否生效。
-6. 确认 workspace trust 的实际影响：官方文档说明 settings 文件中的 hooks 需要接受 workspace trust 对话框，需实测新增 hook 是否触发新的信任提示。
-7. 完整移除 hook，确认配置恢复原状。
+5. **验证 `Notification` 的类型覆盖面**，这是能否压到 3–4 条注册的关键：
+   - `permission_prompt` 是否在普通交互会话触发，以及**审批被批准/拒绝后是否有对应的关闭通知**；若没有，加回 `PermissionRequest` + `PermissionDenied` 走 `tool_use_id` 成对模型。
+   - `agent_completed` 是否在普通交互会话触发；若是，可省掉 `Stop`。
+   - `idle_prompt` 的实际触发条件（是否有空闲延迟，会不会把 Running 误报成 Input needed）。
+6. **验证 `http` hook 的可靠性：** 应用未监听时会话是否完全无感（预期非阻塞）；`async: true` 是否真的不阻塞；超时行为；高频事件下是否丢事件。
+7. 确认热加载：不重启会话直接改 hook 定义，观察是否生效。
+8. 确认 workspace trust 的实际影响：官方文档说明 settings 文件中的 hooks 需要接受 workspace trust 对话框，需实测新增 hook 是否触发新的信任提示。
+9. 完整移除 hook，确认配置恢复原状。
 
-**停止条件：** Desktop 会话收不到 hook；或安装 hook 会让用户在每个项目重新走信任流程。
+**停止条件：** Desktop 会话收不到 hook；安装 hook 会让用户在每个项目重新走信任流程；或 `http` hook 在应用未运行时对用户会话产生任何可见影响。
 
 ### Phase 1：会话集合与身份
 
@@ -305,14 +402,17 @@ Claude Code 支持 `type: "http"` 的 hook，直接把事件 POST 到指定 URL�
 
 建议最低重复次数与 `shared-app-server` 探索一致：正常完成 30 次，审批合计 30 次，输入 20 次，失败与并发各至少 10 次。
 
-### Phase 3：导航（决定性阶段）
+### Phase 3：降级导航
 
-在做任何实现之前先回答产品问题（见 §8）。若产品接受降级导航：
+产品已决定采用降级导航（§8.1），本阶段只验证实现：
 
-1. 实测 pid → tty → Apple Events 聚焦终端标签页，在 iTerm2 与 Terminal.app 上验证。
-2. 记录 Automation 权限提示的实际形态与用户成本。
-3. 对 Desktop 会话，确认“仅激活应用”是否达到可接受的产品体验。
-4. 每次 Claude Desktop 更新后复查 `/code/sessions/` 路由是否开始接受本地会话 ID。
+1. 用 `ps -o ppid=` 向上走进程祖先链判定宿主类型。实测形态：
+   `91157 (claude) → 91156 (Claude.app/Contents/Helpers/disclaimer) → 39127 (Claude.app)`。
+   祖先中出现 `Claude.app` 即为 Desktop 托管，否则找到的终端进程即为宿主。
+2. Desktop 会话：`NSWorkspace` 按 bundle id `com.anthropic.claudefordesktop` 激活即可，无需 deep link。
+3. CLI 会话：pid → `ps -o tty=` → Apple Events 聚焦对应标签页。至少覆盖 iTerm2 与 Terminal.app；Ghostty / kitty / WezTerm / Alacritty 逐个确认支持程度，不支持的降级为仅激活应用。
+4. 记录 Automation 权限提示的实际形态与用户成本，并确认被拒绝后的降级路径不报错、不反复弹窗。
+5. 每次 Claude Desktop 更新后复查 `/code/sessions/` 路由是否开始接受本地会话 ID；一旦官方支持出现，应迁移到 deep link 并移除 Apple Events 路径。
 
 ### Phase 4：已读、额度与降级
 
@@ -322,10 +422,18 @@ Claude Code 支持 `type: "http"` 的 hook，直接把事件 POST 到指定 URL�
 
 ## 8. 必须由产品决定的问题
 
-工程上这些都能做，但它们改变产品定义，不应由实现方替用户决定：
+### 8.1 已决定（2026-08-15）
 
-1. **导航降级是否可接受？** 当前 PRD 第 3 条目标是“让用户点击任意会话行后进入完全相同的会话”，并且 ADR-0004 把精确导航列为发布门槛。Claude Code 侧现在做不到。可选：(a) 仅激活应用；(b) 对 CLI 会话用 Apple Events 聚焦终端；(c) 在官方支持出现前不做 Claude Code。
-2. **是否接受申请 Automation（Apple Events）权限？** PRD 明确排除辅助功能与屏幕录制，未提及 Apple Events。这是 CLI 会话精确导航的唯一非 GUI-自动化路径。
+1. **导航降级可接受，且只对 Claude Code 降级。**
+   - Claude Code Desktop 会话：只激活 Claude Desktop，不要求定位到具体会话。
+   - Claude Code CLI 会话：只聚焦其所在的终端标签页，不要求定位到具体会话。
+   - **Codex Desktop 侧维持精确导航要求不变**，ADR-0004 的发布门槛继续适用于 Codex。
+2. **接受申请 Automation（Apple Events）权限**，用于聚焦终端标签页。辅助功能与屏幕录制仍然排除。
+
+这两条需要同步反映到 PRD 第 3 条目标与 ADR-0004 的适用范围——两者当前都是无条件表述，扩展后必须按来源区分。建议在实现改动中一并更新，而不是留在本探索文档里。
+
+### 8.2 仍待决定
+
 3. **Project 语义怎么定义？** Codex 侧有用户创建的 Project 实体且明令禁止从 cwd 推导。Claude Code 侧不存在该实体，只有 `cwd` / `gitBranch` / 派生 `name`。要么为 Claude Code 行放宽规则，要么该列显示为不适用。
 4. **额度只对 Desktop 用户可用是否可接受？**
 5. **产品命名与定位。** 从 “Codex in Notch” 变成多智能体中心，仓库名、App 名、bundle id、UI 文案与引导流程都要重做。
@@ -335,10 +443,10 @@ Claude Code 支持 `type: "http"` 的 hook，直接把事件 POST 到指定 URL�
 
 出现任一条件即不应把该方案产品化：
 
-- Phase 0 证明用户级 hook 对 Desktop 托管会话不生效，且没有其他官方事件源。
+- Phase 0 证明用户级 hook 对 Desktop 托管会话不生效，且没有其他官方事件源（§4.7 已证明不存在替代真值源，因此这一条直接决定整个方案存亡）。
 - 安装 hook 会导致用户在每个项目重新走 workspace trust 流程，形成不可接受的安装摩擦。
-- 产品判定“无法精确跳回会话”使该来源失去核心价值。
-- 唯一可行的导航实现需要辅助功能权限或 GUI 自动化。
+- `http` hook 在应用未运行或崩溃时会对用户会话产生可见影响（阻塞、报错、卡住审批）。
+- 降级导航连“激活正确的应用/终端”都做不到，或只能靠辅助功能权限与 GUI 自动化实现。
 - 需要修改 `Claude.app`、`app.asar`、注入 Electron IPC，或连接 `/tmp/cc-socks/*.sock` 这类未公开的会话间消息通道来获取状态或导航。
 - 官方后续移除 `claude agents --json` 对交互式会话的可见性，退回到与 Codex 相同的“无法查询当前态”。
 
@@ -356,6 +464,18 @@ Claude Code 支持 `type: "http"` 的 hook，直接把事件 POST 到指定 URL�
 - 结果：状态汇总 PASS（证据见 §4.1–4.3）；精确导航 **FAIL**（§4.4）
 - 未验证项：Hook 在 Desktop 托管会话中的实际触发（Phase 0）；`fh` / `sd` 的确切窗口语义；`lastFocusedAt` 更新时机
 - 下一步建议：先做 §8 的产品决策 1 与 2，再决定是否投入 Phase 0
+
+### 2026-08-15 — 原生真值源调查与产品决策（只读）
+
+- 触发问题：能否不装 Hook、不轮询，直接监听原生真值源
+- 新增只读检查：`claude agents --help`、`ListAgents` peer 列表、3.3 MB 真实 transcript 的全量记录类型统计、`claude` 二进制中 `[uds-messaging]` 实现片段
+- 结果：**不能**。五个候选源全部只描述身份或已发生的事实，详见 §4.7
+- 附带发现 1：`claude agents --help` 明确写明 `--json` 打印 “active sessions (interactive and background)”，交互式会话可见是**文档承诺**而非观察到的巧合，§4.1 据此升级
+- 附带发现 2：`Notification` 单条注册即可按 `notification_type` 覆盖审批与输入两类等待，注册数有望从六条压到三到四条，§6.2 据此重写
+- 附带发现 3：会话消息总线为带 token 鉴权的 NDJSON over UDS，token 位于 `~/.claude/sessions/<pid>.<sha256>.key`；已列入 §9 NO-GO
+- 产品决策：导航降级可接受（仅 Claude Code）；Apple Events 权限可接受。已写入 §8.1
+- 未修改：任何配置、任何生产代码、任何用户状态
+- 下一步建议：直接进入 Phase 0，重点是 `Notification` 类型覆盖面与 `http` hook 可靠性两项
 
 ## 11. 参考入口
 
