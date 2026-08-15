@@ -24,7 +24,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 从当前账户 primary rate-limit window 读取真实 `usedPercent`，转换为剩余百分比；不可用时显示灰色圆环。
 - 从 `account/usage/read.dailyUsageBuckets` 读取本地日历“今天”的 token bucket；Expanded footer 显示标准 Compact 数字、额度重置日期和 Settings 入口。今日 bucket 缺失但 bucket 数组有效时按 `0` 处理，接口不可用时只将今日用量显示为 `--`。
 - 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。Settings 使用一个 `Codex integration` 总开关，把六种必需 lifecycle event 定义作为一个产品能力启停；关闭后留在 Settings，不重置首次引导。
-- 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(request_user_input)`、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求还必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
+- 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(request_user_input|request_permissions)`、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求与审批请求都必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
 - 标题使用 Thread 元数据，按成本分两层获取：Hook reducer 当前跟踪的 Thread 用 `thread/read`（`includeTurns: false`，实测约 1.2 KB/线程）按 id 读取，全量分页 `thread/list` 只负责低频成员关系对账（实测 33 个线程约 45 KB，且随历史线性增长）。`thread/list` 按契约**永远返回空 `turns`**（schema：`turns` 仅在 `thread/resume`、`thread/rollback`、`thread/fork` 和 `includeTurns: true` 的 `thread/read` 上填充），因此任何 Turn 级事实都只能来自 Hook reducer。Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。会话状态只包含 Running、Input needed、Approval needed、Completed；实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接收敛为 Completed，不再读取 Thread 详情区分结束原因。
 - Preview 设置默认开启；关闭后 hook 不再写入内容片段，列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。即使开启，prompt/回答片段也不写入持久状态。
 - `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔配置健康标记。应用重启时 reducer 从空集合开始，启动前积压的所有 Hook（包括 Stop 与 SessionEnd）一律不恢复或修改 Turn；只有本次进程启动后的 Hook 才是实时证据，也是四态状态的唯一来源。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
@@ -240,7 +240,7 @@ struct TurnEvidence: Equatable {
 6. 完成能力探测；只有必需能力全部通过才显示 Ready。
 7. `Start Monitoring` 后进入 connecting，并从空集合重建。
 
-安装器必须记录自己管理的最小配置片段，不能覆盖用户其他配置。移除时只移除本应用管理的片段。安装健康度要求 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(^request_user_input$)`、`PostToolUse`、`Stop`、`SessionEnd` 六种定义各有且只有一个当前 handler，且 command、matcher 与 `timeout = 3` 精确匹配；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `repairRequired`，不能显示 Ready。用户重新开启总开关后，安装器先移除所有本应用 command 的残缺/重复注册，再写回完整集合，同时保留其他 command。
+安装器必须记录自己管理的最小配置片段，不能覆盖用户其他配置。移除时只移除本应用管理的片段。安装健康度要求 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(^(request_user_input|request_permissions)$)`、`PostToolUse`、`Stop`、`SessionEnd` 六种定义各有且只有一个当前 handler，且 command、matcher 与 `timeout = 3` 精确匹配；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `repairRequired`，不能显示 Ready。用户重新开启总开关后，安装器先移除所有本应用 command 的残缺/重复注册，再写回完整集合，同时保留其他 command。
 
 ### 7.2 启动与重连
 

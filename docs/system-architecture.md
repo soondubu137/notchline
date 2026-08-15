@@ -295,7 +295,7 @@ stateDiagram-v2
 
 - 启动 cutoff 之前的所有 Hook 类型统一丢弃其业务语义；不存在“历史 Stop 可以恢复终态边界”的例外。
 - Desktop 中断后继续执行可能创建新的 Turn 而不再发送 `UserPromptSubmit`。同一 Thread 上更晚到达、携带未退休新 `turn_id` 的实时 Hook 会原子替换当前 Turn，并立即退休旧 ID；恢复后的最终 Stop 因而能命中新的当前 Turn，迟到旧事件仍不能复活。
-- `PermissionRequest` 只证明审批管线运行过，不直接制造 `Approval needed`；当前没有任何可用信号能确认「仍在等待人工批准」，因此该状态只能由 `request_user_input` 之外的显式 Hook 证据产生。
+- `Approval needed` 由 `request_permissions` 工具调用的开合区间确定：`PreToolUse(request_permissions)` 打开，同 `tool_use_id` 的 `PostToolUse` 关闭。实测（2026-08-15，真实 Desktop 审批弹窗）表明 Codex 在这种审批下**不发送 `PermissionRequest`**，而是发出一个跨越人工等待整段时间的 `request_permissions` 工具调用——与 `request_user_input` 完全同构。自动放行的请求会立刻收到配对的 `PostToolUse`，因此不会滞留成假的等待态。`PermissionRequest` 本身只证明审批管线运行过，不进入或离开任何等待态。
 - 产品只关心 Turn 是否仍在进行：实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接成为 Completed，不再发起 `thread/read` 区分结束原因。
 - App Server 不参与状态推导。Thread payload 只贡献根线程判定、标题与 preview；实测表明它没有任何字段能表达 Turn 级运行时真值，因此原先的 `activeFlags` 纠偏机制已整体删除而非保留为空转代码。
 - 缺失、超时、未知枚举或不满足身份门槛的信号不触发状态变化；当前四态值保持不变。

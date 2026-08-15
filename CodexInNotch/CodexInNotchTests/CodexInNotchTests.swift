@@ -785,8 +785,8 @@ struct CodexInNotchTests {
             threadID: "thread-1",
             turnID: "turn-1",
             sessionStatus: .running,
-            pendingInput: nil,
-            isApprovalPending: false,
+            pendingInputToolUseID: nil,
+            pendingApprovalToolUseID: nil,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
             retiredTurnIDs: [],
@@ -1189,8 +1189,8 @@ struct CodexInNotchTests {
             threadID: "thread-without-turn",
             turnID: "turn-1",
             sessionStatus: .running,
-            pendingInput: nil,
-            isApprovalPending: false,
+            pendingInputToolUseID: nil,
+            pendingApprovalToolUseID: nil,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
             retiredTurnIDs: [],
@@ -1237,8 +1237,8 @@ struct CodexInNotchTests {
             threadID: "thread-private",
             turnID: "turn-private",
             sessionStatus: .running,
-            pendingInput: nil,
-            isApprovalPending: false,
+            pendingInputToolUseID: nil,
+            pendingApprovalToolUseID: nil,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
             retiredTurnIDs: [],
@@ -1829,6 +1829,69 @@ struct CodexInNotchTests {
         #expect(running.sessions.first?.status == .running)
         #expect(elapsed < 1.5)
         #expect(threadListRequests == 1)
+    }
+
+    @Test
+    func approvalPromptPublishesApprovalNeededUntilItIsAnswered() async throws {
+        // Replays the hook sequence captured from a real Desktop approval:
+        // Codex never emits PermissionRequest for it. The prompt is a
+        // `request_permissions` tool call that stays open across the human wait.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        var clock = 1_000.0
+        func emit(_ index: Int, _ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-approval"
+            payload["turn_id"] = "turn-approval"
+            try JSONSerialization.data(withJSONObject: payload).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        try emit(0, ["hook_event_name": "UserPromptSubmit"])
+        #expect(await repository.consumeEvents().turns.first?.status == .running)
+
+        // The approval tool call opens; the human has not answered yet.
+        try emit(1, [
+            "hook_event_name": "PreToolUse",
+            "tool_name": "request_permissions",
+            "tool_use_id": "exec-approval-1"
+        ])
+        #expect(await repository.consumeEvents().turns.first?.status == .approvalNeeded)
+
+        // An unrelated tool finishing must not clear the pending approval.
+        try emit(2, [
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-unrelated"
+        ])
+        #expect(await repository.consumeEvents().turns.first?.status == .approvalNeeded)
+
+        // Answering it closes the matching tool call and resumes Running.
+        try emit(3, [
+            "hook_event_name": "PostToolUse",
+            "tool_name": "request_permissions",
+            "tool_use_id": "exec-approval-1"
+        ])
+        #expect(await repository.consumeEvents().turns.first?.status == .running)
+
+        try emit(4, ["hook_event_name": "Stop"])
+        #expect(await repository.consumeEvents().turns.first?.status == .completed)
     }
 
     @Test @MainActor
@@ -2994,7 +3057,7 @@ for line in sys.stdin:
         )
         let exactHandler = try #require(exactHandlers.first)
 
-        #expect(exactGroup["matcher"] as? String == "^request_user_input$")
+        #expect(exactGroup["matcher"] as? String == "^(request_user_input|request_permissions)$")
         #expect(exactHandler["timeout"] as? Int == 3)
         #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
     }

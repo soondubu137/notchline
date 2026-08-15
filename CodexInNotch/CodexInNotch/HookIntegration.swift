@@ -105,7 +105,7 @@ actor CodexHookInstaller {
         ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
         ManagedHookDefinition(
             event: "PreToolUse",
-            matcher: "^request_user_input$"
+            matcher: "^(request_user_input|request_permissions)$"
         ),
         ManagedHookDefinition(event: "PostToolUse", matcher: nil),
         ManagedHookDefinition(event: "Stop", matcher: nil),
@@ -503,17 +503,18 @@ print("{}")
 """#
 }
 
-enum HookPendingInputEvidence: Sendable {
-    case hook(toolUseID: String)
-    case appServerSnapshot
-}
-
 struct HookTurnState: Sendable {
     let threadID: String
     let turnID: String
     var sessionStatus: SessionStatus
-    var pendingInput: HookPendingInputEvidence?
-    var isApprovalPending: Bool
+    /// `tool_use_id` of an open `request_user_input` call, if any.
+    var pendingInputToolUseID: String?
+    /// `tool_use_id` of an open `request_permissions` call, if any.
+    ///
+    /// Both waits are the same shape: Codex opens a tool call, the human acts,
+    /// and the matching `PostToolUse` closes it. Pairing on the id is what
+    /// keeps an auto-resolved request from sticking as a false wait.
+    var pendingApprovalToolUseID: String?
     var startedAt: Date
     var lastEventAt: Date
     var retiredTurnIDs: Set<String>
@@ -795,8 +796,8 @@ actor HookEventRepository {
                 threadID: threadID,
                 turnID: turnID,
                 sessionStatus: .running,
-                pendingInput: nil,
-                isApprovalPending: false,
+                pendingInputToolUseID: nil,
+                pendingApprovalToolUseID: nil,
                 startedAt: receivedAt,
                 lastEventAt: receivedAt,
                 retiredTurnIDs: retiredTurnIDs,
@@ -828,11 +829,26 @@ actor HookEventRepository {
                 adoptContinuationWith: .running,
                 turns: &turns
             ) {
-                let nextStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
-                guard nextStatus == .inputNeeded else { return }
-                $0.sessionStatus = nextStatus
-                $0.pendingInput = .hook(toolUseID: toolUseID)
-                $0.isApprovalPending = false
+                $0.pendingInputToolUseID = toolUseID
+                $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
+            }
+        case "PreToolUse" where event.toolName == "request_permissions":
+            // Codex surfaces a Desktop approval prompt as a `request_permissions`
+            // tool call that stays open for exactly as long as the human is
+            // being asked -- the same shape as `request_user_input`.
+            guard let toolUseID = stableIdentifier(event.toolUseID) else {
+                return false
+            }
+            mutateExactTurn(
+                threadID: threadID,
+                turnID: turnID,
+                at: receivedAt,
+                createWith: .running,
+                adoptContinuationWith: .running,
+                turns: &turns
+            ) {
+                $0.pendingApprovalToolUseID = toolUseID
+                $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
             }
         case "PostToolUse":
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
@@ -846,9 +862,21 @@ actor HookEventRepository {
                 adoptContinuationWith: .running,
                 turns: &turns
             ) {
-                if case .hook(let pendingToolUseID)? = $0.pendingInput,
-                   pendingToolUseID == toolUseID {
-                    $0.pendingInput = nil
+                if $0.pendingInputToolUseID == toolUseID {
+                    $0.pendingInputToolUseID = nil
+                }
+                if $0.pendingApprovalToolUseID == toolUseID {
+                    $0.pendingApprovalToolUseID = nil
+                }
+                // Only resume Running once no wait is still open: an unrelated
+                // tool finishing must not clear a prompt the human has not
+                // answered. The state machine only enters a wait from Running,
+                // so at most one of these is ever set.
+                if $0.pendingInputToolUseID != nil {
+                    $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
+                } else if $0.pendingApprovalToolUseID != nil {
+                    $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
+                } else {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
                 }
             }
@@ -864,8 +892,8 @@ actor HookEventRepository {
                 // The product intentionally exposes one terminal state. Stop,
                 // completed, failed, and interrupted all converge to Completed.
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .completed)
-                $0.pendingInput = nil
-                $0.isApprovalPending = false
+                $0.pendingInputToolUseID = nil
+                $0.pendingApprovalToolUseID = nil
                 $0.assistantPreview = event.lastAssistantMessage
             }
         default:
@@ -900,8 +928,8 @@ actor HookEventRepository {
                     threadID: threadID,
                     turnID: turnID,
                     sessionStatus: continuationStatus,
-                    pendingInput: nil,
-                    isApprovalPending: false,
+                    pendingInputToolUseID: nil,
+                    pendingApprovalToolUseID: nil,
                     startedAt: current.startedAt,
                     lastEventAt: date,
                     retiredTurnIDs: retiredTurnIDs,
@@ -915,8 +943,8 @@ actor HookEventRepository {
                 threadID: threadID,
                 turnID: turnID,
                 sessionStatus: sessionStatus,
-                pendingInput: nil,
-                isApprovalPending: false,
+                pendingInputToolUseID: nil,
+                pendingApprovalToolUseID: nil,
                 startedAt: date,
                 lastEventAt: date,
                 retiredTurnIDs: [],
