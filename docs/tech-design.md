@@ -27,7 +27,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(request_user_input)`、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求还必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
 - 标题使用 Thread 元数据，按成本分两层获取：Hook reducer 当前跟踪的 Thread 用 `thread/read`（`includeTurns: false`，实测约 1.2 KB/线程）按 id 读取，全量分页 `thread/list` 只负责低频成员关系对账（实测 33 个线程约 45 KB，且随历史线性增长）。`thread/list` 按契约**永远返回空 `turns`**（schema：`turns` 仅在 `thread/resume`、`thread/rollback`、`thread/fork` 和 `includeTurns: true` 的 `thread/read` 上填充），因此任何 Turn 级事实都只能来自 Hook reducer。Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。会话状态只包含 Running、Input needed、Approval needed、Completed；实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接收敛为 Completed，不再读取 Thread 详情区分结束原因。
 - Preview 设置默认开启；关闭后 hook 不再写入内容片段，列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。即使开启，prompt/回答片段也不写入持久状态。
-- `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔配置健康标记。应用重启时 reducer 从空集合开始，启动前积压的所有 Hook（包括 Stop 与 SessionEnd）一律不恢复或修改 Turn；只有本次进程启动后的 Hook 才是实时证据。App Server 当前 `status/activeFlags` 可在已有精确 Turn 身份上校正瞬时状态。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
+- `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔配置健康标记。应用重启时 reducer 从空集合开始，启动前积压的所有 Hook（包括 Stop 与 SessionEnd）一律不恢复或修改 Turn；只有本次进程启动后的 Hook 才是实时证据，也是四态状态的唯一来源。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
 - 会话行通过官方 `codex://threads/<thread-id>` deep link 打开同一 Codex Desktop 会话；打开前强制刷新全部未归档根 Thread，目标不存在时拒绝导航。URL 只定向交给 bundle id `com.openai.codex`，Launch Services 接受后才收起面板。
 
 已经通过本机当前 Codex 版本验证：App Server 握手、真实额度响应、Thread/Turn schema、Desktop Project 与未读私有状态解析、Hooks 配置合并、事件 reducer 与精确导航 adapter。未读适配器的主/备份/last-known-good、私有 schema 失败、原子替换目录事件、settling window 与端到端已读移除均有单元测试。应用构建与单元测试已通过。
@@ -35,7 +35,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 尚未满足、因此仍阻塞 V1 发布：
 
 - 独立 App Server 不共享 Codex Desktop 的进程内事件流，且实测无法回答 Turn 级问题（见下），因此启动不做现状同步：只要 App Server 完成握手并成功返回一次 `thread/list`，即发布 Ready 并以空集合聚合为 Idle。只有 App Server 没有响应或连接失败才显示 `Codex disconnected`；校验请求尚未完成时保持 Connecting。跨 Codex in Notch 重启持久化的 Hook 标记只用于配置健康判断，不得恢复任何会话状态。
-- **实测边界（Codex CLI `0.148.0-alpha.9`，在一个真实运行中的 Turn 上采样）**：独立 App Server 的 `thread/loaded/list` 返回空；所有 Thread 的 `status.type` 恒为 `notLoaded`；`thread/list` 契约上永不返回 `turns`；`thread/read` 即使带 `includeTurns: true` 也从不出现 `inProgress`——正在运行的 Turn 被记为 `interrupted` 且 `completedAt` 为 null。直接后果：`CodexSnapshotParser.activeEvidence` 依赖的 `status.type == "active"` 在当前拓扑下**永远不成立**，相关 `activeFlags` 校正路径实际为空转。保留它只是为了在未来出现共享运行时的拓扑时无需重写，不得据此推导任何当前能力。
+- **实测边界（Codex CLI `0.148.0-alpha.9`，在一个真实运行中的 Turn 上采样）**：独立 App Server 的 `thread/loaded/list` 返回空；所有 Thread 的 `status.type` 恒为 `notLoaded`；`thread/list` 契约上永不返回 `turns`；`thread/read` 即使带 `includeTurns: true` 也从不出现 `inProgress`——正在运行的 Turn 被记为 `interrupted` 且 `completedAt` 为 null。直接后果：依赖 `status.type == "active"` 的 `activeFlags` 校正在当前拓扑下**永远不成立**。该机制（`activeEvidence`、`terminalStatus`、`reconcileActiveStatus`、`markCompleted` 与 `hasLiveBoundary`）已整体删除，因为保留空转代码会让后续设计误以为存在这条能力。若将来出现共享运行时拓扑，应基于当时验证过的字段重新设计，而不是复活这段代码。
 - 当前公开协议仍没有 Desktop 蓝点对应的已读字段；生产实现依赖第 1.3 节登记的 Desktop 私有只读 schema。Desktop 升级后的真实 read/unread 版本矩阵仍是发布验证项，任何不兼容都必须保守保留终态行。
 - Hooks 可以可靠覆盖开始、权限管线触发、`request_user_input` 和终态边界；`PermissionRequest` 本身不证明仍需人工批准，Approval needed 必须由新鲜 App Server `waitingOnApproval` active flag 确认。App Server 的 `completed`、`failed`、`interrupted` 都映射为 Completed，仍需真实 Desktop 样本矩阵验证端到端覆盖。
 - `threadSource/sourceKinds` 仍不足以单独证明 Desktop 与独立 IDE 来源边界，必须继续以真实样本验证。
@@ -240,7 +240,7 @@ struct TurnEvidence: Equatable {
 6. 完成能力探测；只有必需能力全部通过才显示 Ready。
 7. `Start Monitoring` 后进入 connecting，并从空集合重建。
 
-安装器必须记录自己管理的最小配置片段与定义 hash，不能覆盖用户其他配置。移除时只移除本应用管理的片段。安装健康度要求 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(^request_user_input$)`、`PostToolUse`、`Stop`、`SessionEnd` 六种定义各有且只有一个当前 handler，且 command、matcher 与 `timeout = 3` 精确匹配；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `repairRequired`，不能显示 Ready。用户重新开启总开关后，安装器先移除所有本应用 command 的残缺/重复注册，再写回完整集合，同时保留其他 command。
+安装器必须记录自己管理的最小配置片段，不能覆盖用户其他配置。移除时只移除本应用管理的片段。安装健康度要求 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(^request_user_input$)`、`PostToolUse`、`Stop`、`SessionEnd` 六种定义各有且只有一个当前 handler，且 command、matcher 与 `timeout = 3` 精确匹配；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `repairRequired`，不能显示 Ready。用户重新开启总开关后，安装器先移除所有本应用 command 的残缺/重复注册，再写回完整集合，同时保留其他 command。
 
 ### 7.2 启动与重连
 
@@ -248,7 +248,7 @@ struct TurnEvidence: Equatable {
 launch
 → load Hook trust marker only; initialize an empty in-memory reducer
 → detect installation/version
-→ atomically upgrade an unmodified app-managed Hook helper when its recorded or known legacy hash matches
+→ atomically upgrade the app-managed Hook helper whenever this app recorded installing it
 → Connecting to Codex (≤ 5s)
 → capability handshake
 → reconcile active + unread terminal membership
@@ -258,7 +258,9 @@ launch
 
 五秒内连接成功则不显示中间错误；超时后根据原因进入 Update Codex、unsupported 或 disconnected。Codex 未运行时不自动启动。
 
-Hook helper 的源码发生版本变化不等于集成未安装。安装器以已记录的定义 hash 校验现有 helper；helper 等于当前内置定义，或其 hash 与记录值/已知旧版一致时，只原子升级本应用管理的 helper 文件并保留预览设置，不改写 `hooks.json`、不重新要求信任。未知 helper 修改、缺少任一定义或定义结构不精确时 fail closed 为 `repairRequired`；Settings 总开关显示 Off，用户显式重新开启后才修复。这样应用升级后无需重新接受未改变的受信 helper；但完整注册集合和历史信任本身不能让运行时进入 Ready。只有当前态来源确认集合确实为空时，才能由空集合推导 Idle。
+Hook helper 的源码发生版本变化不等于集成未安装。安装器直接把磁盘上的 helper 与本版本内置的定义做内容比较：相同即 `current`；不同且本应用的 settings 文件存在（该文件只由 `install()` 写入，等于本应用确实安装过）时，只原子升级本应用管理的 helper 文件并保留预览设置，不改写 `hooks.json`、不重新要求信任。
+
+这里**不再记录内容 hash**。曾经存在的 `managedHookSHA256` 与 helper 位于同一目录、同一属主与权限，能改写 helper 的主体同样能改写该 hash，因此它不提供任何防篡改能力；而 `repairRequired` 并不会把 helper 从 `hooks.json` 注销，Codex 仍会继续执行它。也就是说，遇到被替换的 helper 时，自动升级回内置版本比标记 `repairRequired` 更快地消除外来代码。缺少任一定义、定义结构不精确，或 helper 存在但 settings 文件缺失（本应用没有安装记录、来源不明）时仍 fail closed 为 `repairRequired`；Settings 总开关显示 Off，用户显式重新开启后才修复。这样应用升级后无需重新接受未改变的受信 helper；但完整注册集合和历史信任本身不能让运行时进入 Ready。只有当前态来源确认集合确实为空时，才能由空集合推导 Idle。
 
 ### 7.3 集合校正时机
 
@@ -314,9 +316,9 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 
 ### 9.3 App Server 当前快照纠偏
 
-Hook 提供低延迟边界，App Server 提供可用时的当前状态校正。Hook reducer 先用缓存的 App Server 标题与 Desktop Project 私有状态发布状态，再异步刷新 `thread/list`；列表请求不得位于 Hook → UI 的关键路径。对已由精确 `turnId` 绑定的当前 Turn，只有“列表请求开始时间不早于该 Turn 最新 Hook 时间”的快照才可用 `thread.status.activeFlags` 映射 Input/Approval/Running 并覆盖过期的 Hook pending；匹配 Turn 的 `completed/failed/interrupted` 必须通过同一新鲜度门槛，并统一映射为 Completed。Thread 级 active flag 不得创建 Turn、猜测 Turn id、把不同 Turn 关联起来或复活 Completed；历史回放不建立 Turn，因此也不存在历史 Turn 的纠偏路径。
+Hook 是四态状态的唯一来源；App Server 只提供展示用元数据。Hook reducer 先用缓存的 Thread 标题与 Desktop Project 私有状态发布状态，再异步刷新元数据；任何 App Server 请求都不得位于 Hook → UI 的关键路径。Thread payload 只贡献根线程判定、标题与 preview，不参与状态推导——它没有任何字段能在当前拓扑下表达 Turn 级运行时真值（见第 1.1 节实测边界）。
 
-独立 App Server 可能不共享 Desktop 当前运行时，因此它不是 Hooks 的替代品；只在返回可识别且比最新 Hook 边界更新的当前状态时纠偏。常规活动状态校正遇到 `notLoaded`、陈旧快照、缺失字段、未知枚举、超时或协议错误时保留最后可信内存状态。
+独立 App Server 不共享 Desktop 当前运行时，因此它不是 Hooks 的替代品，也不参与状态纠偏。元数据读取遇到缺失字段、超时或协议错误时保留最后可信内存状态，绝不因此改变四态值。
 
 ### 9.4 历史回放与事件去重
 
@@ -328,7 +330,7 @@ repository 启动时记录 live cutoff。`received_at` 早于该 cutoff 的积�
 source + method + threadId + turnId + requestOrItemId + revision
 ```
 
-所有未知字段与枚举写入脱敏诊断，不让应用崩溃。诊断只保留方法名、版本、枚举和哈希标识，不包含正文、路径或凭据。
+所有未知字段与枚举写入脱敏诊断，不让应用崩溃。诊断只保留方法名、版本和枚举标识，不包含正文、路径或凭据。
 
 ## 10. 汇总与排序
 
@@ -432,7 +434,7 @@ reset 按本地日历日而不是 24 小时浮点时长计算：同一天为 `Re
 
 单次 App Server 查询超时不等于连接断开。传输层保留现有连接，UI 继续展示最后一次可信内存快照，并在同一连接上启动至多一个独立探活流程：先等待 3 秒宽限期；其间任意带 `id` 的响应（包括晚到响应）都证明 RPC event loop 仍活跃并取消探活。宽限期内没有响应时，调用官方只读且只访问内存集合的 `thread/loaded/list`，单次最多等待 5 秒；只有该探活也超时且期间仍无任何响应，才重建只读 App Server 传输。并行业务请求超时共享同一个探活，不累计为多次连接失败；远端方法错误和协议错误本身已经收到响应，也不得触发进程重启。该恢复动作不清空 Hook reducer 或最近可信 UI。已有 Ready 等可信状态时，只有 `disconnected` 连续超过 3 秒才发布全局断开状态并清空列表；启动仍为 Connecting 且初始化已确认无响应时直接发布 Disconnected。
 
-尚未建立本次启动后的 Hook 观察时，启动与常规轮询只用最多 5 秒的 `thread/list` 做一次**只读连通性校验**，其结果不得产生任何会话行。请求完成前保持 Connecting；成功返回后发布 Ready 并以空集合聚合为 Idle；App Server 未响应或连接失败才发布 Disconnected。该分支不重建启动前的任何会话（cold-start sync 已明确列为非目标，理由见 PRD 第 3 节），因此也不需要 `thread/loaded/list` 或逐 Thread 详情读取。建立启动后 Hook 观察后，Hook 状态立即发布；后台校正按成本分成两条独立的单飞路径。Hook 跟踪的 Thread 用 `thread/read`（`includeTurns: false`，最多 5 秒，单条元数据陈旧超过 10 秒才重取）刷新标题、preview 与 `status`；全量分页 `thread/list` 只在 Hook 出现从未列出过的 Thread、或 30 秒成员关系到期时运行，最多 15 秒。两条路径各自同一时间只允许一个请求，失败后至少 60 秒再重试，且都不得位于 Hook → UI 关键路径上。服务端不支持 `thread/read`（`-32601`）时只探测一次，之后永久回退为由 `thread/list` 提供元数据，行为退化为旧路径而不丢标题。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得改变状态或移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 直接把同一 Turn 标记为 Completed，不发起终态详情读取。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
+尚未建立本次启动后的 Hook 观察时，启动与常规轮询只用最多 5 秒的 `thread/list` 做一次**只读连通性校验**，其结果不得产生任何会话行。请求完成前保持 Connecting；成功返回后发布 Ready 并以空集合聚合为 Idle；App Server 未响应或连接失败才发布 Disconnected。该分支不重建启动前的任何会话（cold-start sync 已明确列为非目标，理由见 PRD 第 3 节），因此也不需要 `thread/loaded/list` 或逐 Thread 详情读取。建立启动后 Hook 观察后，Hook 状态立即发布；后台校正按成本分成两条独立的单飞路径。Hook 跟踪的 Thread 用 `thread/read`（`includeTurns: false`，最多 5 秒，单条元数据陈旧超过 10 秒才重取）刷新标题、preview 与 `status`；全量分页 `thread/list` 只在 Hook 出现从未列出过的 Thread、或 30 秒成员关系到期时运行，最多 15 秒。两条路径各自同一时间只允许一个请求，失败后至少 60 秒再重试，且都不得位于 Hook → UI 关键路径上。服务端不支持 `thread/read`（`-32601`）时只探测一次，之后永久回退为由 `thread/list` 提供元数据，行为退化为旧路径而不丢标题。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 直接把同一 Turn 标记为 Completed，不发起终态详情读取。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
 
 ## 16. 设置与持久化
 
@@ -442,7 +444,7 @@ reset 按本地日历日而不是 24 小时浮点时长计算：同一天为 `Re
 
 - `showCurrentContentPreviews`。
 - 用户选择的目标显示器稳定标识；显示器临时断开时不覆盖该偏好。
-- 集成安装版本、定义 hash 和兼容性结果。
+- 集成安装状态与兼容性结果。
 - 已成功接收过合法 Hook 的布尔信任标记；不得包含 Thread、Turn 或内容。
 - 非敏感应用版本/迁移标记。
 
@@ -525,7 +527,6 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 - 缺失 `session_id/turn_id` 失败关闭；旧 Turn 的 Permission/Stop 不能改变新 Turn。
 - `request_user_input` 只被相同 `tool_use_id` 的 Post 清除；无关 Post 不清除 Input 或 Approval。
 - 启动前积压的 UserPrompt/Permission/Input/PostTool/Stop/SessionEnd 都不进入 Turn reducer；持久化文件只保留布尔配置健康标记，迁移旧 `turns` 后内存仍为空。
-- App Server `activeFlags` 在已有精确 Turn 上纠偏 Hook pending，匹配 Turn 的 terminal 仍优先。
 - 监视成员集合的 active/unread/archive/delete 规则。
 - 四态合法流转、Completed 粘性与汇总优先级。
 - Project 无近似回退、标题隐私回退。

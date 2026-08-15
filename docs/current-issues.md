@@ -16,7 +16,7 @@ CR-010（冷启动无法重建 Desktop 当前会话状态）已**作为非目标
 
 1. **`thread/list` 永远返回空 `turns`。** schema 原文：`turns` 仅在 `thread/resume`、`thread/rollback`、`thread/fork` 和 `includeTurns: true` 的 `thread/read` 响应上填充。实测 33 个线程全部为空，且 `minimal` / `useStateDbOnly=true|false` / 应用当前参数四种组合结果一致。
 2. **`thread/loaded/list` 恒为空，即使有 Turn 正在运行。** 独立 App Server 进程看不到 Desktop 运行时。历史上那个 `guard !loadedIDs.isEmpty` 门槛因此从来不可能通过。
-3. **`status.type` 恒为 `notLoaded`，即使有 Turn 正在运行。** 因此 `CodexSnapshotParser.activeEvidence` 依赖的 `status.type == "active"` **永不成立**，`activeFlags` 校正路径在当前拓扑下是空转——不只是启动分支，Hook 分支中的纠偏同样如此。该代码保留只为将来出现共享运行时拓扑时无需重写，**不得据此推导任何当前能力**。
+3. **`status.type` 恒为 `notLoaded`，即使有 Turn 正在运行。** 因此依赖 `status.type == "active"` 的 `activeFlags` 校正**永不成立**——不只是启动分支，Hook 分支中的纠偏同样如此。该机制已整体删除（`activeEvidence`、`terminalStatus`、`reconcileActiveStatus`、`markCompleted`、`hasLiveBoundary`），四态状态现在完全由 Hook reducer 拥有。
 4. **`inProgress` 从不出现。** 运行中的 Turn 在持久化数据里被记为 `status: "interrupted"` 且 `completedAt` 为 null；`thread.updatedAt` 会随真实时间前进（空闲线程则严格按墙钟变旧）。也就是说唯一可用的活跃信号是 `completedAt == null` + `updatedAt` 新鲜度，而非任何 status 字段。
 
 第 3、4 条同时说明：即使将来要恢复某种启动同步，也不能建立在 `status`／`inProgress` 之上。

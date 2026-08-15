@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 enum HookSetupStatus: Equatable, Sendable {
@@ -140,10 +139,7 @@ actor CodexHookInstaller {
         guard installationState == .upgradeable else { return false }
 
         try writeCurrentHookScript()
-        try writeSettings(
-            showsContentPreviews: storedShowsContentPreviews,
-            managedScript: Self.hookScript
-        )
+        try writeSettings(showsContentPreviews: storedShowsContentPreviews)
         return true
     }
 
@@ -160,10 +156,7 @@ actor CodexHookInstaller {
         )
 
         try writeCurrentHookScript()
-        try writeSettings(
-            showsContentPreviews: showsContentPreviews,
-            managedScript: Self.hookScript
-        )
+        try writeSettings(showsContentPreviews: showsContentPreviews)
         try mergeHooksConfiguration()
     }
 
@@ -213,17 +206,21 @@ actor CodexHookInstaller {
             return .repairRequired
         }
 
-        let installedDigest = Self.digest(of: installedScript)
+        // The bundled script is available in process, so a direct comparison
+        // answers "is this exactly what this build installs" without hashing.
         if installedScript == Self.hookScript {
-            return storedManagedHookDigest == installedDigest
-                ? .current
-                : .upgradeable
+            return .current
         }
-        if storedManagedHookDigest == installedDigest
-            || Self.legacyManagedHookDigests.contains(installedDigest) {
-            return .upgradeable
-        }
-        return .repairRequired
+
+        // A different script sits at a path this app manages exclusively. The
+        // settings file is written only by install(), so its presence is what
+        // distinguishes "our own older helper" from a file this app never put
+        // there. Recording a content hash next to the script would not add
+        // tamper resistance: both live in the same directory with the same
+        // ownership, so anything that can rewrite one can rewrite the other.
+        return fileManager.fileExists(atPath: paths.settings.path)
+            ? .upgradeable
+            : .repairRequired
     }
 
     private var managedRegistrationState: ManagedRegistrationState {
@@ -298,10 +295,6 @@ actor CodexHookInstaller {
         storedSettings["showsContentPreviews"] as? Bool ?? true
     }
 
-    private var storedManagedHookDigest: String? {
-        storedSettings[Self.managedHookDigestKey] as? String
-    }
-
     private func writeCurrentHookScript() throws {
         try Self.hookScript.write(
             to: paths.script,
@@ -314,16 +307,9 @@ actor CodexHookInstaller {
         )
     }
 
-    private func writeSettings(
-        showsContentPreviews: Bool,
-        managedScript: String? = nil
-    ) throws {
+    private func writeSettings(showsContentPreviews: Bool) throws {
         var settings = storedSettings
         settings["showsContentPreviews"] = showsContentPreviews
-        if let managedScript {
-            settings[Self.managedHookDigestKey] = Self.digest(of: managedScript)
-            settings[Self.managedHookVersionKey] = Self.currentManagedHookVersion
-        }
         let data = try JSONSerialization.data(
             withJSONObject: settings,
             options: [.prettyPrinted, .sortedKeys]
@@ -333,12 +319,6 @@ actor CodexHookInstaller {
             [.posixPermissions: 0o600],
             ofItemAtPath: paths.settings.path
         )
-    }
-
-    nonisolated private static func digest(of script: String) -> String {
-        SHA256.hash(data: Data(script.utf8)).map {
-            String(format: "%02x", $0)
-        }.joined()
     }
 
     private func mergeHooksConfiguration() throws {
@@ -468,17 +448,6 @@ actor CodexHookInstaller {
         )
     }
 
-    private static let managedHookDigestKey = "managedHookSHA256"
-    private static let managedHookVersionKey = "managedHookVersion"
-    private static let currentManagedHookVersion = 1
-
-    // Releases before managed-hook metadata used this exact helper. Recognizing
-    // its digest provides a one-time safe migration without accepting arbitrary
-    // executable files at the managed path.
-    private static let legacyManagedHookDigests: Set<String> = [
-        "064bacb3aa56c5fb7399c192fe51fa8e1d8dfda24f6c61b72869448cbced839b"
-    ]
-
     private static let hookScript = #"""
 #!/usr/bin/python3
 import json
@@ -547,7 +516,6 @@ struct HookTurnState: Sendable {
     var isApprovalPending: Bool
     var startedAt: Date
     var lastEventAt: Date
-    var hasLiveBoundary: Bool
     var retiredTurnIDs: Set<String>
     var promptPreview: String?
     var assistantPreview: String?
@@ -779,70 +747,6 @@ actor HookEventRepository {
         try? persist()
     }
 
-    func reconcileActiveStatus(
-        threadID: String,
-        turnID: String,
-        isInputPending: Bool,
-        isApprovalPending: Bool,
-        snapshotStartedAt: Date
-    ) -> Bool {
-        guard var state = turnsByThreadID[threadID],
-              state.turnID == turnID,
-              snapshotStartedAt >= state.lastEventAt,
-              state.sessionStatus != .completed else {
-            return false
-        }
-
-        let signal: SessionStatusSignal
-        if isInputPending {
-            signal = .inputNeeded
-        } else if isApprovalPending {
-            signal = .approvalNeeded
-        } else {
-            signal = .running
-        }
-        let nextStatus = state.sessionStatus.transitioned(on: signal)
-        state.sessionStatus = nextStatus
-        switch nextStatus {
-        case .inputNeeded:
-            if isInputPending {
-                state.pendingInput = .appServerSnapshot
-            }
-            state.isApprovalPending = false
-        case .approvalNeeded:
-            state.pendingInput = nil
-            state.isApprovalPending = true
-        case .running, .completed:
-            state.pendingInput = nil
-            state.isApprovalPending = false
-        }
-        state.hasLiveBoundary = true
-        turnsByThreadID[threadID] = state
-        return true
-    }
-
-    func markCompleted(
-        threadID: String,
-        turnID: String,
-        snapshotStartedAt: Date
-    ) -> Bool {
-        guard var state = turnsByThreadID[threadID],
-              state.turnID == turnID,
-              snapshotStartedAt >= state.lastEventAt else {
-            return false
-        }
-        guard state.sessionStatus != .completed
-                || state.pendingInput != nil
-                || state.isApprovalPending else {
-            return false
-        }
-        state.sessionStatus = state.sessionStatus.transitioned(on: .completed)
-        state.pendingInput = nil
-        state.isApprovalPending = false
-        turnsByThreadID[threadID] = state
-        return true
-    }
-
     private func reduce(
         _ event: HookEvent,
         into turns: inout [String: HookTurnState]
@@ -895,7 +799,6 @@ actor HookEventRepository {
                 isApprovalPending: false,
                 startedAt: receivedAt,
                 lastEventAt: receivedAt,
-                hasLiveBoundary: true,
                 retiredTurnIDs: retiredTurnIDs,
                 promptPreview: event.prompt,
                 assistantPreview: nil
@@ -907,7 +810,6 @@ actor HookEventRepository {
                 at: receivedAt,
                 createWith: .running,
                 adoptContinuationWith: .running,
-                observedLiveEvent: true,
                 turns: &turns
             ) { _ in
                 // PermissionRequest only proves the approval pipeline ran. It is
@@ -924,7 +826,6 @@ actor HookEventRepository {
                 at: receivedAt,
                 createWith: .running,
                 adoptContinuationWith: .running,
-                observedLiveEvent: true,
                 turns: &turns
             ) {
                 let nextStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
@@ -943,7 +844,6 @@ actor HookEventRepository {
                 at: receivedAt,
                 createWith: nil,
                 adoptContinuationWith: .running,
-                observedLiveEvent: true,
                 turns: &turns
             ) {
                 if case .hook(let pendingToolUseID)? = $0.pendingInput,
@@ -959,7 +859,6 @@ actor HookEventRepository {
                 at: receivedAt,
                 createWith: .completed,
                 adoptContinuationWith: .completed,
-                observedLiveEvent: true,
                 turns: &turns
             ) {
                 // The product intentionally exposes one terminal state. Stop,
@@ -981,7 +880,6 @@ actor HookEventRepository {
         at date: Date,
         createWith sessionStatus: SessionStatus?,
         adoptContinuationWith continuationStatus: SessionStatus?,
-        observedLiveEvent: Bool,
         turns: inout [String: HookTurnState],
         mutation: (inout HookTurnState) -> Void
     ) {
@@ -1006,7 +904,6 @@ actor HookEventRepository {
                     isApprovalPending: false,
                     startedAt: current.startedAt,
                     lastEventAt: date,
-                    hasLiveBoundary: observedLiveEvent,
                     retiredTurnIDs: retiredTurnIDs,
                     promptPreview: current.promptPreview,
                     assistantPreview: nil
@@ -1022,7 +919,6 @@ actor HookEventRepository {
                 isApprovalPending: false,
                 startedAt: date,
                 lastEventAt: date,
-                hasLiveBoundary: observedLiveEvent,
                 retiredTurnIDs: [],
                 promptPreview: nil,
                 assistantPreview: nil
@@ -1030,7 +926,6 @@ actor HookEventRepository {
         }
         mutation(&state)
         state.lastEventAt = max(state.lastEventAt, date)
-        state.hasLiveBoundary = state.hasLiveBoundary || observedLiveEvent
         turns[threadID] = state
     }
 

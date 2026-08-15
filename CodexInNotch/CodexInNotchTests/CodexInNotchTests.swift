@@ -789,7 +789,6 @@ struct CodexInNotchTests {
             isApprovalPending: false,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
-            hasLiveBoundary: true,
             retiredTurnIDs: [],
             promptPreview: nil,
             assistantPreview: nil
@@ -1169,117 +1168,42 @@ struct CodexInNotchTests {
 
     @Test @MainActor
     func hookIdentityIsRequiredBeforeAThreadCanBecomeASession() {
-        // Neither an active thread status nor an eligible root thread is enough
-        // on its own; without Hook-derived Turn identity there is no session.
+        // An eligible root thread that even claims an active status still
+        // cannot become a session on its own: the reducer owns Turn identity
+        // and status, and a Thread payload contributes presentation only.
         let thread = JSONValue.object([
             "id": .string("thread-without-turn"),
             "threadSource": .string("user"),
+            "name": .string("Eligible but unowned"),
             "status": .object([
                 "type": .string("active"),
-                "activeFlags": .array([])
+                "activeFlags": .array([.string("waitingOnApproval")])
             ])
         ])
 
         #expect(CodexSnapshotParser.isEligibleRootThread(thread))
-        #expect(CodexSnapshotParser.activeEvidence(from: thread) != nil)
-        // Eligibility and evidence exist, yet nothing can build a session here.
-    }
 
-    @Test @MainActor
-    func appServerFlagsCorrectHookStateButDoNotCrossTurnIdentity() {
+        // With Hook identity the row exists, and its status is the reducer's
+        // Running -- not the thread's "waitingOnApproval" claim.
         let state = HookTurnState(
-            threadID: "thread-1",
+            threadID: "thread-without-turn",
             turnID: "turn-1",
-            sessionStatus: .approvalNeeded,
+            sessionStatus: .running,
             pendingInput: nil,
-            isApprovalPending: true,
+            isApprovalPending: false,
             startedAt: Date(timeIntervalSince1970: 1_000),
-            lastEventAt: Date(timeIntervalSince1970: 1_001),
-            hasLiveBoundary: true,
+            lastEventAt: Date(timeIntervalSince1970: 1_000),
             retiredTurnIDs: [],
             promptPreview: nil,
             assistantPreview: nil
         )
-        let threadLevelOnly = JSONValue.object([
-            "id": .string("thread-1"),
-            "threadSource": .string("user"),
-            "status": .object([
-                "type": .string("active"),
-                "activeFlags": .array([])
-            ])
-        ])
-        let correctedThread = JSONValue.object([
-            "id": .string("thread-1"),
-            "threadSource": .string("user"),
-            "status": .object([
-                "type": .string("active"),
-                "activeFlags": .array([])
-            ]),
-            "turns": .array([
-                .object([
-                    "id": .string("turn-1"),
-                    "status": .string("inProgress")
-                ])
-            ])
-        ])
-        let differentActiveTurn = JSONValue.object([
-            "id": .string("thread-1"),
-            "threadSource": .string("user"),
-            "status": .object([
-                "type": .string("active"),
-                "activeFlags": .array([])
-            ]),
-            "turns": .array([
-                .object([
-                    "id": .string("turn-2"),
-                    "status": .string("inProgress")
-                ])
-            ])
-        ])
-
-        #expect(
-            CodexSnapshotParser.session(
-                from: state,
-                thread: correctedThread,
-                projectName: "Chats"
-            )?.status
-                == .running
+        let session = CodexSnapshotParser.session(
+            from: state,
+            thread: thread,
+            projectName: "Chats"
         )
-        #expect(
-            CodexSnapshotParser.session(
-                from: state,
-                thread: threadLevelOnly,
-                projectName: "Chats"
-            )?.status
-                == .running
-        )
-        var historicalState = state
-        historicalState.hasLiveBoundary = false
-        #expect(
-            CodexSnapshotParser.session(
-                from: historicalState,
-                thread: threadLevelOnly,
-                projectName: "Chats"
-            )?.status == .approvalNeeded
-        )
-        var terminalState = state
-        terminalState.sessionStatus = .completed
-        terminalState.isApprovalPending = false
-        #expect(
-            CodexSnapshotParser.session(
-                from: terminalState,
-                thread: threadLevelOnly,
-                projectName: "Chats"
-            )?.status == .completed
-        )
-        #expect(
-            CodexSnapshotParser.session(
-                from: state,
-                thread: differentActiveTurn,
-                projectName: "Chats"
-            )?.status
-                == .approvalNeeded
-        )
+        #expect(session?.status == .running)
+        #expect(session?.title == "Eligible but unowned")
     }
 
     @Test @MainActor
@@ -1317,7 +1241,6 @@ struct CodexInNotchTests {
             isApprovalPending: false,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
-            hasLiveBoundary: true,
             retiredTurnIDs: [],
             promptPreview: "private prompt fallback",
             assistantPreview: nil
@@ -1345,18 +1268,6 @@ struct CodexInNotchTests {
         ).hidingContent()
         #expect(redacted.title == "Untitled")
         #expect(redacted.preview == nil)
-    }
-
-    @Test @MainActor
-    func everyAppServerTerminalOutcomeMapsToCompleted() {
-        func turn(status: String) -> JSONValue {
-            .object(["status": .string(status)])
-        }
-
-        #expect(CodexSnapshotParser.terminalStatus(from: turn(status: "completed")) == .completed)
-        #expect(CodexSnapshotParser.terminalStatus(from: turn(status: "failed")) == .completed)
-        #expect(CodexSnapshotParser.terminalStatus(from: turn(status: "interrupted")) == .completed)
-        #expect(CodexSnapshotParser.terminalStatus(from: turn(status: "inProgress")) == nil)
     }
 
     @Test @MainActor
@@ -1535,8 +1446,8 @@ struct CodexInNotchTests {
         let installer = CodexHookInstaller(paths: paths)
         try await installer.install(showsContentPreviews: false)
 
-        // Recreate an installation from before managed Hook hashes were
-        // persisted. The helper remains executable and registered.
+        // Recreate an installation from an older build: a different helper
+        // script this app installed itself, still executable and registered.
         try legacyManagedHookScript.write(
             to: paths.script,
             atomically: true,
@@ -1610,8 +1521,10 @@ struct CodexInNotchTests {
         )
         #expect(upgradedScript.contains(#"payload.get("tool_use_id")"#))
         #expect(settings["showsContentPreviews"] as? Bool == false)
-        #expect(settings["managedHookSHA256"] as? String != nil)
-        #expect(settings["managedHookVersion"] as? Int == 1)
+        // Settings carry the privacy setting only; provenance is the file's
+        // existence, so no hash or version field is recorded.
+        #expect(settings["managedHookSHA256"] == nil)
+        #expect(settings["managedHookVersion"] == nil)
         #expect(methods.contains("thread/list"))
         #expect(!methods.contains("thread/loaded/list"))
         #expect(!methods.contains("thread/read"))
@@ -2956,6 +2869,24 @@ for line in sys.stdin:
         #expect(hooks.keys.contains("PostToolUse"))
         #expect(hooks.keys.contains("SessionEnd"))
 
+        // A helper this app did not write, at a path it manages exclusively.
+        // repairRequired would NOT deregister it from hooks.json, so Codex would
+        // keep executing it until the user noticed. Self-healing is the safer
+        // response: the next refresh restores the bundled helper.
+        try "#!/usr/bin/python3\nprint('{}')\n".write(
+            to: paths.script,
+            atomically: true,
+            encoding: .utf8
+        )
+        #expect(await installer.status(hasObservedEvent: true) == .active)
+        #expect(try await installer.upgradeManagedHookIfNeeded())
+        let healedScript = try String(contentsOf: paths.script, encoding: .utf8)
+        #expect(healedScript.contains(#"payload.get("tool_use_id")"#))
+        #expect(await installer.status(hasObservedEvent: true) == .active)
+
+        // Without the settings file this app never recorded installing anything,
+        // so an unaccounted-for helper is flagged instead of overwritten.
+        try FileManager.default.removeItem(at: paths.settings)
         try "#!/usr/bin/python3\nprint('{}')\n".write(
             to: paths.script,
             atomically: true,
@@ -3508,131 +3439,6 @@ for line in sys.stdin:
         #expect(live.didConsumeEvents)
         #expect(live.turns.first?.turnID == "turn-2")
         #expect(live.turns.first?.status == .running)
-    }
-
-    @Test @MainActor
-    func appServerEvidenceCorrectsOnlyTheExactCurrentTurn() async throws {
-        let paths = makeTemporaryHookPaths()
-        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
-
-        let events: [[String: Any]] = [
-            [
-                "received_at": 100.0,
-                "hook_event_name": "UserPromptSubmit",
-                "session_id": "thread-1",
-                "turn_id": "turn-1"
-            ],
-            [
-                "received_at": 101.0,
-                "hook_event_name": "PermissionRequest",
-                "session_id": "thread-1",
-                "turn_id": "turn-1"
-            ]
-        ]
-        for (index, event) in events.enumerated() {
-            let data = try JSONSerialization.data(withJSONObject: event)
-            try data.write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
-        }
-
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
-        #expect(await repository.consumeEvents().turns.first?.status == .running)
-
-        let ignoredDifferentTurn = await repository.reconcileActiveStatus(
-            threadID: "thread-1",
-            turnID: "other-turn",
-            isInputPending: false,
-            isApprovalPending: false,
-            snapshotStartedAt: Date(timeIntervalSince1970: 102)
-        )
-        #expect(!ignoredDifferentTurn)
-        #expect(await repository.consumeEvents().turns.first?.status == .running)
-
-        let ignoredStaleSnapshot = await repository.reconcileActiveStatus(
-            threadID: "thread-1",
-            turnID: "turn-1",
-            isInputPending: false,
-            isApprovalPending: false,
-            snapshotStartedAt: Date(timeIntervalSince1970: 100.5)
-        )
-        #expect(!ignoredStaleSnapshot)
-        #expect(await repository.consumeEvents().turns.first?.status == .running)
-
-        let appliedApproval = await repository.reconcileActiveStatus(
-            threadID: "thread-1",
-            turnID: "turn-1",
-            isInputPending: false,
-            isApprovalPending: true,
-            snapshotStartedAt: Date(timeIntervalSince1970: 102)
-        )
-        #expect(appliedApproval)
-        #expect(await repository.consumeEvents().turns.first?.status == .approvalNeeded)
-
-        let appliedInput = await repository.reconcileActiveStatus(
-            threadID: "thread-1",
-            turnID: "turn-1",
-            isInputPending: true,
-            isApprovalPending: true,
-            snapshotStartedAt: Date(timeIntervalSince1970: 102)
-        )
-        #expect(appliedInput)
-        #expect(await repository.consumeEvents().turns.first?.status == .approvalNeeded)
-
-        let appliedRunning = await repository.reconcileActiveStatus(
-            threadID: "thread-1",
-            turnID: "turn-1",
-            isInputPending: false,
-            isApprovalPending: false,
-            snapshotStartedAt: Date(timeIntervalSince1970: 102)
-        )
-        #expect(appliedRunning)
-        #expect(await repository.consumeEvents().turns.first?.status == .running)
-
-        let inputAfterRunning = await repository.reconcileActiveStatus(
-            threadID: "thread-1",
-            turnID: "turn-1",
-            isInputPending: true,
-            isApprovalPending: false,
-            snapshotStartedAt: Date(timeIntervalSince1970: 102)
-        )
-        #expect(inputAfterRunning)
-        #expect(await repository.consumeEvents().turns.first?.status == .inputNeeded)
-
-        let resumedBeforeCompletion = await repository.reconcileActiveStatus(
-            threadID: "thread-1",
-            turnID: "turn-1",
-            isInputPending: false,
-            isApprovalPending: false,
-            snapshotStartedAt: Date(timeIntervalSince1970: 102)
-        )
-        #expect(resumedBeforeCompletion)
-        #expect(await repository.consumeEvents().turns.first?.status == .running)
-
-        let appliedTerminal = await repository.markCompleted(
-            threadID: "thread-1",
-            turnID: "turn-1",
-            snapshotStartedAt: Date(timeIntervalSince1970: 102)
-        )
-        #expect(appliedTerminal)
-        #expect(await repository.consumeEvents().turns.first?.status == .completed)
-
-        let refusedReopen = await repository.reconcileActiveStatus(
-            threadID: "thread-1",
-            turnID: "turn-1",
-            isInputPending: false,
-            isApprovalPending: false,
-            snapshotStartedAt: Date(timeIntervalSince1970: 103)
-        )
-        #expect(!refusedReopen)
-        #expect(await repository.consumeEvents().turns.first?.status == .completed)
     }
 
     @Test @MainActor

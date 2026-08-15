@@ -412,56 +412,29 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         )
 
         for state in states {
-            // Freshness is now per thread rather than per batch: each record
-            // carries the start time of the read that produced it.
-            let record = threadRecords[state.threadID]
-            let listedThreadsObservedAt = record?.observedAt
-            let canApplyListedStatus = listedThreadsObservedAt.map {
-                $0 >= state.lastEventAt
-            } ?? false
-            let listedThread = record?.thread
-
-            if let session = CodexSnapshotParser.session(
+            // Thread records only supply metadata. Status is the reducer's
+            // alone: an independent App Server reports every thread as
+            // `notLoaded` even while a turn is running, so it has no runtime
+            // evidence to correct with.
+            guard let session = CodexSnapshotParser.session(
                 from: state,
-                thread: listedThread,
+                thread: threadRecords[state.threadID]?.thread,
                 projectName: projectMetadata.resolution(
                     for: state.threadID
                 ).displayName,
-                allowsAppServerStatusCorrection: canApplyListedStatus,
                 showsContentPreviews: showsContentPreviews
+            ) else {
+                continue
+            }
+
+            if terminalUnreadMembershipGate.shouldDisplay(
+                sessionID: session.id,
+                threadID: session.threadID,
+                status: session.status,
+                terminalBoundaryAt: state.lastEventAt,
+                unreadState: unreadState
             ) {
-                if canApplyListedStatus,
-                   let listedThreadsObservedAt,
-                   session.status == .completed {
-                    _ = await hookEvents.markCompleted(
-                        threadID: session.threadID,
-                        turnID: session.turnID,
-                        snapshotStartedAt: listedThreadsObservedAt
-                    )
-                } else if canApplyListedStatus,
-                          let listedThreadsObservedAt,
-                          let activeEvidence = CodexSnapshotParser.activeEvidence(
-                    from: listedThread,
-                    forTurnID: state.turnID,
-                    allowThreadLevelEvidence: state.hasLiveBoundary
-                ) {
-                    _ = await hookEvents.reconcileActiveStatus(
-                        threadID: state.threadID,
-                        turnID: state.turnID,
-                        isInputPending: activeEvidence.isInputPending,
-                        isApprovalPending: activeEvidence.isApprovalPending,
-                        snapshotStartedAt: listedThreadsObservedAt
-                    )
-                }
-                if terminalUnreadMembershipGate.shouldDisplay(
-                    sessionID: session.id,
-                    threadID: session.threadID,
-                    status: session.status,
-                    terminalBoundaryAt: state.lastEventAt,
-                    unreadState: unreadState
-                ) {
-                    sessions.append(session)
-                }
+                sessions.append(session)
             }
         }
         return sessions
@@ -741,21 +714,6 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
 }
 
 enum CodexSnapshotParser {
-    struct ActiveEvidence: Sendable {
-        let isInputPending: Bool
-        let isApprovalPending: Bool
-
-        nonisolated var status: SessionStatus {
-            if isInputPending {
-                return .inputNeeded
-            }
-            if isApprovalPending {
-                return .approvalNeeded
-            }
-            return .running
-        }
-    }
-
     nonisolated static func accountFingerprint(from response: JSONValue) -> String {
         let account = response["account"]
         return [
@@ -841,59 +799,20 @@ enum CodexSnapshotParser {
     // this process started, so there is no caller that builds a session from a
     // Thread payload alone.
 
-    nonisolated static func activeEvidence(
-        from thread: JSONValue?,
-        forTurnID turnID: String? = nil,
-        allowThreadLevelEvidence: Bool = true
-    ) -> ActiveEvidence? {
-        guard thread?["status"]?["type"]?.stringValue == "active" else {
-            return nil
-        }
-
-        if let turnID {
-            let inProgressTurnIDs: [String] = thread?["turns"]?.arrayValue?.compactMap { turn in
-                guard turn["status"]?.stringValue == "inProgress" else {
-                    return nil
-                }
-                return turn["id"]?.stringValue
-            } ?? []
-            if !inProgressTurnIDs.isEmpty,
-               !inProgressTurnIDs.contains(turnID) {
-                return nil
-            }
-            if inProgressTurnIDs.isEmpty,
-               !allowThreadLevelEvidence {
-                return nil
-            }
-        }
-
-        let flags = Set(
-            thread?["status"]?["activeFlags"]?.arrayValue?.compactMap(\.stringValue) ?? []
-        )
-        return ActiveEvidence(
-            isInputPending: flags.contains("waitingOnUserInput"),
-            isApprovalPending: flags.contains("waitingOnApproval")
-        )
-    }
-
+    /// Builds a display row for a Turn the Hook reducer already owns.
+    ///
+    /// `thread` contributes presentation only — eligibility, title, preview.
+    /// Status and timing come from the reducer, because no field of a Thread
+    /// payload carries Turn-level runtime truth for this topology.
     nonisolated static func session(
         from state: HookTurnState,
         thread: JSONValue?,
         projectName: String,
-        allowsAppServerStatusCorrection: Bool = true,
         showsContentPreviews: Bool = true
     ) -> MonitoredSession? {
         if let thread, !isEligibleRootThread(thread) {
             return nil
         }
-
-        let turns = thread?["turns"]?.arrayValue ?? []
-        let matchingTurn = turns.last {
-            $0["id"]?.stringValue == state.turnID
-        }
-        let startedAt = matchingTurn?["startedAt"]?.doubleValue.map {
-            Date(timeIntervalSince1970: $0)
-        } ?? state.startedAt
 
         let privacySafeTitle = normalizedTitle(thread?["name"]?.stringValue)
             ?? "Untitled"
@@ -904,31 +823,14 @@ enum CodexSnapshotParser {
             ?? threadPreview
             ?? (showsContentPreviews ? normalizedPreview(state.promptPreview) : nil)
             ?? "Untitled"
-        let persistedTerminalStatus: SessionStatus? =
-            state.sessionStatus == .completed ? .completed : nil
-        let appServerTerminalStatus = allowsAppServerStatusCorrection
-            ? terminalStatus(from: matchingTurn)
-            : nil
-        let appServerActiveStatus = allowsAppServerStatusCorrection
-            ? activeEvidence(
-                from: thread,
-                forTurnID: state.turnID,
-                allowThreadLevelEvidence: state.hasLiveBoundary
-            )?.status
-            : nil
-        let status = appServerTerminalStatus
-            ?? persistedTerminalStatus
-            ?? appServerActiveStatus
-            ?? state.status
+        let status = state.status
         let preview: String?
         if !showsContentPreviews {
             preview = nil
         } else if status == .completed {
             preview = normalizedPreview(state.assistantPreview)
-                ?? publicPreview(from: matchingTurn)
         } else {
-            preview = publicPreview(from: matchingTurn)
-                ?? normalizedPreview(state.promptPreview)
+            preview = normalizedPreview(state.promptPreview)
         }
 
         return MonitoredSession(
@@ -939,17 +841,8 @@ enum CodexSnapshotParser {
             privacySafeTitle: privacySafeTitle,
             preview: preview,
             status: status,
-            startedAt: startedAt
+            startedAt: state.startedAt
         )
-    }
-
-    nonisolated static func terminalStatus(from turn: JSONValue?) -> SessionStatus? {
-        switch turn?["status"]?.stringValue {
-        case "completed", "failed", "interrupted":
-            .completed
-        default:
-            nil
-        }
     }
 
     nonisolated static func monitorOrder(_ lhs: MonitoredSession, _ rhs: MonitoredSession) -> Bool {
@@ -965,30 +858,6 @@ enum CodexSnapshotParser {
             return lhsPriority < rhsPriority
         }
         return (lhs.startedAt ?? .distantPast) > (rhs.startedAt ?? .distantPast)
-    }
-
-    nonisolated private static func publicPreview(from turn: JSONValue?) -> String? {
-        let items = turn?["items"]?.arrayValue ?? []
-        for item in items.reversed() {
-            let type = item["type"]?.stringValue
-            guard type == "agentMessage" || type == "userMessage" || type == "plan" else {
-                continue
-            }
-
-            if let text = normalizedPreview(item["text"]?.stringValue) {
-                return text
-            }
-
-            let content = item["content"]?.arrayValue ?? []
-            for part in content.reversed() {
-                if let text = normalizedPreview(
-                    part["text"]?.stringValue ?? part["content"]?.stringValue
-                ) {
-                    return text
-                }
-            }
-        }
-        return nil
     }
 
     nonisolated private static func normalizedTitle(_ value: String?) -> String? {
