@@ -1832,6 +1832,106 @@ struct CodexInNotchTests {
     }
 
     @Test
+    func closesWithoutOpensReportTheUntrustedPreToolUseHook() async throws {
+        // Codex trusts hook definitions by content hash. Rewriting one stops it
+        // executing until the user re-trusts, and nothing else notices because
+        // the remaining definitions keep firing. Replays that exact stream.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        var clock = 3_000.0
+        func emit(_ index: Int, _ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-untrusted"
+            payload["turn_id"] = "turn-untrusted"
+            try JSONSerialization.data(withJSONObject: payload).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        try emit(0, ["hook_event_name": "UserPromptSubmit"])
+        for index in 1 ... 2 {
+            try emit(index, [
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Bash",
+                "tool_use_id": "exec-\(index)"
+            ])
+        }
+        // Two closes is still short of the threshold.
+        #expect(await repository.consumeEvents().diagnostic == nil)
+
+        try emit(3, [
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-3"
+        ])
+        let warned = await repository.consumeEvents().diagnostic
+        #expect(warned?.contains("/hooks") == true)
+        #expect(warned?.contains("PreToolUse") == true)
+    }
+
+    @Test
+    func deliveredPreToolUseNeverReportsAnUntrustedHook() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        var clock = 4_000.0
+        func emit(_ index: Int, _ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-ok"
+            payload["turn_id"] = "turn-ok"
+            try JSONSerialization.data(withJSONObject: payload).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        try emit(0, ["hook_event_name": "UserPromptSubmit"])
+        // A PreToolUse for any tool proves the definition runs, so plenty of
+        // closes afterwards must never raise the warning.
+        try emit(1, [
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-open"
+        ])
+        for index in 2 ... 6 {
+            try emit(index, [
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Bash",
+                "tool_use_id": "exec-\(index)"
+            ])
+        }
+        #expect(await repository.consumeEvents().diagnostic == nil)
+    }
+
+    @Test
     func approvalPromptPublishesApprovalNeededUntilItIsAnswered() async throws {
         // Replays the hook sequence captured from a real Desktop approval:
         // Codex never emits PermissionRequest for it. The prompt is a

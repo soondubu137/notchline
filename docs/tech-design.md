@@ -240,7 +240,9 @@ struct TurnEvidence: Equatable {
 6. 完成能力探测；只有必需能力全部通过才显示 Ready。
 7. `Start Monitoring` 后进入 connecting，并从空集合重建。
 
-安装器必须记录自己管理的最小配置片段，不能覆盖用户其他配置。移除时只移除本应用管理的片段。安装健康度要求 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(^(request_user_input|request_permissions)$)`、`PostToolUse`、`Stop`、`SessionEnd` 六种定义各有且只有一个当前 handler，且 command、matcher 与 `timeout = 3` 精确匹配；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `repairRequired`，不能显示 Ready。用户重新开启总开关后，安装器先移除所有本应用 command 的残缺/重复注册，再写回完整集合，同时保留其他 command。
+安装器必须记录自己管理的最小配置片段，不能覆盖用户其他配置。
+
+**改写任何一条定义都会使它失去信任。** Codex 在 `config.toml` 的 `[hooks.state."<hooks.json 路径>:<event>:<group>:<handler>"]` 下按定义内容哈希记录信任；定义内容一变，Codex 就**静默停止执行该定义**，直到用户重新 `/hooks` 信任。其余未改动的定义哈希不变，继续正常触发，因此应用侧看不出任何异常——`hasObservedEvent` 会被它们满足，UI 照常显示已连接。2026-08-15 实测中 `PreToolUse` 因此连续两轮完全不触发而无任何提示。据此：任何改动 managed 定义的版本升级，都必须在 Settings 与 Onboarding 明确要求重新信任；reducer 另外用「只见 `PostToolUse` 不见 `PreToolUse`」作为该状态的运行时探测并输出诊断。移除时只移除本应用管理的片段。安装健康度要求 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(^(request_user_input|request_permissions)$)`、`PostToolUse`、`Stop`、`SessionEnd` 六种定义各有且只有一个当前 handler，且 command、matcher 与 `timeout = 3` 精确匹配；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `repairRequired`，不能显示 Ready。用户重新开启总开关后，安装器先移除所有本应用 command 的残缺/重复注册，再写回完整集合，同时保留其他 command。
 
 ### 7.2 启动与重连
 

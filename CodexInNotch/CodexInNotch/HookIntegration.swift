@@ -587,6 +587,12 @@ actor HookEventRepository {
     private let liveEventCutoff: Date
     private var hasObservedEvent: Bool
     private var hasObservedLiveEvent: Bool
+    // Codex trusts each hook definition by content hash, so rewriting one stops
+    // Codex executing it until the user re-trusts -- silently, while the other
+    // definitions keep firing. Every PostToolUse is preceded by a PreToolUse for
+    // the same call, so closes without opens are direct evidence of that state.
+    private var observedPreToolUseCount = 0
+    private var observedPostToolUseCount = 0
     private var turnsByThreadID: [String: HookTurnState]
 
     init(
@@ -822,6 +828,7 @@ actor HookEventRepository {
                 // enter or leave a wait state.
             }
         case "PreToolUse" where event.toolName == "request_user_input":
+            observedPreToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return false
             }
@@ -840,6 +847,7 @@ actor HookEventRepository {
             // Codex surfaces a Desktop approval prompt as a `request_permissions`
             // tool call that stays open for exactly as long as the human is
             // being asked -- the same shape as `request_user_input`.
+            observedPreToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return false
             }
@@ -854,7 +862,11 @@ actor HookEventRepository {
                 $0.pendingApprovalToolUseID = toolUseID
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
             }
+        case "PreToolUse":
+            // Any other tool: no state change, but it proves the definition runs.
+            observedPreToolUseCount += 1
         case "PostToolUse":
+            observedPostToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return true
             }
@@ -967,6 +979,16 @@ actor HookEventRepository {
         return normalized.isEmpty ? nil : normalized
     }
 
+    /// Set once enough tool calls have closed without a single one opening.
+    ///
+    /// Three is past coincidence and still reached within one short turn.
+    private var undeliveredPreToolUseDiagnostic: String? {
+        guard observedPreToolUseCount == 0, observedPostToolUseCount >= 3 else {
+            return nil
+        }
+        return "Codex 未执行 PreToolUse hook，等待输入与等待审批无法显示；请在 Codex 中运行 /hooks 重新信任该定义。"
+    }
+
     private func snapshot(
         didConsumeEvents: Bool = false,
         diagnostic: String? = nil
@@ -976,7 +998,7 @@ actor HookEventRepository {
             hasObservedLiveEvent: hasObservedLiveEvent,
             turns: turnsByThreadID.values.sorted { $0.startedAt > $1.startedAt },
             didConsumeEvents: didConsumeEvents,
-            diagnostic: diagnostic
+            diagnostic: diagnostic ?? undeliveredPreToolUseDiagnostic
         )
     }
 
