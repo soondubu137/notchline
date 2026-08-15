@@ -1,0 +1,37 @@
+# 未受官方公开支持的 Codex 集成依赖清单
+
+本文只记录 Codex in Notch 中依赖未被官方公开文档或公开 schema 支持的 Codex 实现细节的生产 feature。目的不是列出所有没有使用 App Server 的功能，而是在 Codex Desktop 更新后出现兼容性问题时，能够快速定位真正的私有依赖。
+
+当前验证基线：Codex Desktop `26.810.50856`（build `6644`），内置 Codex CLI `0.148.0-alpha.9`，验证日期 `2026-08-14`。
+
+“官方公开支持”包括官方文档和公开 schema 中定义的 App Server、Codex Hooks、CLI/SDK 接口、Desktop deep link，以及实现中使用的 macOS 公共 API。仅仅没有通过 App Server 实现，不构成登记理由。官方 [Codex Hooks](https://learn.chatgpt.com/docs/hooks) 明确公开 lifecycle 事件、`hooks.json` 配置位置和信任流程；官方 [Commands](https://learn.chatgpt.com/docs/reference/commands#deep-links) 公开 Desktop deep link，这些能力不列入本表。
+
+## Feature 清单
+
+| Feature | 这个 feature 是什么 | 为什么官方公开支持的接口无法实现 | 实现方法 | 依赖级别与失效信号 | 代码定位 |
+| --- | --- | --- | --- | --- | --- |
+| Desktop Project / `Chats` 身份 | 展开列表为每个 thread 显示 Codex Desktop 侧边栏中的真实 Project 名称；只有 Desktop 明确标记为无 Project 的 thread 才显示 `Chats`。 | 当前公开 App Server Thread schema、Hooks 和 Desktop deep link 都不提供 Desktop `projectId`、`projectName` 或 thread 到 Project 的成员关系。`thread.section` 是独立的 Thread Section，不是 Desktop Project。 | 只读 `$CODEX_HOME/.codex-global-state.json`；可用 `CODEX_IN_NOTCH_CODEX_HOME` 显式覆盖状态根目录。用 `thread-project-assignments[threadId]` 取得 assignment；`local` assignment 连接 `local-projects[projectId].name`，`remote` assignment 连接 `remote-projects[id].label`；只有 `projectless-thread-ids` 明确包含 thread ID 时返回 `Chats`。主文件失败时读取 `.bak`，两者失败时保留 last-known-good。拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、冲突成员关系及不兼容 schema。 | **Desktop 私有只读 schema。** 高版本风险。典型信号：Project 全部显示 `Project unavailable`；诊断包含“Project 状态 schema 不兼容”或“无法读取 Codex Desktop Project 映射”；对应单测失败。Desktop 更新后首先检查四个顶层 key、assignment 的 `projectKind/projectId` 以及本地 `name`、远程 `label`。 | [`CodexDesktopProjectMetadata.swift`](../CodexInNotch/CodexInNotch/CodexDesktopProjectMetadata.swift)、[`LiveCodexMonitorService.swift`](../CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift)、[`CodexInNotchTests.swift`](../CodexInNotch/CodexInNotchTests/CodexInNotchTests.swift) |
+| Codex Desktop 进程身份门槛 | 区分“独立 App Server 可连接”和“当前 Codex Desktop 确实正在运行”；只让同一 Desktop PID 生命周期中的可信 Hook 观察恢复 Ready。 | 官方 App Server 与 Hooks 不提供 Desktop 应用进程生命周期查询。实现依赖观察到的 Desktop bundle identifier `com.openai.codex`，该标识未作为 Codex 集成兼容契约公开。 | 用 macOS 公共 API `NSRunningApplication.runningApplications(withBundleIdentifier:)` 获取当前 Desktop PID，并把它与首次/最新可信 Hook 观察绑定；Desktop PID 变化后重新建立观察门槛。 | **未公开的 Desktop bundle identifier。** 中版本风险。典型信号：Desktop 已打开但 Notch 持续 Disconnected，或应用改名/换 bundle id 后检测不到进程。 | [`LiveCodexMonitorService.swift`](../CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift) |
+| App Server 可执行文件发现与启动 | 找到与 Desktop/CLI 匹配的 `codex` 可执行文件，并启动只读 `app-server --listen stdio://` 连接。 | `app-server` CLI 子命令本身是官方公开能力，但官方契约不包含 Codex Desktop bundle 内的可执行文件安装位置。 | 优先使用 `CODEX_IN_NOTCH_CODEX_PATH`；否则检查 `/Applications/ChatGPT.app/Contents/Resources/codex`、旧 `/Applications/Codex.app/...`，最后搜索 `PATH`。找到可执行文件后用 `Process` 启动公开的 `app-server --listen stdio://` 并完成 initialize/initialized 握手。 | **Desktop 私有打包路径。** 中版本风险。典型信号：`executableNotFound`、Desktop 更新后 bundle 内资源位置变化、进程启动失败。 | [`CodexAppServerClient.swift`](../CodexInNotch/CodexInNotch/CodexAppServerClient.swift) |
+
+## 不在本表中的能力
+
+- 实时 Turn 生命周期桥、Hook 安装/升级/总开关/移除使用官方 Codex Hooks、公开事件与 `hooks.json` 配置，不在本表记录。
+- 精确打开 Desktop thread 使用官方 `codex://threads/<thread-id>` deep link 和 macOS 公共 Launch Services，不在本表记录。
+- 额度、今日 token、Thread 列表、标题、Turn 详情和状态校正使用公开 App Server 方法，不在本表记录。
+- Desktop 蓝点对应的未读成员关系目前仍未进入生产实现；`docs/tech-design.md` 中的私有文件/socket 内容只是探索与候选方案，不能登记成已实现 feature。
+
+## Desktop 更新后的排查顺序
+
+1. 记录新的 Desktop short version、build 与内置 `codex --version`；只有重新验证了表中的私有依赖后才更新本文验证基线。
+2. 先运行 `CodexInNotchTests`，根据失败测试定位到上表对应 feature。
+3. 对私有依赖只做只读检查：确认文件、标识或可执行路径仍存在，再确认最小 schema；不得修改 `app.asar`、注入 Desktop IPC 或把缺失值伪装成成功。
+4. 如果官方文档或公开 schema 新增了等价能力，优先迁移到官方方法，并从本表移除对应私有实现说明。
+5. 如果 feature 暂时失效，必须 fail closed：Project 使用 `Project unavailable`，状态使用单会话 `Unknown` 或全局 Disconnected；不得改用 cwd、标题、时间或窗口焦点猜测。
+
+## 维护规则
+
+- 新增任何依赖未公开或未承诺兼容的 Codex 实现细节的生产 feature 时，必须在同一个改动中新增或更新本表行。
+- 不得仅因为实现没有使用 App Server 而登记；官方 Hooks、官方 deep link、公开 CLI/SDK 接口和 macOS 公共 API 都是允许的实现方式。
+- 每行至少保留 feature 定义、官方公开支持接口的能力缺口、真实实现方法、失效信号和代码定位。
+- 私有 schema 必须有 fixture 测试、缺失/损坏测试和明确的保守降级；不得把解析失败解释为空集合或 `Chats`。

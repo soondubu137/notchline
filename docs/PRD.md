@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | Desktop Project 身份已实现；Desktop 未读能力仍待 Phase 0 验证 |
-| 版本 | 0.7 |
+| 版本 | 0.8 |
 | 日期 | 2026-08-14 |
 | 目标版本 | V1 MVP |
 | 目标平台 | macOS；带物理刘海与无刘海显示器 |
@@ -68,7 +68,7 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 - Project 必须是 Codex Desktop 左侧边栏中用户创建的 Project 实体；它可以对应一个或多个仓库。
 - 无 Project 归属的会话显示 `Chats`。
 - 禁止从 `cwd`、Git 根目录或路径最后一级推导 Project。
-- 当前公开 App Server 不提供 Desktop Project 身份；经产品批准，可使用 [`non-public-app-server-features.md`](non-public-app-server-features.md) 登记的严格只读私有适配器。只有 Desktop 的 `projectless-thread-ids` 明确命中时才显示 `Chats`；缺失或损坏必须显示 `Project unavailable` 并 fail closed。
+- 当前官方公开支持接口不提供 Desktop Project 身份；经产品批准，可使用 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) 登记的严格只读私有适配器。只有 Desktop 的 `projectless-thread-ids` 明确命中时才显示 `Chats`；缺失或损坏必须显示 `Project unavailable` 并 fail closed。
 
 ## 5. 首次安装引导
 
@@ -79,6 +79,8 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 3. **Ready**：确认实时状态、Project、未读成员关系、精确导航与主额度窗口能力可用，并说明当前内容预览默认开启。
 
 设置必须是显式、可逆、由用户确认的流程。应用不得静默修改 Codex 配置、绕过 Codex 的信任机制或自动启动 Codex Desktop。
+
+首次引导中的 `Set Up Integration` 与 Settings 中的 `Codex integration` 总开关都把本应用需要的六种 lifecycle event 定义作为一个不可拆分的产品能力管理。开启时安装或修复完整集合；关闭时只移除 Codex in Notch 管理的定义并留在 Settings，不重新进入首次引导。Codex 底层仍按事件类型显示六个定义，首次安装或定义变化后仍必须由用户在 `/hooks` 中审核信任。
 
 ## 6. 状态模型
 
@@ -210,7 +212,7 @@ V1 不计算、刷新或展示处理时长。Running 在收起态、展开汇总
 V1 设置窗口只包含已经确认的三组能力：
 
 1. **Display**：选择组件显示在哪个已连接显示器；选择跨启动保留，显示器临时断开时回退到可用屏幕。
-2. **Codex integration**：显示连接与兼容状态，提供重新检测和移除集成。
+2. **Codex integration**：显示连接与兼容状态，提供一个总开关同时启停全部六种必需 lifecycle event 定义；提供重新检测。关闭只移除本应用管理的定义并保留用户其他 Hooks；重新开启会安装或修复完整集合。
 3. **Privacy**：`Show current content previews` 全局开关。
 
 设置只影响 Codex in Notch。Notch 中的 `No active turns`、`Update Codex`、`Codex version unsupported` 和 `Codex disconnected` 不提供操作。
@@ -219,6 +221,7 @@ V1 设置窗口只包含已经确认的三组能力：
 
 - 应用启动时列表为空，先显示 Connecting；连接后从 Desktop 当前活动轮次与未读终态重建。
 - 首次验证过 Hook 后，应用自身重启不得要求再次产生事件才能恢复连接；恢复必须同时确认当前 Codex Desktop 正在运行。
+- 六种必需定义缺少、重复或 matcher/handler/timeout 被改变时不得显示为已连接；总开关显示 Off，并明确进入可由用户重新开启修复的状态。
 - 实时事件负责即时变化；`thread/list` 等集合校正必须在后台合并，不能阻塞 Idle、Running、Input 或 Approval 的发布。重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
 - 启动和常规刷新不得逐会话等待详情读取；单会话详情超时只保留该行 Unknown，不能延长 Connecting 或触发全局 Disconnected。
 - 单次 App Server 请求超时保留连接与最近可信状态；若其间没有任何有效响应且连续请求都超时，应重建只读 App Server 传输，再在后续轮询恢复校正。
@@ -253,7 +256,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 10. Disconnected 清空列表；No active turns 与四类被动状态不含操作按钮。
 11. 展开基准为 `520 × 302`，顶部参考高 `46` 且只横向扩张；状态名不被物理刘海遮挡。
 12. 三行以上可以垂直滚动，重排不强制打断用户当前滚动位置。
-13. 首次引导在更改集成前明确说明范围并取得用户确认，移除集成可逆。
+13. 首次引导在更改集成前明确说明范围并取得用户确认；Settings 中一个总开关原子启停六种必需定义，部分安装失败关闭并可修复，关闭不影响用户其他 Hooks。
 14. Figma 与实现中的所有产品字体统一使用 SF Pro。
 
 ## 15. 设计来源
@@ -268,4 +271,4 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 
 - 统一术语见 [`CONTEXT.md`](../CONTEXT.md)。
 - 范围、未读生命周期和 Project 身份见 [`docs/adr`](adr/)。
-- 所有未完全通过公开 App Server 实现的生产能力及其版本风险见 [`non-public-app-server-features.md`](non-public-app-server-features.md)。
+- 所有依赖未公开或未承诺兼容的 Codex 实现细节及其版本风险见 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。官方 Hooks、App Server 和 deep link 不因接口类型不同而进入该清单。

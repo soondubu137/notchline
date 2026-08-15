@@ -3,12 +3,14 @@ import Foundation
 
 enum HookSetupStatus: Equatable, Sendable {
     case notInstalled
+    case repairRequired
     case reviewRequired
     case active
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
         case (.notInstalled, .notInstalled),
+             (.repairRequired, .repairRequired),
              (.reviewRequired, .reviewRequired),
              (.active, .active):
             true
@@ -21,10 +23,21 @@ enum HookSetupStatus: Equatable, Sendable {
         switch self {
         case .notInstalled:
             "尚未安装"
+        case .repairRequired:
+            "安装不完整；请开启总开关以修复"
         case .reviewRequired:
             "已安装；请在 Codex /hooks 中信任"
         case .active:
             "已连接"
+        }
+    }
+
+    nonisolated var isIntegrationEnabled: Bool {
+        switch self {
+        case .reviewRequired, .active:
+            true
+        case .notInstalled, .repairRequired:
+            false
         }
     }
 }
@@ -72,9 +85,33 @@ struct HookIntegrationPaths: Sendable {
 actor CodexHookInstaller {
     private enum ManagedInstallationState {
         case missing
+        case repairRequired
         case current
         case upgradeable
     }
+
+    private enum ManagedRegistrationState {
+        case absent
+        case partial
+        case complete
+    }
+
+    private struct ManagedHookDefinition: Sendable {
+        let event: String
+        let matcher: String?
+    }
+
+    nonisolated private static let managedDefinitions = [
+        ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
+        ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
+        ManagedHookDefinition(
+            event: "PreToolUse",
+            matcher: "^request_user_input$"
+        ),
+        ManagedHookDefinition(event: "PostToolUse", matcher: nil),
+        ManagedHookDefinition(event: "Stop", matcher: nil),
+        ManagedHookDefinition(event: "SessionEnd", matcher: nil)
+    ]
 
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
@@ -88,8 +125,14 @@ actor CodexHookInstaller {
     }
 
     func status(hasObservedEvent: Bool) -> HookSetupStatus {
-        guard installationState != .missing else { return .notInstalled }
-        return hasObservedEvent ? .active : .reviewRequired
+        switch installationState {
+        case .missing:
+            return .notInstalled
+        case .repairRequired:
+            return .repairRequired
+        case .current, .upgradeable:
+            return hasObservedEvent ? .active : .reviewRequired
+        }
     }
 
     @discardableResult
@@ -155,13 +198,19 @@ actor CodexHookInstaller {
     }
 
     private var installationState: ManagedInstallationState {
+        let registrationState = managedRegistrationState
+        guard registrationState == .complete else {
+            return registrationState == .partial || hasManagedSupportFootprint
+                ? .repairRequired
+                : .missing
+        }
+
         guard fileManager.isExecutableFile(atPath: paths.script.path),
               let installedScript = try? String(
                   contentsOf: paths.script,
                   encoding: .utf8
-              ),
-              hasManagedHookRegistration else {
-            return .missing
+              ) else {
+            return .repairRequired
         }
 
         let installedDigest = Self.digest(of: installedScript)
@@ -174,27 +223,67 @@ actor CodexHookInstaller {
             || Self.legacyManagedHookDigests.contains(installedDigest) {
             return .upgradeable
         }
-        return .missing
+        return .repairRequired
     }
 
-    private var hasManagedHookRegistration: Bool {
+    private var managedRegistrationState: ManagedRegistrationState {
         guard let data = try? Data(contentsOf: paths.hooksConfiguration),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let hooks = root["hooks"] as? [String: Any] else {
-            return false
+            return .absent
         }
 
-        return hooks.values.contains { value in
-            guard let groups = value as? [[String: Any]] else { return false }
-            return groups.contains { group in
-                guard let handlers = group["hooks"] as? [[String: Any]] else {
-                    return false
-                }
-                return handlers.contains {
-                    ($0["command"] as? String) == command
-                }
+        let managedOccurrenceCount = hooks.values.reduce(into: 0) { count, value in
+            guard let groups = value as? [[String: Any]] else { return }
+            for group in groups {
+                let handlers = group["hooks"] as? [[String: Any]] ?? []
+                count += handlers.filter(isManagedHandler).count
             }
         }
+
+        guard managedOccurrenceCount > 0 else { return .absent }
+        guard managedOccurrenceCount == Self.managedDefinitions.count else {
+            return .partial
+        }
+
+        let hasEveryExactDefinition = Self.managedDefinitions.allSatisfy { definition in
+            guard let groups = hooks[definition.event] as? [[String: Any]] else {
+                return false
+            }
+            let exactMatches = groups.reduce(into: 0) { count, group in
+                guard matcher(in: group, matches: definition.matcher) else {
+                    return
+                }
+                let handlers = group["hooks"] as? [[String: Any]] ?? []
+                count += handlers.filter(isCurrentManagedHandler).count
+            }
+            return exactMatches == 1
+        }
+
+        return hasEveryExactDefinition ? .complete : .partial
+    }
+
+    private var hasManagedSupportFootprint: Bool {
+        fileManager.fileExists(atPath: paths.supportDirectory.path)
+            || fileManager.fileExists(atPath: paths.script.path)
+            || fileManager.fileExists(atPath: paths.settings.path)
+            || fileManager.fileExists(atPath: paths.state.path)
+            || fileManager.fileExists(atPath: paths.eventsDirectory.path)
+    }
+
+    private func matcher(
+        in group: [String: Any],
+        matches expectedMatcher: String?
+    ) -> Bool {
+        if let expectedMatcher {
+            return (group["matcher"] as? String) == expectedMatcher
+        }
+        return group["matcher"] == nil
+    }
+
+    private func isCurrentManagedHandler(_ handler: [String: Any]) -> Bool {
+        guard isManagedHandler(handler), handler.count == 3 else { return false }
+        return (handler["timeout"] as? NSNumber)?.intValue == 3
     }
 
     private var storedSettings: [String: Any] {
@@ -265,18 +354,19 @@ actor CodexHookInstaller {
         }
 
         var hooks = root["hooks"] as? [String: Any] ?? [:]
-        let definitions: [(event: String, matcher: String?)] = [
-            ("UserPromptSubmit", nil),
-            ("PermissionRequest", nil),
-            ("PreToolUse", "^request_user_input$"),
-            ("PostToolUse", nil),
-            ("Stop", nil),
-            ("SessionEnd", nil)
-        ]
 
-        for definition in definitions {
+        for event in Array(hooks.keys) {
+            guard let groups = hooks[event] as? [[String: Any]] else { continue }
+            let retained = groups.compactMap(removingManagedHandlers)
+            if retained.isEmpty {
+                hooks.removeValue(forKey: event)
+            } else {
+                hooks[event] = retained
+            }
+        }
+
+        for definition in Self.managedDefinitions {
             var groups = hooks[definition.event] as? [[String: Any]] ?? []
-            groups = groups.compactMap(removingManagedHandlers)
 
             var group: [String: Any] = [
                 "hooks": [[

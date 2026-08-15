@@ -90,13 +90,16 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         let setupStatus = await hookInstaller.status(
             hasObservedEvent: hasLiveHookObservation
         )
-        guard setupStatus != .notInstalled else {
+        guard setupStatus.isIntegrationEnabled else {
+            let diagnostic = setupStatus == .repairRequired
+                ? "Codex integration is incomplete and must be repaired."
+                : "Codex integration has not been installed."
             return remember(
                 MonitorSnapshot(
                     availability: .setupRequired,
                     sessions: [],
                     quota: .unavailable,
-                    diagnostic: "Codex integration has not been installed."
+                    diagnostic: diagnostic
                 )
             )
         }

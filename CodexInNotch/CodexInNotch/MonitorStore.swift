@@ -275,6 +275,7 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var quota: QuotaSnapshot
     @Published private(set) var sessions: [MonitoredSession]
     @Published private(set) var hookSetupStatus: HookSetupStatus = .notInstalled
+    @Published private(set) var integrationSwitchIsOn = false
     @Published var isExpanded = false
     @Published var reduceMotion = false
     @Published var showsContentPreviews: Bool {
@@ -559,6 +560,23 @@ final class MonitorStore: ObservableObject {
         }
     }
 
+    func setIntegrationEnabled(_ isEnabled: Bool) {
+        guard !isInstallingIntegration, !isRemovingIntegration else { return }
+        let previousValue = integrationSwitchIsOn
+        guard isEnabled != previousValue else { return }
+
+        integrationSwitchIsOn = isEnabled
+        Task { [weak self] in
+            guard let self else { return }
+            let succeeded = isEnabled
+                ? await installIntegrationHooksAndWait()
+                : await removeIntegrationAndWait()
+            if !succeeded {
+                integrationSwitchIsOn = previousValue
+            }
+        }
+    }
+
     @discardableResult
     func installIntegrationHooksAndWait() async -> Bool {
         guard let service, !isInstallingIntegration else { return false }
@@ -570,6 +588,7 @@ final class MonitorStore: ObservableObject {
                 showsContentPreviews: showsContentPreviews
             )
             hookSetupStatus = await service.hookSetupStatus()
+            integrationSwitchIsOn = hookSetupStatus.isIntegrationEnabled
             lastIntegrationMessage = "Hooks 已安装；请在 Codex 中打开 /hooks 并信任新增定义。"
             return true
         } catch {
@@ -579,27 +598,30 @@ final class MonitorStore: ObservableObject {
     }
 
     func removeIntegration() {
-        guard let service, !isRemovingIntegration else { return }
-        isRemovingIntegration = true
         Task { [weak self] in
-            do {
-                try await service.removeHooks()
-                guard let self else { return }
-                self.sessions = []
-                self.quota = .unavailable
-                self.availability = .setupRequired
-                self.status = .setupRequired
-                self.hookSetupStatus = .notInstalled
-                self.hasCompletedOnboarding = false
-                UserDefaults.standard.set(
-                    false,
-                    forKey: Self.onboardingDefaultsKey
-                )
-                self.lastIntegrationMessage = "Codex in Notch 管理的 Hooks 已移除。"
-            } catch {
-                self?.lastIntegrationMessage = "移除集成失败：\(error.localizedDescription)"
-            }
-            self?.isRemovingIntegration = false
+            _ = await self?.removeIntegrationAndWait()
+        }
+    }
+
+    @discardableResult
+    func removeIntegrationAndWait() async -> Bool {
+        guard let service, !isRemovingIntegration else { return false }
+        isRemovingIntegration = true
+        defer { isRemovingIntegration = false }
+
+        do {
+            try await service.removeHooks()
+            sessions = []
+            quota = .unavailable
+            availability = .setupRequired
+            status = .setupRequired
+            hookSetupStatus = .notInstalled
+            integrationSwitchIsOn = false
+            lastIntegrationMessage = "Codex in Notch 管理的 Hooks 已移除。"
+            return true
+        } catch {
+            lastIntegrationMessage = "移除集成失败：\(error.localizedDescription)"
+            return false
         }
     }
 
@@ -720,6 +742,11 @@ final class MonitorStore: ObservableObject {
         let refreshedHookSetupStatus = await service.hookSetupStatus()
         if hookSetupStatus != refreshedHookSetupStatus {
             hookSetupStatus = refreshedHookSetupStatus
+        }
+        if !isInstallingIntegration,
+           !isRemovingIntegration,
+           integrationSwitchIsOn != refreshedHookSetupStatus.isIntegrationEnabled {
+            integrationSwitchIsOn = refreshedHookSetupStatus.isIntegrationEnabled
         }
     }
 

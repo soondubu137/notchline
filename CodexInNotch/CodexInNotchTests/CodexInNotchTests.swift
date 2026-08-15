@@ -281,6 +281,35 @@ struct CodexInNotchTests {
         #expect(store.status == .running)
     }
 
+    @Test @MainActor
+    func integrationMasterSwitchInstallsAndRemovesTheManagedSet() async {
+        let service = IntegrationMonitoringStub()
+        let store = MonitorStore(
+            service: service,
+            initialSnapshot: MonitorSnapshot(
+                availability: .setupRequired,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+
+        let installed = await store.installIntegrationHooksAndWait()
+
+        #expect(installed)
+        #expect(store.integrationSwitchIsOn)
+        #expect(store.hookSetupStatus == .reviewRequired)
+        #expect(await service.installCount() == 1)
+
+        let removed = await store.removeIntegrationAndWait()
+
+        #expect(removed)
+        #expect(!store.integrationSwitchIsOn)
+        #expect(store.hookSetupStatus == .notInstalled)
+        #expect(store.availability == .setupRequired)
+        #expect(await service.removeCount() == 1)
+    }
+
     @Test
     func statusSetCoversEveryFigmaVariant() {
         #expect(MonitorStatus.allCases.count == 13)
@@ -290,6 +319,14 @@ struct CodexInNotchTests {
         #expect(MonitorStatus.connecting.displayName == "Connecting to Codex")
         #expect(MonitorStatus.unsupportedVersion.displayName == "Codex version unsupported")
         #expect(MonitorStatus.disconnected.displayName == "Codex disconnected")
+    }
+
+    @Test
+    func onlyCompleteHookStatusesTurnTheIntegrationSwitchOn() {
+        #expect(!HookSetupStatus.notInstalled.isIntegrationEnabled)
+        #expect(!HookSetupStatus.repairRequired.isIntegrationEnabled)
+        #expect(HookSetupStatus.reviewRequired.isIntegrationEnabled)
+        #expect(HookSetupStatus.active.isIntegrationEnabled)
     }
 
     @Test @MainActor
@@ -2242,7 +2279,7 @@ for line in sys.stdin:
             atomically: true,
             encoding: .utf8
         )
-        #expect(await installer.status(hasObservedEvent: true) == .notInstalled)
+        #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
         try await installer.install(showsContentPreviews: false)
         #expect(await installer.status(hasObservedEvent: true) == .active)
 
@@ -2259,6 +2296,94 @@ for line in sys.stdin:
                 }
             }
         #expect(remainingCommands == ["/usr/bin/true"])
+    }
+
+    @Test @MainActor
+    func hookInstallerRepairsMissingAndAlteredDefinitions() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: true)
+
+        let installedData = try Data(contentsOf: paths.hooksConfiguration)
+        var root = try #require(
+            JSONSerialization.jsonObject(with: installedData) as? [String: Any]
+        )
+        var hooks = try #require(root["hooks"] as? [String: Any])
+        hooks.removeValue(forKey: "SessionEnd")
+        root["hooks"] = hooks
+        try JSONSerialization.data(
+            withJSONObject: root,
+            options: [.prettyPrinted, .sortedKeys]
+        ).write(to: paths.hooksConfiguration, options: .atomic)
+
+        #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
+
+        try await installer.install(showsContentPreviews: true)
+
+        #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
+        let repairedData = try Data(contentsOf: paths.hooksConfiguration)
+        let repairedRoot = try #require(
+            JSONSerialization.jsonObject(with: repairedData) as? [String: Any]
+        )
+        let repairedHooks = try #require(
+            repairedRoot["hooks"] as? [String: Any]
+        )
+        #expect(repairedHooks.keys.contains("SessionEnd"))
+        #expect(repairedHooks.keys.contains("UserPromptSubmit"))
+        #expect(repairedHooks.keys.contains("PermissionRequest"))
+        #expect(repairedHooks.keys.contains("PreToolUse"))
+        #expect(repairedHooks.keys.contains("PostToolUse"))
+        #expect(repairedHooks.keys.contains("Stop"))
+
+        var alteredRoot = repairedRoot
+        var alteredHooks = repairedHooks
+        var preToolGroups = try #require(
+            alteredHooks["PreToolUse"] as? [[String: Any]]
+        )
+        let groupIndex = try #require(preToolGroups.indices.first)
+        var preToolGroup = preToolGroups[groupIndex]
+        preToolGroup["matcher"] = "request_user_input"
+        var handlers = try #require(
+            preToolGroup["hooks"] as? [[String: Any]]
+        )
+        let handlerIndex = try #require(handlers.indices.first)
+        handlers[handlerIndex]["timeout"] = 99
+        preToolGroup["hooks"] = handlers
+        preToolGroups[groupIndex] = preToolGroup
+        alteredHooks["PreToolUse"] = preToolGroups
+        alteredRoot["hooks"] = alteredHooks
+        try JSONSerialization.data(
+            withJSONObject: alteredRoot,
+            options: [.prettyPrinted, .sortedKeys]
+        ).write(to: paths.hooksConfiguration, options: .atomic)
+
+        #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
+
+        try await installer.install(showsContentPreviews: true)
+
+        let exactData = try Data(contentsOf: paths.hooksConfiguration)
+        let exactRoot = try #require(
+            JSONSerialization.jsonObject(with: exactData) as? [String: Any]
+        )
+        let exactHooks = try #require(exactRoot["hooks"] as? [String: Any])
+        let exactGroups = try #require(
+            exactHooks["PreToolUse"] as? [[String: Any]]
+        )
+        let exactGroup = try #require(exactGroups.first)
+        let exactHandlers = try #require(
+            exactGroup["hooks"] as? [[String: Any]]
+        )
+        let exactHandler = try #require(exactHandlers.first)
+
+        #expect(exactGroup["matcher"] as? String == "^request_user_input$")
+        #expect(exactHandler["timeout"] as? Int == 3)
+        #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
     }
 
     @Test @MainActor
@@ -2869,6 +2994,51 @@ except Exception:
 # configured event and never changes Codex behavior.
 print("{}")
 """#
+    }
+}
+
+private actor IntegrationMonitoringStub: CodexMonitoring {
+    private var setupStatus: HookSetupStatus = .notInstalled
+    private var installRequests = 0
+    private var removeRequests = 0
+
+    func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot {
+        MonitorSnapshot(
+            availability: setupStatus.isIntegrationEnabled
+                ? .connecting
+                : .setupRequired,
+            sessions: [],
+            quota: .unavailable,
+            diagnostic: nil
+        )
+    }
+
+    func hookSetupStatus() async -> HookSetupStatus {
+        setupStatus
+    }
+
+    func installHooks(showsContentPreviews: Bool) async throws {
+        installRequests += 1
+        setupStatus = .reviewRequired
+    }
+
+    func removeHooks() async throws {
+        removeRequests += 1
+        setupStatus = .notInstalled
+    }
+
+    func clearSessions() async {}
+
+    func updateHookSettings(showsContentPreviews: Bool) async {}
+
+    func disconnect() async {}
+
+    func installCount() -> Int {
+        installRequests
+    }
+
+    func removeCount() -> Int {
+        removeRequests
     }
 }
 

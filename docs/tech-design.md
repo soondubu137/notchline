@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | 第一实现切片、精确导航、Desktop Project 身份与 Expanded footer 完成；Desktop 未读能力仍阻塞 V1 发布 |
-| 版本 | 0.15 |
+| 版本 | 0.16 |
 | 日期 | 2026-08-14 |
 | 范围 | 将 SwiftUI 原型中的 Mock 状态、额度、今日 tokens、会话列表与点击导航替换为真实 Codex Desktop 数据；Running 计时延后评估 |
 
@@ -11,7 +11,7 @@
 
 V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器，不实现历史列表。权威成员集合是：当前 Desktop 账户下所有 Project 与 `Chats` 中，存在活动 Turn 或未读终态 Turn，并且仍可通过同一 `threadId` 在 Desktop 精确导航的根会话。
 
-集成采用“受支持的 Desktop 观察通道 + 事件 reducer + 集合校正”架构。Project、未读状态和精确导航都是发布门槛；不能从 cwd、时间或窗口焦点推断。Desktop Project 身份是经产品明确批准、带 schema gate 的私有只读例外；所有未完全依赖公开 App Server 的生产能力必须登记在 [`non-public-app-server-features.md`](non-public-app-server-features.md)。未登记的私有接口仍不得进入生产实现。
+集成采用“受支持的 Desktop 观察通道 + 事件 reducer + 集合校正”架构。Project、未读状态和精确导航都是发布门槛；不能从 cwd、时间或窗口焦点推断。Desktop Project 身份是经产品明确批准、带 schema gate 的私有只读例外；所有依赖未公开或未承诺兼容的 Codex 实现细节必须登记在 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。官方 Hooks、App Server 和 deep link 均属于公开支持接口，不因技术通道不同而登记。
 
 本文同时记录实现方案、已验证的协议能力和当前测试版边界。
 
@@ -23,7 +23,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 只调用 `thread/list`、`thread/loaded/list`、`thread/read`、`account/read`、`account/rateLimits/read`、`account/usage/read` 六个只读方法；启动与常规列表刷新不逐 Thread 调用 `thread/read`，且不响应或代替用户处理审批/输入请求。
 - 从当前账户 primary rate-limit window 读取真实 `usedPercent`，转换为剩余百分比；不可用时显示灰色圆环。
 - 从 `account/usage/read.dailyUsageBuckets` 读取本地日历“今天”的 token bucket；Expanded footer 显示标准 Compact 数字、额度重置日期和 Settings 入口。今日 bucket 缺失但 bucket 数组有效时按 `0` 处理，接口不可用时只将今日用量显示为 `--`。
-- 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。
+- 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。Settings 使用一个 `Codex integration` 总开关，把六种必需 lifecycle event 定义作为一个产品能力启停；关闭后留在 Settings，不重置首次引导。
 - 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(request_user_input)`、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求还必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
 - 标题使用 `thread/list`；Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。Hook 收到实时 `Stop` 后在内部把该 Turn 标记为“终态待解析”，对外暂时保留 Running，并在后台用 App Server `thread/read` 补全真实终态。补全成功后直接进入 Completed/Error/Cancelled；只有补全失败或无法分类时才显示 Unknown，且不阻塞列表快照。
 - Preview 设置默认开启；关闭后 hook 不再写入内容片段，列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。即使开启，prompt/回答片段也不写入持久状态。
@@ -86,7 +86,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 主文件读取或解析失败时尝试 `.bak`；两者都失败时保留进程内 last-known-good 并发出诊断。文件未变化时按 size、mtime 与 inode revision 复用解析结果。
 - 读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、空 Project 名称、重复 remote id 与 Project/Chats 冲突成员关系；不记录原始 JSON、root path 或 thread id。
 
-该适配器已在 Desktop `26.803.61601` build `6396`、CLI `0.147.0-alpha.6.5` 验证。它仍是高版本风险的私有 schema，更新与失效排查必须遵守 [`non-public-app-server-features.md`](non-public-app-server-features.md)。
+该适配器已在 Desktop `26.810.50856` build `6644`、CLI `0.148.0-alpha.9` 验证。它仍是高版本风险的私有 schema，更新与失效排查必须遵守 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。
 
 ## 2. 设计约束
 
@@ -103,7 +103,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 ### 2.2 安全约束
 
-- 默认只使用公开、受支持、可做版本能力判断的接口；生产中的例外必须是产品明确批准、只读、fail closed 且登记在 [`non-public-app-server-features.md`](non-public-app-server-features.md) 的能力。
+- 默认只使用官方公开、受支持、可做版本能力判断的接口；生产中的例外必须是产品明确批准、只读、fail closed 且登记在 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) 的能力。
 - 不连接未经支持的 Desktop 私有 socket，不写私有数据库，不使用辅助功能或 GUI 自动化。
 - 不读取认证文件或复制 Desktop 凭据。
 - 不发起 Turn、resume Turn、批准、输入、取消、归档或删除。
@@ -273,7 +273,7 @@ flowchart LR
 6. 完成能力探测；只有必需能力全部通过才显示 Ready。
 7. `Start Monitoring` 后进入 connecting，并从空集合重建。
 
-安装器必须记录自己管理的最小配置片段与定义 hash，不能覆盖用户其他配置。移除时只移除本应用管理的片段。
+安装器必须记录自己管理的最小配置片段与定义 hash，不能覆盖用户其他配置。移除时只移除本应用管理的片段。安装健康度要求 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(^request_user_input$)`、`PostToolUse`、`Stop`、`SessionEnd` 六种定义各有且只有一个当前 handler，且 command、matcher 与 `timeout = 3` 精确匹配；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `repairRequired`，不能显示 Ready。用户重新开启总开关后，安装器先移除所有本应用 command 的残缺/重复注册，再写回完整集合，同时保留其他 command。
 
 ### 7.2 启动与重连
 
@@ -291,7 +291,7 @@ launch
 
 五秒内连接成功则不显示中间错误；超时后根据原因进入 Update Codex、unsupported 或 disconnected。Codex 未运行时不自动启动。
 
-Hook helper 的源码发生版本变化不等于集成未安装。安装器以已记录的定义 hash 校验现有 helper；helper 等于当前内置定义，或其 hash 与记录值/已知旧版一致时，只原子升级本应用管理的 helper 文件并保留预览设置，不改写 `hooks.json`、不重新要求信任。其余不匹配情况 fail closed，进入首次集成/修复流程。这样应用升级后，Codex Desktop 正在运行且当前集合为空时仍进入 Ready，并由空集合推导 Idle。
+Hook helper 的源码发生版本变化不等于集成未安装。安装器以已记录的定义 hash 校验现有 helper；helper 等于当前内置定义，或其 hash 与记录值/已知旧版一致时，只原子升级本应用管理的 helper 文件并保留预览设置，不改写 `hooks.json`、不重新要求信任。未知 helper 修改、缺少任一定义或定义结构不精确时 fail closed 为 `repairRequired`；Settings 总开关显示 Off，用户显式重新开启后才修复。这样应用升级后，Codex Desktop 正在运行、完整注册集合存在且当前会话集合为空时仍进入 Ready，并由空集合推导 Idle。
 
 ### 7.3 集合校正时机
 
@@ -500,7 +500,7 @@ reset 按本地日历日而不是 24 小时浮点时长计算：同一天为 `Re
 - Expanded footer 齿轮：调用系统 `openSettings` 打开现有 Settings scene；不安装集成、不修改偏好，也不在 panel 中创建第二份设置 UI。
 - `Display`：立即将组件移动到所选显示器；目标临时不可用时回退，并在重新连接后恢复用户偏好。
 - `Recheck`：重新运行只读能力检查，不静默改配置。
-- `Remove Integration`：只移除本应用管理的配置片段，然后清空 repository。
+- `Codex integration` 总开关：On 安装或修复六种必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。
 - `Show current content previews`：立即影响所有行；关闭时清空内存预览并重新生成安全标题。
 
 ## 17. SwiftUI 接入边界
@@ -596,6 +596,7 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 - 确认不申请 Accessibility/Screen Recording。
 - 确认 observer 不发送会改变 Thread/Turn 的方法。
 - 确认移除集成不会删除用户其他配置。
+- 确认总开关 On/Off 分别安装与移除完整六项集合；缺少、重复或 matcher/handler/timeout 被改写时进入 `repairRequired`，重新开启可修复且不删除用户其他 Hooks。
 
 ## 21. Figma 对应
 
@@ -610,6 +611,6 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 ## 22. 参考
 
 - [Codex App Server](https://developers.openai.com/codex/app-server)
-- [Codex Hooks](https://developers.openai.com/codex/hooks)
+- [Codex Hooks](https://learn.chatgpt.com/docs/hooks)
 - [`CONTEXT.md`](../CONTEXT.md)
 - [`docs/adr`](adr/)

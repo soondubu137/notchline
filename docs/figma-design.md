@@ -231,9 +231,11 @@ Input needed
 
 ### 8.1 Codex integration
 
-- 显示 Codex Desktop connected 与兼容性信息。
+- 显示 Codex Desktop connected、Off、Needs repair 与兼容性信息。
+- 右侧使用一个原生 macOS switch 同时启停 Codex in Notch 所需的六种 lifecycle event 定义；切换进行中 disabled。
+- 辅助文案明确说明开关只管理本应用的六项定义，不改变用户其他 Codex Hooks。
 - `Recheck` 重新检测能力。
-- `Remove Integration` 只移除 Codex in Notch 管理的集成。
+- Off 后保持 Settings 可达；再次 On 安装或修复完整集合。首次安装或定义变化后的 `/hooks` 信任仍由 Codex 处理。
 
 ### 8.2 Privacy
 

@@ -287,23 +287,36 @@ struct AppSettingsView: View {
 
     private var integrationCard: some View {
         SettingsCard {
-            HStack(alignment: .top, spacing: 10) {
-                Circle()
-                    .fill(integrationColor)
-                    .frame(width: 10, height: 10)
-                    .padding(.top, 4)
+            HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Circle()
+                        .fill(integrationColor)
+                        .frame(width: 10, height: 10)
+                        .padding(.top, 4)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(integrationTitle)
-                        .font(.system(size: 14, weight: .semibold))
-                    Text(integrationDetail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(DesignColor.tertiaryText)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(integrationTitle)
+                            .font(.system(size: 14, weight: .semibold))
+                        Text(integrationDetail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(DesignColor.tertiaryText)
+                    }
                 }
+
+                Spacer(minLength: 12)
+
+                Toggle("Codex in Notch integration", isOn: integrationSelection)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(
+                        store.isInstallingIntegration
+                            || store.isRemovingIntegration
+                    )
+                    .help("Turns all six required Codex lifecycle hooks on or off together.")
             }
 
             Text(
-                "Real-time state, Projects, chat titles, supported chat navigation, and the primary quota window are checked locally."
+                "One switch installs or removes all six required lifecycle definitions. Other Codex hooks are left unchanged."
             )
             .font(.system(size: 12))
             .foregroundStyle(DesignColor.secondaryText)
@@ -323,10 +336,6 @@ struct AppSettingsView: View {
                 }
                 .disabled(store.sessions.isEmpty || store.isClearingSessions)
                 .help("Clears rows from Codex in Notch without deleting Codex chats.")
-                SettingsButton(title: "Remove Integration", isDestructive: true) {
-                    store.removeIntegration()
-                }
-                .disabled(store.hookSetupStatus == .notInstalled || store.isRemovingIntegration)
             }
         }
     }
@@ -371,7 +380,14 @@ struct AppSettingsView: View {
     }
 
     private var integrationTitle: String {
-        switch store.availability {
+        if store.hookSetupStatus == .repairRequired {
+            return "Codex integration needs repair"
+        }
+        if store.hookSetupStatus == .notInstalled {
+            return "Codex integration is off"
+        }
+
+        return switch store.availability {
         case .ready: "Codex Desktop connected"
         case .setupRequired: "Codex integration not installed"
         case .connecting: "Connecting to Codex Desktop"
@@ -382,13 +398,20 @@ struct AppSettingsView: View {
     }
 
     private var integrationDetail: String {
-        store.availability == .ready
+        store.availability == .ready && store.hookSetupStatus == .active
             ? "Compatible version detected"
             : store.hookSetupStatus.displayName
     }
 
     private var integrationColor: Color {
-        switch store.availability {
+        if store.hookSetupStatus == .repairRequired {
+            return Color(red: 0.96, green: 0.58, blue: 0.10)
+        }
+        if store.hookSetupStatus == .notInstalled {
+            return Color(red: 0.56, green: 0.56, blue: 0.58)
+        }
+
+        return switch store.availability {
         case .ready:
             Color(red: 0.11, green: 0.68, blue: 0.31)
         case .connecting:
@@ -404,6 +427,13 @@ struct AppSettingsView: View {
         Binding(
             get: { store.selectedDisplayID },
             set: { store.selectDisplay(id: $0) }
+        )
+    }
+
+    private var integrationSelection: Binding<Bool> {
+        Binding(
+            get: { store.integrationSwitchIsOn },
+            set: { store.setIntegrationEnabled($0) }
         )
     }
 
