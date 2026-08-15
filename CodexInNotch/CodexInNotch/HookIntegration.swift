@@ -906,6 +906,7 @@ actor HookEventRepository {
                 turnID: turnID,
                 at: receivedAt,
                 createWith: .running,
+                adoptContinuationWith: .running,
                 observedLiveEvent: true,
                 turns: &turns
             ) { _ in
@@ -922,6 +923,7 @@ actor HookEventRepository {
                 turnID: turnID,
                 at: receivedAt,
                 createWith: .running,
+                adoptContinuationWith: .running,
                 observedLiveEvent: true,
                 turns: &turns
             ) {
@@ -940,6 +942,7 @@ actor HookEventRepository {
                 turnID: turnID,
                 at: receivedAt,
                 createWith: nil,
+                adoptContinuationWith: .running,
                 observedLiveEvent: true,
                 turns: &turns
             ) {
@@ -955,6 +958,7 @@ actor HookEventRepository {
                 turnID: turnID,
                 at: receivedAt,
                 createWith: .completed,
+                adoptContinuationWith: .completed,
                 observedLiveEvent: true,
                 turns: &turns
             ) {
@@ -976,17 +980,38 @@ actor HookEventRepository {
         turnID: String,
         at date: Date,
         createWith sessionStatus: SessionStatus?,
+        adoptContinuationWith continuationStatus: SessionStatus?,
         observedLiveEvent: Bool,
         turns: inout [String: HookTurnState],
         mutation: (inout HookTurnState) -> Void
     ) {
         var state: HookTurnState
         if let current = turns[threadID] {
-            guard current.turnID == turnID,
-                  date >= current.lastEventAt else {
-                return
+            if current.turnID == turnID {
+                guard date >= current.lastEventAt else { return }
+                state = current
+            } else {
+                guard let continuationStatus,
+                      date > current.lastEventAt,
+                      !current.retiredTurnIDs.contains(turnID) else {
+                    return
+                }
+                var retiredTurnIDs = current.retiredTurnIDs
+                retiredTurnIDs.insert(current.turnID)
+                state = HookTurnState(
+                    threadID: threadID,
+                    turnID: turnID,
+                    sessionStatus: continuationStatus,
+                    pendingInput: nil,
+                    isApprovalPending: false,
+                    startedAt: current.startedAt,
+                    lastEventAt: date,
+                    hasLiveBoundary: observedLiveEvent,
+                    retiredTurnIDs: retiredTurnIDs,
+                    promptPreview: current.promptPreview,
+                    assistantPreview: nil
+                )
             }
-            state = current
         } else {
             guard let sessionStatus else { return }
             state = HookTurnState(

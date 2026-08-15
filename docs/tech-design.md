@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | 第一实现切片、精确导航、Desktop Project 身份、Desktop 未读终态移除与 Expanded footer 已实现；真实版本矩阵仍待验证 |
-| 版本 | 0.18 |
+| 版本 | 0.19 |
 | 日期 | 2026-08-15 |
 | 范围 | 将 SwiftUI 原型中的 Mock 状态、额度、今日 tokens、会话列表与点击导航替换为真实 Codex Desktop 数据；Running 计时延后评估 |
 
@@ -20,12 +20,12 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 已经实现：
 
 - 通过 Codex Desktop 随附的 `codex app-server --listen stdio://` 建立 JSON-RPC 连接，严格按 `initialize → initialized` 握手。
-- 只调用 `thread/list`、`thread/loaded/list`、`account/read`、`account/rateLimits/read`、`account/usage/read` 五个只读方法，且不响应或代替用户处理审批/输入请求。
+- 只调用 `thread/list`、`thread/read`、`thread/loaded/list`、`account/read`、`account/rateLimits/read`、`account/usage/read` 六个只读方法，且不响应或代替用户处理审批/输入请求。`thread/read` **必须始终带 `includeTurns: false`**：它只用于按 id 取单个 Thread 的元数据（标题、preview、根线程判定、`status`），绝不用于读取 Turn 历史；`thread/items/list`、`thread/turns/list` 等 Turn 明细接口一律不调用。这条约束由测试固定。
 - 从当前账户 primary rate-limit window 读取真实 `usedPercent`，转换为剩余百分比；不可用时显示灰色圆环。
 - 从 `account/usage/read.dailyUsageBuckets` 读取本地日历“今天”的 token bucket；Expanded footer 显示标准 Compact 数字、额度重置日期和 Settings 入口。今日 bucket 缺失但 bucket 数组有效时按 `0` 处理，接口不可用时只将今日用量显示为 `--`。
 - 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。Settings 使用一个 `Codex integration` 总开关，把六种必需 lifecycle event 定义作为一个产品能力启停；关闭后留在 Settings，不重置首次引导。
 - 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(request_user_input)`、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求还必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
-- 标题使用 `thread/list`；Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。会话状态只包含 Running、Input needed、Approval needed、Completed；实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接收敛为 Completed，不再读取 Thread 详情区分结束原因。
+- 标题使用 Thread 元数据，按成本分两层获取：Hook reducer 当前跟踪的 Thread 用 `thread/read`（`includeTurns: false`，实测约 1.2 KB/线程）按 id 读取，全量分页 `thread/list` 只负责低频成员关系对账（实测 33 个线程约 45 KB，且随历史线性增长）。`thread/list` 按契约**永远返回空 `turns`**（schema：`turns` 仅在 `thread/resume`、`thread/rollback`、`thread/fork` 和 `includeTurns: true` 的 `thread/read` 上填充），因此任何 Turn 级事实都只能来自 Hook reducer。Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。会话状态只包含 Running、Input needed、Approval needed、Completed；实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接收敛为 Completed，不再读取 Thread 详情区分结束原因。
 - Preview 设置默认开启；关闭后 hook 不再写入内容片段，列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。即使开启，prompt/回答片段也不写入持久状态。
 - `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔配置健康标记。应用重启时 reducer 从空集合开始，启动前积压的所有 Hook（包括 Stop 与 SessionEnd）一律不恢复或修改 Turn；只有本次进程启动后的 Hook 才是实时证据。App Server 当前 `status/activeFlags` 可在已有精确 Turn 身份上校正瞬时状态。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
 - 会话行通过官方 `codex://threads/<thread-id>` deep link 打开同一 Codex Desktop 会话；打开前强制刷新全部未归档根 Thread，目标不存在时拒绝导航。URL 只定向交给 bundle id `com.openai.codex`，Launch Services 接受后才收起面板。
@@ -34,7 +34,8 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 尚未满足、因此仍阻塞 V1 发布：
 
-- 独立 App Server 不共享 Codex Desktop 的进程内事件流，但只要 App Server 完成握手并成功返回 `thread/list`，本轮启动快照就视为已确认：有活动 Turn 时发布对应状态，没有活动 Turn 时发布 Ready 空集合并聚合为 Idle。只有 App Server 没有响应或连接失败才显示 `Codex disconnected`；快照请求尚未完成时保持 Connecting。跨 Codex in Notch 重启持久化的 Hook 标记只用于配置健康判断，不得恢复任何会话状态。
+- 独立 App Server 不共享 Codex Desktop 的进程内事件流，且实测无法回答 Turn 级问题（见下），因此启动不做现状同步：只要 App Server 完成握手并成功返回一次 `thread/list`，即发布 Ready 并以空集合聚合为 Idle。只有 App Server 没有响应或连接失败才显示 `Codex disconnected`；校验请求尚未完成时保持 Connecting。跨 Codex in Notch 重启持久化的 Hook 标记只用于配置健康判断，不得恢复任何会话状态。
+- **实测边界（Codex CLI `0.148.0-alpha.9`，在一个真实运行中的 Turn 上采样）**：独立 App Server 的 `thread/loaded/list` 返回空；所有 Thread 的 `status.type` 恒为 `notLoaded`；`thread/list` 契约上永不返回 `turns`；`thread/read` 即使带 `includeTurns: true` 也从不出现 `inProgress`——正在运行的 Turn 被记为 `interrupted` 且 `completedAt` 为 null。直接后果：`CodexSnapshotParser.activeEvidence` 依赖的 `status.type == "active"` 在当前拓扑下**永远不成立**，相关 `activeFlags` 校正路径实际为空转。保留它只是为了在未来出现共享运行时的拓扑时无需重写，不得据此推导任何当前能力。
 - 当前公开协议仍没有 Desktop 蓝点对应的已读字段；生产实现依赖第 1.3 节登记的 Desktop 私有只读 schema。Desktop 升级后的真实 read/unread 版本矩阵仍是发布验证项，任何不兼容都必须保守保留终态行。
 - Hooks 可以可靠覆盖开始、权限管线触发、`request_user_input` 和终态边界；`PermissionRequest` 本身不证明仍需人工批准，Approval needed 必须由新鲜 App Server `waitingOnApproval` active flag 确认。App Server 的 `completed`、`failed`、`interrupted` 都映射为 Completed，仍需真实 Desktop 样本矩阵验证端到端覆盖。
 - `threadSource/sourceKinds` 仍不足以单独证明 Desktop 与独立 IDE 来源边界，必须继续以真实样本验证。
@@ -99,7 +100,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 已读、归档、删除或失去可导航性立即退出列表。
 - 子智能体、exec、独立 CLI/IDE 会话不显示为顶级行。
 - 点击必须进入完全相同的 Desktop Thread；只打开首页不算成功。
-- 启动时不展示缓存行；连接后从 Desktop 真值重建。
+- 启动时不展示缓存行，也不重建启动前的会话；列表从空开始，只累积启动后产生 lifecycle 事件的 Turn。
 - 当前内容预览可全局关闭，默认开启且不持久化。
 
 ### 2.2 安全约束
@@ -306,7 +307,7 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 ### 9.2 身份准入与请求配对
 
 - 所有会改变 Turn 状态的 Hook 必须包含非空 `session_id` 和 `turn_id`。不得回退到当前 Turn、`"unknown"`、时间邻近或 Thread 更新时间；缺少身份的事件只写脱敏诊断并消费隔离。
-- repository 没有该 Thread 时，受支持事件可以用自身的精确身份建立 Turn；已有当前 Turn 时，只有顺序更新且从未被该 Thread 淘汰过的 `UserPromptSubmit` 可以建立下一 Turn。repository 在内存中保留本次运行已淘汰的 Turn id；其他不同 `turn_id` 的晚到事件及旧 UserPrompt 一律忽略。
+- repository 没有该 Thread 时，受支持事件可以用自身的精确身份建立 Turn。已有当前 Turn 时，顺序更新且从未被该 Thread 淘汰过的 `UserPromptSubmit` 可以建立下一 Turn；Desktop 中断后继续执行时可能不再发送 `UserPromptSubmit`，因此更晚到达的实时 `PermissionRequest`、`PreToolUse`、`PostToolUse` 或 `Stop` 也可以用新的、未退休的精确 `turn_id` 接管同一 Thread。接管时旧 Turn id 立即进入 `retiredTurnIDs`，保留原始开始时间与 prompt preview，清空旧等待证据；事件本身再决定 Running、Input needed 或 Completed。任何退休 Turn 的迟到事件都不能复活旧身份。
 - `PreToolUse(request_user_input)` 只有在包含非空 `tool_use_id` 时才建立 Input pending；`PostToolUse` 只有 `turn_id` 和 `tool_use_id` 都与该 pending 完全相同时才能清除它。未匹配结果保持原状态。
 - 当前公开 `PermissionRequest` Hook 没有稳定 request/tool id，也不区分人工等待与自动审查后立即继续，因此它只建立该 Turn 的新鲜刷新边界，不建立 Approval evidence。Approval needed 的唯一肯定依据是同一精确 Turn 的新鲜 App Server `waitingOnApproval` active flag；任意 `PostToolUse` 也不得用来猜测审批状态。
 - 只有本次启动后收到的实时 `Stop` 才清空 pending input/approval，并让同一精确 Turn 直接进入 Completed。产品不区分 completed/failed/interrupted 的结束原因，也不存在终态待解析窗口。历史回放的 Stop 完全不进入 Turn reducer。
@@ -431,7 +432,7 @@ reset 按本地日历日而不是 24 小时浮点时长计算：同一天为 `Re
 
 单次 App Server 查询超时不等于连接断开。传输层保留现有连接，UI 继续展示最后一次可信内存快照，并在同一连接上启动至多一个独立探活流程：先等待 3 秒宽限期；其间任意带 `id` 的响应（包括晚到响应）都证明 RPC event loop 仍活跃并取消探活。宽限期内没有响应时，调用官方只读且只访问内存集合的 `thread/loaded/list`，单次最多等待 5 秒；只有该探活也超时且期间仍无任何响应，才重建只读 App Server 传输。并行业务请求超时共享同一个探活，不累计为多次连接失败；远端方法错误和协议错误本身已经收到响应，也不得触发进程重启。该恢复动作不清空 Hook reducer 或最近可信 UI。已有 Ready 等可信状态时，只有 `disconnected` 连续超过 3 秒才发布全局断开状态并清空列表；启动仍为 Connecting 且初始化已确认无响应时直接发布 Disconnected。
 
-尚未建立本次启动后的 Hook 观察时，启动与常规轮询只用最多 5 秒的 `thread/list` 建立快照，不得逐 Thread 读取详情，也不得用 `thread/loaded/list` 的空集合决定业务状态；历史信任标记不改变这条分支。请求完成前保持 Connecting；成功返回后发布 Ready，有活动 Turn 时显示对应状态，空活动集合聚合为 Idle；App Server 未响应或连接失败才发布 Disconnected。建立启动后 Hook 观察后，Hook 状态立即发布；`thread/list` 在后台使用最多 15 秒完成低频集合/activeFlags 校正，同一时间只允许一个请求，失败后至少 60 秒再重试。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得改变状态或移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 直接把同一 Turn 标记为 Completed，不发起终态详情读取。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
+尚未建立本次启动后的 Hook 观察时，启动与常规轮询只用最多 5 秒的 `thread/list` 做一次**只读连通性校验**，其结果不得产生任何会话行。请求完成前保持 Connecting；成功返回后发布 Ready 并以空集合聚合为 Idle；App Server 未响应或连接失败才发布 Disconnected。该分支不重建启动前的任何会话（cold-start sync 已明确列为非目标，理由见 PRD 第 3 节），因此也不需要 `thread/loaded/list` 或逐 Thread 详情读取。建立启动后 Hook 观察后，Hook 状态立即发布；后台校正按成本分成两条独立的单飞路径。Hook 跟踪的 Thread 用 `thread/read`（`includeTurns: false`，最多 5 秒，单条元数据陈旧超过 10 秒才重取）刷新标题、preview 与 `status`；全量分页 `thread/list` 只在 Hook 出现从未列出过的 Thread、或 30 秒成员关系到期时运行，最多 15 秒。两条路径各自同一时间只允许一个请求，失败后至少 60 秒再重试，且都不得位于 Hook → UI 关键路径上。服务端不支持 `thread/read`（`-32601`）时只探测一次，之后永久回退为由 `thread/list` 提供元数据，行为退化为旧路径而不丢标题。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得改变状态或移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 直接把同一 Turn 标记为 Completed，不发起终态详情读取。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
 
 ## 16. 设置与持久化
 

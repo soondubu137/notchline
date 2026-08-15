@@ -750,7 +750,10 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
-    func activeThreadParserUsesProjectWaitingFlagAndPublicPreview() {
+    func threadPayloadAloneCannotProduceASession() {
+        // Sessions may only originate from a post-launch Hook. A Thread payload
+        // — however complete, and even when it claims an active in-progress turn
+        // — is decoration for a session the reducer already knows about.
         let thread = JSONValue.object([
             "id": .string("thread-1"),
             "ephemeral": .bool(false),
@@ -758,10 +761,6 @@ struct CodexInNotchTests {
             "threadSource": .string("user"),
             "name": .string("Implement monitor"),
             "preview": .string("Original prompt"),
-            "section": .object([
-                "id": .string("section-1"),
-                "name": .string("Pinned")
-            ]),
             "status": .object([
                 "type": .string("active"),
                 "activeFlags": .array([.string("waitingOnUserInput")])
@@ -771,8 +770,6 @@ struct CodexInNotchTests {
                     "id": .string("turn-1"),
                     "status": .string("inProgress"),
                     "startedAt": .number(1_000),
-                    "completedAt": .null,
-                    "durationMs": .null,
                     "items": .array([
                         .object([
                             "type": .string("agentMessage"),
@@ -783,17 +780,29 @@ struct CodexInNotchTests {
             ])
         ])
 
-        let session = CodexSnapshotParser.activeSession(
-            from: thread,
+        // The only remaining builder requires Hook-derived Turn identity.
+        let state = HookTurnState(
+            threadID: "thread-1",
+            turnID: "turn-1",
+            sessionStatus: .running,
+            pendingInput: nil,
+            isApprovalPending: false,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastEventAt: Date(timeIntervalSince1970: 1_000),
+            hasLiveBoundary: true,
+            retiredTurnIDs: [],
+            promptPreview: nil,
+            assistantPreview: nil
+        )
+        let session = CodexSnapshotParser.session(
+            from: state,
+            thread: thread,
             projectName: "Codex in Notch"
         )
 
         #expect(session?.threadID == "thread-1")
         #expect(session?.turnID == "turn-1")
-        #expect(session?.projectName == "Codex in Notch")
-        #expect(session?.status == .inputNeeded)
-        #expect(session?.preview == "Please choose a value")
-        #expect(session?.startedAt == Date(timeIntervalSince1970: 1_000))
+        #expect(session?.title == "Implement monitor")
     }
 
     @Test @MainActor
@@ -1159,7 +1168,9 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
-    func activeThreadParserRefusesToInventATurnIdentity() {
+    func hookIdentityIsRequiredBeforeAThreadCanBecomeASession() {
+        // Neither an active thread status nor an eligible root thread is enough
+        // on its own; without Hook-derived Turn identity there is no session.
         let thread = JSONValue.object([
             "id": .string("thread-without-turn"),
             "threadSource": .string("user"),
@@ -1169,12 +1180,9 @@ struct CodexInNotchTests {
             ])
         ])
 
-        #expect(
-            CodexSnapshotParser.activeSession(
-                from: thread,
-                projectName: "Chats"
-            ) == nil
-        )
+        #expect(CodexSnapshotParser.isEligibleRootThread(thread))
+        #expect(CodexSnapshotParser.activeEvidence(from: thread) != nil)
+        // Eligibility and evidence exist, yet nothing can build a session here.
     }
 
     @Test @MainActor
@@ -1301,8 +1309,22 @@ struct CodexInNotchTests {
             ])
         ])
 
-        let session = CodexSnapshotParser.activeSession(
-            from: thread,
+        let state = HookTurnState(
+            threadID: "thread-private",
+            turnID: "turn-private",
+            sessionStatus: .running,
+            pendingInput: nil,
+            isApprovalPending: false,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastEventAt: Date(timeIntervalSince1970: 1_000),
+            hasLiveBoundary: true,
+            retiredTurnIDs: [],
+            promptPreview: "private prompt fallback",
+            assistantPreview: nil
+        )
+        let session = CodexSnapshotParser.session(
+            from: state,
+            thread: thread,
             projectName: "Chats",
             showsContentPreviews: false
         )
@@ -1596,7 +1618,7 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
-    func startupSnapshotUsesThreadListWithoutLoadedOrDetailReads() async throws {
+    func startupNeverReconstructsPreLaunchSessions() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
             try? FileManager.default.removeItem(
@@ -1660,11 +1682,20 @@ struct CodexInNotchTests {
         let ready = await service.fetchSnapshot(showsContentPreviews: true)
         let requestedMethods = await client.requestedMethods()
 
+        // The listed thread advertises an active status and an in-progress turn,
+        // i.e. exactly the pre-launch session the product used to reconstruct.
+        // It must now be ignored: only a post-launch Hook can create a session.
         #expect(ready.availability == .ready)
-        #expect(ready.sessions.count == 1)
-        #expect(ready.sessions.first?.status == .running)
-        #expect(ready.sessions.first?.turnID == "turn-1")
-        #expect(ready.sessions.first?.projectName == "Codex in Notch")
+        #expect(ready.sessions.isEmpty)
+        #expect(
+            MonitorAggregation.status(
+                availability: ready.availability,
+                sessions: ready.sessions
+            ) == .idle
+        )
+        // Startup still proves the App Server answers a real read, which is what
+        // separates Ready from Disconnected.
+        #expect(requestedMethods.contains("thread/list"))
         #expect(!requestedMethods.contains("thread/loaded/list"))
         #expect(!requestedMethods.contains("thread/read"))
         #expect(await client.disconnectCount() == 0)
@@ -1939,7 +1970,9 @@ struct CodexInNotchTests {
             atLeast: 1,
             completed: true
         )
+        // Neither background App Server read may sit on the Hook -> UI path.
         await client.setThreadListDelayNanoseconds(2_000_000_000)
+        await client.setThreadReadDelayNanoseconds(2_000_000_000)
 
         let approval = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -1955,7 +1988,6 @@ struct CodexInNotchTests {
             showsContentPreviews: false
         )
         let elapsed = Date().timeIntervalSince(startedAt)
-        try await waitForThreadListRequests(client, atLeast: 2)
 
         let input = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -1977,7 +2009,9 @@ struct CodexInNotchTests {
         #expect(approvalSnapshot.sessions.first?.status == .running)
         #expect(inputSnapshot.sessions.first?.status == .inputNeeded)
         #expect(elapsed < 1.5)
-        #expect(threadListRequests == 2)
+        // Hook activity on an already-listed thread no longer re-paginates the
+        // whole unarchived set; only the cheap per-thread read follows it.
+        #expect(threadListRequests == 1)
     }
 
     @Test @MainActor
@@ -2038,7 +2072,13 @@ struct CodexInNotchTests {
         #expect(second.sessions.first?.status == .completed)
         #expect(third.availability == .ready)
         #expect(third.sessions.first?.status == .completed)
-        #expect(!methods.contains("thread/read"))
+        // The real rule is not "never call thread/read" — it is "never read Turn
+        // detail". Metadata reads are allowed; rollout history is not.
+        #expect(!methods.contains("thread/items/list"))
+        #expect(!methods.contains("thread/turns/list"))
+        for params in await client.recordedThreadReadParams() {
+            #expect(params["includeTurns"]?.boolValue == false)
+        }
     }
 
     @Test @MainActor
@@ -2142,7 +2182,12 @@ struct CodexInNotchTests {
         #expect(observedStatuses.first == .completed)
         #expect(observedStatuses.last == .completed)
         #expect(afterRead.sessions.isEmpty)
-        #expect(await client.requestCount(method: "thread/read") == 0)
+        // Terminal status comes from the Hook reducer alone; no Turn detail is
+        // fetched to classify it.
+        #expect(await client.requestCount(method: "thread/items/list") == 0)
+        for params in await client.recordedThreadReadParams() {
+            #expect(params["includeTurns"]?.boolValue == false)
+        }
     }
 
     @Test @MainActor
@@ -2220,6 +2265,163 @@ struct CodexInNotchTests {
         #expect(elapsed < 10)
     }
 
+    @Test @MainActor
+    func hookActivityReadsOnlyItsOwnThreadsInsteadOfTheWholeList() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+        let prompt = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-active",
+            "turn_id": "turn-active"
+        ])
+        try prompt.write(
+            to: paths.eventsDirectory.appendingPathComponent("0.json")
+        )
+
+        // One thread is in the Hook reducer; the rest are only history.
+        let listedThreads = (0 ..< 40).map { index -> JSONValue in
+            .object([
+                "id": .string(index == 0 ? "thread-active" : "thread-\(index)"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "name": .string(index == 0 ? "Active work" : "History \(index)"),
+                "status": .object([
+                    "type": .string("active"),
+                    "activeFlags": .array([])
+                ])
+            ])
+        }
+        let client = CodexAppServerStub(
+            listedThreads: listedThreads,
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
+
+        // Drive many more Hook-consuming rounds. Membership was just
+        // reconciled, so none of them may re-paginate the full list.
+        for index in 1 ... 6 {
+            let event = try JSONSerialization.data(withJSONObject: [
+                "received_at": Date().timeIntervalSince1970,
+                "hook_event_name": "PostToolUse",
+                "session_id": "thread-active",
+                "turn_id": "turn-active",
+                "tool_name": "shell",
+                "tool_use_id": "tool-\(index)"
+            ])
+            try event.write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+            _ = await service.fetchSnapshot(showsContentPreviews: false)
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let threadListCount = await client.requestCount(method: "thread/list")
+        let readParams = await client.recordedThreadReadParams()
+        await service.disconnect()
+
+        #expect(threadListCount == 1)
+        #expect(!readParams.isEmpty)
+        // Only the reducer's own thread is read, and never with Turn history.
+        for params in readParams {
+            #expect(params["threadId"]?.stringValue == "thread-active")
+            #expect(params["includeTurns"]?.boolValue == false)
+        }
+        #expect(snapshot.sessions.first?.title == "Active work")
+    }
+
+    @Test @MainActor
+    func metadataReadFallsBackToTheFullListWhenUnsupported() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+        let prompt = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-active",
+            "turn_id": "turn-active"
+        ])
+        try prompt.write(
+            to: paths.eventsDirectory.appendingPathComponent("0.json")
+        )
+
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-active"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "name": .string("Legacy build"),
+                "status": .object([
+                    "type": .string("active"),
+                    "activeFlags": .array([])
+                ])
+            ])],
+            loadedListResults: [],
+            supportsThreadRead: false
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
+
+        let event = try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "PostToolUse",
+            "session_id": "thread-active",
+            "turn_id": "turn-active",
+            "tool_name": "shell",
+            "tool_use_id": "tool-1"
+        ])
+        try event.write(
+            to: paths.eventsDirectory.appendingPathComponent("1.json")
+        )
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        // A server without thread/read must keep getting whole-list metadata
+        // rather than silently losing titles.
+        try await waitForThreadListRequests(client, atLeast: 2)
+
+        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let readAttempts = await client.requestCount(method: "thread/read")
+        await service.disconnect()
+
+        // The unsupported method is probed once, then never retried.
+        #expect(readAttempts == 1)
+        #expect(snapshot.sessions.first?.title == "Legacy build")
+    }
+
     @Test
     func appServerMessageBufferFramesArbitrarilyChunkedMessages() throws {
         var buffer = NewlineDelimitedMessageBuffer()
@@ -2261,6 +2463,138 @@ struct CodexInNotchTests {
         #expect(framedMessage.last == 0x78)
         #expect(buffer.scannedByteCount == messageSize + 1)
         #expect(buffer.bufferedByteCount == 0)
+    }
+
+    @Test
+    func appServerStreamPumpPreservesFrameOrderAcrossPipeSizedChunks() async throws {
+        let (events, continuation) = AsyncStream.makeStream(
+            of: AppServerStreamEvent.self,
+            bufferingPolicy: .unbounded
+        )
+        let pump = AppServerStreamPump(
+            maximumFrameByteCount: 4 * 1_024 * 1_024,
+            continuation: continuation
+        )
+
+        // Each message is far larger than one pipe read, so the pump only frames
+        // them correctly if it observes every chunk in the order it was written.
+        let payload = String(repeating: "x", count: 200_000)
+        let messages = (1 ... 5).map { #"{"id":\#($0),"result":"\#(payload)"}"# }
+        let stream = Data(messages.joined(separator: "\n").utf8) + Data([0x0A])
+
+        let chunkSize = 4_096
+        for offset in stride(from: 0, to: stream.count, by: chunkSize) {
+            let end = min(offset + chunkSize, stream.count)
+            pump.ingest(Data(stream[offset ..< end]))
+        }
+        pump.ingest(Data())
+
+        var frames: [String] = []
+        var didEnd = false
+        for await event in events {
+            switch event {
+            case let .frame(frame):
+                frames.append(String(decoding: frame, as: UTF8.self))
+            case .streamEnded:
+                didEnd = true
+            case .framingOverflow:
+                Issue.record("Unexpected framing overflow")
+            }
+        }
+
+        #expect(didEnd)
+        #expect(frames == messages)
+    }
+
+    @Test
+    func appServerStreamPumpFailsClosedOnOversizedFrame() async throws {
+        let (events, continuation) = AsyncStream.makeStream(
+            of: AppServerStreamEvent.self,
+            bufferingPolicy: .unbounded
+        )
+        let pump = AppServerStreamPump(
+            maximumFrameByteCount: 4_096,
+            continuation: continuation
+        )
+
+        pump.ingest(Data(#"{"id":1,"result":{}}"#.utf8) + Data([0x0A]))
+        // No newline ever arrives for the next frame.
+        for _ in 0 ..< 3 {
+            pump.ingest(Data(repeating: 0x78, count: 2_048))
+        }
+        // Anything after fail-closed must be ignored rather than reframed.
+        pump.ingest(Data("\n".utf8))
+
+        var frames: [String] = []
+        var overflowByteCount: Int?
+        for await event in events {
+            switch event {
+            case let .frame(frame):
+                frames.append(String(decoding: frame, as: UTF8.self))
+            case let .framingOverflow(bufferedByteCount):
+                overflowByteCount = bufferedByteCount
+            case .streamEnded:
+                Issue.record("Unexpected stream end")
+            }
+        }
+
+        #expect(frames == [#"{"id":1,"result":{}}"#])
+        #expect(overflowByteCount == 6_144)
+    }
+
+    @Test @MainActor
+    func largeResponseDoesNotSwallowTheFollowingResponse() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexInNotchFramingTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let executable = root.appendingPathComponent("fake_app_server.py")
+        let source = #"""
+#!/usr/bin/python3
+import json
+import sys
+
+PAYLOAD = "x" * 1000000
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+        if "id" not in request:
+            continue
+        if request.get("method") == "big/read":
+            result = {"payload": PAYLOAD}
+        else:
+            result = {}
+        print(json.dumps({"id": request["id"], "result": result}), flush=True)
+    except Exception:
+        pass
+"""#
+        try source.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+
+        let client = CodexAppServerClient(
+            executableURL: executable,
+            requestTimeoutNanoseconds: 10_000_000_000
+        )
+        try await client.connect()
+
+        // A multi-chunk response used to corrupt the frame boundary and take the
+        // next response down with it, so both requests here must resolve.
+        for _ in 0 ..< 12 {
+            async let big = client.request(method: "big/read", params: nil)
+            async let small = client.request(method: "small/read", params: nil)
+            let (bigResponse, smallResponse) = try await (big, small)
+            #expect(bigResponse["payload"]?.stringValue?.count == 1_000_000)
+            #expect(smallResponse.objectValue?.isEmpty == true)
+        }
+        await client.disconnect()
     }
 
     @Test @MainActor
@@ -2842,6 +3176,128 @@ for line in sys.stdin:
         let clearedSnapshot = await clearedRepository.consumeEvents()
         #expect(clearedSnapshot.hasObservedEvent)
         #expect(clearedSnapshot.turns.isEmpty)
+    }
+
+    @Test @MainActor
+    func hookReducerAdoptsAResumedTurnWithoutANewPromptHook() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        func write(_ event: [String: Any], named name: String) throws {
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent(name)
+            )
+        }
+
+        try write([
+            "received_at": 100.0,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-before-pause",
+            "prompt": "continue this task"
+        ], named: "0.json")
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        let beforePause = await repository.consumeEvents()
+        #expect(beforePause.turns.first?.turnID == "turn-before-pause")
+        #expect(beforePause.turns.first?.status == .running)
+
+        // Desktop resumes an interrupted response as a new Turn without
+        // emitting another UserPromptSubmit Hook. The first live Hook carrying
+        // that new identity must advance the reducer to the resumed Turn.
+        try write([
+            "received_at": 101.0,
+            "hook_event_name": "PostToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-after-resume",
+            "tool_name": "Bash",
+            "tool_use_id": "tool-after-resume"
+        ], named: "1.json")
+        let resumed = await repository.consumeEvents()
+        let resumedTurn = try #require(resumed.turns.first)
+        #expect(resumedTurn.turnID == "turn-after-resume")
+        #expect(resumedTurn.status == .running)
+        #expect(resumedTurn.retiredTurnIDs.contains("turn-before-pause"))
+        #expect(resumedTurn.promptPreview == "continue this task")
+
+        try write([
+            "received_at": 102.0,
+            "hook_event_name": "Stop",
+            "session_id": "thread-1",
+            "turn_id": "turn-before-pause"
+        ], named: "2.json")
+        let staleStop = await repository.consumeEvents()
+        #expect(staleStop.turns.first?.turnID == "turn-after-resume")
+        #expect(staleStop.turns.first?.status == .running)
+
+        try write([
+            "received_at": 103.0,
+            "hook_event_name": "Stop",
+            "session_id": "thread-1",
+            "turn_id": "turn-after-resume"
+        ], named: "3.json")
+        let completed = await repository.consumeEvents()
+        #expect(completed.turns.first?.turnID == "turn-after-resume")
+        #expect(completed.turns.first?.status == .completed)
+    }
+
+    @Test @MainActor
+    func hookReducerCompletesAResumedTurnWhenStopIsItsFirstHook() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let prompt = try JSONSerialization.data(withJSONObject: [
+            "received_at": 100.0,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-before-pause"
+        ])
+        try prompt.write(
+            to: paths.eventsDirectory.appendingPathComponent("0.json")
+        )
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        #expect(await repository.consumeEvents().turns.first?.status == .running)
+
+        let stop = try JSONSerialization.data(withJSONObject: [
+            "received_at": 101.0,
+            "hook_event_name": "Stop",
+            "session_id": "thread-1",
+            "turn_id": "turn-after-resume"
+        ])
+        try stop.write(
+            to: paths.eventsDirectory.appendingPathComponent("1.json")
+        )
+
+        let completed = await repository.consumeEvents()
+        #expect(completed.turns.first?.turnID == "turn-after-resume")
+        #expect(completed.turns.first?.status == .completed)
+        #expect(
+            completed.turns.first?.retiredTurnIDs.contains("turn-before-pause")
+                == true
+        )
     }
 
     @Test @MainActor
@@ -3459,8 +3915,11 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     private let connectResult: Result<Void, CodexAppServerError>
     private let threadListError: CodexAppServerError?
     private var threadListDelayNanoseconds: UInt64
+    private var threadReadDelayNanoseconds: UInt64 = 0
     private var loadedListResults: [Result<JSONValue, CodexAppServerError>]
+    private let supportsThreadRead: Bool
     private var methods: [String] = []
+    private var threadReadParams: [JSONValue] = []
     private var completedThreadListRequests = 0
     private var disconnects = 0
 
@@ -3469,13 +3928,15 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
         loadedListResults: [Result<JSONValue, CodexAppServerError>],
         threadListDelayNanoseconds: UInt64 = 0,
         connectResult: Result<Void, CodexAppServerError> = .success(()),
-        threadListError: CodexAppServerError? = nil
+        threadListError: CodexAppServerError? = nil,
+        supportsThreadRead: Bool = true
     ) {
         self.listedThreads = listedThreads
         self.connectResult = connectResult
         self.threadListError = threadListError
         self.loadedListResults = loadedListResults
         self.threadListDelayNanoseconds = threadListDelayNanoseconds
+        self.supportsThreadRead = supportsThreadRead
     }
 
     func connect() async throws {
@@ -3503,6 +3964,33 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
                 "data": .array(listedThreads),
                 "nextCursor": .null
             ])
+        case "thread/read":
+            threadReadParams.append(params ?? .null)
+            guard supportsThreadRead else {
+                throw CodexAppServerError.remote(
+                    code: -32601,
+                    message: "Method not found: thread/read"
+                )
+            }
+            // The real server only populates `turns` when includeTurns is true,
+            // so the stub mirrors that: a metadata read never carries turns.
+            let requestedID = params?["threadId"]?.stringValue
+            guard let thread = listedThreads.first(
+                where: { $0["id"]?.stringValue == requestedID }
+            ) else {
+                throw CodexAppServerError.remote(
+                    code: -32602,
+                    message: "Unknown thread"
+                )
+            }
+            if threadReadDelayNanoseconds > 0 {
+                try await Task.sleep(nanoseconds: threadReadDelayNanoseconds)
+            }
+            var metadata = thread.objectValue ?? [:]
+            if params?["includeTurns"]?.boolValue != true {
+                metadata["turns"] = .array([])
+            }
+            return .object(["thread": .object(metadata)])
         case "thread/loaded/list":
             guard !loadedListResults.isEmpty else {
                 throw CodexAppServerError.protocolViolation(
@@ -3550,12 +4038,20 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
         methods.filter { $0 == method }.count
     }
 
+    func recordedThreadReadParams() -> [JSONValue] {
+        threadReadParams
+    }
+
     func completedThreadListRequestCount() -> Int {
         completedThreadListRequests
     }
 
     func setThreadListDelayNanoseconds(_ delay: UInt64) {
         threadListDelayNanoseconds = delay
+    }
+
+    func setThreadReadDelayNanoseconds(_ delay: UInt64) {
+        threadReadDelayNanoseconds = delay
     }
 
     func disconnectCount() -> Int {

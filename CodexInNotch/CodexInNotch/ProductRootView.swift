@@ -54,7 +54,7 @@ private struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 8) {
                 pageTitle("Keep every Codex turn in view")
                 bodyText(
-                    "A quiet, top-of-screen monitor for the turns that are running, waiting, or finished but unread."
+                    "A quiet, top-of-screen monitor for the turns you start while it is running — waiting, working, or finished but unread."
                 )
             }
 
@@ -150,7 +150,7 @@ private struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 8) {
                 pageTitle("Codex is connected")
                 bodyText(
-                    "The monitor will now rebuild its list from active Codex Desktop turns. Completed turns remain until archived or deleted in this test build."
+                    "The monitor tracks turns that start from now on. Turns already underway in Codex Desktop stay invisible until their next lifecycle event. Completed turns remain until you read them in Desktop."
                 )
             }
 

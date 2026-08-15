@@ -12,11 +12,22 @@ protocol CodexMonitoring: Sendable {
 }
 
 actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
+    /// Thread-level metadata cached for one thread.
+    ///
+    /// `observedAt` is the request start, not its completion, so a Hook that
+    /// arrives while the read is in flight still wins the freshness comparison.
+    private struct ThreadRecord: Sendable {
+        let thread: JSONValue
+        let observedAt: Date
+    }
+
     nonisolated private static let accountRefreshInterval: TimeInterval = 30
     nonisolated private static let threadListRefreshInterval: TimeInterval = 30
+    nonisolated private static let threadMetadataRefreshInterval: TimeInterval = 10
     nonisolated private static let requestRetryInterval: TimeInterval = 60
     nonisolated private static let coreRequestTimeoutNanoseconds: UInt64 = 5_000_000_000
     nonisolated private static let backgroundThreadListTimeoutNanoseconds: UInt64 = 15_000_000_000
+    nonisolated private static let threadMetadataTimeoutNanoseconds: UInt64 = 5_000_000_000
     private let client: any CodexAppServerCommunicating
     private let hookEvents: HookEventRepository
     private let hookInstaller: CodexHookInstaller
@@ -28,10 +39,14 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private var quotaReadAt: Date?
     private var cachedAccountFingerprint: String?
     private var accountReadAt: Date?
-    private var cachedListedThreads: [JSONValue] = []
+    private var threadRecords: [String: ThreadRecord] = [:]
+    private var listedThreadIDs: Set<String> = []
     private var threadListReadAt: Date?
     private var threadListRefreshTask: Task<Void, Never>?
     private var threadListRetryAfter: Date?
+    private var threadMetadataRefreshTask: Task<Void, Never>?
+    private var threadMetadataRetryAfter: Date?
+    private var supportsThreadMetadataRead = true
     private var observedDesktopProcessIdentifier: pid_t?
     private var quotaRefreshTask: Task<Void, Never>?
     private var quotaRetryAfter: Date?
@@ -107,37 +122,38 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
 
             if hasLiveHookObservation {
                 let unreadSnapshot = await unreadState.snapshot()
-                let cachedThreadIDs = Set(
-                    cachedListedThreads.compactMap { $0["id"]?.stringValue }
-                )
-                let containsUnlistedHookThread = hookState.turns.contains {
-                    !cachedThreadIDs.contains($0.threadID)
+                let hookThreadIDs = Set(hookState.turns.map(\.threadID))
+                let containsUnlistedHookThread = hookThreadIDs.contains {
+                    !listedThreadIDs.contains($0)
                 }
-                if hookState.didConsumeEvents
-                    || containsUnlistedHookThread
-                    || threadListRefreshIsDue {
-                    // Hook state is the low-latency source. Full-list metadata
-                    // and activeFlags are refreshed in the background so a slow
-                    // thread/list cannot hold an Idle -> Running transition for
-                    // the entire request timeout.
+
+                // Hook state is the low-latency source; App Server reads only
+                // decorate it, so both refreshes stay in the background where a
+                // slow request cannot hold an Idle -> Running transition.
+                //
+                // The two reads are deliberately split by cost. Per-thread
+                // metadata covers the Hook reducer's own threads and is cheap
+                // enough to follow Hook activity; the paginated full list is
+                // needed only to reconcile membership, so it keeps the low
+                // frequency the design calls for.
+                scheduleThreadMetadataRefreshIfNeeded(for: hookThreadIDs)
+                let fullListMustSupplyMetadata = !supportsThreadMetadataRead
+                    && hookState.didConsumeEvents
+                if containsUnlistedHookThread
+                    || threadListRefreshIsDue
+                    || fullListMustSupplyMetadata {
                     scheduleThreadListRefreshIfNeeded()
                 }
 
-                let listedThreads = cachedListedThreads
-                let listedThreadsObservedAt = threadListReadAt
-                if let listedThreadsObservedAt {
-                    let unarchivedThreadIDs = Set(
-                        listedThreads.compactMap { $0["id"]?.stringValue }
-                    )
+                if let threadListReadAt {
                     hookState = await hookEvents.removeThreads(
-                        notIn: unarchivedThreadIDs,
-                        snapshotStartedAt: listedThreadsObservedAt
+                        notIn: listedThreadIDs,
+                        snapshotStartedAt: threadListReadAt
                     )
                 }
                 let sessions = await sessions(
                     from: hookState.turns,
-                    listedThreads: listedThreads,
-                    listedThreadsObservedAt: listedThreadsObservedAt,
+                    threadRecords: threadRecords,
                     projectMetadata: projectSnapshot,
                     unreadState: unreadSnapshot,
                     showsContentPreviews: showsContentPreviews
@@ -160,36 +176,29 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                 )
             }
 
-            let listedThreads = try await readAllUnarchivedThreads(
+            // No post-launch Hook observation yet. The product deliberately does
+            // not reconstruct anything that started before this launch, so this
+            // branch never builds sessions — it only confirms that the App
+            // Server answers a real read, which separates Ready from
+            // Disconnected and surfaces an unsupported protocol version.
+            //
+            // Reconstruction was removed rather than fixed: measured against
+            // Codex CLI 0.148.0-alpha.9 with a live turn running, an
+            // independent App Server reports `thread/loaded/list` empty, every
+            // thread `notLoaded`, and never a single `inProgress` turn. There is
+            // no supported read that answers "what is Codex Desktop doing right
+            // now", so any startup list would have been a guess.
+            _ = try await readAllUnarchivedThreads(
                 forceRefresh: false,
                 timeoutNanoseconds: Self.coreRequestTimeoutNanoseconds
             )
-
-            var sessions = listedThreads.compactMap { thread -> MonitoredSession? in
-                guard let threadID = thread["id"]?.stringValue,
-                      CodexSnapshotParser.isEligibleRootThread(thread) else {
-                    return nil
-                }
-                return CodexSnapshotParser.activeSession(
-                    from: thread,
-                    projectName: projectSnapshot.resolution(
-                        for: threadID
-                    ).displayName,
-                    showsContentPreviews: showsContentPreviews
-                )
-            }
-
-            sessions.sort(by: CodexSnapshotParser.monitorOrder)
             scheduleQuotaRefreshIfNeeded()
             return remember(
                 MonitorSnapshot(
                     availability: .ready,
-                    sessions: sessions,
+                    sessions: [],
                     quota: cachedQuota,
-                    diagnostic: projectDiagnostic(
-                        for: sessions,
-                        metadata: projectSnapshot
-                    )
+                    diagnostic: nil
                 )
             )
         } catch let error as CodexAppServerError {
@@ -236,6 +245,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     func disconnect() async {
         threadListRefreshTask?.cancel()
         threadListRefreshTask = nil
+        threadMetadataRefreshTask?.cancel()
+        threadMetadataRefreshTask = nil
         quotaRefreshTask?.cancel()
         quotaRefreshTask = nil
         terminalUnreadMembershipGate.reset()
@@ -280,6 +291,9 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         threadListRefreshTask?.cancel()
         threadListRefreshTask = nil
         threadListRetryAfter = nil
+        threadMetadataRefreshTask?.cancel()
+        threadMetadataRefreshTask = nil
+        threadMetadataRetryAfter = nil
         lastTrustedSnapshot = nil
         terminalUnreadMembershipGate.reset()
     }
@@ -387,27 +401,25 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
 
     private func sessions(
         from states: [HookTurnState],
-        listedThreads: [JSONValue],
-        listedThreadsObservedAt: Date?,
+        threadRecords: [String: ThreadRecord],
         projectMetadata: DesktopProjectMetadataSnapshot,
         unreadState: DesktopUnreadStateSnapshot,
         showsContentPreviews: Bool
     ) async -> [MonitoredSession] {
         var sessions: [MonitoredSession] = []
-        let listedByID = Dictionary(
-            uniqueKeysWithValues: listedThreads.compactMap { thread in
-                thread["id"]?.stringValue.map { ($0, thread) }
-            }
-        )
         terminalUnreadMembershipGate.retain(
             sessionIDs: Set(states.map { "\($0.threadID):\($0.turnID)" })
         )
 
         for state in states {
+            // Freshness is now per thread rather than per batch: each record
+            // carries the start time of the read that produced it.
+            let record = threadRecords[state.threadID]
+            let listedThreadsObservedAt = record?.observedAt
             let canApplyListedStatus = listedThreadsObservedAt.map {
                 $0 >= state.lastEventAt
             } ?? false
-            let listedThread = listedByID[state.threadID]
+            let listedThread = record?.thread
 
             if let session = CodexSnapshotParser.session(
                 from: state,
@@ -471,6 +483,87 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         threadListRefreshTask = Task { [weak self] in
             await self?.refreshThreadListInBackground()
         }
+    }
+
+    /// Refreshes thread-level metadata for the threads the Hook reducer tracks.
+    ///
+    /// This is the read that follows Hook activity. `thread/read` returns the
+    /// same `Thread` payload as `thread/list` for a single thread, so it covers
+    /// title, preview, root-thread eligibility and `status.activeFlags` at a
+    /// fraction of the cost of paginating every unarchived thread.
+    private func scheduleThreadMetadataRefreshIfNeeded(for threadIDs: Set<String>) {
+        let now = Date()
+        guard supportsThreadMetadataRead,
+              threadMetadataRefreshTask == nil,
+              threadMetadataRetryAfter.map({ now >= $0 }) ?? true else {
+            return
+        }
+
+        let staleThreadIDs = threadIDs.filter { threadID in
+            guard let record = threadRecords[threadID] else { return true }
+            return now.timeIntervalSince(record.observedAt)
+                >= Self.threadMetadataRefreshInterval
+        }
+        guard !staleThreadIDs.isEmpty else { return }
+
+        threadMetadataRefreshTask = Task { [weak self] in
+            await self?.refreshThreadMetadataInBackground(
+                threadIDs: staleThreadIDs
+            )
+        }
+    }
+
+    private func refreshThreadMetadataInBackground(
+        threadIDs: Set<String>
+    ) async {
+        defer { threadMetadataRefreshTask = nil }
+
+        var didReadAnyThread = false
+        for threadID in threadIDs.sorted() {
+            guard !Task.isCancelled else { return }
+
+            let startedAt = Date()
+            do {
+                let response = try await client.request(
+                    method: "thread/read",
+                    params: .object([
+                        "threadId": .string(threadID),
+                        // Turn history is never requested. `includeTurns` would
+                        // return the thread's entire rollout — hundreds of KB
+                        // for a long thread — and every Turn-level fact this
+                        // product needs already comes from the Hook reducer.
+                        "includeTurns": .bool(false)
+                    ]),
+                    timeoutNanoseconds: Self.threadMetadataTimeoutNanoseconds
+                )
+                didReadAnyThread = true
+                guard let thread = response["thread"] else { continue }
+                threadRecords[threadID] = ThreadRecord(
+                    thread: thread,
+                    observedAt: startedAt
+                )
+            } catch let error as CodexAppServerError {
+                if error.isUnsupportedMethod {
+                    // Older Codex builds fall back to whole-list metadata.
+                    supportsThreadMetadataRead = false
+                    return
+                }
+                if error.requiresConnectionReset {
+                    await client.disconnect()
+                    return
+                }
+                // One unreadable thread is metadata loss, not state loss:
+                // membership and Turn status both come from elsewhere.
+                continue
+            } catch {
+                continue
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+        threadMetadataRetryAfter = didReadAnyThread
+            ? nil
+            : Date().addingTimeInterval(Self.requestRetryInterval)
     }
 
     private func refreshThreadListInBackground() async {
@@ -552,6 +645,12 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         )
     }
 
+    /// Reads every unarchived thread.
+    ///
+    /// This is the transport's most expensive call, so it exists for exactly one
+    /// job the cheap per-thread read cannot do: establishing which threads still
+    /// exist. It also refreshes `threadRecords` in bulk, which keeps the whole
+    /// pipeline working on builds without `thread/read`.
     private func readAllUnarchivedThreads(
         forceRefresh: Bool,
         timeoutNanoseconds: UInt64
@@ -560,7 +659,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
            let threadListReadAt,
            Date().timeIntervalSince(threadListReadAt)
                < Self.threadListRefreshInterval {
-            return cachedListedThreads
+            return listedThreadIDs.compactMap { threadRecords[$0]?.thread }
         }
 
         var threads: [JSONValue] = []
@@ -599,9 +698,24 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             cursor = page["nextCursor"]?.stringValue
         } while cursor != nil
 
-        cachedListedThreads = threads
         // Use the request start, not completion, as the freshness boundary.
         // A Hook can arrive while a slow paginated list is still in flight.
+        let listedIDs = Set(threads.compactMap { $0["id"]?.stringValue })
+        for thread in threads {
+            guard let threadID = thread["id"]?.stringValue else { continue }
+            // A newer single-thread read must not be overwritten by an older
+            // list that happened to finish after it.
+            if let existing = threadRecords[threadID],
+               existing.observedAt > snapshotStartedAt {
+                continue
+            }
+            threadRecords[threadID] = ThreadRecord(
+                thread: thread,
+                observedAt: snapshotStartedAt
+            )
+        }
+        threadRecords = threadRecords.filter { listedIDs.contains($0.key) }
+        listedThreadIDs = listedIDs
         threadListReadAt = snapshotStartedAt
         return threads
     }
@@ -721,48 +835,11 @@ enum CodexSnapshotParser {
         return true
     }
 
-    nonisolated static func activeSession(
-        from thread: JSONValue,
-        projectName: String,
-        showsContentPreviews: Bool = true
-    ) -> MonitoredSession? {
-        guard isEligibleRootThread(thread),
-              let threadID = thread["id"]?.stringValue,
-              let activeEvidence = activeEvidence(from: thread) else {
-            return nil
-        }
-
-        let turns = thread["turns"]?.arrayValue ?? []
-        let activeTurn = turns.last {
-            $0["status"]?.stringValue == "inProgress"
-        }
-        guard let turnID = activeTurn?["id"]?.stringValue else {
-            return nil
-        }
-        let startedAt = activeTurn?["startedAt"]?.doubleValue.map {
-            Date(timeIntervalSince1970: $0)
-        }
-
-        let privacySafeTitle = normalizedTitle(thread["name"]?.stringValue)
-            ?? "Untitled"
-        let threadPreview = showsContentPreviews
-            ? normalizedPreview(thread["preview"]?.stringValue)
-            : nil
-        let title = normalizedTitle(thread["name"]?.stringValue)
-            ?? threadPreview
-            ?? "Untitled"
-
-        return MonitoredSession(
-            threadID: threadID,
-            turnID: turnID,
-            projectName: projectName,
-            title: title,
-            privacySafeTitle: privacySafeTitle,
-            preview: showsContentPreviews ? publicPreview(from: activeTurn) : nil,
-            status: activeEvidence.status,
-            startedAt: startedAt
-        )
-    }
+    // A Thread-only session builder used to live here so a launch could
+    // reconstruct whatever Codex Desktop was already doing. That capability is
+    // out of scope: sessions now only ever originate from a Hook received after
+    // this process started, so there is no caller that builds a session from a
+    // Thread payload alone.
 
     nonisolated static func activeEvidence(
         from thread: JSONValue?,

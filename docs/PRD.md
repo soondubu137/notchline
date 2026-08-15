@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | Desktop Project 身份与未读终态自动移除已实现；真实版本矩阵仍待 Phase 0 验证 |
-| 版本 | 0.10 |
+| 版本 | 0.11 |
 | 日期 | 2026-08-15 |
 | 目标版本 | V1 MVP |
 | 目标平台 | macOS；带物理刘海与无刘海显示器 |
@@ -20,12 +20,12 @@ Codex in Notch 是 Codex Desktop 当前处理轮次的实时汇总中心。它�
 
 V1 必须做到：
 
-1. 实时呈现当前 Codex Desktop 账户下所有 Project 与 `Chats` 中需要监视的处理轮次。
+1. 实时呈现当前 Codex Desktop 账户下所有 Project 与 `Chats` 中需要监视的处理轮次。**监视范围严格限定为本次 Codex in Notch 启动之后开始的 Turn**：应用启动前已在运行、已完成未读或正在等待审批的会话一律不纳入，直到它们产生下一个 lifecycle 事件为止（见第 3 节非目标）。
 2. 会话状态只使用 Running、Input needed、Approval needed 和 Completed 四类。
 3. 让用户点击任意会话行后进入 Codex Desktop 中完全相同的会话。
 4. Running 与其他状态使用同一状态名称机制，显示 `Running`，不显示处理时长或秒级计时。
 5. 显示当前 Desktop 账户的主额度窗口剩余比例；无法可靠读取时明确显示不可用。
-6. 在应用重启、Codex 重启、账户切换和漏失事件后重新从 Desktop 真实状态校正，不展示缓存会话。
+6. 在应用重启、Codex 重启、账户切换和漏失事件后不展示任何缓存会话；列表从空开始重新累积。
 7. 默认提供有用的当前内容预览，同时允许用户全局隐藏所有预览。
 8. 保持本地优先、低干扰、低资源占用，不申请辅助功能或屏幕录制权限。
 
@@ -36,6 +36,7 @@ V1 不包含：
 - 发送新输入、批准权限、回答 Codex 提问、取消、归档或删除会话。
 - 把 CLI、IDE 或子智能体作为独立列表来源。只有已经成为可在 Desktop 中精确导航的同一根会话时，才可能被纳入。
 - 历史会话搜索、最近 N 条或固定时间窗列表。
+- **启动时与 Codex Desktop 做任何形式的现状同步（cold-start sync）。** 应用启动前的所有会话状态——正在运行、已完成未读、正在等待审批——一律无视。理由是能力边界而非取舍：针对 Codex CLI `0.148.0-alpha.9` 在真实运行中的 Turn 上实测，独立 App Server 的 `thread/loaded/list` 为空、所有 Thread 恒为 `notLoaded`、从不出现 `inProgress` Turn，正在运行的 Turn 在持久化数据中甚至被记为 `interrupted`。没有任何受支持的读取能回答“Codex Desktop 此刻在做什么”，因此任何启动列表都只能是猜测。相关取舍与实测记录见 [`current-issues.md`](current-issues.md)。
 - 通过窗口焦点、路径、标题、时间接近度或 GUI 自动化猜测会话身份、Project、已读状态或导航目标。
 - 展示原始推理、工具参数、命令输出、文件差异、敏感路径或批准理由。
 - 将正文预览、会话列表快照或旧账户额度持久化。
@@ -212,8 +213,9 @@ V1 设置窗口只包含已经确认的三组能力：
 
 ## 12. 可靠性与降级
 
-- 应用启动时列表为空，先显示 Connecting；App Server 成功返回会话快照后进入 Ready，空活动集合显示 Idle，有活动会话则显示对应状态。只有 App Server 无响应、启动失败或连接断开才显示 Disconnected。
-- 启动 cutoff 之前的 Hook、Stop、SessionEnd 或其他 lifecycle 信号不得创建、恢复、终止或修改当前 Turn；当前状态只能来自本次启动的快照和启动后的实时事件。
+- 应用启动时列表为空，先显示 Connecting；App Server 成功返回一次只读校验后进入 Ready 并显示 Idle。该校验只用于区分 Ready 与 Disconnected，**不得据此产出任何会话行**。只有 App Server 无响应、启动失败或连接断开才显示 Disconnected。
+- 启动 cutoff 之前的 Hook、Stop、SessionEnd 或其他 lifecycle 信号不得创建、恢复、终止或修改当前 Turn；当前状态只能来自启动后的实时事件。App Server 数据只能为已由实时事件建立身份的会话补充元数据，永远不能独立创建会话。
+- 用户在 Desktop 中中断后继续同一响应时，即使恢复后的执行使用新的 Turn ID 且没有新的 UserPromptSubmit，启动后携带该新身份的实时 Hook 也必须让同一会话继续保持 Running，并让最终 Stop 正确进入 Completed；旧 Turn 的迟到事件不得覆盖恢复后的 Turn。
 - 首次验证过 Hook 后，应用自身重启不得要求再次产生事件才能恢复连接；恢复必须同时确认当前 Codex Desktop 正在运行。
 - 六种必需定义缺少、重复或 matcher/handler/timeout 被改变时不得显示为已连接；总开关显示 Off，并明确进入可由用户重新开启修复的状态。
 - 实时事件负责即时变化；`thread/list` 等集合校正必须在后台合并，不能阻塞 Idle、Running、Input 或 Approval 的发布。重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
@@ -243,7 +245,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 2. Input needed、Approval needed、Running、Completed 四态及优先级正确；单独 PermissionRequest 不误报 Approval needed，任意执行结束信号都使当前 Turn 直接进入 Completed。
 3. 活动轮次始终显示；终态轮次在 Desktop 已读、归档或删除后自动移除。
 4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
-5. 应用重启时不显示缓存行，连接后从 Desktop 真值恢复活动与未读终态。
+5. 应用重启时不显示缓存行，也不恢复任何启动前的会话；列表从空开始，只累积启动后产生 lifecycle 事件的 Turn。
 6. Running 在收起态、展开汇总和会话行中显示 `Running`，不出现处理时长或逐秒变化的计时文本。
 7. 点击任意行进入同一 `threadId` 会话；打开首页不算通过。
 8. 主额度窗口切换和不可用行为正确；额度失败不影响会话列表。

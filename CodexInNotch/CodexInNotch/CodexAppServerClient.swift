@@ -241,6 +241,70 @@ struct NewlineDelimitedMessageBuffer {
     }
 }
 
+/// One ordered unit of work produced by the App Server output stream.
+///
+/// Framing already happened by the time an event exists, so every case here is
+/// self-contained and safe to hand across isolation boundaries.
+enum AppServerStreamEvent: Sendable {
+    case frame(Data)
+    case framingOverflow(bufferedByteCount: Int)
+    case streamEnded
+}
+
+/// Frames the App Server's stdout into newline-delimited messages.
+///
+/// `FileHandle` invokes its readability handler on a private serial queue, so
+/// this pump observes the pipe bytes in the order the server wrote them. Keeping
+/// the frame buffer here — instead of behind an actor hop — is what preserves
+/// that order: independently created tasks reach an actor in an unspecified
+/// order, and a single reordered chunk corrupts every frame boundary after it.
+final class AppServerStreamPump: @unchecked Sendable {
+    private let maximumFrameByteCount: Int
+    private let continuation: AsyncStream<AppServerStreamEvent>.Continuation
+    nonisolated(unsafe) private var buffer = NewlineDelimitedMessageBuffer()
+    nonisolated(unsafe) private var hasEnded = false
+
+    nonisolated init(
+        maximumFrameByteCount: Int,
+        continuation: AsyncStream<AppServerStreamEvent>.Continuation
+    ) {
+        self.maximumFrameByteCount = maximumFrameByteCount
+        self.continuation = continuation
+    }
+
+    /// Must only be called from the serialized queue that owns this pump.
+    nonisolated func ingest(_ data: Data) {
+        guard !hasEnded else { return }
+
+        guard !data.isEmpty else {
+            end(with: .streamEnded)
+            return
+        }
+
+        for frame in buffer.append(data) {
+            continuation.yield(.frame(frame))
+        }
+
+        // A single frame this large is no longer a plausible response. Fail
+        // closed rather than letting an unterminated stream grow without bound.
+        guard buffer.bufferedByteCount <= maximumFrameByteCount else {
+            end(
+                with: .framingOverflow(
+                    bufferedByteCount: buffer.bufferedByteCount
+                )
+            )
+            return
+        }
+    }
+
+    nonisolated private func end(with event: AppServerStreamEvent) {
+        hasEnded = true
+        buffer.reset()
+        continuation.yield(event)
+        continuation.finish()
+    }
+}
+
 actor CodexAppServerClient: CodexAppServerCommunicating {
     nonisolated private static let logger = Logger(
         subsystem: "com.yinfenglu.CodexInNotch",
@@ -277,16 +341,19 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     private let requestTimeoutNanoseconds: UInt64
     private let livenessProbeGraceNanoseconds: UInt64
     private let livenessProbeTimeoutNanoseconds: UInt64
+    private let maximumFrameByteCount: Int
     private var process: Process?
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
-    private var messageBuffer = NewlineDelimitedMessageBuffer()
+    private var streamContinuation: AsyncStream<AppServerStreamEvent>.Continuation?
+    private var streamConsumerTask: Task<Void, Never>?
     private var pendingRequests: [Int: PendingRequest] = [:]
     private var nextRequestID = 1
     private var connectionPhase = ConnectionPhase.disconnected
     private var connectionGeneration = 0
     private var connectionWaiters: [CheckedContinuation<Void, Error>] = []
     private var responseSequence: UInt64 = 0
+    private var undecodableFrameCount = 0
     private var livenessProbeTask: Task<Void, Never>?
     private var livenessProbeID = 0
 
@@ -294,12 +361,14 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         executableURL: URL? = CodexExecutableLocator.locate(),
         requestTimeoutNanoseconds: UInt64 = 15_000_000_000,
         livenessProbeGraceNanoseconds: UInt64 = 3_000_000_000,
-        livenessProbeTimeoutNanoseconds: UInt64 = 5_000_000_000
+        livenessProbeTimeoutNanoseconds: UInt64 = 5_000_000_000,
+        maximumFrameByteCount: Int = 64 * 1_024 * 1_024
     ) {
         self.executableURL = executableURL
         self.requestTimeoutNanoseconds = requestTimeoutNanoseconds
         self.livenessProbeGraceNanoseconds = livenessProbeGraceNanoseconds
         self.livenessProbeTimeoutNanoseconds = livenessProbeTimeoutNanoseconds
+        self.maximumFrameByteCount = maximumFrameByteCount
     }
 
     func connect() async throws {
@@ -332,12 +401,21 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         process.standardOutput = outputPipe
         process.standardError = FileHandle.nullDevice
 
+        let (streamEvents, streamContinuation) = AsyncStream.makeStream(
+            of: AppServerStreamEvent.self,
+            bufferingPolicy: .unbounded
+        )
+        let pump = AppServerStreamPump(
+            maximumFrameByteCount: maximumFrameByteCount,
+            continuation: streamContinuation
+        )
+
         let outputHandle = outputPipe.fileHandleForReading
-        outputHandle.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            Task {
-                await self?.receive(data, generation: generation)
-            }
+        // Frame synchronously on the readability queue, which already serializes
+        // these callbacks. Nothing here hops to the actor, so the byte order the
+        // server produced survives all the way to a complete frame.
+        outputHandle.readabilityHandler = { handle in
+            pump.ingest(handle.availableData)
         }
         process.terminationHandler = { [weak self] process in
             let status = process.terminationStatus
@@ -355,6 +433,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
             try process.run()
         } catch {
             outputHandle.readabilityHandler = nil
+            streamContinuation.finish()
             let launchError = CodexAppServerError.launchFailed(
                 error.localizedDescription
             )
@@ -366,6 +445,11 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         self.process = process
         self.inputHandle = inputPipe.fileHandleForWriting
         self.outputHandle = outputHandle
+        self.streamContinuation = streamContinuation
+        self.streamConsumerTask = consumeStream(
+            streamEvents,
+            generation: generation
+        )
 
         do {
             _ = try await request(
@@ -468,11 +552,18 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         inputHandle?.closeFile()
         inputHandle = nil
 
+        // The frame buffer belongs to the pump the readability handler just
+        // released, so ending the stream retires this connection's framing state
+        // and its consumer together.
+        streamContinuation?.finish()
+        streamContinuation = nil
+        streamConsumerTask?.cancel()
+        streamConsumerTask = nil
+
         if let process, process.isRunning {
             process.terminate()
         }
         process = nil
-        messageBuffer.reset()
     }
 
     private func sendNotification(method: String, params: JSONValue?) throws {
@@ -496,32 +587,89 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         }
     }
 
-    private func receive(_ data: Data, generation: Int) {
-        guard connectionPhase.generation == generation else { return }
-        guard !data.isEmpty else {
-            serverTerminated(
-                generation: generation,
-                status: process?.isRunning == false ? process?.terminationStatus : nil,
-                reason: process?.isRunning == false ? process?.terminationReason.rawValue : nil
-            )
-            return
-        }
-
-        for line in messageBuffer.append(data) {
-            guard !line.isEmpty else { continue }
-
-            do {
-                let envelope = try JSONDecoder().decode(JSONValue.self, from: line)
-                handleEnvelope(envelope)
-            } catch {
-                // A malformed notification must not destroy otherwise healthy
-                // read-only monitoring. Requests still have their own timeout.
-                continue
+    /// Drains framed events in order and decodes them off the actor.
+    ///
+    /// Deliberately `nonisolated`: a `Task` created inside an actor-isolated
+    /// method inherits that actor, which would put every JSON decode back on it.
+    /// A single consumer preserves the pump's order, including stream end.
+    nonisolated private func consumeStream(
+        _ events: AsyncStream<AppServerStreamEvent>,
+        generation: Int
+    ) -> Task<Void, Never> {
+        Task { [weak self] in
+            for await event in events {
+                switch event {
+                case let .frame(frame):
+                    guard !frame.isEmpty else { continue }
+                    // Decoding a full thread/list response is the most expensive
+                    // work in the transport. Running it here keeps it from
+                    // delaying timeouts, connection management, or other
+                    // responses; a decoded envelope is order-independent.
+                    guard let envelope = try? JSONDecoder().decode(
+                        JSONValue.self,
+                        from: frame
+                    ) else {
+                        await self?.discardUndecodableFrame(
+                            byteCount: frame.count,
+                            generation: generation
+                        )
+                        continue
+                    }
+                    await self?.handleEnvelope(envelope, generation: generation)
+                case let .framingOverflow(bufferedByteCount):
+                    await self?.handleFramingOverflow(
+                        bufferedByteCount: bufferedByteCount,
+                        generation: generation
+                    )
+                case .streamEnded:
+                    await self?.streamEnded(generation: generation)
+                }
             }
         }
     }
 
-    private func handleEnvelope(_ envelope: JSONValue) {
+    private func discardUndecodableFrame(byteCount: Int, generation: Int) {
+        guard connectionPhase.generation == generation else { return }
+
+        // A malformed notification must not destroy otherwise healthy read-only
+        // monitoring, so this stays non-fatal. It must not stay invisible
+        // either: a silently dropped frame used to surface only as a timeout.
+        // The payload is never logged.
+        undecodableFrameCount += 1
+        Self.logger.warning(
+            "Discarded an undecodable App Server frame: bytes=\(byteCount, privacy: .public) total=\(self.undecodableFrameCount, privacy: .public)"
+        )
+    }
+
+    private func handleFramingOverflow(
+        bufferedByteCount: Int,
+        generation: Int
+    ) {
+        guard connectionPhase.generation == generation else { return }
+
+        Self.logger.warning(
+            "App Server frame exceeded the transport limit: buffered=\(bufferedByteCount, privacy: .public) limit=\(self.maximumFrameByteCount, privacy: .public); resetting transport"
+        )
+        failConnection(
+            with: .protocolViolation(
+                "App Server frame exceeded \(maximumFrameByteCount) bytes"
+            )
+        )
+    }
+
+    private func streamEnded(generation: Int) {
+        guard connectionPhase.generation == generation else { return }
+
+        let hasExited = process?.isRunning == false
+        serverTerminated(
+            generation: generation,
+            status: hasExited ? process?.terminationStatus : nil,
+            reason: hasExited ? process?.terminationReason.rawValue : nil
+        )
+    }
+
+    private func handleEnvelope(_ envelope: JSONValue, generation: Int) {
+        guard connectionPhase.generation == generation else { return }
         guard let id = envelope["id"]?.intValue else {
             // Notifications and server-initiated requests are deliberately
             // ignored. This client never answers approval or input requests.
@@ -678,11 +826,15 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         Self.logger.warning(
             "App Server stream ended; status=\(statusText, privacy: .public) reason=\(reasonText, privacy: .public)"
         )
+        failConnection(with: .disconnected)
+    }
+
+    private func failConnection(with error: CodexAppServerError) {
         cancelLivenessProbe()
         tearDownConnection()
         connectionPhase = .disconnected
-        failPendingRequests(with: CodexAppServerError.disconnected)
-        finishConnectionWaiters(with: .failure(CodexAppServerError.disconnected))
+        failPendingRequests(with: error)
+        finishConnectionWaiters(with: .failure(error))
     }
 
     private func failPendingRequests(with error: Error) {
