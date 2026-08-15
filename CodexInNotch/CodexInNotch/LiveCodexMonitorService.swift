@@ -22,6 +22,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private let hookEvents: HookEventRepository
     private let hookInstaller: CodexHookInstaller
     private let projectMetadata: any DesktopProjectMetadataProviding
+    private let unreadState: any DesktopUnreadStateProviding
+    nonisolated let desktopStateChangeEvents: AsyncStream<Void>
     private let desktopProcessIdentifierProvider: @MainActor @Sendable () -> pid_t?
     private var cachedQuota = QuotaSnapshot.unavailable
     private var quotaReadAt: Date?
@@ -39,6 +41,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private var quotaRetryAfter: Date?
     private var lastTrustedSnapshot: MonitorSnapshot?
     private var contentPreviewsEnabled = true
+    private var terminalUnreadMembershipGate: TerminalUnreadMembershipGate
 
     private struct CachedThreadDetails {
         let turnID: String
@@ -52,6 +55,9 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         hookInstaller: CodexHookInstaller = CodexHookInstaller(),
         projectMetadata: any DesktopProjectMetadataProviding =
             CodexDesktopProjectMetadataRepository(),
+        unreadState: any DesktopUnreadStateProviding =
+            CodexDesktopUnreadStateRepository(),
+        terminalReadSettlingInterval: TimeInterval = 2,
         desktopProcessIdentifierProvider: @escaping @MainActor @Sendable () -> pid_t? = {
             LiveCodexMonitorService.desktopProcessIdentifier()
         }
@@ -60,6 +66,11 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         self.hookEvents = hookEvents
         self.hookInstaller = hookInstaller
         self.projectMetadata = projectMetadata
+        self.unreadState = unreadState
+        self.desktopStateChangeEvents = unreadState.changeEvents()
+        self.terminalUnreadMembershipGate = TerminalUnreadMembershipGate(
+            settlingInterval: terminalReadSettlingInterval
+        )
         self.desktopProcessIdentifierProvider = desktopProcessIdentifierProvider
     }
 
@@ -109,6 +120,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             let projectSnapshot = await projectMetadata.snapshot()
 
             if hasLiveHookObservation {
+                let unreadSnapshot = await unreadState.snapshot()
                 let cachedThreadIDs = Set(
                     cachedListedThreads.compactMap { $0["id"]?.stringValue }
                 )
@@ -141,6 +153,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     listedThreads: listedThreads,
                     listedThreadsObservedAt: listedThreadsObservedAt,
                     projectMetadata: projectSnapshot,
+                    unreadState: unreadSnapshot,
                     showsContentPreviews: showsContentPreviews
                 )
                 scheduleQuotaRefreshIfNeeded()
@@ -151,9 +164,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                         quota: cachedQuota,
                         diagnostic: combinedDiagnostic(
                             hookDiagnostic,
-                            sessions.contains(where: { $0.status == .completed })
-                                ? "已完成轮次会保留到归档或删除；当前公开协议尚未提供 Desktop 已读状态。"
-                                : nil,
+                            unreadSnapshot.diagnostic,
                             projectDiagnostic(
                                 for: sessions,
                                 metadata: projectSnapshot
@@ -258,6 +269,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         quotaRefreshTask?.cancel()
         quotaRefreshTask = nil
         cancelDetailReadTasks()
+        terminalUnreadMembershipGate.reset()
         await client.disconnect()
     }
 
@@ -307,6 +319,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         detailReadRetryAfter.removeAll()
         cancelDetailReadTasks()
         lastTrustedSnapshot = nil
+        terminalUnreadMembershipGate.reset()
     }
 
     func clearSessions() async {
@@ -314,6 +327,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         threadDetailsCache.removeAll()
         detailReadRetryAfter.removeAll()
         cancelDetailReadTasks()
+        terminalUnreadMembershipGate.reset()
         if let snapshot = lastTrustedSnapshot {
             lastTrustedSnapshot = MonitorSnapshot(
                 availability: snapshot.availability,
@@ -419,6 +433,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         listedThreads: [JSONValue],
         listedThreadsObservedAt: Date?,
         projectMetadata: DesktopProjectMetadataSnapshot,
+        unreadState: DesktopUnreadStateSnapshot,
         showsContentPreviews: Bool
     ) async -> [MonitoredSession] {
         var sessions: [MonitoredSession] = []
@@ -429,6 +444,9 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         )
         let activeThreadIDs = Set(states.map(\.threadID))
         let activeTurnKeys = Set(states.map(Self.detailReadKey))
+        terminalUnreadMembershipGate.retain(
+            sessionIDs: Set(states.map { "\($0.threadID):\($0.turnID)" })
+        )
         threadDetailsCache = threadDetailsCache.filter {
             activeThreadIDs.contains($0.key)
         }
@@ -479,7 +497,6 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                 allowsAppServerStatusCorrection: canApplyListedStatus,
                 showsContentPreviews: showsContentPreviews
             ) {
-                sessions.append(session)
                 if canApplyListedStatus,
                    let listedThreadsObservedAt,
                    [.completed, .error, .cancelled].contains(session.status) {
@@ -503,6 +520,15 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                         isApprovalPending: activeEvidence.isApprovalPending,
                         snapshotStartedAt: listedThreadsObservedAt
                     )
+                }
+                if terminalUnreadMembershipGate.shouldDisplay(
+                    sessionID: session.id,
+                    threadID: session.threadID,
+                    status: session.status,
+                    terminalBoundaryAt: state.lastEventAt,
+                    unreadState: unreadState
+                ) {
+                    sessions.append(session)
                 }
             }
         }

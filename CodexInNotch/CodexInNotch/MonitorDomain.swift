@@ -157,7 +157,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.startedAt = startedAt
     }
 
-    var id: String {
+    nonisolated var id: String {
         "\(threadID):\(turnID)"
     }
 

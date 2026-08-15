@@ -2,8 +2,8 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | 第一实现切片、精确导航、Desktop Project 身份与 Expanded footer 完成；Desktop 未读能力仍阻塞 V1 发布 |
-| 版本 | 0.16 |
+| 文档状态 | 第一实现切片、精确导航、Desktop Project 身份、Desktop 未读终态移除与 Expanded footer 已实现；真实版本矩阵仍待验证 |
+| 版本 | 0.17 |
 | 日期 | 2026-08-14 |
 | 范围 | 将 SwiftUI 原型中的 Mock 状态、额度、今日 tokens、会话列表与点击导航替换为真实 Codex Desktop 数据；Running 计时延后评估 |
 
@@ -11,7 +11,7 @@
 
 V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器，不实现历史列表。权威成员集合是：当前 Desktop 账户下所有 Project 与 `Chats` 中，存在活动 Turn 或未读终态 Turn，并且仍可通过同一 `threadId` 在 Desktop 精确导航的根会话。
 
-集成采用“受支持的 Desktop 观察通道 + 事件 reducer + 集合校正”架构。Project、未读状态和精确导航都是发布门槛；不能从 cwd、时间或窗口焦点推断。Desktop Project 身份是经产品明确批准、带 schema gate 的私有只读例外；所有依赖未公开或未承诺兼容的 Codex 实现细节必须登记在 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。官方 Hooks、App Server 和 deep link 均属于公开支持接口，不因技术通道不同而登记。
+集成采用“受支持的 Desktop 观察通道 + 事件 reducer + 集合校正”架构。Project、未读状态和精确导航都是发布门槛；不能从 cwd、时间或窗口焦点推断。Desktop Project 身份与未读成员关系是经产品明确批准、带 schema gate 的私有只读例外；所有依赖未公开或未承诺兼容的 Codex 实现细节必须登记在 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。官方 Hooks、App Server 和 deep link 均属于公开支持接口，不因技术通道不同而登记。
 
 本文同时记录实现方案、已验证的协议能力和当前测试版边界。
 
@@ -25,47 +25,48 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 从 `account/usage/read.dailyUsageBuckets` 读取本地日历“今天”的 token bucket；Expanded footer 显示标准 Compact 数字、额度重置日期和 Settings 入口。今日 bucket 缺失但 bucket 数组有效时按 `0` 处理，接口不可用时只将今日用量显示为 `--`。
 - 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。Settings 使用一个 `Codex integration` 总开关，把六种必需 lifecycle event 定义作为一个产品能力启停；关闭后留在 Settings，不重置首次引导。
 - 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(request_user_input)`、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求还必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
-- 标题使用 `thread/list`；Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。Hook 收到实时 `Stop` 后在内部把该 Turn 标记为“终态待解析”，对外暂时保留 Running，并在后台用 App Server `thread/read` 补全真实终态。补全成功后直接进入 Completed/Error/Cancelled；只有补全失败或无法分类时才显示 Unknown，且不阻塞列表快照。
+- 标题使用 `thread/list`；Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。Hook 收到实时 `Stop` 后在内部把该 Turn 标记为“终态待解析”，对外暂时保留 Running，并在后台用 App Server `thread/read` 补全真实终态。补全成功后直接进入 Completed/Error/Cancelled；只有补全失败或无法分类时才显示 Unknown，且不阻塞列表快照。
 - Preview 设置默认开启；关闭后 hook 不再写入内容片段，列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。即使开启，prompt/回答片段也不写入持久状态。
 - `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔信任标记。应用重启时 reducer 从空集合开始，启动前积压事件不得恢复 Running/Input/Approval；App Server 当前 `status/activeFlags` 可在已有精确 Turn 身份上校正瞬时状态。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
 - 会话行通过官方 `codex://threads/<thread-id>` deep link 打开同一 Codex Desktop 会话；打开前强制刷新全部未归档根 Thread，目标不存在时拒绝导航。URL 只定向交给 bundle id `com.openai.codex`，Launch Services 接受后才收起面板。
 
-已经通过本机当前 Codex 版本验证：App Server 握手、真实额度响应、Thread/Turn schema、Desktop Project 私有状态解析、Hooks 配置合并、事件 reducer 与精确导航 adapter。应用构建与单元测试已通过。
+已经通过本机当前 Codex 版本验证：App Server 握手、真实额度响应、Thread/Turn schema、Desktop Project 与未读私有状态解析、Hooks 配置合并、事件 reducer 与精确导航 adapter。未读适配器的主/备份/last-known-good、私有 schema 失败、原子替换目录事件、settling window 与端到端已读移除均有单元测试。应用构建与单元测试已通过。
 
 尚未满足、因此仍阻塞 V1 发布：
 
 - 独立 App Server 不共享 Codex Desktop 当前运行时；从未收到过受信 Hook 事件时只能诚实显示 `Codex disconnected`，即使额度读取成功。曾验证过的 Hook 信任可跨 Codex in Notch 自身重启恢复，但仍必须同时检测到当前 Codex Desktop 进程。
-- 当前公开协议没有 Desktop 蓝点对应的已读字段。测试版会在 `Stop` 后保留 Completed，直到 Thread 归档/删除；用户仅在 Desktop 查看后暂时无法自动移除。
+- 当前公开协议仍没有 Desktop 蓝点对应的已读字段；生产实现依赖第 1.3 节登记的 Desktop 私有只读 schema。Desktop 升级后的真实 read/unread 版本矩阵仍是发布验证项，任何不兼容都必须保守保留终态行。
 - Hooks 可以可靠覆盖开始、权限管线触发、`request_user_input` 和终态边界；`PermissionRequest` 本身不证明仍需人工批准，Approval needed 必须由新鲜 App Server `waitingOnApproval` active flag 确认。App Server 的 `completed`、`failed`、`interrupted` 已分别映射为 Completed、Error、Cancelled，仍需真实 Desktop 样本矩阵验证端到端覆盖。
 - `threadSource/sourceKinds` 仍不足以单独证明 Desktop 与独立 IDE 来源边界，必须继续以真实样本验证。
 
-### 1.2 已读移除与精确导航能力探索
+### 1.2 已读移除与精确导航能力边界
 
 - 官方 [Codex Desktop deep links](https://learn.chatgpt.com/docs/reference/commands#deep-links) 已定义 `codex://threads/<thread-id>`。导航 adapter 已按本节约束实现；Codex 当前仍不提供页面完成渲染的公开回执。
 - 官方 [Codex App Server](https://learn.chatgpt.com/docs/app-server) 当前没有 unread/read/open/current-view 字段或通知。`thread/read` 是读取 Thread 记录，不是标记已读；`thread/loaded/list` 与 `thread/closed` 也不表达蓝点语义。
-- 当前 Desktop 安装包内部把蓝点集合持久化在 `$CODEX_HOME/.codex-global-state.json` 的 `electron-persisted-atom-state.unread-thread-ids-by-host-v1.local`，并通过 Electron 进程内 IPC 更新。Project 身份的私有只读例外不自动授权未读状态；该字段仍只允许隔离实验，不得进入 V1 生产实现。
-- 若只做隔离 spike，监听上述文件必须处理原子替换、100–250 ms debounce、解析失败保留 last-known 并 5 秒重试；活动 Turn 无论蓝点如何都继续显示，只有终态 Turn 从 unread 集合消失后才移除。不得注入 IPC、修改 `app.asar`、使用 Accessibility/AppleScript，或把 Stop/SessionEnd 当作已读。
+- 当前 Desktop 安装包内部把蓝点集合持久化在 `$CODEX_HOME/.codex-global-state.json` 的 `electron-persisted-atom-state.unread-thread-ids-by-host-v1.local`。经产品批准，本字段已作为独立、已登记的私有只读适配器进入生产；它不扩展到其他 Electron 状态或 IPC。
+- 实现必须处理原子替换与短暂主/备份代际差异；活动 Turn 无论蓝点如何都继续显示，只有终态 Turn 在主文件权威快照中从 unread 集合消失后才移除。不得注入 IPC、修改 `app.asar`、使用 Accessibility/AppleScript，或把 Stop/SessionEnd 当作已读。
 - Developer ID 直接分发在关闭 App Sandbox 时技术上可读取该路径；Mac App Store sandbox 需要用户选择目录与 security-scoped bookmark。无论分发方式如何，文件可读都不等于接口受支持。
-- 生产方向仍是向 Codex 请求公开 `hasUnreadTurn` 快照与变化通知；在此之前，完成后“Desktop 阅读即自动移除”仍是唯一未解决的核心能力缺口。
+- 长期方向仍是迁移到 Codex 未来公开的 `hasUnreadTurn` 快照与变化通知；出现等价公开能力时必须在同一改动中移除私有适配器与清单行。
 
-### 1.3 私有未读状态的只读可行性研究（未实现）
+### 1.3 Desktop 未读私有只读适配器（已实现）
 
-对当前 Desktop `26.803.61601` build `6396` 的只读核验表明：
+对当前 Desktop `26.810.50856` build `6644`、CLI `0.148.0-alpha.9` 的只读核验表明：
 
 - 状态根目录是 `process.env.CODEX_HOME ?? ~/.codex`；默认文件为 `.codex-global-state.json`。
 - 未读集合位于 `electron-persisted-atom-state.unread-thread-ids-by-host-v1.<hostID>`；本地 V1 只能消费 `local`，不能合并其他 host。
 - Desktop 自身在状态变化后等待约 `500 ms` 再持久化；写入通过同目录临时文件 `rename` 原子替换主文件，随后独立替换 `.bak`。因此目标 inode 会变化，主文件与 backup 也可能短暂属于不同 generation。
 - 这是真实的 Thread 级蓝点集合，没有 Turn id。它只能与“每个 Thread 展示最新活动或未读终态 Turn”的领域模型组合。
 
-若产品负责人未来批准隔离实验，建议使用以下架构：
+生产实现采用以下架构：
 
-1. 目录级 `DispatchSourceFileSystemObject` + `O_EVTONLY` 监听 Codex Home，而不是长期监听目标文件 inode；目录事件后每次重新按路径打开文件。
-2. 使用 `150–250 ms` trailing debounce；读取前后 `fstat`，generation 改变则重读。拒绝 symlink、非当前用户文件、异常 schema 与超大文件。
-3. 只解析目标 host 的字符串集合；不得记录原始 JSON 或明文 Thread id。解析、权限、文件缺失或 watcher 故障时保留 last-known-good，5 秒静默重试，绝不能把错误解释为空集合。
-4. 活动、Input、Approval 始终显示。终态只在 post-terminal 的有效 generation 中连续确认“不在未读集合”并经过 settling window 后移除；归档/删除的完整公开分页校正优先级更高。
-5. Desktop 重启、Mac 唤醒、账户变化或 watcher 重建时先暂停移除并建立完整 baseline；每 30 秒可做低频校正。
+1. `CodexDesktopUnreadStateRepository` 默认只读 `$CODEX_HOME/.codex-global-state.json`，并支持测试/隔离环境用 `CODEX_IN_NOTCH_CODEX_HOME` 覆盖 Codex Home。
+2. 目录级 `DispatchSourceFileSystemObject` + `O_EVTONLY` 监听 Codex Home，而不是长期监听目标文件 inode；目录事件采用 `250 ms` trailing debounce 并触发刷新。现有 Hook 活跃期 1 秒轮询是 watcher 无法建立或事件被合并时的兜底。
+3. 只解析 `local` host 的字符串集合，同时校验所有 host 名称、空 id 与重复 id。读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、异常 JSON 与不兼容 schema；不记录原始 JSON 或 Thread id。
+4. 主文件失败时读取 `.bak`，两者失败时保留进程内 last-known-good。但 backup 和 last-known-good 只用于保留数据与诊断，只有 `source == current` 的主文件快照可以做新的隐藏决定；解析失败绝不能解释为空集合。
+5. 活动、Input、Approval 始终显示并清除该 Turn 的终态 gate。终态首次出现且主文件暂未包含 unread 时保留 2 秒，覆盖 Desktop 约 500 ms 的持久化延迟；已经观察过 unread 后再从权威主快照消失则立即隐藏。隐藏 gate 在临时解析失败时保持隐藏，避免 UI 闪回；新终态在失败期间继续显示。
+6. `MonitorStore` 同时消费目录变化流和原有轮询；统一的 in-flight gate 合并并发刷新。停止监视、关闭集成或清空列表时清除终态 gate。
 
-当前只允许这一方案进入独立 spike，而不是正式列表逻辑。建议门槛是：锁定上述 Desktop build；50 次真实 read/unread 循环零错误；至少 100 组完成/阅读竞态零次提前移除；1,000 次 atomic-replace fixture 零丢失；p95 同步不超过 1.5 秒、p99 不超过 2 秒；任意错误都不清空终态行。Developer ID 非沙箱、用户明确开启的实验版可有条件 GO；Mac App Store、未知 build 或跨版本默认开启均 NO-GO。
+适配器已经覆盖成功、缺失、损坏、backup、last-known-good、schema 不兼容、原子替换和终态竞态 fixture；Desktop 更新后仍必须执行真实 read/unread 与完成/阅读竞态矩阵。目标是 p95 同步不超过 1.5 秒、p99 不超过 2 秒，且任意错误都不提前移除终态行。当前 Developer ID 非沙箱构建可读取该路径；Mac App Store sandbox 仍需要用户选择目录与 security-scoped bookmark，未经实现不得声称支持。
 
 其他路径的独立研究没有找到公开且准确的替代方案：
 
@@ -74,7 +75,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - Accessibility、AppleScript、标题匹配、定时移除或“Desktop 获得焦点即已读”均不准确并违反安全约束。
 - 唯一公开且诚实的产品折中是把 Notch 点击定义为本应用自己的“已确认”，但它无法覆盖用户直接在 Desktop 阅读，不得称为 Desktop 已读同步；当前产品语义不采用。
 
-生产所需的最小公开能力仍是启动/重连可获取的 `hasUnreadTurn` 快照，以及携带 `threadId`、`hostId` 和新布尔值的 `thread/readState/changed` 通知，并具备 capability/version negotiation。
+可替代本私有实现的最小公开能力仍是启动/重连可获取的 `hasUnreadTurn` 快照，以及携带 `threadId`、`hostId` 和新布尔值的 `thread/readState/changed` 通知，并具备 capability/version negotiation。
 
 ### 1.4 Desktop Project 私有只读适配器（已实现）
 
@@ -133,7 +134,7 @@ Phase 0 必须分别证明以下能力，而不是从现有字段猜测：
 | 今日 token 总量 | `account/usage/read.dailyUsageBuckets` 中本地今天的 bucket | 只降级为 `--`，不得使用 lifetime 或额度百分比推算 |
 | 当前内容 | 用户可见 prompt/progress/error/final | 只隐藏预览 |
 
-官方 App Server 的 Thread/Turn/状态/额度协议是主要基础，但当前公开字段不包含 Desktop Project 与未读成员关系。独立启动的 App Server 也不能假定与 Desktop 共享运行时。Project 使用第 1.4 节已批准并登记的私有只读适配器；其他内部 Desktop 资源只能用于理解问题，未经单独批准、fail-closed 设计和依赖登记不得成为生产依赖。
+官方 App Server 的 Thread/Turn/状态/额度协议是主要基础，但当前公开字段不包含 Desktop Project 与未读成员关系。独立启动的 App Server 也不能假定与 Desktop 共享运行时。未读与 Project 分别使用第 1.3、1.4 节已批准并登记的私有只读适配器；其他内部 Desktop 资源只能用于理解问题，未经单独批准、fail-closed 设计和依赖登记不得成为生产依赖。
 
 处理时长不是 V1 发布门槛。V1 不发布时长字段，也不根据开始/结束时间在 UI 中推算 Running 计时；该能力保留为未来评估项。
 
@@ -466,6 +467,7 @@ reset 按本地日历日而不是 24 小时浮点时长计算：同一天为 `Re
 | 版本过旧 | 清空列表，薄层 `Update Codex` |
 | 版本未知/未经验证 | 清空列表，薄层 `Codex version unsupported` |
 | Desktop 未运行或 observer 断开 | 清空列表，薄层 `Codex disconnected` |
+| Desktop 未读主状态缺失、损坏或不兼容 | 保留尚未隐藏的终态行并显示诊断；不得把 backup/LKG 的空集合作为已读证据 |
 | 只有某会话状态未知 | 该行 Unknown；其他行继续真实显示 |
 | 额度失败 | 灰色圆环；列表不变 |
 | 某行预览失败 | 隐藏该预览；其他字段不变 |
@@ -474,7 +476,7 @@ reset 按本地日历日而不是 24 小时浮点时长计算：同一天为 `Re
 
 单次 App Server 查询超时不等于连接断开。传输层保留现有连接，UI 继续展示最后一次可信内存快照，并在同一连接上启动至多一个独立探活流程：先等待 3 秒宽限期；其间任意带 `id` 的响应（包括晚到响应）都证明 RPC event loop 仍活跃并取消探活。宽限期内没有响应时，调用官方只读且只访问内存集合的 `thread/loaded/list`，单次最多等待 5 秒；只有该探活也超时且期间仍无任何响应，才重建只读 App Server 传输。并行业务请求超时共享同一个探活，不累计为多次连接失败；远端方法错误和协议错误本身已经收到响应，也不得触发进程重启。该恢复动作不清空 Hook reducer 或最近可信 UI。只有 `disconnected` 连续超过 3 秒才发布全局断开状态并清空列表。
 
-尚未建立受信 Hook 观察时，启动与常规轮询只用最多 5 秒的核心列表请求建立快照，不得逐 Thread 串行执行 `thread/read`。建立受信 Hook 观察后，Hook 状态立即发布；`thread/list` 在后台使用最多 15 秒完成低频集合/activeFlags 校正，同一时间只允许一个请求，失败后至少 60 秒再重试。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得改变状态或移除该 Turn；Project 元数据独立从第 1.4 节的 Desktop 状态快照解析。实时 Stop 的终态详情读取必须在快照发布后异步执行，读取期间该行保留 Running，单次最多 5 秒；失败或无法分类后显示 Unknown，且该 Turn 至少 60 秒内不重试。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
+尚未建立受信 Hook 观察时，启动与常规轮询只用最多 5 秒的核心列表请求建立快照，不得逐 Thread 串行执行 `thread/read`。建立受信 Hook 观察后，Hook 状态立即发布；`thread/list` 在后台使用最多 15 秒完成低频集合/activeFlags 校正，同一时间只允许一个请求，失败后至少 60 秒再重试。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得改变状态或移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 的终态详情读取必须在快照发布后异步执行，读取期间该行保留 Running，单次最多 5 秒；失败或无法分类后显示 Unknown，且该 Turn 至少 60 秒内不重试。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
 
 ## 16. 设置与持久化
 

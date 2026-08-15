@@ -872,6 +872,253 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
+    func desktopUnreadStateReadsOnlyTheLocalHostMembership() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "unread-thread-ids-by-host-v1": [
+                    "local": ["thread-local-1", "thread-local-2"],
+                    "remote-host": ["thread-remote"]
+                ]
+            ]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let repository = CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.source == .current)
+        #expect(
+            snapshot.unreadThreadIDs
+                == Set(["thread-local-1", "thread-local-2"])
+        )
+        #expect(!snapshot.unreadThreadIDs.contains("thread-remote"))
+    }
+
+    @Test @MainActor
+    func desktopUnreadStateUsesBackupThenRetainsLastKnownGood() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let backupFile = URL(fileURLWithPath: stateFile.path + ".bak")
+        try Data("not-json".utf8).write(to: stateFile)
+        let validBackup = try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "unread-thread-ids-by-host-v1": [
+                    "local": ["thread-1"]
+                ]
+            ]
+        ])
+        try validBackup.write(to: backupFile, options: .atomic)
+
+        let repository = CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        )
+        let backup = await repository.snapshot()
+        #expect(backup.source == .backup)
+        #expect(backup.unreadThreadIDs == ["thread-1"])
+
+        try Data("also-not-json".utf8).write(to: backupFile)
+        let retained = await repository.snapshot()
+        #expect(retained.source == .lastKnownGood)
+        #expect(retained.unreadThreadIDs == ["thread-1"])
+        #expect(retained.diagnostic?.contains("最近一次有效数据") == true)
+    }
+
+    @Test @MainActor
+    func desktopUnreadStateTreatsMissingPrivateSchemaAsUnavailable() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let incompatible = try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [:]
+        ])
+        try incompatible.write(to: stateFile, options: .atomic)
+
+        let repository = CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.source == .unavailable)
+        #expect(snapshot.unreadThreadIDs.isEmpty)
+        #expect(snapshot.diagnostic?.contains("schema 不兼容") == true)
+        #expect(snapshot.diagnostic?.contains("保守保留终态会话") == true)
+    }
+
+    @Test @MainActor
+    func desktopUnreadStateMissingAndCorruptFilesFailClosed() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let missingRepository = CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        )
+
+        let missing = await missingRepository.snapshot()
+        #expect(missing.source == .unavailable)
+        #expect(missing.unreadThreadIDs.isEmpty)
+        #expect(missing.diagnostic?.contains("保守保留终态会话") == true)
+
+        try Data("not-json".utf8).write(to: stateFile)
+        let corruptRepository = CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        )
+        let corrupt = await corruptRepository.snapshot()
+        #expect(corrupt.source == .unavailable)
+        #expect(corrupt.unreadThreadIDs.isEmpty)
+        #expect(corrupt.diagnostic?.contains("保守保留终态会话") == true)
+    }
+
+    @Test @MainActor
+    func desktopUnreadStateDirectoryWatcherObservesAtomicReplacement() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let initial = try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "unread-thread-ids-by-host-v1": ["local": ["thread-1"]]
+            ]
+        ])
+        try initial.write(to: stateFile, options: .atomic)
+        let repository = CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile,
+            changeDebounceInterval: 0.01
+        )
+        let events = repository.changeEvents()
+        let eventTask = Task {
+            for await _ in events {
+                return true
+            }
+            return false
+        }
+
+        let updated = try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "unread-thread-ids-by-host-v1": ["local": ["thread-2"]]
+            ]
+        ])
+        try updated.write(to: stateFile, options: .atomic)
+        let observed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await eventTask.value }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            eventTask.cancel()
+            return result
+        }
+        let snapshot = await repository.snapshot()
+
+        #expect(observed)
+        #expect(snapshot.source == .current)
+        #expect(snapshot.unreadThreadIDs == ["thread-2"])
+    }
+
+    @Test @MainActor
+    func terminalUnreadMembershipHidesOnlyAfterAuthoritativeReadEvidence() {
+        let boundary = Date(timeIntervalSince1970: 1_000)
+        let unread = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: ["thread-1"],
+            source: .current
+        )
+        let read = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: [],
+            source: .current
+        )
+        let unavailable = DesktopUnreadStateSnapshot.unavailable("invalid")
+        var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
+
+        let unreadTerminalIsVisible = gate.shouldDisplay(
+            sessionID: "thread-1:turn-1",
+            threadID: "thread-1",
+            status: .completed,
+            terminalBoundaryAt: boundary,
+            unreadState: unread,
+            now: boundary
+        )
+        #expect(unreadTerminalIsVisible)
+        let readTerminalIsHidden = !gate.shouldDisplay(
+            sessionID: "thread-1:turn-1",
+            threadID: "thread-1",
+            status: .completed,
+            terminalBoundaryAt: boundary,
+            unreadState: read,
+            now: boundary.addingTimeInterval(0.1)
+        )
+        #expect(readTerminalIsHidden)
+        let invalidStateDoesNotRestoreHiddenTerminal = !gate.shouldDisplay(
+            sessionID: "thread-1:turn-1",
+            threadID: "thread-1",
+            status: .completed,
+            terminalBoundaryAt: boundary,
+            unreadState: unavailable,
+            now: boundary.addingTimeInterval(0.2)
+        )
+        #expect(invalidStateDoesNotRestoreHiddenTerminal)
+
+        let newTerminalWaitsForDesktopPersistence = gate.shouldDisplay(
+            sessionID: "thread-2:turn-2",
+            threadID: "thread-2",
+            status: .completed,
+            terminalBoundaryAt: boundary,
+            unreadState: read,
+            now: boundary.addingTimeInterval(1.9)
+        )
+        #expect(newTerminalWaitsForDesktopPersistence)
+        let settledReadTerminalIsHidden = !gate.shouldDisplay(
+            sessionID: "thread-2:turn-2",
+            threadID: "thread-2",
+            status: .completed,
+            terminalBoundaryAt: boundary,
+            unreadState: read,
+            now: boundary.addingTimeInterval(2)
+        )
+        #expect(settledReadTerminalIsHidden)
+
+        let activeSessionIsAlwaysVisible = gate.shouldDisplay(
+            sessionID: "thread-active:turn-active",
+            threadID: "thread-active",
+            status: .running,
+            terminalBoundaryAt: boundary,
+            unreadState: read,
+            now: boundary.addingTimeInterval(20)
+        )
+        #expect(activeSessionIsAlwaysVisible)
+    }
+
+    @Test @MainActor
     func activeThreadParserRefusesToInventATurnIdentity() {
         let thread = JSONValue.object([
             "id": .string("thread-without-turn"),
@@ -1748,6 +1995,12 @@ struct CodexInNotchTests {
             threadReadDelayNanoseconds: 200_000_000,
             threadReadResult: .success(.object(["thread": completedThread]))
         )
+        let unreadState = DesktopUnreadStateStub(
+            DesktopUnreadStateSnapshot(
+                unreadThreadIDs: ["thread-terminal"],
+                source: .current
+            )
+        )
         let service = LiveCodexMonitorService(
             client: client,
             hookEvents: HookEventRepository(
@@ -1755,6 +2008,7 @@ struct CodexInNotchTests {
                 liveEventCutoff: .distantPast
             ),
             hookInstaller: installer,
+            unreadState: unreadState,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -1789,11 +2043,19 @@ struct CodexInNotchTests {
             }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
+        await unreadState.setSnapshot(
+            DesktopUnreadStateSnapshot(
+                unreadThreadIDs: [],
+                source: .current
+            )
+        )
+        let afterRead = await service.fetchSnapshot(showsContentPreviews: false)
         await service.disconnect()
 
         #expect(observedStatuses.first == .running)
         #expect(observedStatuses.last == .completed)
         #expect(!observedStatuses.contains(.unknown))
+        #expect(afterRead.sessions.isEmpty)
         #expect(await client.requestCount(method: "thread/read") == 1)
     }
 
@@ -3039,6 +3301,26 @@ private actor IntegrationMonitoringStub: CodexMonitoring {
 
     func removeCount() -> Int {
         removeRequests
+    }
+}
+
+private actor DesktopUnreadStateStub: DesktopUnreadStateProviding {
+    private var value: DesktopUnreadStateSnapshot
+
+    init(_ value: DesktopUnreadStateSnapshot) {
+        self.value = value
+    }
+
+    func snapshot() async -> DesktopUnreadStateSnapshot {
+        value
+    }
+
+    nonisolated func changeEvents() -> AsyncStream<Void> {
+        AsyncStream { _ in }
+    }
+
+    func setSnapshot(_ snapshot: DesktopUnreadStateSnapshot) {
+        value = snapshot
     }
 }
 

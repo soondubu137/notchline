@@ -265,7 +265,8 @@ final class MonitorStore: ObservableObject {
         service: liveService,
         navigator: CodexDesktopNavigator(targetChecker: liveService),
         initialSnapshot: .connecting,
-        displayPreferences: .standard
+        displayPreferences: .standard,
+        refreshEvents: liveService.desktopStateChangeEvents
     )
 
     @Published private(set) var displays: [DisplayOption]
@@ -310,6 +311,8 @@ final class MonitorStore: ObservableObject {
     private var preferredDisplayID: String?
     private var pendingHoverAction: DispatchWorkItem?
     private var monitorTask: Task<Void, Never>?
+    private var refreshEventTask: Task<Void, Never>?
+    private let refreshEvents: AsyncStream<Void>?
     private var isRefreshInFlight = false
     private var isNavigationInFlight = false
     private var dismissedSessionIDs: Set<String> = []
@@ -320,7 +323,8 @@ final class MonitorStore: ObservableObject {
         service: (any CodexMonitoring)? = nil,
         navigator: (any CodexNavigating)? = nil,
         initialSnapshot: MonitorSnapshot? = nil,
-        displayPreferences: UserDefaults? = nil
+        displayPreferences: UserDefaults? = nil,
+        refreshEvents: AsyncStream<Void>? = nil
     ) {
         let resolvedDisplays = displays ?? DisplayOption.currentDisplays()
         let snapshot = initialSnapshot ?? Self.previewSnapshot
@@ -337,6 +341,7 @@ final class MonitorStore: ObservableObject {
             ?? (initialDisplayID.isEmpty ? nil : initialDisplayID)
         self.service = service
         self.navigator = navigator
+        self.refreshEvents = refreshEvents
         self.availability = snapshot.availability
         self.quota = snapshot.quota
         self.sessions = snapshot.sessions
@@ -362,6 +367,7 @@ final class MonitorStore: ObservableObject {
 
     deinit {
         monitorTask?.cancel()
+        refreshEventTask?.cancel()
     }
 
     var selectedDisplay: DisplayOption? {
@@ -633,6 +639,7 @@ final class MonitorStore: ObservableObject {
 
     func stopMonitoring() {
         monitorTask?.cancel()
+        refreshEventTask?.cancel()
         guard let service else { return }
         Task {
             await service.disconnect()
@@ -676,6 +683,15 @@ final class MonitorStore: ObservableObject {
                     ? 1_000_000_000
                     : 5_000_000_000
                 try? await Task.sleep(nanoseconds: retryDelay)
+            }
+        }
+
+        if let refreshEvents {
+            refreshEventTask = Task { [weak self] in
+                for await _ in refreshEvents {
+                    guard !Task.isCancelled else { return }
+                    await self?.performRefresh()
+                }
             }
         }
     }
