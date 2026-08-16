@@ -98,7 +98,7 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 
 不存在行级 `Idle` 或行级 `Disconnected`。
 
-`Approval needed` 只在当前精确 Turn 的新鲜 Desktop/App Server 状态明确包含 `waitingOnApproval` 时成立；单独收到 `PermissionRequest` 不足以证明用户需要操作，因为自动审查可能立即放行。`Stop` 或 App Server 的 `completed`、`failed`、`interrupted` 都是同一种产品信号：当前 Turn 已经结束，因此统一进入 Completed。
+`Approval needed` 只在当前精确 Turn 存在一个仍未关闭的审批区间时成立，且必须能被同一 `tool_use_id` 的结束事件关闭：专用审批工具自己构成该区间；普通工具（如 Bash 命令）由 `PermissionRequest` 指名、借用该工具仍打开的调用 id 构成。孤立的 `PermissionRequest` 仍不足以证明用户需要操作，因为自动审查可能立即放行。`Stop` 或 App Server 的 `completed`、`failed`、`interrupted` 都是同一种产品信号：当前 Turn 已经结束，因此统一进入 Completed。
 
 ### 6.2 顶部汇总优先级
 
@@ -256,7 +256,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 ## 14. 验收标准
 
 1. 用户提交输入后一秒内出现对应会话行；同一 Thread 的后续 Turn 不产生重复行。
-2. Input needed、Approval needed、Running、Completed 四态及优先级正确；单独 PermissionRequest 不误报 Approval needed，任意执行结束信号都使当前 Turn 直接进入 Completed。
+2. Input needed、Approval needed、Running、Completed 四态及优先级正确；专用审批工具与普通工具（如 Bash 命令）两种审批形态都必须进入 Approval needed，孤立的 PermissionRequest 不误报，任意执行结束信号都使当前 Turn 直接进入 Completed。
 3. 活动轮次始终显示；终态轮次在 Desktop 已读、归档或删除后自动移除。
 4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
 5. 应用重启时不显示缓存行，也不恢复任何启动前的会话；列表从空开始，只累积启动后产生 lifecycle 事件的 Turn。

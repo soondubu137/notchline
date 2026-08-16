@@ -1130,7 +1130,7 @@ struct CodexInNotchTests {
             turnID: "turn-1",
             sessionStatus: .running,
             pendingInputToolUseID: nil,
-            pendingApprovalToolUseID: nil,
+            pendingApproval: nil,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
             retiredTurnIDs: [],
@@ -1534,7 +1534,7 @@ struct CodexInNotchTests {
             turnID: "turn-1",
             sessionStatus: .running,
             pendingInputToolUseID: nil,
-            pendingApprovalToolUseID: nil,
+            pendingApproval: nil,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
             retiredTurnIDs: [],
@@ -1582,7 +1582,7 @@ struct CodexInNotchTests {
             turnID: "turn-private",
             sessionStatus: .running,
             pendingInputToolUseID: nil,
-            pendingApprovalToolUseID: nil,
+            pendingApproval: nil,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
             retiredTurnIDs: [],
@@ -3875,6 +3875,333 @@ for line in sys.stdin:
         #expect(exactHandler["timeout"] as? Int == 3)
         await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
+    }
+
+    /// Captured from a real Desktop approval on 2026-08-15: asking to run a
+    /// shell command produces `PreToolUse(Bash, exec-…)`, then
+    /// `PermissionRequest(Bash, tool_use_id: null)` ~30ms later, and nothing
+    /// else until the human answers. The approval therefore has to borrow the
+    /// id of the call still open for that tool -- which is also what closes it.
+    @Test
+    func commandApprovalPairsPermissionRequestWithTheOpenToolCall() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let timestamp = Date().timeIntervalSince1970
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+
+        func write(_ event: [String: Any], _ index: Int) throws {
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        try write([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ], 0)
+        try write([
+            "received_at": timestamp + 1,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ], 1)
+        // Announced but not asked about yet: an open tool call is not a wait.
+        var status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .running)
+
+        try write([
+            "received_at": timestamp + 2,
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash"
+        ], 2)
+        status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .approvalNeeded)
+
+        try write([
+            "received_at": timestamp + 3,
+            "hook_event_name": "PostToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ], 3)
+        status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .running)
+
+        try write([
+            "received_at": timestamp + 4,
+            "hook_event_name": "Stop",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ], 4)
+        status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .completed)
+    }
+
+    /// Captured from a real denial on 2026-08-15: denying the same Bash command
+    /// produced *no* event for that call -- 67 seconds of silence and then the
+    /// turn's `Stop`. The wait must still end, and here `Stop` is what ends it.
+    @Test
+    func deniedCommandEndsItsWaitAtTheTurnBoundary() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let timestamp = Date().timeIntervalSince1970
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+
+        func write(_ event: [String: Any], _ index: Int) throws {
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        try write([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ], 0)
+        try write([
+            "received_at": timestamp + 1,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ], 1)
+        try write([
+            "received_at": timestamp + 2,
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash"
+        ], 2)
+        var status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .approvalNeeded)
+
+        // Denied: `exec-1` is never mentioned again.
+        try write([
+            "received_at": timestamp + 67,
+            "hook_event_name": "Stop",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ], 3)
+        status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .completed)
+    }
+
+    /// Denying and then letting the agent try something else: the denied call is
+    /// never closed, so the next call's activity is what proves the human
+    /// answered. Without this the row claims it is still asking for the rest of
+    /// the turn.
+    @Test
+    func denialFollowedByAnotherToolReturnsToRunning() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let timestamp = Date().timeIntervalSince1970
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+
+        func write(_ event: [String: Any], _ index: Int) throws {
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        try write([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ], 0)
+        try write([
+            "received_at": timestamp + 1,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ], 1)
+        try write([
+            "received_at": timestamp + 2,
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash"
+        ], 2)
+        var status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .approvalNeeded)
+
+        // Denied, and the agent tries a different approach.
+        try write([
+            "received_at": timestamp + 30,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Read",
+            "tool_use_id": "read-1"
+        ], 3)
+        status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .running)
+
+        // The new call closing must not resurrect the abandoned approval.
+        try write([
+            "received_at": timestamp + 31,
+            "hook_event_name": "PostToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Read",
+            "tool_use_id": "read-1"
+        ], 4)
+        status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .running)
+    }
+
+    /// An approval that owns its `tool_use_id` always gets a closing event, so
+    /// another tool finishing must not end it early.
+    @Test
+    func requestPermissionsWaitSurvivesUnrelatedToolActivity() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let timestamp = Date().timeIntervalSince1970
+        let events: [[String: Any]] = [
+            [
+                "received_at": timestamp,
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "thread-1",
+                "turn_id": "turn-1"
+            ],
+            [
+                "received_at": timestamp + 1,
+                "hook_event_name": "PreToolUse",
+                "session_id": "thread-1",
+                "turn_id": "turn-1",
+                "tool_name": "request_permissions",
+                "tool_use_id": "approval-1"
+            ],
+            [
+                "received_at": timestamp + 2,
+                "hook_event_name": "PostToolUse",
+                "session_id": "thread-1",
+                "turn_id": "turn-1",
+                "tool_name": "Read",
+                "tool_use_id": "read-1"
+            ]
+        ]
+        for (index, event) in events.enumerated() {
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        let status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .approvalNeeded)
+    }
+
+    /// The pairing is evidence, not a guess: an approval naming a tool other
+    /// than the one still open cannot be matched, so it opens no wait.
+    @Test
+    func permissionRequestForAnotherToolDoesNotOpenAWait() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let timestamp = Date().timeIntervalSince1970
+        let events: [[String: Any]] = [
+            [
+                "received_at": timestamp,
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "thread-1",
+                "turn_id": "turn-1"
+            ],
+            [
+                "received_at": timestamp + 1,
+                "hook_event_name": "PreToolUse",
+                "session_id": "thread-1",
+                "turn_id": "turn-1",
+                "tool_name": "Bash",
+                "tool_use_id": "exec-1"
+            ],
+            [
+                "received_at": timestamp + 2,
+                "hook_event_name": "PermissionRequest",
+                "session_id": "thread-1",
+                "turn_id": "turn-1",
+                "tool_name": "WebFetch"
+            ]
+        ]
+        for (index, event) in events.enumerated() {
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        let status = await repository.consumeEvents().turns.first?.status
+        #expect(status == .running)
     }
 
     @Test @MainActor

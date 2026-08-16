@@ -24,7 +24,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 从当前账户 primary rate-limit window 读取真实 `usedPercent`，转换为剩余百分比；不可用时显示灰色圆环。
 - 从 `account/usage/read.dailyUsageBuckets` 读取本地日历“今天”的 token bucket；Expanded footer 显示标准 Compact 数字、额度重置日期和 Settings 入口。今日 bucket 缺失但 bucket 数组有效时按 `0` 处理，接口不可用时只将今日用量显示为 `--`。
 - 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。Settings 使用一个 `Codex integration` 总开关，把六种必需 lifecycle event 定义作为一个产品能力启停；关闭后留在 Settings，不重置首次引导。
-- 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(request_user_input|request_permissions)`、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求与审批请求都必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
+- 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`（catch-all，reducer 内按 tool 名过滤）、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求与两种审批形态都必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
 - 标题使用 Thread 元数据，按成本分两层获取：Hook reducer 当前跟踪的 Thread 用 `thread/read`（`includeTurns: false`，实测约 1.2 KB/线程）按 id 读取，全量分页 `thread/list` 只负责低频成员关系对账（实测 33 个线程约 45 KB，且随历史线性增长）。`thread/list` 按契约**永远返回空 `turns`**（schema：`turns` 仅在 `thread/resume`、`thread/rollback`、`thread/fork` 和 `includeTurns: true` 的 `thread/read` 上填充），因此任何 Turn 级事实都只能来自 Hook reducer。Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。会话状态只包含 Running、Input needed、Approval needed、Completed；实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接收敛为 Completed，不再读取 Thread 详情区分结束原因。
 - Preview 设置默认开启；关闭后 hook 不再写入内容片段，列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。即使开启，prompt/回答片段也不写入持久状态。
 - `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔配置健康标记。应用重启时 reducer 从空集合开始，启动前积压的所有 Hook（包括 Stop 与 SessionEnd）一律不恢复或修改 Turn；只有本次进程启动后的 Hook 才是实时证据，也是四态状态的唯一来源。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
@@ -37,7 +37,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 独立 App Server 不共享 Codex Desktop 的进程内事件流，且实测无法回答 Turn 级问题（见下），因此启动不做现状同步：只要 App Server 完成握手并成功返回一次 `thread/list`，即发布 Ready 并以空集合聚合为 Idle。只有 App Server 没有响应或连接失败才显示 `Codex disconnected`；校验请求尚未完成时保持 Connecting。跨 Codex in Notch 重启持久化的 Hook 标记只用于配置健康判断，不得恢复任何会话状态。
 - **实测边界（Codex CLI `0.148.0-alpha.9`，在一个真实运行中的 Turn 上采样）**：独立 App Server 的 `thread/loaded/list` 返回空；所有 Thread 的 `status.type` 恒为 `notLoaded`；`thread/list` 契约上永不返回 `turns`；`thread/read` 即使带 `includeTurns: true` 也从不出现 `inProgress`——正在运行的 Turn 被记为 `interrupted` 且 `completedAt` 为 null。直接后果：依赖 `status.type == "active"` 的 `activeFlags` 校正在当前拓扑下**永远不成立**。该机制（`activeEvidence`、`terminalStatus`、`reconcileActiveStatus`、`markCompleted` 与 `hasLiveBoundary`）已整体删除，因为保留空转代码会让后续设计误以为存在这条能力。若将来出现共享运行时拓扑，应基于当时验证过的字段重新设计，而不是复活这段代码。
 - 当前公开协议仍没有 Desktop 蓝点对应的已读字段；生产实现依赖第 1.3 节登记的 Desktop 私有只读 schema。Desktop 升级后的真实 read/unread 版本矩阵仍是发布验证项，任何不兼容都必须保守保留终态行。
-- Hooks 可以可靠覆盖开始、权限管线触发、`request_user_input` 和终态边界；`PermissionRequest` 本身不证明仍需人工批准，Approval needed 必须由新鲜 App Server `waitingOnApproval` active flag 确认。App Server 的 `completed`、`failed`、`interrupted` 都映射为 Completed，仍需真实 Desktop 样本矩阵验证端到端覆盖。
+- Hooks 可以可靠覆盖开始、两种审批形态、`request_user_input` 和终态边界；Approval needed 一律由某个工具调用的开合区间证明（专用审批工具自成区间，普通工具由 `PermissionRequest` 指名并借用其仍打开的调用 id），孤立的 `PermissionRequest` 不证明仍需人工批准。App Server 的 `completed`、`failed`、`interrupted` 都映射为 Completed，仍需真实 Desktop 样本矩阵验证端到端覆盖。
 - `threadSource/sourceKinds` 仍不足以单独证明 Desktop 与独立 IDE 来源边界，必须继续以真实样本验证。
 
 ### 1.2 已读移除与精确导航能力边界
@@ -313,7 +313,8 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 - 所有会改变 Turn 状态的 Hook 必须包含非空 `session_id` 和 `turn_id`。不得回退到当前 Turn、`"unknown"`、时间邻近或 Thread 更新时间；缺少身份的事件只写脱敏诊断并消费隔离。
 - repository 没有该 Thread 时，受支持事件可以用自身的精确身份建立 Turn。已有当前 Turn 时，顺序更新且从未被该 Thread 淘汰过的 `UserPromptSubmit` 可以建立下一 Turn；Desktop 中断后继续执行时可能不再发送 `UserPromptSubmit`，因此更晚到达的实时 `PermissionRequest`、`PreToolUse`、`PostToolUse` 或 `Stop` 也可以用新的、未退休的精确 `turn_id` 接管同一 Thread。接管时旧 Turn id 立即进入 `retiredTurnIDs`，保留原始开始时间与 prompt preview，清空旧等待证据；事件本身再决定 Running、Input needed 或 Completed。任何退休 Turn 的迟到事件都不能复活旧身份。
 - `PreToolUse(request_user_input)` 只有在包含非空 `tool_use_id` 时才建立 Input pending；`PostToolUse` 只有 `turn_id` 和 `tool_use_id` 都与该 pending 完全相同时才能清除它。未匹配结果保持原状态。
-- 当前公开 `PermissionRequest` Hook 没有稳定 request/tool id，也不区分人工等待与自动审查后立即继续，因此它只建立该 Turn 的新鲜刷新边界，不建立 Approval evidence。Approval needed 的唯一肯定依据是同一精确 Turn 的新鲜 App Server `waitingOnApproval` active flag；任意 `PostToolUse` 也不得用来猜测审批状态。
+- `PermissionRequest` 没有自己的 `tool_use_id`，因此不能独立成为 Approval evidence；但它携带 `tool_name`，而被审批的调用已经由紧邻的 `PreToolUse` announce 过。reducer 因此为每个 Turn 记录"当前仍打开的工具调用"（`openToolUse`：`PreToolUse` 写入，同 `tool_use_id` 的 `PostToolUse` 清除），`PermissionRequest` 借用该 id 建立 Approval pending。没有打开的调用可配对，或 `tool_name` 与打开的调用不一致时，保持原状态——绝不建立无法关闭的等待。自动放行的请求在同一批事件内开合，不会滞留成假等待。`PostToolUse` 自身仍不得用来猜测审批状态。
+- Approval pending 因此分两类（`PendingApproval.isInferred`）。`request_permissions` 自带 id，必然收到配对 `PostToolUse`，只由该事件关闭。借用 id 的等待在**拒绝**时永远收不到关闭事件（实测：拒绝后该 `tool_use_id` 再无任何事件，67 秒后直接 `Stop`），因此额外由"任意其他 `tool_use_id` 的 `PreToolUse`／`PostToolUse`"关闭——Codex 在阻塞于审批期间不发送任何事件，所以其他调用的活动就是人工已回答的证据。两类都由 `Stop` 兜底进入 Completed。该规则严格限定在借用 id 的等待上，不得放宽到 `request_permissions` 或 Input pending。
 - 只有本次启动后收到的实时 `Stop` 才清空 pending input/approval，并让同一精确 Turn 直接进入 Completed。产品不区分 completed/failed/interrupted 的结束原因，也不存在终态待解析窗口。历史回放的 Stop 完全不进入 Turn reducer。
 
 ### 9.3 App Server 当前快照纠偏
@@ -494,7 +495,7 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 
 1. **版本与 schema**：记录 Desktop/内嵌 CLI 版本，生成/读取官方 schema，构建未知字段兼容 fixture。
 2. **同 runtime 可见性**：证明观察器能被动看到 Desktop 当前活动 Turn，不需要 resume 或接管请求。
-3. **请求状态**：分别验证 Input、由 `waitingOnApproval` 确认的 Approval 出现/解决及 Running 恢复；验证单独 `PermissionRequest` 和自动审查不会误报 Approval。
+3. **请求状态**：分别验证 Input、两种审批形态（专用审批工具与 Bash 等普通工具）的 Approval 出现/解决及 Running 恢复；批准与拒绝两条路径都要覆盖，拒绝后既要验证 Turn 继续调用其他工具时恢复 Running，也要验证不再调用工具时由 `Stop` 收敛为 Completed；验证孤立 `PermissionRequest`、指名其他 tool 的 `PermissionRequest` 和自动审查都不会误报 Approval。
 4. **终态与未读**：验证实时 Stop 与 App Server 三种结束结果都使 Running 直接进入 Completed；验证终态未读保留，Desktop 阅读后即时移除。
 5. **Project/Chats**：覆盖单仓库、多仓库 Project 与无 Project Chat。
 6. **删除/归档**：验证事件与集合校正都能自动移除；确认 closed 不等于 deleted。

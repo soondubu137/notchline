@@ -539,18 +539,46 @@ print("{}")
 """#
 }
 
+/// An approval the turn is blocked on, and how it can end.
+struct PendingApproval: Sendable, Equatable {
+    let toolUseID: String
+    /// Whether the id was borrowed from the open call rather than belonging to
+    /// an approval tool of its own.
+    ///
+    /// The two shapes end differently. A `request_permissions` call is always
+    /// closed by its own `PostToolUse`, whatever the human answers. A borrowed
+    /// one is only closed when the human *approves*: measured 2026-08-15, a
+    /// denied Bash command produced no event at all for that call -- 67 seconds
+    /// of silence and then the turn's `Stop`. So a borrowed approval also has to
+    /// end on any evidence the turn resumed, since Codex sends nothing while it
+    /// is genuinely blocked on the prompt.
+    let isInferred: Bool
+}
+
+/// A tool call that has been announced and not yet closed.
+struct OpenToolUse: Sendable, Equatable {
+    let id: String
+    /// `tool_name` as Codex reported it, used to check that a `PermissionRequest`
+    /// is asking about this call and not some other one still in flight.
+    let name: String?
+}
+
 struct HookTurnState: Sendable {
     let threadID: String
     let turnID: String
     var sessionStatus: SessionStatus
     /// `tool_use_id` of an open `request_user_input` call, if any.
     var pendingInputToolUseID: String?
-    /// `tool_use_id` of an open `request_permissions` call, if any.
+    /// The call the human is being asked to approve, if any.
+    var pendingApproval: PendingApproval?
+    /// The most recent tool call this turn opened and has not yet closed.
     ///
-    /// Both waits are the same shape: Codex opens a tool call, the human acts,
-    /// and the matching `PostToolUse` closes it. Pairing on the id is what
-    /// keeps an auto-resolved request from sticking as a false wait.
-    var pendingApprovalToolUseID: String?
+    /// Codex asks about an ordinary tool with a `PermissionRequest` that names
+    /// the tool but carries no `tool_use_id`. The id has to come from the
+    /// `PreToolUse` that announced the same call moments earlier -- see
+    /// ``HookEventRepository`` -- so the approval can close on the usual pairing
+    /// instead of a timer.
+    var openToolUse: OpenToolUse?
     var startedAt: Date
     var lastEventAt: Date
     var retiredTurnIDs: Set<String>
@@ -869,7 +897,8 @@ actor HookEventRepository {
                 turnID: turnID,
                 sessionStatus: .running,
                 pendingInputToolUseID: nil,
-                pendingApprovalToolUseID: nil,
+                pendingApproval: nil,
+                openToolUse: nil,
                 startedAt: receivedAt,
                 lastEventAt: receivedAt,
                 retiredTurnIDs: retiredTurnIDs,
@@ -884,10 +913,32 @@ actor HookEventRepository {
                 createWith: .running,
                 adoptContinuationWith: .running,
                 turns: &turns
-            ) { _ in
-                // PermissionRequest only proves the approval pipeline ran. It is
-                // neither human-wait evidence nor a Running signal, so it cannot
-                // enter or leave a wait state.
+            ) { state in
+                // Codex asks about an ordinary tool -- a shell command, say -- by
+                // announcing the call in `PreToolUse` and then firing this event
+                // ~30ms later. This one names the tool but carries no
+                // `tool_use_id`, so the wait is pinned to the call that is still
+                // open for that tool: `PostToolUse` closes it on the same id, so
+                // the wait ends when the human answers and no timer is involved.
+                //
+                // On its own this event still proves nothing -- an approval
+                // pipeline that ran with no call open is not a human waiting --
+                // so with nothing to pair against it stays a no-op rather than
+                // opening a wait nothing could close.
+                guard let openToolUse = state.openToolUse else { return }
+                guard event.toolName == nil
+                    || openToolUse.name == nil
+                    || event.toolName == openToolUse.name else {
+                    // Asking about some other call than the one still open: the
+                    // pairing would be a guess, so decline to make it.
+                    return
+                }
+                state.pendingApproval = PendingApproval(
+                    toolUseID: openToolUse.id,
+                    isInferred: true
+                )
+                state.sessionStatus = state.sessionStatus
+                    .transitioned(on: .approvalNeeded)
             }
         case "PreToolUse" where event.toolName == "request_user_input":
             observedPreToolUseCount += 1
@@ -902,7 +953,9 @@ actor HookEventRepository {
                 adoptContinuationWith: .running,
                 turns: &turns
             ) {
+                Self.resolveInferredApproval(&$0, activityOn: toolUseID)
                 $0.pendingInputToolUseID = toolUseID
+                $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
             }
         case "PreToolUse" where event.toolName == "request_permissions":
@@ -921,12 +974,38 @@ actor HookEventRepository {
                 adoptContinuationWith: .running,
                 turns: &turns
             ) {
-                $0.pendingApprovalToolUseID = toolUseID
+                Self.resolveInferredApproval(&$0, activityOn: toolUseID)
+                $0.pendingApproval = PendingApproval(
+                    toolUseID: toolUseID,
+                    isInferred: false
+                )
+                $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
             }
         case "PreToolUse":
-            // Any other tool: no state change, but it proves the definition runs.
+            // Any other tool: no state change on its own, but it records the
+            // open call so a `PermissionRequest` naming that tool has an id to
+            // pair with. It also proves the definition runs.
             observedPreToolUseCount += 1
+            guard let toolUseID = stableIdentifier(event.toolUseID) else {
+                return true
+            }
+            mutateExactTurn(
+                threadID: threadID,
+                turnID: turnID,
+                at: receivedAt,
+                // An ordinary tool call is not evidence a turn began, so it
+                // never creates one -- it only annotates a turn already known.
+                createWith: nil,
+                adoptContinuationWith: .running,
+                turns: &turns
+            ) {
+                Self.resolveInferredApproval(&$0, activityOn: toolUseID)
+                $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
+                if $0.pendingInputToolUseID == nil, $0.pendingApproval == nil {
+                    $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
+                }
+            }
         case "PostToolUse":
             observedPostToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
@@ -943,8 +1022,13 @@ actor HookEventRepository {
                 if $0.pendingInputToolUseID == toolUseID {
                     $0.pendingInputToolUseID = nil
                 }
-                if $0.pendingApprovalToolUseID == toolUseID {
-                    $0.pendingApprovalToolUseID = nil
+                if $0.pendingApproval?.toolUseID == toolUseID {
+                    $0.pendingApproval = nil
+                } else {
+                    Self.resolveInferredApproval(&$0, activityOn: toolUseID)
+                }
+                if $0.openToolUse?.id == toolUseID {
+                    $0.openToolUse = nil
                 }
                 // Only resume Running once no wait is still open: an unrelated
                 // tool finishing must not clear a prompt the human has not
@@ -952,7 +1036,7 @@ actor HookEventRepository {
                 // so at most one of these is ever set.
                 if $0.pendingInputToolUseID != nil {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
-                } else if $0.pendingApprovalToolUseID != nil {
+                } else if $0.pendingApproval != nil {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
                 } else {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
@@ -971,13 +1055,38 @@ actor HookEventRepository {
                 // completed, failed, and interrupted all converge to Completed.
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .completed)
                 $0.pendingInputToolUseID = nil
-                $0.pendingApprovalToolUseID = nil
+                $0.pendingApproval = nil
                 $0.assistantPreview = event.lastAssistantMessage
             }
         default:
             break
         }
         return true
+    }
+
+    /// Ends an inferred approval as soon as another call shows any activity.
+    ///
+    /// An approved call closes with its own `PostToolUse`, but a *denied* one is
+    /// never closed at all -- measured 2026-08-15: the prompt was followed by 67
+    /// seconds of silence and then the turn's `Stop`, with no event whatsoever
+    /// for the denied call. `Stop` alone would therefore be the only way out,
+    /// which leaves the row claiming the user is still being asked for the whole
+    /// rest of a turn that carried on working after the denial.
+    ///
+    /// Activity on a *different* call is proof the human has answered, because
+    /// Codex emits nothing at all while a turn is genuinely blocked on the
+    /// prompt. An approval that owns its `tool_use_id` needs none of this and is
+    /// left strictly alone: it always gets its closing event.
+    nonisolated private static func resolveInferredApproval(
+        _ state: inout HookTurnState,
+        activityOn toolUseID: String
+    ) {
+        guard let pending = state.pendingApproval,
+              pending.isInferred,
+              pending.toolUseID != toolUseID else {
+            return
+        }
+        state.pendingApproval = nil
     }
 
     private func mutateExactTurn(
@@ -1007,7 +1116,8 @@ actor HookEventRepository {
                     turnID: turnID,
                     sessionStatus: continuationStatus,
                     pendingInputToolUseID: nil,
-                    pendingApprovalToolUseID: nil,
+                    pendingApproval: nil,
+                    openToolUse: nil,
                     startedAt: current.startedAt,
                     lastEventAt: date,
                     retiredTurnIDs: retiredTurnIDs,
@@ -1022,7 +1132,8 @@ actor HookEventRepository {
                 turnID: turnID,
                 sessionStatus: sessionStatus,
                 pendingInputToolUseID: nil,
-                pendingApprovalToolUseID: nil,
+                pendingApproval: nil,
+                openToolUse: nil,
                 startedAt: date,
                 lastEventAt: date,
                 retiredTurnIDs: [],
