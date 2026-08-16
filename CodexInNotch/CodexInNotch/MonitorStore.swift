@@ -99,8 +99,11 @@ enum PanelMetrics {
     static let referenceCompactHeight: CGFloat = 46
     static let nativeNotchMenuBarHeight: CGFloat = 38
     static let maximumSurfaceCornerRadius: CGFloat = 10
-    static let notchCompactWidth: CGFloat = 348
-    static let fallbackBaselineWidth: CGFloat = 166
+    /// Floor for the emulated notch, so a very short status ("Idle") does not
+    /// collapse the pill. It sat at 166 while the usage ring occupied the
+    /// trailing side; without the ring that floor was wider than most content
+    /// and the pill never actually shrank.
+    static let fallbackBaselineWidth: CGFloat = 120
     static let expandedBaselineWidth: CGFloat = 520
     static let sessionRowHeight: CGFloat = 80
     static let maximumVisibleSessionCount = 3
@@ -115,9 +118,88 @@ enum PanelMetrics {
         + expandedFooterHeight
     static let thinExpandedContentHeight: CGFloat = thinExpandedBodyHeight
         + expandedFooterHeight
-    private static let fallbackFixedContentWidth: CGFloat = 114
-    private static let statusDotWidth: CGFloat = 8
-    private static let usageRingWidth: CGFloat = 18
+    /// The status matrix is sized to 40% of the menu bar height, so unlike the
+    /// 8pt dot it replaced its width is not a constant.
+    static let statusMatrixHeightRatio: CGFloat = 0.4
+    /// The notch label renders Light — measure it at the weight it draws at,
+    /// or every compact width is over-reserved.
+    private static let statusLabelFont = NSFont.systemFont(ofSize: 13, weight: .light)
+    /// The elapsed timer uses tabular figures so its width stops changing every
+    /// second; measure it with the same metrics.
+    private static let timerFont = NSFont.monospacedDigitSystemFont(
+        ofSize: 13,
+        weight: .light
+    )
+
+    static func statusMatrixWidth(compactHeight: CGFloat) -> CGFloat {
+        max(0, compactHeight) * statusMatrixHeightRatio
+    }
+
+    /// Compact content leading the notch: padding, the matrix, and — where there
+    /// is no physical notch to work around — the status label as well.
+    static func compactLeadingWidth(
+        statusReadoutText: String,
+        showsStatusText: Bool,
+        compactHeight: CGFloat
+    ) -> CGFloat {
+        var width = expandedHorizontalPadding
+            + statusMatrixWidth(compactHeight: compactHeight)
+        if showsStatusText {
+            width += expandedReadoutSpacing
+                + textWidth(statusReadoutText, font: statusLabelFont)
+        }
+        return width
+    }
+
+    /// Compact content trailing the notch, including its own trailing padding.
+    ///
+    /// Zero unless a turn is being timed. The usage ring used to sit here
+    /// unconditionally, which meant an idle notched display rendered a blank
+    /// wing that read as a second, fake notch.
+    static func compactTrailingWidth(timerText: String?) -> CGFloat {
+        guard let timerText else { return 0 }
+        return textWidth(timerText, font: timerFont) + expandedHorizontalPadding
+    }
+
+    /// How far the compact panel sits from the centre of the display.
+    ///
+    /// A notched panel is pinned to the notch, not the screen: with no trailing
+    /// wing the panel hangs entirely to the left of the notch, so centring it
+    /// would slide the real notch out from under the cut-out.
+    static func compactHorizontalOffset(
+        geometry: DisplayGeometry,
+        isExpanded: Bool,
+        statusReadoutText: String,
+        timerText: String?,
+        centerOcclusionWidth: CGFloat,
+        compactHeight: CGFloat
+    ) -> CGFloat {
+        guard !isExpanded, geometry == .notched, centerOcclusionWidth >= 1 else {
+            return 0
+        }
+        let leading = notchedLeadingWidth(
+            statusReadoutText: statusReadoutText,
+            compactHeight: compactHeight
+        )
+        let trailing = notchedTrailingWidth(timerText: timerText)
+        return (trailing - leading) / 2
+    }
+
+    private static func notchedLeadingWidth(
+        statusReadoutText: String,
+        compactHeight: CGFloat
+    ) -> CGFloat {
+        compactLeadingWidth(
+            statusReadoutText: statusReadoutText,
+            showsStatusText: false,
+            compactHeight: compactHeight
+        ) + expandedNotchClearance
+    }
+
+    private static func notchedTrailingWidth(timerText: String?) -> CGFloat {
+        let content = compactTrailingWidth(timerText: timerText)
+        return content > 0 ? content + expandedNotchClearance : 0
+    }
 
     static func surfaceCornerRadius(
         geometry: DisplayGeometry,
@@ -137,7 +219,7 @@ enum PanelMetrics {
         geometry: DisplayGeometry,
         isExpanded: Bool,
         statusReadoutText: String,
-        expandedUsageReadoutText: String,
+        timerText: String?,
         centerOcclusionWidth: CGFloat,
         compactHeight: CGFloat,
         expandedContentHeight: CGFloat = expandedContentHeight
@@ -146,7 +228,7 @@ enum PanelMetrics {
             return CGSize(
                 width: expandedWidth(
                     centerOcclusionWidth: centerOcclusionWidth,
-                    usageReadoutText: expandedUsageReadoutText
+                    compactHeight: compactHeight
                 ),
                 height: compactHeight + expandedContentHeight
             )
@@ -154,19 +236,52 @@ enum PanelMetrics {
 
         switch geometry {
         case .notched:
-            return CGSize(width: notchCompactWidth, height: compactHeight)
+            guard centerOcclusionWidth >= 1 else {
+                // Notched display with no measurable cut-out: nothing to wrap
+                // around, so lay it out as an emulated notch instead.
+                return CGSize(
+                    width: fallbackCompactWidth(
+                        statusReadoutText: statusReadoutText,
+                        timerText: timerText,
+                        compactHeight: compactHeight
+                    ),
+                    height: compactHeight
+                )
+            }
+            let width = notchedLeadingWidth(
+                statusReadoutText: statusReadoutText,
+                compactHeight: compactHeight
+            )
+                + centerOcclusionWidth
+                + notchedTrailingWidth(timerText: timerText)
+            return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
             return CGSize(
-                width: fallbackCompactWidth(statusReadoutText: statusReadoutText),
+                width: fallbackCompactWidth(
+                    statusReadoutText: statusReadoutText,
+                    timerText: timerText,
+                    compactHeight: compactHeight
+                ),
                 height: compactHeight
             )
         }
     }
 
-    static func fallbackCompactWidth(statusReadoutText: String) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: 13, weight: .bold)
-        let measuredWidth = fallbackFixedContentWidth + textWidth(statusReadoutText, font: font)
-        return ceil(max(fallbackBaselineWidth, measuredWidth))
+    static func fallbackCompactWidth(
+        statusReadoutText: String,
+        timerText: String? = nil,
+        compactHeight: CGFloat = referenceCompactHeight
+    ) -> CGFloat {
+        var width = compactLeadingWidth(
+            statusReadoutText: statusReadoutText,
+            showsStatusText: true,
+            compactHeight: compactHeight
+        )
+        if let timerText {
+            width += expandedReadoutSpacing + textWidth(timerText, font: timerFont)
+        }
+        width += expandedHorizontalPadding
+        return ceil(max(fallbackBaselineWidth, width))
     }
 
     static func expandedHeight(compactHeight: CGFloat) -> CGFloat {
@@ -187,41 +302,32 @@ enum PanelMetrics {
 
     static func expandedWidth(
         centerOcclusionWidth: CGFloat,
-        usageReadoutText: String
+        compactHeight: CGFloat = referenceCompactHeight
     ) -> CGFloat {
         guard centerOcclusionWidth >= 1 else {
             return expandedBaselineWidth
         }
 
+        // Only the status readout flanks the notch now — the usage readout that
+        // used to claim the trailing side moved into the footer.
+        let widestStatusReadout = MonitorStatus.allCases.map {
+            expandedStatusReadoutWidth(status: $0, compactHeight: compactHeight)
+        }.max() ?? 0
         let requiredSideWidth = expandedHorizontalPadding
-            + max(
-                MonitorStatus.allCases.map {
-                    expandedStatusReadoutWidth(status: $0)
-                }.max() ?? 0,
-                expandedUsageReadoutWidth(text: usageReadoutText)
-            )
+            + widestStatusReadout
             + expandedNotchClearance
         let notchSafeWidth = centerOcclusionWidth + requiredSideWidth * 2
 
         return ceil(max(expandedBaselineWidth, notchSafeWidth))
     }
 
-    static func expandedStatusReadoutWidth(status: MonitorStatus) -> CGFloat {
-        statusDotWidth
+    static func expandedStatusReadoutWidth(
+        status: MonitorStatus,
+        compactHeight: CGFloat = referenceCompactHeight
+    ) -> CGFloat {
+        statusMatrixWidth(compactHeight: compactHeight)
             + expandedReadoutSpacing
-            + textWidth(
-                status.displayName,
-                font: NSFont.systemFont(ofSize: 13, weight: .bold)
-            )
-    }
-
-    static func expandedUsageReadoutWidth(text: String) -> CGFloat {
-        textWidth(
-            text,
-            font: NSFont.systemFont(ofSize: 13, weight: .semibold)
-        )
-            + expandedReadoutSpacing
-            + usageRingWidth
+            + textWidth(status.displayName, font: statusLabelFont)
     }
 
     private static func textWidth(_ text: String, font: NSFont) -> CGFloat {
@@ -280,7 +386,11 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var status: MonitorStatus
     @Published private(set) var availability: MonitorAvailability
     @Published private(set) var quota: QuotaSnapshot
-    @Published private(set) var sessions: [MonitoredSession]
+    @Published private(set) var sessions: [MonitoredSession] {
+        didSet { updateElapsedTicking() }
+    }
+    /// Re-published each second while a turn is timed; see `updateElapsedTicking`.
+    @Published private(set) var timerNow: Date
     @Published private(set) var hookSetupStatus: HookSetupStatus = .notInstalled
     @Published private(set) var integrationSwitchIsOn = false
     @Published var isExpanded = false
@@ -320,6 +430,7 @@ final class MonitorStore: ObservableObject {
     private var pendingHoverTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var refreshEventTask: Task<Void, Never>?
+    private var elapsedTickTask: Task<Void, Never>?
     private let refreshEvents: AsyncStream<Void>?
     private var isRefreshInFlight = false
     private var isNavigationInFlight = false
@@ -348,6 +459,7 @@ final class MonitorStore: ObservableObject {
         self.selectedDisplayID = initialDisplayID
         self.displayPreferences = displayPreferences
         self.clock = clock
+        self.timerNow = clock.now()
         self.timing = timing
         self.connectionStabilityGate = ConnectionStabilityGate(
             gracePeriod: timing.disconnectGracePeriod
@@ -378,12 +490,73 @@ final class MonitorStore: ObservableObject {
         if service != nil {
             startMonitoring()
         }
+        updateElapsedTicking()
     }
 
     deinit {
         monitorTask?.cancel()
         refreshEventTask?.cancel()
         pendingHoverTask?.cancel()
+        elapsedTickTask?.cancel()
+    }
+
+    /// Advances the elapsed readout once a second while a turn is being timed.
+    ///
+    /// This lives in the store rather than a view-local timer for two reasons:
+    /// it is a timing decision, so it belongs on ``MonitorClock`` like every
+    /// other window; and the compact panel's width is measured from the readout
+    /// string, so the panel has to re-measure when the timer gains a digit.
+    private func updateElapsedTicking() {
+        // Nothing being timed: stop entirely rather than wake once a second to
+        // discover there is no work.
+        guard longestRunningSessionStart != nil else {
+            elapsedTickTask?.cancel()
+            elapsedTickTask = nil
+            return
+        }
+        guard elapsedTickTask == nil else { return }
+
+        // `timerNow` has been frozen since the last turn finished, so it is
+        // older than the turn that just started. Left stale, the first second of
+        // that turn reads as a negative duration -- which the formatter reports
+        // as "not timed" -- and the row renders blank until the first tick.
+        timerNow = clock.now()
+
+        elapsedTickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                guard let start = self.longestRunningSessionStart else {
+                    // The last timed turn finished between ticks. `sessions`
+                    // will have cancelled this task already; clearing the handle
+                    // keeps a later turn able to start a new one.
+                    self.elapsedTickTask = nil
+                    return
+                }
+                try? await self.clock.sleep(
+                    seconds: Self.secondsUntilNextTick(
+                        after: start,
+                        now: self.clock.now()
+                    )
+                )
+                guard !Task.isCancelled else { return }
+                self.timerNow = self.clock.now()
+            }
+        }
+    }
+
+    /// Time until the timed turn's next whole second.
+    ///
+    /// Sleeping a flat second drifts, and a drifting tick eventually crosses two
+    /// boundaries in one wake-up and visibly skips a digit. Landing on the turn's
+    /// own boundary keeps the ticks a true second apart, so every row -- whatever
+    /// its own sub-second phase -- advances exactly once per tick.
+    nonisolated private static func secondsUntilNextTick(
+        after start: Date,
+        now: Date
+    ) -> TimeInterval {
+        let elapsed = now.timeIntervalSince(start)
+        guard elapsed.isFinite else { return 1 }
+        return 1 - (elapsed - elapsed.rounded(.down))
     }
 
     var selectedDisplay: DisplayOption? {
@@ -402,24 +575,67 @@ final class MonitorStore: ObservableObject {
         quota.remainingPercent
     }
 
-    var tokenText: String {
-        tokenRemainingPercent.map { "\($0)%" } ?? "--"
-    }
-
     var compactStatusReadoutText: String {
         status.displayName
     }
 
-    var expandedUsageReadoutText: String {
-        tokenText
+    /// The turn the notch is timing.
+    ///
+    /// A single readout can only speak for one turn, so it follows the
+    /// longest-running one — the oldest is the one worth surfacing. Every state
+    /// but `completed` is eligible: a turn that has been parked on an approval
+    /// for ten minutes is precisely the one the user needs to see, so filtering
+    /// this to `running` would hide the timer exactly when it starts to matter.
+    var longestRunningSessionStart: Date? {
+        sessions
+            .filter { $0.status.keepsTiming }
+            .compactMap(\.startedAt)
+            .min()
+    }
+
+    var compactTimerText: String? {
+        SessionElapsedFormatter.elapsed(
+            since: longestRunningSessionStart,
+            now: timerNow
+        )
+    }
+
+    /// The compact timer for VoiceOver, which cannot read `12:34` as a length.
+    var spokenLongestElapsedText: String? {
+        SessionElapsedFormatter.spokenElapsed(
+            since: longestRunningSessionStart,
+            now: timerNow
+        )
+    }
+
+    func elapsedText(for session: MonitoredSession) -> String? {
+        guard session.status.keepsTiming else { return nil }
+        return SessionElapsedFormatter.elapsed(
+            since: session.startedAt,
+            now: timerNow
+        )
+    }
+
+    func spokenElapsedText(for session: MonitoredSession) -> String? {
+        guard session.status.keepsTiming else { return nil }
+        return SessionElapsedFormatter.spokenElapsed(
+            since: session.startedAt,
+            now: timerNow
+        )
     }
 
     var expandedFooterText: String {
         UsageSummaryFormatter.summary(
+            remainingPercent: quota.remainingPercent,
             todayTokens: quota.todayTokens,
             resetsAt: quota.resetsAt,
             now: clock.now()
         )
+    }
+
+    /// 0–1 fill for the footer meter, or nil when quota is unavailable.
+    var usageMeterFill: Double? {
+        quota.remainingPercent.map { Double($0) / 100 }
     }
 
     var emptyListMessage: String {
@@ -435,10 +651,23 @@ final class MonitorStore: ObservableObject {
             geometry: geometry,
             isExpanded: isExpanded,
             statusReadoutText: compactStatusReadoutText,
-            expandedUsageReadoutText: expandedUsageReadoutText,
+            timerText: compactTimerText,
             centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight,
             expandedContentHeight: expandedContentHeight
+        )
+    }
+
+    /// Horizontal displacement from the centre of the display. Non-zero only
+    /// for a notched compact panel, which is pinned to the cut-out.
+    var currentPanelHorizontalOffset: CGFloat {
+        PanelMetrics.compactHorizontalOffset(
+            geometry: geometry,
+            isExpanded: isExpanded,
+            statusReadoutText: compactStatusReadoutText,
+            timerText: compactTimerText,
+            centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
+            compactHeight: compactHeight
         )
     }
 

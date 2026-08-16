@@ -107,6 +107,15 @@ enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         self == .running
     }
 
+    /// Whether the turn's clock is still counting.
+    ///
+    /// Every state but `completed` counts. A turn parked on input or approval
+    /// is still occupying the user's attention -- that wait is the part worth
+    /// seeing -- so the timer deliberately does not pause for it.
+    var keepsTiming: Bool {
+        self != .completed
+    }
+
     var monitorStatus: MonitorStatus {
         switch self {
         case .running:
@@ -317,20 +326,68 @@ enum MonitorAggregation {
     }
 }
 
-enum UsageLevel: Equatable {
-    case healthy
-    case warning
-    case critical
-
-    init(remainingPercent: Int) {
-        switch remainingPercent {
-        case 51 ... Int.max:
-            self = .healthy
-        case 15 ... 50:
-            self = .warning
-        default:
-            self = .critical
+/// How long a turn has been running, for the notch and the session rows.
+///
+/// The value is always `now - startedAt` recomputed from scratch, never a total
+/// accumulated tick by tick. That is what makes it wall-clock: a wait on input
+/// or approval, a missed refresh and a sleeping Mac all land in the elapsed time
+/// without the timer having to observe them.
+///
+/// `now` is a parameter rather than a `Date()` read so the format is assertable
+/// at every boundary, the same way ``UsageSummaryFormatter`` takes one.
+enum SessionElapsedFormatter {
+    nonisolated static func elapsed(since startedAt: Date?, now: Date) -> String? {
+        guard let seconds = elapsedSeconds(since: startedAt, now: now) else {
+            return nil
         }
+
+        let (hours, minutes, remainder) = components(of: seconds)
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainder)
+        }
+        return String(format: "%d:%02d", minutes, remainder)
+    }
+
+    /// The same duration spelled out, because VoiceOver reads `12:34` as a time
+    /// of day rather than a length.
+    nonisolated static func spokenElapsed(since startedAt: Date?, now: Date) -> String? {
+        guard let seconds = elapsedSeconds(since: startedAt, now: now) else {
+            return nil
+        }
+
+        let (hours, minutes, remainder) = components(of: seconds)
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append("\(hours) 小时")
+        }
+        if minutes > 0 {
+            parts.append("\(minutes) 分")
+        }
+        if remainder > 0 || parts.isEmpty {
+            parts.append("\(remainder) 秒")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// Whole seconds elapsed, or nil when there is nothing trustworthy to count.
+    ///
+    /// A start time in the future is clock skew, not a negative duration, and a
+    /// turn whose start was never observed has no duration at all. Both read as
+    /// "not timed" so no caller can render an invented number.
+    nonisolated private static func elapsedSeconds(
+        since startedAt: Date?,
+        now: Date
+    ) -> Int? {
+        guard let startedAt else { return nil }
+        let interval = now.timeIntervalSince(startedAt)
+        guard interval >= 0, interval < TimeInterval(Int.max) else { return nil }
+        return Int(interval)
+    }
+
+    nonisolated private static func components(
+        of seconds: Int
+    ) -> (hours: Int, minutes: Int, seconds: Int) {
+        (seconds / 3600, (seconds % 3600) / 60, seconds % 60)
     }
 }
 
@@ -345,6 +402,10 @@ enum UsageSummaryFormatter {
         Double(max(0, tokenCount)).formatted(compactNumberStyle)
     }
 
+    /// Time remaining until the quota resets, as days and hours.
+    ///
+    /// This reads the remaining *duration*, not calendar days: "Resets today"
+    /// was true at both 00:30 and 23:30 and told you nothing about which.
     nonisolated static func resetText(
         resetsAt: Date?,
         now: Date,
@@ -352,30 +413,43 @@ enum UsageSummaryFormatter {
     ) -> String {
         guard let resetsAt else { return "Reset unavailable" }
 
-        let today = calendar.startOfDay(for: now)
-        let resetDay = calendar.startOfDay(for: resetsAt)
-        let dayCount = max(
-            0,
-            calendar.dateComponents([.day], from: today, to: resetDay).day ?? 0
-        )
+        let remaining = resetsAt.timeIntervalSince(now)
+        guard remaining > 0 else { return "Resets now" }
 
-        switch dayCount {
-        case 0:
-            return "Resets today"
-        case 1:
-            return "Resets in 1 day"
+        let totalHours = Int(remaining / 3600)
+        let days = totalHours / 24
+        let hours = totalHours % 24
+
+        switch (days, hours) {
+        case (0, 0):
+            return "Resets in under an hour"
+        case (0, _):
+            return "Resets in \(hours) \(plural(hours, "hour"))"
+        case (_, 0):
+            return "Resets in \(days) \(plural(days, "day"))"
         default:
-            return "Resets in \(dayCount) days"
+            return "Resets in \(days) \(plural(days, "day")) "
+                + "\(hours) \(plural(hours, "hour"))"
         }
     }
 
+    nonisolated private static func plural(_ count: Int, _ noun: String) -> String {
+        count == 1 ? noun : noun + "s"
+    }
+
+    /// The footer line: everything about quota now lives here, so it carries the
+    /// remaining share as well as today's spend and the reset window.
     nonisolated static func summary(
+        remainingPercent: Int?,
         todayTokens: Int64?,
         resetsAt: Date?,
         now: Date,
         calendar: Calendar = .current
     ) -> String {
-        let usageText = todayTokens.map(compactTokenCount) ?? "--"
-        return "\(usageText) • \(resetText(resetsAt: resetsAt, now: now, calendar: calendar))"
+        let remainingText = remainingPercent.map { "\($0)% left" } ?? "-- left"
+        let usageText = todayTokens.map { "\(compactTokenCount($0)) today" }
+            ?? "-- today"
+        let reset = resetText(resetsAt: resetsAt, now: now, calendar: calendar)
+        return "\(remainingText) · \(usageText) · \(reset)"
     }
 }

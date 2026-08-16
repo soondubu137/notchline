@@ -83,7 +83,11 @@ final class OverlayPanelController {
             store.$quota.map { _ in () }.eraseToAnyPublisher(),
             store.$sessions.map { _ in () }.eraseToAnyPublisher(),
             store.$isExpanded.map { _ in () }.eraseToAnyPublisher(),
-            store.$reduceMotion.map { _ in () }.eraseToAnyPublisher()
+            store.$reduceMotion.map { _ in () }.eraseToAnyPublisher(),
+            // The compact width is measured from the elapsed string, so the
+            // panel has to re-measure when it gains a digit. Most ticks resolve
+            // to an unchanged frame and are dropped by updatePanelFrame.
+            store.$timerNow.map { _ in () }.eraseToAnyPublisher()
         ]
 
         Publishers.MergeMany(animatedChanges)
@@ -142,7 +146,8 @@ final class OverlayPanelController {
         let size = store.currentPanelSize
         let targetFrame = OverlayPanelLayout.frame(
             on: selectedDisplay.frame,
-            panelSize: size
+            panelSize: size,
+            horizontalOffset: store.currentPanelHorizontalOffset
         )
 
         guard panel.frame != targetFrame else {
@@ -200,9 +205,16 @@ final class OverlayPanelController {
 }
 
 enum OverlayPanelLayout {
-    static func frame(on screenFrame: NSRect, panelSize: CGSize) -> NSRect {
+    /// `horizontalOffset` displaces the panel from the centre of the display.
+    /// A notched compact panel needs it: with no trailing wing it hangs to the
+    /// left of the cut-out, and centring would slide the notch out from under it.
+    static func frame(
+        on screenFrame: NSRect,
+        panelSize: CGSize,
+        horizontalOffset: CGFloat = 0
+    ) -> NSRect {
         NSRect(
-            x: screenFrame.midX - panelSize.width / 2,
+            x: screenFrame.midX - panelSize.width / 2 + horizontalOffset,
             y: screenFrame.maxY - panelSize.height,
             width: panelSize.width,
             height: panelSize.height

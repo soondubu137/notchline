@@ -5,7 +5,7 @@
 | 文档状态 | 第一实现切片、精确导航、Desktop Project 身份、Desktop 未读终态移除与 Expanded footer 已实现；真实版本矩阵仍待验证 |
 | 版本 | 0.19 |
 | 日期 | 2026-08-15 |
-| 范围 | 将 SwiftUI 原型中的 Mock 状态、额度、今日 tokens、会话列表与点击导航替换为真实 Codex Desktop 数据；Running 计时延后评估 |
+| 范围 | 将 SwiftUI 原型中的 Mock 状态、额度、今日 tokens、会话列表与点击导航替换为真实 Codex Desktop 数据；处理时间按第 12 节实现 |
 
 ## 1. 结论
 
@@ -137,7 +137,7 @@ Phase 0 必须分别证明以下能力，而不是从现有字段猜测：
 
 官方 App Server 的 Thread/Turn/状态/额度协议是主要基础，但当前公开字段不包含 Desktop Project 与未读成员关系。独立启动的 App Server 也不能假定与 Desktop 共享运行时。未读与 Project 分别使用第 1.3、1.4 节已批准并登记的私有只读适配器；其他内部 Desktop 资源只能用于理解问题，未经单独批准、fail-closed 设计和依赖登记不得成为生产依赖。
 
-处理时长不是 V1 发布门槛。V1 不发布时长字段，也不根据开始/结束时间在 UI 中推算 Running 计时；该能力保留为未来评估项。
+处理时间不引入新的数据源：`startedAt` 来自官方 Hooks 中 `UserPromptSubmit` 事件的 `received_at`，与状态判定使用同一条事件流，因此不新增任何非公开依赖（见第 12 节）。
 
 ## 4. 领域数据模型
 
@@ -217,7 +217,7 @@ struct TurnEvidence: Equatable {
 | Project | Desktop 私有全局状态中的精确 thread assignment + Project id/name | `projectless-thread-ids` 明确命中时 `Chats`；否则失败显示 `Project unavailable` | `thread.section`、cwd basename、Git root |
 | 未读 | Desktop 未读真值 | 无 | 窗口焦点、Notch 点击、固定保留时间 |
 | 状态 | 受支持的 Turn/请求事件与校正快照 | 保留最后可信四态值 | 计时器或 UI 猜测 |
-| 处理时长（未来） | V1 不发布该 UI 字段 | 无 | `startedAt` 推算、Thread 时间、文件修改时间 |
+| 处理时间 | Hook `UserPromptSubmit` 的 `received_at` | 起点未知时退回状态点，不显示数值 | Thread 时间、文件修改时间、累加计数器 |
 | 预览 | Codex 已向用户公开的内容 | 隐藏 | raw reasoning、工具参数、输出、diff |
 | 额度 | 当前账户 primary rate-limit window | 灰色 unavailable | stale 值、daily/lifetime usage 推算 |
 | 今日 tokens | `account/usage/read` 当日本地日历 bucket | 有效 bucket 数组中缺少今天时为 `0`；接口失败显示 `--` | lifetime、peakDailyTokens、额度百分比、会话行求和 |
@@ -362,16 +362,21 @@ ready 且集合为空时为 Idle。availability 非 ready 时，汇总改由全�
 
 `showCurrentContentPreviews == false` 时，extractor 不产生正文，并禁止标题生成器访问 prompt fallback。
 
-## 12. 处理时间（未来考虑）
+## 12. 处理时间
 
-V1 不实现处理时长：
+产品语义见 PRD 8.2；本节只描述实现约束。
 
-- `MonitorStore` 不维护 1 Hz UI 时钟，也不派生、格式化或聚合 Running 时长。
-- 收起态、展开汇总和会话行统一使用 `MonitorStatus.running.displayName`，即 `Running`。
-- 额度区域始终显示 primary rate-limit window 的真实剩余比例；Running 不替换该值。
-- `startedAt` 等生命周期元数据只可服务于事件排序或校正，不能形成用户可见计时。
+**时间来源**：`MonitoredSession.startedAt` 直接来自 `HookTurnState.startedAt`，即官方 Hooks `UserPromptSubmit` 事件的 `received_at`。同一 Turn 的继续执行沿用原 `startedAt`，同一 Thread 的新 Turn 重新取值。不读取 Desktop 私有时间字段，因此不进入非公开依赖清单。
 
-未来若重新引入，必须先验证 Desktop 的权威时长语义，明确 Input/Approval、睡眠和重连时间是否计入，并完成无障碍、功耗与刷新频率评审。在此之前不增加计时器、时长格式化器或秒级一致性测试。
+**计算方式**：`SessionElapsedFormatter` 以 `now - startedAt` 重新计算，禁止累加计数器。这是等待与睡眠自动计入的原因，也使漏掉的刷新不会造成永久性偏差。起点缺失或时间倒流一律返回 `nil`，由调用方退回状态点，不得渲染 `0:00` 之类的猜测值。
+
+**聚合**：`MonitorStore.longestRunningSessionStart` 取所有 `status.keepsTiming` 会话中最早的 `startedAt`。判定使用 `SessionStatus.keepsTiming`（仅 `completed` 为假），不得写成 `== .running`，否则轮次一进入 Approval needed 就会从收起态读数中消失。
+
+**刷新**：`MonitorStore` 持有唯一的计时任务，经 `MonitorClock` 休眠，随会话列表变化启停——没有未完成轮次时任务被取消，不存在空转唤醒。每次休眠对齐到被计时轮次的下一个整秒，避免固定 1 秒休眠累积漂移后跳过一个数字。任务重新启动时先刷新 `timerNow`，否则空闲期间冻结的时间戳会让新轮次的第一秒读成负值。
+
+**面板几何**：收起态宽度由计时文本测量得出，因此计时推进必须触发面板重新测量；`NotchTimerText` 使用等宽数字，避免每秒抖动。
+
+**无障碍**：`SessionElapsedFormatter.spokenElapsed` 提供时长读法，与绘制文本分开；VoiceOver 会把 `12:34` 读成时刻。
 
 ## 13. 额度、今日用量与 Expanded footer
 
@@ -493,7 +498,7 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 4. **终态与未读**：验证实时 Stop 与 App Server 三种结束结果都使 Running 直接进入 Completed；验证终态未读保留，Desktop 阅读后即时移除。
 5. **Project/Chats**：覆盖单仓库、多仓库 Project 与无 Project Chat。
 6. **删除/归档**：验证事件与集合校正都能自动移除；确认 closed 不等于 deleted。
-7. **Running 展示**：验证收起态、展开汇总和会话行均显示 `Running`，且不存在逐秒变化的计时文本。
+7. **处理时间**：验证会话行与收起态逐秒推进；验证轮次转入 Approval needed 后计时不暂停、Completed 后停止；验证收起态取所有未完成轮次中的最长值，全部完成后读数消失；验证列表为空或全部完成时计时任务不再唤醒。
 8. **额度与今日用量**：验证 primary、多窗口字段、`account/usage/read` 当天 bucket、账户切换、15 秒请求超时、60 秒重试与相互独立的 unavailable。
 9. **导航**：adapter 与单元测试已完成；仍需在版本矩阵中端到端验证进入相同 Desktop 页面且不创建/恢复 Turn。
 10. **多客户端安全**：证明 observer 不响应 Desktop 的 server request、不改变运行状态。
@@ -563,11 +568,11 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 
 | 页面/节点 | 技术契约 |
 | --- | --- |
-| `Notch Core` / `118:120` | `520 × 326` 共享展开、顶部 `46`、底部 `40` footer |
+| `06 — Notch Core` / `118:120` | `520 × 326` 共享展开、顶部 `46`、底部 `40` footer |
 | `05 — Panel` / `327:305` | `472 × 40` Expanded footer、今日 tokens、reset 文案与 Settings gear |
-| `06 — Integration States` / `227:3` | 隐私关闭、额度局部降级、成员生命周期和 `520 × 134` 薄层状态 |
-| `07 — Onboarding` / `232:95` | 显式授权的三步首次安装 |
-| `08 — Settings` / `233:3` | 集成管理与预览开关的 On/Off 状态 |
+| `07 — Integration States` / `227:3` | 隐私关闭、额度局部降级、成员生命周期和 `520 × 134` 薄层状态 |
+| `08 — Onboarding` / `232:95` | 显式授权的三步首次安装 |
+| `09 — Settings` / `233:3` | 集成管理与预览开关的 On/Off 状态 |
 
 ## 22. 参考
 

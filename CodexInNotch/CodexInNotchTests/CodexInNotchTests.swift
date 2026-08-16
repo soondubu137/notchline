@@ -9,13 +9,162 @@ struct CodexInNotchTests {
             geometry: .noNotch,
             isExpanded: false,
             statusReadoutText: "Running",
-            expandedUsageReadoutText: "72%",
+            timerText: nil,
             centerOcclusionWidth: 0,
             compactHeight: PanelMetrics.referenceCompactHeight
         )
 
-        #expect(size.width == 168)
+        // Padding + an 18.4pt matrix + "Running" at Light, and nothing else —
+        // the usage ring that used to pad this out is gone.
+        #expect(size.width == 128)
         #expect(size.height == 46)
+    }
+
+    @Test @MainActor
+    func timingATurnExtendsTheCompactPanel() {
+        func width(timerText: String?) -> CGFloat {
+            PanelMetrics.size(
+                geometry: .noNotch,
+                isExpanded: false,
+                statusReadoutText: "Running",
+                timerText: timerText,
+                centerOcclusionWidth: 0,
+                compactHeight: 46
+            ).width
+        }
+
+        #expect(width(timerText: "1:23:45") > width(timerText: "1:23"))
+        #expect(width(timerText: "1:23") >= width(timerText: nil))
+    }
+
+    @Test @MainActor
+    func notchedCompactDropsItsTrailingWingUntilATurnIsTimed() {
+        let occlusion: CGFloat = 200
+        func size(timerText: String?) -> CGSize {
+            PanelMetrics.size(
+                geometry: .notched,
+                isExpanded: false,
+                statusReadoutText: "Running",
+                timerText: timerText,
+                centerOcclusionWidth: occlusion,
+                compactHeight: 46
+            )
+        }
+
+        // Idle: leading wing + the cut-out, and nothing to its right — an empty
+        // trailing wing would render as a second, fake notch.
+        let idle = size(timerText: nil)
+        let leading = PanelMetrics.compactLeadingWidth(
+            statusReadoutText: "Running",
+            showsStatusText: false,
+            compactHeight: 46
+        ) + PanelMetrics.expandedNotchClearance
+        #expect(abs(idle.width - (leading + occlusion)) <= 1)
+
+        #expect(size(timerText: "1:23").width > idle.width)
+    }
+
+    @Test @MainActor
+    func notchedCompactPanelStaysPinnedToTheCutOut() {
+        func offset(timerText: String?) -> CGFloat {
+            PanelMetrics.compactHorizontalOffset(
+                geometry: .notched,
+                isExpanded: false,
+                statusReadoutText: "Running",
+                timerText: timerText,
+                centerOcclusionWidth: 200,
+                compactHeight: 46
+            )
+        }
+
+        // With no trailing wing the panel hangs left of the cut-out, so it has
+        // to be displaced left of the display centre to stay aligned.
+        #expect(offset(timerText: nil) < 0)
+        // A trailing wing pulls it back toward centre.
+        #expect(offset(timerText: "1:23") > offset(timerText: nil))
+        // Nothing to pin to when there is no notch.
+        #expect(
+            PanelMetrics.compactHorizontalOffset(
+                geometry: .noNotch,
+                isExpanded: false,
+                statusReadoutText: "Running",
+                timerText: "1:23",
+                centerOcclusionWidth: 0,
+                compactHeight: 46
+            ) == 0
+        )
+    }
+
+    /// The compact panel measures itself from rendered text, so only the widths
+    /// that are pure constants are pinned. The rest are asserted as the
+    /// relationships that actually matter: an exact pixel copied from a font
+    /// metric goes red on the next system update without anything being wrong.
+    @Test @MainActor
+    func compactGeometryComposesTheNotchWings() {
+        func width(
+            geometry: DisplayGeometry,
+            timerText: String?,
+            compactHeight: CGFloat
+        ) -> CGFloat {
+            PanelMetrics.size(
+                geometry: geometry,
+                isExpanded: false,
+                statusReadoutText: "Running",
+                timerText: timerText,
+                centerOcclusionWidth: geometry == .notched ? 200 : 0,
+                compactHeight: compactHeight
+            ).width
+        }
+
+        // Leading wing plus the cut-out and nothing else. No text is measured on
+        // a notched compact panel, so this width is exact -- and it is the one
+        // number a Figma variant can be checked against directly.
+        let notchedIdle = width(geometry: .notched, timerText: nil, compactHeight: 46)
+        #expect(notchedIdle == 251)
+
+        // Timing a turn adds the trailing wing, and nothing but the trailing wing.
+        let notchedTimed = width(geometry: .notched, timerText: "1:23", compactHeight: 46)
+        let trailingWing = PanelMetrics.compactTrailingWidth(timerText: "1:23")
+            + PanelMetrics.expandedNotchClearance
+        #expect(abs((notchedTimed - notchedIdle) - trailingWing) <= 1)
+
+        // A short bar rests on the floor rather than shrinking to its content,
+        // and still grows once there is a timer to fit.
+        #expect(
+            width(geometry: .noNotch, timerText: nil, compactHeight: 24)
+                == PanelMetrics.fallbackBaselineWidth
+        )
+        #expect(
+            width(geometry: .noNotch, timerText: "1:23", compactHeight: 24)
+                > PanelMetrics.fallbackBaselineWidth
+        )
+    }
+
+    @Test @MainActor
+    func statusMatrixTracksFortyPercentOfMenuBarHeight() {
+        // 46 * 0.4 is not exactly 18.4 in binary floating point.
+        #expect(abs(PanelMetrics.statusMatrixWidth(compactHeight: 46) - 18.4) < 0.001)
+        #expect(abs(PanelMetrics.statusMatrixWidth(compactHeight: 24) - 9.6) < 0.001)
+    }
+
+    @Test @MainActor
+    func compactWidthGrowsWithTheMenuBarBecauseTheIndicatorDoes() {
+        let onNotchedBar = PanelMetrics.fallbackCompactWidth(
+            statusReadoutText: "Approval needed",
+            compactHeight: 46
+        )
+        let onStandardBar = PanelMetrics.fallbackCompactWidth(
+            statusReadoutText: "Approval needed",
+            compactHeight: 24
+        )
+
+        // The indicator is height-derived, so the same text needs less width on
+        // a shorter bar — the 8pt dot this replaced made the two identical.
+        // The whole difference is the indicator, give or take the ceil.
+        let indicatorDelta = PanelMetrics.statusMatrixWidth(compactHeight: 46)
+            - PanelMetrics.statusMatrixWidth(compactHeight: 24)
+        #expect(onNotchedBar > onStandardBar)
+        #expect(abs((onNotchedBar - onStandardBar) - indicatorDelta) <= 1)
     }
 
     @Test @MainActor
@@ -23,8 +172,12 @@ struct CodexInNotchTests {
         let runningWidth = PanelMetrics.fallbackCompactWidth(statusReadoutText: "Running")
         let waitingWidth = PanelMetrics.fallbackCompactWidth(statusReadoutText: "Approval needed")
 
+        // Only a very short status rests on the floor now; everything else is
+        // driven by its own content, which is the point of dropping the ring.
+        let idleWidth = PanelMetrics.fallbackCompactWidth(statusReadoutText: "Idle")
+        #expect(idleWidth == PanelMetrics.fallbackBaselineWidth)
+        #expect(runningWidth > idleWidth)
         #expect(waitingWidth > runningWidth)
-        #expect(PanelMetrics.fallbackCompactWidth(statusReadoutText: "Input needed") == 200)
     }
 
     @Test
@@ -71,7 +224,7 @@ struct CodexInNotchTests {
             geometry: .noNotch,
             isExpanded: true,
             statusReadoutText: "Running",
-            expandedUsageReadoutText: "72%",
+            timerText: nil,
             centerOcclusionWidth: 0,
             compactHeight: 24
         )
@@ -79,7 +232,7 @@ struct CodexInNotchTests {
             geometry: .notched,
             isExpanded: true,
             statusReadoutText: "Running",
-            expandedUsageReadoutText: "72%",
+            timerText: nil,
             centerOcclusionWidth: 200,
             compactHeight: 38
         )
@@ -94,30 +247,17 @@ struct CodexInNotchTests {
     func expandedWidthKeepsEveryStatusNameClearOfWideNotch() {
         let centerOcclusionWidth: CGFloat = 220
         let width = PanelMetrics.expandedWidth(
-            centerOcclusionWidth: centerOcclusionWidth,
-            usageReadoutText: "100%"
+            centerOcclusionWidth: centerOcclusionWidth
         )
         let availableSideWidth = (width - centerOcclusionWidth) / 2
 
+        // Only the status readout flanks the notch now; usage moved to the footer.
         for status in MonitorStatus.allCases {
             let requiredWidth = PanelMetrics.expandedHorizontalPadding
                 + PanelMetrics.expandedStatusReadoutWidth(status: status)
                 + PanelMetrics.expandedNotchClearance
             #expect(requiredWidth <= availableSideWidth)
         }
-
-        let requiredUsageWidth = PanelMetrics.expandedHorizontalPadding
-            + PanelMetrics.expandedUsageReadoutWidth(text: "100%")
-            + PanelMetrics.expandedNotchClearance
-        #expect(requiredUsageWidth <= availableSideWidth)
-    }
-
-    @Test @MainActor
-    func usageThresholdsMatchTheFigmaContract() {
-        #expect(UsageLevel(remainingPercent: 51) == .healthy)
-        #expect(UsageLevel(remainingPercent: 50) == .warning)
-        #expect(UsageLevel(remainingPercent: 15) == .warning)
-        #expect(UsageLevel(remainingPercent: 14) == .critical)
     }
 
     @Test
@@ -129,8 +269,10 @@ struct CodexInNotchTests {
         #expect(UsageSummaryFormatter.compactTokenCount(999) == "999")
     }
 
+    /// The reset window now reads as a remaining *duration* rather than a count
+    /// of calendar days: "Resets today" was equally true at 00:30 and 23:30.
     @Test
-    func resetTextUsesLocalCalendarDays() throws {
+    func resetTextReadsRemainingDaysAndHours() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
         let now = try #require(calendar.date(from: DateComponents(
@@ -139,31 +281,226 @@ struct CodexInNotchTests {
             day: 13,
             hour: 10
         )))
-        let laterToday = try #require(calendar.date(byAdding: .hour, value: 8, to: now))
-        let tomorrow = try #require(calendar.date(byAdding: .day, value: 1, to: now))
-        let threeDays = try #require(calendar.date(byAdding: .day, value: 3, to: now))
+        func text(afterHours hours: Int) throws -> String {
+            let resetsAt = try #require(
+                calendar.date(byAdding: .hour, value: hours, to: now)
+            )
+            return UsageSummaryFormatter.resetText(
+                resetsAt: resetsAt,
+                now: now,
+                calendar: calendar
+            )
+        }
 
+        #expect(try text(afterHours: 8) == "Resets in 8 hours")
+        #expect(try text(afterHours: 1) == "Resets in 1 hour")
+        #expect(try text(afterHours: 24) == "Resets in 1 day")
+        #expect(try text(afterHours: 24 * 3) == "Resets in 3 days")
+        #expect(try text(afterHours: 24 * 3 + 4) == "Resets in 3 days 4 hours")
+        #expect(try text(afterHours: 25) == "Resets in 1 day 1 hour")
         #expect(
-            UsageSummaryFormatter.resetText(
-                resetsAt: laterToday,
-                now: now,
-                calendar: calendar
-            ) == "Resets today"
+            UsageSummaryFormatter.resetText(resetsAt: now, now: now) == "Resets now"
         )
         #expect(
-            UsageSummaryFormatter.resetText(
-                resetsAt: tomorrow,
-                now: now,
-                calendar: calendar
-            ) == "Resets in 1 day"
+            UsageSummaryFormatter.resetText(resetsAt: nil, now: now)
+                == "Reset unavailable"
         )
-        #expect(
-            UsageSummaryFormatter.resetText(
-                resetsAt: threeDays,
-                now: now,
-                calendar: calendar
-            ) == "Resets in 3 days"
+    }
+
+    @Test
+    func elapsedFormatterRollsOverIntoHours() throws {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        func elapsed(_ seconds: TimeInterval) -> String? {
+            SessionElapsedFormatter.elapsed(
+                since: start,
+                now: start.addingTimeInterval(seconds)
+            )
+        }
+
+        #expect(elapsed(0) == "0:00")
+        #expect(elapsed(7) == "0:07")
+        #expect(elapsed(83) == "1:23")
+        #expect(elapsed(3599) == "59:59")
+        #expect(elapsed(3600) == "1:00:00")
+        #expect(elapsed(3723) == "1:02:03")
+        // No start time, and clock skew, both read as "not timed".
+        #expect(SessionElapsedFormatter.elapsed(since: nil, now: start) == nil)
+        #expect(elapsed(-5) == nil)
+    }
+
+    /// VoiceOver reads the drawn `1:23` as twenty-three past one, so the spoken
+    /// form is a separate string rather than the same one handed to the label.
+    @Test
+    func spokenElapsedReadsAsADurationRatherThanAClockTime() {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        func spoken(_ seconds: TimeInterval) -> String? {
+            SessionElapsedFormatter.spokenElapsed(
+                since: start,
+                now: start.addingTimeInterval(seconds)
+            )
+        }
+
+        #expect(spoken(0) == "0 秒")
+        #expect(spoken(7) == "7 秒")
+        #expect(spoken(83) == "1 分 23 秒")
+        // Empty units are dropped, never spoken as "0 分".
+        #expect(spoken(120) == "2 分")
+        #expect(spoken(3600) == "1 小时")
+        #expect(spoken(3723) == "1 小时 2 分 3 秒")
+        #expect(SessionElapsedFormatter.spokenElapsed(since: nil, now: start) == nil)
+        #expect(spoken(-5) == nil)
+    }
+
+    /// The wait *is* the part worth timing: a turn parked on an approval is the
+    /// one the user needs a number for, so the clock does not pause for it.
+    @Test @MainActor
+    func timerKeepsCountingWhileATurnWaitsForApproval() async throws {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        let startedAt = clock.now()
+
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .running, startedAt: startedAt)
+            ]),
+            observedAt: clock.now()
         )
+        // Let the ticking task park on the clock before moving it, or the
+        // advance happens before there is a sleeper to wake.
+        await clock.settle()
+        await clock.advance(by: 30)
+        #expect(store.compactTimerText == "0:30")
+
+        // Same turn, now blocked on a human. Nothing about the count changes.
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .approvalNeeded, startedAt: startedAt)
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        await clock.advance(by: 90)
+
+        #expect(store.compactTimerText == "2:00")
+        #expect(store.elapsedText(for: try #require(store.sessions.first)) == "2:00")
+    }
+
+    @Test @MainActor
+    func notchTimesTheLongestRunningUnfinishedTurn() async {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        let now = clock.now()
+
+        store.applyForTesting(
+            makeSessionSnapshot([
+                // Oldest of all, but finished — a stopped clock cannot be the
+                // longest-running one.
+                makeSession(
+                    threadID: "done",
+                    status: .completed,
+                    startedAt: now.addingTimeInterval(-600)
+                ),
+                makeSession(
+                    threadID: "waiting",
+                    status: .approvalNeeded,
+                    startedAt: now.addingTimeInterval(-300)
+                ),
+                makeSession(
+                    threadID: "running",
+                    status: .running,
+                    startedAt: now.addingTimeInterval(-60)
+                )
+            ]),
+            observedAt: now
+        )
+        await clock.settle()
+
+        #expect(store.compactTimerText == "5:00")
+        #expect(store.spokenLongestElapsedText == "5 分")
+    }
+
+    @Test @MainActor
+    func completedTurnStopsItsTimerAndReleasesTheNotch() async throws {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        let startedAt = clock.now().addingTimeInterval(-125)
+
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .completed, startedAt: startedAt)
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+
+        // The start time is still known; the contract is that it stops being
+        // counted, not that the row forgets when it began.
+        let session = try #require(store.sessions.first)
+        #expect(session.startedAt == startedAt)
+        #expect(store.elapsedText(for: session) == nil)
+        #expect(store.spokenElapsedText(for: session) == nil)
+        #expect(store.compactTimerText == nil)
+    }
+
+    /// A monitor with nothing to count must not wake once a second to find that
+    /// out -- the resource cost of a per-second timer is the whole reason the
+    /// product deferred one.
+    @Test @MainActor
+    func elapsedTickingRunsOnlyWhileATurnIsTimed() async {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        await clock.settle()
+
+        #expect(clock.sleeperCount == 0)
+
+        let startedAt = clock.now()
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .running, startedAt: startedAt)
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(clock.sleeperCount == 1)
+
+        await clock.advance(by: 5)
+        #expect(store.compactTimerText == "0:05")
+        #expect(clock.sleeperCount == 1)
+
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .completed, startedAt: startedAt)
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+
+        #expect(clock.sleeperCount == 0)
+    }
+
+    /// The readout the ticking task publishes goes stale while it is stopped, so
+    /// the next turn has to reset it -- otherwise its first second is measured
+    /// against an instant from before it began and renders blank.
+    @Test @MainActor
+    func turnStartingAfterAnIdleStretchTimesFromItsOwnStart() async {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        await clock.advance(by: 600)
+
+        let startedAt = clock.now()
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .running, startedAt: startedAt)
+            ]),
+            observedAt: startedAt
+        )
+
+        // Correct before the first tick, not merely once ticking catches up.
+        #expect(store.compactTimerText == "0:00")
+
+        await clock.settle()
+        await clock.advance(by: 1)
+        #expect(store.compactTimerText == "0:01")
     }
 
     @Test @MainActor
@@ -196,7 +533,7 @@ struct CodexInNotchTests {
 
         #expect(store.sessions.count == 1)
         #expect(store.compactStatusReadoutText == "Running")
-        #expect(store.expandedUsageReadoutText == "72%")
+        #expect(store.tokenRemainingPercent == 72)
 
         store.applyForTesting(
             MonitorSnapshot(
@@ -219,7 +556,7 @@ struct CodexInNotchTests {
 
         #expect(store.sessions.count == 1)
         #expect(store.compactStatusReadoutText == "Input needed")
-        #expect(store.expandedUsageReadoutText == "72%")
+        #expect(store.tokenRemainingPercent == 72)
     }
 
     @Test @MainActor
@@ -4039,6 +4376,46 @@ for line in sys.stdin:
         #expect(rawEvent["reason"] == nil)
         #expect(snapshot.turns.first?.threadID == "thread-script")
         #expect(snapshot.turns.first?.promptPreview == "script preview")
+    }
+
+    /// A store holding nothing, so a timing assertion starts from a clock with
+    /// no sleepers on it and a session list the test controls entirely.
+    @MainActor
+    private func makeIdleStore(clock: TestClock) -> MonitorStore {
+        MonitorStore(
+            displays: [
+                makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 46, hasNotch: true)
+            ],
+            initialSnapshot: makeSessionSnapshot([]),
+            clock: clock
+        )
+    }
+
+    private func makeSession(
+        threadID: String = "thread",
+        status: SessionStatus,
+        startedAt: Date?
+    ) -> MonitoredSession {
+        MonitoredSession(
+            threadID: threadID,
+            turnID: "turn-\(threadID)",
+            projectName: "Chats",
+            title: "Timed turn",
+            preview: nil,
+            status: status,
+            startedAt: startedAt
+        )
+    }
+
+    private func makeSessionSnapshot(
+        _ sessions: [MonitoredSession]
+    ) -> MonitorSnapshot {
+        MonitorSnapshot(
+            availability: .ready,
+            sessions: sessions,
+            quota: .unavailable,
+            diagnostic: nil
+        )
     }
 
     private func makeDisplay(

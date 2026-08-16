@@ -57,7 +57,13 @@ struct NotchOverlayView: View {
     private var panelAccessibilityLabel: String {
         let usage = store.tokenRemainingPercent.map { "剩余用量 \($0)%" }
             ?? "剩余用量不可用"
-        return "Codex，\(store.sessions.count) 个相关会话，状态 \(store.status.displayName)，\(usage)"
+        // Spoken, not the "12:34" the notch draws: VoiceOver reads that as a
+        // time of day. The label names it as the longest of the running turns,
+        // because a bare duration beside a summary status is unattributable.
+        let elapsed = store.spokenLongestElapsedText.map { "，最长已运行 \($0)" }
+            ?? ""
+        return "Codex，\(store.sessions.count) 个相关会话，状态 "
+            + "\(store.status.displayName)\(elapsed)，\(usage)"
     }
 }
 
@@ -139,18 +145,21 @@ private struct OverlayHeader: View {
                 status: store.status,
                 text: statusText,
                 showsText: showsStatusText,
-                spacing: store.isExpanded
-                    ? PanelMetrics.expandedReadoutSpacing
-                    : 8
+                spacing: PanelMetrics.expandedReadoutSpacing,
+                matrixSize: PanelMetrics.statusMatrixWidth(
+                    compactHeight: store.compactHeight
+                ),
+                reduceMotion: store.reduceMotion
             )
 
-            Spacer(minLength: store.isExpanded ? 24 : compactGroupSpacing)
+            Spacer(minLength: 0)
 
-            UsageReadout(
-                remainingPercent: store.tokenRemainingPercent,
-                text: store.expandedUsageReadoutText,
-                showsText: store.isExpanded
-            )
+            // Trailing wing, compact only: present while a turn is timed, absent
+            // otherwise so a notched display shows no empty second cut-out. The
+            // expanded view times each row individually instead.
+            if !store.isExpanded, let elapsed = store.compactTimerText {
+                NotchTimerText(text: elapsed)
+            }
         }
         .padding(.horizontal, horizontalPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -165,10 +174,6 @@ private struct OverlayHeader: View {
 
     private var showsStatusText: Bool {
         store.isExpanded || store.geometry == .noNotch
-    }
-
-    private var compactGroupSpacing: CGFloat {
-        store.geometry == .notched ? 0 : 32
     }
 
     private var horizontalPadding: CGFloat {
@@ -187,121 +192,29 @@ private struct StatusReadout: View {
     let text: String
     let showsText: Bool
     let spacing: CGFloat
+    let matrixSize: CGFloat
+    let reduceMotion: Bool
 
     var body: some View {
         HStack(spacing: spacing) {
-            StatusDot(status: status)
+            NotchStatusMatrix(
+                state: state,
+                size: matrixSize,
+                isAnimated: !reduceMotion
+            )
 
             if showsText {
-                Text(text)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(0.96))
-                    .lineLimit(1)
+                SearchlightLabel(
+                    text: text,
+                    isSweeping: state.isActive && !reduceMotion
+                )
             }
         }
         .fixedSize(horizontal: true, vertical: false)
     }
-}
 
-private struct UsageReadout: View {
-    let remainingPercent: Int?
-    let text: String
-    let showsText: Bool
-
-    var body: some View {
-        HStack(spacing: PanelMetrics.expandedReadoutSpacing) {
-            if showsText {
-                Text(text)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(palette.remaining)
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
-
-            UsageRing(remainingPercent: remainingPercent)
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityText)
-    }
-
-    private var palette: UsagePalette {
-        UsagePalette(
-            level: UsageLevel(remainingPercent: remainingPercent ?? 0),
-            isAvailable: remainingPercent != nil
-        )
-    }
-
-    private var accessibilityText: String {
-        remainingPercent.map { "剩余用量 \($0)%" } ?? "剩余用量不可用"
-    }
-}
-
-private struct UsageRing: View {
-    let remainingPercent: Int?
-
-    var body: some View {
-        ZStack {
-            if remainingProgress <= 0 {
-                Circle()
-                    .stroke(palette.track, lineWidth: 2)
-            } else {
-                Circle()
-                    .stroke(palette.remaining, lineWidth: 2)
-
-                if consumedProgress > 0 {
-                    Circle()
-                        .trim(from: 0, to: consumedProgress)
-                        .stroke(
-                            palette.track,
-                            style: StrokeStyle(lineWidth: 2, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-                        .scaleEffect(x: -1, y: 1)
-                }
-            }
-        }
-        .frame(width: 18, height: 18)
-        .accessibilityHidden(true)
-    }
-
-    private var remainingProgress: CGFloat {
-        CGFloat(min(max(remainingPercent ?? 0, 0), 100)) / 100
-    }
-
-    private var consumedProgress: CGFloat {
-        1 - remainingProgress
-    }
-
-    private var palette: UsagePalette {
-        UsagePalette(
-            level: UsageLevel(remainingPercent: remainingPercent ?? 0),
-            isAvailable: remainingPercent != nil
-        )
-    }
-}
-
-private struct UsagePalette {
-    let remaining: Color
-    let track: Color
-
-    init(level: UsageLevel, isAvailable: Bool = true) {
-        guard isAvailable else {
-            remaining = Color.white.opacity(0.28)
-            track = Color.white.opacity(0.12)
-            return
-        }
-        switch level {
-        case .healthy:
-            remaining = .white
-            track = Color(red: 0.23, green: 0.23, blue: 0.24)
-        case .warning:
-            remaining = Color(red: 1, green: 0.62, blue: 0.04)
-            track = Color(red: 0.34, green: 0.21, blue: 0.02)
-        case .critical:
-            remaining = Color(red: 1, green: 0.27, blue: 0.23)
-            track = Color(red: 0.35, green: 0.09, blue: 0.08)
-        }
+    private var state: NotchMatrixState {
+        NotchMatrixState(status)
     }
 }
 
@@ -321,8 +234,8 @@ private struct ExpandedPanelContent: View {
         Group {
             if store.sessions.isEmpty {
                 Text(store.emptyListMessage)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.56))
+                    .font(.system(size: 13, weight: .light))
+                    .foregroundStyle(NotchPalette.label)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .frame(height: PanelMetrics.thinExpandedBodyHeight)
             } else {
@@ -357,11 +270,13 @@ private struct ExpandedPanelFooter: View {
     @Environment(\.openSettings) private var openSettings
     @EnvironmentObject private var store: MonitorStore
 
+    @State private var isSettingsHovered = false
+
     var body: some View {
         HStack(spacing: 8) {
             Text(store.expandedFooterText)
-                .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.68))
+                .font(.system(size: 11, weight: .light))
+                .foregroundStyle(NotchPalette.label)
                 .lineLimit(1)
 
             Spacer(minLength: 8)
@@ -370,21 +285,32 @@ private struct ExpandedPanelFooter: View {
                 openSettings()
             } label: {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 16, weight: .regular))
-                    .frame(width: 32, height: 32)
+                    .font(.system(size: 15, weight: .regular))
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.white.opacity(isSettingsHovered ? 0.12 : 0))
+                    )
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.white.opacity(0.68))
+            .foregroundStyle(
+                isSettingsHovered ? NotchPalette.sessionTitle : NotchPalette.label
+            )
+            .onHover { isSettingsHovered = $0 }
+            .animation(
+                store.reduceMotion ? nil : .easeOut(duration: 0.12),
+                value: isSettingsHovered
+            )
             .accessibilityLabel("Open Settings")
             .help("Open Settings")
         }
         .frame(maxWidth: .infinity)
         .frame(height: PanelMetrics.expandedFooterHeight)
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.white.opacity(0.15))
-                .frame(height: 1)
+            // The separator *is* the quota meter — all usage lives down here now,
+            // and the rule was already spanning this width doing nothing.
+            UsageMeter(fill: store.usageMeterFill)
         }
         .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
     }
@@ -416,7 +342,12 @@ private struct SessionRow: View {
         let preview = store.showsContentPreviews
             ? session.preview.map { "，当前内容：\($0)" } ?? ""
             : "，内容预览已隐藏"
-        return "\(session.projectName)，\(session.title)，\(session.status.controlTitle)\(preview)"
+        // Spoken form, not the drawn "12:34" — VoiceOver reads that as a clock
+        // time. The row draws the elapsed value, so the label must carry it too.
+        let elapsed = store.spokenElapsedText(for: session).map { "，已运行 \($0)" }
+            ?? ""
+        return "\(session.projectName)，\(session.title)，"
+            + "\(session.status.controlTitle)\(elapsed)\(preview)"
     }
 }
 
@@ -436,15 +367,15 @@ private struct SessionRowContent: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.projectName)
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.68))
+                        .font(.system(size: 11, weight: .light))
+                        .foregroundStyle(NotchPalette.label)
                         .lineLimit(1)
                         .truncationMode(.tail)
 
                     UntruncatedSingleLineText(
                         text: session.title,
                         font: .system(size: 13, weight: .medium),
-                        color: Color.white.opacity(0.98),
+                        color: NotchPalette.sessionTitle,
                         lineHeight: 17
                     )
                     .mask(TrailingAlphaFade())
@@ -452,20 +383,18 @@ private struct SessionRowContent: View {
                     if store.showsContentPreviews, let preview = session.preview {
                         UntruncatedSingleLineText(
                             text: preview,
-                            font: .system(size: 13, weight: .regular),
-                            color: Color.white.opacity(0.68),
-                            lineHeight: 18
+                            font: .system(size: 13, weight: .light),
+                            color: NotchPalette.label,
+                            lineHeight: 18,
+                            sweeps: sweepsBody
                         )
                         .mask(TrailingAlphaFade())
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                SessionStatusControl(
-                    session: session,
-                    revealsStatusName: revealsStatusName
-                )
-                .fixedSize(horizontal: true, vertical: false)
+                SessionStatusControl(session: session)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, 16)
         }
@@ -477,8 +406,10 @@ private struct SessionRowContent: View {
         )
     }
 
-    private var revealsStatusName: Bool {
-        session.status.isRunning || isHovered || isPressed
+    /// A session sweeps its body until it finishes. Hovering no longer changes
+    /// anything about the indicator, so the row's own state is the only input.
+    private var sweepsBody: Bool {
+        session.status.keepsTiming && !store.reduceMotion
     }
 
     private var backgroundColor: Color {
@@ -493,32 +424,35 @@ private struct SessionRowContent: View {
 }
 
 private struct SessionStatusControl: View {
+    @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
-    let revealsStatusName: Bool
 
+    // One mark per row, never two. An unfinished row shows its timer and lets
+    // the timer's own colour and weight carry the state, so an approval-needing
+    // row reads as amber digits rather than a dot parked beside a clock. A
+    // finished row has nothing to count, so it keeps the dot.
     var body: some View {
-        if revealsStatusName {
-            HStack(spacing: 8) {
-                StatusDot(status: session.status.monitorStatus)
-                Text(label)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(statusColor)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 24)
-            .background(statusColor.opacity(0.16), in: Capsule())
+        if let elapsed = store.elapsedText(for: session) {
+            NotchTimerText(text: elapsed, tint: tint, weight: weight)
         } else {
+            // Completed has nothing left to count, and an unfinished turn whose
+            // start was never observed must not invent one. Both fall back to the
+            // dot so no row is ever left unmarked: with previews hidden there is
+            // no swept body to say the turn is in flight either.
             StatusDot(status: session.status.monitorStatus)
         }
     }
 
-    private var label: String {
-        session.status.displayName
+    private var wantsAttention: Bool {
+        session.status == .inputNeeded || session.status == .approvalNeeded
     }
 
-    private var statusColor: Color {
-        StatusPalette.color(for: session.status)
+    private var tint: Color {
+        wantsAttention ? NotchPalette.attention : NotchPalette.label
+    }
+
+    private var weight: Font.Weight {
+        wantsAttention ? .medium : .light
     }
 }
 
@@ -534,10 +468,6 @@ private struct StatusDot: View {
 }
 
 private enum StatusPalette {
-    static func color(for status: SessionStatus) -> Color {
-        color(for: status.monitorStatus)
-    }
-
     static func color(for status: MonitorStatus) -> Color {
         switch status {
         case .idle, .setupRequired:
@@ -559,17 +489,27 @@ private struct UntruncatedSingleLineText: View {
     let font: Font
     let color: Color
     let lineHeight: CGFloat
+    var sweeps = false
 
     var body: some View {
         GeometryReader { proxy in
-            Text(text)
-                .font(font)
-                .foregroundStyle(color)
-                .fixedSize(horizontal: true, vertical: false)
+            glyphs
+                .overlay {
+                    if sweeps {
+                        SearchlightBand().mask(glyphs)
+                    }
+                }
                 .frame(width: proxy.size.width, alignment: .leading)
                 .clipped()
         }
         .frame(height: lineHeight)
+    }
+
+    private var glyphs: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(color)
+            .fixedSize(horizontal: true, vertical: false)
     }
 }
 
