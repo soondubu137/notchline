@@ -370,23 +370,21 @@ private struct SessionRowContent: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
 
-                    UntruncatedSingleLineText(
+                    SessionRowText(
                         text: session.title,
-                        font: .system(size: 13, weight: .medium),
-                        color: NotchPalette.sessionTitle,
+                        font: .systemFont(ofSize: 13, weight: .medium),
+                        color: NotchPalette.sessionTitleDrawingColor,
                         lineHeight: 17
                     )
-                    .mask(TrailingAlphaFade())
 
                     if store.showsContentPreviews, let preview = session.preview {
-                        UntruncatedSingleLineText(
+                        SessionRowText(
                             text: preview,
-                            font: .system(size: 13, weight: .light),
-                            color: NotchPalette.label,
+                            font: .systemFont(ofSize: 13, weight: .light),
+                            color: NotchPalette.labelDrawingColor,
                             lineHeight: 18,
                             sweeps: sweepsBody
                         )
-                        .mask(TrailingAlphaFade())
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -455,50 +453,6 @@ private struct SessionStatusControl: View {
 
     private var weight: Font.Weight {
         wantsAttention ? .medium : .light
-    }
-}
-
-private struct UntruncatedSingleLineText: View {
-    let text: String
-    let font: Font
-    let color: Color
-    let lineHeight: CGFloat
-    var sweeps = false
-
-    var body: some View {
-        GeometryReader { proxy in
-            glyphs
-                .overlay {
-                    if sweeps {
-                        SearchlightBand().mask(glyphs)
-                    }
-                }
-                .frame(width: proxy.size.width, alignment: .leading)
-                .clipped()
-        }
-        .frame(height: lineHeight)
-    }
-
-    private var glyphs: some View {
-        Text(text)
-            .font(font)
-            .foregroundStyle(color)
-            .fixedSize(horizontal: true, vertical: false)
-    }
-}
-
-private struct TrailingAlphaFade: View {
-    var body: some View {
-        HStack(spacing: 0) {
-            Rectangle()
-
-            LinearGradient(
-                colors: [.black, .clear],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            .frame(width: 48)
-        }
     }
 }
 

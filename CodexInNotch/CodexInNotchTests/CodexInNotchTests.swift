@@ -3042,6 +3042,67 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
+    func sessionRowTextFadesItsOverflowAndSweepsThroughCoreAnimation() throws {
+        // This row owns two masks that used to be SwiftUI's: the trailing fade
+        // its caller applied, and the sweep over the bright copy. Getting either
+        // wrong is silent -- a row that clips hard instead of fading, or a bar
+        // painted across the panel -- so both are asserted on the layer.
+        let font = NSFont.systemFont(ofSize: 13, weight: .light)
+        let text = "A preview long enough to run past the row it is drawn in"
+        let view = SessionRowTextView()
+        view.apply(
+            text: text,
+            font: font,
+            color: NotchPalette.labelDrawingColor,
+            sweeps: true
+        )
+
+        // Narrower than the glyphs, which is the case the fade exists for.
+        let glyphWidth = view.intrinsicContentSize.width
+        let rowWidth = glyphWidth / 2
+        view.frame = NSRect(x: 0, y: 0, width: rowWidth, height: 18)
+        view.layout()
+
+        let root = try #require(view.layer)
+        let sublayers = try #require(root.sublayers)
+        #expect(sublayers.count == 2)
+
+        // Glyphs are drawn at their natural width and allowed to overflow, so
+        // the fade has something to fade rather than a pre-truncated string.
+        let glyphs = try #require(sublayers.first)
+        #expect(glyphs.frame.width == glyphWidth)
+        let contents = try #require(glyphs.contents)
+        let image = unsafeDowncast(contents as AnyObject, to: CGImage.self)
+        let alphas = try Self.alphaExtremes(of: image)
+        #expect(alphas.minimum == 0)
+        #expect(alphas.maximum > 0.5)
+
+        // The fade covers the row and turns transparent over its last stretch.
+        let fade = try #require(root.mask as? CAGradientLayer)
+        #expect(fade.frame.width == rowWidth)
+        let locations = try #require(fade.locations)
+        #expect(locations.count == 3)
+        let fadeStart = try #require(locations.dropFirst().first).doubleValue
+        #expect(fadeStart > 0)
+        #expect(fadeStart < 1)
+
+        // The bright copy sweeps across the glyphs, driven by Core Animation.
+        let highlight = try #require(sublayers.last)
+        #expect(!highlight.isHidden)
+        let sweep = try #require(highlight.mask)
+        #expect(sweep.animation(forKey: NotchTextRaster.sweepAnimationKey) != nil)
+
+        view.apply(
+            text: text,
+            font: font,
+            color: NotchPalette.labelDrawingColor,
+            sweeps: false
+        )
+        #expect(highlight.isHidden)
+        #expect(sweep.animation(forKey: NotchTextRaster.sweepAnimationKey) == nil)
+    }
+
+    @Test @MainActor
     func refreshLoopNeverSpinsOnAnOverdueDeadline() async throws {
         // The store cannot verify a service's deadlines, so it must stay bounded
         // when one is wrong. Without a floor an overdue deadline sleeps zero and

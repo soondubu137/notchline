@@ -55,6 +55,7 @@ enum NotchPalette {
         alpha: 1
     )
     static let spotlightDrawingColor = NSColor.white
+    static let sessionTitleDrawingColor = NSColor.white.withAlphaComponent(0.98)
 }
 
 /// Elapsed time for a turn.
@@ -399,48 +400,95 @@ final class MatrixIndicatorView: NSView {
     }
 }
 
-/// A highlight band travelling across the glyphs, over a dim base.
+/// Shared drawing for the surface's layer-backed labels.
 ///
-/// Mirrors the reference implementation: a 400%-wide gradient that is
-/// transparent except for a peak at its centre, clipped to the text and slid
-/// from one side to the other on a 2s linear loop.
-struct SearchlightBand: View {
-    var period: TimeInterval = 2
+/// Both the notch readout and the session rows animate a highlight across their
+/// glyphs, so both draw the glyphs into a layer rather than letting SwiftUI
+/// re-render them every frame. They rasterise through ordinary AppKit text
+/// drawing, so a layer-backed label matches a SwiftUI one beside it.
+enum NotchTextRaster {
+    /// A highlight band: transparent except for a peak at its centre, four
+    /// times as wide as what it crosses. Read as a mask, so only alpha matters.
+    static func makeSweepMask() -> CAGradientLayer {
+        let mask = CAGradientLayer()
+        mask.startPoint = CGPoint(x: 0, y: 0.5)
+        mask.endPoint = CGPoint(x: 1, y: 0.5)
+        mask.colors = [
+            CGColor(gray: 0, alpha: 0),
+            CGColor(gray: 0, alpha: 0),
+            CGColor(gray: 0, alpha: 1),
+            CGColor(gray: 0, alpha: 0),
+            CGColor(gray: 0, alpha: 0)
+        ]
+        mask.locations = [0, 0.40, 0.50, 0.60, 1]
+        return mask
+    }
 
-    // Only the expanded session row still uses this, and only while the pointer
-    // holds the panel open, so its cost is bounded by hover. The notch's own
-    // readout moved to ``SearchlightLabel``'s layer-backed sweep, which is the
-    // one that could run all afternoon.
-    //
-    // Costs ~7% of a core while it runs. Capping the schedule does not help --
-    // 30 Hz measured the same as the display's 120 -- because the redraw
-    // follows the panel being marked for display, not this view's tick. Moving
-    // it to Core Animation as well means moving its two masks (the glyph mask
-    // here, and the caller's TrailingAlphaFade) into AppKit with it.
-    var body: some View {
-        TimelineView(.animation) { context in
-            GeometryReader { proxy in
-                let elapsed = context.date.timeIntervalSinceReferenceDate
-                    .truncatingRemainder(dividingBy: period)
-                let progress = elapsed / period
-                let band = max(proxy.size.width * 4, 1)
+    /// Slides `mask` across `width` on a linear loop, on the render server.
+    static func installSweep(
+        on mask: CAGradientLayer,
+        across width: CGFloat,
+        height: CGFloat,
+        period: TimeInterval
+    ) {
+        mask.removeAnimation(forKey: sweepAnimationKey)
+        guard width > 0 else { return }
 
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .clear, location: 0.40),
-                        .init(color: NotchPalette.spotlight, location: 0.50),
-                        .init(color: .clear, location: 0.60),
-                        .init(color: .clear, location: 1)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: band)
-                .offset(x: -band + progress * (band + proxy.size.width))
-            }
+        let band = max(width * 4, 1)
+        mask.frame = CGRect(x: 0, y: 0, width: band, height: max(height, 1))
+
+        let animation = CABasicAnimation(keyPath: "transform.translation.x")
+        animation.fromValue = -band
+        animation.toValue = width
+        animation.duration = period
+        animation.repeatCount = .infinity
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        animation.isRemovedOnCompletion = false
+        mask.add(animation, forKey: sweepAnimationKey)
+    }
+
+    static let sweepAnimationKey = "notch.searchlight"
+
+    static func textSize(_ text: String, font: NSFont) -> CGSize {
+        let size = (text as NSString).size(withAttributes: [.font: font])
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
+    }
+
+    /// The glyphs, drawn the way every other label on this surface is drawn.
+    static func glyphImage(
+        text: String,
+        font: NSFont,
+        color: NSColor,
+        size: CGSize,
+        scale: CGFloat
+    ) -> CGImage? {
+        let pixelWidth = Int((size.width * scale).rounded(.up))
+        let pixelHeight = Int((size.height * scale).rounded(.up))
+        guard pixelWidth > 0, pixelHeight > 0 else { return nil }
+        guard let context = CGContext(
+            data: nil,
+            width: pixelWidth,
+            height: pixelHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
         }
-        .allowsHitTesting(false)
+
+        context.scaleBy(x: scale, y: scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(
+            cgContext: context,
+            flipped: false
+        )
+        (text as NSString).draw(
+            at: .zero,
+            withAttributes: [.font: font, .foregroundColor: color]
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage()
     }
 }
 
@@ -498,7 +546,7 @@ final class SweepingLabelView: NSView {
 
     private let baseLayer = CALayer()
     private let highlightLayer = CALayer()
-    private let sweepMask = CAGradientLayer()
+    private let sweepMask = NotchTextRaster.makeSweepMask()
     private var appliedText = ""
     private var appliedFont = NSFont.systemFont(ofSize: 13, weight: .light)
     private var appliedIsSweeping = false
@@ -509,19 +557,6 @@ final class SweepingLabelView: NSView {
         wantsLayer = true
         layer?.masksToBounds = false
 
-        // A mask is read through its alpha, so the band is opaque only at its
-        // centre. Same stops as the gradient the SwiftUI band uses.
-        sweepMask.startPoint = CGPoint(x: 0, y: 0.5)
-        sweepMask.endPoint = CGPoint(x: 1, y: 0.5)
-        sweepMask.colors = [
-            CGColor(gray: 0, alpha: 0),
-            CGColor(gray: 0, alpha: 0),
-            CGColor(gray: 0, alpha: 1),
-            CGColor(gray: 0, alpha: 0),
-            CGColor(gray: 0, alpha: 0)
-        ]
-        sweepMask.locations = [0, 0.40, 0.50, 0.60, 1]
-
         highlightLayer.mask = sweepMask
         layer?.addSublayer(baseLayer)
         layer?.addSublayer(highlightLayer)
@@ -531,10 +566,7 @@ final class SweepingLabelView: NSView {
     required init?(coder: NSCoder) { nil }
 
     override var intrinsicContentSize: NSSize {
-        let size = (appliedText as NSString).size(
-            withAttributes: [.font: appliedFont]
-        )
-        return NSSize(width: ceil(size.width), height: ceil(size.height))
+        NotchTextRaster.textSize(appliedText, font: appliedFont)
     }
 
     func apply(text: String, font: NSFont, isSweeping: Bool) {
@@ -585,14 +617,14 @@ final class SweepingLabelView: NSView {
         let size = intrinsicContentSize
         baseLayer.contentsScale = scale
         highlightLayer.contentsScale = scale
-        baseLayer.contents = Self.glyphImage(
+        baseLayer.contents = NotchTextRaster.glyphImage(
             text: appliedText,
             font: appliedFont,
             color: NotchPalette.labelDrawingColor,
             size: size,
             scale: scale
         )
-        highlightLayer.contents = Self.glyphImage(
+        highlightLayer.contents = NotchTextRaster.glyphImage(
             text: appliedText,
             font: appliedFont,
             color: NotchPalette.spotlightDrawingColor,
@@ -602,61 +634,215 @@ final class SweepingLabelView: NSView {
     }
 
     private func installSweep() {
-        sweepMask.removeAnimation(forKey: "notch.searchlight")
-        guard appliedIsSweeping, bounds.width > 0 else { return }
-
-        let band = max(bounds.width * 4, 1)
-        sweepMask.frame = CGRect(
-            x: 0,
-            y: 0,
-            width: band,
-            height: max(bounds.height, 1)
+        guard appliedIsSweeping else {
+            sweepMask.removeAnimation(forKey: NotchTextRaster.sweepAnimationKey)
+            return
+        }
+        NotchTextRaster.installSweep(
+            on: sweepMask,
+            across: bounds.width,
+            height: bounds.height,
+            period: Self.sweepPeriod
         )
+    }
+}
 
-        let animation = CABasicAnimation(keyPath: "transform.translation.x")
-        animation.fromValue = -band
-        animation.toValue = bounds.width
-        animation.duration = Self.sweepPeriod
-        animation.repeatCount = .infinity
-        animation.timingFunction = CAMediaTimingFunction(name: .linear)
-        animation.isRemovedOnCompletion = false
-        sweepMask.add(animation, forKey: "notch.searchlight")
+/// A session row's title or preview: one line, never truncated with an ellipsis,
+/// fading out where it runs past the row instead.
+///
+/// Layer-backed for the same reason the notch readout is — a sweeping row cost
+/// ~7% of a core, and the expanded panel shows up to three of them at once — but
+/// it also owns the trailing fade its caller used to apply. A SwiftUI `.mask`
+/// over an AppKit view is not dependable, and the fade is the row's own
+/// behaviour rather than the caller's, so both masks live on the layer now: the
+/// fade on the container, the sweep on the bright copy.
+struct SessionRowText: View {
+    let text: String
+    let font: NSFont
+    let color: NSColor
+    let lineHeight: CGFloat
+    var sweeps = false
+
+    var body: some View {
+        SessionRowTextRepresentable(
+            text: text,
+            font: font,
+            color: color,
+            lineHeight: lineHeight,
+            sweeps: sweeps
+        )
+        .frame(height: lineHeight)
+    }
+}
+
+private struct SessionRowTextRepresentable: NSViewRepresentable {
+    let text: String
+    let font: NSFont
+    let color: NSColor
+    let lineHeight: CGFloat
+    let sweeps: Bool
+
+    func makeNSView(context: Context) -> SessionRowTextView {
+        SessionRowTextView()
     }
 
-    /// The glyphs, drawn the way every other label on this surface is drawn.
-    private static func glyphImage(
-        text: String,
-        font: NSFont,
-        color: NSColor,
-        size: NSSize,
-        scale: CGFloat
-    ) -> CGImage? {
-        let pixelWidth = Int((size.width * scale).rounded(.up))
-        let pixelHeight = Int((size.height * scale).rounded(.up))
-        guard pixelWidth > 0, pixelHeight > 0 else { return nil }
-        guard let context = CGContext(
-            data: nil,
-            width: pixelWidth,
-            height: pixelHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return nil
+    func updateNSView(_ view: SessionRowTextView, context: Context) {
+        view.apply(text: text, font: font, color: color, sweeps: sweeps)
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: SessionRowTextView,
+        context: Context
+    ) -> CGSize? {
+        // Takes the width it is offered, like the GeometryReader it replaced,
+        // and lets the glyphs overflow and fade rather than shrinking the row.
+        CGSize(
+            width: proposal.width ?? nsView.intrinsicContentSize.width,
+            height: lineHeight
+        )
+    }
+}
+
+final class SessionRowTextView: NSView {
+    private static let sweepPeriod: TimeInterval = 2
+    /// Distance over which the last glyphs fade out, matching the gradient the
+    /// caller used to apply as a separate SwiftUI mask.
+    private static let trailingFadeWidth: CGFloat = 48
+
+    private let baseLayer = CALayer()
+    private let highlightLayer = CALayer()
+    private let sweepMask = NotchTextRaster.makeSweepMask()
+    private let fadeMask = CAGradientLayer()
+    private var appliedText = ""
+    private var appliedFont = NSFont.systemFont(ofSize: 13, weight: .light)
+    private var appliedColor = NSColor.white
+    private var appliedSweeps = false
+    private var renderedScale: CGFloat = 0
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+
+        fadeMask.startPoint = CGPoint(x: 0, y: 0.5)
+        fadeMask.endPoint = CGPoint(x: 1, y: 0.5)
+        fadeMask.colors = [
+            CGColor(gray: 0, alpha: 1),
+            CGColor(gray: 0, alpha: 1),
+            CGColor(gray: 0, alpha: 0)
+        ]
+
+        highlightLayer.mask = sweepMask
+        layer?.addSublayer(baseLayer)
+        layer?.addSublayer(highlightLayer)
+        // Sized to the row, so it clips the overflow as well as fading it.
+        layer?.mask = fadeMask
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize {
+        NotchTextRaster.textSize(appliedText, font: appliedFont)
+    }
+
+    func apply(text: String, font: NSFont, color: NSColor, sweeps: Bool) {
+        let textChanged = text != appliedText
+            || font != appliedFont
+            || color != appliedColor
+        guard textChanged || sweeps != appliedSweeps else { return }
+
+        appliedText = text
+        appliedFont = font
+        appliedColor = color
+        appliedSweeps = sweeps
+
+        if textChanged {
+            invalidateIntrinsicContentSize()
+            renderedScale = 0
+            redrawGlyphs()
+        }
+        highlightLayer.isHidden = !sweeps
+        layout()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        redrawGlyphs()
+        layout()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        redrawGlyphs()
+    }
+
+    override func layout() {
+        super.layout()
+        // Geometry changes must not animate: the row is inside a panel that
+        // resizes, and an implicit CA animation would drag the glyphs after it.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        let glyphs = intrinsicContentSize
+        // Left-aligned at the top of the line box, where the GeometryReader
+        // this replaced placed its content.
+        let glyphFrame = CGRect(
+            x: 0,
+            y: 0,
+            width: glyphs.width,
+            height: glyphs.height
+        )
+        baseLayer.frame = glyphFrame
+        highlightLayer.frame = glyphFrame
+
+        fadeMask.frame = bounds
+        let width = max(bounds.width, 1)
+        let fadeStart = max(0, width - Self.trailingFadeWidth) / width
+        fadeMask.locations = [0, NSNumber(value: fadeStart), 1]
+
+        if appliedSweeps {
+            NotchTextRaster.installSweep(
+                on: sweepMask,
+                across: glyphs.width,
+                height: glyphs.height,
+                period: Self.sweepPeriod
+            )
+        } else {
+            sweepMask.removeAnimation(forKey: NotchTextRaster.sweepAnimationKey)
         }
 
-        context.scaleBy(x: scale, y: scale)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(
-            cgContext: context,
-            flipped: false
+        CATransaction.commit()
+    }
+
+    private func redrawGlyphs() {
+        let scale = window?.backingScaleFactor ?? 2
+        guard !appliedText.isEmpty else {
+            baseLayer.contents = nil
+            highlightLayer.contents = nil
+            return
+        }
+        guard scale != renderedScale else { return }
+        renderedScale = scale
+
+        let size = intrinsicContentSize
+        baseLayer.contentsScale = scale
+        highlightLayer.contentsScale = scale
+        baseLayer.contents = NotchTextRaster.glyphImage(
+            text: appliedText,
+            font: appliedFont,
+            color: appliedColor,
+            size: size,
+            scale: scale
         )
-        (text as NSString).draw(
-            at: .zero,
-            withAttributes: [.font: font, .foregroundColor: color]
+        highlightLayer.contents = NotchTextRaster.glyphImage(
+            text: appliedText,
+            font: appliedFont,
+            color: NotchPalette.spotlightDrawingColor,
+            size: size,
+            scale: scale
         )
-        NSGraphicsContext.restoreGraphicsState()
-        return context.makeImage()
     }
 }
