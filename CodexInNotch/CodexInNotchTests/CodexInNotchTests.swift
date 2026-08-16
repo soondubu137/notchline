@@ -3,38 +3,63 @@ import Testing
 @testable import CodexInNotch
 
 struct CodexInNotchTests {
+    /// A no-notch panel is one width, always. It used to measure itself, so it
+    /// resized whenever the status changed or a turn started or finished —
+    /// which on a menu bar reads as flicker rather than information.
     @Test @MainActor
-    func fallbackRunningBaselineMatchesFigma() {
-        let size = PanelMetrics.size(
-            geometry: .noNotch,
-            isExpanded: false,
-            statusReadoutText: "Running",
-            timerText: nil,
-            centerOcclusionWidth: 0,
-            compactHeight: PanelMetrics.referenceCompactHeight
-        )
-
-        // Padding + the fixed 16.6pt matrix + "Running" at Light, and nothing
-        // else — the usage ring that used to pad this out is gone.
-        #expect(size.width == 126)
-        #expect(size.height == 46)
-    }
-
-    @Test @MainActor
-    func timingATurnExtendsTheCompactPanel() {
-        func width(timerText: String?) -> CGFloat {
-            PanelMetrics.size(
-                geometry: .noNotch,
-                isExpanded: false,
-                statusReadoutText: "Running",
-                timerText: timerText,
-                centerOcclusionWidth: 0,
-                compactHeight: 46
-            ).width
+    func noNotchCompactIsOneFixedWidth() {
+        var widths: Set<CGFloat> = []
+        var heights: Set<CGFloat> = []
+        for status in MonitorStatus.allCases {
+            for timerText in [nil, "0:07", "1:23", "1:02:03"] as [String?] {
+                for barHeight in [CGFloat(46), 38, 24] {
+                    let size = PanelMetrics.size(
+                        geometry: .noNotch,
+                        isExpanded: false,
+                        statusReadoutText: status.compactDisplayName,
+                        timerText: timerText,
+                        centerOcclusionWidth: 0,
+                        compactHeight: barHeight
+                    )
+                    widths.insert(size.width)
+                    heights.insert(size.height)
+                }
+            }
         }
 
-        #expect(width(timerText: "1:23:45") > width(timerText: "1:23"))
-        #expect(width(timerText: "1:23") >= width(timerText: nil))
+        #expect(widths == [PanelMetrics.fixedCompactWidth])
+        // Height still follows the menu bar; only width came loose.
+        #expect(heights == [46, 38, 24])
+    }
+
+    /// The fixed width is a reservation, so it has to actually fit every state —
+    /// and not be so generous that it is reserving space nothing can use.
+    @Test @MainActor
+    func fixedCompactWidthFitsEveryStatusWithoutSlack() {
+        var widest: CGFloat = 0
+        for status in MonitorStatus.allCases {
+            let needed = PanelMetrics.compactChromeWidth
+                + PanelMetrics.compactContentWidth(for: status)
+            #expect(needed <= PanelMetrics.fixedCompactWidth)
+            widest = max(widest, needed)
+        }
+        // Only the rounding up should separate them.
+        #expect(PanelMetrics.fixedCompactWidth - widest < 1)
+    }
+
+    /// The notch's label is shorter than the panel's because the matrix beside
+    /// it already says a turn wants the user.
+    @Test @MainActor
+    func compactLabelsAreShorterThanTheirFullForm() {
+        #expect(MonitorStatus.inputNeeded.compactDisplayName == "Input")
+        #expect(MonitorStatus.approvalNeeded.compactDisplayName == "Approval")
+        #expect(MonitorStatus.inputNeeded.displayName == "Input needed")
+        #expect(MonitorStatus.approvalNeeded.displayName == "Approval needed")
+
+        for status in MonitorStatus.allCases {
+            #expect(status.compactDisplayName.count <= status.displayName.count)
+            #expect(!status.compactDisplayName.isEmpty)
+        }
     }
 
     @Test @MainActor
@@ -125,20 +150,11 @@ struct CodexInNotchTests {
             + PanelMetrics.expandedNotchClearance
         #expect(abs((notchedTimed - notchedIdle) - trailingWing) <= 1)
 
-        // The floor is a content floor now, not a short-bar one: with the
-        // indicator fixed, only a very short status rests on it, and it does so
-        // at every menu bar height.
-        #expect(
-            PanelMetrics.fallbackCompactWidth(statusReadoutText: "Idle")
-                == PanelMetrics.fallbackBaselineWidth
-        )
+        // Only the notched panel composes its width from content. A no-notch
+        // one is fixed, so the same two cases must not move it at all.
         #expect(
             width(geometry: .noNotch, timerText: nil, compactHeight: 24)
-                > PanelMetrics.fallbackBaselineWidth
-        )
-        #expect(
-            width(geometry: .noNotch, timerText: "1:23", compactHeight: 24)
-                > PanelMetrics.fallbackBaselineWidth
+                == width(geometry: .noNotch, timerText: "1:23", compactHeight: 24)
         )
     }
 
@@ -149,41 +165,6 @@ struct CodexInNotchTests {
     func statusMatrixIsAFixedSizeDerivedFromTheLabel() {
         // 92:72 indicator-to-text at loaders.wtf, applied to the 13pt label.
         #expect(abs(PanelMetrics.statusMatrixSize - 13 * (92.0 / 72.0)) < 0.02)
-    }
-
-    @Test @MainActor
-    func compactWidthNoLongerDependsOnMenuBarHeight() {
-        // Nothing in the compact width scales with the bar any more, so the same
-        // status has to measure identically on a 46pt and a 24pt menu bar.
-        for text in ["Running", "Approval needed", "Idle"] {
-            let plain = PanelMetrics.fallbackCompactWidth(statusReadoutText: text)
-            for height in [CGFloat(46), 38, 24] {
-                let size = PanelMetrics.size(
-                    geometry: .noNotch,
-                    isExpanded: false,
-                    statusReadoutText: text,
-                    timerText: nil,
-                    centerOcclusionWidth: 0,
-                    compactHeight: height
-                )
-                #expect(size.width == plain)
-                // Height still follows the bar; only width came loose.
-                #expect(size.height == height)
-            }
-        }
-    }
-
-    @Test @MainActor
-    func fallbackWidthGrowsForLongerStatus() {
-        let runningWidth = PanelMetrics.fallbackCompactWidth(statusReadoutText: "Running")
-        let waitingWidth = PanelMetrics.fallbackCompactWidth(statusReadoutText: "Approval needed")
-
-        // Only a very short status rests on the floor now; everything else is
-        // driven by its own content, which is the point of dropping the ring.
-        let idleWidth = PanelMetrics.fallbackCompactWidth(statusReadoutText: "Idle")
-        #expect(idleWidth == PanelMetrics.fallbackBaselineWidth)
-        #expect(runningWidth > idleWidth)
-        #expect(waitingWidth > runningWidth)
     }
 
     @Test
@@ -561,7 +542,9 @@ struct CodexInNotchTests {
         )
 
         #expect(store.sessions.count == 1)
-        #expect(store.compactStatusReadoutText == "Input needed")
+        // The notch shows the short form; the panel still says "Input needed".
+        #expect(store.compactStatusReadoutText == "Input")
+        #expect(store.status.displayName == "Input needed")
         #expect(store.tokenRemainingPercent == 72)
     }
 

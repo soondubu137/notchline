@@ -39,6 +39,51 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
+    /// The name the notch shows, which is shorter than ``displayName``.
+    ///
+    /// The matrix beside it already says a turn wants the user, so the label
+    /// only has to say which kind — "needed" repeats the indicator. Dropping
+    /// "Codex" costs nothing in the app's own menu bar item either. The panel
+    /// still shows the full sentence, so this is a shorter form, not less
+    /// information.
+    var compactDisplayName: String {
+        switch self {
+        case .idle:
+            "Idle"
+        case .setupRequired:
+            "Set up"
+        case .connecting:
+            "Connecting"
+        case .running:
+            "Running"
+        case .inputNeeded:
+            "Input"
+        case .approvalNeeded:
+            "Approval"
+        case .completed:
+            "Completed"
+        case .updateCodex:
+            "Update Codex"
+        case .unsupportedVersion:
+            "Unsupported"
+        case .disconnected:
+            "Disconnected"
+        }
+    }
+
+    /// Whether the notch can show an elapsed timer beside this status.
+    ///
+    /// The notch times the longest unfinished turn, and the aggregate of an
+    /// unfinished turn is always one of these three.
+    var canShowElapsed: Bool {
+        switch self {
+        case .running, .inputNeeded, .approvalNeeded:
+            true
+        default:
+            false
+        }
+    }
+
     var controlTitle: String {
         switch self {
         case .idle:

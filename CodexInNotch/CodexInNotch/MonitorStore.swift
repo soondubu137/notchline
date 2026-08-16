@@ -99,11 +99,6 @@ enum PanelMetrics {
     static let referenceCompactHeight: CGFloat = 46
     static let nativeNotchMenuBarHeight: CGFloat = 38
     static let maximumSurfaceCornerRadius: CGFloat = 10
-    /// Floor for the emulated notch, so a very short status ("Idle") does not
-    /// collapse the pill. It sat at 166 while the usage ring occupied the
-    /// trailing side; without the ring that floor was wider than most content
-    /// and the pill never actually shrank.
-    static let fallbackBaselineWidth: CGFloat = 120
     static let expandedBaselineWidth: CGFloat = 520
     static let sessionRowHeight: CGFloat = 80
     static let maximumVisibleSessionCount = 3
@@ -229,42 +224,55 @@ enum PanelMetrics {
             guard centerOcclusionWidth >= 1 else {
                 // Notched display with no measurable cut-out: nothing to wrap
                 // around, so lay it out as an emulated notch instead.
-                return CGSize(
-                    width: fallbackCompactWidth(
-                        statusReadoutText: statusReadoutText,
-                        timerText: timerText
-                    ),
-                    height: compactHeight
-                )
+                return CGSize(width: fixedCompactWidth, height: compactHeight)
             }
+            // A notched panel still wraps the cut-out, so its width is set by
+            // the wings around a fixed obstacle rather than by its content.
             let width = notchedLeadingWidth(statusReadoutText: statusReadoutText)
                 + centerOcclusionWidth
                 + notchedTrailingWidth(timerText: timerText)
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
-            return CGSize(
-                width: fallbackCompactWidth(
-                    statusReadoutText: statusReadoutText,
-                    timerText: timerText
-                ),
-                height: compactHeight
-            )
+            return CGSize(width: fixedCompactWidth, height: compactHeight)
         }
     }
 
-    static func fallbackCompactWidth(
-        statusReadoutText: String,
-        timerText: String? = nil
-    ) -> CGFloat {
-        var width = compactLeadingWidth(
-            statusReadoutText: statusReadoutText,
-            showsStatusText: true
-        )
-        if let timerText {
-            width += expandedReadoutSpacing + textWidth(timerText, font: timerFont)
-        }
-        width += expandedHorizontalPadding
-        return ceil(max(fallbackBaselineWidth, width))
+    /// The widest elapsed readout inside a turn that has run for hours. Sizing
+    /// the slot for it means the pill does not widen at 1:00:00 either.
+    private static let timerSlotTemplate = "1:02:03"
+
+    /// One width for every no-notch compact panel, whatever the state.
+    ///
+    /// Derived rather than fixed by hand: the widest content any state can
+    /// produce, which is the longest compact label that also carries a timer,
+    /// plus the timer slot. Reserving that on every state — including the ones
+    /// with no timer and a short label — is the point. A pill that measured
+    /// itself resized whenever the status changed or a turn started, which on a
+    /// menu bar reads as flicker rather than information.
+    /// Computed rather than a stored `static let`: a lazily-initialised one runs
+    /// its initialiser in a nonisolated context, and this measures text. Ten
+    /// cases of measurement per panel update is not worth the isolation dance.
+    static var fixedCompactWidth: CGFloat {
+        let widest = MonitorStatus.allCases
+            .map(compactContentWidth(for:))
+            .max() ?? 0
+        return ceil(compactChromeWidth + widest)
+    }
+
+    /// Everything in a compact panel that is not the label or the timer.
+    static let compactChromeWidth: CGFloat = expandedHorizontalPadding
+        + statusMatrixSize
+        + expandedReadoutSpacing
+        + expandedHorizontalPadding
+
+    /// What one status needs beside the chrome: its label, plus the timer slot
+    /// when that status can be counting.
+    static func compactContentWidth(for status: MonitorStatus) -> CGFloat {
+        let label = textWidth(status.compactDisplayName, font: statusLabelFont)
+        guard status.canShowElapsed else { return label }
+        return label
+            + expandedReadoutSpacing
+            + textWidth(timerSlotTemplate, font: timerFont)
     }
 
     static func expandedHeight(compactHeight: CGFloat) -> CGFloat {
@@ -553,7 +561,7 @@ final class MonitorStore: ObservableObject {
     }
 
     var compactStatusReadoutText: String {
-        status.displayName
+        status.compactDisplayName
     }
 
     /// The turn the notch is timing.
@@ -915,7 +923,7 @@ final class MonitorStore: ObservableObject {
                 // a busy loop, not a catch-up.
                 let untilDeadline = deadline.map {
                     max(
-                        timing.minimumRefreshInterval,
+                        self.timing.minimumRefreshInterval,
                         $0.timeIntervalSince(self.clock.now())
                     )
                 } ?? heartbeat
