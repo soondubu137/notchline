@@ -3086,6 +3086,63 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
+    func sweepPhaseSurvivesTheTextBeingReplaced() throws {
+        // A running turn's body text is its live progress, so it is replaced
+        // every few seconds -- and every replacement re-rasterises the glyphs
+        // and re-installs the sweep. If the sweep's phase came from the moment
+        // it was installed, each update would restart it.
+        //
+        // That is not a cosmetic stutter. The band is four times the width of
+        // what it crosses and its bright peak sits at the centre, so the peak
+        // does not reach the glyphs until 40% into the loop. Restarting more
+        // often than that means the highlight is never drawn at all.
+        let font = NSFont.systemFont(ofSize: 13, weight: .light)
+        let view = SessionRowTextView()
+        view.apply(
+            text: "Reading LiveCodexMonitorService.swift",
+            font: font,
+            color: NotchPalette.labelDrawingColor,
+            sweeps: true
+        )
+        view.frame = NSRect(x: 0, y: 0, width: 200, height: 18)
+        view.layout()
+
+        let highlight = try #require(view.layer?.sublayers?.last)
+        let mask = try #require(highlight.mask)
+        let before = try #require(
+            mask.animation(forKey: NotchTextRaster.sweepAnimationKey)
+        )
+
+        view.apply(
+            text: "Now editing NotchStatusMatrix.swift instead",
+            font: font,
+            color: NotchPalette.labelDrawingColor,
+            sweeps: true
+        )
+        let after = try #require(
+            mask.animation(forKey: NotchTextRaster.sweepAnimationKey)
+        )
+
+        // Phase is anchored to a global grid of whole periods, so it is a
+        // function of the clock rather than of when the text last changed.
+        // A left-at-default `beginTime` of 0 is exactly the broken case: Core
+        // Animation then starts the loop at whatever moment it was added.
+        for (label, animation) in [("before", before), ("after", after)] {
+            #expect(
+                animation.beginTime > 0,
+                "\(label) sweep starts when it was installed, not on the clock"
+            )
+            let offset = animation.beginTime.truncatingRemainder(
+                dividingBy: SessionRowTextView.sweepPeriod
+            )
+            #expect(
+                abs(offset) < 0.001,
+                "\(label) sweep is not aligned to a whole-period boundary"
+            )
+        }
+    }
+
+    @Test @MainActor
     func refreshLoopNeverSpinsOnAnOverdueDeadline() async throws {
         // The store cannot verify a service's deadlines, so it must stay bounded
         // when one is wrong. Without a floor an overdue deadline sleeps zero and

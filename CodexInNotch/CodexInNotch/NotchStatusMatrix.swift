@@ -444,6 +444,22 @@ enum NotchTextRaster {
         animation.repeatCount = .infinity
         animation.timingFunction = CAMediaTimingFunction(name: .linear)
         animation.isRemovedOnCompletion = false
+        // Phase comes from the clock, not from the moment of installation.
+        //
+        // A running turn's body text is its live progress, so it is replaced
+        // every few seconds, and every replacement re-rasterises the glyphs and
+        // lands back here. Left at the default `beginTime` of 0, Core Animation
+        // starts the loop when the animation is added, so each update would
+        // restart the sweep. The band is four times the width of what it
+        // crosses with its bright peak at the centre, so the peak does not
+        // reach the glyphs until 40% into the loop -- restarting more often
+        // than that would mean the highlight is never drawn at all.
+        //
+        // Anchoring to a whole-period grid also keeps every row in phase with
+        // every other, which is what the absolute-time SwiftUI schedule did
+        // before this moved to Core Animation.
+        let now = CACurrentMediaTime()
+        animation.beginTime = now - now.truncatingRemainder(dividingBy: period)
         mask.add(animation, forKey: sweepAnimationKey)
     }
 
@@ -606,6 +622,14 @@ final class SweepingLabelView: NSView {
 
     private func redrawGlyphs() {
         let scale = window?.backingScaleFactor ?? 2
+        // Replacing `contents` is an animatable change on a plain sublayer, so
+        // Core Animation would cross-fade it. Body text is replaced as a turn
+        // makes progress, and fades that outlive the gap between updates pile
+        // up into a smear; the text it replaced swapped instantly.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
         guard !appliedText.isEmpty else {
             baseLayer.contents = nil
             highlightLayer.contents = nil
@@ -705,7 +729,7 @@ private struct SessionRowTextRepresentable: NSViewRepresentable {
 }
 
 final class SessionRowTextView: NSView {
-    private static let sweepPeriod: TimeInterval = 2
+    static let sweepPeriod: TimeInterval = 2
     /// Distance over which the last glyphs fade out, matching the gradient the
     /// caller used to apply as a separate SwiftUI mask.
     private static let trailingFadeWidth: CGFloat = 48
@@ -819,6 +843,14 @@ final class SessionRowTextView: NSView {
 
     private func redrawGlyphs() {
         let scale = window?.backingScaleFactor ?? 2
+        // Replacing `contents` is an animatable change on a plain sublayer, so
+        // Core Animation would cross-fade it. Body text is replaced as a turn
+        // makes progress, and fades that outlive the gap between updates pile
+        // up into a smear; the text it replaced swapped instantly.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
         guard !appliedText.isEmpty else {
             baseLayer.contents = nil
             highlightLayer.contents = nil
