@@ -151,7 +151,7 @@ sequenceDiagram
     participant unread as Unread state repository
     participant reducer as Parser and membership gates
 
-    loop Hook active 每 1 秒或未连接每 5 秒
+    loop 由 watcher 事件、到期唤醒或 60 秒心跳触发
         store->>service: fetchSnapshot previews setting
         service->>hooks: consumeEvents
         hooks-->>service: post-launch exact Turn evidence and configuration trust
@@ -189,7 +189,11 @@ sequenceDiagram
     end
 ```
 
-两个目录 watcher（Hook 事件队列与 Desktop 状态文件）的 `changeEvents` 合并成一条触发流，与轮询共同驱动同一个 `performRefresh`；`isRefreshInFlight` 把它们合并为一条刷新，不产生第二套状态管线。Hook 事件因此不再需要等待轮询周期才被发现，轮询退化为 watcher 失效时的兜底。
+刷新不再按固定节拍采样。驱动它的有三个来源：两个目录 watcher（Hook 事件队列与 Desktop 状态文件）合并成的一条 `changeEvents` 流、服务通过 `nextRefreshDeadline()` 报出的下一个到期时刻（终态 settling 到期、元数据/成员关系/额度缓存过期），以及一个 60 秒心跳。`isRefreshInFlight` 把它们合并为一条刷新，不产生第二套状态管线。
+
+**心跳只是兜底，不承担任何延迟指标。** 它存在的唯一理由是本仓库已知的两类静默失效：`DirectoryChangeWatcher` 在 `open(O_EVTONLY)` 失败或目录被替换后不会重新挂载（CR-018），而到期唤醒同样可能因为任务被取消或 deadline 算错而无声丢失。任何"更新太慢"的问题都不得通过缩短心跳来解决。
+
+安装健康度同理：`installationState` 是三次文件读取，回答的却是一个只在本应用写配置、用户修复或外部编辑时才变化的问题。它改为缓存，由本应用自身的 install/uninstall/upgrade 与用户 Recheck 直接失效，另有 60 秒上限兜住外部编辑。**轮询配置本来就无法回答真正会出问题的那一维**——Codex 按定义内容哈希记录信任，扫描通过并不意味着 hook 会被执行（见第 8 节）。
 
 事件消费**每轮只发生一次**。`consumeEvents` 会删除文件并推进 Turn 状态，因此它只出现在快照路径上；`hookSetupStatus` 改为只读持久化信任标记，集成健康度随 `MonitorSnapshot.setupStatus` 一并返回，上层不再二次询问。
 

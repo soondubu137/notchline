@@ -36,19 +36,32 @@ extension MonitorClock {
 ///
 /// - **Codex Desktop dies → `Codex disconnected` appears.**
 ///   `backgroundThreadListTimeout` (15s) + the transport's liveness grace (3s)
-///   and probe timeout (5s) + `disconnectGracePeriod` (3s) + one
-///   `activePollInterval` (1s) ≈ 27s worst case.
+///   and probe timeout (5s) + `disconnectGracePeriod` (3s) ≈ 26s worst case.
 /// - **A finished turn is read in Desktop → its row disappears.**
 ///   The unread watcher's 250ms debounce + `terminalReadSettlingInterval` (2s)
-///   + one `activePollInterval` (1s) ≈ 3.25s worst case.
+///   ≈ 2.25s worst case.
+///
+/// Neither total includes a poll interval any more: refreshes are driven by the
+/// directory watchers and by wake-ups scheduled at the deadline that actually
+/// matters. `heartbeatInterval` only bounds how long a *missed* trigger can go
+/// unnoticed, so it never appears in a latency budget.
 ///
 /// Changing any single value moves those totals, so they are asserted directly
 /// rather than left as arithmetic in a comment.
 struct MonitorTiming: Sendable {
-    /// How often a snapshot is taken while Hook events are arriving.
-    var activePollInterval: TimeInterval = 1
-    /// How often a snapshot is retried while no integration is connected.
-    var idlePollInterval: TimeInterval = 5
+    /// Upper bound on how long a missed trigger can go unnoticed.
+    ///
+    /// This is a safety net for mechanisms that fail silently -- a watcher that
+    /// never re-attaches (CR-018), a scheduled wake-up that was dropped -- not a
+    /// work interval. Nothing may depend on it for latency, and shortening it is
+    /// never the right fix for a slow update.
+    var heartbeatInterval: TimeInterval = 60
+    /// How long a cached installation scan is trusted without re-reading disk.
+    ///
+    /// Installation health changes only when this app writes the configuration,
+    /// when the user repairs it, or when something outside edits it. The first
+    /// two invalidate the cache directly; this bounds the third.
+    var installationRevalidationInterval: TimeInterval = 60
     /// How long a full membership reconciliation stays fresh.
     var threadListRefreshInterval: TimeInterval = 30
     /// How long one thread's cached metadata stays fresh.

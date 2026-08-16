@@ -3,6 +3,12 @@ import Foundation
 
 protocol CodexMonitoring: Sendable {
     func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot
+    /// Earliest moment a refresh could produce different output.
+    ///
+    /// The store sleeps until this instead of sampling on a fixed cadence, so a
+    /// quiet monitor does no work at all and a due window is served exactly when
+    /// it comes due.
+    func nextRefreshDeadline() async -> Date?
     func hookSetupStatus() async -> HookSetupStatus
     func installHooks(showsContentPreviews: Bool) async throws
     func removeHooks() async throws
@@ -246,6 +252,37 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
     }
 
+    func nextRefreshDeadline() -> Date? {
+        var deadlines: [Date] = []
+        if let threadListReadAt {
+            deadlines.append(
+                threadListReadAt.addingTimeInterval(timing.threadListRefreshInterval)
+            )
+        }
+        if let oldestMetadata = threadRecords.values.map(\.observedAt).min() {
+            deadlines.append(
+                oldestMetadata.addingTimeInterval(timing.threadMetadataRefreshInterval)
+            )
+        }
+        if let quotaReadAt {
+            deadlines.append(
+                quotaReadAt.addingTimeInterval(timing.quotaRefreshInterval)
+            )
+        }
+        if let accountReadAt {
+            deadlines.append(
+                accountReadAt.addingTimeInterval(timing.accountRefreshInterval)
+            )
+        }
+        deadlines.append(contentsOf: [
+            threadListRetryAfter, threadMetadataRetryAfter, quotaRetryAfter
+        ].compactMap { $0 })
+        if let settling = terminalUnreadMembershipGate.nextSettlingDeadline {
+            deadlines.append(settling)
+        }
+        return deadlines.min()
+    }
+
     func disconnect() async {
         threadListRefreshTask?.cancel()
         threadListRefreshTask = nil
@@ -276,7 +313,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     /// Consuming here would delete files the snapshot path is about to reduce,
     /// costing a full refresh cycle of latency for whatever it swallowed.
     func hookSetupStatus() async -> HookSetupStatus {
-        await hookInstaller.status(
+        await hookInstaller.invalidateInstallationCache()
+        return await hookInstaller.status(
             hasObservedEvent: await hookEvents.observedState().hasObservedEvent
         )
     }

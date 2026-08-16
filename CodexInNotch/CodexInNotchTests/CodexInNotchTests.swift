@@ -1469,6 +1469,10 @@ struct CodexInNotchTests {
             options: [.prettyPrinted, .sortedKeys]
         ).write(to: paths.settings, options: .atomic)
 
+        // The scan is cached, so these external edits are only visible after
+        // revalidation -- which the app does on its own within the window, and
+        // immediately whenever the user asks for a recheck.
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .active)
 
         // Persist trust without creating a live Turn, then simulate a fresh app
@@ -2449,6 +2453,104 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
+    func installationHealthIsScannedOnDemandRatherThanOnACadence() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let installer = CodexHookInstaller(
+            paths: paths,
+            clock: clock,
+            timing: timing
+        )
+        try await installer.install(showsContentPreviews: false)
+        #expect(await installer.status(hasObservedEvent: true) == .active)
+
+        // Something outside this app removes a managed definition.
+        var configuration = try #require(
+            JSONSerialization.jsonObject(
+                with: try Data(contentsOf: paths.hooksConfiguration)
+            ) as? [String: Any]
+        )
+        var hooks = try #require(configuration["hooks"] as? [String: Any])
+        hooks.removeValue(forKey: "Stop")
+        configuration["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: configuration)
+            .write(to: paths.hooksConfiguration)
+
+        // Within the window the cached answer stands: this app did not make the
+        // change, so nothing invalidated it.
+        await clock.advance(by: timing.installationRevalidationInterval - 1)
+        #expect(await installer.status(hasObservedEvent: true) == .active)
+
+        // Past it, one scan picks the damage up without any polling in between.
+        await clock.advance(by: 2)
+        #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
+    }
+
+    @Test @MainActor
+    func refreshSleepsUntilTheNextDeadlineRatherThanACadence() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-deadline",
+            "turn_id": "turn-deadline"
+        ]).write(to: paths.eventsDirectory.appendingPathComponent("0.json"))
+
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-deadline"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "name": .string("Deadline")
+            ])],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                clock: clock,
+                timing: timing,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            clock: clock,
+            timing: timing,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        // Nothing has been read yet, so nothing is scheduled: a quiet monitor
+        // falls through to the heartbeat instead of sampling.
+        #expect(await service.nextRefreshDeadline() == nil)
+
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadReads(client, atLeast: 1)
+
+        // Once metadata is cached the next wake-up is its staleness boundary --
+        // sooner than the membership window, and far sooner than the heartbeat.
+        let deadline = try #require(await service.nextRefreshDeadline())
+        let untilDeadline = deadline.timeIntervalSince(clock.now())
+        #expect(untilDeadline <= timing.threadMetadataRefreshInterval)
+        #expect(untilDeadline < timing.heartbeatInterval)
+        await service.disconnect()
+    }
+
+    @Test @MainActor
     func backgroundReadsHonourTheirOwnFreshnessWindows() async throws {
         // These windows previously had no coverage at all: every one of them was
         // a bare Date() comparison, so nothing could state when a background
@@ -3236,10 +3338,12 @@ for line in sys.stdin:
             atomically: true,
             encoding: .utf8
         )
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .active)
         #expect(try await installer.upgradeManagedHookIfNeeded())
         let healedScript = try String(contentsOf: paths.script, encoding: .utf8)
         #expect(healedScript.contains(#"payload.get("tool_use_id")"#))
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .active)
 
         // Without the settings file this app never recorded installing anything,
@@ -3250,8 +3354,10 @@ for line in sys.stdin:
             atomically: true,
             encoding: .utf8
         )
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
         try await installer.install(showsContentPreviews: false)
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .active)
 
         try await installer.uninstall()
@@ -3293,10 +3399,12 @@ for line in sys.stdin:
             options: [.prettyPrinted, .sortedKeys]
         ).write(to: paths.hooksConfiguration, options: .atomic)
 
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
 
         try await installer.install(showsContentPreviews: true)
 
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
         let repairedData = try Data(contentsOf: paths.hooksConfiguration)
         let repairedRoot = try #require(
@@ -3334,6 +3442,7 @@ for line in sys.stdin:
             options: [.prettyPrinted, .sortedKeys]
         ).write(to: paths.hooksConfiguration, options: .atomic)
 
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
 
         try await installer.install(showsContentPreviews: true)
@@ -3356,6 +3465,7 @@ for line in sys.stdin:
         // whether a wait is observed.
         #expect(exactGroup["matcher"] == nil)
         #expect(exactHandler["timeout"] as? Int == 3)
+        await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
     }
 
@@ -4007,6 +4117,9 @@ print("{}")
 }
 
 private actor IntegrationMonitoringStub: CodexMonitoring {
+    // Nothing to schedule: the stub's output never changes on its own.
+    func nextRefreshDeadline() async -> Date? { nil }
+
     private var setupStatus: HookSetupStatus = .notInstalled
     private var installRequests = 0
     private var removeRequests = 0

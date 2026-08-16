@@ -692,15 +692,23 @@ final class MonitorStore: ObservableObject {
     private func startMonitoring() {
         guard service != nil else { return }
 
+        // Refreshes are driven by the directory watchers below. This loop only
+        // sleeps until the next moment the service says its own output could
+        // change -- a settling window expiring, a cache going stale -- and
+        // otherwise idles until the heartbeat. It samples nothing on a cadence.
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.performRefresh()
-                guard !Task.isCancelled else { return }
-                guard let self else { return }
-                let retryDelay = hookSetupStatus == .active
-                    ? timing.activePollInterval
-                    : timing.idlePollInterval
-                try? await clock.sleep(seconds: retryDelay)
+                guard !Task.isCancelled, let self else { return }
+
+                let heartbeat = timing.heartbeatInterval
+                let deadline = await service?.nextRefreshDeadline()
+                let untilDeadline = deadline.map {
+                    $0.timeIntervalSince(clock.now())
+                } ?? heartbeat
+                try? await clock.sleep(
+                    seconds: max(0, min(heartbeat, untilDeadline))
+                )
             }
         }
 

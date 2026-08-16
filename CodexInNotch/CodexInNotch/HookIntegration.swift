@@ -115,13 +115,29 @@ actor CodexHookInstaller {
 
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
+    private let clock: any MonitorClock
+    private let timing: MonitorTiming
+    private var cachedInstallationState: (state: ManagedInstallationState, readAt: Date)?
 
     init(
         paths: HookIntegrationPaths = .live(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        clock: any MonitorClock = SystemMonitorClock(),
+        timing: MonitorTiming = .standard
     ) {
         self.paths = paths
         self.fileManager = fileManager
+        self.clock = clock
+        self.timing = timing
+    }
+
+    /// Drops the cached scan so the next read hits disk.
+    ///
+    /// Called after this app writes the configuration and whenever the user
+    /// asks for a recheck -- the moments installation health can actually
+    /// change by our own doing.
+    func invalidateInstallationCache() {
+        cachedInstallationState = nil
     }
 
     func status(hasObservedEvent: Bool) -> HookSetupStatus {
@@ -141,6 +157,7 @@ actor CodexHookInstaller {
 
         try writeCurrentHookScript()
         try writeSettings(showsContentPreviews: storedShowsContentPreviews)
+        invalidateInstallationCache()
         return true
     }
 
@@ -159,6 +176,7 @@ actor CodexHookInstaller {
         try writeCurrentHookScript()
         try writeSettings(showsContentPreviews: showsContentPreviews)
         try mergeHooksConfiguration()
+        invalidateInstallationCache()
     }
 
     func updateSettings(showsContentPreviews: Bool) throws {
@@ -169,6 +187,7 @@ actor CodexHookInstaller {
     }
 
     func uninstall() throws {
+        invalidateInstallationCache()
         try removeManagedHooksConfiguration()
 
         for url in [paths.script, paths.settings, paths.state] {
@@ -191,7 +210,22 @@ actor CodexHookInstaller {
         "/usr/bin/python3 \"\(paths.script.path)\""
     }
 
+    /// Cached because it is three file reads answering a question that changes
+    /// only when someone rewrites the configuration. Re-deriving it on every
+    /// refresh was both wasteful and misleading: it cannot observe Codex's own
+    /// per-definition trust, so a passing scan never meant the hooks would run.
     private var installationState: ManagedInstallationState {
+        if let cached = cachedInstallationState,
+           clock.now().timeIntervalSince(cached.readAt)
+               < timing.installationRevalidationInterval {
+            return cached.state
+        }
+        let scanned = scanInstallationState()
+        cachedInstallationState = (scanned, clock.now())
+        return scanned
+    }
+
+    private func scanInstallationState() -> ManagedInstallationState {
         let registrationState = managedRegistrationState
         guard registrationState == .complete else {
             return registrationState == .partial || hasManagedSupportFootprint

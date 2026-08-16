@@ -111,6 +111,18 @@ struct TerminalUnreadMembershipGate: Sendable {
         return !entry.isHidden
     }
 
+    /// When a still-visible terminal row would next become hideable.
+    ///
+    /// Without this the settling window could only expire on some unrelated
+    /// refresh happening to land after it, which is what the one-second poll
+    /// was really paying for.
+    nonisolated var nextSettlingDeadline: Date? {
+        entries.values
+            .filter { !$0.isHidden }
+            .map { $0.terminalObservedAt.addingTimeInterval(settlingInterval) }
+            .min()
+    }
+
     nonisolated mutating func retain(sessionIDs: Set<String>) {
         entries = entries.filter { sessionIDs.contains($0.key) }
     }
