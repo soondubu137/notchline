@@ -36,7 +36,7 @@ V1 不包含：
 - 发送新输入、批准权限、回答 Codex 提问、取消、归档或删除会话。
 - 把 CLI、IDE 或子智能体作为独立列表来源。只有已经成为可在 Desktop 中精确导航的同一根会话时，才可能被纳入。
 - 历史会话搜索、最近 N 条或固定时间窗列表。
-- **启动时与 Codex Desktop 做任何形式的现状同步（cold-start sync）。** 应用启动前的所有会话状态——正在运行、已完成未读、正在等待审批——一律无视。理由是能力边界而非取舍：针对 Codex CLI `0.148.0-alpha.9` 在真实运行中的 Turn 上实测，独立 App Server 的 `thread/loaded/list` 为空、所有 Thread 恒为 `notLoaded`、从不出现 `inProgress` Turn，正在运行的 Turn 在持久化数据中甚至被记为 `interrupted`。没有任何受支持的读取能回答“Codex Desktop 此刻在做什么”，因此任何启动列表都只能是猜测。相关取舍与实测记录见 [`current-issues.md`](current-issues.md)。
+- **启动时与 Codex Desktop 做任何形式的现状同步（cold-start sync）。** 应用启动前的所有会话状态——正在运行、已完成未读、正在等待审批——一律无视。理由是能力边界而非取舍：针对 Codex CLI `0.148.0-alpha.9` 在真实运行中的 Turn 上实测，独立 App Server 的 `thread/loaded/list` 为空、所有 Thread 恒为 `notLoaded`、从不出现 `inProgress` Turn，正在运行的 Turn 在持久化数据中甚至被记为 `interrupted`。没有任何受支持的读取能回答“Codex Desktop 此刻在做什么”，因此任何启动列表都只能是猜测。相关取舍与实测记录见 [`system-architecture.md` §2.1](system-architecture.md#21-启动边界不做现状同步)。
 - 通过窗口焦点、路径、标题、时间接近度或 GUI 自动化猜测会话身份、Project、已读状态或导航目标。
 - 展示原始推理、工具参数、命令输出、文件差异、敏感路径或批准理由。
 - 将正文预览、会话列表快照或旧账户额度持久化。

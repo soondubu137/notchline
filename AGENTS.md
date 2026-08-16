@@ -2,6 +2,17 @@
 
 本文件适用于本仓库及其所有子目录。任何在本仓库中工作的 Agent 都必须遵守以下约束。
 
+## 问题清单在哪里
+
+已知问题**不再记录在仓库内的文档里**。原 `docs/current-issues.md` 已于 2026-08-16 迁移到 GitHub 看板并删除：
+
+- 看板：<https://github.com/users/soondubu137/projects/2>（编号约定、优先级定义与修复顺序见看板 README）
+- Issues：<https://github.com/soondubu137/codex-in-notch/issues>
+
+`CR-xxx` 编号沿用原文，git 历史中的提交信息直接引用它们。新发现的问题应开成 issue 并加入看板，不要在 `docs/` 下重建问题清单文件。修复某条问题时，在提交信息里引用对应 issue 编号。
+
+设计结论、实测边界和架构约束仍然留在 `docs/`——只有**待办的缺陷**搬走了。
+
 ## 未受官方公开支持的 Codex 集成 Feature 登记
 
 ### 强制规则
