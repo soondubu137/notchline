@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Testing
 @testable import CodexInNotch
 
@@ -3085,6 +3086,44 @@ struct CodexInNotchTests {
         )
         #expect(highlight.isHidden)
         #expect(sweep.animation(forKey: NotchTextRaster.sweepAnimationKey) == nil)
+    }
+
+    @Test @MainActor
+    func elapsedTicksDoNotRepublishTheStore() async throws {
+        // Every publish on the store re-evaluates the whole overlay, profiled at
+        // roughly 20ms. A readout advancing a second must not cost that: it used
+        // to, and a turn sitting on an approval burned ~4% of a core doing
+        // nothing but redrawing four characters. The readouts now take the tick
+        // directly, so a second passing must be silent here.
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        let startedAt = clock.now()
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .approvalNeeded, startedAt: startedAt)
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+
+        var publishes = 0
+        let subscription = store.objectWillChange.sink { _ in publishes += 1 }
+        defer { subscription.cancel() }
+
+        // Nine seconds, every one of them a new reading, none of them a new
+        // width: 0:01 through 0:09 are all four characters.
+        await clock.advance(by: 9)
+        #expect(store.compactTimerText == "0:09")
+        #expect(
+            publishes == 0,
+            "a tick republished the store \(publishes) time(s)"
+        )
+
+        // Crossing into 10:00 does change the reserved width, and the panel has
+        // to re-measure for that -- so exactly here a publish is expected.
+        await clock.advance(by: 591)
+        #expect(store.compactTimerText == "10:00")
+        #expect(publishes > 0, "a width change must reach the panel")
     }
 
     @Test @MainActor

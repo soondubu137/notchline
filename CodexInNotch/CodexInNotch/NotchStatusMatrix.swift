@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreImage
 import SwiftUI
 
@@ -62,18 +63,159 @@ enum NotchPalette {
 ///
 /// This is the *whole* indicator for an unfinished row — the state rides in the
 /// colour and weight rather than a separate dot, so a row never shows two marks.
-struct NotchTimerText: View {
-    let text: String
-    var tint: Color = NotchPalette.label
-    var weight: Font.Weight = .light
+///
+/// It advances itself from the store's tick and draws into a layer, rather than
+/// reading a string the store republishes. A republish re-evaluates the entire
+/// overlay for about 20ms, which for a readout that changes once a second came
+/// to roughly 4% of a core for as long as a turn ran — or sat waiting on an
+/// approval, where nothing else was happening at all.
+struct ElapsedReadout: View {
+    let startedAt: Date
+    let tick: AnyPublisher<Date, Never>
+    var tint: NSColor = NotchPalette.labelDrawingColor
+    var weight: NSFont.Weight = .light
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 13, weight: weight))
-            .monospacedDigit()
-            .foregroundStyle(tint)
-            .lineLimit(1)
-            .fixedSize()
+        ElapsedReadoutRepresentable(
+            startedAt: startedAt,
+            tick: tick,
+            tint: tint,
+            weight: weight
+        )
+        // The panel and each row already speak their own elapsed value in a
+        // spoken form; VoiceOver reads "12:34" as a time of day.
+        .accessibilityHidden(true)
+    }
+}
+
+private struct ElapsedReadoutRepresentable: NSViewRepresentable {
+    let startedAt: Date
+    let tick: AnyPublisher<Date, Never>
+    let tint: NSColor
+    let weight: NSFont.Weight
+
+    func makeNSView(context: Context) -> ElapsedReadoutView {
+        ElapsedReadoutView()
+    }
+
+    func updateNSView(_ view: ElapsedReadoutView, context: Context) {
+        view.configure(
+            startedAt: startedAt,
+            tint: tint,
+            weight: weight,
+            tick: tick
+        )
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: ElapsedReadoutView,
+        context: Context
+    ) -> CGSize? {
+        nsView.intrinsicContentSize
+    }
+}
+
+final class ElapsedReadoutView: NSView {
+    private let glyphLayer = CALayer()
+    private var subscription: AnyCancellable?
+    private var startedAt: Date?
+    private var font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .light)
+    private var tint = NotchPalette.labelDrawingColor
+    private var lastTick = Date.distantPast
+    private var renderedText = ""
+    private var renderedScale: CGFloat = 0
+    private var renderedSize: CGSize = .zero
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.addSublayer(glyphLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize {
+        guard renderedSize == .zero else {
+            return NSSize(width: renderedSize.width, height: renderedSize.height)
+        }
+        // SwiftUI may measure before the first tick has been rendered. A
+        // shortest-form reading is the right placeholder: every readout starts
+        // at 0:00 and only ever grows from there.
+        let placeholder = NotchTextRaster.textSize("0:00", font: font)
+        return NSSize(width: placeholder.width, height: placeholder.height)
+    }
+
+    func configure(
+        startedAt: Date,
+        tint: NSColor,
+        weight: NSFont.Weight,
+        tick: AnyPublisher<Date, Never>
+    ) {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: weight)
+        let changed = startedAt != self.startedAt
+            || tint != self.tint
+            || font != self.font
+        self.startedAt = startedAt
+        self.tint = tint
+        self.font = font
+
+        guard subscription == nil else {
+            if changed { render(at: lastTick) }
+            return
+        }
+        // The tick is a CurrentValueSubject, so subscribing delivers the current
+        // instant straight away and the readout is never blank for a second.
+        subscription = tick.sink { [weak self] now in
+            self?.render(at: now)
+        }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        render(at: lastTick)
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        glyphLayer.frame = CGRect(origin: .zero, size: renderedSize)
+        CATransaction.commit()
+    }
+
+    private func render(at now: Date) {
+        lastTick = now
+        guard let startedAt else { return }
+        let text = SessionElapsedFormatter.elapsed(since: startedAt, now: now) ?? ""
+        let scale = window?.backingScaleFactor ?? 2
+        guard text != renderedText || scale != renderedScale else { return }
+        renderedText = text
+        renderedScale = scale
+
+        let size = NotchTextRaster.textSize(text, font: font)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        glyphLayer.contentsScale = scale
+        glyphLayer.contents = NotchTextRaster.glyphImage(
+            text: text,
+            font: font,
+            color: tint,
+            size: size,
+            scale: scale
+        )
+        glyphLayer.frame = CGRect(origin: .zero, size: size)
+        CATransaction.commit()
+
+        guard size != renderedSize else { return }
+        // Width only moves when the digit count does, which is also when the
+        // store bumps its layout revision, so SwiftUI re-measures in the same
+        // turn rather than being asked to on every tick.
+        renderedSize = size
+        invalidateIntrinsicContentSize()
     }
 }
 

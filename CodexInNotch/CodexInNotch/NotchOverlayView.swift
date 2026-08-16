@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 struct NotchOverlayView: View {
@@ -155,8 +156,11 @@ private struct OverlayHeader: View {
             // Trailing wing, compact only: present while a turn is timed, absent
             // otherwise so a notched display shows no empty second cut-out. The
             // expanded view times each row individually instead.
-            if !store.isExpanded, let elapsed = store.compactTimerText {
-                NotchTimerText(text: elapsed)
+            if !store.isExpanded, let startedAt = store.compactTimerStart {
+                ElapsedReadout(
+                    startedAt: startedAt,
+                    tick: store.elapsedTick.eraseToAnyPublisher()
+                )
             }
         }
         .padding(.horizontal, horizontalPadding)
@@ -429,8 +433,13 @@ private struct SessionStatusControl: View {
     // running row counts dim; a finished row shows nothing, because its still
     // body and absent timer already say so and the dot was a redundant third.
     var body: some View {
-        if let elapsed = store.elapsedText(for: session) {
-            NotchTimerText(text: elapsed, tint: tint, weight: weight)
+        if let startedAt = store.elapsedStart(for: session) {
+            ElapsedReadout(
+                startedAt: startedAt,
+                tick: store.elapsedTick.eraseToAnyPublisher(),
+                tint: tint,
+                weight: weight
+            )
         } else if session.status.keepsTiming {
             // Unfinished but its start was never observed — unreachable with
             // hook-sourced data, and it must not be left unmarked when previews
@@ -446,12 +455,14 @@ private struct SessionStatusControl: View {
         session.status == .inputNeeded || session.status == .approvalNeeded
     }
 
-    private var tint: Color {
+    private var tint: NSColor {
         // Brightness is the attention channel, the same one the searchlight uses.
-        wantsAttention ? NotchPalette.spotlight : NotchPalette.label
+        wantsAttention
+            ? NotchPalette.spotlightDrawingColor
+            : NotchPalette.labelDrawingColor
     }
 
-    private var weight: Font.Weight {
+    private var weight: NSFont.Weight {
         wantsAttention ? .medium : .light
     }
 }

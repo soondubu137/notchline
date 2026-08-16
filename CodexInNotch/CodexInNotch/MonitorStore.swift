@@ -374,8 +374,26 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var sessions: [MonitoredSession] {
         didSet { updateElapsedTicking() }
     }
-    /// Re-published each second while a turn is timed; see `updateElapsedTicking`.
-    @Published private(set) var timerNow: Date
+    /// Advances once a second while a turn is timed; see `updateElapsedTicking`.
+    ///
+    /// Deliberately **not** `@Published`. Every publish on this store re-evaluates
+    /// the whole overlay — the `GeometryReader`, the custom panel `Shape` and both
+    /// AppKit representables — which profiles at roughly 20ms, so a readout
+    /// gaining a second used to cost about 4% of a core for as long as a turn ran
+    /// or waited on the user. The readouts subscribe to this and redraw their own
+    /// layer; nothing in the SwiftUI graph observes it.
+    let elapsedTick: CurrentValueSubject<Date, Never>
+
+    /// Bumped when a readout's *reserved width* changes, which is the only thing
+    /// SwiftUI actually has to re-measure for.
+    ///
+    /// The readouts use tabular figures, so width follows the digit count: this
+    /// moves when a turn crosses a minute or hour boundary, not every second.
+    @Published private(set) var elapsedLayoutRevision = 0
+    private var elapsedLayoutSignature: [Int] = []
+
+    /// The instant the readouts are currently showing.
+    var timerNow: Date { elapsedTick.value }
     @Published private(set) var hookSetupStatus: HookSetupStatus = .notInstalled
     @Published private(set) var integrationSwitchIsOn = false
     @Published var isExpanded = false
@@ -444,7 +462,7 @@ final class MonitorStore: ObservableObject {
         self.selectedDisplayID = initialDisplayID
         self.displayPreferences = displayPreferences
         self.clock = clock
-        self.timerNow = clock.now()
+        self.elapsedTick = CurrentValueSubject(clock.now())
         self.timing = timing
         self.connectionStabilityGate = ConnectionStabilityGate(
             gracePeriod: timing.disconnectGracePeriod
@@ -487,10 +505,11 @@ final class MonitorStore: ObservableObject {
 
     /// Advances the elapsed readout once a second while a turn is being timed.
     ///
-    /// This lives in the store rather than a view-local timer for two reasons:
-    /// it is a timing decision, so it belongs on ``MonitorClock`` like every
-    /// other window; and the compact panel's width is measured from the readout
-    /// string, so the panel has to re-measure when the timer gains a digit.
+    /// The tick still lives here rather than in a view-local timer, because it is
+    /// a timing decision and belongs on ``MonitorClock`` like every other window.
+    /// What changed is how it leaves: a tick is sent on ``elapsedTick``, which no
+    /// SwiftUI view observes, and only a change in the readouts' *reserved width*
+    /// bumps ``elapsedLayoutRevision`` and asks SwiftUI to re-measure.
     private func updateElapsedTicking() {
         // Nothing being timed: stop entirely rather than wake once a second to
         // discover there is no work.
@@ -501,11 +520,11 @@ final class MonitorStore: ObservableObject {
         }
         guard elapsedTickTask == nil else { return }
 
-        // `timerNow` has been frozen since the last turn finished, so it is
-        // older than the turn that just started. Left stale, the first second of
-        // that turn reads as a negative duration -- which the formatter reports
-        // as "not timed" -- and the row renders blank until the first tick.
-        timerNow = clock.now()
+        // The tick has been frozen since the last turn finished, so it is older
+        // than the turn that just started. Left stale, the first second of that
+        // turn reads as a negative duration -- which the formatter reports as
+        // "not timed" -- and the row renders blank until the first tick.
+        publishTick(clock.now())
 
         elapsedTickTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -524,9 +543,25 @@ final class MonitorStore: ObservableObject {
                     )
                 )
                 guard !Task.isCancelled else { return }
-                self.timerNow = self.clock.now()
+                self.publishTick(self.clock.now())
             }
         }
+    }
+
+    /// Sends a tick to the readouts, and asks SwiftUI to re-measure only if one
+    /// of them changed width.
+    ///
+    /// The formatter emits digits and colons in tabular figures, so a string's
+    /// character count *is* its rendered width; comparing counts is comparing
+    /// widths without measuring text once a second.
+    private func publishTick(_ now: Date) {
+        elapsedTick.send(now)
+
+        var signature = [compactTimerText?.count ?? -1]
+        signature.append(contentsOf: sessions.map { elapsedText(for: $0)?.count ?? -1 })
+        guard signature != elapsedLayoutSignature else { return }
+        elapsedLayoutSignature = signature
+        elapsedLayoutRevision &+= 1
     }
 
     /// Time until the timed turn's next whole second.
@@ -583,6 +618,18 @@ final class MonitorStore: ObservableObject {
             since: longestRunningSessionStart,
             now: timerNow
         )
+    }
+
+    /// The instant the compact readout counts from, or nil when there is nothing
+    /// to draw. The readout advances itself from ``elapsedTick``, so it needs the
+    /// start rather than a string that would go stale between re-renders.
+    var compactTimerStart: Date? {
+        compactTimerText == nil ? nil : longestRunningSessionStart
+    }
+
+    /// As ``compactTimerStart``, for one row.
+    func elapsedStart(for session: MonitoredSession) -> Date? {
+        elapsedText(for: session) == nil ? nil : session.startedAt
     }
 
     /// The compact timer for VoiceOver, which cannot read `12:34` as a length.

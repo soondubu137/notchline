@@ -85,9 +85,10 @@ final class OverlayPanelController {
             store.$isExpanded.map { _ in () }.eraseToAnyPublisher(),
             store.$reduceMotion.map { _ in () }.eraseToAnyPublisher(),
             // The compact width is measured from the elapsed string, so the
-            // panel has to re-measure when it gains a digit. Most ticks resolve
-            // to an unchanged frame and are dropped by updatePanelFrame.
-            store.$timerNow.map { _ in () }.eraseToAnyPublisher()
+            // panel has to re-measure when it gains a digit -- but only then.
+            // The readouts advance themselves off a tick no SwiftUI view
+            // observes; this fires when one of them changes width.
+            store.$elapsedLayoutRevision.map { _ in () }.eraseToAnyPublisher()
         ]
 
         Publishers.MergeMany(animatedChanges)
