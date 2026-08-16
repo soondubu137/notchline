@@ -633,19 +633,12 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     }
 
     /// Runs one membership read; returns whether another should follow now.
+    ///
+    /// A failed read leaves its request outstanding and stops here; the retry
+    /// is scheduled by `nextRefreshDeadline` reporting the backoff.
     private func runThreadListRefresh() async -> Bool {
         let succeeded = await refreshThreadListInBackground()
-        // A failed read did not cover its request, so the request survives the
-        // backoff and the next eligible trigger still finds work to do.
-        let shouldContinue = threadListGate.endRun(covered: succeeded)
-        guard shouldContinue else { return false }
-        guard threadListRetryAfter == nil else {
-            // Backing off: hand the claim back but keep the request pending, so
-            // `nextRefreshDeadline` schedules the retry.
-            threadListGate.endRunLeavingPending(covered: false)
-            return false
-        }
-        return true
+        return threadListGate.endRun(covered: succeeded)
     }
 
     private func clearThreadListRefreshTask() {
@@ -707,13 +700,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             // Put them back so the retry has something to read.
             pendingMetadataThreadIDs.formUnion(threadIDs)
         }
-        let shouldContinue = threadMetadataGate.endRun(covered: succeeded)
-        guard shouldContinue else { return false }
-        guard threadMetadataRetryAfter == nil else {
-            threadMetadataGate.endRunLeavingPending(covered: false)
-            return false
-        }
-        return true
+        return threadMetadataGate.endRun(covered: succeeded)
     }
 
     private func clearThreadMetadataRefreshTask() {

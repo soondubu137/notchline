@@ -439,7 +439,6 @@ final class MonitorStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     /// The switch's desired state, which the convergence task reads each pass.
     private var desiredIntegrationEnabled: Bool?
-    private var integrationGate = SingleFlightGate()
     private var integrationTask: Task<Void, Never>?
     private var isNavigationInFlight = false
     private var dismissedSessionIDs: Set<String> = []
@@ -875,7 +874,6 @@ final class MonitorStore: ObservableObject {
 
         desiredIntegrationEnabled = isEnabled
         integrationSwitchIsOn = isEnabled
-        integrationGate.request()
         startIntegrationConvergenceIfNeeded()
     }
 
@@ -887,13 +885,23 @@ final class MonitorStore: ObservableObject {
         return integrationSwitchIsOn == isEnabled
     }
 
+    /// Starts the convergence loop unless one is already running.
+    ///
+    /// No revision gate here on purpose. ``desiredIntegrationEnabled`` already
+    /// records that work is outstanding -- the loop runs until it is nil -- so
+    /// a gate alongside it would be a second, redundant copy of the same fact,
+    /// and two sources of truth for "is more work pending" is worse than one.
+    ///
+    /// A plain task handle is safe because both the check and the clear happen
+    /// on the main actor with no suspension between the loop's last read of
+    /// the desired state and the handle being released.
     private func startIntegrationConvergenceIfNeeded() {
-        guard service != nil, integrationGate.beginRun() else { return }
+        guard service != nil, integrationTask == nil else { return }
         integrationTask = Task { [weak self] in
             guard let self else { return }
-            repeat {
+            while self.desiredIntegrationEnabled != nil {
                 await self.convergeIntegrationOnce()
-            } while self.integrationGate.endRun()
+            }
             self.integrationTask = nil
         }
     }

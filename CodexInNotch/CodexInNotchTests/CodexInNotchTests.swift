@@ -4181,13 +4181,11 @@ for line in sys.stdin:
     func singleFlightGateNeverLosesARequestMadeDuringARun() {
         var gate = SingleFlightGate()
         #expect(!gate.isPending)
-        #expect(!gate.isRunning)
 
         let first = gate.request()
         #expect(gate.isPending)
         let claimed = gate.beginRun()
         #expect(claimed)
-        #expect(gate.isRunning)
 
         // A second caller cannot start a parallel run.
         let claimedAgain = gate.beginRun()
@@ -4207,7 +4205,9 @@ for line in sys.stdin:
         let third = gate.request()
         let repeatsAfterBusyRun = gate.endRun()
         #expect(repeatsAfterBusyRun)
-        #expect(gate.isRunning)
+        // The claim was handed straight over, so nobody can start a third run.
+        let blockedMidHandover = gate.beginRun()
+        #expect(!blockedMidHandover)
         #expect(gate.hasCovered(second))
         #expect(!gate.hasCovered(third))
 
@@ -4216,18 +4216,29 @@ for line in sys.stdin:
         #expect(gate.hasCovered(third))
     }
 
-    /// A failed run must not mark its request satisfied.
+    /// A failed run keeps its request, and must not retry itself.
+    ///
+    /// Continuing on failure looks like the helpful thing to do and is an
+    /// unbounded retry loop with no backoff in it: the request is still
+    /// outstanding, so the gate hands the claim straight back and the caller
+    /// runs again, forever. Measured before this was fixed: 1000 iterations
+    /// with no sign of stopping. The guard against it originally lived in the
+    /// call site, where the cancellation path walked straight past it.
     @Test
-    func singleFlightGateKeepsAFailedRequestOutstandingForTheRetry() {
+    func singleFlightGateKeepsAFailedRequestButDoesNotRetryItself() {
         var gate = SingleFlightGate()
         let revision = gate.request()
         let claimed = gate.beginRun()
         #expect(claimed)
 
-        // The read failed, so it covered nothing. The caller is backing off and
-        // hands the claim back rather than looping.
-        gate.endRunLeavingPending(covered: false)
-        #expect(!gate.isRunning)
+        var continuations = 0
+        var shouldContinue = gate.endRun(covered: false)
+        while shouldContinue, continuations < 1_000 {
+            continuations += 1
+            shouldContinue = gate.endRun(covered: false)
+        }
+        #expect(continuations == 0, "a failed run retried itself \(continuations) times")
+
         #expect(gate.isPending, "a failed read must leave its request outstanding")
         #expect(!gate.hasCovered(revision))
 
@@ -4247,10 +4258,10 @@ for line in sys.stdin:
         gate.request()
         let claimed = gate.beginRun()
         #expect(claimed)
-        #expect(gate.isRunning)
+        let blockedWhileRunning = gate.beginRun()
+        #expect(!blockedWhileRunning)
 
         gate.reset()
-        #expect(!gate.isRunning)
         #expect(!gate.isPending)
 
         gate.request()

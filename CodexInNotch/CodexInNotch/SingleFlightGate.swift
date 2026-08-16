@@ -54,28 +54,20 @@ nonisolated struct SingleFlightGate: Sendable {
     /// straight over rather than released and re-taken, so no other caller can
     /// slip a second run in between.
     ///
-    /// `covered` is whether this run actually satisfied the request. A read
-    /// that failed did not, so its request stays outstanding and a later
-    /// trigger -- typically once a backoff expires -- still finds work to do.
+    /// `covered` is whether this run satisfied the request. A run that did not
+    /// **never continues on its own**: its request stays outstanding, and
+    /// whatever governs retries decides when to try again. Continuing here
+    /// would be an unbounded retry loop with no backoff in it -- which this
+    /// type did do at first, and which no call site could have been trusted to
+    /// notice, because the guard against it lived in the caller.
     nonisolated mutating func endRun(covered: Bool = true) -> Bool {
         if covered, let runningRevision {
             completedRevision = max(completedRevision, runningRevision)
         }
         runningRevision = nil
-        guard requestedRevision > completedRevision else { return false }
+        guard covered, requestedRevision > completedRevision else { return false }
         runningRevision = requestedRevision
         return true
-    }
-
-    /// Ends a run without claiming another, leaving any request outstanding.
-    ///
-    /// For the caller that has decided to stop -- a failure it wants to back
-    /// off from -- and needs ``isPending`` to keep reporting the work.
-    nonisolated mutating func endRunLeavingPending(covered: Bool = true) {
-        if covered, let runningRevision {
-            completedRevision = max(completedRevision, runningRevision)
-        }
-        runningRevision = nil
     }
 
     /// Whether a finished run has covered `revision`.
@@ -88,10 +80,6 @@ nonisolated struct SingleFlightGate: Sendable {
     /// True while a run is in flight for it, and true again if that run failed.
     nonisolated var isPending: Bool {
         requestedRevision > completedRevision
-    }
-
-    nonisolated var isRunning: Bool {
-        runningRevision != nil
     }
 
     /// Forgets everything, for a teardown that cancels the run in flight.
