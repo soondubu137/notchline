@@ -21,6 +21,8 @@ CR-010（冷启动无法重建 Desktop 当前会话状态）已**作为非目标
 
 第 3、4 条同时说明：即使将来要恢复某种启动同步，也不能建立在 `status`／`inProgress` 之上。
 
+`2026-08-16` 补记 CR-022、CR-023 两条常驻动效相关的性能问题，基线为当前工作树。两条都以 Release 构建实测，方法是把状态固定后逐项开关变量；具体数字与测法记在各自条目里。其余动效成本已在本轮修复（见 system-architecture 第 6 节）：空闲、Completed 停留以及展开面板的常驻扫光都已降到 0%–0.4%。
+
 优先级定义：
 
 - `P0`：会造成严重数据破坏、安全事故，或使核心产品在正常条件下完全不可用，必须阻断发布。
@@ -53,6 +55,7 @@ CR-010（冷启动无法重建 Desktop 当前会话状态）已**作为非目标
 | CR-015 | Desktop Project 私有 schema 只要求四个顶层 key 中任意一个存在，部分或未知映射会被当成成功。 | [`GlobalState.init`](../CodexInNotch/CodexInNotch/CodexDesktopProjectMetadata.swift) 使用 `contains(where:)`，缺失 key 默认空集合；未知 `projectKind`、不存在的 `projectId` 和空 thread id 会被静默跳过。清单文档却声明不兼容 schema 应 fail closed。 | Desktop schema 漂移可能被错误标记为 `.current`，既没有兼容性诊断，也可能只丢失部分 Project/Chats 映射。 | 明确当前版本的最小必需 key 集；assignment 必须引用已知 project 且 kind 受支持，thread id 不得为空。任何不一致都拒绝整份 current snapshot，转 backup/last-known-good，并补齐 partial/unknown/dangling fixture。同步核对非公开 feature 清单中的契约描述。 |
 | CR-016 | JSON-RPC envelope 分类只看整数 id，不能正确区分 response 与 server-initiated request。 | [`handleEnvelope`](../CodexInNotch/CodexInNotch/CodexAppServerClient.swift) 只要 `id` 可转 Int 就从 pending 中移除；公开 schema 的 request id 同时允许 string/integer，而带 `method + id` 的 server request 也可能使用整数。 | 若 server request id 与本地 pending id 碰撞，正常请求会被误判为缺少 result 的 response 并失败。当前只读路径触发概率较低，但 transport 本身并不满足双向协议边界。 | 先按 envelope shape 分类：response 必须有 `result` 或 `error` 且无 `method`；server request 单独走显式只读拒绝/unsupported response。增加 numeric id collision 测试。 |
 | CR-017 | Integration 总开关的 install/remove 任务也没有串行意图或 revision。 | [`setIntegrationEnabled`](../CodexInNotch/CodexInNotch/MonitorStore.swift) 先改变 UI 值再创建未持有 Task，真正的 `isInstallingIntegration` / `isRemovingIntegration` 标记在任务开始后才设置。快速来回切换可在标记生效前排入相反操作。 | 安装和移除可能按非用户最终意图的顺序完成，UI 回滚也可能覆盖更新后的真实状态。 | 用单一持有任务和 desired-state reducer 串行收敛到最后一次选择；所有操作完成后重新读取 Hook health，再发布 switch 状态。 |
+| CR-023 | 处理轮次进行中，1 Hz 的处理时间读数经由 store 发布，使整个叠层每秒重渲染一次。 | [`updateElapsedTicking`](../CodexInNotch/CodexInNotch/MonitorStore.swift) 每秒写入 `@Published timerNow`；`NotchOverlayView` 观察 store，因此每次写入都要重新求值整个 body——`GeometryReader`、`PanelContour` 自定义 `Shape`、以及两个 `NSViewRepresentable` 的 reconcile。实测（Release、面板折叠、`service` 为 nil，只看视图侧）：会话为 `approvalNeeded`（计时中）稳态约 4.7%；同一个会话改成 `completed`（矩阵仍在 Core Animation 上运行，只是不再有每秒发布）后为 0.0%。 | Running 与 Approval needed 都持续付出这份成本，而 Approval needed 可以无限期等待用户操作。一次每秒一次的文字更新花掉约 4% 的核心，意味着单次重渲染约 40ms，与它实际改变的那几个字符完全不成比例。 | 让读数不再经由整个 store 发布：读数自身持有 tick，或按第 6 节其余动效的做法改为 layer-backed，使一次 tick 不触碰 SwiftUI 视图图。`updateElapsedTicking` 的注释指出读数宽度会影响紧凑面板宽度，这一点仍然成立——但等宽数字下宽度只在位数变化时才变，因此只需在字符串宽度真正变化时发布一次布局相关的变更，而不是每秒发布一次内容。 |
 | CR-009 | 关键边界仍缺少确定性回归测试，live tests 未运行时表现为普通通过。 | 当前测试没有覆盖刷新中的 dirty invalidation、分页总预算、request cancellation、隐私设置乱序/写失败、Hook 错误结构、或 server-request id 碰撞。两个 live test 在未设置 `CODEX_IN_NOTCH_RUN_LIVE_TEST=1` 时直接 `return`。 | 测试全绿仍可能遗漏本表最关键的状态丢失、隐私 fail-open 和后台任务泄漏。 | 注入 Clock/调度器与可控文件写入器，补齐上述确定性测试；live test 应使用测试框架的显式 skip/disable 机制并输出原因，并在受控环境定期执行真实 Codex Desktop 的启动后四态场景。 |
 
 ## P3
@@ -61,12 +64,13 @@ CR-010（冷启动无法重建 Desktop 当前会话状态）已**作为非目标
 | --- | --- | --- | --- | --- |
 | CR-018 | Desktop 状态目录 watcher 不会在初始化失败或目录被替换后重新挂载。 | [`CodexDesktopStateDirectoryWatcher`](../CodexInNotch/CodexInNotch/CodexDesktopUnreadState.swift) 只在 init 时 `open(O_EVTONLY)` 一次；失败便永久结束 stream，收到 rename/delete 也只 yield，不重建 descriptor。 | 一秒轮询仍能兜底，因此不会永久丢状态，但 unread 变化的 250 ms 低延迟路径会悄然失效。 | watcher 增加重新 attach 状态机与退避；目录 rename/delete 后关闭旧 source 并重新打开，暴露 watcher health 诊断。 |
 | CR-019 | App Server 子进程 stderr 被直接丢弃，版本不兼容缺少可定位的诊断。 | [`connect`](../CodexInNotch/CodexInNotch/CodexAppServerClient.swift) 把 `standardError` 设为 `FileHandle.nullDevice`。分帧上限与 undecodable frame 诊断已随 CR-021 修复补齐，stderr 通道仍是空白。 | 协议或版本不兼容只能表现为超时或 `-32601`，无法区分「子进程启动后立刻报错退出」与「服务端沉默」，定位困难。 | 为 stderr 增加有界、脱敏的采集（固定行数上限、不记录正文 payload），并在 `launchFailed` / `disconnected` 诊断中带上最近若干行。 |
+| CR-022 | 展开面板中会话正文的每次更新都要重新光栅化并重排一行文本，而正文将来会随处理轮次实时更新。 | [`SessionRowTextView`](../CodexInNotch/CodexInNotch/NotchStatusMatrix.swift) 的 `apply` 会重画字形并重新布局；`MonitorStore` 每发布一次快照，SwiftUI 都会重渲染整个叠层。实测（Release、三行、240 字正文、10 Hz、面板展开）：修正光栅裁剪、sweep 复用与 intrinsic size 失效后为 11.5%（此前 17%）。保持同样的发布频率、只让正文不变，地板是 7.6%——那是 SwiftUI 每次发布重渲染叠层的固有成本，与本行无关。 | 若正文以接近 debounce 上限（10 Hz）的频率更新且面板保持展开，仍会占用约 11.5% 的核心。 | 在 reducer 侧把正文更新合并到约 1 Hz。首要理由是可读性——每秒变十次的文字没人读得完——足迹收益顺带获得。**判定为 P3 的依据**：实际正文更新远慢于此，面板也只在指针悬停时展开；折叠时行视图根本不在视图树中（`ExpandedPanelContent` 在 `if store.isExpanded` 之内），成本为 0，`LazyVStack` 也已把同时存在的行数限制在约三行。 |
 | CR-020 | Assets 中仍有未被代码引用的 failed 状态资源。 | `StatusFailedRing` 与 `StatusFailedX` 未被任何代码引用，但会话模型已只有四态。（Onboarding 关于 Completed 生命周期与启动范围的文案已随冷启动同步下线一并更新。） | 设计资产继续暗示 failed 是产品状态。 | 删除未引用 failed assets，并在设计文档/视觉资源检查中固定四态集合。 |
 
 ## 修复顺序建议
 
 1. 先处理 CR-011、CR-012、CR-013，收紧隐私与用户 Hook 配置边界。
 2. 用同一个 revision/single-flight 抽象收敛 CR-003、CR-008，避免继续叠加互相独立的布尔补丁；现在成员关系与元数据是两条独立的单飞路径，该抽象应同时覆盖两者。
-3. 完成 P2 的有界队列、分页、取消和协议分类后，再清理 P3 与补齐完整回归矩阵。
+3. 完成 P2 的有界队列、分页、取消和协议分类后，再清理 P3 与补齐完整回归矩阵。CR-023 可以独立于上述任何一项先做：它只涉及处理时间读数如何发布，不触碰状态收敛，而 Approval needed 是一个可以无限期停留的状态。
 
 传输层分帧（原 CR-021）已完成，是上述所有状态正确性工作的前提：在它修好之前，任何依赖 App Server 响应的结论都可能因为响应被静默丢弃而失真。
