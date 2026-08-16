@@ -60,10 +60,14 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private var hookTrackedThreadIDs: Set<String> = []
     private var listedThreadIDs: Set<String> = []
     private var threadListReadAt: Date?
+    private var threadListGate = SingleFlightGate()
     private var threadListRefreshTask: Task<Void, Never>?
     private var threadListRetryAfter: Date?
+    private var threadMetadataGate = SingleFlightGate()
     private var threadMetadataRefreshTask: Task<Void, Never>?
     private var threadMetadataRetryAfter: Date?
+    /// Threads a metadata read was asked for but has not yet covered.
+    private var pendingMetadataThreadIDs: Set<String> = []
     private var supportsThreadMetadataRead = true
     private var observedDesktopProcessIdentifier: pid_t?
     private var quotaRefreshTask: Task<Void, Never>?
@@ -179,6 +183,10 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     || fullListMustSupplyMetadata {
                     scheduleThreadListRefreshIfNeeded()
                 }
+                // A request parked by a backoff is still outstanding; this is
+                // where it gets picked back up once the cool-off expires.
+                startThreadListRefreshIfPossible()
+                startThreadMetadataRefreshIfPossible()
 
                 if let threadListReadAt {
                     hookState = await hookEvents.removeThreads(
@@ -340,6 +348,16 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             )
         }
 
+        // Work a backoff parked. Reported only while backing off: a pending
+        // request with no cool-off is already looping, and publishing a
+        // deadline the refresh cannot clear is how the loop starts spinning.
+        if threadListGate.isPending, let threadListRetryAfter {
+            deadlines.append(threadListRetryAfter)
+        }
+        if threadMetadataGate.isPending, let threadMetadataRetryAfter {
+            deadlines.append(threadMetadataRetryAfter)
+        }
+
         if let settling = terminalUnreadMembershipGate.nextSettlingDeadline {
             deadlines.append(settling)
         }
@@ -359,8 +377,11 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     func disconnect() async {
         threadListRefreshTask?.cancel()
         threadListRefreshTask = nil
+        threadListGate.reset()
         threadMetadataRefreshTask?.cancel()
         threadMetadataRefreshTask = nil
+        threadMetadataGate.reset()
+        pendingMetadataThreadIDs.removeAll()
         quotaRefreshTask?.cancel()
         quotaRefreshTask = nil
         terminalUnreadMembershipGate.reset()
@@ -412,9 +433,12 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         threadListRefreshTask?.cancel()
         threadListRefreshTask = nil
         threadListRetryAfter = nil
+        threadListGate.reset()
         threadMetadataRefreshTask?.cancel()
         threadMetadataRefreshTask = nil
         threadMetadataRetryAfter = nil
+        threadMetadataGate.reset()
+        pendingMetadataThreadIDs.removeAll()
         lastTrustedSnapshot = nil
         terminalUnreadMembershipGate.reset()
     }
@@ -585,16 +609,47 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             >= timing.threadListRefreshInterval
     }
 
+    /// Records that membership needs re-reading, and starts a read if idle.
+    ///
+    /// The request is recorded before the backoff is consulted, so an
+    /// invalidation that arrives during a read -- or during its cool-off -- is
+    /// still outstanding afterwards rather than dropped on the floor (CR-003).
     private func scheduleThreadListRefreshIfNeeded() {
+        threadListGate.request()
+        startThreadListRefreshIfPossible()
+    }
+
+    private func startThreadListRefreshIfPossible() {
         let now = clock.now()
-        guard threadListRefreshTask == nil,
-              threadListRetryAfter.map({ now >= $0 }) ?? true else {
-            return
-        }
+        guard threadListGate.isPending else { return }
+        guard threadListRetryAfter.map({ now >= $0 }) ?? true else { return }
+        guard threadListGate.beginRun() else { return }
 
         threadListRefreshTask = Task { [weak self] in
-            await self?.refreshThreadListInBackground()
+            guard let self else { return }
+            while await self.runThreadListRefresh() {}
+            await self.clearThreadListRefreshTask()
         }
+    }
+
+    /// Runs one membership read; returns whether another should follow now.
+    private func runThreadListRefresh() async -> Bool {
+        let succeeded = await refreshThreadListInBackground()
+        // A failed read did not cover its request, so the request survives the
+        // backoff and the next eligible trigger still finds work to do.
+        let shouldContinue = threadListGate.endRun(covered: succeeded)
+        guard shouldContinue else { return false }
+        guard threadListRetryAfter == nil else {
+            // Backing off: hand the claim back but keep the request pending, so
+            // `nextRefreshDeadline` schedules the retry.
+            threadListGate.endRunLeavingPending(covered: false)
+            return false
+        }
+        return true
+    }
+
+    private func clearThreadListRefreshTask() {
+        threadListRefreshTask = nil
     }
 
     /// Refreshes thread-level metadata for the threads the Hook reducer tracks.
@@ -604,13 +659,9 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     /// title, preview, root-thread eligibility and `status.activeFlags` at a
     /// fraction of the cost of paginating every unarchived thread.
     private func scheduleThreadMetadataRefreshIfNeeded(for threadIDs: Set<String>) {
-        let now = clock.now()
-        guard supportsThreadMetadataRead,
-              threadMetadataRefreshTask == nil,
-              threadMetadataRetryAfter.map({ now >= $0 }) ?? true else {
-            return
-        }
+        guard supportsThreadMetadataRead else { return }
 
+        let now = clock.now()
         let staleThreadIDs = threadIDs.filter { threadID in
             guard let record = threadRecords[threadID] else { return true }
             return now.timeIntervalSince(record.observedAt)
@@ -618,24 +669,70 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
         guard !staleThreadIDs.isEmpty else { return }
 
+        // Accumulated rather than replaced: threads that went stale while a
+        // read was in flight belong to the next read, not to nobody.
+        pendingMetadataThreadIDs.formUnion(staleThreadIDs)
+        threadMetadataGate.request()
+        startThreadMetadataRefreshIfPossible()
+    }
+
+    private func startThreadMetadataRefreshIfPossible() {
+        let now = clock.now()
+        guard threadMetadataGate.isPending,
+              supportsThreadMetadataRead,
+              threadMetadataRetryAfter.map({ now >= $0 }) ?? true else {
+            return
+        }
+        guard threadMetadataGate.beginRun() else { return }
+
         threadMetadataRefreshTask = Task { [weak self] in
-            await self?.refreshThreadMetadataInBackground(
-                threadIDs: staleThreadIDs
-            )
+            guard let self else { return }
+            while await self.runThreadMetadataRefresh() {}
+            await self.clearThreadMetadataRefreshTask()
         }
     }
 
+    private func runThreadMetadataRefresh() async -> Bool {
+        let threadIDs = pendingMetadataThreadIDs
+        pendingMetadataThreadIDs.removeAll()
+        guard !threadIDs.isEmpty else {
+            _ = threadMetadataGate.endRun(covered: true)
+            return false
+        }
+
+        let succeeded = await refreshThreadMetadataInBackground(
+            threadIDs: threadIDs
+        )
+        if !succeeded {
+            // Put them back so the retry has something to read.
+            pendingMetadataThreadIDs.formUnion(threadIDs)
+        }
+        let shouldContinue = threadMetadataGate.endRun(covered: succeeded)
+        guard shouldContinue else { return false }
+        guard threadMetadataRetryAfter == nil else {
+            threadMetadataGate.endRunLeavingPending(covered: false)
+            return false
+        }
+        return true
+    }
+
+    private func clearThreadMetadataRefreshTask() {
+        threadMetadataRefreshTask = nil
+    }
+
+    /// Reads metadata for `threadIDs`; returns whether the read covered them.
+    ///
+    /// The task handle and the loop belong to the caller now, so this reports
+    /// its outcome instead of clearing state the gate owns.
+    @discardableResult
     private func refreshThreadMetadataInBackground(
         threadIDs: Set<String>
-    ) async {
-        defer {
-            threadMetadataRefreshTask = nil
-            invalidatePublishedSnapshot()
-        }
+    ) async -> Bool {
+        defer { invalidatePublishedSnapshot() }
 
         var didReadAnyThread = false
         for threadID in threadIDs.sorted() {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return false }
 
             let startedAt = clock.now()
             do {
@@ -660,12 +757,13 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             } catch let error as CodexAppServerError {
                 if error.isUnsupportedMethod {
                     // Older Codex builds fall back to whole-list metadata.
+                    // Nothing more to ask for, so the request is settled.
                     supportsThreadMetadataRead = false
-                    return
+                    return true
                 }
                 if error.requiresConnectionReset {
                     await client.disconnect()
-                    return
+                    return false
                 }
                 // One unreadable thread is metadata loss, not state loss:
                 // membership and Turn status both come from elsewhere.
@@ -675,38 +773,41 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             }
         }
 
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return false }
         threadMetadataRetryAfter = didReadAnyThread
             ? nil
             : clock.now().addingTimeInterval(timing.requestRetryInterval)
+        return didReadAnyThread
     }
 
-    private func refreshThreadListInBackground() async {
-        defer {
-            threadListRefreshTask = nil
-            invalidatePublishedSnapshot()
-        }
+    /// Reads membership; returns whether the read succeeded.
+    @discardableResult
+    private func refreshThreadListInBackground() async -> Bool {
+        defer { invalidatePublishedSnapshot() }
 
         do {
             _ = try await readAllUnarchivedThreads(
                 forceRefresh: true,
                 timeoutNanoseconds: nanoseconds(timing.backgroundThreadListTimeout)
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return false }
             threadListRetryAfter = nil
+            return true
         } catch let error as CodexAppServerError {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return false }
             threadListRetryAfter = clock.now().addingTimeInterval(
                 timing.requestRetryInterval
             )
             if error.requiresConnectionReset {
                 await client.disconnect()
             }
+            return false
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return false }
             threadListRetryAfter = clock.now().addingTimeInterval(
                 timing.requestRetryInterval
             )
+            return false
         }
     }
 

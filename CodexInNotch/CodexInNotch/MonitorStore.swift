@@ -435,7 +435,12 @@ final class MonitorStore: ObservableObject {
     private var refreshEventTask: Task<Void, Never>?
     private var elapsedTickTask: Task<Void, Never>?
     private let refreshEvents: AsyncStream<Void>?
-    private var isRefreshInFlight = false
+    private var refreshGate = SingleFlightGate()
+    private var refreshTask: Task<Void, Never>?
+    /// The switch's desired state, which the convergence task reads each pass.
+    private var desiredIntegrationEnabled: Bool?
+    private var integrationGate = SingleFlightGate()
+    private var integrationTask: Task<Void, Never>?
     private var isNavigationInFlight = false
     private var dismissedSessionIDs: Set<String> = []
     private var connectionStabilityGate: ConnectionStabilityGate
@@ -507,6 +512,8 @@ final class MonitorStore: ObservableObject {
         refreshEventTask?.cancel()
         pendingHoverTask?.cancel()
         elapsedTickTask?.cancel()
+        refreshTask?.cancel()
+        integrationTask?.cancel()
     }
 
     /// Advances the elapsed readout once a second while a turn is being timed.
@@ -798,7 +805,7 @@ final class MonitorStore: ObservableObject {
             lastIntegrationMessage = "已在 Codex Desktop 中打开：\(session.title)"
             return true
         } catch {
-            await performRefresh()
+            await refreshAndWait()
             let reason = (error as? LocalizedError)?.errorDescription
                 ?? "发生未知错误。"
             lastIntegrationMessage = "无法打开 \(session.title)：\(reason)"
@@ -807,9 +814,7 @@ final class MonitorStore: ObservableObject {
     }
 
     func refreshNow() {
-        Task { [weak self] in
-            await self?.performRefresh()
-        }
+        requestRefresh()
     }
 
     func clearSessions() {
@@ -839,7 +844,7 @@ final class MonitorStore: ObservableObject {
 
     @discardableResult
     func recheckIntegrationAndWait() async -> HookSetupStatus {
-        await performRefresh()
+        await refreshAndWait()
         return hookSetupStatus
     }
 
@@ -849,20 +854,72 @@ final class MonitorStore: ObservableObject {
         }
     }
 
+    /// Records where the user wants the integration, and converges to it.
+    ///
+    /// The switch used to read its own guard flags before the task that sets
+    /// them had started, so flipping it twice quickly could queue an install
+    /// and a removal that then completed in whichever order they happened to
+    /// finish in -- not the order the user asked for, and not necessarily
+    /// ending where they left the switch (CR-017).
+    ///
+    /// Intent and execution are now separate. This records the desired state
+    /// and returns; a single convergence task applies it, re-reading the
+    /// desired state after each step so the last flip is the one that decides
+    /// where things end up. Intermediate flips are collapsed rather than
+    /// replayed -- nobody wants three installs because the switch was tapped
+    /// three times.
     func setIntegrationEnabled(_ isEnabled: Bool) {
-        guard !isInstallingIntegration, !isRemovingIntegration else { return }
-        let previousValue = integrationSwitchIsOn
-        guard isEnabled != previousValue else { return }
+        guard isEnabled != desiredIntegrationEnabled ?? integrationSwitchIsOn else {
+            return
+        }
 
+        desiredIntegrationEnabled = isEnabled
         integrationSwitchIsOn = isEnabled
-        Task { [weak self] in
+        integrationGate.request()
+        startIntegrationConvergenceIfNeeded()
+    }
+
+    /// Applies the desired integration state, and waits for it to settle.
+    @discardableResult
+    func setIntegrationEnabledAndWait(_ isEnabled: Bool) async -> Bool {
+        setIntegrationEnabled(isEnabled)
+        await integrationTask?.value
+        return integrationSwitchIsOn == isEnabled
+    }
+
+    private func startIntegrationConvergenceIfNeeded() {
+        guard service != nil, integrationGate.beginRun() else { return }
+        integrationTask = Task { [weak self] in
             guard let self else { return }
-            let succeeded = isEnabled
-                ? await installIntegrationHooksAndWait()
-                : await removeIntegrationAndWait()
-            if !succeeded {
-                integrationSwitchIsOn = previousValue
+            repeat {
+                await self.convergeIntegrationOnce()
+            } while self.integrationGate.endRun()
+            self.integrationTask = nil
+        }
+    }
+
+    private func convergeIntegrationOnce() async {
+        guard let desired = desiredIntegrationEnabled else { return }
+
+        let succeeded = desired
+            ? await installIntegrationHooksAndWait()
+            : await removeIntegrationAndWait()
+
+        // Someone flipped it again while this was running; that flip owns the
+        // switch now, so this outcome must not write over it.
+        guard desiredIntegrationEnabled == desired else { return }
+        desiredIntegrationEnabled = nil
+
+        if succeeded {
+            // Re-read health rather than trusting the requested value: the
+            // install may have landed in reviewRequired rather than active.
+            if let service {
+                let status = await service.hookSetupStatus()
+                hookSetupStatus = status
+                integrationSwitchIsOn = status.isIntegrationEnabled
             }
+        } else {
+            integrationSwitchIsOn = !desired
         }
     }
 
@@ -962,7 +1019,7 @@ final class MonitorStore: ObservableObject {
         // otherwise idles until the heartbeat. It samples nothing on a cadence.
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.performRefresh()
+                await self?.refreshAndWait()
                 guard !Task.isCancelled, let self else { return }
 
                 let heartbeat = timing.heartbeatInterval
@@ -986,7 +1043,10 @@ final class MonitorStore: ObservableObject {
             refreshEventTask = Task { [weak self] in
                 for await _ in refreshEvents {
                     guard !Task.isCancelled else { return }
-                    await self?.performRefresh()
+                    // A watcher signal only has to converge, so it does not
+                    // wait -- but it must not be dropped either, which is what
+                    // the gate guarantees.
+                    self?.requestRefresh()
                 }
             }
         }
@@ -1041,10 +1101,47 @@ final class MonitorStore: ObservableObject {
         apply(snapshot)
     }
 
+    /// Requests a refresh without waiting for it.
+    ///
+    /// For triggers that only need the state to converge -- the monitor loop,
+    /// the directory watchers. If one is already running, this raises the gate
+    /// so another follows; it is never dropped.
+    private func requestRefresh() {
+        refreshGate.request()
+        startRefreshRunIfNeeded()
+    }
+
+    /// Requests a refresh and waits for one that accounts for this request.
+    ///
+    /// For the user pressing Recheck. It used to call `performRefresh`, which
+    /// returned immediately whenever an automatic refresh happened to be in
+    /// flight -- so the button finished instantly and handed back the status it
+    /// already had (CR-008). Waiting on the gate's own revision is what makes
+    /// "I asked, so tell me what is true now" mean something.
+    private func refreshAndWait() async {
+        let revision = refreshGate.request()
+        startRefreshRunIfNeeded()
+
+        // At most two iterations: a run that begins after this request covers
+        // it, and revisions only move forward.
+        while !refreshGate.hasCovered(revision) {
+            guard let refreshTask else { break }
+            await refreshTask.value
+        }
+    }
+
+    private func startRefreshRunIfNeeded() {
+        guard service != nil, refreshGate.beginRun() else { return }
+        refreshTask = Task { [weak self] in
+            guard let self else { return }
+            repeat {
+                await self.performRefresh()
+            } while self.refreshGate.endRun()
+        }
+    }
+
     private func performRefresh() async {
-        guard let service, !isRefreshInFlight else { return }
-        isRefreshInFlight = true
-        defer { isRefreshInFlight = false }
+        guard let service else { return }
 
         let snapshot = await service.fetchSnapshot(
             showsContentPreviews: showsContentPreviews

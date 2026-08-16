@@ -609,6 +609,153 @@ struct CodexInNotchTests {
         #expect(store.status == .running)
     }
 
+    /// Recheck must report what is true now, not what was true before.
+    ///
+    /// It used to call a refresh that returned immediately whenever an
+    /// automatic one happened to be in flight, so the button finished at once
+    /// and handed back the status it already had (CR-008).
+    @Test @MainActor
+    func recheckWaitsForASnapshotThatAccountsForItOwnRequest() async throws {
+        let service = GatedMonitoringStub()
+        await service.setHoldsSnapshots(true)
+        await service.setStatus(.reviewRequired)
+
+        let store = MonitorStore(
+            service: service,
+            initialSnapshot: MonitorSnapshot(
+                availability: .connecting,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                setupStatus: .notInstalled
+            )
+        )
+
+        // Wait until the automatic refresh is genuinely in flight and stuck.
+        for _ in 0 ..< 200 where await service.snapshotCount() < 1 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(await service.snapshotCount() == 1)
+
+        // The world changes while that refresh is parked.
+        await service.setStatus(.active)
+
+        // The user presses Recheck now.
+        let recheck = Task { await store.recheckIntegrationAndWait() }
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        await service.setHoldsSnapshots(false)
+        await service.releaseHeldSnapshots()
+
+        let reported = await recheck.value
+        #expect(
+            reported == .active,
+            "Recheck reported \(reported); it returned before a fresh read"
+        )
+        #expect(await service.snapshotCount() >= 2)
+        store.stopMonitoring()
+    }
+
+    /// A watcher signal arriving mid-refresh must still produce a refresh.
+    @Test @MainActor
+    func aChangeSignalDuringARefreshIsServedRatherThanDropped() async throws {
+        let service = GatedMonitoringStub()
+        await service.setHoldsSnapshots(true)
+
+        let store = MonitorStore(
+            service: service,
+            initialSnapshot: MonitorSnapshot(
+                availability: .connecting,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                setupStatus: .notInstalled
+            )
+        )
+        for _ in 0 ..< 200 where await service.snapshotCount() < 1 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        // Three signals land while the first read is stuck. They collapse into
+        // one follow-up -- coalesced, but not lost.
+        store.refreshNow()
+        store.refreshNow()
+        store.refreshNow()
+
+        await service.setHoldsSnapshots(false)
+        await service.releaseHeldSnapshots()
+
+        for _ in 0 ..< 200 where await service.snapshotCount() < 2 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(
+            await service.snapshotCount() >= 2,
+            "a signal that arrived during a refresh was dropped"
+        )
+        store.stopMonitoring()
+    }
+
+    /// Flipping the switch faster than the work completes must still end where
+    /// the user left it, and must not run two changes at once.
+    @Test @MainActor
+    func rapidIntegrationTogglesConvergeOnTheLastRequestedState() async throws {
+        let service = GatedMonitoringStub()
+        await service.setStatus(.notInstalled)
+        let store = MonitorStore(
+            service: service,
+            initialSnapshot: MonitorSnapshot(
+                availability: .setupRequired,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                setupStatus: .notInstalled
+            )
+        )
+
+        store.setIntegrationEnabled(true)
+        store.setIntegrationEnabled(false)
+        let settled = await store.setIntegrationEnabledAndWait(true)
+
+        #expect(settled)
+        #expect(store.integrationSwitchIsOn, "the last flip must decide")
+        #expect(store.hookSetupStatus.isIntegrationEnabled)
+        #expect(await service.installCount() >= 1)
+        #expect(
+            await service.observedOverlappingIntegrationChange == false,
+            "install and remove overlapped"
+        )
+        store.stopMonitoring()
+    }
+
+    /// And the same in the other direction, ending off.
+    @Test @MainActor
+    func rapidIntegrationTogglesConvergeWhenTheLastRequestIsOff() async throws {
+        let service = GatedMonitoringStub()
+        await service.setStatus(.notInstalled)
+        let store = MonitorStore(
+            service: service,
+            initialSnapshot: MonitorSnapshot(
+                availability: .setupRequired,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                setupStatus: .notInstalled
+            )
+        )
+
+        store.setIntegrationEnabled(true)
+        let settled = await store.setIntegrationEnabledAndWait(false)
+
+        #expect(settled)
+        #expect(!store.integrationSwitchIsOn)
+        #expect(!store.hookSetupStatus.isIntegrationEnabled)
+        #expect(
+            await service.observedOverlappingIntegrationChange == false,
+            "install and remove overlapped"
+        )
+        store.stopMonitoring()
+    }
+
     @Test @MainActor
     func integrationMasterSwitchInstallsAndRemovesTheManagedSet() async {
         let service = IntegrationMonitoringStub()
@@ -4026,6 +4173,91 @@ for line in sys.stdin:
         #expect(launchCount == "1")
     }
 
+    /// The mechanism the three fixes share, on its own.
+    ///
+    /// Mutating calls are hoisted out of `#expect`, which cannot invoke them on
+    /// the value it captures.
+    @Test
+    func singleFlightGateNeverLosesARequestMadeDuringARun() {
+        var gate = SingleFlightGate()
+        #expect(!gate.isPending)
+        #expect(!gate.isRunning)
+
+        let first = gate.request()
+        #expect(gate.isPending)
+        let claimed = gate.beginRun()
+        #expect(claimed)
+        #expect(gate.isRunning)
+
+        // A second caller cannot start a parallel run.
+        let claimedAgain = gate.beginRun()
+        #expect(!claimedAgain)
+
+        // Nothing else asked, so one run settles it.
+        let repeatsAfterQuietRun = gate.endRun()
+        #expect(!repeatsAfterQuietRun)
+        #expect(gate.hasCovered(first))
+        #expect(!gate.isPending)
+
+        // A request landing mid-run is covered by a follow-up, and the claim
+        // passes straight from one run to the next so nothing can slip between.
+        let second = gate.request()
+        let claimedSecond = gate.beginRun()
+        #expect(claimedSecond)
+        let third = gate.request()
+        let repeatsAfterBusyRun = gate.endRun()
+        #expect(repeatsAfterBusyRun)
+        #expect(gate.isRunning)
+        #expect(gate.hasCovered(second))
+        #expect(!gate.hasCovered(third))
+
+        let repeatsAfterCatchUp = gate.endRun()
+        #expect(!repeatsAfterCatchUp)
+        #expect(gate.hasCovered(third))
+    }
+
+    /// A failed run must not mark its request satisfied.
+    @Test
+    func singleFlightGateKeepsAFailedRequestOutstandingForTheRetry() {
+        var gate = SingleFlightGate()
+        let revision = gate.request()
+        let claimed = gate.beginRun()
+        #expect(claimed)
+
+        // The read failed, so it covered nothing. The caller is backing off and
+        // hands the claim back rather than looping.
+        gate.endRunLeavingPending(covered: false)
+        #expect(!gate.isRunning)
+        #expect(gate.isPending, "a failed read must leave its request outstanding")
+        #expect(!gate.hasCovered(revision))
+
+        // Once the cool-off expires the same request is still there to serve.
+        let retried = gate.beginRun()
+        #expect(retried)
+        let repeats = gate.endRun(covered: true)
+        #expect(!repeats)
+        #expect(gate.hasCovered(revision))
+        #expect(!gate.isPending)
+    }
+
+    /// Cancelling a run must not wedge the gate closed forever.
+    @Test
+    func singleFlightGateResetReleasesAClaimHeldByACancelledRun() {
+        var gate = SingleFlightGate()
+        gate.request()
+        let claimed = gate.beginRun()
+        #expect(claimed)
+        #expect(gate.isRunning)
+
+        gate.reset()
+        #expect(!gate.isRunning)
+        #expect(!gate.isPending)
+
+        gate.request()
+        let claimedAfterReset = gate.beginRun()
+        #expect(claimedAfterReset, "a reset gate must be able to run again")
+    }
+
     /// A watcher built before its directory exists must still come to life.
     ///
     /// This is the CR-025 shape exactly: the Hook event directory is created by
@@ -6042,6 +6274,83 @@ private actor StuckDeadlineMonitoringStub: CodexMonitoring {
     nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
     func discardCollectedPreviews() async {}
     func disconnect() async {}
+}
+
+/// A service whose snapshot can be held open, so a refresh can be observed
+/// while it is genuinely in flight.
+private actor GatedMonitoringStub: CodexMonitoring {
+    private var observedSnapshots = 0
+    private var status: HookSetupStatus = .reviewRequired
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var holdsSnapshots = false
+    private var installRequests = 0
+    private var removeRequests = 0
+    private var isApplyingIntegrationChange = false
+    private(set) var observedOverlappingIntegrationChange = false
+
+    func nextRefreshDeadline() async -> Date? { nil }
+
+    func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot {
+        observedSnapshots += 1
+        if holdsSnapshots {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        return MonitorSnapshot(
+            availability: .ready,
+            sessions: [],
+            quota: .unavailable,
+            diagnostic: nil,
+            setupStatus: status
+        )
+    }
+
+    func hookSetupStatus() async -> HookSetupStatus { status }
+
+    func installHooks() async throws {
+        try await applyIntegrationChange {
+            installRequests += 1
+            status = .reviewRequired
+        }
+    }
+
+    func removeHooks() async throws {
+        try await applyIntegrationChange {
+            removeRequests += 1
+            status = .notInstalled
+        }
+    }
+
+    /// Records whether two integration changes were ever in flight together.
+    private func applyIntegrationChange(
+        _ body: () -> Void
+    ) async throws {
+        if isApplyingIntegrationChange {
+            observedOverlappingIntegrationChange = true
+        }
+        isApplyingIntegrationChange = true
+        // A real install touches the disk; yielding here gives an unserialised
+        // caller every chance to interleave.
+        await Task.yield()
+        body()
+        isApplyingIntegrationChange = false
+    }
+
+    func clearSessions() async {}
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
+    func discardCollectedPreviews() async {}
+    func disconnect() async {}
+
+    func setStatus(_ status: HookSetupStatus) { self.status = status }
+    func setHoldsSnapshots(_ holds: Bool) { holdsSnapshots = holds }
+    func snapshotCount() -> Int { observedSnapshots }
+    func installCount() -> Int { installRequests }
+    func removeCount() -> Int { removeRequests }
+
+    func releaseHeldSnapshots() {
+        let held = waiters
+        waiters.removeAll()
+        held.forEach { $0.resume() }
+    }
 }
 
 private actor IntegrationMonitoringStub: CodexMonitoring {
