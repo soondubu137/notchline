@@ -38,13 +38,16 @@ extension MonitorClock {
 ///   `backgroundThreadListTimeout` (15s) + the transport's liveness grace (3s)
 ///   and probe timeout (5s) + `disconnectGracePeriod` (3s) ≈ 26s worst case.
 /// - **A finished turn is read in Desktop → its row disappears.**
-///   The unread watcher's 250ms debounce + `terminalReadSettlingInterval` (2s)
-///   ≈ 2.25s worst case.
+///   `unreadStateDebounceInterval` (50ms) once the watcher edge lands, which is
+///   the normal case — measured end to end on the live app at 224ms from
+///   Desktop's write to the row leaving the model. `terminalUnreadRecheckInterval`
+///   (1s) is the bound when that edge does not land.
 ///
-/// Neither total includes a poll interval any more: refreshes are driven by the
-/// directory watchers and by wake-ups scheduled at the deadline that actually
-/// matters. `heartbeatInterval` only bounds how long a *missed* trigger can go
-/// unnoticed, so it never appears in a latency budget.
+/// The second total is the only one with a term that exists purely to bound a
+/// *missed* signal, and it is deliberate: the watcher is a hint, so the row it
+/// governs needs a floor under it. `heartbeatInterval` is not that floor — it
+/// covers mechanisms that fail silently, and nothing may depend on it for
+/// latency.
 ///
 /// Changing any single value moves those totals, so they are asserted directly
 /// rather than left as arithmetic in a comment.
@@ -94,8 +97,26 @@ nonisolated struct MonitorTiming: Sendable {
     /// covering a prompt Hook that beat Codex's own state write.
     var newTurnReconciliationGrace: TimeInterval = 10
     /// How long a finished Turn stays listed before unread evidence can hide it,
-    /// covering Desktop's ~500ms persistence delay.
+    /// covering Desktop's persistence delay -- measured at 583ms between a Turn
+    /// finishing and Desktop recording the thread as unread.
     var terminalReadSettlingInterval: TimeInterval = 2
+    /// How often a listed terminal Turn is re-examined while it waits on the
+    /// user rather than on time.
+    ///
+    /// This is the floor under the unread watcher, not a sampling cadence: the
+    /// watcher normally answers first and this never comes due. It exists
+    /// because the row it governs has no other bounded signal -- see
+    /// ``TerminalUnreadMembershipGate/nextDeadline(now:)``. One snapshot costs
+    /// 1-7ms measured in Release on the live app, so the state this covers runs
+    /// under 1% of a core and only while such a row is actually listed.
+    var terminalUnreadRecheckInterval: TimeInterval = 1
+    /// Trailing debounce on the Desktop state directory.
+    ///
+    /// Sized to the burst an atomic replace produces, measured at 3-14ms across
+    /// real Desktop writes. The previous 250ms was 18-80x that, and every
+    /// millisecond of it landed on the one path where a user is watching for a
+    /// row to leave.
+    var unreadStateDebounceInterval: TimeInterval = 0.05
     /// How long `disconnected` must persist before it replaces a trusted state.
     var disconnectGracePeriod: TimeInterval = 3
     /// Trailing debounce on the Hook event queue directory.

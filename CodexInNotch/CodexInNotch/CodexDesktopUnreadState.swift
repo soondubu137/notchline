@@ -63,25 +63,27 @@ struct TerminalUnreadMembershipGate: Sendable {
         var isHidden: Bool
         /// Whether waiting -- and nothing else -- could still hide this row.
         ///
-        /// Two things make waiting pointless, and the deadline below must skip
-        /// both. An unreadable state cannot hide anything however long it is
-        /// given. And a row Desktop still reports as *unread* is not waiting on
-        /// a window at all: only the user reading it changes that, which
-        /// arrives as a file change on the watcher, not as time passing.
+        /// Two things make waiting pointless. An unreadable state cannot hide
+        /// anything however long it is given. And a row Desktop still reports
+        /// as *unread* is not waiting on a window at all: only the user reading
+        /// it changes that, which arrives as a file change on the watcher, not
+        /// as time passing.
         ///
-        /// Only the first case used to be excluded. The second left a deadline
-        /// permanently in the past for every Completed row the user had not
-        /// read, which the store clamps to its one-second floor -- so the app
-        /// took a full snapshot every second for as long as such a row was on
-        /// screen, which the performance notes recorded as a 0% steady state.
+        /// This decides *which* deadline the row reports, not whether it
+        /// reports one -- see ``nextDeadline(now:)``.
         var canHideByWaiting: Bool
     }
 
     private let settlingInterval: TimeInterval
+    private let unreadRecheckInterval: TimeInterval
     private var entries: [String: Entry] = [:]
 
-    nonisolated init(settlingInterval: TimeInterval = 2) {
+    nonisolated init(
+        settlingInterval: TimeInterval = 2,
+        unreadRecheckInterval: TimeInterval = 1
+    ) {
         self.settlingInterval = settlingInterval
+        self.unreadRecheckInterval = unreadRecheckInterval
     }
 
     nonisolated mutating func shouldDisplay(
@@ -129,19 +131,42 @@ struct TerminalUnreadMembershipGate: Sendable {
         return !entry.isHidden
     }
 
-    /// When a still-visible terminal row would next become hideable.
+    /// When a still-visible terminal row should next be looked at again.
     ///
-    /// Without this the settling window could only expire on some unrelated
-    /// refresh happening to land after it, which is what the one-second poll
-    /// was really paying for.
+    /// Every listed terminal row reports something, because every one of them
+    /// is waiting -- but not on the same thing, and the deadline has to say
+    /// which:
     ///
-    /// Rows that waiting cannot hide are excluded -- see ``Entry`` -- because
-    /// reporting their window asks the store to wake for work that will not
-    /// happen, and once the window is past, to keep waking forever.
-    nonisolated var nextSettlingDeadline: Date? {
+    /// - Inside its settling window a row waits on *time*. Report the instant
+    ///   the window expires; a refresh then genuinely clears it.
+    /// - A row Desktop still reports as unread waits on the *user*, and one
+    ///   whose unread state is unreadable waits on the file becoming legible.
+    ///   Both arrive on the watcher, and the watcher is a low-latency hint,
+    ///   never a source of truth. Report a re-check measured forward from now.
+    ///
+    /// Excluding that second group entirely is what regressed this. Waiting
+    /// cannot hide those rows, which is true and was the wrong conclusion: the
+    /// store then had no scheduled wake-up at all for the product's core
+    /// interaction, so a watcher edge that arrived late -- or never -- left the
+    /// row listed until some unrelated refresh happened along. Traced on the
+    /// live app: eight seconds of complete silence between a finished Turn
+    /// being listed and the user reading it, the disappearance resting entirely
+    /// on one edge landing.
+    ///
+    /// The mistake worth not repeating is reporting a *stale* deadline rather
+    /// than none. `terminalObservedAt + settlingInterval` for an unread row
+    /// sits permanently in the past, the store clamps it to its one-second
+    /// floor, and no refresh can move it -- a busy loop wearing a deadline's
+    /// clothes. A re-check measured from `now` is clearable by construction:
+    /// the refresh at that instant either hides the row or books the next look.
+    nonisolated func nextDeadline(now: Date) -> Date? {
         entries.values
-            .filter { !$0.isHidden && $0.canHideByWaiting }
-            .map { $0.terminalObservedAt.addingTimeInterval(settlingInterval) }
+            .filter { !$0.isHidden }
+            .map { entry in
+                entry.canHideByWaiting
+                    ? entry.terminalObservedAt.addingTimeInterval(settlingInterval)
+                    : now.addingTimeInterval(unreadRecheckInterval)
+            }
             .min()
     }
 
@@ -260,7 +285,8 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
     init(
         stateFileURL: URL = CodexDesktopUnreadStateRepository.liveStateFileURL(),
         fileManager: FileManager = .default,
-        changeDebounceInterval: TimeInterval = 0.25
+        changeDebounceInterval: TimeInterval =
+            MonitorTiming.standard.unreadStateDebounceInterval
     ) {
         self.stateFileURL = stateFileURL
         self.fileManager = fileManager

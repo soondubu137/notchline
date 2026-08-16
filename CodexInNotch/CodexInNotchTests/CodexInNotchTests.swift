@@ -6679,17 +6679,23 @@ private final class CodexNavigatorStub: CodexNavigating {
 }
 
 extension CodexInNotchTests {
-    /// A Completed row the user has not read must not ask to be woken for.
+    /// A Completed row the user has not read still asks to be looked at.
     ///
     /// Only the user reading it can hide it, and that arrives on the watcher as
-    /// a file change. Reporting its settling window left a deadline
-    /// permanently in the past, which the store clamps to its one-second floor
-    /// -- so the app took a full snapshot every second, including a
-    /// main-thread LaunchServices round trip, for as long as the row was on
-    /// screen. Measured before the fix: 598s in the past and still reported.
+    /// a file change -- a hint, not a guarantee. Reporting nothing for such a
+    /// row left the disappearance resting entirely on that one edge, with no
+    /// bound when it landed late: traced on the live app at eight seconds of
+    /// silence between the row being listed and the user reading it.
+    ///
+    /// The deadline must be measured forward from `now`, not from the terminal
+    /// boundary. The latter sits permanently in the past, which the store
+    /// clamps to its one-second floor and no refresh can move.
     @Test
-    func terminalGateAsksForNoWakeUpWhileARowIsStillUnread() {
-        var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
+    func terminalGateBooksARecheckWhileARowIsStillUnread() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
         let start = Date(timeIntervalSince1970: 1_000)
         let unread = DesktopUnreadStateSnapshot(
             unreadThreadIDs: ["thread"],
@@ -6708,9 +6714,90 @@ extension CodexInNotchTests {
             terminalBoundaryAt: start, unreadState: unread, now: later
         )
         #expect(stillDisplayed, "an unread terminal row stays listed")
+
+        let deadline = gate.nextDeadline(now: later)
         #expect(
-            gate.nextSettlingDeadline == nil,
-            "waiting cannot hide an unread row, so it must not schedule a wake-up"
+            deadline == later.addingTimeInterval(1),
+            "an unread row must book a re-check, not go unwatched: got \(String(describing: deadline?.timeIntervalSince(later)))"
+        )
+        #expect(
+            deadline.map { $0 > later } == true,
+            "a deadline already in the past is the busy loop this replaced"
+        )
+    }
+
+    /// The floor moves with each look, so it can never go stale.
+    ///
+    /// This is the property that separates the re-check from the deadline it
+    /// replaced: the refresh at the reported instant re-evaluates the row and
+    /// books the next look, rather than re-reporting an instant nothing can
+    /// clear.
+    @Test
+    func terminalGateRecheckMovesForwardOnEveryLook() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
+        let start = Date(timeIntervalSince1970: 1_000)
+        let unread = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: ["thread"],
+            source: .current
+        )
+
+        _ = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: unread, now: start
+        )
+        let first = gate.nextDeadline(now: start)
+
+        let woken = start.addingTimeInterval(1)
+        _ = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: unread, now: woken
+        )
+        let second = gate.nextDeadline(now: woken)
+
+        #expect(first == start.addingTimeInterval(1))
+        #expect(second == woken.addingTimeInterval(1))
+        #expect(
+            second.map { $0 > woken } == true,
+            "the re-check must stay ahead of the refresh that served it"
+        )
+    }
+
+    /// Reading the row still hides it on the very next look, not on a window.
+    ///
+    /// The re-check is a floor under the watcher, not a delay added to it: once
+    /// Desktop reports the thread read, the row goes on that evaluation.
+    @Test
+    func terminalGateHidesOnTheFirstLookAfterTheUserReadsIt() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
+        let start = Date(timeIntervalSince1970: 1_000)
+        let unread = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: ["thread"],
+            source: .current
+        )
+        let read = DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+
+        _ = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: unread, now: start
+        )
+
+        // Long past the settling window, so nothing but the unread evidence
+        // itself can be doing the hiding here.
+        let readAt = start.addingTimeInterval(600)
+        let displayed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: read, now: readAt
+        )
+        #expect(!displayed, "a row observed unread hides the moment it reads as read")
+        #expect(
+            gate.nextDeadline(now: readAt) == nil,
+            "a hidden row asks for nothing"
         )
     }
 
@@ -6728,7 +6815,7 @@ extension CodexInNotchTests {
             terminalBoundaryAt: start, unreadState: read, now: start
         )
         #expect(displayed, "a just-finished turn is not hidden instantly")
-        #expect(gate.nextSettlingDeadline == start.addingTimeInterval(2))
+        #expect(gate.nextDeadline(now: start) == start.addingTimeInterval(2))
 
         // Once the window passes, the row hides and stops asking to be woken.
         let hidden = gate.shouldDisplay(
@@ -6737,26 +6824,32 @@ extension CodexInNotchTests {
             now: start.addingTimeInterval(2.1)
         )
         #expect(!hidden)
-        #expect(gate.nextSettlingDeadline == nil)
+        #expect(gate.nextDeadline(now: start.addingTimeInterval(2.1)) == nil)
     }
 
-    /// An unreadable state still cannot hide anything, so still no wake-up.
+    /// An unreadable state cannot hide anything, but it can become readable.
+    ///
+    /// Waiting alone does not hide this row either, so it takes the same
+    /// forward-measured re-check as an unread one rather than nothing at all.
     @Test
-    func terminalGateAsksForNoWakeUpWhileTheUnreadStateIsUnreadable() {
-        var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
+    func terminalGateBooksARecheckWhileTheUnreadStateIsUnreadable() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
         let start = Date(timeIntervalSince1970: 1_000)
         let unreadable = DesktopUnreadStateSnapshot(
             unreadThreadIDs: [],
             source: .lastKnownGood
         )
 
+        let now = start.addingTimeInterval(600)
         let displayed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
-            terminalBoundaryAt: start, unreadState: unreadable,
-            now: start.addingTimeInterval(600)
+            terminalBoundaryAt: start, unreadState: unreadable, now: now
         )
         #expect(displayed, "an unreadable state must never hide a row")
-        #expect(gate.nextSettlingDeadline == nil)
+        #expect(gate.nextDeadline(now: now) == now.addingTimeInterval(1))
     }
 
     /// A row that stops rendering must stop asking to be woken for.

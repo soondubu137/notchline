@@ -110,7 +110,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             invalidations
         ])
         self.terminalUnreadMembershipGate = TerminalUnreadMembershipGate(
-            settlingInterval: timing.terminalReadSettlingInterval
+            settlingInterval: timing.terminalReadSettlingInterval,
+            unreadRecheckInterval: timing.terminalUnreadRecheckInterval
         )
         self.desktopProcessIdentifierProvider = desktopProcessIdentifierProvider
     }
@@ -358,8 +359,12 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             deadlines.append(threadMetadataRetryAfter)
         }
 
-        if let settling = terminalUnreadMembershipGate.nextSettlingDeadline {
-            deadlines.append(settling)
+        // Both the settling window and the floor under the unread watcher. This
+        // is the one deadline here measured partly forward from now rather than
+        // from when its work became due, because the row it covers is waiting
+        // on the user and not on an interval that started somewhere.
+        if let terminal = terminalUnreadMembershipGate.nextDeadline(now: clock.now()) {
+            deadlines.append(terminal)
         }
         return deadlines.min()
     }
