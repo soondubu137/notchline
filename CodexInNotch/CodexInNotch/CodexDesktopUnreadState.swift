@@ -76,7 +76,7 @@ struct TerminalUnreadMembershipGate: Sendable {
         status: SessionStatus,
         terminalBoundaryAt: Date,
         unreadState: DesktopUnreadStateSnapshot,
-        now: Date = Date()
+        now: Date
     ) -> Bool {
         guard Self.isTerminal(status) else {
             entries.removeValue(forKey: sessionID)
@@ -410,6 +410,9 @@ private final class CodexDesktopStateDirectoryWatcher: @unchecked Sendable {
         source?.cancel()
     }
 
+    // The debounce below stays on GCD wall time deliberately: it coalesces
+    // filesystem events on the watcher's own queue and makes no product timing
+    // decision, so routing it through MonitorClock would buy nothing.
     nonisolated private func scheduleDelivery() {
         lock.lock()
         pendingDelivery?.cancel()

@@ -328,7 +328,7 @@ enum UsageSummaryFormatter {
 
     nonisolated static func resetText(
         resetsAt: Date?,
-        now: Date = Date(),
+        now: Date,
         calendar: Calendar = .current
     ) -> String {
         guard let resetsAt else { return "Reset unavailable" }
@@ -353,7 +353,7 @@ enum UsageSummaryFormatter {
     nonisolated static func summary(
         todayTokens: Int64?,
         resetsAt: Date?,
-        now: Date = Date(),
+        now: Date,
         calendar: Calendar = .current
     ) -> String {
         let usageText = todayTokens.map(compactTokenCount) ?? "--"

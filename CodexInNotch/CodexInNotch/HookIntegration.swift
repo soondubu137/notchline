@@ -584,6 +584,8 @@ actor HookEventRepository {
 
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
+    private let clock: any MonitorClock
+    private let timing: MonitorTiming
     private let liveEventCutoff: Date
     private var hasObservedEvent: Bool
     private var hasObservedLiveEvent: Bool
@@ -598,11 +600,15 @@ actor HookEventRepository {
     init(
         paths: HookIntegrationPaths = .live(),
         fileManager: FileManager = .default,
-        liveEventCutoff: Date = Date()
+        clock: any MonitorClock = SystemMonitorClock(),
+        timing: MonitorTiming = .standard,
+        liveEventCutoff: Date? = nil
     ) {
         self.paths = paths
         self.fileManager = fileManager
-        self.liveEventCutoff = liveEventCutoff
+        self.clock = clock
+        self.timing = timing
+        self.liveEventCutoff = liveEventCutoff ?? clock.now()
 
         if let data = try? Data(contentsOf: paths.state),
            let persisted = try? JSONDecoder().decode(PersistedState.self, from: data) {
@@ -714,7 +720,7 @@ actor HookEventRepository {
         snapshotStartedAt: Date
     ) -> HookStateSnapshot {
         let originalCount = turnsByThreadID.count
-        let now = Date()
+        let now = clock.now()
         turnsByThreadID = turnsByThreadID.filter {
             if unarchivedThreadIDs.contains($0.key) {
                 return true
@@ -726,7 +732,8 @@ actor HookEventRepository {
             }
             // A prompt hook can arrive just before the state DB is updated.
             // Keep a short grace period so reconciliation does not erase a new turn.
-            return now.timeIntervalSince($0.value.startedAt) < 10
+            return now.timeIntervalSince($0.value.startedAt)
+                < timing.newTurnReconciliationGrace
         }
         if turnsByThreadID.count != originalCount {
             try? persist()

@@ -230,12 +230,10 @@ enum PanelMetrics {
 }
 
 struct ConnectionStabilityGate {
-    static let defaultGracePeriod: TimeInterval = 3
-
     let gracePeriod: TimeInterval
     private var disconnectedSince: Date?
 
-    init(gracePeriod: TimeInterval = Self.defaultGracePeriod) {
+    init(gracePeriod: TimeInterval = MonitorTiming.standard.disconnectGracePeriod) {
         self.gracePeriod = gracePeriod
     }
 
@@ -316,15 +314,17 @@ final class MonitorStore: ObservableObject {
     private let service: (any CodexMonitoring)?
     private let navigator: (any CodexNavigating)?
     private let displayPreferences: UserDefaults?
+    private let clock: any MonitorClock
+    private let timing: MonitorTiming
     private var preferredDisplayID: String?
-    private var pendingHoverAction: DispatchWorkItem?
+    private var pendingHoverTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var refreshEventTask: Task<Void, Never>?
     private let refreshEvents: AsyncStream<Void>?
     private var isRefreshInFlight = false
     private var isNavigationInFlight = false
     private var dismissedSessionIDs: Set<String> = []
-    private var connectionStabilityGate = ConnectionStabilityGate()
+    private var connectionStabilityGate: ConnectionStabilityGate
 
     init(
         displays: [DisplayOption]? = nil,
@@ -332,7 +332,9 @@ final class MonitorStore: ObservableObject {
         navigator: (any CodexNavigating)? = nil,
         initialSnapshot: MonitorSnapshot? = nil,
         displayPreferences: UserDefaults? = nil,
-        refreshEvents: AsyncStream<Void>? = nil
+        refreshEvents: AsyncStream<Void>? = nil,
+        clock: any MonitorClock = SystemMonitorClock(),
+        timing: MonitorTiming = .standard
     ) {
         let resolvedDisplays = displays ?? DisplayOption.currentDisplays()
         let snapshot = initialSnapshot ?? Self.previewSnapshot
@@ -345,6 +347,11 @@ final class MonitorStore: ObservableObject {
         self.displays = resolvedDisplays
         self.selectedDisplayID = initialDisplayID
         self.displayPreferences = displayPreferences
+        self.clock = clock
+        self.timing = timing
+        self.connectionStabilityGate = ConnectionStabilityGate(
+            gracePeriod: timing.disconnectGracePeriod
+        )
         self.preferredDisplayID = persistedDisplayID
             ?? (initialDisplayID.isEmpty ? nil : initialDisplayID)
         self.service = service
@@ -376,6 +383,7 @@ final class MonitorStore: ObservableObject {
     deinit {
         monitorTask?.cancel()
         refreshEventTask?.cancel()
+        pendingHoverTask?.cancel()
     }
 
     var selectedDisplay: DisplayOption? {
@@ -409,7 +417,8 @@ final class MonitorStore: ObservableObject {
     var expandedFooterText: String {
         UsageSummaryFormatter.summary(
             todayTokens: quota.todayTokens,
-            resetsAt: quota.resetsAt
+            resetsAt: quota.resetsAt,
+            now: clock.now()
         )
     }
 
@@ -484,13 +493,13 @@ final class MonitorStore: ObservableObject {
     }
 
     func pointerEnteredPanel() {
-        scheduleHoverAction(after: 0.15) { store in
+        scheduleHoverAction(after: timing.hoverExpandDelay) { store in
             store.isExpanded = true
         }
     }
 
     func pointerExitedPanel() {
-        scheduleHoverAction(after: 0.25) { store in
+        scheduleHoverAction(after: timing.hoverCollapseDelay) { store in
             store.isExpanded = false
         }
     }
@@ -656,9 +665,9 @@ final class MonitorStore: ObservableObject {
 
     func applyForTesting(
         _ snapshot: MonitorSnapshot,
-        observedAt: Date = Date()
+        observedAt: Date? = nil
     ) {
-        publish(snapshot, observedAt: observedAt)
+        publish(snapshot, observedAt: observedAt ?? clock.now())
     }
 
     private func scheduleHoverAction(
@@ -667,17 +676,17 @@ final class MonitorStore: ObservableObject {
     ) {
         cancelPendingHoverAction()
 
-        let workItem = DispatchWorkItem { [weak self] in
+        pendingHoverTask = Task { [weak self] in
             guard let self else { return }
+            try? await clock.sleep(seconds: delay)
+            guard !Task.isCancelled else { return }
             action(self)
         }
-        pendingHoverAction = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func cancelPendingHoverAction() {
-        pendingHoverAction?.cancel()
-        pendingHoverAction = nil
+        pendingHoverTask?.cancel()
+        pendingHoverTask = nil
     }
 
     private func startMonitoring() {
@@ -687,10 +696,11 @@ final class MonitorStore: ObservableObject {
             while !Task.isCancelled {
                 await self?.performRefresh()
                 guard !Task.isCancelled else { return }
-                let retryDelay: UInt64 = self?.hookSetupStatus == .active
-                    ? 1_000_000_000
-                    : 5_000_000_000
-                try? await Task.sleep(nanoseconds: retryDelay)
+                guard let self else { return }
+                let retryDelay = hookSetupStatus == .active
+                    ? timing.activePollInterval
+                    : timing.idlePollInterval
+                try? await clock.sleep(seconds: retryDelay)
             }
         }
 
@@ -762,7 +772,7 @@ final class MonitorStore: ObservableObject {
             showsContentPreviews: showsContentPreviews
         )
         guard !Task.isCancelled else { return }
-        publish(snapshot, observedAt: Date())
+        publish(snapshot, observedAt: clock.now())
         let refreshedHookSetupStatus = await service.hookSetupStatus()
         if hookSetupStatus != refreshedHookSetupStatus {
             hookSetupStatus = refreshedHookSetupStatus
@@ -775,6 +785,7 @@ final class MonitorStore: ObservableObject {
     }
 
     private static var previewSnapshot: MonitorSnapshot {
+        // SwiftUI preview fixture: display data, not a timing decision.
         let now = Date()
         return MonitorSnapshot(
             availability: .ready,

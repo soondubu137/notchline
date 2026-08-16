@@ -21,13 +21,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         let observedAt: Date
     }
 
-    nonisolated private static let accountRefreshInterval: TimeInterval = 30
-    nonisolated private static let threadListRefreshInterval: TimeInterval = 30
-    nonisolated private static let threadMetadataRefreshInterval: TimeInterval = 10
-    nonisolated private static let requestRetryInterval: TimeInterval = 60
-    nonisolated private static let coreRequestTimeoutNanoseconds: UInt64 = 5_000_000_000
-    nonisolated private static let backgroundThreadListTimeoutNanoseconds: UInt64 = 15_000_000_000
-    nonisolated private static let threadMetadataTimeoutNanoseconds: UInt64 = 5_000_000_000
+    private let clock: any MonitorClock
+    private let timing: MonitorTiming
     private let client: any CodexAppServerCommunicating
     private let hookEvents: HookEventRepository
     private let hookInstaller: CodexHookInstaller
@@ -61,11 +56,14 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             CodexDesktopProjectMetadataRepository(),
         unreadState: any DesktopUnreadStateProviding =
             CodexDesktopUnreadStateRepository(),
-        terminalReadSettlingInterval: TimeInterval = 2,
+        clock: any MonitorClock = SystemMonitorClock(),
+        timing: MonitorTiming = .standard,
         desktopProcessIdentifierProvider: @escaping @MainActor @Sendable () -> pid_t? = {
             LiveCodexMonitorService.desktopProcessIdentifier()
         }
     ) {
+        self.clock = clock
+        self.timing = timing
         self.client = client
         self.hookEvents = hookEvents
         self.hookInstaller = hookInstaller
@@ -73,7 +71,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         self.unreadState = unreadState
         self.desktopStateChangeEvents = unreadState.changeEvents()
         self.terminalUnreadMembershipGate = TerminalUnreadMembershipGate(
-            settlingInterval: terminalReadSettlingInterval
+            settlingInterval: timing.terminalReadSettlingInterval
         )
         self.desktopProcessIdentifierProvider = desktopProcessIdentifierProvider
     }
@@ -190,7 +188,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             // now", so any startup list would have been a guess.
             _ = try await readAllUnarchivedThreads(
                 forceRefresh: false,
-                timeoutNanoseconds: Self.coreRequestTimeoutNanoseconds
+                timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
             )
             scheduleQuotaRefreshIfNeeded()
             return remember(
@@ -259,7 +257,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         try await client.connect()
         let listedThreads = try await readAllUnarchivedThreads(
             forceRefresh: true,
-            timeoutNanoseconds: Self.coreRequestTimeoutNanoseconds
+            timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
         )
         return listedThreads.contains { thread in
             thread["id"]?.stringValue == threadID
@@ -320,8 +318,12 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
     }
 
+    nonisolated private func nanoseconds(_ seconds: TimeInterval) -> UInt64 {
+        UInt64(max(0, seconds) * 1_000_000_000)
+    }
+
     private func scheduleQuotaRefreshIfNeeded() {
-        let now = Date()
+        let now = clock.now()
         guard quotaRefreshTask == nil,
               quotaRetryAfter.map({ now >= $0 }) ?? true else {
             return
@@ -329,7 +331,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
 
         let accountNeedsRefresh = accountReadAt == nil
             || now.timeIntervalSince(accountReadAt ?? .distantPast)
-                >= Self.accountRefreshInterval
+                >= timing.accountRefreshInterval
         let quotaNeedsRefresh = quotaReadAt == nil
             || now.timeIntervalSince(quotaReadAt ?? .distantPast) >= 60
         guard accountNeedsRefresh || quotaNeedsRefresh else { return }
@@ -347,15 +349,15 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         } catch {
             cachedQuota = .unavailable
             quotaReadAt = nil
-            quotaRetryAfter = Date().addingTimeInterval(Self.requestRetryInterval)
+            quotaRetryAfter = clock.now().addingTimeInterval(timing.requestRetryInterval)
         }
     }
 
     private func readAccountUsageIfNeeded() async throws -> QuotaSnapshot {
-        let now = Date()
+        let now = clock.now()
         if accountReadAt == nil
             || now.timeIntervalSince(accountReadAt ?? .distantPast)
-                >= Self.accountRefreshInterval {
+                >= timing.accountRefreshInterval {
             let account = try await client.request(
                 method: "account/read",
                 params: .object(["refreshToken": .bool(false)])
@@ -370,7 +372,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
 
         if let quotaReadAt,
-           now.timeIntervalSince(quotaReadAt) < 60 {
+           now.timeIntervalSince(quotaReadAt) < timing.quotaRefreshInterval {
             return cachedQuota
         }
 
@@ -391,7 +393,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             remainingPercent: rateLimitQuota.remainingPercent,
             resetsAt: rateLimitQuota.resetsAt,
             todayTokens: responses.1.flatMap {
-                CodexSnapshotParser.todayTokenCount(from: $0)
+                CodexSnapshotParser.todayTokenCount(from: $0, now: clock.now())
             }
         )
         cachedQuota = quota
@@ -432,7 +434,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                 threadID: session.threadID,
                 status: session.status,
                 terminalBoundaryAt: state.lastEventAt,
-                unreadState: unreadState
+                unreadState: unreadState,
+                now: clock.now()
             ) {
                 sessions.append(session)
             }
@@ -442,12 +445,12 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
 
     private var threadListRefreshIsDue: Bool {
         guard let threadListReadAt else { return true }
-        return Date().timeIntervalSince(threadListReadAt)
-            >= Self.threadListRefreshInterval
+        return clock.now().timeIntervalSince(threadListReadAt)
+            >= timing.threadListRefreshInterval
     }
 
     private func scheduleThreadListRefreshIfNeeded() {
-        let now = Date()
+        let now = clock.now()
         guard threadListRefreshTask == nil,
               threadListRetryAfter.map({ now >= $0 }) ?? true else {
             return
@@ -465,7 +468,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     /// title, preview, root-thread eligibility and `status.activeFlags` at a
     /// fraction of the cost of paginating every unarchived thread.
     private func scheduleThreadMetadataRefreshIfNeeded(for threadIDs: Set<String>) {
-        let now = Date()
+        let now = clock.now()
         guard supportsThreadMetadataRead,
               threadMetadataRefreshTask == nil,
               threadMetadataRetryAfter.map({ now >= $0 }) ?? true else {
@@ -475,7 +478,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         let staleThreadIDs = threadIDs.filter { threadID in
             guard let record = threadRecords[threadID] else { return true }
             return now.timeIntervalSince(record.observedAt)
-                >= Self.threadMetadataRefreshInterval
+                >= timing.threadMetadataRefreshInterval
         }
         guard !staleThreadIDs.isEmpty else { return }
 
@@ -495,7 +498,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         for threadID in threadIDs.sorted() {
             guard !Task.isCancelled else { return }
 
-            let startedAt = Date()
+            let startedAt = clock.now()
             do {
                 let response = try await client.request(
                     method: "thread/read",
@@ -507,7 +510,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                         // product needs already comes from the Hook reducer.
                         "includeTurns": .bool(false)
                     ]),
-                    timeoutNanoseconds: Self.threadMetadataTimeoutNanoseconds
+                    timeoutNanoseconds: nanoseconds(timing.threadMetadataTimeout)
                 )
                 didReadAnyThread = true
                 guard let thread = response["thread"] else { continue }
@@ -536,7 +539,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         guard !Task.isCancelled else { return }
         threadMetadataRetryAfter = didReadAnyThread
             ? nil
-            : Date().addingTimeInterval(Self.requestRetryInterval)
+            : clock.now().addingTimeInterval(timing.requestRetryInterval)
     }
 
     private func refreshThreadListInBackground() async {
@@ -545,22 +548,22 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         do {
             _ = try await readAllUnarchivedThreads(
                 forceRefresh: true,
-                timeoutNanoseconds: Self.backgroundThreadListTimeoutNanoseconds
+                timeoutNanoseconds: nanoseconds(timing.backgroundThreadListTimeout)
             )
             guard !Task.isCancelled else { return }
             threadListRetryAfter = nil
         } catch let error as CodexAppServerError {
             guard !Task.isCancelled else { return }
-            threadListRetryAfter = Date().addingTimeInterval(
-                Self.requestRetryInterval
+            threadListRetryAfter = clock.now().addingTimeInterval(
+                timing.requestRetryInterval
             )
             if error.requiresConnectionReset {
                 await client.disconnect()
             }
         } catch {
             guard !Task.isCancelled else { return }
-            threadListRetryAfter = Date().addingTimeInterval(
-                Self.requestRetryInterval
+            threadListRetryAfter = clock.now().addingTimeInterval(
+                timing.requestRetryInterval
             )
         }
     }
@@ -630,15 +633,15 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     ) async throws -> [JSONValue] {
         if !forceRefresh,
            let threadListReadAt,
-           Date().timeIntervalSince(threadListReadAt)
-               < Self.threadListRefreshInterval {
+           clock.now().timeIntervalSince(threadListReadAt)
+               < timing.threadListRefreshInterval {
             return listedThreadIDs.compactMap { threadRecords[$0]?.thread }
         }
 
         var threads: [JSONValue] = []
         var cursor: String?
         var observedCursors = Set<String>()
-        let snapshotStartedAt = Date()
+        let snapshotStartedAt = clock.now()
 
         repeat {
             var params: [String: JSONValue] = [
@@ -743,7 +746,7 @@ enum CodexSnapshotParser {
 
     nonisolated static func todayTokenCount(
         from response: JSONValue,
-        now: Date = Date(),
+        now: Date,
         calendar: Calendar? = nil
     ) -> Int64? {
         guard let buckets = response["dailyUsageBuckets"]?.arrayValue else {

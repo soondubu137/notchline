@@ -342,6 +342,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     private let livenessProbeGraceNanoseconds: UInt64
     private let livenessProbeTimeoutNanoseconds: UInt64
     private let maximumFrameByteCount: Int
+    private let clock: any MonitorClock
     private var process: Process?
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
@@ -362,13 +363,15 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         requestTimeoutNanoseconds: UInt64 = 15_000_000_000,
         livenessProbeGraceNanoseconds: UInt64 = 3_000_000_000,
         livenessProbeTimeoutNanoseconds: UInt64 = 5_000_000_000,
-        maximumFrameByteCount: Int = 64 * 1_024 * 1_024
+        maximumFrameByteCount: Int = 64 * 1_024 * 1_024,
+        clock: any MonitorClock = SystemMonitorClock()
     ) {
         self.executableURL = executableURL
         self.requestTimeoutNanoseconds = requestTimeoutNanoseconds
         self.livenessProbeGraceNanoseconds = livenessProbeGraceNanoseconds
         self.livenessProbeTimeoutNanoseconds = livenessProbeTimeoutNanoseconds
         self.maximumFrameByteCount = maximumFrameByteCount
+        self.clock = clock
     }
 
     func connect() async throws {
@@ -530,8 +533,9 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
             }
 
             let timeout = timeoutNanoseconds ?? requestTimeoutNanoseconds
+            let clock = clock
             Task { [weak self] in
-                try? await Task.sleep(nanoseconds: timeout)
+                try? await clock.sleep(nanoseconds: timeout)
                 await self?.timeOutRequest(id: requestID)
             }
         }
@@ -746,7 +750,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         defer { finishLivenessProbe(id: id) }
 
         do {
-            try await Task.sleep(nanoseconds: livenessProbeGraceNanoseconds)
+            try await clock.sleep(nanoseconds: livenessProbeGraceNanoseconds)
         } catch {
             return
         }

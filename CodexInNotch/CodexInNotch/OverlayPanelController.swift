@@ -128,6 +128,9 @@ final class OverlayPanelController {
             self.updatePanelFrame(animated: shouldAnimate)
         }
         pendingFrameUpdate = workItem
+        // A run-loop hop, not a delay: this coalesces same-turn @Published
+        // emissions and waits on no duration, so there is nothing for
+        // MonitorClock to control.
         DispatchQueue.main.async(execute: workItem)
     }
 

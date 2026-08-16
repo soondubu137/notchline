@@ -504,14 +504,21 @@ struct CodexInNotchTests {
         ]
 
         for display in displays {
-            let store = MonitorStore(displays: [display])
+            let clock = TestClock()
+            let store = MonitorStore(displays: [display], clock: clock)
 
             store.pointerEnteredPanel()
-            try await Task.sleep(nanoseconds: 200_000_000)
+            // The dwell must actually be observed: expanding before the delay
+            // elapses would make the panel twitch on a passing pointer.
+            await clock.advance(by: MonitorTiming.standard.hoverExpandDelay / 2)
+            #expect(!store.isExpanded)
+            await clock.advance(by: MonitorTiming.standard.hoverExpandDelay)
             #expect(store.isExpanded)
 
             store.pointerExitedPanel()
-            try await Task.sleep(nanoseconds: 300_000_000)
+            await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay / 2)
+            #expect(store.isExpanded)
+            await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay)
             #expect(!store.isExpanded)
         }
     }
@@ -2342,6 +2349,94 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
+    func backgroundReadsHonourTheirOwnFreshnessWindows() async throws {
+        // These windows previously had no coverage at all: every one of them was
+        // a bare Date() comparison, so nothing could state when a background
+        // read actually repeats. With an injected clock they are exact.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        var eventIndex = 0
+        func emitHookActivity() throws {
+            eventIndex += 1
+            let event: [String: Any] = [
+                "received_at": clock.now().timeIntervalSince1970,
+                "hook_event_name": eventIndex == 1 ? "UserPromptSubmit" : "PostToolUse",
+                "session_id": "thread-window",
+                "turn_id": "turn-window",
+                "tool_name": "Bash",
+                "tool_use_id": "exec-\(eventIndex)"
+            ]
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(eventIndex).json")
+            )
+        }
+
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-window"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "name": .string("Windowed")
+            ])],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                clock: clock,
+                timing: timing,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            clock: clock,
+            timing: timing,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        try emitHookActivity()
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        try await waitForThreadReads(client, atLeast: 1)
+        #expect(await client.requestCount(method: "thread/list") == 1)
+        #expect(await client.requestCount(method: "thread/read") == 1)
+
+        // Just short of each window: plenty of Hook activity, no repeat reads.
+        await clock.advance(by: timing.threadMetadataRefreshInterval - 1)
+        try emitHookActivity()
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        await clock.settle()
+        #expect(await client.requestCount(method: "thread/read") == 1)
+        #expect(await client.requestCount(method: "thread/list") == 1)
+
+        // Past the metadata window only: the cheap read repeats, the expensive
+        // membership pagination still does not.
+        await clock.advance(by: 2)
+        try emitHookActivity()
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadReads(client, atLeast: 2)
+        #expect(await client.requestCount(method: "thread/list") == 1)
+
+        // Past the membership window: the full list repeats exactly once.
+        await clock.advance(by: timing.threadListRefreshInterval)
+        try emitHookActivity()
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadListRequests(client, atLeast: 2, completed: true)
+        #expect(await client.requestCount(method: "thread/list") == 2)
+
+        await service.disconnect()
+    }
+
+    @Test @MainActor
     func hookActivityReadsOnlyItsOwnThreadsInsteadOfTheWholeList() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
@@ -3719,6 +3814,19 @@ for line in sys.stdin:
             supportDirectory: root.appendingPathComponent("ApplicationSupport"),
             hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")
         )
+    }
+
+    private func waitForThreadReads(
+        _ client: CodexAppServerStub,
+        atLeast expectedCount: Int
+    ) async throws {
+        for _ in 0..<200 {
+            if await client.requestCount(method: "thread/read") >= expectedCount {
+                return
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        Issue.record("Expected at least \(expectedCount) thread/read requests")
     }
 
     private func waitForThreadListRequests(
