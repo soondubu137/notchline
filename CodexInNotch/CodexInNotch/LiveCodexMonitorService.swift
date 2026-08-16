@@ -569,9 +569,12 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         showsContentPreviews: Bool
     ) async -> [MonitoredSession] {
         var sessions: [MonitoredSession] = []
-        terminalUnreadMembershipGate.retain(
-            sessionIDs: Set(states.map { "\($0.threadID):\($0.turnID)" })
-        )
+        // Keyed on what was actually evaluated, not on every Hook state. A
+        // state whose thread turns out to be a sub-agent stops producing a
+        // session at all, and keying on states kept its gate entry alive,
+        // frozen mid-window, reporting a deadline that could never be cleared
+        // because nothing evaluated it again.
+        var evaluatedSessionIDs: Set<String> = []
 
         for state in states {
             // Thread records only supply metadata. Status is the reducer's
@@ -588,6 +591,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             ) else {
                 continue
             }
+            evaluatedSessionIDs.insert(session.id)
 
             if terminalUnreadMembershipGate.shouldDisplay(
                 sessionID: session.id,
@@ -600,6 +604,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                 sessions.append(session)
             }
         }
+
+        terminalUnreadMembershipGate.retain(sessionIDs: evaluatedSessionIDs)
         return sessions
     }
 

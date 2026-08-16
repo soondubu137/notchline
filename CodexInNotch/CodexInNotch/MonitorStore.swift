@@ -351,7 +351,15 @@ struct ConnectionStabilityGate {
             return false
         }
 
-        return observedAt.timeIntervalSince(disconnectedSince) >= gracePeriod
+        guard observedAt.timeIntervalSince(disconnectedSince) >= gracePeriod else {
+            return false
+        }
+        // Cleared as it publishes. Leaving it set kept ``nextPublishDeadline``
+        // reporting an instant already past until the *next* refresh observed
+        // the now-disconnected state and cleared it -- one wake-up spent
+        // rediscovering something this call already knew.
+        self.disconnectedSince = nil
+        return true
     }
 
     /// When a suppressed disconnect becomes publishable.

@@ -6759,6 +6759,101 @@ extension CodexInNotchTests {
         #expect(gate.nextSettlingDeadline == nil)
     }
 
+    /// A row that stops rendering must stop asking to be woken for.
+    ///
+    /// A Hook-tracked thread parses fine while its metadata is absent, and
+    /// parses to nothing once that metadata reveals it is a sub-agent or
+    /// ephemeral thread -- nothing filters those out of `threadRecords`. The
+    /// gate entry created on the first pass was then never evaluated again, but
+    /// `retain` kept it alive because it was keyed on every Hook state rather
+    /// than on the sessions actually evaluated. Frozen inside its settling
+    /// window, it reported a deadline that went stale and stayed stale, which
+    /// the store clamps to its one-second floor.
+    @Test @MainActor
+    func aSessionThatStopsRenderingStopsSchedulingWakeUps() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install()
+        // Hook timestamps have to sit on the test clock's timeline, or the
+        // settling window is measured against a boundary years away.
+        let clock = TestClock()
+        let base = clock.now().timeIntervalSince1970
+        for (index, event) in [
+            [
+                "received_at": base,
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "thread-sub",
+                "turn_id": "turn-1"
+            ],
+            [
+                "received_at": base + 1,
+                "hook_event_name": "Stop",
+                "session_id": "thread-sub",
+                "turn_id": "turn-1"
+            ]
+        ].enumerated() {
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+            )
+        }
+
+        // The list reveals this thread is a sub-agent, so from the next pass on
+        // it renders no row at all.
+        let client = CodexAppServerStub(
+            listedThreads: [
+                .object([
+                    "id": .string("thread-sub"),
+                    "ephemeral": .bool(false),
+                    "threadSource": .string("user"),
+                    "agentRole": .string("reviewer"),
+                    "name": .string("Sub-agent work")
+                ])
+            ],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                clock: clock,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            unreadState: DesktopUnreadStateStub(
+                DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+            ),
+            clock: clock,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        // First pass: no metadata yet, so the Completed row renders and the
+        // gate starts its settling window.
+        let first = await service.fetchSnapshot(showsContentPreviews: false)
+        #expect(first.sessions.count == 1, "the row renders before metadata lands")
+        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
+
+        // Second pass, past the settling window but well inside every other
+        // window, so the only deadline that could be stale is the gate's.
+        await clock.advance(by: 10)
+        let second = await service.fetchSnapshot(showsContentPreviews: false)
+        #expect(second.sessions.isEmpty, "a sub-agent thread renders no row")
+
+        let deadline = await service.nextRefreshDeadline()
+        await service.disconnect()
+
+        let staleBy = deadline.map { Int(clock.now().timeIntervalSince($0)) } ?? 0
+        #expect(
+            deadline == nil || deadline! >= clock.now(),
+            "a row nobody renders left a deadline \(staleBy)s in the past"
+        )
+    }
+
     /// A suppressed disconnect has to schedule its own re-examination.
     ///
     /// The grace period only bounds the wait if something looks again when it
