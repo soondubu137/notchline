@@ -35,6 +35,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private let projectMetadata: any DesktopProjectMetadataProviding
     private let unreadState: any DesktopUnreadStateProviding
     nonisolated let desktopStateChangeEvents: AsyncStream<Void>
+    nonisolated private let snapshotInvalidations: AsyncStream<Void>.Continuation
     private let desktopProcessIdentifierProvider: @MainActor @Sendable () -> pid_t?
     private var cachedQuota = QuotaSnapshot.unavailable
     private var quotaReadAt: Date?
@@ -75,9 +76,18 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         self.hookInstaller = hookInstaller
         self.projectMetadata = projectMetadata
         self.unreadState = unreadState
+        // Background reads land after the snapshot that started them has already
+        // been published, so their results need a trigger of their own. The
+        // one-second poll used to supply that by accident.
+        let (invalidations, invalidationContinuation) = AsyncStream.makeStream(
+            of: Void.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        self.snapshotInvalidations = invalidationContinuation
         self.desktopStateChangeEvents = DirectoryChangeWatcher.merged([
             hookEvents.changeEvents(),
-            unreadState.changeEvents()
+            unreadState.changeEvents(),
+            invalidations
         ])
         self.terminalUnreadMembershipGate = TerminalUnreadMembershipGate(
             settlingInterval: timing.terminalReadSettlingInterval
@@ -384,8 +394,19 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
     }
 
+    /// Tells the store that background work changed what a snapshot would say.
+    ///
+    /// Every background read must end in this, or its result sits in the actor
+    /// until some unrelated deadline happens to fire.
+    nonisolated private func invalidatePublishedSnapshot() {
+        snapshotInvalidations.yield(())
+    }
+
     private func refreshQuotaInBackground() async {
-        defer { quotaRefreshTask = nil }
+        defer {
+            quotaRefreshTask = nil
+            invalidatePublishedSnapshot()
+        }
         do {
             _ = try await readAccountUsageIfNeeded()
             quotaRetryAfter = nil
@@ -535,7 +556,10 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private func refreshThreadMetadataInBackground(
         threadIDs: Set<String>
     ) async {
-        defer { threadMetadataRefreshTask = nil }
+        defer {
+            threadMetadataRefreshTask = nil
+            invalidatePublishedSnapshot()
+        }
 
         var didReadAnyThread = false
         for threadID in threadIDs.sorted() {
@@ -586,7 +610,10 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     }
 
     private func refreshThreadListInBackground() async {
-        defer { threadListRefreshTask = nil }
+        defer {
+            threadListRefreshTask = nil
+            invalidatePublishedSnapshot()
+        }
 
         do {
             _ = try await readAllUnarchivedThreads(

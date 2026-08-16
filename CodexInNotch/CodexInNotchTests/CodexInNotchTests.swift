@@ -2493,6 +2493,77 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
+    func backgroundQuotaReadPublishesWithoutWaitingForADeadline() async throws {
+        // Quota is read in the background, so it lands after the snapshot that
+        // started it was already published. Nothing else was due for ten
+        // seconds, so without its own trigger the ring stayed blank that long.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-quota"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user")
+            ])],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                clock: clock,
+                timing: timing,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            clock: clock,
+            timing: timing
+        )
+
+        let triggers = service.desktopStateChangeEvents
+        let observer = Task {
+            for await _ in triggers {
+                return true
+            }
+            return false
+        }
+
+        let first = await service.fetchSnapshot(showsContentPreviews: false)
+        #expect(first.quota.remainingPercent == nil)
+
+        // The store would otherwise be asleep until the metadata window, which
+        // is an order of magnitude further out than the read itself takes.
+        let deadline = try #require(await service.nextRefreshDeadline())
+        #expect(deadline.timeIntervalSince(clock.now()) >= 5)
+
+        let signalled = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await observer.value }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        observer.cancel()
+        #expect(signalled)
+
+        let second = await service.fetchSnapshot(showsContentPreviews: false)
+        #expect(second.quota.remainingPercent == 70)
+        await service.disconnect()
+    }
+
+    @Test @MainActor
     func refreshSleepsUntilTheNextDeadlineRatherThanACadence() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
