@@ -56,16 +56,23 @@ final class TestClock: MonitorClock, @unchecked Sendable {
     /// Yields afterwards so the woken tasks reach their next suspension point
     /// before the caller asserts, which is what makes ordering deterministic.
     func advance(by interval: TimeInterval) async {
-        lock.lock()
-        instant = instant.addingTimeInterval(interval)
-        let due = sleepers.filter { $0.deadline <= instant }
-        sleepers.removeAll { $0.deadline <= instant }
-        lock.unlock()
-
+        // The locked section is a separate synchronous function because NSLock
+        // may not be taken across a suspension point. Splitting it also makes
+        // the "resume outside the lock" rule structural rather than a comment.
+        let due = takeSleepersDue(after: interval)
         for sleeper in due {
             sleeper.continuation.resume()
         }
         await settle()
+    }
+
+    private func takeSleepersDue(after interval: TimeInterval) -> [Sleeper] {
+        lock.lock()
+        defer { lock.unlock() }
+        instant = instant.addingTimeInterval(interval)
+        let due = sleepers.filter { $0.deadline <= instant }
+        sleepers.removeAll { $0.deadline <= instant }
+        return due
     }
 
     /// Number of callers currently waiting, for asserting that a scheduled

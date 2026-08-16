@@ -41,27 +41,30 @@ enum HookSetupStatus: Equatable, Sendable {
     }
 }
 
-struct HookIntegrationPaths: Sendable {
+/// `nonisolated` for the same reason as ``PendingApproval``: a plain `Sendable`
+/// bag of URLs that is read off the main actor, which the project's default
+/// isolation would otherwise pin to it.
+nonisolated struct HookIntegrationPaths: Sendable {
     let supportDirectory: URL
     let hooksConfiguration: URL
 
-    nonisolated var script: URL {
+    var script: URL {
         supportDirectory.appendingPathComponent("codex_in_notch_hook.py")
     }
 
-    nonisolated var eventsDirectory: URL {
+    var eventsDirectory: URL {
         supportDirectory.appendingPathComponent("events", isDirectory: true)
     }
 
-    nonisolated var state: URL {
+    var state: URL {
         supportDirectory.appendingPathComponent("monitor-state.json")
     }
 
-    nonisolated var settings: URL {
+    var settings: URL {
         supportDirectory.appendingPathComponent("hook-settings.json")
     }
 
-    nonisolated var hooksBackup: URL {
+    var hooksBackup: URL {
         hooksConfiguration.appendingPathExtension("codex-in-notch-backup")
     }
 
@@ -540,7 +543,12 @@ print("{}")
 }
 
 /// An approval the turn is blocked on, and how it can end.
-struct PendingApproval: Sendable, Equatable {
+///
+/// `nonisolated` because the project defaults to main-actor isolation, which
+/// would isolate the synthesized `Equatable` too — and this is compared inside
+/// ``HookEventRepository``, off the main actor. It is a plain `Sendable` value,
+/// so there is nothing for the isolation to protect.
+nonisolated struct PendingApproval: Sendable, Equatable {
     let toolUseID: String
     /// Whether the id was borrowed from the open call rather than belonging to
     /// an approval tool of its own.

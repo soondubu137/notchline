@@ -48,7 +48,7 @@ extension MonitorClock {
 ///
 /// Changing any single value moves those totals, so they are asserted directly
 /// rather than left as arithmetic in a comment.
-struct MonitorTiming: Sendable {
+nonisolated struct MonitorTiming: Sendable {
     /// Upper bound on how long a missed trigger can go unnoticed.
     ///
     /// This is a safety net for mechanisms that fail silently -- a watcher that
@@ -93,7 +93,7 @@ struct MonitorTiming: Sendable {
     /// Pointer dwell before the panel collapses.
     var hoverCollapseDelay: TimeInterval = 0.25
 
-    nonisolated init() {}
+    init() {}
 
-    nonisolated static let standard = MonitorTiming()
+    static let standard = MonitorTiming()
 }

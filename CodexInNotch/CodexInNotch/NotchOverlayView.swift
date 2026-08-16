@@ -146,9 +146,7 @@ private struct OverlayHeader: View {
                 text: statusText,
                 showsText: showsStatusText,
                 spacing: PanelMetrics.expandedReadoutSpacing,
-                matrixSize: PanelMetrics.statusMatrixWidth(
-                    compactHeight: store.compactHeight
-                ),
+                matrixSize: PanelMetrics.statusMatrixSize,
                 reduceMotion: store.reduceMotion
             )
 
@@ -427,19 +425,22 @@ private struct SessionStatusControl: View {
     @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
 
-    // One mark per row, never two. An unfinished row shows its timer and lets
-    // the timer's own colour and weight carry the state, so an approval-needing
-    // row reads as amber digits rather than a dot parked beside a clock. A
-    // finished row has nothing to count, so it keeps the dot.
+    // One mark per row at most, and no hue — this surface says everything with
+    // brightness and motion, and the amber and green dots were the only two
+    // colours left on it. A row that wants the user counts in bright white; a
+    // running row counts dim; a finished row shows nothing, because its still
+    // body and absent timer already say so and the dot was a redundant third.
     var body: some View {
         if let elapsed = store.elapsedText(for: session) {
             NotchTimerText(text: elapsed, tint: tint, weight: weight)
-        } else {
-            // Completed has nothing left to count, and an unfinished turn whose
-            // start was never observed must not invent one. Both fall back to the
-            // dot so no row is ever left unmarked: with previews hidden there is
-            // no swept body to say the turn is in flight either.
-            StatusDot(status: session.status.monitorStatus)
+        } else if session.status.keepsTiming {
+            // Unfinished but its start was never observed — unreachable with
+            // hook-sourced data, and it must not be left unmarked when previews
+            // are hidden and there is no swept body either.
+            Circle()
+                .fill(NotchPalette.label)
+                .frame(width: 8, height: 8)
+                .accessibilityHidden(true)
         }
     }
 
@@ -448,39 +449,12 @@ private struct SessionStatusControl: View {
     }
 
     private var tint: Color {
-        wantsAttention ? NotchPalette.attention : NotchPalette.label
+        // Brightness is the attention channel, the same one the searchlight uses.
+        wantsAttention ? NotchPalette.spotlight : NotchPalette.label
     }
 
     private var weight: Font.Weight {
         wantsAttention ? .medium : .light
-    }
-}
-
-private struct StatusDot: View {
-    let status: MonitorStatus
-
-    var body: some View {
-        Circle()
-            .fill(StatusPalette.color(for: status))
-            .frame(width: 8, height: 8)
-            .accessibilityHidden(true)
-    }
-}
-
-private enum StatusPalette {
-    static func color(for status: MonitorStatus) -> Color {
-        switch status {
-        case .idle, .setupRequired:
-            Color(red: 0.39, green: 0.39, blue: 0.40)
-        case .connecting, .running:
-            Color(red: 0.04, green: 0.52, blue: 1)
-        case .inputNeeded, .approvalNeeded:
-            Color(red: 1, green: 0.62, blue: 0.04)
-        case .completed:
-            Color(red: 0.19, green: 0.82, blue: 0.35)
-        case .updateCodex, .unsupportedVersion, .disconnected:
-            Color(red: 0.75, green: 0.35, blue: 0.95)
-        }
     }
 }
 

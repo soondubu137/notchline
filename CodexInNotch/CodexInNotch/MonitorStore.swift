@@ -118,9 +118,13 @@ enum PanelMetrics {
         + expandedFooterHeight
     static let thinExpandedContentHeight: CGFloat = thinExpandedBodyHeight
         + expandedFooterHeight
-    /// The status matrix is sized to 40% of the menu bar height, so unlike the
-    /// 8pt dot it replaced its width is not a constant.
-    static let statusMatrixHeightRatio: CGFloat = 0.4
+    /// The status matrix is a fixed size, not a share of the menu bar.
+    ///
+    /// Taken from the indicator-to-text ratio at loaders.wtf — a 92pt indicator
+    /// beside 72pt text — applied to the label's fixed 13pt: 13 × 1.2778 ≈ 16.6.
+    /// Because the label never scaled with the bar either, tying only the
+    /// indicator to it left the two drifting apart between a 46pt and a 24pt bar.
+    static let statusMatrixSize: CGFloat = 16.6
     /// The notch label renders Light — measure it at the weight it draws at,
     /// or every compact width is over-reserved.
     private static let statusLabelFont = NSFont.systemFont(ofSize: 13, weight: .light)
@@ -131,19 +135,16 @@ enum PanelMetrics {
         weight: .light
     )
 
-    static func statusMatrixWidth(compactHeight: CGFloat) -> CGFloat {
-        max(0, compactHeight) * statusMatrixHeightRatio
-    }
-
     /// Compact content leading the notch: padding, the matrix, and — where there
     /// is no physical notch to work around — the status label as well.
+    ///
+    /// Menu bar height no longer appears here. Neither the indicator nor the
+    /// label scales with it, so it governs panel height and corner radius only.
     static func compactLeadingWidth(
         statusReadoutText: String,
-        showsStatusText: Bool,
-        compactHeight: CGFloat
+        showsStatusText: Bool
     ) -> CGFloat {
-        var width = expandedHorizontalPadding
-            + statusMatrixWidth(compactHeight: compactHeight)
+        var width = expandedHorizontalPadding + statusMatrixSize
         if showsStatusText {
             width += expandedReadoutSpacing
                 + textWidth(statusReadoutText, font: statusLabelFont)
@@ -171,28 +172,20 @@ enum PanelMetrics {
         isExpanded: Bool,
         statusReadoutText: String,
         timerText: String?,
-        centerOcclusionWidth: CGFloat,
-        compactHeight: CGFloat
+        centerOcclusionWidth: CGFloat
     ) -> CGFloat {
         guard !isExpanded, geometry == .notched, centerOcclusionWidth >= 1 else {
             return 0
         }
-        let leading = notchedLeadingWidth(
-            statusReadoutText: statusReadoutText,
-            compactHeight: compactHeight
-        )
+        let leading = notchedLeadingWidth(statusReadoutText: statusReadoutText)
         let trailing = notchedTrailingWidth(timerText: timerText)
         return (trailing - leading) / 2
     }
 
-    private static func notchedLeadingWidth(
-        statusReadoutText: String,
-        compactHeight: CGFloat
-    ) -> CGFloat {
+    private static func notchedLeadingWidth(statusReadoutText: String) -> CGFloat {
         compactLeadingWidth(
             statusReadoutText: statusReadoutText,
-            showsStatusText: false,
-            compactHeight: compactHeight
+            showsStatusText: false
         ) + expandedNotchClearance
     }
 
@@ -226,10 +219,7 @@ enum PanelMetrics {
     ) -> CGSize {
         guard !isExpanded else {
             return CGSize(
-                width: expandedWidth(
-                    centerOcclusionWidth: centerOcclusionWidth,
-                    compactHeight: compactHeight
-                ),
+                width: expandedWidth(centerOcclusionWidth: centerOcclusionWidth),
                 height: compactHeight + expandedContentHeight
             )
         }
@@ -242,16 +232,12 @@ enum PanelMetrics {
                 return CGSize(
                     width: fallbackCompactWidth(
                         statusReadoutText: statusReadoutText,
-                        timerText: timerText,
-                        compactHeight: compactHeight
+                        timerText: timerText
                     ),
                     height: compactHeight
                 )
             }
-            let width = notchedLeadingWidth(
-                statusReadoutText: statusReadoutText,
-                compactHeight: compactHeight
-            )
+            let width = notchedLeadingWidth(statusReadoutText: statusReadoutText)
                 + centerOcclusionWidth
                 + notchedTrailingWidth(timerText: timerText)
             return CGSize(width: ceil(width), height: compactHeight)
@@ -259,8 +245,7 @@ enum PanelMetrics {
             return CGSize(
                 width: fallbackCompactWidth(
                     statusReadoutText: statusReadoutText,
-                    timerText: timerText,
-                    compactHeight: compactHeight
+                    timerText: timerText
                 ),
                 height: compactHeight
             )
@@ -269,13 +254,11 @@ enum PanelMetrics {
 
     static func fallbackCompactWidth(
         statusReadoutText: String,
-        timerText: String? = nil,
-        compactHeight: CGFloat = referenceCompactHeight
+        timerText: String? = nil
     ) -> CGFloat {
         var width = compactLeadingWidth(
             statusReadoutText: statusReadoutText,
-            showsStatusText: true,
-            compactHeight: compactHeight
+            showsStatusText: true
         )
         if let timerText {
             width += expandedReadoutSpacing + textWidth(timerText, font: timerFont)
@@ -300,10 +283,7 @@ enum PanelMetrics {
             + expandedFooterHeight
     }
 
-    static func expandedWidth(
-        centerOcclusionWidth: CGFloat,
-        compactHeight: CGFloat = referenceCompactHeight
-    ) -> CGFloat {
+    static func expandedWidth(centerOcclusionWidth: CGFloat) -> CGFloat {
         guard centerOcclusionWidth >= 1 else {
             return expandedBaselineWidth
         }
@@ -311,7 +291,7 @@ enum PanelMetrics {
         // Only the status readout flanks the notch now — the usage readout that
         // used to claim the trailing side moved into the footer.
         let widestStatusReadout = MonitorStatus.allCases.map {
-            expandedStatusReadoutWidth(status: $0, compactHeight: compactHeight)
+            expandedStatusReadoutWidth(status: $0)
         }.max() ?? 0
         let requiredSideWidth = expandedHorizontalPadding
             + widestStatusReadout
@@ -321,11 +301,8 @@ enum PanelMetrics {
         return ceil(max(expandedBaselineWidth, notchSafeWidth))
     }
 
-    static func expandedStatusReadoutWidth(
-        status: MonitorStatus,
-        compactHeight: CGFloat = referenceCompactHeight
-    ) -> CGFloat {
-        statusMatrixWidth(compactHeight: compactHeight)
+    static func expandedStatusReadoutWidth(status: MonitorStatus) -> CGFloat {
+        statusMatrixSize
             + expandedReadoutSpacing
             + textWidth(status.displayName, font: statusLabelFont)
     }
@@ -666,8 +643,7 @@ final class MonitorStore: ObservableObject {
             isExpanded: isExpanded,
             statusReadoutText: compactStatusReadoutText,
             timerText: compactTimerText,
-            centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
-            compactHeight: compactHeight
+            centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0
         )
     }
 
@@ -933,7 +909,7 @@ final class MonitorStore: ObservableObject {
                 let heartbeat = timing.heartbeatInterval
                 let deadline = await service?.nextRefreshDeadline()
                 let untilDeadline = deadline.map {
-                    $0.timeIntervalSince(clock.now())
+                    $0.timeIntervalSince(self.clock.now())
                 } ?? heartbeat
                 try? await clock.sleep(
                     seconds: max(0, min(heartbeat, untilDeadline))

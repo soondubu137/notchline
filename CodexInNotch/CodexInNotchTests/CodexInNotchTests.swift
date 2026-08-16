@@ -14,9 +14,9 @@ struct CodexInNotchTests {
             compactHeight: PanelMetrics.referenceCompactHeight
         )
 
-        // Padding + an 18.4pt matrix + "Running" at Light, and nothing else —
-        // the usage ring that used to pad this out is gone.
-        #expect(size.width == 128)
+        // Padding + the fixed 16.6pt matrix + "Running" at Light, and nothing
+        // else — the usage ring that used to pad this out is gone.
+        #expect(size.width == 126)
         #expect(size.height == 46)
     }
 
@@ -56,8 +56,7 @@ struct CodexInNotchTests {
         let idle = size(timerText: nil)
         let leading = PanelMetrics.compactLeadingWidth(
             statusReadoutText: "Running",
-            showsStatusText: false,
-            compactHeight: 46
+            showsStatusText: false
         ) + PanelMetrics.expandedNotchClearance
         #expect(abs(idle.width - (leading + occlusion)) <= 1)
 
@@ -72,8 +71,7 @@ struct CodexInNotchTests {
                 isExpanded: false,
                 statusReadoutText: "Running",
                 timerText: timerText,
-                centerOcclusionWidth: 200,
-                compactHeight: 46
+                centerOcclusionWidth: 200
             )
         }
 
@@ -89,8 +87,7 @@ struct CodexInNotchTests {
                 isExpanded: false,
                 statusReadoutText: "Running",
                 timerText: "1:23",
-                centerOcclusionWidth: 0,
-                compactHeight: 46
+                centerOcclusionWidth: 0
             ) == 0
         )
     }
@@ -120,7 +117,7 @@ struct CodexInNotchTests {
         // a notched compact panel, so this width is exact -- and it is the one
         // number a Figma variant can be checked against directly.
         let notchedIdle = width(geometry: .notched, timerText: nil, compactHeight: 46)
-        #expect(notchedIdle == 251)
+        #expect(notchedIdle == 249)
 
         // Timing a turn adds the trailing wing, and nothing but the trailing wing.
         let notchedTimed = width(geometry: .notched, timerText: "1:23", compactHeight: 46)
@@ -128,11 +125,16 @@ struct CodexInNotchTests {
             + PanelMetrics.expandedNotchClearance
         #expect(abs((notchedTimed - notchedIdle) - trailingWing) <= 1)
 
-        // A short bar rests on the floor rather than shrinking to its content,
-        // and still grows once there is a timer to fit.
+        // The floor is a content floor now, not a short-bar one: with the
+        // indicator fixed, only a very short status rests on it, and it does so
+        // at every menu bar height.
+        #expect(
+            PanelMetrics.fallbackCompactWidth(statusReadoutText: "Idle")
+                == PanelMetrics.fallbackBaselineWidth
+        )
         #expect(
             width(geometry: .noNotch, timerText: nil, compactHeight: 24)
-                == PanelMetrics.fallbackBaselineWidth
+                > PanelMetrics.fallbackBaselineWidth
         )
         #expect(
             width(geometry: .noNotch, timerText: "1:23", compactHeight: 24)
@@ -140,31 +142,35 @@ struct CodexInNotchTests {
         )
     }
 
+    /// The indicator is a fixed size derived from the label, not a share of the
+    /// menu bar. It scaled with the bar while the 13pt label did not, so the two
+    /// drifted apart between a 46pt and a 24pt bar.
     @Test @MainActor
-    func statusMatrixTracksFortyPercentOfMenuBarHeight() {
-        // 46 * 0.4 is not exactly 18.4 in binary floating point.
-        #expect(abs(PanelMetrics.statusMatrixWidth(compactHeight: 46) - 18.4) < 0.001)
-        #expect(abs(PanelMetrics.statusMatrixWidth(compactHeight: 24) - 9.6) < 0.001)
+    func statusMatrixIsAFixedSizeDerivedFromTheLabel() {
+        // 92:72 indicator-to-text at loaders.wtf, applied to the 13pt label.
+        #expect(abs(PanelMetrics.statusMatrixSize - 13 * (92.0 / 72.0)) < 0.02)
     }
 
     @Test @MainActor
-    func compactWidthGrowsWithTheMenuBarBecauseTheIndicatorDoes() {
-        let onNotchedBar = PanelMetrics.fallbackCompactWidth(
-            statusReadoutText: "Approval needed",
-            compactHeight: 46
-        )
-        let onStandardBar = PanelMetrics.fallbackCompactWidth(
-            statusReadoutText: "Approval needed",
-            compactHeight: 24
-        )
-
-        // The indicator is height-derived, so the same text needs less width on
-        // a shorter bar — the 8pt dot this replaced made the two identical.
-        // The whole difference is the indicator, give or take the ceil.
-        let indicatorDelta = PanelMetrics.statusMatrixWidth(compactHeight: 46)
-            - PanelMetrics.statusMatrixWidth(compactHeight: 24)
-        #expect(onNotchedBar > onStandardBar)
-        #expect(abs((onNotchedBar - onStandardBar) - indicatorDelta) <= 1)
+    func compactWidthNoLongerDependsOnMenuBarHeight() {
+        // Nothing in the compact width scales with the bar any more, so the same
+        // status has to measure identically on a 46pt and a 24pt menu bar.
+        for text in ["Running", "Approval needed", "Idle"] {
+            let plain = PanelMetrics.fallbackCompactWidth(statusReadoutText: text)
+            for height in [CGFloat(46), 38, 24] {
+                let size = PanelMetrics.size(
+                    geometry: .noNotch,
+                    isExpanded: false,
+                    statusReadoutText: text,
+                    timerText: nil,
+                    centerOcclusionWidth: 0,
+                    compactHeight: height
+                )
+                #expect(size.width == plain)
+                // Height still follows the bar; only width came loose.
+                #expect(size.height == height)
+            }
+        }
     }
 
     @Test @MainActor

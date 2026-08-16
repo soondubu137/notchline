@@ -12,8 +12,6 @@ enum NotchPalette {
     static let matrixOn = Color(red: 0.424, green: 0.706, blue: 1)
     /// Session title — the one element that stays bright.
     static let sessionTitle = Color.white.opacity(0.98)
-    /// `status/waiting` — the only state that still wants the user.
-    static let attention = Color(red: 1, green: 0.624, blue: 0.039)
 }
 
 /// Elapsed time for a turn.
@@ -175,8 +173,7 @@ private extension NotchMatrixState {
 
 /// The 3×3 status matrix that replaced the notch status dot.
 ///
-/// Sized by the caller to 40% of the menu bar height, per
-/// ``PanelMetrics/statusMatrixWidth(compactHeight:)``.
+/// Sized by the caller to the fixed ``PanelMetrics/statusMatrixSize``.
 struct NotchStatusMatrix: View {
     let state: NotchMatrixState
     let size: CGFloat
