@@ -9,9 +9,17 @@ import XCTest
 
 final class CodexInNotchUITestsLaunchTests: XCTestCase {
 
-    override class var runsForEachTargetApplicationUIConfiguration: Bool {
-        true
-    }
+    // Do not override `runsForEachTargetApplicationUIConfiguration` back to `true`.
+    // On macOS the two target application UI configurations are the light and dark
+    // system appearances, and XCTest reaches them by writing the machine's real
+    // appearance setting — not the app's `NSAppearance`. It never restores the value it
+    // found, so the run ends on whichever configuration happened to execute last and
+    // the user's Mac is left on it. Measured: `testLaunch` ran twice, the setting went
+    // Light -> Dark mid-run, and stayed Dark after the suite exited.
+    //
+    // The default (`false`) runs this test once, in whatever appearance is already set,
+    // and touches nothing. To cover both appearances, drive the app's own
+    // `NSApp.appearance` from a launch argument instead of the system-wide setting.
 
     override func setUpWithError() throws {
         continueAfterFailure = false

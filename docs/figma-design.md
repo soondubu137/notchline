@@ -29,7 +29,10 @@
 | `06 — Notch Core` | 核心产品状态与不同菜单栏高度参考 | `118:73`, `185:292`, `304:630`, `304:641` |
 | `07 — Integration States` | 隐私、局部降级、空和全局可用性 | `227:3`, `307:30` |
 | `08 — Onboarding` | 首次安装三步流程 | `232:95` |
-| `09 — Settings` | 集成管理与预览隐私 | `233:3` |
+| `09 — Settings` | 集成管理、预览隐私与 `Session list` 分组 | `233:3`, `591:2` |
+| `10 — Double Apps` | 双产品（Codex + Claude Code）设计 | `540:2` |
+
+本文描述单产品契约。同时监视 Codex 与 Claude Code 时的设计见 [`dual-agent-design.md`](dual-agent-design.md)，其中两处已取代本文：设置齿轮的位置（见 4.5，现为展开态顶栏右上角，单产品同样生效）与双产品页脚的额度构成（见 4.3）。其余部分不受影响。
 
 当前 SwiftUI 与本文只承认四个会话状态变体：Running、Input needed、Approval needed、Completed。外部 Figma 中超过这四类的历史会话状态变体不再属于产品契约，需在下一次 Figma 同步中删除；在完成前以本文和代码为准。`Usage Ring` 的 7 个合法变体、`Usage Indicator` 的 4 个合法变体及 `Panel` 的 7 个合法变体不受本次状态收敛影响。
 

@@ -1,0 +1,3 @@
+# Project 按产品解析：Codex 用 Desktop 实体，Claude Code 用工作目录
+
+会话行的 Project 不再是单一定义，而是按产品解析。Codex 行沿用 [ADR 0003](0003-use-codex-desktop-project-identity.md)：Project 必须对应 Codex Desktop 侧边栏中由用户创建的实体，无归属的会话显示 `Chats`，且不得从 `cwd`、Git 根目录或路径名推断——该禁令自此仅约束 Codex 一侧，因为它的理由是路径与用户管理的 Desktop Project 并非一一对应。Claude Code 行的 Project 就是会话的工作目录（`cwd`）：Claude Code 不存在用户创建的分组实体，`cwd` 由 Hook payload 直接给出、transcript 也据此归档（`~/.claude/projects/<编码后的 cwd>/`），因此它是该产品真实存在的分组单位，不是从路径推断出的近似值，路径推断禁令对它不适用。行内显示路径最后一段，完整 `cwd` 作为无障碍名称；`gitBranch` 同样可得但行首只有一行宽度，不予显示。该选择放弃两种替代：为 Claude Code 行留空归属会让混合列表的行首参差不齐，并丢掉用户区分同名会话标题的唯一线索；为 Claude Code 另造一个与 Project 并列的术语，则要求界面、无障碍文案和数据模型同时携带两个只是来源不同的同义概念。已知失败模式是两个同名目录的检出显示相同归属，Codex 的用户命名 Project 不会发生这种碰撞；消歧规则尚未确定。

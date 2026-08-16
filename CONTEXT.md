@@ -45,8 +45,8 @@ _Avoid_: 待恢复状态、启动快照、历史 Stop 状态
 _Avoid_: 最近完成、短暂终态、Notch 未读
 
 **Project**：
-Codex Desktop 中由用户创建和管理、可以包含一个或多个仓库的会话分组。
-_Avoid_: 仓库、workspace、cwd、路径名
+会话所属的分组，按产品解析。Codex 中是 Codex Desktop 里由用户创建和管理、可以包含一个或多个仓库的会话分组；**Codex 会话的 Project 不得从 `cwd`、Git 根目录或路径名推断**，因为这些对象与用户管理的 Desktop Project 并非一一对应（见 [ADR 0003](docs/adr/0003-use-codex-desktop-project-identity.md)）。Claude Code 中就是会话的工作目录（`cwd`）：它由 Hook payload 直接给出，transcript 也据此归档，是该产品真实存在的分组单位，而不是从路径推断出的近似值（见 [ADR 0009](docs/adr/0009-resolve-project-per-product.md)）。
+_Avoid_: 仓库、workspace、Mock 分组
 
 **Chats**：
 Codex Desktop 中不属于任何 Project 的会话集合。

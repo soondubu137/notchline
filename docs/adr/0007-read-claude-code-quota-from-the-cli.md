@@ -1,0 +1,3 @@
+# 以 CLI 命令按需读取 Claude Code 额度，而不是 Claude Desktop 私有文件
+
+Claude Code 的滚动额度窗口通过 `claude -p "/usage" --output-format json` 按需读取。该调用不经过模型：实测 `total_cost_usd` 为 `0`、`num_turns` 为 `0`、全部 token 计数为零，耗时约 `4.3` 秒，每次写入一个约 `3 KB` 的 transcript，且不增加用户自己额度报告里的会话计数。因此它是后台定时刷新的数据源，不能在展开面板时同步调用。该选择放弃 `~/Library/Application Support/Claude/plan-usage-history.json`：那是 Claude Desktop 私有状态，纯 CLI 用户没有该文件，实测样本稀疏且可能过期一天以上；改用 CLI 后额度对每一个 Claude Code 用户都成立，Desktop 依赖整体消失。代价是 JSON 外层结构稳定而数值位于 `result` 字符串的自然语言里，解析属于对非契约格式做正则匹配：解析失败、命令报错或格式变化时必须降级为额度不可用的完整轨道，不得沿用上一次的数值，也不得推算。同时不采用读取 OAuth 凭据直接调用未公开接口的做法——它与 §9 中"读取私有 token 并逆向未公开通道"属于同一类，已在 NO-GO 之列。
