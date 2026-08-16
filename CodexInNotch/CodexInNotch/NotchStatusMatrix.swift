@@ -9,9 +9,14 @@ enum NotchPalette {
     // representations cannot drift apart.
     private static let matrixOffRGB = (red: 0.063, green: 0.106, blue: 0.149)
     private static let matrixOnRGB = (red: 0.424, green: 0.706, blue: 1.0)
+    private static let labelRGB = (red: 0.486, green: 0.486, blue: 0.502)
 
     /// `text/notch-label` — the dim base every notch label sits at.
-    static let label = Color(red: 0.486, green: 0.486, blue: 0.502)
+    static let label = Color(
+        red: labelRGB.red,
+        green: labelRGB.green,
+        blue: labelRGB.blue
+    )
     /// `text/notch-spotlight` — the searchlight highlight.
     static let spotlight = Color.white
     /// Unlit matrix cell.
@@ -41,6 +46,15 @@ enum NotchPalette {
         blue: matrixOnRGB.blue,
         alpha: 1
     )
+
+    /// Drawing colours for the layer-backed notch label.
+    static let labelDrawingColor = NSColor(
+        srgbRed: labelRGB.red,
+        green: labelRGB.green,
+        blue: labelRGB.blue,
+        alpha: 1
+    )
+    static let spotlightDrawingColor = NSColor.white
 }
 
 /// Elapsed time for a turn.
@@ -393,12 +407,16 @@ final class MatrixIndicatorView: NSView {
 struct SearchlightBand: View {
     var period: TimeInterval = 2
 
-    // NOTE: this sweep costs ~7% of a core for as long as it runs, and capping
-    // the schedule does not help -- 30 Hz measured the same as the display's
-    // 120. The redraw is not driven by this view's tick but by the panel being
-    // marked for display every frame, so the whole overlay is re-rendered
-    // either way. Only moving the motion to Core Animation removes it, the way
-    // NotchStatusMatrix now does; that needs the mask to move into AppKit too.
+    // Only the expanded session row still uses this, and only while the pointer
+    // holds the panel open, so its cost is bounded by hover. The notch's own
+    // readout moved to ``SearchlightLabel``'s layer-backed sweep, which is the
+    // one that could run all afternoon.
+    //
+    // Costs ~7% of a core while it runs. Capping the schedule does not help --
+    // 30 Hz measured the same as the display's 120 -- because the redraw
+    // follows the panel being marked for display, not this view's tick. Moving
+    // it to Core Animation as well means moving its two masks (the glyph mask
+    // here, and the caller's TrailingAlphaFade) into AppKit with it.
     var body: some View {
         TimelineView(.animation) { context in
             GeometryReader { proxy in
@@ -427,24 +445,218 @@ struct SearchlightBand: View {
 }
 
 /// A single-line notch label: thin and dim, sweeping while work is in flight.
+///
+/// This is the notch's own status readout, so it is on screen for as long as
+/// the panel is, and its sweep is the one that runs indefinitely — a turn can
+/// sit on `Approval needed` all afternoon. It is therefore layer-backed, for
+/// the reason ``NotchStatusMatrix`` documents: a SwiftUI-driven animation here
+/// re-renders the whole overlay every frame, measured at ~7% of a core, and
+/// throttling its schedule does not help because the redraw follows the panel
+/// being marked for display rather than this view's tick.
+///
+/// The glyphs are rasterised through ordinary AppKit text drawing rather than a
+/// `CATextLayer` so they match the rest of the surface exactly; only the tint
+/// differs between the two copies. Measurement uses the same `NSFont` metrics
+/// ``PanelMetrics`` sizes the panel with, so the label and the panel width now
+/// agree by construction instead of by coincidence.
 struct SearchlightLabel: View {
     let text: String
-    var font: Font = .system(size: 13, weight: .light)
+    var font: NSFont = .systemFont(ofSize: 13, weight: .light)
     var isSweeping: Bool
 
     var body: some View {
-        base
-            .overlay {
-                if isSweeping {
-                    SearchlightBand().mask(base)
-                }
-            }
+        SweepingLabel(text: text, font: font, isSweeping: isSweeping)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct SweepingLabel: NSViewRepresentable {
+    let text: String
+    let font: NSFont
+    let isSweeping: Bool
+
+    func makeNSView(context: Context) -> SweepingLabelView {
+        SweepingLabelView()
     }
 
-    private var base: some View {
-        Text(text)
-            .font(font)
-            .foregroundStyle(NotchPalette.label)
-            .lineLimit(1)
+    func updateNSView(_ view: SweepingLabelView, context: Context) {
+        view.apply(text: text, font: font, isSweeping: isSweeping)
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: SweepingLabelView,
+        context: Context
+    ) -> CGSize? {
+        nsView.intrinsicContentSize
+    }
+}
+
+final class SweepingLabelView: NSView {
+    /// Loop length of one traverse.
+    private static let sweepPeriod: TimeInterval = 2
+
+    private let baseLayer = CALayer()
+    private let highlightLayer = CALayer()
+    private let sweepMask = CAGradientLayer()
+    private var appliedText = ""
+    private var appliedFont = NSFont.systemFont(ofSize: 13, weight: .light)
+    private var appliedIsSweeping = false
+    private var renderedScale: CGFloat = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+
+        // A mask is read through its alpha, so the band is opaque only at its
+        // centre. Same stops as the gradient the SwiftUI band uses.
+        sweepMask.startPoint = CGPoint(x: 0, y: 0.5)
+        sweepMask.endPoint = CGPoint(x: 1, y: 0.5)
+        sweepMask.colors = [
+            CGColor(gray: 0, alpha: 0),
+            CGColor(gray: 0, alpha: 0),
+            CGColor(gray: 0, alpha: 1),
+            CGColor(gray: 0, alpha: 0),
+            CGColor(gray: 0, alpha: 0)
+        ]
+        sweepMask.locations = [0, 0.40, 0.50, 0.60, 1]
+
+        highlightLayer.mask = sweepMask
+        layer?.addSublayer(baseLayer)
+        layer?.addSublayer(highlightLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize {
+        let size = (appliedText as NSString).size(
+            withAttributes: [.font: appliedFont]
+        )
+        return NSSize(width: ceil(size.width), height: ceil(size.height))
+    }
+
+    func apply(text: String, font: NSFont, isSweeping: Bool) {
+        let textChanged = text != appliedText || font != appliedFont
+        guard textChanged || isSweeping != appliedIsSweeping else { return }
+
+        appliedText = text
+        appliedFont = font
+        appliedIsSweeping = isSweeping
+
+        if textChanged {
+            invalidateIntrinsicContentSize()
+            renderedScale = 0
+            redrawGlyphs()
+        }
+        highlightLayer.isHidden = !isSweeping
+        installSweep()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        redrawGlyphs()
+        installSweep()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        redrawGlyphs()
+    }
+
+    override func layout() {
+        super.layout()
+        baseLayer.frame = bounds
+        highlightLayer.frame = bounds
+        installSweep()
+    }
+
+    private func redrawGlyphs() {
+        let scale = window?.backingScaleFactor ?? 2
+        guard !appliedText.isEmpty else {
+            baseLayer.contents = nil
+            highlightLayer.contents = nil
+            return
+        }
+        guard scale != renderedScale else { return }
+        renderedScale = scale
+
+        let size = intrinsicContentSize
+        baseLayer.contentsScale = scale
+        highlightLayer.contentsScale = scale
+        baseLayer.contents = Self.glyphImage(
+            text: appliedText,
+            font: appliedFont,
+            color: NotchPalette.labelDrawingColor,
+            size: size,
+            scale: scale
+        )
+        highlightLayer.contents = Self.glyphImage(
+            text: appliedText,
+            font: appliedFont,
+            color: NotchPalette.spotlightDrawingColor,
+            size: size,
+            scale: scale
+        )
+    }
+
+    private func installSweep() {
+        sweepMask.removeAnimation(forKey: "notch.searchlight")
+        guard appliedIsSweeping, bounds.width > 0 else { return }
+
+        let band = max(bounds.width * 4, 1)
+        sweepMask.frame = CGRect(
+            x: 0,
+            y: 0,
+            width: band,
+            height: max(bounds.height, 1)
+        )
+
+        let animation = CABasicAnimation(keyPath: "transform.translation.x")
+        animation.fromValue = -band
+        animation.toValue = bounds.width
+        animation.duration = Self.sweepPeriod
+        animation.repeatCount = .infinity
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        animation.isRemovedOnCompletion = false
+        sweepMask.add(animation, forKey: "notch.searchlight")
+    }
+
+    /// The glyphs, drawn the way every other label on this surface is drawn.
+    private static func glyphImage(
+        text: String,
+        font: NSFont,
+        color: NSColor,
+        size: NSSize,
+        scale: CGFloat
+    ) -> CGImage? {
+        let pixelWidth = Int((size.width * scale).rounded(.up))
+        let pixelHeight = Int((size.height * scale).rounded(.up))
+        guard pixelWidth > 0, pixelHeight > 0 else { return nil }
+        guard let context = CGContext(
+            data: nil,
+            width: pixelWidth,
+            height: pixelHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.scaleBy(x: scale, y: scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(
+            cgContext: context,
+            flipped: false
+        )
+        (text as NSString).draw(
+            at: .zero,
+            withAttributes: [.font: font, .foregroundColor: color]
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage()
     }
 }

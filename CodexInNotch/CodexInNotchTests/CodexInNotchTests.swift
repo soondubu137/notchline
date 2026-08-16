@@ -2965,6 +2965,83 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
+    func notchLabelDrawsGlyphsAndSweepsThroughCoreAnimation() throws {
+        // The notch label is layer-backed so its sweep costs no per-frame view
+        // work. That trade is only worth anything if it still draws text: the
+        // failure modes are a blank label, or an unmasked band painting a solid
+        // bar across the notch. Neither is visible from a unit test directly,
+        // but both are visible in the rasterised glyphs and the mask.
+        let font = NSFont.systemFont(ofSize: 13, weight: .light)
+        let text = "Approval needed"
+        let view = SweepingLabelView()
+        view.apply(text: text, font: font, isSweeping: true)
+
+        // The same metrics PanelMetrics reserves compact width with, so the
+        // label cannot be wider than the panel drawn for it.
+        let measured = (text as NSString).size(withAttributes: [.font: font])
+        #expect(view.intrinsicContentSize.width == ceil(measured.width))
+
+        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
+        view.layout()
+
+        let sublayers = try #require(view.layer?.sublayers)
+        #expect(sublayers.count == 2)
+        let glyphs = try #require(sublayers.first)
+        let highlight = try #require(sublayers.last)
+
+        let contents = try #require(glyphs.contents)
+        let image = unsafeDowncast(contents as AnyObject, to: CGImage.self)
+        #expect(image.width >= Int(measured.width))
+
+        // Text, not a filled rectangle: a solid band would have no transparent
+        // pixels, and a label that failed to draw would have no opaque ones.
+        let alphas = try Self.alphaExtremes(of: image)
+        #expect(alphas.minimum == 0)
+        #expect(alphas.maximum > 0.5)
+
+        // The highlight rides a mask that Core Animation drives.
+        #expect(!highlight.isHidden)
+        let mask = try #require(highlight.mask)
+        #expect(mask.animation(forKey: "notch.searchlight") != nil)
+
+        view.apply(text: text, font: font, isSweeping: false)
+        #expect(highlight.isHidden)
+        #expect(mask.animation(forKey: "notch.searchlight") == nil)
+    }
+
+    private static func alphaExtremes(
+        of image: CGImage
+    ) throws -> (minimum: Double, maximum: Double) {
+        let width = image.width
+        let height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drew = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else {
+                return false
+            }
+            context.draw(
+                image,
+                in: CGRect(x: 0, y: 0, width: width, height: height)
+            )
+            return true
+        }
+        try #require(drew)
+
+        let alphas = stride(from: 3, to: pixels.count, by: 4).map {
+            Double(pixels[$0]) / 255
+        }
+        return (alphas.min() ?? 1, alphas.max() ?? 0)
+    }
+
+    @Test @MainActor
     func refreshLoopNeverSpinsOnAnOverdueDeadline() async throws {
         // The store cannot verify a service's deadlines, so it must stay bounded
         // when one is wrong. Without a floor an overdue deadline sleeps zero and
