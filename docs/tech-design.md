@@ -24,9 +24,9 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 从当前账户 primary rate-limit window 读取真实 `usedPercent`，转换为剩余百分比；不可用时显示灰色圆环。
 - 从 `account/usage/read.dailyUsageBuckets` 读取本地日历“今天”的 token bucket；Expanded footer 显示标准 Compact 数字、额度重置日期和 Settings 入口。今日 bucket 缺失但 bucket 数组有效时按 `0` 处理，接口不可用时只将今日用量显示为 `--`。
 - 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。Settings 使用一个 `Codex integration` 总开关，把六种必需 lifecycle event 定义作为一个产品能力启停；关闭后留在 Settings，不重置首次引导。
-- 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`（catch-all，reducer 内按 tool 名过滤）、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求与两种审批形态都必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除。
+- 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`（catch-all，reducer 内按 tool 名过滤）、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求与两种审批形态都必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除，且**只含身份与生命周期，不含任何正文**。
 - 标题使用 Thread 元数据，按成本分两层获取：Hook reducer 当前跟踪的 Thread 用 `thread/read`（`includeTurns: false`，实测约 1.2 KB/线程）按 id 读取，全量分页 `thread/list` 只负责低频成员关系对账（实测 33 个线程约 45 KB，且随历史线性增长）。`thread/list` 按契约**永远返回空 `turns`**（schema：`turns` 仅在 `thread/resume`、`thread/rollback`、`thread/fork` 和 `includeTurns: true` 的 `thread/read` 上填充），因此任何 Turn 级事实都只能来自 Hook reducer。Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。会话状态只包含 Running、Input needed、Approval needed、Completed；实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接收敛为 Completed，不再读取 Thread 详情区分结束原因。
-- Preview 设置默认开启；关闭后 hook 不再写入内容片段，列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。即使开启，prompt/回答片段也不写入持久状态。
+- Preview 设置默认开启；关闭后列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。prompt/回答片段**在任何情况下都不落盘**：它们经由 Unix socket 从 helper 直接交到运行中的进程内存，见第 11 节。
 - `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔配置健康标记。应用重启时 reducer 从空集合开始，启动前积压的所有 Hook（包括 Stop 与 SessionEnd）一律不恢复或修改 Turn；只有本次进程启动后的 Hook 才是实时证据，也是四态状态的唯一来源。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
 - 会话行通过官方 `codex://threads/<thread-id>` deep link 打开同一 Codex Desktop 会话；打开前强制刷新全部未归档根 Thread，目标不存在时拒绝导航。URL 只定向交给 bundle id `com.openai.codex`，Launch Services 接受后才收起面板。
 
@@ -260,9 +260,9 @@ launch
 
 五秒内连接成功则不显示中间错误；超时后根据原因进入 Update Codex、unsupported 或 disconnected。Codex 未运行时不自动启动。
 
-Hook helper 的源码发生版本变化不等于集成未安装。安装器直接把磁盘上的 helper 与本版本内置的定义做内容比较：相同即 `current`；不同且本应用的 settings 文件存在（该文件只由 `install()` 写入，等于本应用确实安装过）时，只原子升级本应用管理的 helper 文件并保留预览设置，不改写 `hooks.json`、不重新要求信任。
+Hook helper 的源码发生版本变化不等于集成未安装。安装器直接把磁盘上的 helper 与本版本内置的定义做内容比较：相同即 `current`；不同且本应用的安装标记存在（`managed-install.json` 只由 `install()` 写入，等于本应用确实安装过；早于该标记的安装以遗留的 `hook-settings.json` 为准）时，只原子升级本应用管理的 helper 文件，不改写 `hooks.json`、不重新要求信任。标记本身不携带任何设置——预览开关已不再落盘。
 
-这里**不再记录内容 hash**。曾经存在的 `managedHookSHA256` 与 helper 位于同一目录、同一属主与权限，能改写 helper 的主体同样能改写该 hash，因此它不提供任何防篡改能力；而 `repairRequired` 并不会把 helper 从 `hooks.json` 注销，Codex 仍会继续执行它。也就是说，遇到被替换的 helper 时，自动升级回内置版本比标记 `repairRequired` 更快地消除外来代码。缺少任一定义、定义结构不精确，或 helper 存在但 settings 文件缺失（本应用没有安装记录、来源不明）时仍 fail closed 为 `repairRequired`；Settings 总开关显示 Off，用户显式重新开启后才修复。这样应用升级后无需重新接受未改变的受信 helper；但完整注册集合和历史信任本身不能让运行时进入 Ready。只有当前态来源确认集合确实为空时，才能由空集合推导 Idle。
+这里**不再记录内容 hash**。曾经存在的 `managedHookSHA256` 与 helper 位于同一目录、同一属主与权限，能改写 helper 的主体同样能改写该 hash，因此它不提供任何防篡改能力；而 `repairRequired` 并不会把 helper 从 `hooks.json` 注销，Codex 仍会继续执行它。也就是说，遇到被替换的 helper 时，自动升级回内置版本比标记 `repairRequired` 更快地消除外来代码。缺少任一定义、定义结构不精确，或 helper 存在但安装标记缺失（本应用没有安装记录、来源不明）时仍 fail closed 为 `repairRequired`；Settings 总开关显示 Off，用户显式重新开启后才修复。这样应用升级后无需重新接受未改变的受信 helper；但完整注册集合和历史信任本身不能让运行时进入 Ready。只有当前态来源确认集合确实为空时，才能由空集合推导 Idle。
 
 ### 7.3 集合校正时机
 
@@ -361,7 +361,19 @@ ready 且集合为空时为 Idle。availability 非 ready 时，汇总改由全�
 
 处理步骤：去控制字符 → 合并空白 → 取第一可见行 → 内存限制 → 交给 UI Alpha mask。禁止写日志、数据库、UserDefaults 或诊断包。
 
-`showCurrentContentPreviews == false` 时，extractor 不产生正文，并禁止标题生成器访问 prompt fallback。
+### 正文如何到达本进程
+
+**正文永远不写文件。** helper 在写事件文件之前，先通过 support 目录下权限 `0600` 的 Unix domain socket（`preview.sock`）把 `{event_id, prompt?, last_assistant_message?}` 交给正在运行的应用，随后才写那份不含正文的事件文件。应用按 `event_id` 把两者接上。
+
+顺序不可颠倒：事件文件的出现正是唤醒应用的信号，因此正文必须在文件落地之前就已在手。
+
+没有监听者时 helper 直接放弃，正文丢失。这是**正确的降级**，因为早于本次启动 cutoff 的事件本来就会被整份丢弃（见 `system-architecture.md` §2.1）——把正文写进队列换不来任何产品价值，只换来一份没有 TTL 的敏感文本积压。丢失的结果是「没有预览」，而不是「过时的预览」。
+
+实测 helper 成本（3 秒 hook 预算）：无监听者 30 ms、正常监听 33 ms、监听者绑定但完全不 accept 最坏 57 ms；纯解释器启动本身就要 30 ms，所以 socket 只占预算的 1%–2%，250 ms 超时从未触发。
+
+不能改用 `thread.preview` 代替：实测它是**线程的首条用户消息**，不随轮次前进（17 轮的线程仍返回第 1 轮的文本），因此它满足不了 PRD 2.7 的「当前内容预览」。
+
+`showCurrentContentPreviews == false` 时，socket 收到的正文在到达瞬间即被丢弃，extractor 不产生正文，并禁止标题生成器访问 prompt fallback。该开关是一个进程内标志而非落盘设置：写盘的开关可能失败、可能乱序，也确实曾经 fail open（CR-012）。
 
 ## 12. 处理时间
 

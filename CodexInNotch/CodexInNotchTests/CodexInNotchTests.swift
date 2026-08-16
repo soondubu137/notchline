@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import Testing
 @testable import CodexInNotch
 
@@ -1778,7 +1779,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
 
         // Recreate an installation from an older build: a different helper
         // script this app installed itself, still executable and registered.
@@ -1791,10 +1792,13 @@ struct CodexInNotchTests {
             [.posixPermissions: 0o700],
             ofItemAtPath: paths.script.path
         )
+        // An install from before the marker existed: its provenance is the
+        // settings file, which is what the upgrade path still has to accept.
+        try? FileManager.default.removeItem(at: paths.installMarker)
         try JSONSerialization.data(
             withJSONObject: ["showsContentPreviews": false],
             options: [.prettyPrinted, .sortedKeys]
-        ).write(to: paths.settings, options: .atomic)
+        ).write(to: paths.legacySettings, options: .atomic)
 
         // The scan is cached, so these external edits are only visible after
         // revalidation -- which the app does on its own within the window, and
@@ -1843,9 +1847,12 @@ struct CodexInNotchTests {
             contentsOf: paths.script,
             encoding: .utf8
         )
-        let settingsData = try Data(contentsOf: paths.settings)
-        let settings = try #require(
-            JSONSerialization.jsonObject(with: settingsData) as? [String: Any]
+        let markerData = try Data(contentsOf: paths.installMarker)
+        let marker = try #require(
+            JSONSerialization.jsonObject(with: markerData) as? [String: Any]
+        )
+        let retiredLegacySettings = !FileManager.default.fileExists(
+            atPath: paths.legacySettings.path
         )
         await service.disconnect()
 
@@ -1858,11 +1865,15 @@ struct CodexInNotchTests {
             ) == .idle
         )
         #expect(upgradedScript.contains(#"payload.get("tool_use_id")"#))
-        #expect(settings["showsContentPreviews"] as? Bool == false)
-        // Settings carry the privacy setting only; provenance is the file's
-        // existence, so no hash or version field is recorded.
-        #expect(settings["managedHookSHA256"] == nil)
-        #expect(settings["managedHookVersion"] == nil)
+        // The upgrade recognised a pre-marker install by its legacy settings
+        // file, replaced it with the marker, and carried no privacy state
+        // across -- there is no longer any setting a helper could read.
+        #expect(marker["managedBy"] as? String == "codex-in-notch")
+        #expect(marker["showsContentPreviews"] == nil)
+        #expect(retiredLegacySettings)
+        // Provenance is the marker's existence, so no hash or version is kept.
+        #expect(marker["managedHookSHA256"] == nil)
+        #expect(marker["managedHookVersion"] == nil)
         #expect(methods.contains("thread/list"))
         #expect(!methods.contains("thread/loaded/list"))
         #expect(!methods.contains("thread/read"))
@@ -1878,7 +1889,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: true)
+        try await installer.install()
 
         let projectStateFile = paths.supportDirectory
             .appendingPathComponent(".codex-global-state.json")
@@ -1964,7 +1975,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -2043,7 +2054,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "SessionEnd",
@@ -2086,7 +2097,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let client = CodexAppServerStub(
             listedThreads: [],
             loadedListResults: [],
@@ -2118,7 +2129,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let trusted = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "SessionEnd",
@@ -2342,7 +2353,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let timestamp = Date().timeIntervalSince1970
         let prompt = try JSONSerialization.data(withJSONObject: [
             "received_at": timestamp,
@@ -2438,7 +2449,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "Stop",
@@ -2505,7 +2516,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let prompt = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -2640,7 +2651,7 @@ struct CodexInNotchTests {
             )
         }
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -2742,7 +2753,7 @@ struct CodexInNotchTests {
             )
         }
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -2794,7 +2805,7 @@ struct CodexInNotchTests {
             clock: clock,
             timing: timing
         )
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         #expect(await installer.status(hasObservedEvent: true) == .active)
 
         // Something outside this app removes a managed definition.
@@ -2831,7 +2842,7 @@ struct CodexInNotchTests {
             )
         }
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
 
         let clock = TestClock()
         let timing = MonitorTiming.standard
@@ -2899,7 +2910,7 @@ struct CodexInNotchTests {
             )
         }
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -3233,7 +3244,7 @@ struct CodexInNotchTests {
             )
         }
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -3302,7 +3313,7 @@ struct CodexInNotchTests {
             )
         }
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
 
         let clock = TestClock()
         let timing = MonitorTiming.standard
@@ -3388,7 +3399,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let prompt = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -3472,7 +3483,7 @@ struct CodexInNotchTests {
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         let prompt = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -4044,8 +4055,8 @@ for line in sys.stdin:
         ).write(to: paths.hooksConfiguration)
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: false)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
+        try await installer.install()
 
         let status = await installer.status(hasObservedEvent: false)
         let data = try Data(contentsOf: paths.hooksConfiguration)
@@ -4086,9 +4097,11 @@ for line in sys.stdin:
         await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .active)
 
-        // Without the settings file this app never recorded installing anything,
-        // so an unaccounted-for helper is flagged instead of overwritten.
-        try FileManager.default.removeItem(at: paths.settings)
+        // With no marker this app never recorded installing anything, so an
+        // unaccounted-for helper is flagged instead of overwritten. Both the
+        // marker and the legacy settings file count, so both have to go.
+        try FileManager.default.removeItem(at: paths.installMarker)
+        try? FileManager.default.removeItem(at: paths.legacySettings)
         try "#!/usr/bin/python3\nprint('{}')\n".write(
             to: paths.script,
             atomically: true,
@@ -4096,7 +4109,7 @@ for line in sys.stdin:
         )
         await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
-        try await installer.install(showsContentPreviews: false)
+        try await installer.install()
         await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .active)
 
@@ -4125,7 +4138,7 @@ for line in sys.stdin:
         }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: true)
+        try await installer.install()
 
         let installedData = try Data(contentsOf: paths.hooksConfiguration)
         var root = try #require(
@@ -4142,7 +4155,7 @@ for line in sys.stdin:
         await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
 
-        try await installer.install(showsContentPreviews: true)
+        try await installer.install()
 
         await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
@@ -4185,7 +4198,7 @@ for line in sys.stdin:
         await installer.invalidateInstallationCache()
         #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
 
-        try await installer.install(showsContentPreviews: true)
+        try await installer.install()
 
         let exactData = try Data(contentsOf: paths.hooksConfiguration)
         let exactRoot = try #require(
@@ -4545,22 +4558,33 @@ for line in sys.stdin:
             withIntermediateDirectories: true
         )
 
+        // The repository binds the socket, so it has to exist before any
+        // helper would hand text to it.
+        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast,
+            previewChannel: channel
+        )
+
         let timestamp = Date().timeIntervalSince1970
         let events: [[String: Any]] = [
             [
+                "event_id": "event-prompt",
                 "received_at": timestamp,
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "thread-1",
-                "turn_id": "turn-1",
-                "prompt": "private prompt"
+                "turn_id": "turn-1"
             ],
             [
+                "event_id": "event-permission",
                 "received_at": timestamp + 1,
                 "hook_event_name": "PermissionRequest",
                 "session_id": "thread-1",
                 "turn_id": "turn-1"
             ],
             [
+                "event_id": "event-post",
                 "received_at": timestamp + 2,
                 "hook_event_name": "PostToolUse",
                 "session_id": "thread-1",
@@ -4570,6 +4594,16 @@ for line in sys.stdin:
             ]
         ]
 
+        // Text arrives over the socket, never in the file -- which is the whole
+        // point of CR-011. The helper sends before writing its file for exactly
+        // this reason: the preview must already be in hand when the file lands.
+        sendHookPreview(
+            to: paths.previewSocket,
+            eventID: "event-prompt",
+            prompt: "private prompt"
+        )
+        try await waitForRetainedPreviews(channel, count: 1)
+
         for (index, event) in events.enumerated() {
             let data = try JSONSerialization.data(withJSONObject: event)
             try data.write(
@@ -4577,19 +4611,22 @@ for line in sys.stdin:
             )
         }
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
         let waitingSnapshot = await repository.consumeEvents()
         #expect(waitingSnapshot.turns.first?.status == .running)
 
+        sendHookPreview(
+            to: paths.previewSocket,
+            eventID: "event-stop",
+            assistantMessage: "private answer"
+        )
+        try await waitForRetainedPreviews(channel, count: 1)
+
         let stop = try JSONSerialization.data(withJSONObject: [
+            "event_id": "event-stop",
             "received_at": timestamp + 3,
             "hook_event_name": "Stop",
             "session_id": "thread-1",
-            "turn_id": "turn-1",
-            "last_assistant_message": "private answer"
+            "turn_id": "turn-1"
         ])
         try stop.write(
             to: paths.eventsDirectory.appendingPathComponent("3.json")
@@ -4598,6 +4635,14 @@ for line in sys.stdin:
         let snapshot = await repository.consumeEvents()
         let turn = try #require(snapshot.turns.first)
         let persistedText = try String(contentsOf: paths.state, encoding: .utf8)
+        let everythingOnDisk = allFileContents(under: paths.supportDirectory)
+        channel.stop()
+
+        // The claim in onboarding and Settings is absolute -- "No prompt or
+        // answer is persisted" -- so assert it against every file this app
+        // owns, not just the state file.
+        #expect(!everythingOnDisk.contains("private prompt"))
+        #expect(!everythingOnDisk.contains("private answer"))
 
         #expect(snapshot.hasObservedEvent)
         #expect(turn.threadID == "thread-1")
@@ -4665,18 +4710,29 @@ for line in sys.stdin:
             )
         }
 
+        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast,
+            previewChannel: channel
+        )
+        defer { channel.stop() }
+
+        sendHookPreview(
+            to: paths.previewSocket,
+            eventID: "event-prompt",
+            prompt: "continue this task"
+        )
+        try await waitForRetainedPreviews(channel, count: 1)
+
         try write([
+            "event_id": "event-prompt",
             "received_at": 100.0,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-1",
-            "turn_id": "turn-before-pause",
-            "prompt": "continue this task"
+            "turn_id": "turn-before-pause"
         ], named: "0.json")
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
         let beforePause = await repository.consumeEvents()
         #expect(beforePause.turns.first?.turnID == "turn-before-pause")
         #expect(beforePause.turns.first?.status == .running)
@@ -4984,7 +5040,16 @@ for line in sys.stdin:
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
 
         let installer = CodexHookInstaller(paths: paths)
-        try await installer.install(showsContentPreviews: true)
+        try await installer.install()
+
+        // Listening before the helper runs, the way the app does: the helper
+        // sends its preview and then writes the file that wakes the reducer.
+        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast,
+            previewChannel: channel
+        )
 
         let input = Pipe()
         let output = Pipe()
@@ -5017,16 +5082,15 @@ for line in sys.stdin:
                 includingPropertiesForKeys: nil
             ).first
         )
+        let rawEventText = try String(contentsOf: eventURL, encoding: .utf8)
         let rawEvent = try #require(
             JSONSerialization.jsonObject(
                 with: Data(contentsOf: eventURL)
             ) as? [String: Any]
         )
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
         let snapshot = await repository.consumeEvents()
+        let everythingOnDisk = allFileContents(under: paths.supportDirectory)
+        channel.stop()
 
         #expect(process.terminationStatus == 0)
         #expect(String(data: stdout, encoding: .utf8) == "{}\n")
@@ -5034,7 +5098,115 @@ for line in sys.stdin:
         #expect(rawEvent["cwd"] == nil)
         #expect(rawEvent["reason"] == nil)
         #expect(snapshot.turns.first?.threadID == "thread-script")
+
+        // The real helper handed the preview over the socket, so the reducer
+        // has it and no file this app owns ever contained it.
         #expect(snapshot.turns.first?.promptPreview == "script preview")
+        #expect(rawEvent["prompt"] == nil)
+        #expect(!rawEventText.contains("script preview"))
+        #expect(!everythingOnDisk.contains("script preview"))
+    }
+
+    /// The privacy switch, at the boundary where it used to fail open.
+    ///
+    /// It was a file the helper read, written through an unheld `Task` with the
+    /// error swallowed: two quick toggles could land out of order, and a single
+    /// failed write left the UI showing "off" while text kept being collected
+    /// (CR-012). It is now one in-memory flag, so "off" means the next message
+    /// is dropped on arrival, and the last caller always wins.
+    @Test
+    func disablingPreviewsDropsTextOnArrivalAndLastWriteWins() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast,
+            previewChannel: channel
+        )
+        defer { channel.stop() }
+
+        repository.setContentPreviewsEnabled(false)
+        sendHookPreview(
+            to: paths.previewSocket,
+            eventID: "event-off",
+            prompt: "must not be retained"
+        )
+        // Nothing to wait for on the happy path, so give the reader a real
+        // chance to do the wrong thing before asserting that it did not.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(channel.retainedPreviewCount == 0)
+
+        // Rapid toggling: the last call is the state, with no ordering window.
+        repository.setContentPreviewsEnabled(true)
+        repository.setContentPreviewsEnabled(false)
+        repository.setContentPreviewsEnabled(true)
+        sendHookPreview(
+            to: paths.previewSocket,
+            eventID: "event-on",
+            prompt: "may be retained"
+        )
+        try await waitForRetainedPreviews(channel, count: 1)
+
+        // Turning it off also drops what was already collected.
+        repository.setContentPreviewsEnabled(false)
+        #expect(channel.retainedPreviewCount == 0)
+
+        let everythingOnDisk = allFileContents(under: paths.supportDirectory)
+        #expect(!everythingOnDisk.contains("must not be retained"))
+        #expect(!everythingOnDisk.contains("may be retained"))
+    }
+
+    /// Unclaimed previews cannot grow without bound.
+    ///
+    /// They pile up only when the file that would claim them never arrives -- a
+    /// quarantined event, or a helper that sent text and then failed to write.
+    @Test
+    func unclaimedPreviewsAreBoundedByTheRetentionCap() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.supportDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let channel = HookPreviewChannel(
+            socketURL: paths.previewSocket,
+            maximumRetainedPreviews: 4
+        )
+        #expect(channel.start())
+        defer { channel.stop() }
+
+        for index in 0 ..< 12 {
+            sendHookPreview(
+                to: paths.previewSocket,
+                eventID: "event-\(index)",
+                prompt: "prompt \(index)"
+            )
+        }
+        try await waitForRetainedPreviews(channel, count: 4)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(channel.retainedPreviewCount == 4)
+        // The cap evicts oldest-first, so the newest survivor is still there
+        // and the oldest is long gone.
+        #expect(channel.claimPreview(forEventID: "event-11")?.prompt == "prompt 11")
+        #expect(channel.claimPreview(forEventID: "event-0") == nil)
+        // A claim consumes, so the same text can never be served twice.
+        #expect(channel.claimPreview(forEventID: "event-11") == nil)
     }
 
     /// A store holding nothing, so a timing assertion starts from a clock with
@@ -5124,11 +5296,89 @@ for line in sys.stdin:
         )
     }
 
+    /// Hands preview text to a listening ``HookPreviewChannel``.
+    ///
+    /// Speaks the same wire format the installed Python helper does -- one line
+    /// of JSON on a Unix socket -- so these tests exercise the real path rather
+    /// than a Swift-side shortcut around it.
+    @discardableResult
+    private func sendHookPreview(
+        to socketURL: URL,
+        eventID: String,
+        prompt: String? = nil,
+        assistantMessage: String? = nil
+    ) -> Bool {
+        var payload: [String: Any] = ["event_id": eventID]
+        if let prompt { payload["prompt"] = prompt }
+        if let assistantMessage { payload["last_assistant_message"] = assistantMessage }
+        guard var data = try? JSONSerialization.data(withJSONObject: payload) else {
+            return false
+        }
+        data.append(0x0A)
+
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketURL.path.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            return false
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connected == 0 else { return false }
+
+        return data.withUnsafeBytes { buffer in
+            write(descriptor, buffer.baseAddress, buffer.count)
+        } == data.count
+    }
+
+    /// Waits for the channel's background reader to take delivery.
+    private func waitForRetainedPreviews(
+        _ channel: HookPreviewChannel,
+        count: Int
+    ) async throws {
+        for _ in 0 ..< 200 {
+            if channel.retainedPreviewCount >= count { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        Issue.record("preview channel never received \(count) message(s)")
+    }
+
+    /// Every regular file under a directory, for "is the text anywhere" checks.
+    private func allFileContents(under directory: URL) -> String {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return ""
+        }
+        var combined = ""
+        for case let url as URL in enumerator {
+            if let text = try? String(contentsOf: url, encoding: .utf8) {
+                combined += text
+            }
+        }
+        return combined
+    }
+
     private func makeTemporaryHookPaths() -> HookIntegrationPaths {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexInNotchTests-\(UUID().uuidString)")
+        // Deliberately short. The preview socket lives inside this directory,
+        // and a Unix domain socket path may not exceed 104 bytes -- the system
+        // temporary directory plus a full UUID spends 135 of them, so binding
+        // would fail in tests for a reason that has nothing to do with the
+        // code under test.
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("cin-\(UUID().uuidString.prefix(8))")
         return HookIntegrationPaths(
-            supportDirectory: root.appendingPathComponent("ApplicationSupport"),
+            supportDirectory: root.appendingPathComponent("AS"),
             hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")
         )
     }
@@ -5250,10 +5500,11 @@ private actor StuckDeadlineMonitoringStub: CodexMonitoring {
     func snapshotCount() -> Int { snapshots }
 
     func hookSetupStatus() async -> HookSetupStatus { .reviewRequired }
-    func installHooks(showsContentPreviews: Bool) async throws {}
+    func installHooks() async throws {}
     func removeHooks() async throws {}
     func clearSessions() async {}
-    func updateHookSettings(showsContentPreviews: Bool) async {}
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
+    func discardCollectedPreviews() async {}
     func disconnect() async {}
 }
 
@@ -5280,7 +5531,7 @@ private actor IntegrationMonitoringStub: CodexMonitoring {
         setupStatus
     }
 
-    func installHooks(showsContentPreviews: Bool) async throws {
+    func installHooks() async throws {
         installRequests += 1
         setupStatus = .reviewRequired
     }
@@ -5292,7 +5543,9 @@ private actor IntegrationMonitoringStub: CodexMonitoring {
 
     func clearSessions() async {}
 
-    func updateHookSettings(showsContentPreviews: Bool) async {}
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
+
+    func discardCollectedPreviews() async {}
 
     func disconnect() async {}
 

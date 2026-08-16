@@ -404,14 +404,14 @@ final class MonitorStore: ObservableObject {
                 showsContentPreviews,
                 forKey: Self.contentPreviewDefaultsKey
             )
-            if !showsContentPreviews {
-                sessions = sessions.map { $0.hidingContent() }
-            }
-            guard let service else { return }
-            Task {
-                await service.updateHookSettings(
-                    showsContentPreviews: showsContentPreviews
-                )
+            // Applied before this setter returns, so the switch cannot land out
+            // of order and cannot fail. Everything below is cleanup of text
+            // already collected, which is idempotent and may run late.
+            service?.setContentPreviewsEnabled(showsContentPreviews)
+            guard !showsContentPreviews else { return }
+            sessions = sessions.map { $0.hidingContent() }
+            Task { [service] in
+                await service?.discardCollectedPreviews()
             }
         }
     }
@@ -489,6 +489,12 @@ final class MonitorStore: ObservableObject {
         if !showsContentPreviews {
             self.sessions = snapshot.sessions.map { $0.hidingContent() }
         }
+
+        // Reconcile the switch with what was persisted, rather than trusting
+        // the channel's default to match. Previously nothing did this, so a
+        // user who had turned previews off got a helper that came back up
+        // collecting text until they toggled it again.
+        service?.setContentPreviewsEnabled(showsContentPreviews)
 
         if service != nil {
             startMonitoring()
@@ -867,9 +873,7 @@ final class MonitorStore: ObservableObject {
         defer { isInstallingIntegration = false }
 
         do {
-            try await service.installHooks(
-                showsContentPreviews: showsContentPreviews
-            )
+            try await service.installHooks()
             hookSetupStatus = await service.hookSetupStatus()
             integrationSwitchIsOn = hookSetupStatus.isIntegrationEnabled
             lastIntegrationMessage = "Hooks 已安装；请在 Codex 中打开 /hooks 并信任新增定义。"

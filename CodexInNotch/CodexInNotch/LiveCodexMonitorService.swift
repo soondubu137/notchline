@@ -10,10 +10,19 @@ protocol CodexMonitoring: Sendable {
     /// it comes due.
     func nextRefreshDeadline() async -> Date?
     func hookSetupStatus() async -> HookSetupStatus
-    func installHooks(showsContentPreviews: Bool) async throws
+    func installHooks() async throws
     func removeHooks() async throws
     func clearSessions() async
-    func updateHookSettings(showsContentPreviews: Bool) async
+    /// Applies the preview switch before returning.
+    ///
+    /// Synchronous and `nonisolated` on purpose: this is a privacy control, so
+    /// the caller's last write has to be the one that takes effect. Routing it
+    /// through an unheld `Task` made it reorderable, and routing it to a file
+    /// made it failable -- see CR-012.
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool)
+    /// Redacts preview text already collected. Ordering-insensitive, unlike
+    /// ``setContentPreviewsEnabled``.
+    func discardCollectedPreviews() async
     func disconnect() async
 }
 
@@ -383,14 +392,17 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         )
     }
 
-    func installHooks(showsContentPreviews: Bool) async throws {
-        try await hookInstaller.install(
-            showsContentPreviews: showsContentPreviews
-        )
+    func installHooks() async throws {
+        try await hookInstaller.install()
+        // The support directory exists now. On a first run the preview socket
+        // could not bind at launch because there was nowhere to bind it, so
+        // this is the moment it becomes possible.
+        hookEvents.startPreviewChannel()
     }
 
     func removeHooks() async throws {
         await hookEvents.resetIntegrationObservation(clearTurns: true)
+        hookEvents.stopPreviewChannel()
         try await hookInstaller.uninstall()
         observedDesktopProcessIdentifier = nil
         hookTrackedThreadIDs = []
@@ -417,13 +429,12 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
     }
 
-    func updateHookSettings(showsContentPreviews: Bool) async {
-        try? await hookInstaller.updateSettings(
-            showsContentPreviews: showsContentPreviews
-        )
-        if !showsContentPreviews {
-            await hookEvents.clearContentPreviews()
-        }
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {
+        hookEvents.setContentPreviewsEnabled(isEnabled)
+    }
+
+    func discardCollectedPreviews() async {
+        await hookEvents.clearContentPreviews()
     }
 
     nonisolated private func nanoseconds(_ seconds: TimeInterval) -> UInt64 {

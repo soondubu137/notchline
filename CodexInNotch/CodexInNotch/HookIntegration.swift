@@ -60,7 +60,31 @@ nonisolated struct HookIntegrationPaths: Sendable {
         supportDirectory.appendingPathComponent("monitor-state.json")
     }
 
-    var settings: URL {
+    /// Where the helper hands preview text to a running app.
+    ///
+    /// See ``HookPreviewChannel``: the text goes over this socket instead of
+    /// into an event file, so nothing the product promises not to persist is
+    /// ever written.
+    var previewSocket: URL {
+        supportDirectory.appendingPathComponent("preview.sock")
+    }
+
+    /// Proof that this app, rather than something else, put a helper here.
+    ///
+    /// It only has to exist. ``CodexHookInstaller`` uses it to tell "our own
+    /// older helper, which should be upgraded" from "a file this app never
+    /// installed, which must not be silently replaced".
+    var installMarker: URL {
+        supportDirectory.appendingPathComponent("managed-install.json")
+    }
+
+    /// The file the marker replaced.
+    ///
+    /// It used to carry `showsContentPreviews` down to the helper. The helper
+    /// no longer handles text at all, so there is no setting left to send; the
+    /// path survives only so an existing install is still recognised as ours
+    /// and the stale file gets cleaned up.
+    var legacySettings: URL {
         supportDirectory.appendingPathComponent("hook-settings.json")
     }
 
@@ -159,12 +183,12 @@ actor CodexHookInstaller {
         guard installationState == .upgradeable else { return false }
 
         try writeCurrentHookScript()
-        try writeSettings(showsContentPreviews: storedShowsContentPreviews)
+        try writeInstallMarker()
         invalidateInstallationCache()
         return true
     }
 
-    func install(showsContentPreviews: Bool) throws {
+    func install() throws {
         try fileManager.createDirectory(
             at: paths.supportDirectory,
             withIntermediateDirectories: true,
@@ -177,23 +201,22 @@ actor CodexHookInstaller {
         )
 
         try writeCurrentHookScript()
-        try writeSettings(showsContentPreviews: showsContentPreviews)
+        try writeInstallMarker()
         try mergeHooksConfiguration()
         invalidateInstallationCache()
-    }
-
-    func updateSettings(showsContentPreviews: Bool) throws {
-        guard fileManager.fileExists(atPath: paths.supportDirectory.path) else {
-            return
-        }
-        try writeSettings(showsContentPreviews: showsContentPreviews)
     }
 
     func uninstall() throws {
         invalidateInstallationCache()
         try removeManagedHooksConfiguration()
 
-        for url in [paths.script, paths.settings, paths.state] {
+        for url in [
+            paths.script,
+            paths.installMarker,
+            paths.legacySettings,
+            paths.state,
+            paths.previewSocket
+        ] {
             if fileManager.fileExists(atPath: url.path) {
                 try fileManager.removeItem(at: url)
             }
@@ -251,14 +274,20 @@ actor CodexHookInstaller {
         }
 
         // A different script sits at a path this app manages exclusively. The
-        // settings file is written only by install(), so its presence is what
+        // marker is written only by install(), so its presence is what
         // distinguishes "our own older helper" from a file this app never put
         // there. Recording a content hash next to the script would not add
         // tamper resistance: both live in the same directory with the same
         // ownership, so anything that can rewrite one can rewrite the other.
-        return fileManager.fileExists(atPath: paths.settings.path)
-            ? .upgradeable
-            : .repairRequired
+        //
+        // The legacy settings file counts as a marker too, so an install made
+        // before the marker existed upgrades instead of demanding a repair.
+        return hasManagedInstallMarker ? .upgradeable : .repairRequired
+    }
+
+    private var hasManagedInstallMarker: Bool {
+        fileManager.fileExists(atPath: paths.installMarker.path)
+            || fileManager.fileExists(atPath: paths.legacySettings.path)
     }
 
     private var managedRegistrationState: ManagedRegistrationState {
@@ -301,7 +330,7 @@ actor CodexHookInstaller {
     private var hasManagedSupportFootprint: Bool {
         fileManager.fileExists(atPath: paths.supportDirectory.path)
             || fileManager.fileExists(atPath: paths.script.path)
-            || fileManager.fileExists(atPath: paths.settings.path)
+            || hasManagedInstallMarker
             || fileManager.fileExists(atPath: paths.state.path)
             || fileManager.fileExists(atPath: paths.eventsDirectory.path)
     }
@@ -321,18 +350,6 @@ actor CodexHookInstaller {
         return (handler["timeout"] as? NSNumber)?.intValue == 3
     }
 
-    private var storedSettings: [String: Any] {
-        guard let data = try? Data(contentsOf: paths.settings),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [:]
-        }
-        return root
-    }
-
-    private var storedShowsContentPreviews: Bool {
-        storedSettings["showsContentPreviews"] as? Bool ?? true
-    }
-
     private func writeCurrentHookScript() throws {
         try Self.hookScript.write(
             to: paths.script,
@@ -345,18 +362,27 @@ actor CodexHookInstaller {
         )
     }
 
-    private func writeSettings(showsContentPreviews: Bool) throws {
-        var settings = storedSettings
-        settings["showsContentPreviews"] = showsContentPreviews
+    /// Writes the marker, and retires the settings file it replaced.
+    ///
+    /// Nothing in the marker is read back -- only its presence matters -- so it
+    /// carries just enough to identify itself to a human looking at the folder.
+    /// It deliberately holds no privacy state: the preview switch is now an
+    /// in-memory flag on ``HookPreviewChannel``, because a switch that has to
+    /// be written to disk to take effect can fail open, and did.
+    private func writeInstallMarker() throws {
         let data = try JSONSerialization.data(
-            withJSONObject: settings,
+            withJSONObject: ["managedBy": "codex-in-notch"],
             options: [.prettyPrinted, .sortedKeys]
         )
-        try data.write(to: paths.settings, options: .atomic)
+        try data.write(to: paths.installMarker, options: .atomic)
         try fileManager.setAttributes(
             [.posixPermissions: 0o600],
-            ofItemAtPath: paths.settings.path
+            ofItemAtPath: paths.installMarker.path
         )
+
+        if fileManager.fileExists(atPath: paths.legacySettings.path) {
+            try? fileManager.removeItem(at: paths.legacySettings)
+        }
     }
 
     private func mergeHooksConfiguration() throws {
@@ -490,25 +516,61 @@ actor CodexHookInstaller {
 #!/usr/bin/python3
 import json
 import os
+import socket
 import sys
 import time
 import uuid
 
 SUPPORT = os.path.dirname(os.path.abspath(__file__))
 EVENTS = os.path.join(SUPPORT, "events")
-SETTINGS = os.path.join(SUPPORT, "hook-settings.json")
+PREVIEW_SOCKET = os.path.join(SUPPORT, "preview.sock")
 
-def previews_enabled():
+# Codex gives this hook 3 seconds. Handing the preview over must cost a small
+# fraction of that even when nothing is listening, so the whole exchange is
+# bounded well below the budget and every failure is silent: a missing preview
+# is a cosmetic loss, a late hook is not.
+PREVIEW_TIMEOUT_SECONDS = 0.25
+
+def send_preview(event_id, payload):
+    """Hand prompt/answer text to a running app over a local socket.
+
+    This text is deliberately never written to disk. If the app is not running
+    there is nothing to hand it to and the text is dropped -- which is correct,
+    because an event written while the app is down is discarded on its next
+    launch anyway.
+    """
+    prompt = payload.get("prompt")
+    assistant = payload.get("last_assistant_message")
+    preview = {"event_id": event_id}
+    if isinstance(prompt, str):
+        preview["prompt"] = prompt[:240]
+    if isinstance(assistant, str):
+        preview["last_assistant_message"] = assistant[:240]
+    if len(preview) == 1:
+        return
+
+    connection = None
     try:
-        with open(SETTINGS, "r", encoding="utf-8") as handle:
-            return bool(json.load(handle).get("showsContentPreviews", True))
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(PREVIEW_TIMEOUT_SECONDS)
+        connection.connect(PREVIEW_SOCKET)
+        connection.sendall(
+            json.dumps(preview, separators=(",", ":")).encode("utf-8") + b"\n"
+        )
     except Exception:
-        return False
+        pass
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
 
 try:
     payload = json.load(sys.stdin)
+    event_id = str(uuid.uuid4())
     event = {
-        "event_id": str(uuid.uuid4()),
+        "event_id": event_id,
         "received_at": time.time(),
         "hook_event_name": payload.get("hook_event_name"),
         "session_id": payload.get("session_id"),
@@ -517,16 +579,14 @@ try:
         "tool_use_id": payload.get("tool_use_id"),
         "permission_mode": payload.get("permission_mode"),
     }
-    if previews_enabled():
-        prompt = payload.get("prompt")
-        assistant = payload.get("last_assistant_message")
-        if isinstance(prompt, str):
-            event["prompt"] = prompt[:240]
-        if isinstance(assistant, str):
-            event["last_assistant_message"] = assistant[:240]
+
+    # Send before writing the file, never after. The file appearing is what
+    # wakes the app, so the text has to already be in its hands by then or the
+    # reducer would claim an id whose preview is still in flight.
+    send_preview(event_id, payload)
 
     os.makedirs(EVENTS, mode=0o700, exist_ok=True)
-    filename = "%020d-%s.json" % (time.time_ns(), event["event_id"])
+    filename = "%020d-%s.json" % (time.time_ns(), event_id)
     target = os.path.join(EVENTS, filename)
     temporary = target + ".tmp"
     with open(temporary, "x", encoding="utf-8") as handle:
@@ -628,7 +688,12 @@ actor HookEventRepository {
         var turns: [LegacyPersistedTurn]?
     }
 
+    /// One lifecycle event as the helper wrote it.
+    ///
+    /// It deliberately carries no prompt or answer text: those arrive over
+    /// ``HookPreviewChannel`` and are matched back to this by `eventID`.
     private struct HookEvent: Decodable {
+        let eventID: String?
         let receivedAt: Double
         let hookEventName: String?
         let sessionID: String?
@@ -636,10 +701,9 @@ actor HookEventRepository {
         let toolName: String?
         let toolUseID: String?
         let permissionMode: String?
-        let prompt: String?
-        let lastAssistantMessage: String?
 
         enum CodingKeys: String, CodingKey {
+            case eventID = "event_id"
             case receivedAt = "received_at"
             case hookEventName = "hook_event_name"
             case sessionID = "session_id"
@@ -647,8 +711,6 @@ actor HookEventRepository {
             case toolName = "tool_name"
             case toolUseID = "tool_use_id"
             case permissionMode = "permission_mode"
-            case prompt
-            case lastAssistantMessage = "last_assistant_message"
         }
     }
 
@@ -657,6 +719,7 @@ actor HookEventRepository {
     private let clock: any MonitorClock
     private let timing: MonitorTiming
     nonisolated private let eventsWatcher: DirectoryChangeWatcher
+    nonisolated private let previewChannel: HookPreviewChannel
     private let liveEventCutoff: Date
     private var hasObservedEvent: Bool
     private var hasObservedLiveEvent: Bool
@@ -673,7 +736,8 @@ actor HookEventRepository {
         fileManager: FileManager = .default,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
-        liveEventCutoff: Date? = nil
+        liveEventCutoff: Date? = nil,
+        previewChannel: HookPreviewChannel? = nil
     ) {
         self.paths = paths
         self.fileManager = fileManager
@@ -686,6 +750,11 @@ actor HookEventRepository {
             directoryURL: paths.eventsDirectory,
             debounceInterval: timing.hookEventDebounceInterval
         )
+        self.previewChannel = previewChannel
+            ?? HookPreviewChannel(socketURL: paths.previewSocket)
+        // Binding fails harmlessly before the support directory exists; the
+        // installer asks again once it has created it.
+        self.previewChannel.start()
         self.liveEventCutoff = liveEventCutoff ?? clock.now()
 
         if let data = try? Data(contentsOf: paths.state),
@@ -716,6 +785,40 @@ actor HookEventRepository {
 
     nonisolated func changeEvents() -> AsyncStream<Void> {
         eventsWatcher.events()
+    }
+
+    /// Turns preview collection on or off.
+    ///
+    /// Deliberately `nonisolated` and synchronous. The previous design wrote
+    /// the switch to a settings file the helper read, through an unheld `Task`
+    /// whose write failure was swallowed -- so two quick toggles could land out
+    /// of order, and one failed write left the UI showing "off" while text kept
+    /// being collected. There is no write to lose any more: the caller's last
+    /// call is the state, and it takes effect before that call returns.
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {
+        previewChannel.setAcceptsText(isEnabled)
+    }
+
+    /// Rebinds the preview socket, for use once the support directory exists.
+    ///
+    /// The channel is constructed at launch, which on a first run is before
+    /// anything has created the directory it binds in.
+    @discardableResult
+    nonisolated func startPreviewChannel() -> Bool {
+        previewChannel.start()
+    }
+
+    nonisolated func stopPreviewChannel() {
+        previewChannel.stop()
+    }
+
+    nonisolated var previewChannelDiagnostic: String? {
+        previewChannel.diagnostic
+    }
+
+    private func claimedPreview(for event: HookEvent) -> HookPreviewChannel.Preview? {
+        guard let eventID = stableIdentifier(event.eventID) else { return nil }
+        return previewChannel.claimPreview(forEventID: eventID)
     }
 
     /// The reducer's current view, without touching the event queue.
@@ -832,6 +935,10 @@ actor HookEventRepository {
         return snapshot()
     }
 
+    /// Redacts text already reduced into Turn state.
+    ///
+    /// The switch itself is ``setContentPreviewsEnabled``, which must have run
+    /// first: this only cleans up what was collected while it was on.
     func clearContentPreviews() {
         turnsByThreadID = turnsByThreadID.mapValues { state in
             var redacted = state
@@ -910,7 +1017,7 @@ actor HookEventRepository {
                 startedAt: receivedAt,
                 lastEventAt: receivedAt,
                 retiredTurnIDs: retiredTurnIDs,
-                promptPreview: event.prompt,
+                promptPreview: claimedPreview(for: event)?.prompt,
                 assistantPreview: nil
             )
         case "PermissionRequest":
@@ -1051,6 +1158,9 @@ actor HookEventRepository {
                 }
             }
         case "Stop":
+            // Claimed before the mutation so the text is taken exactly once,
+            // whether or not this event turns out to address a live turn.
+            let assistantPreview = claimedPreview(for: event)?.assistantMessage
             mutateExactTurn(
                 threadID: threadID,
                 turnID: turnID,
@@ -1064,7 +1174,7 @@ actor HookEventRepository {
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .completed)
                 $0.pendingInputToolUseID = nil
                 $0.pendingApproval = nil
-                $0.assistantPreview = event.lastAssistantMessage
+                $0.assistantPreview = assistantPreview
             }
         default:
             break
