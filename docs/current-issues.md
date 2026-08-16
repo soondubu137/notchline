@@ -23,7 +23,9 @@ CR-010（冷启动无法重建 Desktop 当前会话状态）已**作为非目标
 
 第 3、4 条同时说明：即使将来要恢复某种启动同步，也不能建立在 `status`／`inProgress` 之上。
 
-`2026-08-16` 补记常驻动效相关的性能问题，基线为当前工作树，均以 Release 构建实测——方法是把状态固定后逐项开关变量。其中 CR-023（处理时间读数每秒重渲染叠层）已随本轮修复移出本表，只剩 CR-022；具体数字与测法记在条目里。其余动效成本同样已降到 0%–0.4%（见 system-architecture 第 6 节）。
+`2026-08-16` 补记叠层渲染相关的性能问题，基线为当前工作树，均以 Release 构建实测——方法是把状态固定后逐项开关变量，具体数字与测法记在各自条目里。本轮修复后所有**稳态**都已降到 0%（空闲、Running、Approval needed、Completed 停留），展开且行内扫光时约 0.4%；剩下的 CR-022 与 CR-024 都只在特定操作期间出现，且已实测确认可接受。CR-023（处理时间读数每秒重渲染叠层）已随本轮修复移出本表。
+
+这一轮有一条测量方法上的教训值得单独记住：**`ps %cpu` 会把短促的突发摊平掉**。CR-024 那 92ms 的过渡成本在 `ps` 上只显示为 0.1%–0.3%，几乎等于不存在；换成累计 CPU 时间（`ps -o time`）做差才看得出来。反过来，稳态成本用 `ps` 看是准的。选错工具会得出「已经没有成本」的错误结论。
 
 优先级定义：
 
@@ -66,6 +68,7 @@ CR-010（冷启动无法重建 Desktop 当前会话状态）已**作为非目标
 | CR-018 | Desktop 状态目录 watcher 不会在初始化失败或目录被替换后重新挂载。 | [`CodexDesktopStateDirectoryWatcher`](../CodexInNotch/CodexInNotch/CodexDesktopUnreadState.swift) 只在 init 时 `open(O_EVTONLY)` 一次；失败便永久结束 stream，收到 rename/delete 也只 yield，不重建 descriptor。 | 一秒轮询仍能兜底，因此不会永久丢状态，但 unread 变化的 250 ms 低延迟路径会悄然失效。 | watcher 增加重新 attach 状态机与退避；目录 rename/delete 后关闭旧 source 并重新打开，暴露 watcher health 诊断。 |
 | CR-019 | App Server 子进程 stderr 被直接丢弃，版本不兼容缺少可定位的诊断。 | [`connect`](../CodexInNotch/CodexInNotch/CodexAppServerClient.swift) 把 `standardError` 设为 `FileHandle.nullDevice`。分帧上限与 undecodable frame 诊断已随 CR-021 修复补齐，stderr 通道仍是空白。 | 协议或版本不兼容只能表现为超时或 `-32601`，无法区分「子进程启动后立刻报错退出」与「服务端沉默」，定位困难。 | 为 stderr 增加有界、脱敏的采集（固定行数上限、不记录正文 payload），并在 `launchFailed` / `disconnected` 诊断中带上最近若干行。 |
 | CR-022 | 展开面板中会话正文的每次更新都要重新光栅化并重排一行文本，而正文将来会随处理轮次实时更新。 | [`SessionRowTextView`](../CodexInNotch/CodexInNotch/NotchStatusMatrix.swift) 的 `apply` 会重画字形并重新布局；`MonitorStore` 每发布一次快照，SwiftUI 都会重渲染整个叠层。实测（Release、三行、240 字正文、10 Hz、面板展开）：修正光栅裁剪、sweep 复用与 intrinsic size 失效后为 11.5%（此前 17%）。保持同样的发布频率、只让正文不变，地板是 7.6%——那是 SwiftUI 每次发布重渲染叠层的固有成本，与本行无关。 | 若正文以接近 debounce 上限（10 Hz）的频率更新且面板保持展开，仍会占用约 11.5% 的核心。 | 在 reducer 侧把正文更新合并到约 1 Hz。首要理由是可读性——每秒变十次的文字没人读得完——足迹收益顺带获得。**判定为 P3 的依据**：实际正文更新远慢于此，面板也只在指针悬停时展开；折叠时行视图根本不在视图树中（`ExpandedPanelContent` 在 `if store.isExpanded` 之内），成本为 0，`LazyVStack` 也已把同时存在的行数限制在约三行。 |
+| CR-024 | 展开／折叠一次过渡要花掉约 92ms 的 CPU，折合动画期间约半个核心。 | 用累计 CPU 时间实测（Release、两行会话、每 2 秒切换一次）：60 秒内 30 次过渡耗 2.97s CPU，同样时长的不切换基线耗 0.21s，即每次过渡 (2.97−0.21)/30 ≈ 92ms；过渡动画本身 0.20s，折算约 46% 的核心。**这件事用 `ps %cpu` 是看不见的**——它把 200ms 的突发摊平成 0.1%–0.3%，必须测累计 CPU 时间；真实运行中观察到的 3%–20% 正是同一件事。 | 单次绝对值不算小，但摊到真实使用频率后可以忽略：每小时 100 次约 0.26%，即使病态的每小时 500 次也只有约 1.3%。`hoverExpandDelay` 只有 0.15 秒，指针蹭过 notch 就会触发，所以频率并不低——结论仍是可接受，这也是判定为 P3 的依据。 | 其中一部分不可省：展开要新建三行并光栅化约十张字形位图，那是此前不存在的内容。**尚未证实的假设**是更大的一块来自 [`updatePanelFrame`](../CodexInNotch/CodexInNotch/OverlayPanelController.swift) 用 `NSAnimationContext` 动画 NSPanel 的 frame——0.20 秒内约 24 帧，每帧都让整个叠层重新布局，与第 6 节「重渲染由布局变化驱动而非内容变化驱动」是同一个主题。**动手前先对单次过渡采样验证这个假设**，不要直接照着改；若成立，方向是让面板在动画期间不必每帧重排 SwiftUI 内容——例如动画图层／transform 而不是 NSWindow frame，或让 hosting view 在动画期间保持固定布局尺寸。 |
 | CR-020 | Assets 中仍有未被代码引用的 failed 状态资源。 | `StatusFailedRing` 与 `StatusFailedX` 未被任何代码引用，但会话模型已只有四态。（Onboarding 关于 Completed 生命周期与启动范围的文案已随冷启动同步下线一并更新。） | 设计资产继续暗示 failed 是产品状态。 | 删除未引用 failed assets，并在设计文档/视觉资源检查中固定四态集合。 |
 
 ## 修复顺序建议
