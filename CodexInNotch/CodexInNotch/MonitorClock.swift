@@ -56,6 +56,18 @@ nonisolated struct MonitorTiming: Sendable {
     /// work interval. Nothing may depend on it for latency, and shortening it is
     /// never the right fix for a slow update.
     var heartbeatInterval: TimeInterval = 60
+    /// Floor on the gap between two refreshes.
+    ///
+    /// `nextRefreshDeadline` reports when output could next change, and the
+    /// store sleeps until then. A deadline that is *already past* when the store
+    /// wakes means the refresh it just ran did not clear it -- so running
+    /// another one immediately does not clear it either, and the loop becomes a
+    /// busy loop rather than a late wake-up. This bounds that failure to the 1 Hz
+    /// the poll used to cost instead of letting it consume a whole core.
+    ///
+    /// It is a backstop, not a cadence: a service reporting honest deadlines
+    /// never reaches it. Nothing may depend on it for latency.
+    var minimumRefreshInterval: TimeInterval = 1
     /// How long a cached installation scan is trusted without re-reading disk.
     ///
     /// Installation health changes only when this app writes the configuration,

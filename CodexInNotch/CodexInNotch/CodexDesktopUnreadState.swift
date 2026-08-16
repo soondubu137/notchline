@@ -61,6 +61,11 @@ struct TerminalUnreadMembershipGate: Sendable {
         var terminalObservedAt: Date
         var hasObservedUnread: Bool
         var isHidden: Bool
+        /// Whether the last evaluation could act on unread evidence at all.
+        ///
+        /// Only an authoritative reading can hide a row, so only then does the
+        /// settling window describe something the passage of time will change.
+        var canSettle: Bool
     }
 
     private let settlingInterval: TimeInterval
@@ -86,12 +91,14 @@ struct TerminalUnreadMembershipGate: Sendable {
         var entry = entries[sessionID] ?? Entry(
             terminalObservedAt: terminalBoundaryAt,
             hasObservedUnread: false,
-            isHidden: false
+            isHidden: false,
+            canSettle: false
         )
         entry.terminalObservedAt = max(
             entry.terminalObservedAt,
             terminalBoundaryAt
         )
+        entry.canSettle = unreadState.source.isAuthoritative
 
         guard unreadState.source.isAuthoritative else {
             entries[sessionID] = entry
@@ -116,9 +123,14 @@ struct TerminalUnreadMembershipGate: Sendable {
     /// Without this the settling window could only expire on some unrelated
     /// refresh happening to land after it, which is what the one-second poll
     /// was really paying for.
+    ///
+    /// Rows that cannot settle are excluded. While the unread state is
+    /// unreadable no amount of waiting hides anything, so reporting their window
+    /// would ask the store to wake for work that will not happen -- and once
+    /// that window is past, to keep waking forever.
     nonisolated var nextSettlingDeadline: Date? {
         entries.values
-            .filter { !$0.isHidden }
+            .filter { !$0.isHidden && $0.canSettle }
             .map { $0.terminalObservedAt.addingTimeInterval(settlingInterval) }
             .min()
     }

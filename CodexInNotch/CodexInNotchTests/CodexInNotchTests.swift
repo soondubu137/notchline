@@ -2965,6 +2965,113 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
+    func refreshLoopNeverSpinsOnAnOverdueDeadline() async throws {
+        // The store cannot verify a service's deadlines, so it must stay bounded
+        // when one is wrong. Without a floor an overdue deadline sleeps zero and
+        // the loop runs full snapshots continuously -- measured at 63% of a core
+        // with the main thread inside a synchronous LaunchServices round trip.
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let service = StuckDeadlineMonitoringStub(
+            deadline: clock.now().addingTimeInterval(-5)
+        )
+        let store = MonitorStore(
+            displays: [
+                makeDisplay(
+                    id: "display-1",
+                    ordinal: 1,
+                    menuBarHeight: 38,
+                    hasNotch: true
+                )
+            ],
+            service: service,
+            initialSnapshot: .connecting,
+            clock: clock,
+            timing: timing
+        )
+
+        for _ in 0 ..< 8 {
+            await clock.advance(by: timing.minimumRefreshInterval)
+        }
+
+        let requested = clock.requestedSleepIntervals
+        #expect(!requested.isEmpty)
+        #expect(requested.allSatisfy { $0 >= timing.minimumRefreshInterval })
+        // Bounded work, not "no work": the loop still converges on the deadline.
+        #expect(await service.snapshotCount() <= 10)
+        store.stopMonitoring()
+    }
+
+    @Test @MainActor
+    func refreshDeadlineNeverFallsIntoThePast() async throws {
+        // The store sleeps `max(0, deadline - now)`, so a deadline the service
+        // can never advance is not a late wake-up -- it is a zero-length sleep
+        // in an unconditional loop, i.e. a busy loop running full snapshots.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-hooked",
+            "turn_id": "turn-hooked"
+        ]).write(to: paths.eventsDirectory.appendingPathComponent("0.json"))
+
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        // Only `thread-hooked` is driven by a Hook. `thread-idle` is an ordinary
+        // unarchived thread -- the state of every real account.
+        let client = CodexAppServerStub(
+            listedThreads: [
+                .object([
+                    "id": .string("thread-hooked"),
+                    "ephemeral": .bool(false),
+                    "threadSource": .string("user"),
+                    "name": .string("Hooked")
+                ]),
+                .object([
+                    "id": .string("thread-idle"),
+                    "ephemeral": .bool(false),
+                    "threadSource": .string("user"),
+                    "name": .string("Idle")
+                ])
+            ],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                clock: clock,
+                timing: timing,
+                liveEventCutoff: .distantPast
+            ),
+            hookInstaller: installer,
+            clock: clock,
+            timing: timing,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        try await waitForThreadReads(client, atLeast: 1)
+
+        // Past the per-thread metadata window, still inside the membership one.
+        await clock.advance(by: timing.threadMetadataRefreshInterval + 1)
+        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        try await waitForThreadReads(client, atLeast: 2)
+
+        let deadline = try #require(await service.nextRefreshDeadline())
+        #expect(deadline >= clock.now())
+        await service.disconnect()
+    }
+
+    @Test @MainActor
     func backgroundReadsHonourTheirOwnFreshnessWindows() async throws {
         // These windows previously had no coverage at all: every one of them was
         // a bare Date() comparison, so nothing could state when a background
@@ -4895,6 +5002,40 @@ except Exception:
 print("{}")
 """#
     }
+}
+
+/// A service whose deadline is permanently overdue, however often it is asked.
+///
+/// This is the shape every real instance of the bug took: a deadline derived
+/// from state that the refresh it triggers does not update.
+private actor StuckDeadlineMonitoringStub: CodexMonitoring {
+    private let deadline: Date
+    private var snapshots = 0
+
+    init(deadline: Date) {
+        self.deadline = deadline
+    }
+
+    func nextRefreshDeadline() async -> Date? { deadline }
+
+    func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot {
+        snapshots += 1
+        return MonitorSnapshot(
+            availability: .ready,
+            sessions: [],
+            quota: .unavailable,
+            diagnostic: nil
+        )
+    }
+
+    func snapshotCount() -> Int { snapshots }
+
+    func hookSetupStatus() async -> HookSetupStatus { .reviewRequired }
+    func installHooks(showsContentPreviews: Bool) async throws {}
+    func removeHooks() async throws {}
+    func clearSessions() async {}
+    func updateHookSettings(showsContentPreviews: Bool) async {}
+    func disconnect() async {}
 }
 
 private actor IntegrationMonitoringStub: CodexMonitoring {

@@ -20,6 +20,7 @@ final class TestClock: MonitorClock, @unchecked Sendable {
     private let lock = NSLock()
     nonisolated(unsafe) private var instant: Date
     nonisolated(unsafe) private var sleepers: [Sleeper] = []
+    nonisolated(unsafe) private var requestedSleeps: [TimeInterval] = []
 
     nonisolated init(now: Date = Date(timeIntervalSince1970: 1_000_000)) {
         self.instant = now
@@ -36,9 +37,9 @@ final class TestClock: MonitorClock, @unchecked Sendable {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 lock.lock()
-                let deadline = instant.addingTimeInterval(
-                    TimeInterval(nanoseconds) / 1_000_000_000
-                )
+                let interval = TimeInterval(nanoseconds) / 1_000_000_000
+                requestedSleeps.append(interval)
+                let deadline = instant.addingTimeInterval(interval)
                 // A zero or already-elapsed delay still suspends once, so a
                 // caller cannot starve the test by spinning without a wake-up.
                 sleepers.append(
@@ -81,6 +82,19 @@ final class TestClock: MonitorClock, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return sleepers.count
+    }
+
+    /// Every interval a caller has asked to sleep for.
+    ///
+    /// `sleep` suspends even for a zero-length request, which is what keeps the
+    /// test deterministic -- and what makes a production busy loop invisible
+    /// here, since a caller spinning on `sleep(0)` looks exactly like one parked
+    /// on a real delay. Recording the requested interval is the only way a test
+    /// can tell the two apart.
+    var requestedSleepIntervals: [TimeInterval] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestedSleeps
     }
 
     /// Lets already-runnable tasks progress without moving time.

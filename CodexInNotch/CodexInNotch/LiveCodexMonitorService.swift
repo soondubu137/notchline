@@ -42,6 +42,13 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private var cachedAccountFingerprint: String?
     private var accountReadAt: Date?
     private var threadRecords: [String: ThreadRecord] = [:]
+    /// The threads the per-thread metadata read actually revisits.
+    ///
+    /// `threadRecords` caches every unarchived thread the membership read
+    /// returned, but only Hook-tracked threads are ever re-read. Measuring
+    /// staleness over the whole cache therefore reports a deadline that no
+    /// refresh can clear.
+    private var hookTrackedThreadIDs: Set<String> = []
     private var listedThreadIDs: Set<String> = []
     private var threadListReadAt: Date?
     private var threadListRefreshTask: Task<Void, Never>?
@@ -141,6 +148,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             if hasLiveHookObservation {
                 let unreadSnapshot = await unreadState.snapshot()
                 let hookThreadIDs = Set(hookState.turns.map(\.threadID))
+                hookTrackedThreadIDs = hookThreadIDs
                 let containsUnlistedHookThread = hookThreadIDs.contains {
                     !listedThreadIDs.contains($0)
                 }
@@ -207,6 +215,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             // thread `notLoaded`, and never a single `inProgress` turn. There is
             // no supported read that answers "what is Codex Desktop doing right
             // now", so any startup list would have been a guess.
+            hookTrackedThreadIDs = []
             _ = try await readAllUnarchivedThreads(
                 forceRefresh: false,
                 timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
@@ -262,35 +271,80 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
     }
 
+    /// Earliest moment a refresh could produce different output.
+    ///
+    /// Every deadline here must be one a refresh can actually clear. The store
+    /// wakes at whatever this reports and refreshes; if the refresh leaves the
+    /// deadline where it was, the same wake-up fires again immediately and the
+    /// monitor spins. So each entry mirrors the exact condition its scheduler
+    /// tests, and a source with no pending work reports nothing at all.
     func nextRefreshDeadline() -> Date? {
         var deadlines: [Date] = []
+
+        // Membership reconciliation.
         if let threadListReadAt {
             deadlines.append(
-                threadListReadAt.addingTimeInterval(timing.threadListRefreshInterval)
+                deferred(
+                    threadListReadAt.addingTimeInterval(
+                        timing.threadListRefreshInterval
+                    ),
+                    by: threadListRetryAfter
+                )
             )
         }
-        if let oldestMetadata = threadRecords.values.map(\.observedAt).min() {
+
+        // Per-thread metadata, over the threads that read actually revisits --
+        // and only while this Codex build supports it. The rest of
+        // `threadRecords` is refreshed by the membership read above, on its own
+        // interval, so measuring it here would report a deadline that comes due
+        // twenty seconds before anything is scheduled to clear it.
+        if supportsThreadMetadataRead,
+           let oldestMetadata = hookTrackedThreadIDs
+            .compactMap({ threadRecords[$0]?.observedAt })
+            .min() {
             deadlines.append(
-                oldestMetadata.addingTimeInterval(timing.threadMetadataRefreshInterval)
+                deferred(
+                    oldestMetadata.addingTimeInterval(
+                        timing.threadMetadataRefreshInterval
+                    ),
+                    by: threadMetadataRetryAfter
+                )
             )
         }
+
+        // Quota and account. A nil read date means the read is already due, and
+        // the next refresh schedules it without needing a wake-up of its own.
         if let quotaReadAt {
             deadlines.append(
-                quotaReadAt.addingTimeInterval(timing.quotaRefreshInterval)
+                deferred(
+                    quotaReadAt.addingTimeInterval(timing.quotaRefreshInterval),
+                    by: quotaRetryAfter
+                )
             )
         }
         if let accountReadAt {
             deadlines.append(
-                accountReadAt.addingTimeInterval(timing.accountRefreshInterval)
+                deferred(
+                    accountReadAt.addingTimeInterval(timing.accountRefreshInterval),
+                    by: quotaRetryAfter
+                )
             )
         }
-        deadlines.append(contentsOf: [
-            threadListRetryAfter, threadMetadataRetryAfter, quotaRetryAfter
-        ].compactMap { $0 })
+
         if let settling = terminalUnreadMembershipGate.nextSettlingDeadline {
             deadlines.append(settling)
         }
         return deadlines.min()
+    }
+
+    /// A due date pushed out by its source's retry backoff.
+    ///
+    /// A backoff is a floor on the *next attempt*, never a reason to wake on its
+    /// own: waking at a bare retry marker asks a scheduler that may have decided
+    /// it has nothing to do, which leaves the marker in the past forever.
+    nonisolated private func deferred(_ due: Date, by retryAfter: Date?) -> Date {
+        guard let retryAfter else { return due }
+        return max(due, retryAfter)
     }
 
     func disconnect() async {
@@ -339,6 +393,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         await hookEvents.resetIntegrationObservation(clearTurns: true)
         try await hookInstaller.uninstall()
         observedDesktopProcessIdentifier = nil
+        hookTrackedThreadIDs = []
         threadListRefreshTask?.cancel()
         threadListRefreshTask = nil
         threadListRetryAfter = nil
@@ -385,8 +440,11 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         let accountNeedsRefresh = accountReadAt == nil
             || now.timeIntervalSince(accountReadAt ?? .distantPast)
                 >= timing.accountRefreshInterval
+        // The same window `nextRefreshDeadline` publishes for quota. A literal
+        // here would let the wake-up and the work it wakes for disagree.
         let quotaNeedsRefresh = quotaReadAt == nil
-            || now.timeIntervalSince(quotaReadAt ?? .distantPast) >= 60
+            || now.timeIntervalSince(quotaReadAt ?? .distantPast)
+                >= timing.quotaRefreshInterval
         guard accountNeedsRefresh || quotaNeedsRefresh else { return }
 
         quotaRefreshTask = Task { [weak self] in

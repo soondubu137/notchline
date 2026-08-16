@@ -908,12 +908,18 @@ final class MonitorStore: ObservableObject {
 
                 let heartbeat = timing.heartbeatInterval
                 let deadline = await service?.nextRefreshDeadline()
+                // An overdue deadline is clamped up to the floor, never down to
+                // zero. Sleeping zero here re-runs a full snapshot -- a
+                // LaunchServices round trip on the main thread and several stat
+                // calls -- against a deadline the refresh cannot move, which is
+                // a busy loop, not a catch-up.
                 let untilDeadline = deadline.map {
-                    $0.timeIntervalSince(self.clock.now())
+                    max(
+                        timing.minimumRefreshInterval,
+                        $0.timeIntervalSince(self.clock.now())
+                    )
                 } ?? heartbeat
-                try? await clock.sleep(
-                    seconds: max(0, min(heartbeat, untilDeadline))
-                )
+                try? await clock.sleep(seconds: min(heartbeat, untilDeadline))
             }
         }
 
