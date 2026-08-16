@@ -3050,10 +3050,12 @@ struct CodexInNotchTests {
         let sublayers = try #require(root.sublayers)
         #expect(sublayers.count == 2)
 
-        // Glyphs are drawn at their natural width and allowed to overflow, so
-        // the fade has something to fade rather than a pre-truncated string.
+        // Only what the row can show is drawn. The remainder sits behind the
+        // fade, so drawing it would upload a texture per update for pixels that
+        // are never composited -- and body text is replaced as a turn runs.
         let glyphs = try #require(sublayers.first)
-        #expect(glyphs.frame.width == glyphWidth)
+        #expect(glyphs.frame.width == rowWidth)
+        #expect(glyphs.frame.width < glyphWidth)
         let contents = try #require(glyphs.contents)
         let image = unsafeDowncast(contents as AnyObject, to: CGImage.self)
         let alphas = try Self.alphaExtremes(of: image)

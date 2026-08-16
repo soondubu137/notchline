@@ -743,6 +743,14 @@ final class SessionRowTextView: NSView {
     private var appliedColor = NSColor.white
     private var appliedSweeps = false
     private var renderedScale: CGFloat = 0
+    /// The glyph size actually drawn, which is the natural text size clipped to
+    /// the row. Only this much is ever visible, and every byte beyond it is a
+    /// texture upload per update that nothing can see.
+    private var renderedGlyphSize: CGSize = .zero
+    /// Geometry the running sweep was built for, so an unchanged one is left
+    /// alone rather than torn down and rebuilt on every text update.
+    private var installedSweepWidth: CGFloat?
+    private var installedSweepHeight: CGFloat?
 
     override var isFlipped: Bool { true }
 
@@ -784,8 +792,13 @@ final class SessionRowTextView: NSView {
         appliedSweeps = sweeps
 
         if textChanged {
-            invalidateIntrinsicContentSize()
+            // No `invalidateIntrinsicContentSize` here on purpose. This view is
+            // always given the width it is offered, so its intrinsic size never
+            // decides the layout -- invalidating it only makes SwiftUI re-measure
+            // and re-lay-out the subtree, once per row for every update, and a
+            // running turn's body text updates constantly.
             renderedScale = 0
+            renderedGlyphSize = .zero
             redrawGlyphs()
         }
         highlightLayer.isHidden = !sweeps
@@ -810,7 +823,9 @@ final class SessionRowTextView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        let glyphs = intrinsicContentSize
+        // The clip depends on the row's width, so a resize has to re-draw.
+        redrawGlyphs()
+        let glyphs = renderedGlyphSize
         // Left-aligned at the top of the line box, where the GeometryReader
         // this replaced placed its content.
         let glyphFrame = CGRect(
@@ -828,13 +843,34 @@ final class SessionRowTextView: NSView {
         fadeMask.locations = [0, NSNumber(value: fadeStart), 1]
 
         if appliedSweeps {
-            NotchTextRaster.installSweep(
-                on: sweepMask,
-                across: glyphs.width,
-                height: glyphs.height,
-                period: Self.sweepPeriod
-            )
+            // The sweep crosses what is *visible*, not the whole string. A
+            // 240-character body line is three times the row, so a band scaled
+            // to the glyphs spends most of its loop off-screen -- the highlight
+            // degrades to a 0.13s flicker once every two seconds. Bounding it to
+            // the row keeps one full, even pass however long the text is.
+            //
+            // It also makes the sweep's geometry independent of the text, which
+            // is what lets the reinstall below be skipped: a running turn
+            // replaces this text constantly, and re-adding the animation each
+            // time is a CATransaction commit per row per update.
+            let sweepWidth = min(glyphs.width, bounds.width)
+            let sweepHeight = glyphs.height
+            if sweepWidth != installedSweepWidth
+                || sweepHeight != installedSweepHeight
+                || sweepMask.animation(
+                    forKey: NotchTextRaster.sweepAnimationKey
+                ) == nil {
+                installedSweepWidth = sweepWidth
+                installedSweepHeight = sweepHeight
+                NotchTextRaster.installSweep(
+                    on: sweepMask,
+                    across: sweepWidth,
+                    height: sweepHeight,
+                    period: Self.sweepPeriod
+                )
+            }
         } else {
+            installedSweepWidth = nil
             sweepMask.removeAnimation(forKey: NotchTextRaster.sweepAnimationKey)
         }
 
@@ -854,12 +890,22 @@ final class SessionRowTextView: NSView {
         guard !appliedText.isEmpty else {
             baseLayer.contents = nil
             highlightLayer.contents = nil
+            renderedGlyphSize = .zero
             return
         }
-        guard scale != renderedScale else { return }
-        renderedScale = scale
 
-        let size = intrinsicContentSize
+        // Only what the row can show. A body line is capped at 240 characters,
+        // three times the width of the row it sits in, and the remainder is
+        // behind the fade -- drawing it would upload a texture per update for
+        // pixels that are never composited.
+        let natural = NotchTextRaster.textSize(appliedText, font: appliedFont)
+        let size = bounds.width > 0
+            ? CGSize(width: min(natural.width, bounds.width), height: natural.height)
+            : natural
+        guard scale != renderedScale || size != renderedGlyphSize else { return }
+        renderedScale = scale
+        renderedGlyphSize = size
+
         baseLayer.contentsScale = scale
         highlightLayer.contentsScale = scale
         baseLayer.contents = NotchTextRaster.glyphImage(
