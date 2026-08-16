@@ -61,11 +61,20 @@ struct TerminalUnreadMembershipGate: Sendable {
         var terminalObservedAt: Date
         var hasObservedUnread: Bool
         var isHidden: Bool
-        /// Whether the last evaluation could act on unread evidence at all.
+        /// Whether waiting -- and nothing else -- could still hide this row.
         ///
-        /// Only an authoritative reading can hide a row, so only then does the
-        /// settling window describe something the passage of time will change.
-        var canSettle: Bool
+        /// Two things make waiting pointless, and the deadline below must skip
+        /// both. An unreadable state cannot hide anything however long it is
+        /// given. And a row Desktop still reports as *unread* is not waiting on
+        /// a window at all: only the user reading it changes that, which
+        /// arrives as a file change on the watcher, not as time passing.
+        ///
+        /// Only the first case used to be excluded. The second left a deadline
+        /// permanently in the past for every Completed row the user had not
+        /// read, which the store clamps to its one-second floor -- so the app
+        /// took a full snapshot every second for as long as such a row was on
+        /// screen, which the performance notes recorded as a 0% steady state.
+        var canHideByWaiting: Bool
     }
 
     private let settlingInterval: TimeInterval
@@ -92,20 +101,22 @@ struct TerminalUnreadMembershipGate: Sendable {
             terminalObservedAt: terminalBoundaryAt,
             hasObservedUnread: false,
             isHidden: false,
-            canSettle: false
+            canHideByWaiting: false
         )
         entry.terminalObservedAt = max(
             entry.terminalObservedAt,
             terminalBoundaryAt
         )
-        entry.canSettle = unreadState.source.isAuthoritative
+        let isCurrentlyUnread = unreadState.unreadThreadIDs.contains(threadID)
+        entry.canHideByWaiting = unreadState.source.isAuthoritative
+            && !isCurrentlyUnread
 
         guard unreadState.source.isAuthoritative else {
             entries[sessionID] = entry
             return !entry.isHidden
         }
 
-        if unreadState.unreadThreadIDs.contains(threadID) {
+        if isCurrentlyUnread {
             entry.hasObservedUnread = true
             entry.isHidden = false
         } else if entry.hasObservedUnread
@@ -124,13 +135,12 @@ struct TerminalUnreadMembershipGate: Sendable {
     /// refresh happening to land after it, which is what the one-second poll
     /// was really paying for.
     ///
-    /// Rows that cannot settle are excluded. While the unread state is
-    /// unreadable no amount of waiting hides anything, so reporting their window
-    /// would ask the store to wake for work that will not happen -- and once
-    /// that window is past, to keep waking forever.
+    /// Rows that waiting cannot hide are excluded -- see ``Entry`` -- because
+    /// reporting their window asks the store to wake for work that will not
+    /// happen, and once the window is past, to keep waking forever.
     nonisolated var nextSettlingDeadline: Date? {
         entries.values
-            .filter { !$0.isHidden && $0.canSettle }
+            .filter { !$0.isHidden && $0.canHideByWaiting }
             .map { $0.terminalObservedAt.addingTimeInterval(settlingInterval) }
             .min()
     }

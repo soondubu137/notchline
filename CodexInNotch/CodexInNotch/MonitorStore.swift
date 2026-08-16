@@ -353,6 +353,21 @@ struct ConnectionStabilityGate {
 
         return observedAt.timeIntervalSince(disconnectedSince) >= gracePeriod
     }
+
+    /// When a suppressed disconnect becomes publishable.
+    ///
+    /// Suppressing without arranging to be asked again is the same mistake as
+    /// dropping a refresh request: the grace period only bounds the wait if
+    /// something actually looks again when it expires. Nothing did -- the store
+    /// slept on the service's deadlines, which know nothing about this gate, so
+    /// a real disconnect could sit unpublished until the next unrelated wake-up
+    /// or the 60s heartbeat, rather than the 3s the latency budget documents.
+    ///
+    /// Always clearable: the refresh at this instant either publishes the
+    /// disconnect or observes a recovery, and both clear `disconnectedSince`.
+    var nextPublishDeadline: Date? {
+        disconnectedSince?.addingTimeInterval(gracePeriod)
+    }
 }
 
 @MainActor
@@ -1031,7 +1046,13 @@ final class MonitorStore: ObservableObject {
                 guard !Task.isCancelled, let self else { return }
 
                 let heartbeat = timing.heartbeatInterval
-                let deadline = await service?.nextRefreshDeadline()
+                // The gate's own deadline counts: a suppressed disconnect has
+                // to be re-examined when its grace expires, not whenever the
+                // service happens to want attention next.
+                let deadline = [
+                    await service?.nextRefreshDeadline(),
+                    self.connectionStabilityGate.nextPublishDeadline
+                ].compactMap { $0 }.min()
                 // An overdue deadline is clamped up to the floor, never down to
                 // zero. Sleeping zero here re-runs a full snapshot -- a
                 // LaunchServices round trip on the main thread and several stat

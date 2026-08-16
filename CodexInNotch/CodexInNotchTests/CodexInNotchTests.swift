@@ -6677,3 +6677,139 @@ private final class CodexNavigatorStub: CodexNavigating {
         }
     }
 }
+
+extension CodexInNotchTests {
+    /// A Completed row the user has not read must not ask to be woken for.
+    ///
+    /// Only the user reading it can hide it, and that arrives on the watcher as
+    /// a file change. Reporting its settling window left a deadline
+    /// permanently in the past, which the store clamps to its one-second floor
+    /// -- so the app took a full snapshot every second, including a
+    /// main-thread LaunchServices round trip, for as long as the row was on
+    /// screen. Measured before the fix: 598s in the past and still reported.
+    @Test
+    func terminalGateAsksForNoWakeUpWhileARowIsStillUnread() {
+        var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
+        let start = Date(timeIntervalSince1970: 1_000)
+        let unread = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: ["thread"],
+            source: .current
+        )
+
+        let displayedAtOnce = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: unread, now: start
+        )
+        #expect(displayedAtOnce)
+
+        let later = start.addingTimeInterval(600)
+        let stillDisplayed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: unread, now: later
+        )
+        #expect(stillDisplayed, "an unread terminal row stays listed")
+        #expect(
+            gate.nextSettlingDeadline == nil,
+            "waiting cannot hide an unread row, so it must not schedule a wake-up"
+        )
+    }
+
+    /// The window that *is* real still gets reported, or the row never leaves.
+    @Test
+    func terminalGateStillSchedulesTheWindowItCanActuallyClear() {
+        var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
+        let start = Date(timeIntervalSince1970: 1_000)
+        // Authoritative, and Desktop does not consider it unread: the row is
+        // inside its settling window and waiting really will hide it.
+        let read = DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+
+        let displayed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: read, now: start
+        )
+        #expect(displayed, "a just-finished turn is not hidden instantly")
+        #expect(gate.nextSettlingDeadline == start.addingTimeInterval(2))
+
+        // Once the window passes, the row hides and stops asking to be woken.
+        let hidden = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: read,
+            now: start.addingTimeInterval(2.1)
+        )
+        #expect(!hidden)
+        #expect(gate.nextSettlingDeadline == nil)
+    }
+
+    /// An unreadable state still cannot hide anything, so still no wake-up.
+    @Test
+    func terminalGateAsksForNoWakeUpWhileTheUnreadStateIsUnreadable() {
+        var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
+        let start = Date(timeIntervalSince1970: 1_000)
+        let unreadable = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: [],
+            source: .lastKnownGood
+        )
+
+        let displayed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: unreadable,
+            now: start.addingTimeInterval(600)
+        )
+        #expect(displayed, "an unreadable state must never hide a row")
+        #expect(gate.nextSettlingDeadline == nil)
+    }
+
+    /// A suppressed disconnect has to schedule its own re-examination.
+    ///
+    /// The grace period only bounds the wait if something looks again when it
+    /// expires. The store slept on the service's deadlines, which know nothing
+    /// about this gate, so a real disconnect could sit unpublished until an
+    /// unrelated wake-up or the 60s heartbeat -- against a documented budget
+    /// that counts the grace as 3s.
+    @Test
+    func connectionGateSchedulesItsOwnGraceExpiry() {
+        var gate = ConnectionStabilityGate(gracePeriod: 3)
+        let t0 = Date(timeIntervalSince1970: 1_000)
+
+        #expect(gate.nextPublishDeadline == nil, "nothing suppressed yet")
+
+        let publishedImmediately = gate.shouldPublish(
+            candidate: .disconnected, current: .ready, observedAt: t0
+        )
+        #expect(!publishedImmediately, "a blip is suppressed")
+        #expect(
+            gate.nextPublishDeadline == t0.addingTimeInterval(3),
+            "the suppression must schedule the moment it expires"
+        )
+
+        let publishedAtExpiry = gate.shouldPublish(
+            candidate: .disconnected, current: .ready,
+            observedAt: t0.addingTimeInterval(3)
+        )
+        #expect(publishedAtExpiry)
+
+        // Publishing clears it, so the deadline cannot be re-reported forever.
+        let afterPublish = gate.shouldPublish(
+            candidate: .disconnected, current: .disconnected,
+            observedAt: t0.addingTimeInterval(4)
+        )
+        #expect(afterPublish)
+        #expect(gate.nextPublishDeadline == nil)
+    }
+
+    /// And a recovery inside the grace clears it too.
+    @Test
+    func connectionGateStopsSchedulingWhenTheBlipRecovers() {
+        var gate = ConnectionStabilityGate(gracePeriod: 3)
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        _ = gate.shouldPublish(candidate: .disconnected, current: .ready, observedAt: t0)
+        #expect(gate.nextPublishDeadline != nil)
+
+        let recovered = gate.shouldPublish(
+            candidate: .ready, current: .ready,
+            observedAt: t0.addingTimeInterval(1)
+        )
+        #expect(recovered)
+        #expect(gate.nextPublishDeadline == nil, "a recovery must cancel the wake-up")
+    }
+}
