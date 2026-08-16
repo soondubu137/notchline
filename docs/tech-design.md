@@ -262,6 +262,14 @@ launch
 
 Hook helper 的源码发生版本变化不等于集成未安装。安装器直接把磁盘上的 helper 与本版本内置的定义做内容比较：相同即 `current`；不同且本应用的安装标记存在（`managed-install.json` 只由 `install()` 写入，等于本应用确实安装过；早于该标记的安装以遗留的 `hook-settings.json` 为准）时，只原子升级本应用管理的 helper 文件，不改写 `hooks.json`、不重新要求信任。标记本身不携带任何设置——预览开关已不再落盘。
 
+安装与移除都对用户的 `hooks.json` **fail closed**，由 [`ManagedHooksConfiguration`](../CodexInNotch/CodexInNotch/ManagedHooksConfiguration.swift) 执行，规则只有三条：
+
+1. **只改本应用管理的六个 event key**，其余 key、未知字段、分组内的自定义键一律原样保留。
+2. **看不懂的结构不改**。只有当「必须写入的那个 key 已经是看不懂的结构」时才整体拒绝并返回可见错误——因为写进去就等于覆盖用户的内容。不相关的 event 即使结构奇怪也只是跳过，不构成错误，否则用户将永远无法干净卸载。
+3. **移除侧额外做一次全文深扫**，确认本应用的命令没有残留在任何改不动的形状里。有残留就拒绝，并且**不删除 helper**——删了就是在用户配置里留下悬空引用。
+
+写入前后各有一道保护：写入前比对文件字节是否仍是读取时那份（避免与 Codex `/hooks` 的并发写互相覆盖），写入后重新读回校验六个定义确实存在／确实已清除。无改动时根本不写，避免无谓地重排用户的文件格式。
+
 这里**不再记录内容 hash**。曾经存在的 `managedHookSHA256` 与 helper 位于同一目录、同一属主与权限，能改写 helper 的主体同样能改写该 hash，因此它不提供任何防篡改能力；而 `repairRequired` 并不会把 helper 从 `hooks.json` 注销，Codex 仍会继续执行它。也就是说，遇到被替换的 helper 时，自动升级回内置版本比标记 `repairRequired` 更快地消除外来代码。缺少任一定义、定义结构不精确，或 helper 存在但安装标记缺失（本应用没有安装记录、来源不明）时仍 fail closed 为 `repairRequired`；Settings 总开关显示 Off，用户显式重新开启后才修复。这样应用升级后无需重新接受未改变的受信 helper；但完整注册集合和历史信任本身不能让运行时进入 Ready。只有当前态来源确认集合确实为空时，才能由空集合推导 Idle。
 
 ### 7.3 集合校正时机

@@ -1,0 +1,329 @@
+import Foundation
+
+/// One hook definition this app manages.
+nonisolated struct ManagedHookDefinition: Sendable, Equatable {
+    let event: String
+    let matcher: String?
+
+    nonisolated init(event: String, matcher: String?) {
+        self.event = event
+        self.matcher = matcher
+    }
+}
+
+/// Why an edit to a user's hooks configuration was refused.
+///
+/// Every case here means "we stopped before writing". The previous
+/// implementation had no such vocabulary: it coerced whatever it did not
+/// understand into an empty dictionary and carried on, which is how a valid
+/// JSON file whose root was an array got replaced wholesale.
+nonisolated enum ManagedHooksConfigurationError: LocalizedError, Equatable {
+    case rootIsNotObject
+    case hooksIsNotObject
+    case eventIsNotGroupArray(event: String)
+    case groupHooksAreNotHandlerArray(event: String)
+    case unremovableManagedCommand
+    case changedWhileEditing
+    case verificationFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .rootIsNotObject:
+            "Hook 配置文件的根不是 JSON 对象，已停止写入以免覆盖既有内容。"
+        case .hooksIsNotObject:
+            "Hook 配置文件的 `hooks` 不是 JSON 对象，已停止写入以免覆盖既有内容。"
+        case let .eventIsNotGroupArray(event):
+            "Hook 配置中 `\(event)` 的结构无法识别，已停止写入以免覆盖既有内容。"
+        case let .groupHooksAreNotHandlerArray(event):
+            "Hook 配置中 `\(event)` 的某个分组结构无法识别，已停止写入以免覆盖既有内容。"
+        case .unremovableManagedCommand:
+            "Hook 配置中存在无法安全移除的本应用命令，已保留 helper 以免留下悬空引用。"
+        case .changedWhileEditing:
+            "Hook 配置在本次写入期间被其他程序修改，已放弃写入以免覆盖对方的改动；请重试。"
+        case .verificationFailed:
+            "Hook 配置写入后校验未通过，请检查 ~/.codex/hooks.json。"
+        }
+    }
+}
+
+/// Adds and removes exactly this app's hook definitions inside a configuration
+/// file that belongs to the user.
+///
+/// The contract is narrow on purpose: **only the managed definitions may be
+/// touched, and anything this type cannot positively identify is left byte for
+/// byte alone.** Where it cannot honour that -- because a key it must write
+/// already holds a shape it does not understand -- it refuses the whole edit
+/// rather than guessing.
+///
+/// That strictness is not theoretical tidiness. This same shape of merge is
+/// what a second agent's configuration would need, and such a file typically
+/// carries far more than hooks, so "coerce anything unexpected to empty" is a
+/// data-loss bug waiting for a bigger file to happen to.
+nonisolated struct ManagedHooksConfiguration: Sendable {
+    let command: String
+    let definitions: [ManagedHookDefinition]
+    /// Written into a file this app creates, and never into one it did not.
+    let descriptionForNewFiles: String
+
+    nonisolated init(
+        command: String,
+        definitions: [ManagedHookDefinition],
+        descriptionForNewFiles: String = "User-level Codex lifecycle hooks."
+    ) {
+        self.command = command
+        self.definitions = definitions
+        self.descriptionForNewFiles = descriptionForNewFiles
+    }
+
+    /// The handler entry this build installs.
+    nonisolated var managedHandler: [String: Any] {
+        [
+            "type": "command",
+            "command": command,
+            "timeout": 3
+        ]
+    }
+
+    // MARK: - Install
+
+    /// Returns `root` with exactly one current definition per managed event.
+    ///
+    /// Any earlier copy of this app's handler is removed first, so installing
+    /// twice cannot accumulate duplicates.
+    nonisolated func installing(
+        into root: [String: Any],
+        isNewFile: Bool
+    ) throws -> [String: Any] {
+        var root = root
+        var hooks = try validatedHooks(in: root)
+
+        hooks = try strippingManagedHandlers(from: hooks, strictEvents: managedEventNames)
+
+        // Nothing this app wrote may survive the strip. If a copy of the
+        // command is still reachable, it sits in a structure this type cannot
+        // edit, and installing on top of it would register the hook twice.
+        if Self.contains(command: command, in: hooks) {
+            throw ManagedHooksConfigurationError.unremovableManagedCommand
+        }
+
+        for definition in definitions {
+            var groups = try validatedGroups(for: definition.event, in: hooks)
+            var group: [String: Any] = ["hooks": [managedHandler]]
+            if let matcher = definition.matcher {
+                group["matcher"] = matcher
+            }
+            groups.append(group)
+            hooks[definition.event] = groups
+        }
+
+        root["hooks"] = hooks
+        // Only ever stamped on a file this app just created. Adding a
+        // description to a file somebody else owns is outside the boundary,
+        // however harmless it looks.
+        if isNewFile, root["description"] == nil {
+            root["description"] = descriptionForNewFiles
+        }
+        return root
+    }
+
+    // MARK: - Remove
+
+    /// Returns `root` with every copy of this app's handler removed.
+    ///
+    /// Throws rather than returning a partial result, because the caller
+    /// deletes the helper script afterwards: a silent partial removal is how
+    /// `hooks.json` ends up pointing at a script that no longer exists.
+    nonisolated func removing(from root: [String: Any]) throws -> [String: Any] {
+        var root = root
+        guard root["hooks"] != nil else {
+            // No hooks at all is a clean state, but only if the command is not
+            // hiding somewhere else in the document.
+            if Self.contains(command: command, in: root) {
+                throw ManagedHooksConfigurationError.unremovableManagedCommand
+            }
+            return root
+        }
+
+        var hooks = try validatedHooks(in: root)
+        // No event is strict here, deliberately. Removal writes no key of its
+        // own, so an event whose shape this type cannot read is one it can
+        // simply leave alone -- and refusing on account of it would mean a user
+        // with any unusual event could never cleanly uninstall. The deep scan
+        // below is what makes that safe: it finds anything of ours that
+        // survived, in any shape, and turns it into a refusal.
+        hooks = try strippingManagedHandlers(from: hooks, strictEvents: [])
+
+        if Self.contains(command: command, in: hooks) {
+            throw ManagedHooksConfigurationError.unremovableManagedCommand
+        }
+
+        if hooks.isEmpty {
+            root.removeValue(forKey: "hooks")
+        } else {
+            root["hooks"] = hooks
+        }
+
+        if Self.contains(command: command, in: root) {
+            throw ManagedHooksConfigurationError.unremovableManagedCommand
+        }
+        return root
+    }
+
+    // MARK: - Verification
+
+    /// Whether `root` holds exactly one current definition per managed event.
+    nonisolated func isFullyInstalled(in root: [String: Any]) -> Bool {
+        guard let hooks = root["hooks"] as? [String: Any] else { return false }
+        return definitions.allSatisfy { definition in
+            guard let groups = hooks[definition.event] as? [[String: Any]] else {
+                return false
+            }
+            let matches = groups.reduce(into: 0) { count, group in
+                guard matcher(in: group, matches: definition.matcher) else { return }
+                let handlers = group["hooks"] as? [[String: Any]] ?? []
+                count += handlers.filter(isManagedHandler).count
+            }
+            return matches == 1
+        }
+    }
+
+    /// Whether any trace of this app's command remains anywhere in `root`.
+    nonisolated func isFullyRemoved(from root: [String: Any]) -> Bool {
+        !Self.contains(command: command, in: root)
+    }
+
+    nonisolated func isManagedHandler(_ handler: [String: Any]) -> Bool {
+        (handler["type"] as? String) == "command"
+            && (handler["command"] as? String) == command
+    }
+
+    // MARK: - Validation
+
+    nonisolated private var managedEventNames: Set<String> {
+        Set(definitions.map(\.event))
+    }
+
+    nonisolated private func validatedHooks(
+        in root: [String: Any]
+    ) throws -> [String: Any] {
+        guard let existing = root["hooks"] else { return [:] }
+        guard let hooks = existing as? [String: Any] else {
+            throw ManagedHooksConfigurationError.hooksIsNotObject
+        }
+        return hooks
+    }
+
+    /// The groups already registered for one managed event.
+    ///
+    /// Absent is fine. Present but not an array of objects is not: writing our
+    /// group would mean replacing whatever is there, which is exactly the
+    /// data loss this type exists to prevent.
+    nonisolated private func validatedGroups(
+        for event: String,
+        in hooks: [String: Any]
+    ) throws -> [[String: Any]] {
+        guard let existing = hooks[event] else { return [] }
+        guard let groups = existing as? [[String: Any]] else {
+            throw ManagedHooksConfigurationError.eventIsNotGroupArray(event: event)
+        }
+        for group in groups where group["hooks"] != nil {
+            guard group["hooks"] is [[String: Any]] else {
+                throw ManagedHooksConfigurationError.groupHooksAreNotHandlerArray(
+                    event: event
+                )
+            }
+        }
+        return groups
+    }
+
+    /// Removes this app's handlers from every event it can parse.
+    ///
+    /// `strictEvents` are the events where an unparseable shape is an error
+    /// instead of something to leave alone -- the ones this call is going to
+    /// write to, or, on removal, all of them.
+    nonisolated private func strippingManagedHandlers(
+        from hooks: [String: Any],
+        strictEvents: Set<String>
+    ) throws -> [String: Any] {
+        var hooks = hooks
+
+        for event in hooks.keys.sorted() {
+            guard let value = hooks[event] else { continue }
+            guard let groups = value as? [[String: Any]] else {
+                if strictEvents.contains(event) {
+                    throw ManagedHooksConfigurationError.eventIsNotGroupArray(
+                        event: event
+                    )
+                }
+                // Not a shape this app could have written, so there is nothing
+                // of ours to take out and nothing we are entitled to change.
+                continue
+            }
+
+            var retained: [[String: Any]] = []
+            for group in groups {
+                guard let handlers = group["hooks"] else {
+                    retained.append(group)
+                    continue
+                }
+                guard let handlerObjects = handlers as? [[String: Any]] else {
+                    if strictEvents.contains(event) {
+                        throw ManagedHooksConfigurationError
+                            .groupHooksAreNotHandlerArray(event: event)
+                    }
+                    retained.append(group)
+                    continue
+                }
+
+                let survivors = handlerObjects.filter { !isManagedHandler($0) }
+                if survivors.isEmpty {
+                    // The group existed only to carry our handler, so it goes
+                    // with it. A group that had other handlers keeps them.
+                    if handlerObjects.isEmpty {
+                        retained.append(group)
+                    }
+                    continue
+                }
+                var updated = group
+                updated["hooks"] = survivors
+                retained.append(updated)
+            }
+
+            if retained.isEmpty {
+                hooks.removeValue(forKey: event)
+            } else {
+                hooks[event] = retained
+            }
+        }
+        return hooks
+    }
+
+    nonisolated private func matcher(
+        in group: [String: Any],
+        matches expectedMatcher: String?
+    ) -> Bool {
+        if let expectedMatcher {
+            return (group["matcher"] as? String) == expectedMatcher
+        }
+        return group["matcher"] == nil
+    }
+
+    /// Finds `command` anywhere in an arbitrary JSON value.
+    ///
+    /// This is the safety net that makes the whole type trustworthy: the
+    /// structured editing above only reaches shapes it understands, so this
+    /// answers "did anything of ours survive in a shape we could not touch"
+    /// without needing to understand that shape at all.
+    nonisolated static func contains(command: String, in value: Any) -> Bool {
+        switch value {
+        case let string as String:
+            return string == command
+        case let array as [Any]:
+            return array.contains { contains(command: command, in: $0) }
+        case let object as [String: Any]:
+            return object.values.contains { contains(command: command, in: $0) }
+        default:
+            return false
+        }
+    }
+}

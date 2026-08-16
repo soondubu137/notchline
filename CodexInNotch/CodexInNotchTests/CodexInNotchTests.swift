@@ -4026,6 +4026,379 @@ for line in sys.stdin:
         #expect(launchCount == "1")
     }
 
+    /// Configurations this app must refuse to edit rather than guess at.
+    ///
+    /// Every one of these is *valid JSON* -- malformed JSON already failed
+    /// closed. These are the shapes the old implementation coerced away with
+    /// `as? [String: Any] ?? [:]`, each of which silently replaced content the
+    /// user owned.
+    private static let hostileHookConfigurations: [(name: String, json: String)] = [
+        (
+            "root is an array",
+            #"["not", "an", "object"]"#
+        ),
+        (
+            "hooks is a string",
+            #"{"hooks": "please do not eat this"}"#
+        ),
+        (
+            "hooks is an array",
+            #"{"hooks": [{"Stop": []}]}"#
+        ),
+        (
+            "a managed event holds a string",
+            #"{"hooks": {"Stop": "run-my-own-thing.sh"}}"#
+        ),
+        (
+            "a managed event holds an array of strings",
+            #"{"hooks": {"PreToolUse": ["do-a-thing"]}}"#
+        ),
+        (
+            "a managed event's group hooks is a string",
+            #"{"hooks": {"Stop": [{"hooks": "not-an-array"}]}}"#
+        ),
+        (
+            "a managed event's group hooks mixes objects and strings",
+            #"{"hooks": {"Stop": [{"hooks": [{"type": "command"}, "stray"]}]}}"#
+        )
+    ]
+
+    /// Installing must never damage a configuration it does not understand.
+    ///
+    /// This is the CR-013 regression, and it matters well beyond Codex: the
+    /// same merge shape is what a second agent's configuration would need, and
+    /// those files carry far more than hooks.
+    @Test @MainActor
+    func installRefusesUnparseableConfigurationsAndLeavesThemByteIdentical() async throws {
+        for hostile in Self.hostileHookConfigurations {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            try FileManager.default.createDirectory(
+                at: paths.hooksConfiguration.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let originalBytes = Data(hostile.json.utf8)
+            try originalBytes.write(to: paths.hooksConfiguration)
+
+            let installer = CodexHookInstaller(paths: paths)
+            var refused = false
+            do {
+                try await installer.install()
+            } catch {
+                refused = true
+            }
+
+            let afterBytes = try Data(contentsOf: paths.hooksConfiguration)
+            #expect(refused, "install should refuse when \(hostile.name)")
+            #expect(
+                afterBytes == originalBytes,
+                "install rewrote the file when \(hostile.name)"
+            )
+        }
+    }
+
+    /// Uninstalling must never corrupt the file and never leave a dangling
+    /// command, whatever shape it meets.
+    ///
+    /// Asserted as the invariant rather than the mechanism, because there are
+    /// two legitimate outcomes. If nothing of this app's is present, uninstall
+    /// may proceed and must not touch the file. If something is present but
+    /// unreachable, it must refuse and keep the helper. What it may never do is
+    /// rewrite the file or delete a helper that is still referenced -- which is
+    /// exactly what the old code did, silently.
+    @Test @MainActor
+    func uninstallNeverCorruptsTheConfigurationOrStrandsTheHelper() async throws {
+        for hostile in Self.hostileHookConfigurations {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            try FileManager.default.createDirectory(
+                at: paths.hooksConfiguration.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+
+            // A completed install, so there is a helper to strand.
+            let installer = CodexHookInstaller(paths: paths)
+            try await installer.install()
+            #expect(FileManager.default.isExecutableFile(atPath: paths.script.path))
+
+            // Then the configuration turns into something unreadable.
+            let originalBytes = Data(hostile.json.utf8)
+            try originalBytes.write(to: paths.hooksConfiguration)
+            let managedCommand = "/usr/bin/python3 \"\(paths.script.path)\""
+
+            var refused = false
+            do {
+                try await installer.uninstall()
+            } catch {
+                refused = true
+            }
+
+            let afterBytes = try Data(contentsOf: paths.hooksConfiguration)
+            #expect(
+                afterBytes == originalBytes,
+                "uninstall rewrote the file when \(hostile.name)"
+            )
+            if refused {
+                #expect(
+                    FileManager.default.fileExists(atPath: paths.script.path),
+                    "uninstall refused but still deleted the helper when \(hostile.name)"
+                )
+            } else {
+                // Proceeding is only allowed when nothing referenced the helper.
+                let remaining = try #require(
+                    String(data: afterBytes, encoding: .utf8)
+                )
+                #expect(
+                    !remaining.contains(paths.script.path),
+                    "uninstall deleted a helper the file still references when \(hostile.name)"
+                )
+            }
+        }
+    }
+
+    /// The three shapes where the document itself cannot be read must always
+    /// refuse, because proceeding would mean writing over it.
+    @Test @MainActor
+    func uninstallRefusesWhenTheDocumentItselfCannotBeRead() async throws {
+        let unreadable = [
+            #"["not", "an", "object"]"#,
+            #"{"hooks": "please do not eat this"}"#,
+            #"{"hooks": [{"Stop": []}]}"#
+        ]
+        for json in unreadable {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            try FileManager.default.createDirectory(
+                at: paths.hooksConfiguration.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let installer = CodexHookInstaller(paths: paths)
+            try await installer.install()
+            try Data(json.utf8).write(to: paths.hooksConfiguration)
+
+            var refused = false
+            do {
+                try await installer.uninstall()
+            } catch {
+                refused = true
+            }
+            #expect(refused, "uninstall should refuse: \(json)")
+            #expect(FileManager.default.fileExists(atPath: paths.script.path))
+            #expect(try Data(contentsOf: paths.hooksConfiguration) == Data(json.utf8))
+        }
+    }
+
+    /// The command hiding somewhere the structured editor cannot reach.
+    ///
+    /// The deep scan is what makes the guarantee total: the editor only walks
+    /// shapes it understands, so this answers "did anything of ours survive
+    /// somewhere we could not touch" without needing to understand that shape.
+    @Test @MainActor
+    func uninstallRefusesWhenTheManagedCommandHidesInAnUnreachableShape() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.hooksConfiguration.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install()
+        let managedCommand = "/usr/bin/python3 \"\(paths.script.path)\""
+
+        // A hand-written copy of our command in a group shape the editor
+        // deliberately refuses to rewrite: an unrelated event whose handler
+        // array mixes objects with something else.
+        let data = try Data(contentsOf: paths.hooksConfiguration)
+        var root = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        var hooks = try #require(root["hooks"] as? [String: Any])
+        hooks["SomeOtherEvent"] = [
+            ["hooks": [["type": "command", "command": managedCommand], "stray"]]
+        ]
+        root["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted])
+            .write(to: paths.hooksConfiguration)
+        let beforeBytes = try Data(contentsOf: paths.hooksConfiguration)
+
+        var refused = false
+        do {
+            try await installer.uninstall()
+        } catch {
+            refused = true
+        }
+
+        #expect(refused)
+        #expect(try Data(contentsOf: paths.hooksConfiguration) == beforeBytes)
+        #expect(FileManager.default.fileExists(atPath: paths.script.path))
+    }
+
+    /// Everything outside the six managed definitions survives a round trip.
+    @Test @MainActor
+    func installAndUninstallPreserveEverythingTheyDoNotManage() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.hooksConfiguration.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        // Deliberately busy, the way a real user's file is: settings this app
+        // knows nothing about, a user handler inside an event this app also
+        // manages, an event shape it cannot parse, and unknown keys at every
+        // level.
+        let existing: [String: Any] = [
+            "description": "my own description",
+            "permissions": ["allow": ["Bash(ls:*)"]],
+            "unknownTopLevel": ["deeply": ["nested": 42]],
+            "hooks": [
+                "Stop": [[
+                    "matcher": "mine",
+                    "customGroupKey": "keep me",
+                    "hooks": [[
+                        "type": "command",
+                        "command": "/usr/bin/true",
+                        "customHandlerKey": "keep me too"
+                    ]]
+                ]],
+                "UserPromptSubmit": [[
+                    "hooks": [["type": "command", "command": "/usr/bin/false"]]
+                ]],
+                "SomeEventWeCannotParse": "a bare string"
+            ]
+        ]
+        let originalRoot = existing
+        try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+            .write(to: paths.hooksConfiguration)
+
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install()
+
+        let installedRoot = try #require(
+            JSONSerialization.jsonObject(
+                with: try Data(contentsOf: paths.hooksConfiguration)
+            ) as? [String: Any]
+        )
+        let installedHooks = try #require(installedRoot["hooks"] as? [String: Any])
+
+        // Untouched settings, including one this app has no concept of.
+        #expect(installedRoot["description"] as? String == "my own description")
+        #expect(
+            (installedRoot["permissions"] as? [String: Any])?["allow"] as? [String]
+                == ["Bash(ls:*)"]
+        )
+        #expect(installedRoot["unknownTopLevel"] as? [String: Any] != nil)
+        // An event shape it cannot parse is left exactly as found rather than
+        // treated as an error -- this app could never have written there.
+        #expect(installedHooks["SomeEventWeCannotParse"] as? String == "a bare string")
+
+        // The user's own handlers survive inside events this app also manages.
+        func commands(_ event: String, in hooks: [String: Any]) -> [String] {
+            (hooks[event] as? [[String: Any]] ?? []).flatMap { group in
+                (group["hooks"] as? [[String: Any]] ?? []).compactMap {
+                    $0["command"] as? String
+                }
+            }
+        }
+        #expect(commands("Stop", in: installedHooks).contains("/usr/bin/true"))
+        #expect(
+            commands("UserPromptSubmit", in: installedHooks).contains("/usr/bin/false")
+        )
+        // And their sibling keys are not rewritten.
+        let stopGroups = try #require(installedHooks["Stop"] as? [[String: Any]])
+        let userGroup = try #require(
+            stopGroups.first { $0["customGroupKey"] as? String == "keep me" }
+        )
+        #expect(userGroup["matcher"] as? String == "mine")
+        let userHandler = try #require(
+            (userGroup["hooks"] as? [[String: Any]])?.first
+        )
+        #expect(userHandler["customHandlerKey"] as? String == "keep me too")
+
+        try await installer.uninstall()
+
+        let finalRoot = try #require(
+            JSONSerialization.jsonObject(
+                with: try Data(contentsOf: paths.hooksConfiguration)
+            ) as? [String: Any]
+        )
+        let finalHooks = try #require(finalRoot["hooks"] as? [String: Any])
+
+        #expect(finalRoot["description"] as? String == "my own description")
+        #expect(finalRoot["unknownTopLevel"] as? [String: Any] != nil)
+        #expect(finalHooks["SomeEventWeCannotParse"] as? String == "a bare string")
+        #expect(commands("Stop", in: finalHooks) == ["/usr/bin/true"])
+        #expect(commands("UserPromptSubmit", in: finalHooks) == ["/usr/bin/false"])
+        // Nothing of this app's may remain anywhere in the document.
+        let managedCommand = "/usr/bin/python3 \"\(paths.script.path)\""
+        #expect(
+            !ManagedHooksConfiguration.contains(command: managedCommand, in: finalRoot)
+        )
+        // The events this app added and then removed are gone entirely rather
+        // than left as empty arrays.
+        #expect(finalHooks["PreToolUse"] == nil)
+        #expect(finalHooks["PermissionRequest"] == nil)
+        _ = originalRoot
+    }
+
+    /// A description is this app's to write only on a file it created.
+    @Test @MainActor
+    func descriptionIsStampedOnlyOnAFileThisAppCreated() async throws {
+        let created = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: created.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try await CodexHookInstaller(paths: created).install()
+        let createdRoot = try #require(
+            JSONSerialization.jsonObject(
+                with: try Data(contentsOf: created.hooksConfiguration)
+            ) as? [String: Any]
+        )
+        #expect(createdRoot["description"] as? String != nil)
+
+        let adopted = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: adopted.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: adopted.hooksConfiguration.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"hooks": {}}"#.utf8).write(to: adopted.hooksConfiguration)
+        try await CodexHookInstaller(paths: adopted).install()
+        let adoptedRoot = try #require(
+            JSONSerialization.jsonObject(
+                with: try Data(contentsOf: adopted.hooksConfiguration)
+            ) as? [String: Any]
+        )
+        #expect(adoptedRoot["description"] == nil)
+    }
+
     @Test @MainActor
     func hookInstallerMergesExistingConfigurationAndIsIdempotent() async throws {
         let paths = makeTemporaryHookPaths()
