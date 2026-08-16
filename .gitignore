@@ -6,8 +6,10 @@ Icon?
 .Spotlight-V100
 .Trashes
 
-/development-guideline.md
+/docs/development-guideline.md
 
-# Local grill-with-docs outputs
-/CONTEXT.md
-/docs/adr/
+# Xcode per-user state
+xcuserdata/
+
+# Build and coverage artifacts
+*.profraw
