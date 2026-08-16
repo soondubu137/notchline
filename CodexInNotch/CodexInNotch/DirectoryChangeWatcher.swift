@@ -1,6 +1,7 @@
 import Darwin
 import Dispatch
 import Foundation
+import OSLog
 
 /// Coalesced change notifications for one directory.
 ///
@@ -10,9 +11,29 @@ import Foundation
 /// trailing debounce collapses the burst a replace produces into one signal.
 ///
 /// The stream is a low-latency hint, never a source of truth: a caller that
-/// misses an event still converges on its next poll.
+/// misses an event still converges on its next refresh.
+///
+/// **Attachment is not assumed to succeed, and not assumed to last.** It used
+/// to be attempted exactly once, in `init`, and a failure was permanent: on a
+/// first run the Hook event directory does not exist yet -- it is created by
+/// the installer, minutes later -- so the watcher was dead for the rest of the
+/// process and every turn waited out a refresh deadline instead (CR-025). The
+/// same applied after the directory was replaced or deleted, since a descriptor
+/// keeps pointing at the old inode (CR-018).
+///
+/// Re-attaching is driven by two things and no timer of its own: the source
+/// itself reports `rename`/`delete`, and callers invoke ``attachIfNeeded()`` on
+/// work they were already doing. A watcher that cannot attach therefore costs
+/// one failed `open` per refresh rather than a wake-up of its own -- which
+/// matters, because idle cost is a product constraint here.
 final class DirectoryChangeWatcher: @unchecked Sendable {
+    nonisolated private static let logger = Logger(
+        subsystem: "com.yinfenglu.CodexInNotch",
+        category: "DirectoryChangeWatcher"
+    )
+
     private let lock = NSLock()
+    nonisolated private let directoryURL: URL
     private let queue = DispatchQueue(
         label: "com.yinfenglu.codex-in-notch.directory-watcher"
     )
@@ -22,11 +43,49 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
         UUID: AsyncStream<Void>.Continuation
     ] = [:]
     nonisolated(unsafe) private var pendingDelivery: DispatchWorkItem?
+    nonisolated(unsafe) private var isFinished = false
+    nonisolated(unsafe) private var lastAttachFailurePath: String?
 
     nonisolated init(directoryURL: URL, debounceInterval: TimeInterval) {
+        self.directoryURL = directoryURL
         self.debounceInterval = debounceInterval
+        attachIfNeeded()
+    }
+
+    /// Attaches if not already attached. Cheap and safe to call repeatedly.
+    ///
+    /// Returns whether the watcher is attached when it returns, so a caller can
+    /// tell "low-latency path is live" from "falling back to refresh deadlines".
+    @discardableResult
+    nonisolated func attachIfNeeded() -> Bool {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return false
+        }
+        if source != nil {
+            lock.unlock()
+            return true
+        }
+
+        // `open` happens under the lock so two callers cannot both create a
+        // source. A dispatch source starts suspended, and dropping a suspended
+        // source without resuming it traps in libdispatch, so losing a race
+        // here is not something that can be cleaned up after the fact.
         let descriptor = open(directoryURL.path, O_EVTONLY)
-        guard descriptor >= 0 else { return }
+        guard descriptor >= 0 else {
+            let shouldLog = lastAttachFailurePath != directoryURL.path
+            lastAttachFailurePath = directoryURL.path
+            lock.unlock()
+            if shouldLog {
+                // Once per path, not once per attempt: this is the expected
+                // state before the integration is installed.
+                Self.logger.info(
+                    "Directory watcher not attached; falling back to refresh deadlines until it appears"
+                )
+            }
+            return false
+        }
 
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
@@ -34,26 +93,41 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
             queue: queue
         )
         source.setEventHandler { [weak self] in
-            self?.scheduleDelivery()
+            self?.handleFileSystemEvent()
         }
         source.setCancelHandler {
             close(descriptor)
         }
         self.source = source
+        lastAttachFailurePath = nil
+        lock.unlock()
+
+        // Resumed outside the lock: the handler takes the same lock.
         source.resume()
+        return true
+    }
+
+    nonisolated var isAttached: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return source != nil
     }
 
     nonisolated func events() -> AsyncStream<Void> {
         AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let identifier = UUID()
             lock.lock()
-            let isAvailable = source != nil
-            if isAvailable {
+            let isFinished = self.isFinished
+            if !isFinished {
                 continuations[identifier] = continuation
             }
             lock.unlock()
 
-            guard isAvailable else {
+            // Subscribing is no longer refused just because the watcher is
+            // currently detached. It may attach later -- on a first run it
+            // always does, once the installer creates the directory -- and a
+            // stream finished at subscription time could never deliver that.
+            guard !isFinished else {
                 continuation.finish()
                 return
             }
@@ -65,6 +139,7 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
 
     deinit {
         lock.lock()
+        isFinished = true
         let source = source
         self.source = nil
         pendingDelivery?.cancel()
@@ -77,11 +152,45 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
         source?.cancel()
     }
 
+    /// Handles one batch of file system events.
+    ///
+    /// A `rename` or `delete` means the descriptor no longer refers to the
+    /// directory at this path -- the inode is still open, but nothing will ever
+    /// be written to it again. Re-opening by path is what keeps the watcher
+    /// alive across an uninstall/reinstall, or across Codex replacing its state
+    /// directory wholesale.
+    nonisolated private func handleFileSystemEvent() {
+        lock.lock()
+        let mask = source?.data ?? []
+        lock.unlock()
+
+        if mask.contains(.rename) || mask.contains(.delete) {
+            queue.async { [weak self] in
+                guard let self else { return }
+                self.detach()
+                self.attachIfNeeded()
+            }
+        }
+        scheduleDelivery()
+    }
+
+    nonisolated private func detach() {
+        lock.lock()
+        let source = source
+        self.source = nil
+        lock.unlock()
+        source?.cancel()
+    }
+
     // The debounce below stays on GCD wall time deliberately: it coalesces
     // filesystem events on the watcher's own queue and makes no product timing
     // decision, so routing it through MonitorClock would buy nothing.
     nonisolated private func scheduleDelivery() {
         lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
         pendingDelivery?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             self?.deliver()

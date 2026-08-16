@@ -61,7 +61,8 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 生产实现采用以下架构：
 
 1. `CodexDesktopUnreadStateRepository` 默认只读 `$CODEX_HOME/.codex-global-state.json`，并支持测试/隔离环境用 `CODEX_IN_NOTCH_CODEX_HOME` 覆盖 Codex Home。
-2. 目录级 `DispatchSourceFileSystemObject` + `O_EVTONLY` 监听 Codex Home，而不是长期监听目标文件 inode；目录事件采用 `250 ms` trailing debounce 并触发刷新。现有 Hook 活跃期 1 秒轮询是 watcher 无法建立或事件被合并时的兜底。
+2. 目录级 `DispatchSourceFileSystemObject` + `O_EVTONLY` 监听 Codex Home，而不是长期监听目标文件 inode；目录事件采用 `250 ms` trailing debounce 并触发刷新。watcher 挂不上时的兜底是 `nextRefreshDeadline()` 与 60 秒心跳，不是轮询。
+   **挂载不是一次性的。** 目录不存在（首次运行时 Hook 事件目录要等安装器创建）或被删除／替换（卸载后重装、Codex 整体换掉状态目录）都必须能恢复：watcher 收到 `rename`／`delete` 就重开描述符，`HookEventRepository.consumeEvents` 与未读 repository 的 `snapshot` 也各自在本来就要做的那次刷新上顺手重试一次，安装成功后再显式催一次。**刻意不设自己的重试定时器**——挂不上的代价因此是每次刷新一个失败的 `open`，而不是一个额外的唤醒源。
 3. 只解析 `local` host 的字符串集合，同时校验所有 host 名称、空 id 与重复 id。读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、异常 JSON 与不兼容 schema；不记录原始 JSON 或 Thread id。
 4. 主文件失败时读取 `.bak`，两者失败时保留进程内 last-known-good。但 backup 和 last-known-good 只用于保留数据与诊断，只有 `source == current` 的主文件快照可以做新的隐藏决定；解析失败绝不能解释为空集合。
 5. 活动、Input、Approval 始终显示并清除该 Turn 的终态 gate。终态首次出现且主文件暂未包含 unread 时保留 2 秒，覆盖 Desktop 约 500 ms 的持久化延迟；已经观察过 unread 后再从权威主快照消失则立即隐藏。隐藏 gate 在临时解析失败时保持隐藏，避免 UI 闪回；新终态在失败期间继续显示。

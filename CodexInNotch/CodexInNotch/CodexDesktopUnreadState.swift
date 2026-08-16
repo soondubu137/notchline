@@ -265,6 +265,12 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
     }
 
     func snapshot() async -> DesktopUnreadStateSnapshot {
+        // Same reason as the Hook event queue: the watcher may have failed to
+        // attach at launch, or Codex may have replaced this directory since.
+        // Retrying on a read that was happening anyway restores the 250 ms
+        // unread path without a wake-up of its own (CR-018).
+        directoryWatcher.attachIfNeeded()
+
         let primaryRevision = try? revision(of: stateFileURL)
         if primaryRevision != nil,
            primaryRevision == lastSuccessfulPrimaryRevision,

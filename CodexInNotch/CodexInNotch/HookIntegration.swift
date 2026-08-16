@@ -819,6 +819,20 @@ actor HookEventRepository {
         previewChannel.start()
     }
 
+    /// Attaches the event-queue watcher, for the same reason.
+    ///
+    /// Called the moment the installer creates the directory, so the first turn
+    /// after setup is delivered immediately rather than waiting out a refresh
+    /// deadline. ``consumeEvents`` also retries, as a backstop.
+    @discardableResult
+    nonisolated func attachEventWatcher() -> Bool {
+        eventsWatcher.attachIfNeeded()
+    }
+
+    nonisolated var isEventWatcherAttached: Bool {
+        eventsWatcher.isAttached
+    }
+
     nonisolated func stopPreviewChannel() {
         previewChannel.stop()
     }
@@ -842,6 +856,13 @@ actor HookEventRepository {
     }
 
     func consumeEvents() -> HookStateSnapshot {
+        // Every refresh is a chance to pick the low-latency path back up. On a
+        // first run the directory does not exist until the installer creates
+        // it, so the attach attempted at launch necessarily failed; piggybacking
+        // on the refresh that was happening anyway costs one `open` and needs no
+        // timer of its own.
+        eventsWatcher.attachIfNeeded()
+
         let urls = (try? fileManager.contentsOfDirectory(
             at: paths.eventsDirectory,
             includingPropertiesForKeys: nil,

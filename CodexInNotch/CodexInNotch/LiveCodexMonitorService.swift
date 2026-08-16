@@ -394,10 +394,13 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
 
     func installHooks() async throws {
         try await hookInstaller.install()
-        // The support directory exists now. On a first run the preview socket
-        // could not bind at launch because there was nowhere to bind it, so
-        // this is the moment it becomes possible.
+        // The support directory exists now. On a first run neither the preview
+        // socket nor the event-queue watcher could bind at launch, because
+        // there was nowhere to bind them; this is the moment it becomes
+        // possible, and doing it here is what keeps the first turn after setup
+        // from waiting out a refresh deadline.
         hookEvents.startPreviewChannel()
+        hookEvents.attachEventWatcher()
     }
 
     func removeHooks() async throws {

@@ -4026,6 +4026,137 @@ for line in sys.stdin:
         #expect(launchCount == "1")
     }
 
+    /// A watcher built before its directory exists must still come to life.
+    ///
+    /// This is the CR-025 shape exactly: the Hook event directory is created by
+    /// the installer, minutes after the watcher is constructed at launch. The
+    /// old code opened once in `init` and treated failure as permanent, so on a
+    /// first run the low-latency path was dead for the whole process.
+    @Test
+    func watcherAttachesAfterItsDirectoryAppearsAndDeliversToExistingSubscribers() async throws {
+        let root = makeTemporaryWatchRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("events")
+
+        let watcher = DirectoryChangeWatcher(
+            directoryURL: directory,
+            debounceInterval: 0.05
+        )
+        #expect(!watcher.isAttached)
+
+        // Subscribing while detached must yield a live stream, not a finished
+        // one -- the old `events()` refused and could never recover.
+        let stream = watcher.events()
+
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        #expect(watcher.attachIfNeeded())
+        #expect(watcher.isAttached)
+
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("a.json"))
+        #expect(await receivesChange(stream))
+    }
+
+    /// Deleting and recreating the directory is the uninstall/reinstall path.
+    @Test
+    func watcherReattachesAfterItsDirectoryIsDeletedAndRecreated() async throws {
+        let root = makeTemporaryWatchRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("events")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+
+        let watcher = DirectoryChangeWatcher(
+            directoryURL: directory,
+            debounceInterval: 0.05
+        )
+        #expect(watcher.isAttached)
+        let stream = watcher.events()
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("a.json"))
+        #expect(await receivesChange(stream))
+
+        // Uninstall removes the directory. The descriptor now refers to an
+        // inode nothing will ever write to again.
+        try FileManager.default.removeItem(at: directory)
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        // Reinstall recreates it.
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        #expect(watcher.attachIfNeeded())
+
+        let secondStream = watcher.events()
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("b.json"))
+        #expect(await receivesChange(secondStream))
+    }
+
+    /// The end-to-end first run: repository at launch, install, then a hook.
+    @Test
+    func hookEventsReachTheLowLatencyPathOnAFirstRunInstall() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        #expect(
+            !FileManager.default.fileExists(atPath: paths.eventsDirectory.path),
+            "the support directory must not exist yet for this to be a first run"
+        )
+
+        // Constructed at launch, before onboarding has installed anything.
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        #expect(!repository.isEventWatcherAttached)
+        let stream = repository.changeEvents()
+
+        // Onboarding installs, which is what creates the event directory.
+        try await CodexHookInstaller(paths: paths).install()
+        #expect(repository.attachEventWatcher())
+        #expect(repository.isEventWatcherAttached)
+
+        // The very next hook must arrive on the watcher rather than waiting out
+        // a refresh deadline.
+        try Data(#"{"received_at": 1}"#.utf8).write(
+            to: paths.eventsDirectory.appendingPathComponent("1.json")
+        )
+        #expect(await receivesChange(stream))
+    }
+
+    /// A refresh re-attaches on its own, so the explicit nudge is a latency
+    /// optimisation rather than the only route back.
+    @Test
+    func consumingEventsReattachesAWatcherThatCouldNotBindAtLaunch() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        #expect(!repository.isEventWatcherAttached)
+
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+        // No explicit attach: just the refresh the store performs anyway.
+        _ = await repository.consumeEvents()
+        #expect(repository.isEventWatcherAttached)
+    }
+
     /// Configurations this app must refuse to edit rather than guess at.
     ///
     /// Every one of these is *valid JSON* -- malformed JSON already failed
@@ -5667,6 +5798,38 @@ for line in sys.stdin:
                 : nil,
             fallbackMenuBarHeight: 22
         )
+    }
+
+    /// Whether a change stream delivers at least one signal in time.
+    ///
+    /// Bounded so a regression reports as a failure rather than hanging the
+    /// suite. `AsyncStream`'s build closure runs during `events()`, so the
+    /// continuation is registered before the caller mutates anything and a
+    /// signal that arrives first is buffered rather than lost.
+    private func receivesChange(
+        _ stream: AsyncStream<Void>,
+        within seconds: Double = 3
+    ) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in stream { return true }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(seconds * 1_000_000_000)
+                )
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func makeTemporaryWatchRoot() -> URL {
+        URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("cin-w-\(UUID().uuidString.prefix(8))")
     }
 
     /// Hands preview text to a listening ``HookPreviewChannel``.

@@ -49,7 +49,7 @@ flowchart LR
     subgraph desktopAdapters ["Desktop 私有只读适配器"]
         projectRepository["CodexDesktopProjectMetadataRepository actor"]
         unreadRepository["CodexDesktopUnreadStateRepository actor"]
-        directoryWatcher["目录 watcher 与 250 ms debounce"]
+        directoryWatcher["目录 watcher 与 250 ms debounce 可重新挂载"]
         desktopPidGate["NSRunningApplication PID 观察门槛"]
     end
 
@@ -189,6 +189,8 @@ sequenceDiagram
         store-->>store: publish only changed UI fields
     end
 ```
+
+两个目录 watcher 都能重新挂载：目录不存在或被替换不是终局状态，`rename`／`delete` 会触发重开，刷新路径也会顺手重试。它们没有自己的重试定时器，因此「挂不上」的成本是每次刷新一个失败的 `open`，而不是新增一个唤醒源。
 
 刷新不再按固定节拍采样。驱动它的有四个来源，合并成同一条 `changeEvents` 流或睡眠时长：两个目录 watcher（Hook 事件队列与 Desktop 状态文件）、**服务自身在后台读取落地后发出的失效信号**、服务通过 `nextRefreshDeadline()` 报出的下一个到期时刻（终态 settling 到期、元数据/成员关系/额度缓存过期），以及一个 60 秒心跳。
 
