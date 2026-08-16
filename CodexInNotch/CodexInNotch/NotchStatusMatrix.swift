@@ -1,17 +1,46 @@
+import AppKit
+import CoreImage
 import SwiftUI
 
 /// Colours the notch surface owns, mirroring the Figma variables of the same name.
 enum NotchPalette {
+    // The matrix draws through Core Animation, which needs CGColor, while the
+    // rest of the surface is SwiftUI. Both come from these components so the two
+    // representations cannot drift apart.
+    private static let matrixOffRGB = (red: 0.063, green: 0.106, blue: 0.149)
+    private static let matrixOnRGB = (red: 0.424, green: 0.706, blue: 1.0)
+
     /// `text/notch-label` — the dim base every notch label sits at.
     static let label = Color(red: 0.486, green: 0.486, blue: 0.502)
     /// `text/notch-spotlight` — the searchlight highlight.
     static let spotlight = Color.white
     /// Unlit matrix cell.
-    static let matrixOff = Color(red: 0.063, green: 0.106, blue: 0.149)
+    static let matrixOff = Color(
+        red: matrixOffRGB.red,
+        green: matrixOffRGB.green,
+        blue: matrixOffRGB.blue
+    )
     /// Lit matrix cell.
-    static let matrixOn = Color(red: 0.424, green: 0.706, blue: 1)
+    static let matrixOn = Color(
+        red: matrixOnRGB.red,
+        green: matrixOnRGB.green,
+        blue: matrixOnRGB.blue
+    )
     /// Session title — the one element that stays bright.
     static let sessionTitle = Color.white.opacity(0.98)
+
+    static let matrixOffLayerColor = CGColor(
+        srgbRed: matrixOffRGB.red,
+        green: matrixOffRGB.green,
+        blue: matrixOffRGB.blue,
+        alpha: 1
+    )
+    static let matrixOnLayerColor = CGColor(
+        srgbRed: matrixOnRGB.red,
+        green: matrixOnRGB.green,
+        blue: matrixOnRGB.blue,
+        alpha: 1
+    )
 }
 
 /// Elapsed time for a turn.
@@ -135,38 +164,29 @@ private enum MatrixTrack {
     ]
     /// Idle and disconnected hold the resting floor of the completed breath.
     static let inactiveLevel = 0.200
-
-    /// SMIL spreads N values across N-1 intervals; mirror that so the loop
-    /// lands on the same frames the SVG does.
-    static func sample(_ track: [Double], phase: Double) -> Double {
-        guard track.count > 1 else { return track.first ?? 0 }
-        let scaled = min(max(phase, 0), 1) * Double(track.count - 1)
-        let index = Int(scaled)
-        let fraction = scaled - Double(index)
-        let lower = track[min(index, track.count - 1)]
-        let upper = track[min(index + 1, track.count - 1)]
-        return lower + (upper - lower) * fraction
-    }
 }
 
 private extension NotchMatrixState {
-    func opacity(forCell index: Int, phase: Double) -> Double {
+    /// One cell's whole opacity track, verbatim from the SVG's `values` list.
+    ///
+    /// The track is handed to Core Animation as keyframes rather than sampled
+    /// per frame. `CAKeyframeAnimation` with linear calculation spreads N values
+    /// across N-1 intervals, which is exactly SMIL's rule, so the motion is the
+    /// same curve the design file describes — evaluated on the render server
+    /// instead of by re-rendering the view tree.
+    func track(forCell index: Int) -> [Double] {
         switch self {
         case .running:
             let isEven = ((index / 3) + (index % 3)).isMultiple(of: 2)
-            return MatrixTrack.sample(
-                isEven ? MatrixTrack.runningEven : MatrixTrack.runningOdd,
-                phase: phase
-            )
+            return isEven ? MatrixTrack.runningEven : MatrixTrack.runningOdd
         case .needsAttention:
-            return MatrixTrack.sample(
-                index == 4 ? MatrixTrack.attentionCentre : MatrixTrack.attentionRing,
-                phase: phase
-            )
+            return index == 4
+                ? MatrixTrack.attentionCentre
+                : MatrixTrack.attentionRing
         case .completed:
-            return MatrixTrack.sample(MatrixTrack.completed, phase: phase)
+            return MatrixTrack.completed
         case .inactive:
-            return MatrixTrack.inactiveLevel
+            return [MatrixTrack.inactiveLevel]
         }
     }
 }
@@ -174,71 +194,194 @@ private extension NotchMatrixState {
 /// The 3×3 status matrix that replaced the notch status dot.
 ///
 /// Sized by the caller to the fixed ``PanelMetrics/statusMatrixSize``.
+///
+/// The indicator animates continuously for every state but `inactive` —
+/// including `completed`, which lingers until the user reads the turn — so its
+/// steady-state cost is what the app costs at rest. It is therefore drawn by
+/// Core Animation rather than SwiftUI: a `TimelineView` tick re-renders the
+/// whole overlay, custom panel `Shape` included, and measured at 8% of a core
+/// no matter how little the tick actually changed. Layer animations run on the
+/// render server and leave the view graph alone entirely.
 struct NotchStatusMatrix: View {
     let state: NotchMatrixState
     let size: CGFloat
     var isAnimated = true
 
-    // Proportions come straight from the SVG's 91-unit viewBox: 27-unit cells
-    // on a 32-unit pitch, 2-unit corner radius.
-    private var cell: CGFloat { size * 27 / 91 }
-    private var gap: CGFloat { size * 5 / 91 }
-    private var radius: CGFloat { cell * 2 / 27 }
-
     var body: some View {
-        Group {
-            if let period = state.period, isAnimated {
-                TimelineView(.animation) { context in
-                    grid(phase: phase(at: context.date, period: period))
-                }
-            } else {
+        MatrixIndicator(state: state, size: size, isAnimated: isAnimated)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct MatrixIndicator: NSViewRepresentable {
+    let state: NotchMatrixState
+    let size: CGFloat
+    let isAnimated: Bool
+
+    func makeNSView(context: Context) -> MatrixIndicatorView {
+        MatrixIndicatorView()
+    }
+
+    func updateNSView(_ view: MatrixIndicatorView, context: Context) {
+        view.apply(state: state, size: size, isAnimated: isAnimated)
+    }
+}
+
+final class MatrixIndicatorView: NSView {
+    /// One blur pass of the lit cells, or the sharp copy when `blur` is nil.
+    private struct GlowPass {
+        let blur: CGFloat?
+        let opacity: Float
+    }
+
+    private var appliedState: NotchMatrixState?
+    private var appliedSize: CGFloat = 0
+    private var appliedIsAnimated = true
+
+    // Row 0 is the top row, as in the SVG.
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        // The glow deliberately spills past the indicator's own bounds.
+        layer?.masksToBounds = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func apply(state: NotchMatrixState, size: CGFloat, isAnimated: Bool) {
+        guard state != appliedState
+            || size != appliedSize
+            || isAnimated != appliedIsAnimated else {
+            return
+        }
+        appliedState = state
+        appliedSize = size
+        appliedIsAnimated = isAnimated
+        rebuild()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // `contentsScale` is only knowable once there is a window to ask.
+        rebuild()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        rebuild()
+    }
+
+    private func rebuild() {
+        guard let state = appliedState, appliedSize > 0, let root = layer else {
+            return
+        }
+
+        root.sublayers?.forEach { $0.removeFromSuperlayer() }
+
+        // Proportions come straight from the SVG's 91-unit viewBox: 27-unit
+        // cells on a 32-unit pitch, 2-unit corner radius.
+        let size = appliedSize
+        let cell = size * 27 / 91
+        let gap = size * 5 / 91
+        let radius = cell * 2 / 27
+        let pitch = cell + gap
+        // Three sigma is where a Gaussian is spent, so this is how far the
+        // widest pass reaches. Each pass gets bounds that large or the filter
+        // would clip its own halo.
+        let bleed = cell * 10.5 / 27 * 3
+        let scale = window?.backingScaleFactor ?? 2
+
+        func pass(_ pass: GlowPass, color: CGColor, animated: Bool) -> CALayer {
+            let container = CALayer()
+            container.frame = CGRect(
+                x: -bleed,
+                y: -bleed,
+                width: size + bleed * 2,
+                height: size + bleed * 2
+            )
+            container.masksToBounds = false
+            container.contentsScale = scale
+            container.opacity = pass.opacity
+            if let blur = pass.blur,
+               let filter = CIFilter(
+                   name: "CIGaussianBlur",
+                   parameters: [kCIInputRadiusKey: blur]
+               ) {
+                container.filters = [filter]
+            }
+
+            for index in 0 ..< 9 {
+                let cellLayer = CALayer()
+                cellLayer.frame = CGRect(
+                    x: bleed + CGFloat(index % 3) * pitch,
+                    y: bleed + CGFloat(index / 3) * pitch,
+                    width: cell,
+                    height: cell
+                )
+                cellLayer.cornerRadius = radius
+                cellLayer.cornerCurve = .continuous
+                cellLayer.backgroundColor = color
+                cellLayer.contentsScale = scale
+
+                let track = state.track(forCell: index)
                 // The still the design file shows: every track's t=0 frame.
-                grid(phase: 0)
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-    }
-
-    private func phase(at date: Date, period: TimeInterval) -> Double {
-        let elapsed = date.timeIntervalSinceReferenceDate
-            .truncatingRemainder(dividingBy: period)
-        return elapsed / period
-    }
-
-    private func grid(phase: Double) -> some View {
-        let opacities = (0..<9).map { state.opacity(forCell: $0, phase: phase) }
-        // One blurred copy per glow layer reproduces the SVG's three
-        // feGaussianBlur + feMerge passes without stacking 27 shadows.
-        return ZStack {
-            cells(opacities: nil)
-            cells(opacities: opacities)
-                .blur(radius: cell * 10.5 / 27)
-                .opacity(0.21)
-            cells(opacities: opacities)
-                .blur(radius: cell * 5.6 / 27)
-                .opacity(0.35)
-            cells(opacities: opacities)
-                .blur(radius: cell * 2.1 / 27)
-                .opacity(0.56)
-            cells(opacities: opacities)
-        }
-    }
-
-    /// `opacities == nil` draws the unlit bed; otherwise the lit cells.
-    private func cells(opacities: [Double]?) -> some View {
-        VStack(spacing: gap) {
-            ForEach(0..<3, id: \.self) { row in
-                HStack(spacing: gap) {
-                    ForEach(0..<3, id: \.self) { column in
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .fill(opacities == nil ? NotchPalette.matrixOff : NotchPalette.matrixOn)
-                            .frame(width: cell, height: cell)
-                            .opacity(opacities?[row * 3 + column] ?? 1)
-                    }
+                cellLayer.opacity = Float(track.first ?? 1)
+                if animated, let period = state.period, track.count > 1 {
+                    cellLayer.add(
+                        Self.trackAnimation(track: track, period: period),
+                        forKey: "notch.matrix.opacity"
+                    )
                 }
+                container.addSublayer(cellLayer)
             }
+            return container
         }
+
+        // The unlit bed never animates; only the lit copies above it do.
+        root.addSublayer(
+            pass(
+                GlowPass(blur: nil, opacity: 1),
+                color: NotchPalette.matrixOffLayerColor,
+                animated: false
+            )
+        )
+
+        // Three blurred copies reproduce the SVG's feGaussianBlur + feMerge
+        // passes, then the sharp copy sits on top.
+        let glowPasses = [
+            GlowPass(blur: cell * 10.5 / 27, opacity: 0.21),
+            GlowPass(blur: cell * 5.6 / 27, opacity: 0.35),
+            GlowPass(blur: cell * 2.1 / 27, opacity: 0.56),
+            GlowPass(blur: nil, opacity: 1)
+        ]
+        for glowPass in glowPasses {
+            root.addSublayer(
+                pass(
+                    glowPass,
+                    color: NotchPalette.matrixOnLayerColor,
+                    animated: appliedIsAnimated
+                )
+            )
+        }
+    }
+
+    /// Every cell's animation is added in one pass, so they share a `beginTime`
+    /// and stay in phase with each other for as long as they run.
+    private static func trackAnimation(
+        track: [Double],
+        period: TimeInterval
+    ) -> CAKeyframeAnimation {
+        let animation = CAKeyframeAnimation(keyPath: "opacity")
+        animation.values = track.map { NSNumber(value: $0) }
+        animation.duration = period
+        animation.calculationMode = .linear
+        animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
+        return animation
     }
 }
 
@@ -250,6 +393,12 @@ struct NotchStatusMatrix: View {
 struct SearchlightBand: View {
     var period: TimeInterval = 2
 
+    // NOTE: this sweep costs ~7% of a core for as long as it runs, and capping
+    // the schedule does not help -- 30 Hz measured the same as the display's
+    // 120. The redraw is not driven by this view's tick but by the panel being
+    // marked for display every frame, so the whole overlay is re-rendered
+    // either way. Only moving the motion to Core Animation removes it, the way
+    // NotchStatusMatrix now does; that needs the mask to move into AppKit too.
     var body: some View {
         TimelineView(.animation) { context in
             GeometryReader { proxy in
