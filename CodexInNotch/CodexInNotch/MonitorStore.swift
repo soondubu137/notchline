@@ -773,7 +773,9 @@ final class MonitorStore: ObservableObject {
         )
         guard !Task.isCancelled else { return }
         publish(snapshot, observedAt: clock.now())
-        let refreshedHookSetupStatus = await service.hookSetupStatus()
+        // The snapshot already carries the health the same refresh observed;
+        // asking the service again would consume the Hook queue twice a cycle.
+        let refreshedHookSetupStatus = snapshot.setupStatus
         if hookSetupStatus != refreshedHookSetupStatus {
             hookSetupStatus = refreshedHookSetupStatus
         }

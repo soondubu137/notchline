@@ -73,6 +73,8 @@ struct MonitorTiming: Sendable {
     var terminalReadSettlingInterval: TimeInterval = 2
     /// How long `disconnected` must persist before it replaces a trusted state.
     var disconnectGracePeriod: TimeInterval = 3
+    /// Trailing debounce on the Hook event queue directory.
+    var hookEventDebounceInterval: TimeInterval = 0.1
     /// Pointer dwell before the panel expands.
     var hoverExpandDelay: TimeInterval = 0.15
     /// Pointer dwell before the panel collapses.

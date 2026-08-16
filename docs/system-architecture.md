@@ -77,6 +77,7 @@ flowchart LR
     desktopHooks -->|"执行受信 handler"| hookHelper
     hookHelper -->|"原子写入脱敏事件"| hookEvents
     hookEvents -->|"按启动 cutoff 分类后删除或隔离"| hookRepository
+    hookEvents -.->|"目录 watcher 100ms debounce"| hookRepository
     hookRepository -->|"HookStateSnapshot"| liveService
     hookRepository -->|"仅持久化 Hook 配置信任"| observationMarker
 
@@ -115,7 +116,8 @@ flowchart LR
     monitorSnapshot -->|"ready 时聚合 sessions"| aggregation
     stabilityGate -->|"允许发布或暂存重试"| monitorStore
     aggregation -->|"顶部 MonitorStatus"| monitorStore
-    unreadRepository -.->|"changeEvents 触发即时 refresh"| monitorStore
+    hookRepository -.->|"changeEvents"| monitorStore
+    unreadRepository -.->|"changeEvents"| monitorStore
 
     monitorStore -->|"Published 状态"| panelController
     monitorStore -->|"Published 状态与用户操作"| notchView
@@ -187,7 +189,9 @@ sequenceDiagram
     end
 ```
 
-目录 watcher 的 `changeEvents` 也会触发同一个 `performRefresh`；`isRefreshInFlight` 将轮询与文件事件合并为一条刷新，不产生第二套状态管线。
+两个目录 watcher（Hook 事件队列与 Desktop 状态文件）的 `changeEvents` 合并成一条触发流，与轮询共同驱动同一个 `performRefresh`；`isRefreshInFlight` 把它们合并为一条刷新，不产生第二套状态管线。Hook 事件因此不再需要等待轮询周期才被发现，轮询退化为 watcher 失效时的兜底。
+
+事件消费**每轮只发生一次**。`consumeEvents` 会删除文件并推进 Turn 状态，因此它只出现在快照路径上；`hookSetupStatus` 改为只读持久化信任标记，集成健康度随 `MonitorSnapshot.setupStatus` 一并返回，上层不再二次询问。
 
 ### 2.1 启动边界：不做现状同步
 

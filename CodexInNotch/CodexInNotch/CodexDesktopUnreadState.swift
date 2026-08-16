@@ -200,7 +200,7 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
 
     private let stateFileURL: URL
     private let fileManager: FileManager
-    nonisolated private let directoryWatcher: CodexDesktopStateDirectoryWatcher
+    nonisolated private let directoryWatcher: DirectoryChangeWatcher
     private var lastKnownGood: DesktopUnreadStateSnapshot?
     private var lastSuccessfulPrimaryRevision: FileRevision?
 
@@ -230,7 +230,7 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
     ) {
         self.stateFileURL = stateFileURL
         self.fileManager = fileManager
-        self.directoryWatcher = CodexDesktopStateDirectoryWatcher(
+        self.directoryWatcher = DirectoryChangeWatcher(
             directoryURL: stateFileURL.deletingLastPathComponent(),
             debounceInterval: changeDebounceInterval
         )
@@ -341,103 +341,5 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
             modificationDate: attributes[.modificationDate] as? Date,
             fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
         )
-    }
-}
-
-private final class CodexDesktopStateDirectoryWatcher: @unchecked Sendable {
-    private let lock = NSLock()
-    private let queue = DispatchQueue(
-        label: "com.yinfenglu.codex-in-notch.desktop-state-watcher"
-    )
-    private let debounceInterval: TimeInterval
-    nonisolated(unsafe) private var source: DispatchSourceFileSystemObject?
-    nonisolated(unsafe) private var continuations: [
-        UUID: AsyncStream<Void>.Continuation
-    ] = [:]
-    nonisolated(unsafe) private var pendingDelivery: DispatchWorkItem?
-
-    nonisolated init(directoryURL: URL, debounceInterval: TimeInterval) {
-        self.debounceInterval = debounceInterval
-        let descriptor = open(directoryURL.path, O_EVTONLY)
-        guard descriptor >= 0 else { return }
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: descriptor,
-            eventMask: [.write, .extend, .attrib, .rename, .delete],
-            queue: queue
-        )
-        source.setEventHandler { [weak self] in
-            self?.scheduleDelivery()
-        }
-        source.setCancelHandler {
-            close(descriptor)
-        }
-        self.source = source
-        source.resume()
-    }
-
-    nonisolated func events() -> AsyncStream<Void> {
-        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
-            let identifier = UUID()
-            lock.lock()
-            let isAvailable = source != nil
-            if isAvailable {
-                continuations[identifier] = continuation
-            }
-            lock.unlock()
-
-            guard isAvailable else {
-                continuation.finish()
-                return
-            }
-            continuation.onTermination = { [weak self] _ in
-                self?.removeContinuation(identifier)
-            }
-        }
-    }
-
-    deinit {
-        lock.lock()
-        let source = source
-        self.source = nil
-        pendingDelivery?.cancel()
-        pendingDelivery = nil
-        let continuations = Array(continuations.values)
-        self.continuations.removeAll()
-        lock.unlock()
-
-        continuations.forEach { $0.finish() }
-        source?.cancel()
-    }
-
-    // The debounce below stays on GCD wall time deliberately: it coalesces
-    // filesystem events on the watcher's own queue and makes no product timing
-    // decision, so routing it through MonitorClock would buy nothing.
-    nonisolated private func scheduleDelivery() {
-        lock.lock()
-        pendingDelivery?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.deliver()
-        }
-        pendingDelivery = workItem
-        lock.unlock()
-        queue.asyncAfter(
-            deadline: .now() + debounceInterval,
-            execute: workItem
-        )
-    }
-
-    nonisolated private func deliver() {
-        lock.lock()
-        pendingDelivery = nil
-        let continuations = Array(continuations.values)
-        lock.unlock()
-        continuations.forEach { $0.yield(()) }
-    }
-
-    nonisolated private func removeContinuation(_ identifier: UUID) {
-        lock.lock()
-        continuations.removeValue(forKey: identifier)
-        lock.unlock()
     }
 }

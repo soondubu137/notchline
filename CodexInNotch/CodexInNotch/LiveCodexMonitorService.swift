@@ -69,7 +69,10 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         self.hookInstaller = hookInstaller
         self.projectMetadata = projectMetadata
         self.unreadState = unreadState
-        self.desktopStateChangeEvents = unreadState.changeEvents()
+        self.desktopStateChangeEvents = DirectoryChangeWatcher.merged([
+            hookEvents.changeEvents(),
+            unreadState.changeEvents()
+        ])
         self.terminalUnreadMembershipGate = TerminalUnreadMembershipGate(
             settlingInterval: timing.terminalReadSettlingInterval
         )
@@ -107,7 +110,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     availability: .setupRequired,
                     sessions: [],
                     quota: .unavailable,
-                    diagnostic: diagnostic
+                    diagnostic: diagnostic,
+                    setupStatus: setupStatus
                 )
             )
         }
@@ -169,7 +173,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                                 for: sessions,
                                 metadata: projectSnapshot
                             )
-                        )
+                        ),
+                        setupStatus: setupStatus
                     )
                 )
             }
@@ -196,7 +201,8 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
                     availability: .ready,
                     sessions: [],
                     quota: cachedQuota,
-                    diagnostic: nil
+                    diagnostic: nil,
+                    setupStatus: setupStatus
                 )
             )
         } catch let error as CodexAppServerError {
@@ -265,14 +271,13 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
         }
     }
 
+    /// Reads integration health without touching the event queue.
+    ///
+    /// Consuming here would delete files the snapshot path is about to reduce,
+    /// costing a full refresh cycle of latency for whatever it swallowed.
     func hookSetupStatus() async -> HookSetupStatus {
-        let state = await hookEvents.consumeEvents()
-        let desktopProcessIdentifier = await desktopProcessIdentifierProvider()
-        if state.didConsumeEvents {
-            observedDesktopProcessIdentifier = desktopProcessIdentifier
-        }
-        return await hookInstaller.status(
-            hasObservedEvent: state.hasObservedEvent
+        await hookInstaller.status(
+            hasObservedEvent: await hookEvents.observedState().hasObservedEvent
         )
     }
 

@@ -2348,6 +2348,106 @@ struct CodexInNotchTests {
         #expect(elapsed < 10)
     }
 
+    @Test
+    func hookEventQueueSignalsWithoutWaitingForThePoll() async throws {
+        // The queue directory is the only place a Hook lands, so watching it is
+        // what turns a lifecycle event into an immediate refresh instead of one
+        // that waits out the poll interval.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        var timing = MonitorTiming.standard
+        timing.hookEventDebounceInterval = 0.01
+        let repository = HookEventRepository(
+            paths: paths,
+            timing: timing,
+            liveEventCutoff: .distantPast
+        )
+        let events = repository.changeEvents()
+        let observer = Task {
+            for await _ in events {
+                return true
+            }
+            return false
+        }
+
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-watch",
+            "turn_id": "turn-watch"
+        ]).write(to: paths.eventsDirectory.appendingPathComponent("0.json"))
+
+        let observed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await observer.value }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        observer.cancel()
+        #expect(observed)
+    }
+
+    @Test @MainActor
+    func readingSetupStatusNeverConsumesTheHookQueue() async throws {
+        // hookSetupStatus used to consume events, so a refresh drained the queue
+        // twice and whatever the second call swallowed surfaced a cycle late.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookInstaller(paths: paths)
+        try await installer.install(showsContentPreviews: false)
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-intact",
+            "turn_id": "turn-intact"
+        ]).write(to: paths.eventsDirectory.appendingPathComponent("0.json"))
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        let service = LiveCodexMonitorService(
+            client: CodexAppServerStub(listedThreads: [], loadedListResults: []),
+            hookEvents: repository,
+            hookInstaller: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        // Querying health repeatedly must leave the queued event untouched.
+        for _ in 0 ..< 3 {
+            _ = await service.hookSetupStatus()
+        }
+        #expect(
+            FileManager.default.fileExists(
+                atPath: paths.eventsDirectory
+                    .appendingPathComponent("0.json").path
+            )
+        )
+
+        // The snapshot path is the single consumer, and it still sees the Turn.
+        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.first?.threadID == "thread-intact")
+        #expect(snapshot.setupStatus == .active)
+        await service.disconnect()
+    }
+
     @Test @MainActor
     func backgroundReadsHonourTheirOwnFreshnessWindows() async throws {
         // These windows previously had no coverage at all: every one of them was

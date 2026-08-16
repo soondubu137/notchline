@@ -586,6 +586,7 @@ actor HookEventRepository {
     private let fileManager: FileManager
     private let clock: any MonitorClock
     private let timing: MonitorTiming
+    nonisolated private let eventsWatcher: DirectoryChangeWatcher
     private let liveEventCutoff: Date
     private var hasObservedEvent: Bool
     private var hasObservedLiveEvent: Bool
@@ -608,6 +609,13 @@ actor HookEventRepository {
         self.fileManager = fileManager
         self.clock = clock
         self.timing = timing
+        // The helper writes one file per lifecycle event, so watching the queue
+        // directory turns a Hook into an immediate refresh instead of one that
+        // waits out the poll interval.
+        self.eventsWatcher = DirectoryChangeWatcher(
+            directoryURL: paths.eventsDirectory,
+            debounceInterval: timing.hookEventDebounceInterval
+        )
         self.liveEventCutoff = liveEventCutoff ?? clock.now()
 
         if let data = try? Data(contentsOf: paths.state),
@@ -634,6 +642,19 @@ actor HookEventRepository {
             self.hasObservedLiveEvent = false
             self.turnsByThreadID = [:]
         }
+    }
+
+    nonisolated func changeEvents() -> AsyncStream<Void> {
+        eventsWatcher.events()
+    }
+
+    /// The reducer's current view, without touching the event queue.
+    ///
+    /// `consumeEvents` deletes files and advances Turn state, so it must happen
+    /// exactly once per refresh. Callers that only need the trust marker or the
+    /// current Turns use this instead.
+    func observedState() -> HookStateSnapshot {
+        snapshot()
     }
 
     func consumeEvents() -> HookStateSnapshot {

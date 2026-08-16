@@ -266,12 +266,31 @@ struct MonitorSnapshot: Equatable, Sendable {
     let sessions: [MonitoredSession]
     let quota: QuotaSnapshot
     let diagnostic: String?
+    /// Integration health as observed by the same refresh that built this
+    /// snapshot. It rides along so the store never has to ask a second time --
+    /// asking used to consume the Hook queue a second time per cycle.
+    let setupStatus: HookSetupStatus
+
+    nonisolated init(
+        availability: MonitorAvailability,
+        sessions: [MonitoredSession],
+        quota: QuotaSnapshot,
+        diagnostic: String?,
+        setupStatus: HookSetupStatus = .active
+    ) {
+        self.availability = availability
+        self.sessions = sessions
+        self.quota = quota
+        self.diagnostic = diagnostic
+        self.setupStatus = setupStatus
+    }
 
     static let connecting = MonitorSnapshot(
         availability: .connecting,
         sessions: [],
         quota: .unavailable,
-        diagnostic: nil
+        diagnostic: nil,
+        setupStatus: .notInstalled
     )
 }
 
