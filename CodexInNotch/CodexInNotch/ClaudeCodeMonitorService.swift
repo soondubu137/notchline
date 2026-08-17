@@ -34,6 +34,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     private let hookEvents: HookEventRepository
     private let sessions: any ClaudeCodeSessionListing
     private let listener: AgentHookListener
+    private let transcripts: ClaudeCodeTranscriptReader
     private let clock: any MonitorClock
     private var boundPort: UInt16?
     private var lastDiagnostic: String?
@@ -44,6 +45,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         hookEvents: HookEventRepository? = nil,
         sessions: (any ClaudeCodeSessionListing)? = nil,
         listener: AgentHookListener? = nil,
+        transcripts: ClaudeCodeTranscriptReader? = nil,
         sessionsDirectory: URL? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
@@ -64,6 +66,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             eventsDirectory: paths.eventsDirectory,
             clock: clock
         )
+        self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
         self.clock = clock
 
         // Two edges, no cadence. An event arriving means a turn moved; the
@@ -119,14 +122,22 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             uniquingKeysWith: { first, _ in first }
         )
 
-        let rows = hookState.turns
+        await transcripts.retain(sessionIDs: Set(liveByID.keys))
+        var rows: [MonitoredSession] = []
+        for turn in hookState.turns {
             // A turn whose session is gone is gone. This is the whole reason
             // the session list is load-bearing rather than a convenience.
-            .compactMap { turn -> MonitoredSession? in
-                guard let session = liveByID[turn.threadID] else { return nil }
-                return row(for: turn, in: session, showsContentPreviews: showsContentPreviews)
-            }
-            .sorted(by: MonitorAggregation.rowOrder)
+            guard let session = liveByID[turn.threadID] else { continue }
+            // A title is content, so it is only read when previews are on.
+            let title = showsContentPreviews
+                ? await transcripts.title(
+                    forSession: session.sessionID,
+                    workingDirectory: session.workingDirectory
+                )
+                : nil
+            rows.append(row(for: turn, in: session, title: title))
+        }
+        rows.sort(by: MonitorAggregation.rowOrder)
 
         return snapshot(
             availability: .ready,
@@ -201,7 +212,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     private func row(
         for turn: HookTurnState,
         in session: ClaudeCodeSession,
-        showsContentPreviews: Bool
+        title: String?
     ) -> MonitoredSession {
         // Project is the working directory (ADR 0009). The ban on deriving a
         // Project from a path binds Codex only: there a path is an approximation
@@ -213,10 +224,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             threadID: turn.threadID,
             turnID: turn.turnID,
             projectName: project.isEmpty ? "Untitled folder" : project,
-            // No title source yet: the listener never receives prompt text, and
-            // the transcript is not read. `Untitled` is the contract's answer
-            // for a title that cannot be obtained -- never the folder name.
-            title: "Untitled",
+            // `Untitled` is the contract's answer for a title that cannot be
+            // obtained, and the folder name is never allowed to stand in for
+            // one. That is also what a row shows with previews off, since a
+            // title is as much the user's content as a prompt is.
+            title: title ?? "Untitled",
             privacySafeTitle: "Untitled",
             preview: nil,
             status: turn.status,

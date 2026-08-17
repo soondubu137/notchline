@@ -6580,6 +6580,96 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
+    /// A title the user typed outranks one the product generated, and a title
+    /// that cannot be read is never replaced by the folder name.
+    @Test @MainActor
+    func transcriptTitlesPreferTheUsersOwnAndFailClosed() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tx-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cwd = URL(fileURLWithPath: "/Users/someone/Projects/thing")
+        let project = root.appendingPathComponent(
+            cwd.path.replacingOccurrences(of: "/", with: "-"),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        func write(_ session: String, _ records: [[String: Any]]) throws {
+            let lines = try records.map {
+                String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self)
+            }
+            try Data((lines.joined(separator: "\n") + "\n").utf8)
+                .write(to: project.appendingPathComponent("\(session).jsonl"))
+        }
+
+        // Later records win, and a user's title wins wherever it sits.
+        try write("s-1", [
+            ["type": "ai-title", "aiTitle": "First guess"],
+            ["type": "custom-title", "customTitle": "What I called it"],
+            ["type": "ai-title", "aiTitle": "Second guess"]
+        ])
+        // Only a generated title: it is used, most recent first.
+        try write("s-2", [
+            ["type": "ai-title", "aiTitle": "Older"],
+            ["type": "user", "message": ["role": "user"]],
+            ["type": "ai-title", "aiTitle": "Newer"]
+        ])
+        // Nothing recognisable in it at all.
+        try write("s-3", [["type": "user", "message": ["role": "user"]]])
+
+        let reader = ClaudeCodeTranscriptReader(projectsDirectory: root)
+        #expect(await reader.title(forSession: "s-1", workingDirectory: cwd)
+            == "What I called it")
+        #expect(await reader.title(forSession: "s-2", workingDirectory: cwd) == "Newer")
+        #expect(await reader.title(forSession: "s-3", workingDirectory: cwd) == nil)
+        // A session with no transcript at all.
+        #expect(await reader.title(forSession: "missing", workingDirectory: cwd) == nil)
+    }
+
+    /// The transcript is found even if the directory naming rule changes.
+    ///
+    /// Two observations hold this up — that a project directory is named after
+    /// the working directory, and that a transcript is named after its session.
+    /// Only the second is relied on when the first stops being true, so a
+    /// change to the naming rule alone does not cost the title.
+    @Test @MainActor
+    func aTranscriptIsFoundByItsSessionWhenTheDirectoryRuleDoesNotHold() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tx-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let elsewhere = root.appendingPathComponent("some-other-scheme", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try Data(#"{"type":"ai-title","aiTitle":"Found anyway"}"#.utf8)
+            .write(to: elsewhere.appendingPathComponent("s-9.jsonl"))
+
+        let reader = ClaudeCodeTranscriptReader(projectsDirectory: root)
+        #expect(
+            await reader.title(
+                forSession: "s-9",
+                workingDirectory: URL(fileURLWithPath: "/Users/someone/nowhere")
+            ) == "Found anyway"
+        )
+    }
+
+    /// A title is content, so previews-off hides it like any other.
+    @Test @MainActor
+    func aRowShowsUntitledWhilePreviewsAreOff() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "t1", at: 100)
+        harness.live = [harness.session(id: "s-1", cwd: "/Users/someone/Projects/thing")]
+        try harness.writeTranscript(session: "s-1", cwd: "/Users/someone/Projects/thing",
+                                    title: "Something private")
+
+        let shown = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(shown.sessions.first?.title == "Something private")
+
+        let hidden = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(hidden.sessions.first?.title == "Untitled")
+        #expect(hidden.sessions.first?.privacySafeTitle == "Untitled")
+    }
+
     /// A turn whose session has gone is gone with it.
     ///
     /// SessionEnd is deliberately not registered, so the session list is the
@@ -8094,6 +8184,10 @@ private final class ClaudeCodeHarness {
     let paths: HookIntegrationPaths
     let setup: ClaudeCodeHookSetup
     let service: ClaudeCodeMonitorService
+    /// Its own port per harness: these tests run in parallel, and two of them
+    /// asking for one fixed port is the same collision the product surfaces to
+    /// the user rather than working around.
+    let port = UInt16.random(in: 49_200 ... 50_900)
     private let listing = StubSessionListing()
 
     var live: [ClaudeCodeSession] {
@@ -8121,6 +8215,9 @@ private final class ClaudeCodeHarness {
             ),
             sessions: listing,
             listener: AgentHookListener(eventsDirectory: paths.eventsDirectory),
+            transcripts: ClaudeCodeTranscriptReader(
+                projectsDirectory: root.appendingPathComponent("projects", isDirectory: true)
+            ),
             sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true)
         )
     }
@@ -8135,7 +8232,7 @@ private final class ClaudeCodeHarness {
         var hooks: [String: Any] = [:]
         let handler: [String: Any] = [
             "type": "http",
-            "url": "http://127.0.0.1:51741\(ClaudeCodeHookSetup.hookPath)",
+            "url": "http://127.0.0.1:\(port)\(ClaudeCodeHookSetup.hookPath)",
             "async": true,
             "timeout": 5,
             "headers": ["Authorization": "Bearer harness-token"]
@@ -8160,6 +8257,19 @@ private final class ClaudeCodeHarness {
             "session_id": session,
             "turn_id": turn
         ]).write(to: paths.eventsDirectory.appendingPathComponent("\(received).json"))
+    }
+
+    func writeTranscript(session: String, cwd: String, title: String) throws {
+        let project = root
+            .appendingPathComponent("projects", isDirectory: true)
+            .appendingPathComponent(cwd.replacingOccurrences(of: "/", with: "-"),
+                                    isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let record = try JSONSerialization.data(
+            withJSONObject: ["type": "ai-title", "aiTitle": title]
+        )
+        try (record + Data("\n".utf8))
+            .write(to: project.appendingPathComponent("\(session).jsonl"))
     }
 
     func session(id: String, cwd: String) -> ClaudeCodeSession {
