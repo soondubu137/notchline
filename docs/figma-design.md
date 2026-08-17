@@ -2,9 +2,9 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | V1 SwiftUI 四态契约已同步；外部 Figma 的旧状态变体待清理 |
-| 版本 | 0.8 |
-| 日期 | 2026-08-15 |
+| 文档状态 | V1 SwiftUI 四态契约已同步；设置窗口已按 macOS 26 重做；外部 Figma 的旧状态变体待清理 |
+| 版本 | 0.9 |
+| 日期 | 2026-08-16 |
 | 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
 
 ## 1. 设计原则
@@ -29,7 +29,7 @@
 | `06 — Notch Core` | 核心产品状态与不同菜单栏高度参考 | `118:73`, `185:292`, `304:630`, `304:641` |
 | `07 — Integration States` | 隐私、局部降级、空和全局可用性 | `227:3`, `307:30` |
 | `08 — Onboarding` | 首次安装三步流程 | `232:95` |
-| `09 — Settings` | 集成管理、预览隐私与 `Session list` 分组 | `233:3`, `591:2` |
+| `09 — Settings` | macOS 26 设置窗口（浅色／深色）、集成管理、预览隐私与 `Session list` 分组 | `609:2`（现行）；`233:3`、`591:2`（v1 参考） |
 | `10 — Double Apps` | 双产品（Codex + Claude Code）设计 | `540:2` |
 
 本文描述单产品契约。同时监视 Codex 与 Claude Code 时的设计见 [`dual-agent-design.md`](dual-agent-design.md)，其中两处已取代本文：设置齿轮的位置（见 4.5，现为展开态顶栏右上角，单产品同样生效）与双产品页脚的额度构成（见 4.3）。其余部分不受影响。
@@ -62,6 +62,8 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 - Input/Approval：橙色。
 - Completed：绿色。
 - Disconnected/版本不可用：紫色。
+
+以上 token 服务于 Notch 组件。**原生窗口（设置、Onboarding）另有一套集合 `Color / macOS Window`**，它是本文件里唯一带 `Light` / `Dark` 两个 mode 的集合，承载 macOS 窗口自己的语义：`window/bg`、`window/titlebar`、`window/stroke`、`group/bg`、`group/stroke`、`separator`、`text/primary｜secondary｜tertiary`、`accent`、`control/bg`、`control/stroke`、`switch/off-track`、`knob`、`status/green`、`product/codex`、`product/claude`。原生窗口的浅色与深色必须由这一套集合的 mode 切换产生，不得复制成两批硬编码颜色。
 
 ### 3.3 Layout tokens
 
@@ -220,21 +222,51 @@ Input needed
 
 ## 8. 设置
 
-`09 — Settings`（`233:3`）同时展示默认与隐私关闭两种状态。设置页只包含已确认的两类控制：
+现行设计是 `09 — Settings` 上的 `609:2`（`Settings — redesigned for macOS 26`），按 macOS 26 视觉语言重做，包含浅色与深色两个完整窗口，以及预览关闭状态的两个局部切片。`233:3` 与 `591:2` 保留为 v1 参考，不再是验收对象。
 
-### 8.1 Codex integration
+### 8.0 窗口结构
 
-- 显示 Codex Desktop connected、Off、Needs repair 与兼容性信息。
-- 右侧使用一个原生 macOS switch 同时启停 Codex in Notch 所需的六种 lifecycle event 定义；切换进行中 disabled。
-- 辅助文案明确说明开关只管理本应用的六项定义，不改变用户其他 Codex Hooks。
-- `Recheck` 重新检测能力。
+设置窗口是**单面板，没有侧边栏**。V1 只有三个已确认分组，用一个只有一项的 source list 承载它们，等于宣告一套并不存在的导航，还逼内容区重复一个 `General` 大标题。窗口标题因此按 HIG 写作 `Codex in Notch Settings`，内容区不再有第二个标题。
+
+| 项目 | 值 |
+| --- | --- |
+| 窗口宽度 | `580`（与 Onboarding 窗口同宽） |
+| 窗口圆角 | `26` |
+| 标题栏 | 高 `52`，与窗口同色；内容滚动到其下方之前不画分隔线 |
+| 交通灯 | 直径 `12`，间距 `20`，`x = 20` |
+| 内容边距 | 左右 `24`，上 `20`，下 `22` |
+| 分组间距 | `22`；组标题与卡片之间 `8` |
+| 卡片 | 圆角 `12`，1px hairline 描边，极轻投影 |
+| 行内边距 | 左右 `14`，上下 `11`；主标签与说明行间距 `2` |
+| Switch | `38 × 22`，滑块 `18` |
+| 按钮与弹出菜单 | 胶囊圆角；弹出菜单尾部是强调色 `18 × 18` 双箭头 chip |
+
+三个分组自上而下是 `Products`、`Session list`、`Privacy`。每个分组的形状都是「小标题 + 一张圆角卡片 + 卡片下方的脚注文字」。脚注取代了 v1 的蓝色提示条——macOS 用脚注而不是色块陈述后果，色块在原生窗口里只会读作一个没人点得动的控件。
+
+所有主标签共用同一左缩进：产品行的绿色状态点移到说明行行首，而不是站在产品名左边，因此三张卡片的标题列在同一条竖线上。
+
+浅色与深色是**同一批节点**：颜色全部绑定到两模式集合 `Color / macOS Window`（`Light` / `Dark`），深色窗口是浅色窗口的 clone 加一次 mode override。改一次颜色两边同时生效，不存在两套值漂移的可能。
+
+### 8.1 Products
+
+`Codex Desktop` 与 `Claude Code` 是同一张卡片里的两行，不是两个分组。加入第三个产品的代价是一行，而不是一个新面板。
+
+- 每行左侧是产品名，说明行以状态点开头，写连接结论与能力信息（`Connected · compatible version`、`Connected · hooks installed`）。
+- 每行右侧是一个原生 macOS switch，各自启停该产品所需的 lifecycle event 定义；切换进行中 disabled。
+- 卡片下方脚注说明开关只安装 Codex in Notch 需要的六项定义，关闭时移除，用户其他 hooks 不受影响。
+- `Recheck` 是脚注行尾部的胶囊按钮，重新检测能力。
 - Off 后保持 Settings 可达；再次 On 安装或修复完整集合。首次安装或定义变化后的 `/hooks` 信任仍由 Codex 处理。
 
-### 8.2 Privacy
+### 8.2 Session list
 
-- `Show current content previews` 默认 On。
-- Off 时说明 Project、标题和状态仍然显示。
-- 明确提示 prompt fallback 被禁用，缺失标题为 `Untitled`。
+只含一个弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品同时运行时有效果；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
+
+### 8.3 Privacy
+
+- `Show current content previews` 默认 On，说明行写明它覆盖哪些片段。
+- On 的脚注写明预览不落盘。
+- Off 的脚注写明 Project、标题与状态仍然显示，且 prompt fallback 被禁用、缺失标题为 `Untitled`。
+- 只有开关本身改变：行高、行几何与说明行都不动，这一点由两个局部切片直接对照。
 
 不在 V1 设置画板中加入登录启动、动画、通知、模型选择或其他尚未确认的功能。
 
@@ -283,6 +315,8 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] No active turns、Connecting、Disconnected、Update、unsupported、setup 薄层。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
+- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。
+- [ ] 在装有 SF Pro 的 Figma 桌面端打开 `609:2`，确认字形正常渲染、多行脚注的换行落位与预期一致。
 - [x] 会话行已同步 Running／等待人工／Completed 三种计时表现，一行只有一个标记。
 - [ ] 收起态计时变体的文字层改为 hug contents（见 4.6），消除固定文本宽度带来的整体偏宽。
 - [ ] 刘海计时变体中的计时 TEXT 在渲染中不可见（节点数据正确、坐标与实现一致，`24` 高面板中同一文本正常）；需在 Figma 桌面端确认是渲染问题还是文件缺陷。

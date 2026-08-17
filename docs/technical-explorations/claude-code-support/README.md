@@ -7,7 +7,7 @@
 | 探索点 | 让当前只服务 Codex Desktop 的顶部监视器同时汇总 Claude Code 会话 |
 | 目标读者 | 后续负责决策、spike 和实现的 Agent 与产品负责人 |
 | 验证基线 | Claude Desktop `1.30096.5`（bundle `com.anthropic.claudefordesktop`），内置 Claude Code CLI `2.1.229`，macOS `Darwin 25.5.0`，验证日期 `2026-08-15` |
-| 当前结论 | **可行。导航按产品决策降级；实现可以做到稳态零轮询、零落盘、无 helper 脚本。** `http` hook 通道已于 2026-08-16 实测通过（§10），但 `SessionEnd` 必须排除在 http 之外，且「Desktop 托管会话是否触发 hook」仍未验证 |
+| 当前结论 | **可行，且 Phase 0 的存亡问题已闭合。** 用户级 hook 在 Desktop 托管会话中确实触发（2026-08-16 实测，§10）。`http` 通道可用，但 `SessionEnd` 必须排除在 http 之外。导航按产品决策降级 |
 | 产品决策 | 已于 2026-08-15 确定：导航降级可接受；Apple Events 权限可接受（见 §8） |
 
 > 目录约定沿用 [`shared-app-server/README.md`](../shared-app-server/README.md)：每个探索点独立二级目录，后续实验记录追加到本文第 10 节，不覆盖早期证据。
@@ -443,7 +443,7 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 
 出现任一条件即不应把该方案产品化：
 
-- Phase 0 证明用户级 hook 对 Desktop 托管会话不生效，且没有其他官方事件源（§4.7 已证明不存在替代真值源，因此这一条直接决定整个方案存亡）。
+- ~~Phase 0 证明用户级 hook 对 Desktop 托管会话不生效~~ —— **已于 2026-08-16 排除，见 §10**。
 - 安装 hook 会导致用户在每个项目重新走 workspace trust 流程，形成不可接受的安装摩擦。
 - `http` hook 在应用未运行或崩溃时会对用户会话产生可见影响（阻塞、报错、卡住审批）。
 - 降级导航连“激活正确的应用/终端”都做不到，或只能靠辅助功能权限与 GUI 自动化实现。
@@ -500,6 +500,31 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 | 12 | `PostToolUseFailure` 在普通工具错误（文件不存在）时触发，带 `error` / `is_interrupt` / `duration_ms` | 中断与错误可区分 |
 
 **未回答，且必须用真实 `~/.claude/settings.json` 才能回答的一条：hook 是否在 Claude Desktop 托管的会话中触发。** 这是决定整个方案存亡的问题（§9 第一条），而 `--settings` 只作用于它启动的那个 CLI 进程。审批相关的 `Notification(permission_prompt)` 同样测不到——它按定义只在有人被真正询问时才出现，非交互运行不产生对话框。两者都需要一次交互式验证。
+
+### 2026-08-16 — Phase 0 收尾：Desktop 托管会话确实触发 hook
+
+- 执行范围：用户本人把七条 `type: "http"` 注册写入真实 `~/.claude/settings.json`（本 Agent 被权限分类器拦下，未自行写入），随后立即从备份还原。监听器同前，仍只记录字段名与安全标量。
+- **`SessionEnd` 被刻意排除**，见上一条记录第 3 项。
+
+**结论：§9 第一条 NO-GO 不成立。用户级 hook 在 Claude Desktop 托管的会话中正常触发，整个方案成立。**
+
+证据是本次对话自身——`~/.claude/sessions/45912.json` 记录该进程 `"entrypoint":"claude-desktop"`，而监听器收到的每一个事件都带同一个 `session_id: ff1a9f95-…`：
+
+| 事件 | 关键字段 |
+| --- | --- |
+| `UserPromptSubmit` | `prompt_id: 7d174256…`，`permission_mode: auto` |
+| `PreToolUse` | 同 `prompt_id`，`tool_name: Bash`，`tool_use_id: toolu_01Qq4o…` |
+| `PostToolUse` | 同 `prompt_id`、**同 `tool_use_id`**，`duration_ms: 3049` |
+
+即成对开闭模型在 Desktop 托管会话里与 CLI 会话完全同构。
+
+两项补充观察：
+
+1. **`permission_mode` 出现了 `auto`**，此前 `-p` 运行中只见过 `default`。状态映射不得假设该字段的取值集合。
+2. **`UserPromptSubmit` 在真人交互提交时同样没有 `source` 字段**（实测 keys：`cwd, hook_event_name, permission_mode, prompt, prompt_id, session_id, transcript_path`）。这比上一条记录第 8 项更强：`source` 不是「`-p` 才缺席」，而是**普遍缺席**，因此自噪声过滤只能靠把额度轮询钉在专用工作目录并按 `cwd` 过滤。
+3. 交互会话的事件还多带一个 `effort` 字段。
+
+**仍未验证：`Notification(notification_type: permission_prompt)`。** 它按定义只在真的向人弹出审批对话框时出现，本次会话处于 `permission_mode: auto`，没有产生对话框。这一项不阻塞设计——审批区间的开闭已由 `PermissionRequest` 借用 id、`PostToolUse` / `PermissionDenied` 关闭这条链路覆盖——但在实现审批状态前应补测一次。
 
 ## 11. 参考入口
 

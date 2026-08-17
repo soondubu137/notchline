@@ -5,7 +5,7 @@
 | 文档状态 | 视觉与数据口径已定；域层与合并层已落地（`claude-code-integration` 分支），UI 尚未开始 |
 | 版本 | 1.0 |
 | 日期 | 2026-08-16 |
-| Figma | [`10 — Double Apps`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=540-2)；设置项在 [`09 — Settings`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=233-3) |
+| Figma | [`10 — Double Apps`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=540-2)；设置项在 [`09 — Settings`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=609-2) |
 | 相关 ADR | [0007](adr/0007-read-claude-code-quota-from-the-cli.md)、[0008](adr/0008-count-today-tokens-cache-inclusive.md)、[0009](adr/0009-resolve-project-per-product.md) |
 
 ## 1. 范围
@@ -120,15 +120,17 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 ## 6. 设置项
 
-`09 — Settings` 的 General 面板新增 `Session list` 分组，与 `Codex integration`、`Privacy` 并列，只含一个弹出菜单：
+设置窗口是单面板，没有侧边栏（见 [`figma-design.md`](figma-design.md) §8.0）。`Session list` 是其中第二个分组，位于 `Products` 与 `Privacy` 之间，只含一个弹出菜单：
 
 | 标签 | `Distinguish products` |
 | --- | --- |
-| 说明 | `How each row shows whether it came from Codex or Claude Code.` |
+| 说明 | `How a row shows which product it came from.` |
 | 选项 | `Name and colour`（默认）／`Name only`／`Badge` |
-| 提示条 | `Only applies when both products are running` |
+| 脚注 | `Only applies when both products are running — with one product there is nothing to tell apart.` |
 
 单产品运行时该项仍然可见但无效果。隐藏它会让用户恰好在准备接入第二个产品时找不到它。
+
+两个产品的集成开关不再各占一个分组：`Codex Desktop` 与 `Claude Code` 是 `Products` 卡片里的两行，各带一个 switch，共用一条脚注和一个 `Recheck` 按钮。第三个产品的代价因此是一行。
 
 ## 7. 数据来源与口径
 
@@ -171,3 +173,5 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 ## 9. 与既有文档的关系
 
 [`figma-design.md`](figma-design.md) 描述单产品契约，其中两处已被本文取代：设置齿轮的位置（§4.5，现为顶栏右上角）与页脚额度行的构成（§4.3，双产品时为两行规则加当日用量行）。其余部分不受影响。
+
+例外是设置窗口：`figma-design.md` §8 已按 macOS 26 重写，其中 `Products` 分组直接容纳两个产品，`Session list` 分组来自本文 §6。设置窗口的结构、几何与颜色以 §8 为准，本文只保留 `Distinguish products` 的语义。
