@@ -6315,7 +6315,7 @@ for line in sys.stdin:
             )
         }
         try FileManager.default.createDirectory(
-            at: paths.supportDirectory,
+            at: paths.agentDirectory,
             withIntermediateDirectories: true
         )
 
@@ -6831,6 +6831,69 @@ for line in sys.stdin:
             diagnostic: diagnostic,
             setupStatus: setupStatus
         )
+    }
+
+    /// Uninstalling one product leaves the other product's install untouched.
+    ///
+    /// Everything used to sit directly in one shared directory, which is only
+    /// safe while there is one product. Two products sharing it means an
+    /// uninstall deletes the other's queued events and preview socket, and the
+    /// leftover files make the other report an install footprint it does not
+    /// have — which is enough for the refresh to switch its integration off by
+    /// itself.
+    @Test @MainActor
+    func oneAgentsUninstallLeavesTheOtherAgentsQueueAndInstallMarkerIntact() async throws {
+        let codexPaths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: codexPaths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let claudePaths = HookIntegrationPaths(
+            supportDirectory: codexPaths.supportDirectory,
+            hooksConfiguration: codexPaths.hooksConfiguration
+                .deletingLastPathComponent()
+                .appendingPathComponent("claude-settings.json"),
+            agent: .claudeCode
+        )
+
+        // No two files belonging to different products share a path.
+        #expect(codexPaths.agentDirectory != claudePaths.agentDirectory)
+        #expect(codexPaths.eventsDirectory != claudePaths.eventsDirectory)
+        #expect(codexPaths.previewSocket != claudePaths.previewSocket)
+        #expect(codexPaths.installMarker != claudePaths.installMarker)
+
+        // Stand up both products the way install() lays them out.
+        let manager = FileManager.default
+        for paths in [codexPaths, claudePaths] {
+            try manager.createDirectory(
+                at: paths.eventsDirectory,
+                withIntermediateDirectories: true
+            )
+            try Data("marker".utf8).write(to: paths.installMarker)
+            try Data("event".utf8).write(
+                to: paths.eventsDirectory.appendingPathComponent("1.json")
+            )
+        }
+
+        let installer = CodexHookInstaller(paths: codexPaths)
+        try await installer.uninstall()
+
+        #expect(!manager.fileExists(atPath: codexPaths.agentDirectory.path))
+        #expect(manager.fileExists(atPath: claudePaths.installMarker.path))
+        #expect(
+            manager.fileExists(
+                atPath: claudePaths.eventsDirectory
+                    .appendingPathComponent("1.json").path
+            )
+        )
+        // The shared directory survives precisely because the other product is
+        // still living in it.
+        #expect(manager.fileExists(atPath: codexPaths.supportDirectory.path))
+
+        // And with the other product gone too, nothing of ours is left behind.
+        try await CodexHookInstaller(paths: claudePaths).uninstall()
+        #expect(!manager.fileExists(atPath: codexPaths.supportDirectory.path))
     }
 
     private func makeTemporaryHookPaths() -> HookIntegrationPaths {

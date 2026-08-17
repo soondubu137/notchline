@@ -45,19 +45,47 @@ enum HookSetupStatus: Equatable, Sendable {
 /// bag of URLs that is read off the main actor, which the project's default
 /// isolation would otherwise pin to it.
 nonisolated struct HookIntegrationPaths: Sendable {
+    /// The app's own directory, shared by every product.
     let supportDirectory: URL
     let hooksConfiguration: URL
+    let agent: AgentKind
+
+    nonisolated init(
+        supportDirectory: URL,
+        hooksConfiguration: URL,
+        agent: AgentKind = .codex
+    ) {
+        self.supportDirectory = supportDirectory
+        self.hooksConfiguration = hooksConfiguration
+        self.agent = agent
+    }
+
+    /// Everything belonging to one product, and nothing belonging to another.
+    ///
+    /// Every file below used to sit directly in the shared directory, which is
+    /// only safe while there is one product. With two, one product's uninstall
+    /// deletes the other's event queue and preview socket, and one product's
+    /// files make the other report an install footprint it does not have —
+    /// which turns its integration switch off by itself.
+    ///
+    /// Kept short deliberately: the preview socket lives in here and a Unix
+    /// domain socket path may not exceed 104 bytes.
+    var agentDirectory: URL {
+        supportDirectory
+            .appendingPathComponent("agents", isDirectory: true)
+            .appendingPathComponent(agent.rawValue, isDirectory: true)
+    }
 
     var script: URL {
-        supportDirectory.appendingPathComponent("codex_in_notch_hook.py")
+        agentDirectory.appendingPathComponent("codex_in_notch_hook.py")
     }
 
     var eventsDirectory: URL {
-        supportDirectory.appendingPathComponent("events", isDirectory: true)
+        agentDirectory.appendingPathComponent("events", isDirectory: true)
     }
 
     var state: URL {
-        supportDirectory.appendingPathComponent("monitor-state.json")
+        agentDirectory.appendingPathComponent("monitor-state.json")
     }
 
     /// Where the helper hands preview text to a running app.
@@ -66,7 +94,7 @@ nonisolated struct HookIntegrationPaths: Sendable {
     /// into an event file, so nothing the product promises not to persist is
     /// ever written.
     var previewSocket: URL {
-        supportDirectory.appendingPathComponent("preview.sock")
+        agentDirectory.appendingPathComponent("preview.sock")
     }
 
     /// Proof that this app, rather than something else, put a helper here.
@@ -75,7 +103,7 @@ nonisolated struct HookIntegrationPaths: Sendable {
     /// older helper, which should be upgraded" from "a file this app never
     /// installed, which must not be silently replaced".
     var installMarker: URL {
-        supportDirectory.appendingPathComponent("managed-install.json")
+        agentDirectory.appendingPathComponent("managed-install.json")
     }
 
     /// The file the marker replaced.
@@ -85,14 +113,34 @@ nonisolated struct HookIntegrationPaths: Sendable {
     /// path survives only so an existing install is still recognised as ours
     /// and the stale file gets cleaned up.
     var legacySettings: URL {
-        supportDirectory.appendingPathComponent("hook-settings.json")
+        agentDirectory.appendingPathComponent("hook-settings.json")
+    }
+
+    /// The flat layout every file used before products were namespaced.
+    ///
+    /// Installing rewrites the hooks configuration with the new script path, so
+    /// the old registration stops matching and the old helper stops being
+    /// referenced. These are the files it would otherwise leave behind — all of
+    /// them paths this app has always owned exclusively.
+    var legacyFlatLayout: [URL] {
+        [
+            "codex_in_notch_hook.py",
+            "monitor-state.json",
+            "preview.sock",
+            "managed-install.json",
+            "hook-settings.json",
+            "events"
+        ].map { supportDirectory.appendingPathComponent($0) }
     }
 
     var hooksBackup: URL {
         hooksConfiguration.appendingPathExtension("codex-in-notch-backup")
     }
 
-    nonisolated static func live(fileManager: FileManager = .default) -> HookIntegrationPaths {
+    nonisolated static func live(
+        agent: AgentKind = .codex,
+        fileManager: FileManager = .default
+    ) -> HookIntegrationPaths {
         let support = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -103,7 +151,8 @@ nonisolated struct HookIntegrationPaths: Sendable {
         return HookIntegrationPaths(
             supportDirectory: support,
             hooksConfiguration: fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent(".codex/hooks.json")
+                .appendingPathComponent(".codex/hooks.json"),
+            agent: agent
         )
     }
 }
@@ -279,7 +328,7 @@ actor CodexHookInstaller {
 
     func install() throws {
         try fileManager.createDirectory(
-            at: paths.supportDirectory,
+            at: paths.agentDirectory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
@@ -288,6 +337,7 @@ actor CodexHookInstaller {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        removeLegacyFlatLayout()
 
         try writeCurrentHookScript()
         try writeInstallMarker()
@@ -313,11 +363,26 @@ actor CodexHookInstaller {
         if fileManager.fileExists(atPath: paths.eventsDirectory.path) {
             try fileManager.removeItem(at: paths.eventsDirectory)
         }
-        if let remaining = try? fileManager.contentsOfDirectory(
-            at: paths.supportDirectory,
+        removeLegacyFlatLayout()
+        // Only ever this product's own directory, and then the shared ones if
+        // nothing else is left in them. Another product's files keep both.
+        removeDirectoryIfEmpty(paths.agentDirectory)
+        removeDirectoryIfEmpty(paths.agentDirectory.deletingLastPathComponent())
+        removeDirectoryIfEmpty(paths.supportDirectory)
+    }
+
+    private func removeDirectoryIfEmpty(_ url: URL) {
+        guard let remaining = try? fileManager.contentsOfDirectory(
+            at: url,
             includingPropertiesForKeys: nil
-        ), remaining.isEmpty {
-            try? fileManager.removeItem(at: paths.supportDirectory)
+        ), remaining.isEmpty else { return }
+        try? fileManager.removeItem(at: url)
+    }
+
+    private func removeLegacyFlatLayout() {
+        for url in paths.legacyFlatLayout
+        where fileManager.fileExists(atPath: url.path) {
+            try? fileManager.removeItem(at: url)
         }
     }
 
@@ -418,7 +483,7 @@ actor CodexHookInstaller {
     }
 
     private var hasManagedSupportFootprint: Bool {
-        fileManager.fileExists(atPath: paths.supportDirectory.path)
+        fileManager.fileExists(atPath: paths.agentDirectory.path)
             || fileManager.fileExists(atPath: paths.script.path)
             || hasManagedInstallMarker
             || fileManager.fileExists(atPath: paths.state.path)
@@ -1447,7 +1512,7 @@ actor HookEventRepository {
         fileManager: FileManager
     ) throws {
         try fileManager.createDirectory(
-            at: paths.supportDirectory,
+            at: paths.agentDirectory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
