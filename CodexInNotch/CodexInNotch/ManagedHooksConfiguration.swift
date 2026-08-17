@@ -126,6 +126,24 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         )
     }
 
+    /// The `hooks` block on its own, for showing a user what to add.
+    ///
+    /// Built from the same definitions the reducer consumes, so instructions
+    /// cannot drift from the events this app actually understands — a snippet
+    /// that named an event the reducer ignored would look installed and report
+    /// nothing.
+    nonisolated func hooksBlock() -> [String: Any] {
+        var hooks: [String: Any] = [:]
+        for definition in definitions {
+            var group: [String: Any] = ["hooks": [managedHandler]]
+            if let matcher = definition.matcher {
+                group["matcher"] = matcher
+            }
+            hooks[definition.event] = [group]
+        }
+        return hooks
+    }
+
     // MARK: - Install
 
     /// Returns `root` with exactly one current definition per managed event.

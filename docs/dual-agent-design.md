@@ -161,6 +161,7 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 | 是否超出四个状态（`StopFailure` 带 `error`） | **已定：保持四态。** 只有 Claude Code 能观察到的状态会让这套共享词汇在 Codex 上说谎——用户无法区分「没有失败」与「无法观察到失败」。失败作为终态原因随行，行上的标记不变。字段名是 `error` 而非 `error_type`（CLI 2.1.233 实测） |
 | `dailyUsageBuckets.tokens` 与 CLI `total_tokens` 是否同口径 | 待验证，低优先级；不阻塞任何布局 |
 | 同名目录的两个检出如何消歧 | 未定 |
+| Claude Code hook 注册由谁写入 | **已定：用户自己写。** 本应用只读 `~/.claude/settings.json`、显示待粘贴内容、报告注册是否完整，永不写入。Codex 侧维持自动写入 `~/.codex/hooks.json`。见 [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) |
 | 产品改名 | 候选见 Figma §07；`Baton` 为推荐项 |
 | 双产品无刘海紧凑标签由哪一状态定宽 | **新增，待定。** 见下 |
 

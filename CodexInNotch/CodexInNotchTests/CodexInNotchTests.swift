@@ -6580,93 +6580,164 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
-    /// Installing hooks leaves everything else in the user's settings alone.
+    /// The product never writes the user's Claude Code settings.
     ///
-    /// `~/.claude/settings.json` is not a hooks file with a few extras — it is
-    /// where a user keeps their whole Claude Code install, and this app adds
-    /// one key to it. A test that only checked our own key would pass while
-    /// quietly flattening theirs.
+    /// The Codex side edits `~/.codex/hooks.json` itself, and that file holds
+    /// hooks and little else. `~/.claude/settings.json` holds a user's whole
+    /// install, so this product only ever reads it and tells the user what to
+    /// add. The asymmetry will look like an oversight one day; this is the test
+    /// that says it is not.
     @Test @MainActor
-    func installingClaudeCodeHooksPreservesEverythingElseInTheSettings() async throws {
+    func claudeCodeSetupOnlyEverReadsTheUsersSettings() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let settings = root.appendingPathComponent("settings.json")
         let paths = HookIntegrationPaths(
             supportDirectory: root.appendingPathComponent("AS"),
-            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            hooksConfiguration: settings,
             agent: .claudeCode
         )
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        let theirs: [String: Any] = [
-            "theme": "auto",
-            "env": ["EDITOR": "vim"],
-            "permissions": ["allow": ["Bash(git status)"]],
-            "hooks": ["PreCompact": [["hooks": [["type": "command", "command": "theirs"]]]]]
-        ]
-        try JSONSerialization.data(withJSONObject: theirs, options: .prettyPrinted)
-            .write(to: paths.hooksConfiguration)
+        let theirs = "{\n  \"theme\" : \"auto\"\n}\n"
+        try Data(theirs.utf8).write(to: settings)
 
-        let installer = ClaudeCodeHookInstaller(paths: paths)
-        try await installer.install(port: 51_000, token: "tok")
-        #expect(await installer.isInstalled(port: 51_000, token: "tok"))
+        let setup = ClaudeCodeHookSetup(paths: paths)
+        #expect(await setup.status() == .notInstalled)
 
-        func settings() throws -> [String: Any] {
-            try JSONSerialization.jsonObject(
-                with: Data(contentsOf: paths.hooksConfiguration)
-            ) as? [String: Any] ?? [:]
-        }
-        var written = try settings()
-        #expect(written["theme"] as? String == "auto")
-        #expect((written["env"] as? [String: Any])?["EDITOR"] as? String == "vim")
-        #expect(written["permissions"] != nil)
-        #expect((written["hooks"] as? [String: Any])?["PreCompact"] != nil)
-        // A file we did not create is never stamped with a description.
-        #expect(written["description"] == nil)
+        // Everything the panel can do with an un-registered install: read the
+        // state, mint a proposal, render instructions.
+        let proposal = await setup.proposedRegistration()
+        let snippet = await setup.configurationSnippet()
+        #expect(await setup.status() == .notInstalled)
 
-        // The port the listener actually bound is remembered, so a relaunch can
-        // ask for the same one instead of rewriting the user's file every time.
-        let registration = await installer.installedRegistration()
-        #expect(registration == ClaudeCodeHookInstaller.Registration(port: 51_000, token: "tok"))
+        // After all of that, their file has not been touched at all.
+        #expect(String(decoding: try Data(contentsOf: settings), as: UTF8.self) == theirs)
 
-        // Uninstalling finds the handler by its path, so it does not need to be
-        // told what it was installed with.
-        try await installer.uninstall()
-        written = try settings()
-        #expect(written["theme"] as? String == "auto")
-        #expect((written["hooks"] as? [String: Any])?["PreCompact"] != nil)
-        #expect((written["hooks"] as? [String: Any])?["Stop"] == nil)
-        #expect(!(await installer.isInstalled(port: 51_000, token: "tok")))
+        // The snippet is a whole hooks block naming every event the reducer
+        // understands, and no event it does not.
+        let block = try #require(
+            try JSONSerialization.jsonObject(with: Data(snippet.utf8)) as? [String: Any]
+        )
+        let hooks = try #require(block["hooks"] as? [String: Any])
+        #expect(
+            Set(hooks.keys)
+                == Set(ClaudeCodeHookVocabulary().managedDefinitions.map(\.event))
+        )
+        #expect(!hooks.keys.contains("SessionEnd"))
+        #expect(snippet.contains("127.0.0.1:\(proposal.port)"))
+        #expect(snippet.contains(proposal.token))
+
+        // The proposal is stable, so a user cannot be told two different things
+        // to paste for the same install.
+        #expect(await setup.proposedRegistration() == proposal)
+        #expect(await setup.configurationSnippet() == snippet)
     }
 
-    /// A settings file this app cannot understand is left exactly as it is.
+    /// What the user pasted is the authority, not what the app once proposed.
     ///
-    /// The failure that matters is not malformed JSON — that always threw. It
-    /// is *valid* JSON whose root is not an object, which used to be coerced to
-    /// an empty document and written back with only our keys in it.
+    /// The hook URL names a port, and since the app cannot rewrite their file
+    /// it cannot move that port either. So the direction reverses: the
+    /// registration is read back out of their settings and the listener binds
+    /// what it finds — a user who edits the port is followed, not overruled.
     @Test @MainActor
-    func installingClaudeCodeHooksRefusesASettingsFileItCannotParse() async throws {
+    func theRegistrationIsReadBackOutOfWhatTheUserActuallyPasted() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let settings = root.appendingPathComponent("settings.json")
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: settings,
+            agent: .claudeCode
+        )
+        let setup = ClaudeCodeHookSetup(paths: paths)
+
+        // The user pastes it, but on a port of their own choosing.
+        let snippet = await setup.configurationSnippet()
+        var document = try #require(
+            try JSONSerialization.jsonObject(with: Data(snippet.utf8)) as? [String: Any]
+        )
+        document["theme"] = "auto"
+        var text = String(
+            decoding: try JSONSerialization.data(
+                withJSONObject: document,
+                options: [.prettyPrinted, .withoutEscapingSlashes]
+            ),
+            as: UTF8.self
+        )
+        let proposed = await setup.proposedRegistration()
+        text = text.replacingOccurrences(
+            of: "127.0.0.1:\(proposed.port)",
+            with: "127.0.0.1:49999"
+        )
+        try Data(text.utf8).write(to: settings)
+
+        let installed = try #require(await setup.installedRegistration())
+        #expect(installed.port == 49_999)
+        #expect(installed.token == proposed.token)
+        #expect(await setup.status() == .active)
+        // And the proposal now defers to it, so the instructions stop offering
+        // a port the user has already replaced.
+        #expect(await setup.proposedRegistration() == installed)
+    }
+
+    /// Half a registration is worse than none, because the gap is silent.
+    @Test @MainActor
+    func aPartiallyPastedRegistrationReportsThatItNeedsRepair() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let settings = root.appendingPathComponent("settings.json")
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: settings,
+            agent: .claudeCode
+        )
+        let setup = ClaudeCodeHookSetup(paths: paths)
+
+        let snippet = await setup.configurationSnippet()
+        var document = try #require(
+            try JSONSerialization.jsonObject(with: Data(snippet.utf8)) as? [String: Any]
+        )
+        var hooks = try #require(document["hooks"] as? [String: Any])
+        // A paste that dropped one event: the notch would simply never learn
+        // about that transition, with nothing anywhere reporting an error.
+        hooks.removeValue(forKey: "Stop")
+        document["hooks"] = hooks
+        try JSONSerialization
+            .data(withJSONObject: document, options: [.withoutEscapingSlashes])
+            .write(to: settings)
+
+        #expect(await setup.status() == .repairRequired)
+    }
+
+    /// A settings file this app cannot parse is reported, never rewritten.
+    @Test @MainActor
+    func anUnreadableSettingsFileReadsAsNotInstalledRatherThanCrashing() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        for contents in ["[1, 2, 3]", "{ not json at all", "\"a string\""] {
-            let settings = root.appendingPathComponent("settings-\(abs(contents.hashValue)).json")
+        for contents in ["[1, 2, 3]", "{ not json at all", ""] {
+            let settings = root
+                .appendingPathComponent("s-\(abs(contents.hashValue)).json")
             try Data(contents.utf8).write(to: settings)
-            let paths = HookIntegrationPaths(
-                supportDirectory: root.appendingPathComponent("AS"),
-                hooksConfiguration: settings,
-                agent: .claudeCode
+            let setup = ClaudeCodeHookSetup(
+                paths: HookIntegrationPaths(
+                    supportDirectory: root.appendingPathComponent("AS"),
+                    hooksConfiguration: settings,
+                    agent: .claudeCode
+                )
             )
-            let installer = ClaudeCodeHookInstaller(paths: paths)
-
-            await #expect(throws: (any Error).self) {
-                try await installer.install(port: 51_000, token: "tok")
-            }
+            #expect(await setup.status() == .notInstalled)
+            #expect(await setup.installedRegistration() == nil)
             #expect(
-                String(decoding: try Data(contentsOf: settings), as: UTF8.self) == contents,
-                "the file must be byte-identical after a refusal"
+                String(decoding: try Data(contentsOf: settings), as: UTF8.self) == contents
             )
         }
     }
