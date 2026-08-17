@@ -157,19 +157,21 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 | 事项 | 状态 |
 | --- | --- |
-| 展开态顶栏状态名是否附带产品名 | 待定，构建前重新评估 |
+| 展开态顶栏状态名是否附带产品名 | 待定，构建前重新评估（随 [#35](https://github.com/soondubu137/codex-in-notch/issues/35) 一并决定） |
 | 是否超出四个状态（`StopFailure` 带 `error`） | **已定：保持四态。** 只有 Claude Code 能观察到的状态会让这套共享词汇在 Codex 上说谎——用户无法区分「没有失败」与「无法观察到失败」。失败作为终态原因随行，行上的标记不变。字段名是 `error` 而非 `error_type`（CLI 2.1.233 实测） |
 | `dailyUsageBuckets.tokens` 与 CLI `total_tokens` 是否同口径 | 待验证，低优先级；不阻塞任何布局 |
-| 同名目录的两个检出如何消歧 | 未定 |
+| 同名目录的两个检出如何消歧 | 未定（[#25](https://github.com/soondubu137/codex-in-notch/issues/25) 遗留项） |
 | Claude Code hook 注册由谁写入 | **已定：用户自己写。** 本应用只读 `~/.claude/settings.json`、显示待粘贴内容、报告注册是否完整，永不写入。Codex 侧维持自动写入 `~/.codex/hooks.json`。见 [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) |
 | 产品改名 | 候选见 Figma §07；`Baton` 为推荐项 |
-| 双产品无刘海紧凑标签由哪一状态定宽 | **新增，待定。** 见下 |
+| 双产品无刘海紧凑标签由哪一状态定宽 | **已定位成因，转 [#29](https://github.com/soondubu137/codex-in-notch/issues/29)。** 见下 |
 
 降级导航已确认并接受：Claude Code 行只能唤起 Claude Desktop 或聚焦终端，行内不为此增加任何标记。
 
+> 未决事项统一跟踪在 GitHub 看板 [soondubu137/projects/2](https://github.com/users/soondubu137/projects/2)，本表只保留设计侧的结论与理由，不重复记录进度。
+
 **紧凑标签定宽状态在双产品下换人。** 单 Codex 时最宽的紧凑状态是 `Approval`，它靠同时占用标签与计时槽取胜，任何不计时的状态都追不上它。加入 Claude Code 后冠军变成一个**不计时**的状态：`Update Claude Code` 比 `Approval` 加计时槽更长。本机实测 13pt Light：`Approval` + 12 + `1:02:03` = 112.3，`Update Claude Code` = 124.8，无刘海药丸宽度因此从 189 变为 202。
 
-这不是缺陷，是一个产品问题。紧凑状态名只有一个，且命名的是跨两个产品最紧急的状态（§3.3），所以它不能像其他紧凑标签那样把产品名省掉——省掉之后「Update」不说明该更新哪一个。可选项：接受 202；或者接受该标签在双产品下不指名产品；或者为 `updateAgent` 设计一个更短的紧凑形式。在此之前，`PanelMetrics.fixedCompactWidth(for:)` 按用户实际配置的产品集合折叠，单 Codex 用户的宽度与今天逐点一致，由 `aCodexOnlyConfigurationHasTodaysExactPanelGeometry` 固定。
+**成因后来查清了**：`updateAgent` 这个状态对 Claude Code **根本不可达**——它存在是因为 Codex Desktop 可能版本过旧，而 Claude Code 是用户自己装的 CLI，没有版本门槛。宽度折叠不区分「哪个产品能到哪个状态」，于是为一个画不出来的标签预留了位置。修法是让每个 provider 声明自己能产生的状态集合，双产品药丸会回到 189，与图一致；见 [#29](https://github.com/soondubu137/codex-in-notch/issues/29)。在此之前，`PanelMetrics.fixedCompactWidth(for:)` 按用户实际配置的产品集合折叠，单 Codex 用户的宽度与今天逐点一致，由 `aCodexOnlyConfigurationHasTodaysExactPanelGeometry` 固定。
 
 ## 6.1 Claude Code 集成卡片（新增面）
 
