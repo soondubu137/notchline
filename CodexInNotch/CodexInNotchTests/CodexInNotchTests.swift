@@ -6580,6 +6580,164 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
+    /// The listener queues an event, and refuses to have seen the text in it.
+    ///
+    /// A hook payload carries shell command lines, file paths, diffs and whole
+    /// answers. The decoder has no field for any of them, so this asserts what
+    /// the product promises: none of it reaches the queue, and the queued file
+    /// is byte-searchable proof.
+    @Test @MainActor
+    func theListenerQueuesEventsAndNeverWritesTheirText() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let events = root.appendingPathComponent("events", isDirectory: true)
+
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_700))
+        let listener = AgentHookListener(
+            eventsDirectory: events,
+            token: "secret-token",
+            clock: clock
+        )
+        defer { listener.stop() }
+        let port = try #require(listener.start())
+
+        let secret = "rm -rf /Users/someone/private"
+        try await post(
+            port: port,
+            token: "secret-token",
+            body: [
+                "hook_event_name": "PreToolUse",
+                "session_id": "session-1",
+                "prompt_id": "prompt-1",
+                "tool_name": "Bash",
+                "tool_use_id": "call-1",
+                "permission_mode": "auto",
+                "tool_input": ["command": secret],
+                "prompt": "please delete everything"
+            ]
+        )
+
+        let queued = try await waitForQueuedEvents(in: events, count: 1)
+        let raw = try Data(contentsOf: queued[0])
+        let decoded = try #require(
+            try JSONSerialization.jsonObject(with: raw) as? [String: Any]
+        )
+
+        #expect(decoded["hook_event_name"] as? String == "PreToolUse")
+        #expect(decoded["session_id"] as? String == "session-1")
+        // prompt_id is this product's turn id.
+        #expect(decoded["turn_id"] as? String == "prompt-1")
+        #expect(decoded["tool_use_id"] as? String == "call-1")
+        // Stamped here, because the payload carries no timestamp at all.
+        #expect(decoded["received_at"] as? Double == 1_700)
+
+        let text = String(decoding: raw, as: UTF8.self)
+        #expect(!text.contains(secret))
+        #expect(!text.contains("please delete everything"))
+        #expect(decoded["tool_input"] == nil)
+        #expect(decoded["prompt"] == nil)
+    }
+
+    /// The socket is loopback, POST-only, and answers nothing without the token.
+    @Test @MainActor
+    func theListenerRefusesAnythingItDidNotAskFor() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let events = root.appendingPathComponent("events", isDirectory: true)
+        let listener = AgentHookListener(eventsDirectory: events, token: "right")
+        defer { listener.stop() }
+        let port = try #require(listener.start())
+
+        let body: [String: Any] = [
+            "hook_event_name": "Stop", "session_id": "s", "prompt_id": "p"
+        ]
+        #expect(try await postStatus(port: port, token: "wrong", body: body) == 403)
+        #expect(try await postStatus(port: port, token: "right", body: body) == 200)
+        #expect(
+            try await getStatus(port: port, path: "/hook") == 405,
+            "only POST is answered"
+        )
+    }
+
+    /// Our own quota reading is a real session firing real hooks.
+    ///
+    /// `UserPromptSubmit` would have separated it from a human's prompt by its
+    /// `source` field, except that field was measured absent from every event —
+    /// including a human's, in an interactive session. Pinning the poll to a
+    /// directory of its own is what is left.
+    @Test @MainActor
+    func theListenerDropsEventsFromItsOwnQuotaWorkingDirectory() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let events = root.appendingPathComponent("events", isDirectory: true)
+        let ours = root.appendingPathComponent("quota", isDirectory: true)
+
+        let listener = AgentHookListener(
+            eventsDirectory: events,
+            token: "t",
+            ignoredWorkingDirectory: ours
+        )
+        defer { listener.stop() }
+        let port = try #require(listener.start())
+
+        try await post(port: port, token: "t", body: [
+            "hook_event_name": "UserPromptSubmit", "session_id": "poll",
+            "prompt_id": "p", "cwd": ours.path
+        ])
+        try await post(port: port, token: "t", body: [
+            "hook_event_name": "UserPromptSubmit", "session_id": "real",
+            "prompt_id": "p", "cwd": "/Users/someone/Projects/thing"
+        ])
+
+        let queued = try await waitForQueuedEvents(in: events, count: 1)
+        let decoded = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: queued[0]))
+                as? [String: Any]
+        )
+        #expect(decoded["session_id"] as? String == "real")
+    }
+
+    @discardableResult
+    private func postStatus(
+        port: UInt16,
+        token: String,
+        body: [String: Any]
+    ) async throws -> Int {
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/hook")!
+        )
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode ?? -1
+    }
+
+    private func getStatus(port: UInt16, path: String) async throws -> Int {
+        let request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode ?? -1
+    }
+
+    private func post(port: UInt16, token: String, body: [String: Any]) async throws {
+        _ = try await postStatus(port: port, token: token, body: body)
+    }
+
+    private func waitForQueuedEvents(in directory: URL, count: Int) async throws -> [URL] {
+        for _ in 0 ..< 200 {
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            )) ?? []
+            if files.count >= count { return files.sorted { $0.path < $1.path } }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return []
+    }
+
     /// Claude Code's spelling of the same lifecycle.
     @Test @MainActor
     func claudeCodeVocabularyMapsItsOwnEventNames() {
