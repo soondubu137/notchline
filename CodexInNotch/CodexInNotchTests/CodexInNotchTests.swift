@@ -1044,24 +1044,44 @@ struct CodexInNotchTests {
         )
     }
 
-    /// A row's identity is the turn it belongs to, spelled out.
+    /// Two products may mint the same thread and turn ids without colliding.
     ///
     /// This id keys the dismissed set, the terminal-unread gate and SwiftUI's
-    /// row identity. Pinning the format here means changing it has to be a
-    /// decision rather than a side effect of some other refactor.
+    /// row identity, and thread and turn ids are each product's own invention —
+    /// nothing stops Claude Code from using a string a Codex thread already
+    /// uses. A collision would silently make one row dismiss, hide or
+    /// re-render the other. The literal format this replaces was only ever a
+    /// proxy for that.
     @Test @MainActor
-    func sessionIdentityIsThreadAndTurn() {
-        let session = MonitoredSession(
-            threadID: "thread",
-            turnID: "turn",
-            projectName: "Chats",
-            title: "Task",
-            preview: nil,
-            status: .running,
-            startedAt: nil
-        )
+    func sessionIDsFromTwoAgentsWithTheSameThreadAndTurnDoNotCollide() {
+        func session(agent: AgentKind) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: "thread",
+                turnID: "turn",
+                projectName: "Chats",
+                title: "Task",
+                preview: nil,
+                status: .running,
+                startedAt: nil
+            )
+        }
 
-        #expect(session.id == "thread:turn")
+        let ids = Set(AgentKind.allCases.map { session(agent: $0).id })
+        #expect(ids.count == AgentKind.allCases.count)
+
+        // Hiding content must not silently re-home a row to another product.
+        let hidden = session(agent: .claudeCode).hidingContent()
+        #expect(hidden.agent == .claudeCode)
+        #expect(hidden.id == session(agent: .claudeCode).id)
+    }
+
+    /// Codex leads, always — the order is a product rule, not a sort result.
+    @Test @MainActor
+    func agentOrderIsFixedWithCodexLeading() {
+        #expect(AgentKind.allCases == [.codex, .claudeCode])
+        #expect(AgentKind.codex < AgentKind.claudeCode)
+        #expect(AgentKind.allCases.shuffled().sorted() == [.codex, .claudeCode])
     }
 
     /// Availability only speaks for the aggregate while it is not ready.

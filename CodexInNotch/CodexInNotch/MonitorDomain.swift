@@ -1,5 +1,35 @@
 import Foundation
 
+/// Which product a row came from.
+///
+/// Declaration order is display order, and it never changes: Codex leads the
+/// matrix pair and wins ties in the row list whatever either product is doing.
+/// Once the two hues are learned, position is the only thing identifying a
+/// matrix — sorting the pair by urgency would swap the marks under the user's
+/// eye at the exact moment they are being read.
+enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
+    case codex
+    case claudeCode
+
+    var displayName: String {
+        switch self {
+        case .codex:
+            "Codex"
+        case .claudeCode:
+            "Claude Code"
+        }
+    }
+
+    /// Where this product sits in the fixed order.
+    private var rank: Int {
+        Self.allCases.firstIndex(of: self) ?? Self.allCases.count
+    }
+
+    nonisolated static func < (lhs: AgentKind, rhs: AgentKind) -> Bool {
+        lhs.rank < rhs.rank
+    }
+}
+
 enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     case idle
     case setupRequired
@@ -244,6 +274,7 @@ enum MonitorAvailability: Equatable, Sendable {
 }
 
 struct MonitoredSession: Identifiable, Equatable, Sendable {
+    let agent: AgentKind
     let threadID: String
     let turnID: String
     let projectName: String
@@ -254,6 +285,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     let startedAt: Date?
 
     nonisolated init(
+        agent: AgentKind = .codex,
         threadID: String,
         turnID: String,
         projectName: String,
@@ -263,6 +295,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         status: SessionStatus,
         startedAt: Date?
     ) {
+        self.agent = agent
         self.threadID = threadID
         self.turnID = turnID
         self.projectName = projectName
@@ -273,12 +306,20 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.startedAt = startedAt
     }
 
+    /// The row's identity, and the key for the dismissed set, the terminal
+    /// membership gate and SwiftUI's row identity.
+    ///
+    /// Namespaced by product because thread and turn ids are each product's own
+    /// invention: nothing stops Claude Code from minting a session id that a
+    /// Codex thread already uses, and an id collision between two products
+    /// would silently make one row dismiss, hide or re-render the other.
     nonisolated var id: String {
-        "\(threadID):\(turnID)"
+        "\(agent.rawValue):\(threadID):\(turnID)"
     }
 
     func hidingContent() -> MonitoredSession {
         MonitoredSession(
+            agent: agent,
             threadID: threadID,
             turnID: turnID,
             projectName: projectName,
