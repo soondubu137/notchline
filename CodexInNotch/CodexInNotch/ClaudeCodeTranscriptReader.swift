@@ -63,6 +63,112 @@ actor ClaudeCodeTranscriptReader {
         return title
     }
 
+    /// The turn a session is part-way through, if it is part-way through one.
+    ///
+    /// This is what makes cold start possible, and it is the one capability
+    /// that genuinely separates the two products. Codex has no supported way to
+    /// ask what is happening right now, so the product shows nothing from
+    /// before launch; Claude Code writes it down.
+    ///
+    /// What the transcript cannot say is *what* a turn is waiting for — nothing
+    /// is written while a prompt sits in front of the user. So a reconstructed
+    /// turn is only ever `Running`, and the first real event refines it.
+    func currentTurn(
+        forSession sessionID: String,
+        workingDirectory: URL
+    ) -> TranscriptTurn? {
+        guard let url = transcriptURL(
+            forSession: sessionID,
+            workingDirectory: workingDirectory
+        ) else {
+            return nil
+        }
+        let size = (try? fileManager.attributesOfItem(atPath: url.path))
+            .flatMap { ($0[.size] as? NSNumber)?.intValue } ?? 0
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        return Self.turn(in: tail(of: handle, size: size))
+    }
+
+    /// Whether a session is mid-turn, and which turn it is.
+    struct TranscriptTurn: Sendable, Equatable {
+        let turnID: String
+        let startedAt: Date
+        let isUnfinished: Bool
+    }
+
+    private struct TurnRecord: Decodable {
+        let type: String?
+        let promptId: String?
+        let timestamp: String?
+        let message: Message?
+
+        struct Message: Decodable {
+            let role: String?
+            let stopReason: String?
+
+            enum CodingKeys: String, CodingKey {
+                case role
+                case stopReason = "stop_reason"
+            }
+        }
+    }
+
+    private static let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    /// Reads the turn state out of a run of records.
+    ///
+    /// Two facts do the work, both measured rather than documented: an
+    /// `assistant` record carries `stop_reason` and no prompt id, and a `user`
+    /// record carries the prompt id whether it is a prompt or a tool result. So
+    /// the id comes from the last `user` record and the state from the last
+    /// `assistant` one — unless a `user` record came after it, which means the
+    /// assistant has not answered yet.
+    nonisolated private static func turn(in lines: [Data]) -> TranscriptTurn? {
+        var turnID: String?
+        var startedAt: Date?
+        var isUnfinished: Bool?
+
+        for line in lines {
+            guard let record = try? JSONDecoder().decode(TurnRecord.self, from: line) else {
+                continue
+            }
+            switch record.type {
+            case "user":
+                if let promptID = record.promptId, !promptID.isEmpty {
+                    if promptID != turnID {
+                        turnID = promptID
+                        startedAt = nil
+                    }
+                    // The earliest moment of this turn that this read can see.
+                    // A turn whose start is older than the read window is timed
+                    // from here, which under-counts rather than inventing a
+                    // start -- the same rule the Codex side follows.
+                    if let stamp = record.timestamp.flatMap(timestampFormatter.date(from:)),
+                       startedAt == nil || stamp < startedAt! {
+                        startedAt = stamp
+                    }
+                }
+                // A user record after the assistant's last word means the
+                // assistant has not had its turn yet.
+                isUnfinished = true
+            case "assistant":
+                guard let reason = record.message?.stopReason else { continue }
+                isUnfinished = reason == "tool_use"
+            default:
+                // Titles, modes, queue bookkeeping: not turn state.
+                continue
+            }
+        }
+
+        guard let turnID, let startedAt, isUnfinished == true else { return nil }
+        return TranscriptTurn(turnID: turnID, startedAt: startedAt, isUnfinished: true)
+    }
+
     /// Drops what is remembered about sessions that no longer exist.
     func retain(sessionIDs: Set<String>) {
         cache = cache.filter { sessionIDs.contains($0.key) }

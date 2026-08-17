@@ -123,19 +123,57 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         )
 
         await transcripts.retain(sessionIDs: Set(liveByID.keys))
+
+        func title(for session: ClaudeCodeSession) async -> String? {
+            // A title is content, so it is only read when previews are on.
+            guard showsContentPreviews else { return nil }
+            return await transcripts.title(
+                forSession: session.sessionID,
+                workingDirectory: session.workingDirectory
+            )
+        }
+
         var rows: [MonitoredSession] = []
+        var accountedFor: Set<String> = []
         for turn in hookState.turns {
             // A turn whose session is gone is gone. This is the whole reason
             // the session list is load-bearing rather than a convenience.
             guard let session = liveByID[turn.threadID] else { continue }
-            // A title is content, so it is only read when previews are on.
-            let title = showsContentPreviews
-                ? await transcripts.title(
-                    forSession: session.sessionID,
-                    workingDirectory: session.workingDirectory
+            accountedFor.insert(turn.threadID)
+            rows.append(row(for: turn, in: session, title: await title(for: session)))
+        }
+
+        // Sessions the reducer has never heard of: either they were running
+        // before this app was, or their hooks were registered after they
+        // started. Codex has no way to ask about those and shows nothing; here
+        // the transcript can be read, which is the one place the two products
+        // genuinely differ in what they can know.
+        //
+        // The reducer always wins where it has an opinion, including when that
+        // opinion is Completed — a real event outranks a reconstruction.
+        for session in liveByID.values where !accountedFor.contains(session.sessionID) {
+            guard let reconstructed = await transcripts.currentTurn(
+                forSession: session.sessionID,
+                workingDirectory: session.workingDirectory
+            ) else { continue }
+            rows.append(
+                MonitoredSession(
+                    agent: .claudeCode,
+                    threadID: session.sessionID,
+                    // The same id the hooks use, so the first real event
+                    // addresses this turn rather than opening a second one.
+                    turnID: reconstructed.turnID,
+                    projectName: projectName(for: session),
+                    title: await title(for: session) ?? "Untitled",
+                    privacySafeTitle: "Untitled",
+                    preview: nil,
+                    // Only ever Running. Nothing is written while a turn waits
+                    // on the user, so a reconstruction cannot tell a wait from
+                    // work -- and guessing which would be inventing a state.
+                    status: .running,
+                    startedAt: reconstructed.startedAt
                 )
-                : nil
-            rows.append(row(for: turn, in: session, title: title))
+            )
         }
         rows.sort(by: MonitorAggregation.rowOrder)
 
@@ -218,12 +256,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         // Project from a path binds Codex only: there a path is an approximation
         // of a grouping the user made, here the directory *is* the grouping --
         // it is what Claude Code itself files transcripts by.
-        let project = session.workingDirectory.lastPathComponent
-        return MonitoredSession(
+        MonitoredSession(
             agent: .claudeCode,
             threadID: turn.threadID,
             turnID: turn.turnID,
-            projectName: project.isEmpty ? "Untitled folder" : project,
+            projectName: projectName(for: session),
             // `Untitled` is the contract's answer for a title that cannot be
             // obtained, and the folder name is never allowed to stand in for
             // one. That is also what a row shows with previews off, since a
@@ -234,6 +271,15 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             status: turn.status,
             startedAt: turn.startedAt
         )
+    }
+
+    /// Project is the working directory (ADR 0009). The ban on deriving a
+    /// Project from a path binds Codex only: there a path approximates a
+    /// grouping the user made, here the directory *is* the grouping -- it is
+    /// what Claude Code itself files transcripts by.
+    private func projectName(for session: ClaudeCodeSession) -> String {
+        let component = session.workingDirectory.lastPathComponent
+        return component.isEmpty ? "Untitled folder" : component
     }
 
     private func snapshot(

@@ -6580,6 +6580,94 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
+    /// A session running before the app was is visible immediately.
+    ///
+    /// This is the asymmetry with Codex, and it is deliberate: Codex has no
+    /// supported way to ask what is happening right now, so the product shows
+    /// nothing from before launch. Claude Code writes it down, and the product
+    /// exists to answer "what wants me *now*" — an answer of "I don't know
+    /// yet" for the first minute after launch is the wrong one.
+    @Test @MainActor
+    func aTurnRunningBeforeLaunchIsReconstructedAsRunning() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        let cwd = "/Users/someone/Projects/thing"
+        // Mid-turn: the assistant asked for a tool and has not come back.
+        try harness.writeTranscript(session: "older", cwd: cwd, records: [
+            ["type": "user", "promptId": "p-1",
+             "timestamp": "2026-08-16T10:00:00.000Z",
+             "message": ["role": "user", "content": "do the thing"]],
+            ["type": "ai-title", "aiTitle": "Doing the thing"],
+            ["type": "assistant",
+             "message": ["role": "assistant", "stop_reason": "tool_use"]]
+        ])
+        harness.live = [harness.session(id: "older", cwd: cwd)]
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let row = try #require(snapshot.sessions.first)
+        #expect(row.threadID == "older")
+        // The same id the hooks use, so the first real event addresses this
+        // turn rather than opening a second one beside it.
+        #expect(row.turnID == "p-1")
+        // Only ever Running: nothing is written while a turn waits on the user,
+        // so a reconstruction cannot tell a wait from work.
+        #expect(row.status == .running)
+        // The true submit moment, which is more than the Codex side can
+        // recover for a turn it did not watch start.
+        #expect(row.startedAt == ISO8601DateFormatter().date(from: "2026-08-16T10:00:00Z"))
+        #expect(row.title == "Doing the thing")
+    }
+
+    /// A finished turn from before launch stays invisible.
+    @Test @MainActor
+    func aTurnThatEndedBeforeLaunchIsNotReconstructed() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        let cwd = "/Users/someone/Projects/thing"
+        try harness.writeTranscript(session: "done", cwd: cwd, records: [
+            ["type": "user", "promptId": "p-1",
+             "timestamp": "2026-08-16T10:00:00.000Z",
+             "message": ["role": "user", "content": "do the thing"]],
+            ["type": "assistant",
+             "message": ["role": "assistant", "stop_reason": "end_turn"]]
+        ])
+        harness.live = [harness.session(id: "done", cwd: cwd)]
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(snapshot.sessions.isEmpty)
+    }
+
+    /// A real event always outranks a reconstruction, including when it says
+    /// the turn is over.
+    @Test @MainActor
+    func aReducerTurnOverridesWhatTheTranscriptWouldHaveSaid() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        let cwd = "/Users/someone/Projects/thing"
+        // The transcript still looks mid-turn...
+        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
+            ["type": "user", "promptId": "p-1",
+             "timestamp": "2026-08-16T10:00:00.000Z",
+             "message": ["role": "user", "content": "go"]],
+            ["type": "assistant",
+             "message": ["role": "assistant", "stop_reason": "tool_use"]]
+        ])
+        // ...but events say that turn started and then stopped.
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(snapshot.sessions.count == 1)
+        #expect(snapshot.sessions[0].status == .completed)
+    }
+
     /// A title the user typed outranks one the product generated, and a title
     /// that cannot be read is never replaced by the folder name.
     @Test @MainActor
@@ -8260,15 +8348,21 @@ private final class ClaudeCodeHarness {
     }
 
     func writeTranscript(session: String, cwd: String, title: String) throws {
+        try writeTranscript(session: session, cwd: cwd, records: [
+            ["type": "ai-title", "aiTitle": title]
+        ])
+    }
+
+    func writeTranscript(session: String, cwd: String, records: [[String: Any]]) throws {
         let project = root
             .appendingPathComponent("projects", isDirectory: true)
             .appendingPathComponent(cwd.replacingOccurrences(of: "/", with: "-"),
                                     isDirectory: true)
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
-        let record = try JSONSerialization.data(
-            withJSONObject: ["type": "ai-title", "aiTitle": title]
-        )
-        try (record + Data("\n".utf8))
+        let lines = try records.map {
+            String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self)
+        }
+        try Data((lines.joined(separator: "\n") + "\n").utf8)
             .write(to: project.appendingPathComponent("\(session).jsonl"))
     }
 
