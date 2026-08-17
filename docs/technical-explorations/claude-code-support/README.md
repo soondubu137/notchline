@@ -7,7 +7,7 @@
 | 探索点 | 让当前只服务 Codex Desktop 的顶部监视器同时汇总 Claude Code 会话 |
 | 目标读者 | 后续负责决策、spike 和实现的 Agent 与产品负责人 |
 | 验证基线 | Claude Desktop `1.30096.5`（bundle `com.anthropic.claudefordesktop`），内置 Claude Code CLI `2.1.229`，macOS `Darwin 25.5.0`，验证日期 `2026-08-15` |
-| 当前结论 | **可行。导航按产品决策降级；实现可以做到稳态零轮询、零落盘、无 helper 脚本** |
+| 当前结论 | **可行。导航按产品决策降级；实现可以做到稳态零轮询、零落盘、无 helper 脚本。** `http` hook 通道已于 2026-08-16 实测通过（§10），但 `SessionEnd` 必须排除在 http 之外，且「Desktop 托管会话是否触发 hook」仍未验证 |
 | 产品决策 | 已于 2026-08-15 确定：导航降级可接受；Apple Events 权限可接受（见 §8） |
 
 > 目录约定沿用 [`shared-app-server/README.md`](../shared-app-server/README.md)：每个探索点独立二级目录，后续实验记录追加到本文第 10 节，不覆盖早期证据。
@@ -75,7 +75,7 @@ flowchart LR
 
 1. **独立 App Server 子进程**（`CodexAppServerClient.swift` 全部 860 行、NDJSON 分帧、超时探活、传输重建）在 Claude Code 侧没有对应必需品。会话集合来自一条 0.2 秒返回的官方命令，标题与元数据来自 Hook 直接给出的 `transcript_path`。
 2. **启动 cutoff 的能力边界**（见 [`system-architecture.md` §2.1](../../system-architecture.md)）在 Claude Code 侧不成立，因为存在受支持的“此刻有哪些会话”查询。
-3. **`PermissionRequest` 只证明管线跑过、不能表达仍在等待**（当前 Approval needed 只能由 `request_user_input` 之外的显式证据产生）在 Claude Code 侧有直接解法：`PermissionRequest` 带 `tool_use_id`，`PermissionDenied` 与后续 `PreToolUse` 用同一 `tool_use_id` 关闭它，与现有 reducer 的成对开闭模型完全同构。
+3. ~~**`PermissionRequest` 只证明管线跑过、不能表达仍在等待**在 Claude Code 侧有直接解法。~~ **这一条是错的**（2026-08-16 实测，见 §10）：`PermissionRequest` 不带 `tool_use_id`，所以 Codex 侧「借用仍打开的调用 id」的模型在这里原样保留，这个难题并没有消失。真正消失的是另一半——`PermissionDenied` **带** `tool_use_id`，拒绝因此能被精确关闭，不再有 Codex 侧那 67 秒的悬挂。
 
 ## 4. 已验证事实
 
@@ -112,11 +112,11 @@ flowchart LR
 
 | 产品状态 | Claude Code 证据 | 关闭条件 |
 | --- | --- | --- |
-| Running | `UserPromptSubmit`（带 `user_message`、`is_continuation`） | 后续状态事件 |
-| Approval needed | `PermissionRequest`（带 `tool_use_id`） | 同 `tool_use_id` 的 `PermissionDenied` 或 `PreToolUse`/`PostToolUse` |
+| Running | `UserPromptSubmit`（实测字段为 `prompt`，`source` 可选且 `-p` 运行中缺席） | 后续状态事件 |
+| Approval needed | `PermissionRequest`（**实测不带 `tool_use_id`**，见 §10 2026-08-16） | 借用仍打开的调用 id，由同 `tool_use_id` 的 `PostToolUse` 或 `PermissionDenied` 关闭 |
 | Input needed | `Notification(notification_type: idle_prompt / agent_needs_input)`、`Elicitation` | `ElicitationResult`、`Notification(elicitation_complete)` |
-| Completed | `Stop`（带 `last_assistant_message`）、`StopFailure`（带 `error_type`） | 终态粘性 |
-| 会话消失 | `SessionEnd`（带 `session_end_reason`） | — |
+| Completed | `Stop`（带 `last_assistant_message`、`background_tasks`）、`StopFailure`（字段名是 `error`，非 `error_type`） | 终态粘性 |
+| 会话消失 | `SessionEnd`（字段名是 `reason`） | — |
 
 关键结构性优势：
 
@@ -476,6 +476,30 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 - 产品决策：导航降级可接受（仅 Claude Code）；Apple Events 权限可接受。已写入 §8.1
 - 未修改：任何配置、任何生产代码、任何用户状态
 - 下一步建议：直接进入 Phase 0，重点是 `Notification` 类型覆盖面与 `http` hook 可靠性两项
+
+### 2026-08-16 — Phase 0 局部执行：`http` hook 实测（CLI，未覆盖 Desktop 托管）
+
+- 执行范围：**未修改 `~/.claude/settings.json`**。全部通过 `claude -p --settings <临时文件>` 注入 15 条 `type: "http"`、`async: true` 的注册，指向一个只绑 `127.0.0.1`、要求 bearer token、只记录字段名与安全标量（从不记录 prompt / tool_input / tool_response 内容）的临时监听器。共 5 次 `-p` 运行，模型 `claude-haiku-4-5`。
+- 基线：Claude Code CLI `2.1.233`，macOS `Darwin 25.5.0`
+
+**结论：`http` hook 通道成立，且 NO-GO 条件仅差一步被触发。**
+
+| # | 结果 | 影响 |
+| --- | --- | --- |
+| 1 | 15 条注册全部投递成功 | `http` hook 可用 |
+| 2 | 监听器关闭时，`async: true` 的 hook **完全静默失败**，会话正常完成（`is_error: false`） | 应用未运行不影响用户 |
+| 3 | **`SessionEnd` 例外**：向 stderr 打印 `SessionEnd hook [...] failed: connect ECONNREFUSED`，每次会话一行 | 这是 §9 NO-GO 里「应用未运行时对用户会话产生可见影响」。**对策：不要用 http 注册 `SessionEnd`**——它在本产品里只负责移除行，而会话消失同样能由 `claude agents --json` 与 `~/.claude/sessions/` watcher 观察到。去掉它，可见影响归零 |
+| 4 | **`PermissionRequest` 不带 `tool_use_id`**（实测字段：`agent_id, agent_type, cwd, hook_event_name, permission_mode, permission_suggestions, prompt_id, session_id, tool_input, tool_name, transcript_path`） | 证实 §4.2 与 §3 第 3 条写错了。Codex 侧的「借用仍打开的调用 id」模型在 Claude Code 侧**仍然必需**，不会消失 |
+| 5 | 非交互运行中 `PermissionRequest` 照样触发，无人被询问 | 与 Codex 同一教训：孤立的 `PermissionRequest` 不是「有人在等」的证据 |
+| 6 | `prompt_id` 出现在**每一个**事件上，包括 `SessionEnd` | 它就是 `turn_id`，身份规则可原样保留 |
+| 7 | **子智能体事件带父会话的 `session_id` 与 `prompt_id`**，另加 `agent_id` / `agent_type` | 子智能体活动天然折叠进父 Turn，不需要额外身份工作，也不会产生独立行 |
+| 8 | **`UserPromptSubmit` 在 `-p` 运行中没有 `source` 字段** | 自噪声过滤**不能**依赖 `source == "user"`；把额度轮询钉在专用工作目录、按 `cwd` 过滤才是主防线 |
+| 9 | **payload 里没有任何时间戳** | Codex 的 helper 自己写 `received_at`；http 监听器必须在到达时自己盖时间戳 |
+| 10 | **投递无序。** 同一 `prompt_id` 下，父 `Stop` 先于子智能体的 `PermissionRequest` 与 `SubagentStop` 到达 | `async: true` 是发完即忘。reducer 依赖 `lastEventAt` 单调，只能由监听器的到达时刻喂给它；而「另一个 `tool_use_id` 上的活动关闭借用审批」这条规则在乱序下可能误判，需要在设计里单独处理 |
+| 11 | `Stop` 额外带 `session_crons`（此前未记录），`background_tasks` 本次为 0 | — |
+| 12 | `PostToolUseFailure` 在普通工具错误（文件不存在）时触发，带 `error` / `is_interrupt` / `duration_ms` | 中断与错误可区分 |
+
+**未回答，且必须用真实 `~/.claude/settings.json` 才能回答的一条：hook 是否在 Claude Desktop 托管的会话中触发。** 这是决定整个方案存亡的问题（§9 第一条），而 `--settings` 只作用于它启动的那个 CLI 进程。审批相关的 `Notification(permission_prompt)` 同样测不到——它按定义只在有人被真正询问时才出现，非交互运行不产生对话框。两者都需要一次交互式验证。
 
 ## 11. 参考入口
 
