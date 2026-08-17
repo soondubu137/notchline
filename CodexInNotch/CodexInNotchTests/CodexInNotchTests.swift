@@ -49,6 +49,32 @@ struct CodexInNotchTests {
         #expect(PanelMetrics.fixedCompactWidth - widest < 1)
     }
 
+    /// Which status sets the compact width, named rather than measured.
+    ///
+    /// `fixedCompactWidth` folds over every `MonitorStatus`, so adding or
+    /// renaming a case silently resizes the no-notch pill — including for a
+    /// user who never asked for the new case. Pinning the *identity* of the
+    /// widest status rather than a golden float keeps the assertion true across
+    /// system font changes while still failing the moment the maximiser moves.
+    @Test @MainActor
+    func compactWidthIsDrivenByTheWidestTimedStatus() {
+        let widest = MonitorStatus.allCases.max {
+            PanelMetrics.compactContentWidth(for: $0)
+                < PanelMetrics.compactContentWidth(for: $1)
+        }
+        #expect(widest == .approvalNeeded)
+
+        // It wins because it reserves the timer slot as well as its label, so
+        // no untimed status can overtake it however long its name gets.
+        let widestUntimed = MonitorStatus.allCases
+            .filter { !$0.canShowElapsed }
+            .map(PanelMetrics.compactContentWidth(for:))
+            .max() ?? 0
+        #expect(
+            widestUntimed < PanelMetrics.compactContentWidth(for: .approvalNeeded)
+        )
+    }
+
     /// The notch's label is shorter than the panel's because the matrix beside
     /// it already says a turn wants the user.
     @Test @MainActor
@@ -1016,6 +1042,99 @@ struct CodexInNotchTests {
                 sessions: [session]
             ) == .disconnected
         )
+    }
+
+    /// A row's identity is the turn it belongs to, spelled out.
+    ///
+    /// This id keys the dismissed set, the terminal-unread gate and SwiftUI's
+    /// row identity. Pinning the format here means changing it has to be a
+    /// decision rather than a side effect of some other refactor.
+    @Test @MainActor
+    func sessionIdentityIsThreadAndTurn() {
+        let session = MonitoredSession(
+            threadID: "thread",
+            turnID: "turn",
+            projectName: "Chats",
+            title: "Task",
+            preview: nil,
+            status: .running,
+            startedAt: nil
+        )
+
+        #expect(session.id == "thread:turn")
+    }
+
+    /// Availability only speaks for the aggregate while it is not ready.
+    ///
+    /// Naming this makes the early return a contract instead of an
+    /// implementation detail, so a later change to it reads as the deliberate
+    /// product decision it would be.
+    @Test @MainActor
+    func aggregateFallsBackToAvailabilityOnlyWhenNotReady() {
+        let running = MonitoredSession(
+            threadID: "thread",
+            turnID: "turn",
+            projectName: "Chats",
+            title: "Running task",
+            preview: nil,
+            status: .running,
+            startedAt: Date()
+        )
+
+        let unready: [MonitorAvailability] = [
+            .setupRequired,
+            .connecting,
+            .updateCodex,
+            .unsupportedVersion,
+            .disconnected
+        ]
+        for availability in unready {
+            #expect(
+                MonitorAggregation.status(
+                    availability: availability,
+                    sessions: [running]
+                ) == availability.status
+            )
+        }
+
+        #expect(
+            MonitorAggregation.status(
+                availability: .ready,
+                sessions: [running]
+            ) == .running
+        )
+        #expect(
+            MonitorAggregation.status(availability: .ready, sessions: []) == .idle
+        )
+    }
+
+    /// The row comparator has to be a total order, or the list reshuffles.
+    ///
+    /// Two rows sharing a status and a start time compare equal in both
+    /// directions, and `sorted(by:)` is not stable — so the same snapshot can
+    /// render in a different order on the next refresh. One source makes that
+    /// tie rare. A second one, reporting whole-millisecond start times and
+    /// discovering a batch of sessions at once, makes it routine. A list that
+    /// reorders while it is being read is exactly the flicker the fixed compact
+    /// width exists to prevent.
+    @Test @MainActor
+    func monitorOrderIsATotalOrder() {
+        let startedAt = Date(timeIntervalSince1970: 1_000)
+        let sessions = (0 ..< 6).map { index in
+            MonitoredSession(
+                threadID: "thread-\(index)",
+                turnID: "turn",
+                projectName: "Chats",
+                title: "Task \(index)",
+                preview: nil,
+                status: index.isMultiple(of: 2) ? .running : .completed,
+                startedAt: startedAt
+            )
+        }
+
+        let forward = sessions.sorted(by: CodexSnapshotParser.monitorOrder)
+        let backward = sessions.reversed().sorted(by: CodexSnapshotParser.monitorOrder)
+        #expect(forward.map(\.id) == backward.map(\.id))
     }
 
     @Test @MainActor

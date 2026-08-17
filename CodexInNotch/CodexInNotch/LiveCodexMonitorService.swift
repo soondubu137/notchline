@@ -1101,7 +1101,16 @@ enum CodexSnapshotParser {
         if lhsPriority != rhsPriority {
             return lhsPriority < rhsPriority
         }
-        return (lhs.startedAt ?? .distantPast) > (rhs.startedAt ?? .distantPast)
+        let lhsStart = lhs.startedAt ?? .distantPast
+        let rhsStart = rhs.startedAt ?? .distantPast
+        if lhsStart != rhsStart {
+            return lhsStart > rhsStart
+        }
+        // Identity breaks the last tie so the comparator is a total order.
+        // Without it two rows sharing a status and a start time compare equal
+        // both ways, and `sorted(by:)` is free to place them either way round
+        // on each refresh — a list that reorders itself while it is being read.
+        return lhs.id < rhs.id
     }
 
     nonisolated private static func normalizedTitle(_ value: String?) -> String? {
