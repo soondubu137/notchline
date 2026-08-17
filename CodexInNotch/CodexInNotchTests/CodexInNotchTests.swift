@@ -6688,6 +6688,117 @@ for line in sys.stdin:
         )
     }
 
+    /// Today's tokens are everything processed, cache included, plus output.
+    ///
+    /// ADR 0008's definition, and not the obvious one: the three candidates
+    /// differ by 237× on two figures that share a footer line. A test that only
+    /// checked "some number came out" would pass on any of them.
+    @Test @MainActor
+    func todayTokensCountEverythingProcessedIncludingCacheReads() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        func assistant(_ day: String, _ usage: [String: Int]) -> [String: Any] {
+            [
+                "type": "assistant",
+                "timestamp": "\(day)T12:00:00.000Z",
+                "message": ["role": "assistant", "usage": usage]
+            ]
+        }
+        let records: [[String: Any]] = [
+            assistant("2026-08-16", [
+                "input_tokens": 2, "cache_creation_input_tokens": 100,
+                "cache_read_input_tokens": 1_000, "output_tokens": 10
+            ]),
+            // A different day, which must not be counted.
+            assistant("2026-08-15", [
+                "input_tokens": 5_000, "cache_read_input_tokens": 5_000,
+                "output_tokens": 5_000
+            ]),
+            // Not an assistant record, even though it carries a usage key.
+            ["type": "user", "timestamp": "2026-08-16T12:00:00.000Z",
+             "message": ["role": "user", "usage": ["input_tokens": 999]]],
+            assistant("2026-08-16", ["input_tokens": 1, "output_tokens": 2])
+        ]
+        let lines = try records.map {
+            String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self)
+        }
+        let transcript = project.appendingPathComponent("s-1.jsonl")
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: transcript)
+
+        let clock = TestClock(now: ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!)
+        let counter = ClaudeCodeTokenCounter(projectsDirectory: root, clock: clock)
+
+        // 2 + 100 + 1000 + 10, then 1 + 2. Cache reads dominate, which is the
+        // whole reason the definition had to be pinned.
+        #expect(await counter.todayTokens() == 1_115)
+    }
+
+    /// A second pass reads only what was appended since the first.
+    ///
+    /// The transcript directory on a working machine is over 100 MB and one
+    /// file is 16 MB. Re-reading all of it once a minute is the difference
+    /// between a background counter and a visible one.
+    @Test @MainActor
+    func todayTokensReadOnlyWhatWasAppendedSinceTheLastPass() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let transcript = project.appendingPathComponent("s-1.jsonl")
+
+        func line(_ output: Int) -> String {
+            let record: [String: Any] = [
+                "type": "assistant",
+                "timestamp": "2026-08-16T12:00:00.000Z",
+                "message": ["role": "assistant", "usage": ["output_tokens": output]]
+            ]
+            return String(
+                decoding: try! JSONSerialization.data(withJSONObject: record),
+                as: UTF8.self
+            )
+        }
+
+        try Data((line(10) + "\n").utf8).write(to: transcript)
+        let clock = TestClock(now: ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!)
+        let counter = ClaudeCodeTokenCounter(projectsDirectory: root, clock: clock)
+        #expect(await counter.todayTokens() == 10)
+
+        // Append, exactly as a live session does.
+        let handle = try FileHandle(forWritingTo: transcript)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((line(5) + "\n").utf8))
+        try handle.close()
+        #expect(await counter.todayTokens() == 15)
+
+        // Replaced rather than appended to: anything remembered describes a
+        // file that no longer exists, so it is counted again from scratch.
+        try Data((line(7) + "\n").utf8).write(to: transcript)
+        #expect(await counter.todayTokens() == 7)
+    }
+
+    /// A directory that cannot be read is no figure, not a figure of zero.
+    ///
+    /// Zero is a true answer — the transcripts were read and today has nothing
+    /// in them. A small wrong number looks like a quiet day, which is worse
+    /// than a blank, so the two answers stay distinct.
+    @Test @MainActor
+    func todayTokensDistinguishNothingReadFromNothingSpent() async throws {
+        let missing = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-absent-\(UUID().uuidString.prefix(8))")
+        #expect(await ClaudeCodeTokenCounter(projectsDirectory: missing).todayTokens() == nil)
+
+        let empty = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: empty) }
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        #expect(await ClaudeCodeTokenCounter(projectsDirectory: empty).todayTokens() == 0)
+    }
+
     /// The quota parser reads two lines out of a paragraph written for a
     /// person, and is not fooled by the numbers around them.
     ///

@@ -75,7 +75,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         self.usage = usage ?? ClaudeCodeUsageReader(
             clock: clock,
             workingDirectory: paths.agentDirectory
-                .appendingPathComponent("usage", isDirectory: true)
+                .appendingPathComponent("usage", isDirectory: true),
+            tokens: ClaudeCodeTokenCounter(clock: clock)
         )
         self.clock = clock
 

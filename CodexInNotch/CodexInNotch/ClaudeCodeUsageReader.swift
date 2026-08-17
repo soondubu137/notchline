@@ -36,6 +36,7 @@ actor ClaudeCodeUsageReader {
     ]
 
     private let read: @Sendable () async -> String?
+    private let tokens: ClaudeCodeTokenCounter?
     private let clock: any MonitorClock
     private let freshness: TimeInterval
     private var cached = QuotaSnapshot.unavailable
@@ -45,8 +46,10 @@ actor ClaudeCodeUsageReader {
         clock: any MonitorClock = SystemMonitorClock(),
         freshness: TimeInterval = 60,
         workingDirectory: URL? = nil,
+        tokens: ClaudeCodeTokenCounter? = nil,
         read: (@Sendable () async -> String?)? = nil
     ) {
+        self.tokens = tokens
         self.clock = clock
         self.freshness = freshness
         let directory = workingDirectory
@@ -58,16 +61,22 @@ actor ClaudeCodeUsageReader {
             return cached
         }
         readAt = clock.now()
+        // Counted separately from the windows: the two come from different
+        // places and one failing must not blank the other.
+        let todayTokens = await tokens?.todayTokens()
         guard let output = await read() else {
             // Never a stale figure and never a zero. A quota that cannot be
             // obtained is drawn as unavailable, which is a thing the surface
             // knows how to say.
-            cached = .unavailable
+            cached = QuotaSnapshot(
+                windows: Self.parseWindows("", now: clock.now()),
+                todayTokens: todayTokens
+            )
             return cached
         }
         cached = QuotaSnapshot(
             windows: Self.parseWindows(output, now: clock.now()),
-            todayTokens: nil
+            todayTokens: todayTokens
         )
         return cached
     }
