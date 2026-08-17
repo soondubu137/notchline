@@ -64,7 +64,7 @@ struct NotchOverlayView: View {
         let elapsed = store.spokenLongestElapsedText.map { "，最长已运行 \($0)" }
             ?? ""
         return "Codex，\(store.sessions.count) 个相关会话，状态 "
-            + "\(store.status.displayName)\(elapsed)，\(usage)"
+            + "\(store.statusDisplayName)\(elapsed)，\(usage)"
     }
 }
 
@@ -171,7 +171,7 @@ private struct OverlayHeader: View {
     }
 
     private var statusText: String {
-        store.isExpanded ? store.status.displayName : store.compactStatusReadoutText
+        store.isExpanded ? store.statusDisplayName : store.compactStatusReadoutText
     }
 
     private var showsStatusText: Bool {

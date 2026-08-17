@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | 视觉与数据口径已定；代码尚未开始 |
+| 文档状态 | 视觉与数据口径已定；域层与合并层已落地（`claude-code-integration` 分支），UI 尚未开始 |
 | 版本 | 1.0 |
 | 日期 | 2026-08-16 |
 | Figma | [`10 — Double Apps`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=540-2)；设置项在 [`09 — Settings`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=233-3) |
@@ -156,12 +156,17 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 | 事项 | 状态 |
 | --- | --- |
 | 展开态顶栏状态名是否附带产品名 | 待定，构建前重新评估 |
-| 是否超出四个状态（`StopFailure` 带 `error_type`） | 待定；本文所有图示均假设仍为四态 |
+| 是否超出四个状态（`StopFailure` 带 `error`） | **已定：保持四态。** 只有 Claude Code 能观察到的状态会让这套共享词汇在 Codex 上说谎——用户无法区分「没有失败」与「无法观察到失败」。失败作为终态原因随行，行上的标记不变。字段名是 `error` 而非 `error_type`（CLI 2.1.233 实测） |
 | `dailyUsageBuckets.tokens` 与 CLI `total_tokens` 是否同口径 | 待验证，低优先级；不阻塞任何布局 |
 | 同名目录的两个检出如何消歧 | 未定 |
 | 产品改名 | 候选见 Figma §07；`Baton` 为推荐项 |
+| 双产品无刘海紧凑标签由哪一状态定宽 | **新增，待定。** 见下 |
 
 降级导航已确认并接受：Claude Code 行只能唤起 Claude Desktop 或聚焦终端，行内不为此增加任何标记。
+
+**紧凑标签定宽状态在双产品下换人。** 单 Codex 时最宽的紧凑状态是 `Approval`，它靠同时占用标签与计时槽取胜，任何不计时的状态都追不上它。加入 Claude Code 后冠军变成一个**不计时**的状态：`Update Claude Code` 比 `Approval` 加计时槽更长。本机实测 13pt Light：`Approval` + 12 + `1:02:03` = 112.3，`Update Claude Code` = 124.8，无刘海药丸宽度因此从 189 变为 202。
+
+这不是缺陷，是一个产品问题。紧凑状态名只有一个，且命名的是跨两个产品最紧急的状态（§3.3），所以它不能像其他紧凑标签那样把产品名省掉——省掉之后「Update」不说明该更新哪一个。可选项：接受 202；或者接受该标签在双产品下不指名产品；或者为 `updateAgent` 设计一个更短的紧凑形式。在此之前，`PanelMetrics.fixedCompactWidth(for:)` 按用户实际配置的产品集合折叠，单 Codex 用户的宽度与今天逐点一致，由 `aCodexOnlyConfigurationHasTodaysExactPanelGeometry` 固定。
 
 ## 9. 与既有文档的关系
 

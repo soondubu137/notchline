@@ -391,7 +391,7 @@ struct AppSettingsView: View {
         case .ready: "Codex Desktop connected"
         case .setupRequired: "Codex integration not installed"
         case .connecting: "Connecting to Codex Desktop"
-        case .updateCodex: "Update Codex Desktop"
+        case .updateAgent: "Update Codex Desktop"
         case .unsupportedVersion: "Codex version unsupported"
         case .disconnected: "Codex Desktop disconnected"
         }
@@ -418,7 +418,7 @@ struct AppSettingsView: View {
             Color(red: 0.03, green: 0.45, blue: 0.98)
         case .setupRequired:
             Color(red: 0.56, green: 0.56, blue: 0.58)
-        case .updateCodex, .unsupportedVersion, .disconnected:
+        case .updateAgent, .unsupportedVersion, .disconnected:
             Color(red: 0.75, green: 0.35, blue: 0.95)
         }
     }

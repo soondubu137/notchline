@@ -38,20 +38,31 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     case inputNeeded
     case approvalNeeded
     case completed
-    case updateCodex
+    case updateAgent
     case unsupportedVersion
     case disconnected
 
     var id: Self { self }
 
-    var displayName: String {
+    /// The panel's full sentence for this state.
+    ///
+    /// Four of these name a product, so they are told which one rather than
+    /// spelling Codex into the enum. Adding a case per product would have been
+    /// the other way to do it, and it is the wrong way: every panel width is
+    /// derived by folding over `allCases`, so a `.updateClaudeCode` case would
+    /// widen the pill for a user who has never installed Claude Code.
+    ///
+    /// A `nil` product means no single one owns the state — either nothing is
+    /// wrong, or more than one product is unhealthy and naming just one of them
+    /// would be a lie.
+    func displayName(for agent: AgentKind?) -> String {
         switch self {
         case .idle:
             "Idle"
         case .setupRequired:
             "Set up integration"
         case .connecting:
-            "Connecting to Codex"
+            agent.map { "Connecting to \($0.displayName)" } ?? "Connecting"
         case .running:
             "Running"
         case .inputNeeded:
@@ -60,12 +71,13 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
             "Approval needed"
         case .completed:
             "Completed"
-        case .updateCodex:
-            "Update Codex"
+        case .updateAgent:
+            agent.map { "Update \($0.displayName)" } ?? "Update required"
         case .unsupportedVersion:
-            "Codex version unsupported"
+            agent.map { "\($0.displayName) version unsupported" }
+                ?? "Version unsupported"
         case .disconnected:
-            "Codex disconnected"
+            agent.map { "\($0.displayName) disconnected" } ?? "Disconnected"
         }
     }
 
@@ -76,7 +88,11 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     /// "Codex" costs nothing in the app's own menu bar item either. The panel
     /// still shows the full sentence, so this is a shorter form, not less
     /// information.
-    var compactDisplayName: String {
+    ///
+    /// Only one of these names a product, and it is the one that sets the
+    /// widest compact label — so the product a panel is configured for is what
+    /// decides how wide that panel is.
+    func compactDisplayName(for agent: AgentKind?) -> String {
         switch self {
         case .idle:
             "Idle"
@@ -92,8 +108,8 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
             "Approval"
         case .completed:
             "Completed"
-        case .updateCodex:
-            "Update Codex"
+        case .updateAgent:
+            agent.map { "Update \($0.displayName)" } ?? "Update"
         case .unsupportedVersion:
             "Unsupported"
         case .disconnected:
@@ -114,28 +130,29 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
-    var controlTitle: String {
+    func controlTitle(for agent: AgentKind?) -> String {
+        let product = agent?.displayName ?? "智能体"
         switch self {
         case .idle:
-            "空闲"
+            return "空闲"
         case .setupRequired:
-            "设置 Codex 集成"
+            return "设置 \(product) 集成"
         case .connecting:
-            "正在连接"
+            return "正在连接"
         case .running:
-            "运行中"
+            return "运行中"
         case .inputNeeded:
-            "需要输入"
+            return "需要输入"
         case .approvalNeeded:
-            "等待批准"
+            return "等待批准"
         case .completed:
-            "已完成"
-        case .updateCodex:
-            "需要更新 Codex"
+            return "已完成"
+        case .updateAgent:
+            return "需要更新 \(product)"
         case .unsupportedVersion:
-            "Codex 版本不受支持"
+            return "\(product) 版本不受支持"
         case .disconnected:
-            "连接中断"
+            return "连接中断"
         }
     }
 
@@ -234,7 +251,7 @@ enum MonitorAvailability: Equatable, Sendable {
     case setupRequired
     case connecting
     case ready
-    case updateCodex
+    case updateAgent
     case unsupportedVersion
     case disconnected
 
@@ -246,8 +263,8 @@ enum MonitorAvailability: Equatable, Sendable {
             .connecting
         case .ready:
             .idle
-        case .updateCodex:
-            .updateCodex
+        case .updateAgent:
+            .updateAgent
         case .unsupportedVersion:
             .unsupportedVersion
         case .disconnected:
@@ -268,27 +285,22 @@ enum MonitorAvailability: Equatable, Sendable {
             2
         case .unsupportedVersion:
             3
-        case .updateCodex:
+        case .updateAgent:
             4
         case .setupRequired:
             5
         }
     }
 
-    var emptyListMessage: String {
+    func emptyListMessage(for agent: AgentKind?) -> String {
         switch self {
         case .setupRequired:
             "Set up integration"
-        case .connecting:
-            "Connecting to Codex"
         case .ready:
             "No active turns"
-        case .updateCodex:
-            "Update Codex"
-        case .unsupportedVersion:
-            "Codex version unsupported"
-        case .disconnected:
-            "Codex disconnected"
+        case .connecting, .updateAgent, .unsupportedVersion, .disconnected:
+            // The same sentence the panel header shows, so the two cannot drift.
+            status.displayName(for: agent)
         }
     }
 }
@@ -450,6 +462,20 @@ struct MonitorSnapshot: Equatable, Sendable {
         MonitorAggregation.availability(agents: agents)
     }
 
+    /// Whose problem the summary is describing, or `nil` when it is nobody's.
+    ///
+    /// The status label has to name a product to say "Codex disconnected", and
+    /// it has to *not* name one when two products are equally unhealthy —
+    /// naming just one of them would be a lie about the other.
+    nonisolated var availabilityAgent: AgentKind? {
+        let availability = self.availability
+        guard availability != .ready else { return nil }
+        let owners = agents
+            .filter { $0.availability == availability }
+            .map(\.agent)
+        return owners.count == 1 ? owners.first : nil
+    }
+
     /// The single quota window the footer draws while one product is running.
     /// A two-product footer reads ``agents`` directly, because it has one rule
     /// per product rather than one rule.
@@ -517,6 +543,8 @@ enum MonitorAggregation {
         return availability(agents: agents).status
     }
 
+    /// Ready if any product is being watched properly; otherwise the most
+    /// actionable of the unhealthy ones.
     nonisolated static func availability(
         agents: [AgentSnapshot]
     ) -> MonitorAvailability {

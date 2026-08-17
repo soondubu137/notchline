@@ -210,11 +210,15 @@ enum PanelMetrics {
         timerText: String?,
         centerOcclusionWidth: CGFloat,
         compactHeight: CGFloat,
+        configuredAgents: Set<AgentKind> = [.codex],
         expandedContentHeight: CGFloat = expandedContentHeight
     ) -> CGSize {
         guard !isExpanded else {
             return CGSize(
-                width: expandedWidth(centerOcclusionWidth: centerOcclusionWidth),
+                width: expandedWidth(
+                    centerOcclusionWidth: centerOcclusionWidth,
+                    configuredAgents: configuredAgents
+                ),
                 height: compactHeight + expandedContentHeight
             )
         }
@@ -224,7 +228,10 @@ enum PanelMetrics {
             guard centerOcclusionWidth >= 1 else {
                 // Notched display with no measurable cut-out: nothing to wrap
                 // around, so lay it out as an emulated notch instead.
-                return CGSize(width: fixedCompactWidth, height: compactHeight)
+                return CGSize(
+                    width: fixedCompactWidth(for: configuredAgents),
+                    height: compactHeight
+                )
             }
             // A notched panel still wraps the cut-out, so its width is set by
             // the wings around a fixed obstacle rather than by its content.
@@ -233,7 +240,10 @@ enum PanelMetrics {
                 + notchedTrailingWidth(timerText: timerText)
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
-            return CGSize(width: fixedCompactWidth, height: compactHeight)
+            return CGSize(
+                width: fixedCompactWidth(for: configuredAgents),
+                height: compactHeight
+            )
         }
     }
 
@@ -252,9 +262,24 @@ enum PanelMetrics {
     /// Computed rather than a stored `static let`: a lazily-initialised one runs
     /// its initialiser in a nonisolated context, and this measures text. Ten
     /// cases of measurement per panel update is not worth the isolation dance.
-    static var fixedCompactWidth: CGFloat {
+    /// Folded over every state *and* every product the user has configured.
+    ///
+    /// One label names its product, so what a panel is configured to watch is
+    /// what decides how wide it is. Deriving the set from settings rather than
+    /// from whichever products currently have rows is the whole point: a width
+    /// that followed live membership would resize the pill the moment a second
+    /// product connected, which is the flicker this fixed width exists to
+    /// prevent.
+    static func fixedCompactWidth(
+        for configuredAgents: Set<AgentKind>
+    ) -> CGFloat {
+        let agents: [AgentKind?] = configuredAgents.isEmpty
+            ? [nil]
+            : configuredAgents.sorted().map { $0 }
         let widest = MonitorStatus.allCases
-            .map(compactContentWidth(for:))
+            .flatMap { status in
+                agents.map { compactContentWidth(for: status, agent: $0) }
+            }
             .max() ?? 0
         return ceil(compactChromeWidth + widest)
     }
@@ -267,8 +292,14 @@ enum PanelMetrics {
 
     /// What one status needs beside the chrome: its label, plus the timer slot
     /// when that status can be counting.
-    static func compactContentWidth(for status: MonitorStatus) -> CGFloat {
-        let label = textWidth(status.compactDisplayName, font: statusLabelFont)
+    static func compactContentWidth(
+        for status: MonitorStatus,
+        agent: AgentKind?
+    ) -> CGFloat {
+        let label = textWidth(
+            status.compactDisplayName(for: agent),
+            font: statusLabelFont
+        )
         guard status.canShowElapsed else { return label }
         return label
             + expandedReadoutSpacing
@@ -291,15 +322,21 @@ enum PanelMetrics {
             + expandedFooterHeight
     }
 
-    static func expandedWidth(centerOcclusionWidth: CGFloat) -> CGFloat {
+    static func expandedWidth(
+        centerOcclusionWidth: CGFloat,
+        configuredAgents: Set<AgentKind>
+    ) -> CGFloat {
         guard centerOcclusionWidth >= 1 else {
             return expandedBaselineWidth
         }
 
         // Only the status readout flanks the notch now — the usage readout that
         // used to claim the trailing side moved into the footer.
-        let widestStatusReadout = MonitorStatus.allCases.map {
-            expandedStatusReadoutWidth(status: $0)
+        let agents: [AgentKind?] = configuredAgents.isEmpty
+            ? [nil]
+            : configuredAgents.sorted().map { $0 }
+        let widestStatusReadout = MonitorStatus.allCases.flatMap { status in
+            agents.map { expandedStatusReadoutWidth(status: status, agent: $0) }
         }.max() ?? 0
         let requiredSideWidth = expandedHorizontalPadding
             + widestStatusReadout
@@ -309,10 +346,13 @@ enum PanelMetrics {
         return ceil(max(expandedBaselineWidth, notchSafeWidth))
     }
 
-    static func expandedStatusReadoutWidth(status: MonitorStatus) -> CGFloat {
+    static func expandedStatusReadoutWidth(
+        status: MonitorStatus,
+        agent: AgentKind?
+    ) -> CGFloat {
         statusMatrixSize
             + expandedReadoutSpacing
-            + textWidth(status.displayName, font: statusLabelFont)
+            + textWidth(status.displayName(for: agent), font: statusLabelFont)
     }
 
     private static func textWidth(_ text: String, font: NSFont) -> CGFloat {
@@ -392,6 +432,9 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var displays: [DisplayOption]
     @Published private(set) var selectedDisplayID: String
     @Published private(set) var status: MonitorStatus
+    /// Which product the summary is speaking about, or nil when it speaks for
+    /// none — nothing is wrong, or more than one product is equally unhealthy.
+    @Published private(set) var statusAgent: AgentKind?
     @Published private(set) var availability: MonitorAvailability
     @Published private(set) var quota: QuotaSnapshot
     @Published private(set) var sessions: [MonitoredSession] {
@@ -509,6 +552,7 @@ final class MonitorStore: ObservableObject {
         self.quota = merged.quota
         self.sessions = merged.sessions
         self.status = merged.status
+        self.statusAgent = merged.availabilityAgent
         self.showsContentPreviews = UserDefaults.standard.object(
             forKey: Self.contentPreviewDefaultsKey
         ) as? Bool ?? true
@@ -633,8 +677,20 @@ final class MonitorStore: ObservableObject {
         quota.remainingPercent
     }
 
+    /// The products this panel is configured to watch.
+    ///
+    /// Geometry is derived from this rather than from which products currently
+    /// have rows, so the pill does not resize when one connects or goes quiet.
+    var configuredAgents: Set<AgentKind> {
+        Set(latestByAgent.keys)
+    }
+
+    var statusDisplayName: String {
+        status.displayName(for: statusAgent)
+    }
+
     var compactStatusReadoutText: String {
-        status.compactDisplayName
+        status.compactDisplayName(for: statusAgent)
     }
 
     /// The turn the notch is timing.
@@ -709,7 +765,7 @@ final class MonitorStore: ObservableObject {
     }
 
     var emptyListMessage: String {
-        availability.emptyListMessage
+        availability.emptyListMessage(for: statusAgent)
     }
 
     var expandedContentHeight: CGFloat {
@@ -724,6 +780,7 @@ final class MonitorStore: ObservableObject {
             timerText: compactTimerText,
             centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight,
+            configuredAgents: configuredAgents,
             expandedContentHeight: expandedContentHeight
         )
     }
@@ -748,7 +805,7 @@ final class MonitorStore: ObservableObject {
             "正在连接 Codex App Server"
         case .ready:
             "Codex 实时监视已连接"
-        case .updateCodex:
+        case .updateAgent:
             "需要更新 Codex"
         case .unsupportedVersion:
             "当前 Codex 版本不支持所需协议"
@@ -1126,6 +1183,9 @@ final class MonitorStore: ObservableObject {
         }
         if status != aggregateStatus {
             status = aggregateStatus
+        }
+        if statusAgent != snapshot.availabilityAgent {
+            statusAgent = snapshot.availabilityAgent
         }
         if lastIntegrationMessage != integrationMessage {
             lastIntegrationMessage = integrationMessage

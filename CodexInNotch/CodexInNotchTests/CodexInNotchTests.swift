@@ -9,69 +9,147 @@ struct CodexInNotchTests {
     /// resized whenever the status changed or a turn started or finished —
     /// which on a menu bar reads as flicker rather than information.
     @Test @MainActor
-    func noNotchCompactIsOneFixedWidth() {
-        var widths: Set<CGFloat> = []
-        var heights: Set<CGFloat> = []
-        for status in MonitorStatus.allCases {
-            for timerText in [nil, "0:07", "1:23", "1:02:03"] as [String?] {
-                for barHeight in [CGFloat(46), 38, 24] {
-                    let size = PanelMetrics.size(
-                        geometry: .noNotch,
-                        isExpanded: false,
-                        statusReadoutText: status.compactDisplayName,
-                        timerText: timerText,
-                        centerOcclusionWidth: 0,
-                        compactHeight: barHeight
-                    )
-                    widths.insert(size.width)
-                    heights.insert(size.height)
+    func noNotchCompactIsOneFixedWidthPerConfiguredAgentSet() {
+        for configured in [Set([AgentKind.codex]), Set(AgentKind.allCases)] {
+            var widths: Set<CGFloat> = []
+            var heights: Set<CGFloat> = []
+            for status in MonitorStatus.allCases {
+                for agent in configured {
+                    for timerText in [nil, "0:07", "1:23", "1:02:03"] as [String?] {
+                        for barHeight in [CGFloat(46), 38, 24] {
+                            let size = PanelMetrics.size(
+                                geometry: .noNotch,
+                                isExpanded: false,
+                                statusReadoutText: status.compactDisplayName(for: agent),
+                                timerText: timerText,
+                                centerOcclusionWidth: 0,
+                                compactHeight: barHeight,
+                                configuredAgents: configured
+                            )
+                            widths.insert(size.width)
+                            heights.insert(size.height)
+                        }
+                    }
                 }
             }
-        }
 
-        #expect(widths == [PanelMetrics.fixedCompactWidth])
-        // Height still follows the menu bar; only width came loose.
-        #expect(heights == [46, 38, 24])
+            #expect(widths == [PanelMetrics.fixedCompactWidth(for: configured)])
+            // Height still follows the menu bar; only width came loose.
+            #expect(heights == [46, 38, 24])
+        }
     }
 
     /// The fixed width is a reservation, so it has to actually fit every state —
     /// and not be so generous that it is reserving space nothing can use.
     @Test @MainActor
-    func fixedCompactWidthFitsEveryStatusWithoutSlack() {
-        var widest: CGFloat = 0
-        for status in MonitorStatus.allCases {
-            let needed = PanelMetrics.compactChromeWidth
-                + PanelMetrics.compactContentWidth(for: status)
-            #expect(needed <= PanelMetrics.fixedCompactWidth)
-            widest = max(widest, needed)
+    func fixedCompactWidthFitsEveryStatusForEveryConfiguredAgent() {
+        for configured in [Set([AgentKind.codex]), Set(AgentKind.allCases)] {
+            var widest: CGFloat = 0
+            for status in MonitorStatus.allCases {
+                for agent in configured {
+                    let needed = PanelMetrics.compactChromeWidth
+                        + PanelMetrics.compactContentWidth(for: status, agent: agent)
+                    #expect(needed <= PanelMetrics.fixedCompactWidth(for: configured))
+                    widest = max(widest, needed)
+                }
+            }
+            // Only the rounding up should separate them.
+            #expect(PanelMetrics.fixedCompactWidth(for: configured) - widest < 1)
         }
-        // Only the rounding up should separate them.
-        #expect(PanelMetrics.fixedCompactWidth - widest < 1)
+    }
+
+    /// Today's panel, for today's user, to the point.
+    ///
+    /// This is the anti-regression for the whole two-product refactor. A Codex
+    /// user's surface has to be exactly what it was, and the way that quietly
+    /// stops being true is geometry: every width is derived by folding over
+    /// `MonitorStatus.allCases`, so anything that adds a case, renames a label,
+    /// or lets a second product into the fold moves a panel nobody asked to
+    /// move.
+    @Test @MainActor
+    func aCodexOnlyConfigurationHasTodaysExactPanelGeometry() {
+        let codexOnly = PanelMetrics.fixedCompactWidth(for: [.codex])
+        let both = PanelMetrics.fixedCompactWidth(for: Set(AgentKind.allCases))
+
+        // Configuring a second product must not reach back into the first
+        // product's panel.
+        #expect(PanelMetrics.fixedCompactWidth(for: [.codex]) == codexOnly)
+        #expect(both >= codexOnly)
+
+        for occlusion in [CGFloat(0), 200, 320] {
+            let codexExpanded = PanelMetrics.expandedWidth(
+                centerOcclusionWidth: occlusion,
+                configuredAgents: [.codex]
+            )
+            #expect(
+                PanelMetrics.expandedWidth(
+                    centerOcclusionWidth: occlusion,
+                    configuredAgents: [.codex]
+                ) == codexExpanded
+            )
+        }
+
+        // The four sentences a Codex user reads are unchanged word for word.
+        #expect(MonitorStatus.connecting.displayName(for: .codex) == "Connecting to Codex")
+        #expect(MonitorStatus.updateAgent.displayName(for: .codex) == "Update Codex")
+        #expect(
+            MonitorStatus.unsupportedVersion.displayName(for: .codex)
+                == "Codex version unsupported"
+        )
+        #expect(MonitorStatus.disconnected.displayName(for: .codex) == "Codex disconnected")
+        #expect(MonitorStatus.updateAgent.compactDisplayName(for: .codex) == "Update Codex")
+        #expect(
+            MonitorAvailability.disconnected.emptyListMessage(for: .codex)
+                == "Codex disconnected"
+        )
     }
 
     /// Which status sets the compact width, named rather than measured.
     ///
-    /// `fixedCompactWidth` folds over every `MonitorStatus`, so adding or
-    /// renaming a case silently resizes the no-notch pill — including for a
-    /// user who never asked for the new case. Pinning the *identity* of the
-    /// widest status rather than a golden float keeps the assertion true across
-    /// system font changes while still failing the moment the maximiser moves.
+    /// Pinning the *identity* of the widest status rather than a golden float
+    /// keeps the assertion true across system font changes while still failing
+    /// the moment the maximiser moves.
+    ///
+    /// It does move, and that is worth having written down. For Codex the
+    /// widest state is `Approval`, which wins by reserving the timer slot as
+    /// well as its label — no untimed state can overtake it. Adding Claude Code
+    /// hands the title to an *untimed* state: "Update Claude Code" is a longer
+    /// run of text than "Approval" plus a timer, so the widest compact label
+    /// stops being a state that can even be counting. Measured on this machine:
+    /// Approval + timer 112.3, "Update Claude Code" 124.8, so the no-notch pill
+    /// goes 189 → 202 for a user who configures both.
+    ///
+    /// That is a real product question for the two-product surface rather than
+    /// a bug — the compact label names the most urgent state across both
+    /// products, so it cannot silently drop the product name the way the other
+    /// compact labels do — but it must not be discovered by someone wondering
+    /// why a measured width disagrees with the one in Figma.
     @Test @MainActor
-    func compactWidthIsDrivenByTheWidestTimedStatus() {
-        let widest = MonitorStatus.allCases.max {
-            PanelMetrics.compactContentWidth(for: $0)
-                < PanelMetrics.compactContentWidth(for: $1)
+    func theWidestCompactStatusIsTimedForCodexAndUntimedOnceClaudeCodeIsConfigured() {
+        func widest(for agent: AgentKind) -> MonitorStatus? {
+            MonitorStatus.allCases.max {
+                PanelMetrics.compactContentWidth(for: $0, agent: agent)
+                    < PanelMetrics.compactContentWidth(for: $1, agent: agent)
+            }
         }
-        #expect(widest == .approvalNeeded)
 
-        // It wins because it reserves the timer slot as well as its label, so
-        // no untimed status can overtake it however long its name gets.
-        let widestUntimed = MonitorStatus.allCases
+        #expect(widest(for: .codex) == .approvalNeeded)
+        #expect(widest(for: .codex)?.canShowElapsed == true)
+
+        let widestUntimedForCodex = MonitorStatus.allCases
             .filter { !$0.canShowElapsed }
-            .map(PanelMetrics.compactContentWidth(for:))
+            .map { PanelMetrics.compactContentWidth(for: $0, agent: .codex) }
             .max() ?? 0
         #expect(
-            widestUntimed < PanelMetrics.compactContentWidth(for: .approvalNeeded)
+            widestUntimedForCodex
+                < PanelMetrics.compactContentWidth(for: .approvalNeeded, agent: .codex)
+        )
+
+        #expect(widest(for: .claudeCode) == .updateAgent)
+        #expect(widest(for: .claudeCode)?.canShowElapsed == false)
+        #expect(
+            PanelMetrics.fixedCompactWidth(for: Set(AgentKind.allCases))
+                > PanelMetrics.fixedCompactWidth(for: [.codex])
         )
     }
 
@@ -79,14 +157,19 @@ struct CodexInNotchTests {
     /// it already says a turn wants the user.
     @Test @MainActor
     func compactLabelsAreShorterThanTheirFullForm() {
-        #expect(MonitorStatus.inputNeeded.compactDisplayName == "Input")
-        #expect(MonitorStatus.approvalNeeded.compactDisplayName == "Approval")
-        #expect(MonitorStatus.inputNeeded.displayName == "Input needed")
-        #expect(MonitorStatus.approvalNeeded.displayName == "Approval needed")
+        #expect(MonitorStatus.inputNeeded.compactDisplayName(for: .codex) == "Input")
+        #expect(MonitorStatus.approvalNeeded.compactDisplayName(for: .codex) == "Approval")
+        #expect(MonitorStatus.inputNeeded.displayName(for: .codex) == "Input needed")
+        #expect(MonitorStatus.approvalNeeded.displayName(for: .codex) == "Approval needed")
 
         for status in MonitorStatus.allCases {
-            #expect(status.compactDisplayName.count <= status.displayName.count)
-            #expect(!status.compactDisplayName.isEmpty)
+            for agent in AgentKind.allCases {
+                #expect(
+                    status.compactDisplayName(for: agent).count
+                        <= status.displayName(for: agent).count
+                )
+                #expect(!status.compactDisplayName(for: agent).isEmpty)
+            }
         }
     }
 
@@ -259,19 +342,28 @@ struct CodexInNotchTests {
     }
 
     @Test
-    func expandedWidthKeepsEveryStatusNameClearOfWideNotch() {
+    func expandedWidthKeepsEveryStatusNameClearOfWideNotchForEveryConfiguredAgent() {
         let centerOcclusionWidth: CGFloat = 220
-        let width = PanelMetrics.expandedWidth(
-            centerOcclusionWidth: centerOcclusionWidth
-        )
-        let availableSideWidth = (width - centerOcclusionWidth) / 2
+        for configured in [Set([AgentKind.codex]), Set(AgentKind.allCases)] {
+            let width = PanelMetrics.expandedWidth(
+                centerOcclusionWidth: centerOcclusionWidth,
+                configuredAgents: configured
+            )
+            let availableSideWidth = (width - centerOcclusionWidth) / 2
 
-        // Only the status readout flanks the notch now; usage moved to the footer.
-        for status in MonitorStatus.allCases {
-            let requiredWidth = PanelMetrics.expandedHorizontalPadding
-                + PanelMetrics.expandedStatusReadoutWidth(status: status)
-                + PanelMetrics.expandedNotchClearance
-            #expect(requiredWidth <= availableSideWidth)
+            // Only the status readout flanks the notch now; usage moved to the
+            // footer.
+            for status in MonitorStatus.allCases {
+                for agent in configured {
+                    let requiredWidth = PanelMetrics.expandedHorizontalPadding
+                        + PanelMetrics.expandedStatusReadoutWidth(
+                            status: status,
+                            agent: agent
+                        )
+                        + PanelMetrics.expandedNotchClearance
+                    #expect(requiredWidth <= availableSideWidth)
+                }
+            }
         }
     }
 
@@ -572,7 +664,7 @@ struct CodexInNotchTests {
         #expect(store.sessions.count == 1)
         // The notch shows the short form; the panel still says "Input needed".
         #expect(store.compactStatusReadoutText == "Input")
-        #expect(store.status.displayName == "Input needed")
+        #expect(store.statusDisplayName == "Input needed")
         #expect(store.tokenRemainingPercent == 72)
     }
 
@@ -813,19 +905,51 @@ struct CodexInNotchTests {
 
     @Test
     func statusDomainsSeparateSystemAndSessionStates() {
-        #expect(MonitorStatus.allCases.count == 10)
+        // The session states are the contract; the system states are not
+        // counted here, because a raw count only says a number changed and
+        // never which half of the domain it changed in.
         #expect(SessionStatus.allCases == [
             .running,
             .inputNeeded,
             .approvalNeeded,
             .completed
         ])
-        #expect(MonitorStatus.setupRequired.displayName == "Set up integration")
-        #expect(MonitorStatus.inputNeeded.displayName == "Input needed")
-        #expect(MonitorStatus.approvalNeeded.displayName == "Approval needed")
-        #expect(MonitorStatus.connecting.displayName == "Connecting to Codex")
-        #expect(MonitorStatus.unsupportedVersion.displayName == "Codex version unsupported")
-        #expect(MonitorStatus.disconnected.displayName == "Codex disconnected")
+        // No system state may leak into the session vocabulary, and vice versa.
+        let sessionStatuses = Set(SessionStatus.allCases.map(\.monitorStatus))
+        #expect(
+            sessionStatuses == [.running, .inputNeeded, .approvalNeeded, .completed]
+        )
+        #expect(
+            Set(MonitorStatus.allCases).subtracting(sessionStatuses)
+                == [
+                    .idle,
+                    .setupRequired,
+                    .connecting,
+                    .updateAgent,
+                    .unsupportedVersion,
+                    .disconnected
+                ]
+        )
+
+        // A system state that names a product is told which one; the shared
+        // ones never take a name at all.
+        #expect(MonitorStatus.setupRequired.displayName(for: .codex) == "Set up integration")
+        #expect(MonitorStatus.inputNeeded.displayName(for: .codex) == "Input needed")
+        #expect(MonitorStatus.approvalNeeded.displayName(for: .codex) == "Approval needed")
+        #expect(MonitorStatus.inputNeeded.displayName(for: .claudeCode) == "Input needed")
+        #expect(MonitorStatus.connecting.displayName(for: .codex) == "Connecting to Codex")
+        #expect(
+            MonitorStatus.connecting.displayName(for: .claudeCode)
+                == "Connecting to Claude Code"
+        )
+        #expect(
+            MonitorStatus.unsupportedVersion.displayName(for: .codex)
+                == "Codex version unsupported"
+        )
+        #expect(MonitorStatus.disconnected.displayName(for: .codex) == "Codex disconnected")
+        // Nobody's problem in particular: two unhealthy products must not be
+        // reported as one of them.
+        #expect(MonitorStatus.disconnected.displayName(for: nil) == "Disconnected")
     }
 
     @Test
@@ -1125,7 +1249,7 @@ struct CodexInNotchTests {
         let unready: [MonitorAvailability] = [
             .setupRequired,
             .connecting,
-            .updateCodex,
+            .updateAgent,
             .unsupportedVersion,
             .disconnected
         ]

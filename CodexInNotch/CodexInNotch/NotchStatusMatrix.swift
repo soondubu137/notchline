@@ -266,7 +266,7 @@ enum NotchMatrixState: Equatable {
         case .completed:
             self = .completed
         case .idle, .connecting, .disconnected,
-             .setupRequired, .updateCodex, .unsupportedVersion:
+             .setupRequired, .updateAgent, .unsupportedVersion:
             self = .inactive
         }
     }
