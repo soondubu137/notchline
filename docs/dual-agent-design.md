@@ -14,6 +14,10 @@
 
 **只有一个产品有会话时，界面与今天完全一致。** 收起态宽度、展开态高度、行内标记、额度行数都不变，只有色调不同。所有新增元素都以"两个产品都有会话"为出现条件，这与既有的尾翼规则一致：没有内容可说的翼被移除，而不是留空。
 
+**没有任何智能体打开时，矩阵不再替产品占位。** 收起态的系统状态收敛为 `Disconnected` 与 `Connected` 两个：矩阵不再报告我们自己的连接健康，改为报告用户能自己核对的事——是否有编码智能体处于打开状态。有刘海形态在静息时什么都不画；无刘海形态保留一个不指认任何产品的灰色矩阵，因为菜单栏里消失的控件会带走自己的位置。设计见 `08 — Presence`（`624:1560`），契约写在 [`figma-design.md`](figma-design.md) §6.4–§6.8。
+
+这是既有约束 2「无内容可说的区域被移除，不是变暗」第一次被应用到矩阵自身：单产品时它不必成立，因为那个产品就是全部；两个产品之后，为用户从不打开的那一个长期变暗，就成了替别人的工具做广告。约束 1 因此多出第三个通道——**在场表示产品是否打开**，色相与亮度的分工不变。
+
 判断每个方案时使用的既有约束，均来自当前已发布的界面：
 
 1. 色相表示产品，亮度表示是否需要用户处理。两个通道不得互换。
@@ -163,7 +167,8 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 | 同名目录的两个检出如何消歧 | 未定（[#25](https://github.com/soondubu137/codex-in-notch/issues/25) 遗留项） |
 | Claude Code hook 注册由谁写入 | **已定：用户自己写。** 本应用只读 `~/.claude/settings.json`、显示待粘贴内容、报告注册是否完整，永不写入。Codex 侧维持自动写入 `~/.codex/hooks.json`。见 [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) |
 | 产品改名 | 候选见 Figma §07；`Baton` 为推荐项 |
-| 双产品无刘海紧凑标签由哪一状态定宽 | **已定位成因，转 [#29](https://github.com/soondubu137/codex-in-notch/issues/29)。** 见下 |
+| `Disconnected` 这个词是否保留 | **语义已定**（[`figma-design.md`](figma-design.md) §6.7：没有任何智能体**已连接**）。词本身待定，备选 `No agents`、`Nothing running`，上屏后判断 |
+| 双产品无刘海紧凑标签由哪一状态定宽 | **已被在场制吸收，见下。** 成因仍记录在 [#29](https://github.com/soondubu137/codex-in-notch/issues/29) |
 
 降级导航已确认并接受：Claude Code 行只能唤起 Claude Desktop 或聚焦终端，行内不为此增加任何标记。
 
@@ -171,7 +176,9 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 **紧凑标签定宽状态在双产品下换人。** 单 Codex 时最宽的紧凑状态是 `Approval`，它靠同时占用标签与计时槽取胜，任何不计时的状态都追不上它。加入 Claude Code 后冠军变成一个**不计时**的状态：`Update Claude Code` 比 `Approval` 加计时槽更长。本机实测 13pt Light：`Approval` + 12 + `1:02:03` = 112.3，`Update Claude Code` = 124.8，无刘海药丸宽度因此从 189 变为 202。
 
-**成因后来查清了**：`updateAgent` 这个状态对 Claude Code **根本不可达**——它存在是因为 Codex Desktop 可能版本过旧，而 Claude Code 是用户自己装的 CLI，没有版本门槛。宽度折叠不区分「哪个产品能到哪个状态」，于是为一个画不出来的标签预留了位置。修法是让每个 provider 声明自己能产生的状态集合，双产品药丸会回到 189，与图一致；见 [#29](https://github.com/soondubu137/codex-in-notch/issues/29)。在此之前，`PanelMetrics.fixedCompactWidth(for:)` 按用户实际配置的产品集合折叠，单 Codex 用户的宽度与今天逐点一致，由 `aCodexOnlyConfigurationHasTodaysExactPanelGeometry` 固定。
+**成因后来查清了**：`updateAgent` 这个状态对 Claude Code **根本不可达**——它存在是因为 Codex Desktop 可能版本过旧，而 Claude Code 是用户自己装的 CLI，没有版本门槛。宽度折叠不区分「哪个产品能到哪个状态」，于是为一个画不出来的标签预留了位置。见 [#29](https://github.com/soondubu137/codex-in-notch/issues/29)。
+
+**这条已被在场制吸收。** `Update Claude Code` 随 `Update Codex`、`Unsupported Version` 一起退出收起态（[`figma-design.md`](figma-design.md) §6.6），不再参与定宽；同时单产品工作集合改为共用固定宽度 `220`（§6.4），而 `Update Claude Code` 本机实测 `124.77`，撑到 `24 + 16.62 + 12 + 124.77 + 24 = 201.4`，本来就在 `220` 之内。也就是说即便日后它回到收起态，也不会再改变任何宽度。`PanelMetrics.fixedCompactWidth(for:)` 的按产品折叠仍然保留，用于双产品与单产品之间的那一次加宽。
 
 ## 6.1 Claude Code 集成卡片（新增面）
 
