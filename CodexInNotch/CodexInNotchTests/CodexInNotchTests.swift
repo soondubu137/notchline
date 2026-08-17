@@ -6580,6 +6580,97 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
+    /// Installing hooks leaves everything else in the user's settings alone.
+    ///
+    /// `~/.claude/settings.json` is not a hooks file with a few extras — it is
+    /// where a user keeps their whole Claude Code install, and this app adds
+    /// one key to it. A test that only checked our own key would pass while
+    /// quietly flattening theirs.
+    @Test @MainActor
+    func installingClaudeCodeHooksPreservesEverythingElseInTheSettings() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let theirs: [String: Any] = [
+            "theme": "auto",
+            "env": ["EDITOR": "vim"],
+            "permissions": ["allow": ["Bash(git status)"]],
+            "hooks": ["PreCompact": [["hooks": [["type": "command", "command": "theirs"]]]]]
+        ]
+        try JSONSerialization.data(withJSONObject: theirs, options: .prettyPrinted)
+            .write(to: paths.hooksConfiguration)
+
+        let installer = ClaudeCodeHookInstaller(paths: paths)
+        try await installer.install(port: 51_000, token: "tok")
+        #expect(await installer.isInstalled(port: 51_000, token: "tok"))
+
+        func settings() throws -> [String: Any] {
+            try JSONSerialization.jsonObject(
+                with: Data(contentsOf: paths.hooksConfiguration)
+            ) as? [String: Any] ?? [:]
+        }
+        var written = try settings()
+        #expect(written["theme"] as? String == "auto")
+        #expect((written["env"] as? [String: Any])?["EDITOR"] as? String == "vim")
+        #expect(written["permissions"] != nil)
+        #expect((written["hooks"] as? [String: Any])?["PreCompact"] != nil)
+        // A file we did not create is never stamped with a description.
+        #expect(written["description"] == nil)
+
+        // The port the listener actually bound is remembered, so a relaunch can
+        // ask for the same one instead of rewriting the user's file every time.
+        let registration = await installer.installedRegistration()
+        #expect(registration == ClaudeCodeHookInstaller.Registration(port: 51_000, token: "tok"))
+
+        // Uninstalling finds the handler by its path, so it does not need to be
+        // told what it was installed with.
+        try await installer.uninstall()
+        written = try settings()
+        #expect(written["theme"] as? String == "auto")
+        #expect((written["hooks"] as? [String: Any])?["PreCompact"] != nil)
+        #expect((written["hooks"] as? [String: Any])?["Stop"] == nil)
+        #expect(!(await installer.isInstalled(port: 51_000, token: "tok")))
+    }
+
+    /// A settings file this app cannot understand is left exactly as it is.
+    ///
+    /// The failure that matters is not malformed JSON — that always threw. It
+    /// is *valid* JSON whose root is not an object, which used to be coerced to
+    /// an empty document and written back with only our keys in it.
+    @Test @MainActor
+    func installingClaudeCodeHooksRefusesASettingsFileItCannotParse() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        for contents in ["[1, 2, 3]", "{ not json at all", "\"a string\""] {
+            let settings = root.appendingPathComponent("settings-\(abs(contents.hashValue)).json")
+            try Data(contents.utf8).write(to: settings)
+            let paths = HookIntegrationPaths(
+                supportDirectory: root.appendingPathComponent("AS"),
+                hooksConfiguration: settings,
+                agent: .claudeCode
+            )
+            let installer = ClaudeCodeHookInstaller(paths: paths)
+
+            await #expect(throws: (any Error).self) {
+                try await installer.install(port: 51_000, token: "tok")
+            }
+            #expect(
+                String(decoding: try Data(contentsOf: settings), as: UTF8.self) == contents,
+                "the file must be byte-identical after a refusal"
+            )
+        }
+    }
+
     /// The session list is identity, and a failed read is not absence.
     ///
     /// This list is the only thing that can retire a row whose session died,

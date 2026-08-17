@@ -651,135 +651,22 @@ actor CodexHookInstaller {
         )
     }
 
+    /// The strict editor for this product's configuration file.
+    private var configurationEditor: ManagedHooksFileEditor {
+        ManagedHooksFileEditor(
+            url: paths.hooksConfiguration,
+            recoveryCopyURL: paths.hooksBackup,
+            configuration: managedConfiguration,
+            fileManager: fileManager
+        )
+    }
+
     private func mergeHooksConfiguration() throws {
-        try fileManager.createDirectory(
-            at: paths.hooksConfiguration.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-
-        let isNewFile = !fileManager.fileExists(
-            atPath: paths.hooksConfiguration.path
-        )
-        let read = try readHooksConfiguration()
-        let updated = try managedConfiguration.installing(
-            into: read.root,
-            isNewFile: isNewFile
-        )
-
-        try writeHooksConfiguration(updated, replacing: read.bytes)
-
-        // Read back rather than trust the write. This file is the user's, and
-        // the only thing standing between a bad edit and their configuration
-        // is that we notice before reporting success.
-        let verified = try readHooksConfiguration()
-        guard managedConfiguration.isFullyInstalled(in: verified.root) else {
-            throw ManagedHooksConfigurationError.verificationFailed
-        }
+        try configurationEditor.install()
     }
 
-    /// The configuration as read, with the exact bytes it was decoded from.
-    ///
-    /// The bytes come back so the write can prove the file has not moved
-    /// underneath it -- see ``writeHooksConfiguration(_:replacing:)``.
-    private struct HooksConfigurationRead {
-        let root: [String: Any]
-        /// `nil` when the file did not exist at read time.
-        let bytes: Data?
-    }
-
-    /// Reads the configuration root, refusing anything that is not an object.
-    ///
-    /// Malformed JSON already threw here. What did not was *valid* JSON whose
-    /// root was, say, an array: it was coerced to an empty dictionary and the
-    /// user's file was then written over with only our definitions in it.
-    private func readHooksConfiguration() throws -> HooksConfigurationRead {
-        guard fileManager.fileExists(atPath: paths.hooksConfiguration.path) else {
-            return HooksConfigurationRead(root: [:], bytes: nil)
-        }
-        let data = try Data(contentsOf: paths.hooksConfiguration)
-        guard !data.isEmpty else {
-            return HooksConfigurationRead(root: [:], bytes: data)
-        }
-        let decoded = try JSONSerialization.jsonObject(with: data)
-        guard let root = decoded as? [String: Any] else {
-            throw ManagedHooksConfigurationError.rootIsNotObject
-        }
-        return HooksConfigurationRead(root: root, bytes: data)
-    }
-
-    /// Writes the merged document, but only onto the bytes it was derived from.
-    ///
-    /// Everything above is a read-modify-write on a file this app does not own.
-    /// If Codex or the user rewrites it in that window -- `/hooks` trusting a
-    /// definition, say -- writing anyway would silently drop their change. This
-    /// cannot make the sequence atomic, but it does turn a lost edit into a
-    /// visible failure the caller reports and the user can retry.
-    private func writeHooksConfiguration(
-        _ root: [String: Any],
-        replacing expectedBytes: Data?
-    ) throws {
-        let data = try JSONSerialization.data(
-            withJSONObject: root,
-            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        )
-
-        let currentBytes: Data? = fileManager.fileExists(
-            atPath: paths.hooksConfiguration.path
-        ) ? try Data(contentsOf: paths.hooksConfiguration) : nil
-        guard currentBytes == expectedBytes else {
-            throw ManagedHooksConfigurationError.changedWhileEditing
-        }
-
-        try preserveRecoveryCopyIfNeeded()
-        try data.write(to: paths.hooksConfiguration, options: .atomic)
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: paths.hooksConfiguration.path
-        )
-    }
-
-    private func preserveRecoveryCopyIfNeeded() throws {
-        guard fileManager.fileExists(atPath: paths.hooksConfiguration.path) else {
-            return
-        }
-        guard !fileManager.fileExists(atPath: paths.hooksBackup.path) else {
-            return
-        }
-        try fileManager.copyItem(
-            at: paths.hooksConfiguration,
-            to: paths.hooksBackup
-        )
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: paths.hooksBackup.path
-        )
-    }
-
-    /// Takes this app's definitions back out, or throws without writing.
-    ///
-    /// Throwing is the point. ``uninstall`` deletes the helper script straight
-    /// after this returns, so anything left pointing at that script is a
-    /// dangling command in the user's configuration. This used to `return`
-    /// silently whenever the file's shape surprised it -- and then the script
-    /// was deleted anyway.
     private func removeManagedHooksConfiguration() throws {
-        guard fileManager.fileExists(atPath: paths.hooksConfiguration.path) else {
-            return
-        }
-
-        let read = try readHooksConfiguration()
-        let updated = try managedConfiguration.removing(from: read.root)
-
-        // Nothing of ours was in there, so there is nothing to write. Rewriting
-        // anyway would reformat a file this app does not own for no reason.
-        guard (updated as NSDictionary) != (read.root as NSDictionary) else { return }
-
-        try writeHooksConfiguration(updated, replacing: read.bytes)
-
-        let verified = try readHooksConfiguration()
-        guard managedConfiguration.isFullyRemoved(from: verified.root) else {
-            throw ManagedHooksConfigurationError.verificationFailed
-        }
+        try configurationEditor.remove()
     }
 
     private static let hookScript = #"""
