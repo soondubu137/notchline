@@ -6580,6 +6580,69 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
+    /// A turn whose session has gone is gone with it.
+    ///
+    /// SessionEnd is deliberately not registered, so the session list is the
+    /// only thing that can retire a row. If it were merely an optimisation, a
+    /// finished session's rows would sit in the notch forever.
+    @Test @MainActor
+    func aTurnWhoseSessionHasGoneIsDroppedFromTheSnapshot() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+
+        try harness.registerHooks()
+        try harness.queue(event: "UserPromptSubmit", session: "alive", turn: "t1", at: 100)
+        try harness.queue(event: "UserPromptSubmit", session: "ghost", turn: "t2", at: 101)
+
+        harness.live = [
+            harness.session(id: "alive", cwd: "/Users/someone/Projects/notch")
+        ]
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+
+        #expect(snapshot.availability == .ready)
+        #expect(snapshot.sessions.map(\.threadID) == ["alive"])
+        #expect(snapshot.sessions[0].agent == .claudeCode)
+        #expect(snapshot.sessions[0].status == .running)
+        // Project is the working directory's last component (ADR 0009) — the
+        // ban on deriving one from a path binds Codex only.
+        #expect(snapshot.sessions[0].projectName == "notch")
+        // No title source yet, and the folder name is never allowed to stand in.
+        #expect(snapshot.sessions[0].title == "Untitled")
+        #expect(snapshot.sessions[0].preview == nil)
+    }
+
+    /// Without a registration there is nothing to listen for, and the product
+    /// says so rather than reporting an empty but healthy state.
+    @Test @MainActor
+    func anUnregisteredClaudeCodeReportsSetupRatherThanSilence() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(snapshot.availability == .setupRequired)
+        #expect(snapshot.setupStatus == .notInstalled)
+        #expect(snapshot.sessions.isEmpty)
+        #expect(snapshot.diagnostic != nil)
+    }
+
+    /// Switching the integration on is refused, loudly.
+    ///
+    /// The app cannot write this product's registration (ADR 0010), and a
+    /// switch that silently achieves nothing is worse than one that explains
+    /// why it is not a switch.
+    @Test @MainActor
+    func claudeCodeRefusesToInstallItsOwnHooks() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+
+        await #expect(throws: AgentSetupError.manualRegistrationRequired(.claudeCode)) {
+            try await harness.service.installHooks()
+        }
+        await #expect(throws: AgentSetupError.manualRegistrationRequired(.claudeCode)) {
+            try await harness.service.removeHooks()
+        }
+    }
+
     /// The product never writes the user's Claude Code settings.
     ///
     /// The Codex side edits `~/.codex/hooks.json` itself, and that file holds
@@ -8022,6 +8085,97 @@ private final class CodexWorkspaceStub: CodexWorkspaceOpening {
         openedURL = url
         openedApplicationURL = applicationURL
     }
+}
+
+/// Stands up a Claude Code service over temporary paths.
+@MainActor
+private final class ClaudeCodeHarness {
+    let root: URL
+    let paths: HookIntegrationPaths
+    let setup: ClaudeCodeHookSetup
+    let service: ClaudeCodeMonitorService
+    private let listing = StubSessionListing()
+
+    var live: [ClaudeCodeSession] {
+        get { listing.sessions }
+        set { listing.sessions = newValue }
+    }
+
+    init() throws {
+        root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-svc-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
+        )
+        setup = ClaudeCodeHookSetup(paths: paths)
+        service = ClaudeCodeMonitorService(
+            paths: paths,
+            setup: setup,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                liveEventCutoff: .distantPast,
+                vocabulary: ClaudeCodeHookVocabulary()
+            ),
+            sessions: listing,
+            listener: AgentHookListener(eventsDirectory: paths.eventsDirectory),
+            sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true)
+        )
+    }
+
+    func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    /// Writes the block the app would have told the user to paste.
+    func registerHooks() throws {
+        let snippet = ClaudeCodeHookVocabulary().managedDefinitions
+        var hooks: [String: Any] = [:]
+        let handler: [String: Any] = [
+            "type": "http",
+            "url": "http://127.0.0.1:51741\(ClaudeCodeHookSetup.hookPath)",
+            "async": true,
+            "timeout": 5,
+            "headers": ["Authorization": "Bearer harness-token"]
+        ]
+        for definition in snippet {
+            hooks[definition.event] = [["hooks": [handler]]]
+        }
+        try JSONSerialization
+            .data(withJSONObject: ["theme": "auto", "hooks": hooks])
+            .write(to: paths.hooksConfiguration)
+    }
+
+    func queue(event: String, session: String, turn: String, at received: Double) throws {
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+        try JSONSerialization.data(withJSONObject: [
+            "event_id": UUID().uuidString,
+            "received_at": received,
+            "hook_event_name": event,
+            "session_id": session,
+            "turn_id": turn
+        ]).write(to: paths.eventsDirectory.appendingPathComponent("\(received).json"))
+    }
+
+    func session(id: String, cwd: String) -> ClaudeCodeSession {
+        ClaudeCodeSession(
+            sessionID: id,
+            processIdentifier: 1,
+            workingDirectory: URL(fileURLWithPath: cwd),
+            startedAt: Date(timeIntervalSince1970: 100),
+            name: nil
+        )
+    }
+}
+
+private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sendable {
+    var sessions: [ClaudeCodeSession] = []
+    func liveSessions() async -> [ClaudeCodeSession] { sessions }
 }
 
 /// Hands back a prepared sequence of stub responses, one per read.

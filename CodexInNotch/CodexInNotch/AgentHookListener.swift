@@ -80,7 +80,10 @@ final class AgentHookListener: @unchecked Sendable {
     static let maximumBodyBytes = 1 << 20
 
     private let eventsDirectory: URL
-    private let token: String
+    /// Set when the listener binds, because it comes from the user's settings
+    /// rather than from this app: whatever token their registration carries is
+    /// the one Claude Code will send.
+    private var token: String
     private let clock: any MonitorClock
     private let fileManager: FileManager
     /// Events whose working directory is this one are dropped.
@@ -97,7 +100,7 @@ final class AgentHookListener: @unchecked Sendable {
 
     init(
         eventsDirectory: URL,
-        token: String,
+        token: String = "",
         ignoredWorkingDirectory: URL? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         fileManager: FileManager = .default
@@ -122,7 +125,8 @@ final class AgentHookListener: @unchecked Sendable {
     /// — so it falls back to an ephemeral one and the caller repairs the
     /// configuration.
     @discardableResult
-    func start(preferredPort: UInt16? = nil) -> UInt16? {
+    func start(preferredPort: UInt16? = nil, token: String? = nil) -> UInt16? {
+        if let token { queue.sync { self.token = token } }
         if let preferredPort, let bound = bind(to: preferredPort) {
             return bound
         }
