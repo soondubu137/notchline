@@ -6580,6 +6580,90 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
+    /// The session list is identity, and a failed read is not absence.
+    ///
+    /// This list is the only thing that can retire a row whose session died,
+    /// because SessionEnd is deliberately not registered. That makes its
+    /// failure mode the important part: if a read that fails were treated as
+    /// "no sessions", one hiccup would clear every Claude Code row at once —
+    /// the same fail-closed rule the Desktop unread adapter holds to.
+    @Test @MainActor
+    func theSessionListKeepsItsLastAnswerWhenAReadFails() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = ResponseQueue(items: [
+            Data("""
+            [{"pid": 42, "cwd": "/Users/someone/Projects/thing", "kind": "interactive",
+              "startedAt": 1786919144634, "sessionId": "s-1", "name": "thing-21"}]
+            """.utf8),
+            nil,
+            Data("[]".utf8)
+        ])
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            read: { await responses.next() }
+        )
+
+        let first = await registry.refresh()
+        #expect(first.count == 1)
+        #expect(first[0].sessionID == "s-1")
+        #expect(first[0].processIdentifier == 42)
+        #expect(first[0].workingDirectory.path == "/Users/someone/Projects/thing")
+        // Reported in milliseconds.
+        #expect(first[0].startedAt == Date(timeIntervalSince1970: 1_786_919_144.634))
+
+        // A read that could not be obtained keeps the previous answer.
+        #expect(await registry.refresh() == first)
+        // An answer that really is empty is believed.
+        #expect(await registry.refresh().isEmpty)
+    }
+
+    /// A fresh answer is not re-read; a stale one is.
+    @Test @MainActor
+    func theSessionListIsReadAgainOnlyOnceItIsStale() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = ResponseQueue(items: [
+            Data("""
+            [{"pid": 1, "cwd": "/a", "kind": "interactive",
+              "startedAt": 1000, "sessionId": "s-1"}]
+            """.utf8),
+            Data("""
+            [{"pid": 2, "cwd": "/b", "kind": "interactive",
+              "startedAt": 2000, "sessionId": "s-2"}]
+            """.utf8)
+        ])
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            read: { await responses.next() }
+        )
+
+        #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        await clock.advance(by: 29)
+        #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        #expect(await responses.remaining() == 1)
+        await clock.advance(by: 2)
+        #expect(await registry.liveSessions().first?.sessionID == "s-2")
+    }
+
+    /// Entries missing anything that makes them addressable are dropped rather
+    /// than filled in.
+    @Test @MainActor
+    func theSessionListRefusesEntriesItCannotAddress() async {
+        let responses = ResponseQueue(items: [
+            Data("""
+            [{"pid": 1, "cwd": "/a", "startedAt": 1000, "sessionId": "keep"},
+             {"pid": 2, "cwd": "/b", "startedAt": 1000},
+             {"pid": 3, "startedAt": 1000, "sessionId": "no-cwd"},
+             {"cwd": "/d", "startedAt": 1000, "sessionId": "no-pid"},
+             {"pid": 5, "cwd": "/e", "sessionId": "no-start"}]
+            """.utf8)
+        ])
+        let registry = ClaudeCodeSessionRegistry(read: { await responses.next() })
+        let sessions = await registry.refresh()
+        #expect(sessions.map(\.sessionID) == ["keep"])
+    }
+
     /// An HTTP handler stays recognisable after its port moves.
     ///
     /// A command line identifies itself; a URL cannot, because the port in it
@@ -7776,6 +7860,22 @@ private final class CodexWorkspaceStub: CodexWorkspaceOpening {
         openedURL = url
         openedApplicationURL = applicationURL
     }
+}
+
+/// Hands back a prepared sequence of stub responses, one per read.
+private actor ResponseQueue {
+    private var items: [Data?]
+
+    init(items: [Data?]) {
+        self.items = items
+    }
+
+    func next() -> Data? {
+        guard !items.isEmpty else { return nil }
+        return items.removeFirst()
+    }
+
+    func remaining() -> Int { items.count }
 }
 
 /// A provider whose fetch can be held open, and whose product is chosen.
