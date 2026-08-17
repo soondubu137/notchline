@@ -644,9 +644,10 @@ actor CodexHookInstaller {
 
     /// The strict editor for this build's definitions.
     private var managedConfiguration: ManagedHooksConfiguration {
-        ManagedHooksConfiguration(
-            command: command,
-            definitions: Self.managedDefinitions
+        .command(
+            command,
+            definitions: Self.managedDefinitions,
+            descriptionForNewFiles: "User-level Codex lifecycle hooks."
         )
     }
 

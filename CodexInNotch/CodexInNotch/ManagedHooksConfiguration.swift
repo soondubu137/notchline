@@ -60,28 +60,70 @@ nonisolated enum ManagedHooksConfigurationError: LocalizedError, Equatable {
 /// carries far more than hooks, so "coerce anything unexpected to empty" is a
 /// data-loss bug waiting for a bigger file to happen to.
 nonisolated struct ManagedHooksConfiguration: Sendable {
-    let command: String
+    /// The handler entry this build installs.
+    let managedHandler: [String: Any]
+    /// The string that identifies this app's handler anywhere in the document.
+    ///
+    /// Codex's handler is a shell command, so the command line itself is the
+    /// identity. An HTTP handler cannot use its URL that way -- the URL carries
+    /// a port, and a port that was taken at launch has to be rebound, which
+    /// would make every previously installed handler unrecognisable exactly
+    /// when it most needs repairing. So the marker is a fixed path inside the
+    /// URL, and identity survives the part of it that moves.
+    let identityMarker: String
     let definitions: [ManagedHookDefinition]
     /// Written into a file this app creates, and never into one it did not.
     let descriptionForNewFiles: String
 
     nonisolated init(
-        command: String,
+        managedHandler: [String: Any],
+        identityMarker: String,
         definitions: [ManagedHookDefinition],
-        descriptionForNewFiles: String = "User-level Codex lifecycle hooks."
+        descriptionForNewFiles: String = "User-level agent lifecycle hooks."
     ) {
-        self.command = command
+        self.managedHandler = managedHandler
+        self.identityMarker = identityMarker
         self.definitions = definitions
         self.descriptionForNewFiles = descriptionForNewFiles
     }
 
-    /// The handler entry this build installs.
-    nonisolated var managedHandler: [String: Any] {
-        [
-            "type": "command",
-            "command": command,
-            "timeout": 3
-        ]
+    /// A configuration that runs a helper script, as Codex requires.
+    nonisolated static func command(
+        _ command: String,
+        definitions: [ManagedHookDefinition],
+        descriptionForNewFiles: String = "User-level Codex lifecycle hooks."
+    ) -> ManagedHooksConfiguration {
+        ManagedHooksConfiguration(
+            managedHandler: ["type": "command", "command": command, "timeout": 3],
+            identityMarker: command,
+            definitions: definitions,
+            descriptionForNewFiles: descriptionForNewFiles
+        )
+    }
+
+    /// A configuration that posts to this app, as Claude Code allows.
+    ///
+    /// `async` is what keeps the hook off the user's critical path, and it is
+    /// also why nothing here may depend on delivery order.
+    nonisolated static func loopbackPost(
+        port: UInt16,
+        path: String,
+        token: String,
+        definitions: [ManagedHookDefinition],
+        descriptionForNewFiles: String = "User-level agent lifecycle hooks."
+    ) -> ManagedHooksConfiguration {
+        ManagedHooksConfiguration(
+            managedHandler: [
+                "type": "http",
+                "url": "http://127.0.0.1:\(port)\(path)",
+                "async": true,
+                "timeout": 5,
+                "headers": ["Authorization": "Bearer \(token)"]
+            ],
+            identityMarker: path,
+            definitions: definitions,
+            descriptionForNewFiles: descriptionForNewFiles
+        )
     }
 
     // MARK: - Install
@@ -102,7 +144,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         // Nothing this app wrote may survive the strip. If a copy of the
         // command is still reachable, it sits in a structure this type cannot
         // edit, and installing on top of it would register the hook twice.
-        if Self.contains(command: command, in: hooks) {
+        if Self.contains(marker: identityMarker, in: hooks) {
             throw ManagedHooksConfigurationError.unremovableManagedCommand
         }
 
@@ -138,7 +180,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         guard root["hooks"] != nil else {
             // No hooks at all is a clean state, but only if the command is not
             // hiding somewhere else in the document.
-            if Self.contains(command: command, in: root) {
+            if Self.contains(marker: identityMarker, in: root) {
                 throw ManagedHooksConfigurationError.unremovableManagedCommand
             }
             return root
@@ -153,7 +195,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         // survived, in any shape, and turns it into a refusal.
         hooks = try strippingManagedHandlers(from: hooks, strictEvents: [])
 
-        if Self.contains(command: command, in: hooks) {
+        if Self.contains(marker: identityMarker, in: hooks) {
             throw ManagedHooksConfigurationError.unremovableManagedCommand
         }
 
@@ -163,7 +205,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
             root["hooks"] = hooks
         }
 
-        if Self.contains(command: command, in: root) {
+        if Self.contains(marker: identityMarker, in: root) {
             throw ManagedHooksConfigurationError.unremovableManagedCommand
         }
         return root
@@ -189,12 +231,11 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
 
     /// Whether any trace of this app's command remains anywhere in `root`.
     nonisolated func isFullyRemoved(from root: [String: Any]) -> Bool {
-        !Self.contains(command: command, in: root)
+        !Self.contains(marker: identityMarker, in: root)
     }
 
     nonisolated func isManagedHandler(_ handler: [String: Any]) -> Bool {
-        (handler["type"] as? String) == "command"
-            && (handler["command"] as? String) == command
+        Self.contains(marker: identityMarker, in: handler)
     }
 
     // MARK: - Validation
@@ -308,20 +349,23 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         return group["matcher"] == nil
     }
 
-    /// Finds `command` anywhere in an arbitrary JSON value.
+    /// Finds this app's marker anywhere in an arbitrary JSON value.
     ///
     /// This is the safety net that makes the whole type trustworthy: the
     /// structured editing above only reaches shapes it understands, so this
     /// answers "did anything of ours survive in a shape we could not touch"
     /// without needing to understand that shape at all.
-    nonisolated static func contains(command: String, in value: Any) -> Bool {
+    ///
+    /// A command matches exactly; a URL matches on containment, because the
+    /// port in it is allowed to move and the path is not.
+    nonisolated static func contains(marker: String, in value: Any) -> Bool {
         switch value {
         case let string as String:
-            return string == command
+            return string == marker || string.contains(marker)
         case let array as [Any]:
-            return array.contains { contains(command: command, in: $0) }
+            return array.contains { contains(marker: marker, in: $0) }
         case let object as [String: Any]:
-            return object.values.contains { contains(command: command, in: $0) }
+            return object.values.contains { contains(marker: marker, in: $0) }
         default:
             return false
         }

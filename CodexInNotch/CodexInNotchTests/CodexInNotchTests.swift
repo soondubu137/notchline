@@ -5116,7 +5116,7 @@ for line in sys.stdin:
         // Nothing of this app's may remain anywhere in the document.
         let managedCommand = "/usr/bin/python3 \"\(paths.script.path)\""
         #expect(
-            !ManagedHooksConfiguration.contains(command: managedCommand, in: finalRoot)
+            !ManagedHooksConfiguration.contains(marker: managedCommand, in: finalRoot)
         )
         // The events this app added and then removed are gone entirely rather
         // than left as empty arrays.
@@ -6578,6 +6578,61 @@ for line in sys.stdin:
         )
         #expect(vocabulary.signal(forEvent: "PreToolUse", toolName: "shell") == .toolCallOpened)
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
+    }
+
+    /// An HTTP handler stays recognisable after its port moves.
+    ///
+    /// A command line identifies itself; a URL cannot, because the port in it
+    /// is the one part allowed to change — a port taken at launch has to be
+    /// rebound, which is exactly the moment the old registration most needs to
+    /// be found and replaced. So identity is a fixed path inside the URL, and
+    /// a reinstall on a different port replaces rather than accumulates.
+    @Test @MainActor
+    func anHTTPHandlerIsIdentifiedByItsPathSoItSurvivesARebind() throws {
+        func configuration(port: UInt16) -> ManagedHooksConfiguration {
+            .loopbackPost(
+                port: port,
+                path: "/codex-in-notch/hook",
+                token: "token-\(port)",
+                definitions: [ManagedHookDefinition(event: "Stop", matcher: nil)]
+            )
+        }
+
+        // A settings file with content of the user's own in it.
+        let original: [String: Any] = [
+            "theme": "auto",
+            "env": ["SOME_KEY": "value"],
+            "hooks": ["PreToolUse": [["hooks": [["type": "command", "command": "theirs"]]]]]
+        ]
+
+        let installed = try configuration(port: 51_000)
+            .installing(into: original, isNewFile: false)
+        #expect(configuration(port: 51_000).isFullyInstalled(in: installed))
+        // Everything that was not ours is exactly as it was.
+        #expect(installed["theme"] as? String == "auto")
+        #expect((installed["env"] as? [String: Any])?["SOME_KEY"] as? String == "value")
+        let hooks = try #require(installed["hooks"] as? [String: Any])
+        #expect(hooks["PreToolUse"] != nil)
+
+        // Rebound to a different port: the old handler is recognised and
+        // replaced, not left behind beside the new one.
+        let rebound = try configuration(port: 52_000)
+            .installing(into: installed, isNewFile: false)
+        #expect(configuration(port: 52_000).isFullyInstalled(in: rebound))
+        let reboundStop = try #require(
+            (rebound["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]]
+        )
+        #expect(reboundStop.count == 1)
+
+        // And removal leaves no trace of ours, while keeping theirs.
+        let removed = try configuration(port: 52_000).removing(from: rebound)
+        #expect(configuration(port: 52_000).isFullyRemoved(from: removed))
+        #expect(configuration(port: 51_000).isFullyRemoved(from: removed))
+        #expect(removed["theme"] as? String == "auto")
+        let theirs = try #require(
+            (removed["hooks"] as? [String: Any])?["PreToolUse"] as? [[String: Any]]
+        )
+        #expect(theirs.count == 1)
     }
 
     /// The listener queues an event, and refuses to have seen the text in it.
