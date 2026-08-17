@@ -364,9 +364,27 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     }
 }
 
-struct QuotaSnapshot: Equatable, Sendable {
+/// One rate-limit window, and what is left of it.
+///
+/// A window has a label because a product can have more than one. Codex has a
+/// single primary window and its rule spans the footer unlabelled; Claude Code
+/// reports a 5-hour session window and a 7-day one, and the footer halves for
+/// them -- not to fit them in, but because that side genuinely has two.
+nonisolated struct QuotaWindow: Equatable, Sendable {
+    /// Empty when the product has only one window to draw.
+    let label: String
     let remainingPercent: Int?
     let resetsAt: Date?
+
+    nonisolated init(label: String = "", remainingPercent: Int?, resetsAt: Date?) {
+        self.label = label
+        self.remainingPercent = remainingPercent.map { min(max($0, 0), 100) }
+        self.resetsAt = resetsAt
+    }
+}
+
+struct QuotaSnapshot: Equatable, Sendable {
+    let windows: [QuotaWindow]
     let todayTokens: Int64?
 
     nonisolated static let unavailable = QuotaSnapshot(
@@ -375,17 +393,28 @@ struct QuotaSnapshot: Equatable, Sendable {
         todayTokens: nil
     )
 
+    nonisolated init(windows: [QuotaWindow], todayTokens: Int64? = nil) {
+        self.windows = windows
+        self.todayTokens = todayTokens.map { max(0, $0) }
+    }
+
+    /// The single-window form, which is what one product's quota looks like.
     nonisolated init(
         remainingPercent: Int?,
         resetsAt: Date?,
         todayTokens: Int64? = nil
     ) {
-        self.remainingPercent = remainingPercent.map {
-            min(max($0, 0), 100)
-        }
-        self.resetsAt = resetsAt
-        self.todayTokens = todayTokens.map { max(0, $0) }
+        self.init(
+            windows: [
+                QuotaWindow(remainingPercent: remainingPercent, resetsAt: resetsAt)
+            ],
+            todayTokens: todayTokens
+        )
     }
+
+    /// The first window, for every surface that draws one rule.
+    nonisolated var remainingPercent: Int? { windows.first?.remainingPercent }
+    nonisolated var resetsAt: Date? { windows.first?.resetsAt }
 }
 
 /// What one product's provider observed on one refresh.

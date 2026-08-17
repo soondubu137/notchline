@@ -6580,6 +6580,109 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
+    /// The quota parser reads two lines out of a paragraph written for a
+    /// person, and is not fooled by the numbers around them.
+    ///
+    /// This is captured output, byte for byte, from `claude -p "/usage"` on
+    /// 2026-08-16. The free-text section below the figures is the whole reason
+    /// the parser anchors on line prefixes: `94% of your usage` sits four lines
+    /// under the ones that matter, and anything hunting for a percentage would
+    /// find it.
+    @Test @MainActor
+    func theUsageParserAnchorsOnItsTwoLinesAndIgnoresTheProseBelow() {
+        let output = """
+        You are currently using your subscription to power your Claude Code usage
+
+        Current session: 22% used · resets Aug 16 at 7:19pm (America/Los_Angeles)
+        Current week (all models): 18% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
+        Current week (Fable): 0% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
+
+        What's contributing to your limits usage?
+        Approximate, based on local sessions on this machine.
+
+        Last 24h · 1690 requests · 15 sessions
+          94% of your usage was at >150k context
+          Top skills: /figma:figma-use 4%, /figma:figma-swiftui 2%
+        """
+
+        let now = ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!
+        let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
+
+        #expect(windows.count == 2)
+        // Reported as used; a rule draws what is left.
+        #expect(windows[0].label == "5 h")
+        #expect(windows[0].remainingPercent == 78)
+        #expect(windows[1].label == "7 d")
+        #expect(windows[1].remainingPercent == 82)
+        // The per-model window is deliberately not one of them: which model it
+        // names varies, so a rule that changed meaning would have to be read
+        // rather than glanced at.
+        #expect(!windows.contains { $0.remainingPercent == 100 })
+
+        // The year is not printed. It is inferred, and both resets land ahead.
+        let session = try! #require(windows[0].resetsAt)
+        let week = try! #require(windows[1].resetsAt)
+        #expect(session > now)
+        #expect(week > session)
+    }
+
+    /// A reset printed before today's date belongs to next year.
+    @Test @MainActor
+    func aResetThatWouldBeInThePastRollsIntoTheFollowingYear() {
+        let output = "Current session: 10% used · resets Jan 2 at 9:00am (America/Los_Angeles)"
+        let now = ISO8601DateFormatter().date(from: "2026-12-30T12:00:00Z")!
+        let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
+        let reset = try! #require(windows[0].resetsAt)
+        #expect(reset > now)
+        #expect(reset.timeIntervalSince(now) < 5 * 24 * 3600)
+    }
+
+    /// Output this parser does not recognise reads as unavailable, never as a
+    /// number and never as zero.
+    @Test @MainActor
+    func unrecognisedUsageOutputReportsUnavailableRatherThanZero() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        for output in [
+            "",
+            "You are currently using your subscription",
+            // A shape change that keeps the words but moves the numbers.
+            "Current session — used 22% — resets soon",
+            // Only prose, with percentages in it.
+            "94% of your usage was at >150k context"
+        ] {
+            let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
+            #expect(windows.count == 2)
+            #expect(windows.allSatisfy { $0.remainingPercent == nil })
+            #expect(windows.allSatisfy { $0.resetsAt == nil })
+        }
+    }
+
+    /// A reading that cannot be obtained clears the figure rather than keeping
+    /// the last one.
+    @Test @MainActor
+    func aFailedUsageReadingBecomesUnavailableRatherThanStale() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = TextQueue(items: [
+            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)",
+            nil
+        ])
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            freshness: 60,
+            read: { await responses.next() }
+        )
+
+        #expect(await reader.quota().remainingPercent == 80)
+        // Still fresh: not re-read.
+        await clock.advance(by: 30)
+        #expect(await reader.quota().remainingPercent == 80)
+        // Stale, and the reading fails. A stale percentage is worse than none:
+        // it looks like current information.
+        await clock.advance(by: 40)
+        #expect(await reader.quota().remainingPercent == nil)
+        #expect(await reader.quota().windows.allSatisfy { $0.remainingPercent == nil })
+    }
+
     /// A session running before the app was is visible immediately.
     ///
     /// This is the asymmetry with Codex, and it is deliberate: Codex has no
@@ -8380,6 +8483,20 @@ private final class ClaudeCodeHarness {
 private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sendable {
     var sessions: [ClaudeCodeSession] = []
     func liveSessions() async -> [ClaudeCodeSession] { sessions }
+}
+
+/// Hands back a prepared sequence of text responses, one per read.
+private actor TextQueue {
+    private var items: [String?]
+
+    init(items: [String?]) {
+        self.items = items
+    }
+
+    func next() -> String? {
+        guard !items.isEmpty else { return nil }
+        return items.removeFirst()
+    }
 }
 
 /// Hands back a prepared sequence of stub responses, one per read.

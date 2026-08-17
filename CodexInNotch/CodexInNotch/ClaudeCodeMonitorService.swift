@@ -35,6 +35,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     private let sessions: any ClaudeCodeSessionListing
     private let listener: AgentHookListener
     private let transcripts: ClaudeCodeTranscriptReader
+    private let usage: ClaudeCodeUsageReader
     private let clock: any MonitorClock
     private var boundPort: UInt16?
     private var lastDiagnostic: String?
@@ -46,6 +47,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         sessions: (any ClaudeCodeSessionListing)? = nil,
         listener: AgentHookListener? = nil,
         transcripts: ClaudeCodeTranscriptReader? = nil,
+        usage: ClaudeCodeUsageReader? = nil,
         sessionsDirectory: URL? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
@@ -67,6 +69,14 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             clock: clock
         )
         self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
+        // Pinned to a directory of its own: the reading is a real session that
+        // fires real hooks, and the working directory is what keeps its events
+        // out of the row list.
+        self.usage = usage ?? ClaudeCodeUsageReader(
+            clock: clock,
+            workingDirectory: paths.agentDirectory
+                .appendingPathComponent("usage", isDirectory: true)
+        )
         self.clock = clock
 
         // Two edges, no cadence. An event arriving means a turn moved; the
@@ -181,7 +191,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             availability: .ready,
             sessions: rows,
             setupStatus: status,
-            diagnostic: hookState.diagnostic
+            diagnostic: hookState.diagnostic,
+            quota: await usage.quota()
         )
     }
 
@@ -286,16 +297,15 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         availability: MonitorAvailability,
         sessions: [MonitoredSession],
         setupStatus: HookSetupStatus,
-        diagnostic: String?
+        diagnostic: String?,
+        quota: QuotaSnapshot = .unavailable
     ) -> AgentSnapshot {
         lastDiagnostic = diagnostic
         return AgentSnapshot(
             agent: .claudeCode,
             availability: availability,
             sessions: sessions,
-            // Quota arrives with the /usage reading; unavailable is the honest
-            // answer until then, and never a zero.
-            quota: .unavailable,
+            quota: quota,
             diagnostic: diagnostic,
             setupStatus: setupStatus
         )
