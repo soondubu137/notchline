@@ -305,6 +305,20 @@ enum MonitorAvailability: Equatable, Sendable {
     }
 }
 
+/// What a user has to do by hand to register a product's hooks.
+///
+/// Only exists for a product this app will not set up for them, which today is
+/// Claude Code alone: its settings file holds their whole install, and the
+/// blast radius of a bad edit is why the app reads that file and never writes
+/// it (ADR 0010).
+nonisolated struct AgentManualSetup: Sendable, Equatable {
+    let agent: AgentKind
+    /// The file to edit.
+    let settingsURL: URL
+    /// The block to add to it.
+    let configurationSnippet: String
+}
+
 struct MonitoredSession: Identifiable, Equatable, Sendable {
     let agent: AgentKind
     let threadID: String

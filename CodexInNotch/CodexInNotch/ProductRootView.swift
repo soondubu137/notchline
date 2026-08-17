@@ -203,6 +203,8 @@ private struct OnboardingView: View {
 
 struct AppSettingsView: View {
     @EnvironmentObject private var store: MonitorStore
+    @State private var isShowingClaudeCodeSnippet = false
+    @State private var didCopyClaudeCodeSnippet = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -233,6 +235,7 @@ struct AppSettingsView: View {
 
                 displayCard
                 integrationCard
+                claudeCodeCard
                 privacyCard
 
                 Text("Settings affect Codex in Notch only. Passive Notch states never modify Codex.")
@@ -337,6 +340,116 @@ struct AppSettingsView: View {
                 .disabled(store.sessions.isEmpty || store.isClearingSessions)
                 .help("Clears rows from Codex in Notch without deleting Codex chats.")
             }
+        }
+    }
+
+    /// Claude Code's registration is the user's to make, so this card gives
+    /// instructions where the Codex one gives a switch.
+    ///
+    /// Placed directly beside it on purpose. The two products differ in
+    /// mechanism and the difference is worth seeing; hiding it behind a
+    /// separate flow would make the asymmetry feel like an accident rather
+    /// than the decision it is (ADR 0010).
+    @ViewBuilder
+    private var claudeCodeCard: some View {
+        if let setup = store.manualSetups[.claudeCode] {
+            SettingsCard {
+                HStack(alignment: .top, spacing: 10) {
+                    Circle()
+                        .fill(claudeCodeStatusColor)
+                        .frame(width: 10, height: 10)
+                        .padding(.top, 4)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Claude Code integration")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text(claudeCodeStatusDetail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(DesignColor.tertiaryText)
+                    }
+
+                    Spacer(minLength: 12)
+                }
+
+                Text(
+                    "Codex in Notch does not edit your Claude Code settings. "
+                        + "Add the block below to \(setup.settingsURL.path) yourself."
+                )
+                .font(.system(size: 12))
+                .foregroundStyle(DesignColor.secondaryText)
+                .lineSpacing(2)
+
+                DisclosureGroup(
+                    isExpanded: $isShowingClaudeCodeSnippet,
+                    content: {
+                        ScrollView {
+                            Text(setup.configurationSnippet)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(DesignColor.secondaryText)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                        }
+                        .frame(height: 150)
+                        .background(
+                            DesignColor.sidebar,
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                        .padding(.top, 6)
+                    },
+                    label: {
+                        Text("Configuration to add")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                )
+
+                HStack(spacing: 10) {
+                    SettingsButton(title: didCopyClaudeCodeSnippet ? "Copied" : "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(
+                            setup.configurationSnippet,
+                            forType: .string
+                        )
+                        didCopyClaudeCodeSnippet = true
+                    }
+                    SettingsButton(title: "Reveal Settings File") {
+                        NSWorkspace.shared.activateFileViewerSelecting([setup.settingsURL])
+                    }
+                    SettingsButton(title: "Recheck") {
+                        didCopyClaudeCodeSnippet = false
+                        store.refreshNow()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Green only when every registered event is there.
+    ///
+    /// Partial registration gets its own colour and its own sentence because it
+    /// is the failure with no other symptom: Claude Code simply never posts the
+    /// events that were left out, and nothing anywhere reports an error.
+    private var claudeCodeStatusColor: Color {
+        switch store.setupStatus(for: .claudeCode) {
+        case .active:
+            Color(red: 0.20, green: 0.72, blue: 0.44)
+        case .repairRequired:
+            Color(red: 0.95, green: 0.61, blue: 0.20)
+        default:
+            DesignColor.tertiaryText
+        }
+    }
+
+    private var claudeCodeStatusDetail: String {
+        switch store.setupStatus(for: .claudeCode) {
+        case .active:
+            store.agentAvailability(for: .claudeCode) == .disconnected
+                ? "Registered, but the port in your settings is unavailable."
+                : "Registered and receiving events."
+        case .repairRequired:
+            "Partly registered. The events left out never arrive and never fail."
+        default:
+            "Not registered yet."
         }
     }
 

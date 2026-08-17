@@ -454,6 +454,9 @@ final class MonitorStore: ObservableObject {
     /// Which product the summary is speaking about, or nil when it speaks for
     /// none — nothing is wrong, or more than one product is equally unhealthy.
     @Published private(set) var statusAgent: AgentKind?
+    /// Instructions for every product whose registration the user makes by
+    /// hand. Absent for a product this app sets up itself.
+    @Published private(set) var manualSetups: [AgentKind: AgentManualSetup] = [:]
     @Published private(set) var availability: MonitorAvailability
     @Published private(set) var quota: QuotaSnapshot
     @Published private(set) var sessions: [MonitoredSession] {
@@ -543,6 +546,7 @@ final class MonitorStore: ObservableObject {
     /// keeping this per product is what stops one product's absence from
     /// switching another product's integration off.
     private var setupStatusByAgent: [AgentKind: HookSetupStatus] = [:]
+    private var manualSetupTask: Task<Void, Never>?
     /// Deadlines a provider reported and then failed to clear. A provider that
     /// keeps naming the same overdue instant is not going to advance it, and
     /// letting it into the shared `min` would drag every other provider down to
@@ -1283,8 +1287,41 @@ final class MonitorStore: ObservableObject {
 
         latestByAgent[agent] = snapshot
         setupStatusByAgent[agent] = snapshot.setupStatus
+        refreshManualSetupIfNeeded(for: agent)
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
         applyIntegrationHealth(for: agent)
+    }
+
+    /// What a product's own boundary reported, before merging.
+    func agentAvailability(for agent: AgentKind) -> MonitorAvailability? {
+        latestByAgent[agent]?.availability
+    }
+
+    /// How far along a product's registration is.
+    func setupStatus(for agent: AgentKind) -> HookSetupStatus {
+        setupStatusByAgent[agent] ?? .notInstalled
+    }
+
+    /// Re-reads the instructions when a product answers.
+    ///
+    /// Not inline in the refresh: rendering the snippet reads the user's
+    /// settings file, and an open panel does not need that once a second.
+    private func refreshManualSetupIfNeeded(for agent: AgentKind) {
+        guard manualSetupTask == nil,
+              let service = services.first(where: { $0.agent == agent }) else {
+            return
+        }
+        manualSetupTask = Task { [weak self] in
+            let setup = await service.manualSetup()
+            guard let self else { return }
+            self.manualSetupTask = nil
+            guard self.manualSetups[agent] != setup else { return }
+            if let setup {
+                self.manualSetups[agent] = setup
+            } else {
+                self.manualSetups.removeValue(forKey: agent)
+            }
+        }
     }
 
     /// Keeps the integration card in step with the product it belongs to.

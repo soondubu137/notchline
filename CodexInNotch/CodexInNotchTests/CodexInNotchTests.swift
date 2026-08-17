@@ -6688,6 +6688,65 @@ for line in sys.stdin:
         )
     }
 
+    /// The settings card only exists for a product the app will not set up.
+    ///
+    /// Codex answers nil because it installs its own hooks and gets a switch;
+    /// Claude Code answers with the file to edit and the text to put in it, and
+    /// gets instructions. The card is driven off that answer rather than off a
+    /// product name, so a third product picks its own side by saying so.
+    @Test @MainActor
+    func onlyAProductThisAppWillNotSetUpOffersInstructions() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+
+        let claude = try #require(await harness.service.manualSetup())
+        #expect(claude.agent == .claudeCode)
+        #expect(claude.settingsURL == harness.paths.hooksConfiguration)
+        // The instructions are the events the reducer understands, so a user
+        // cannot paste a block that leaves one out by following them.
+        let block = try #require(
+            try JSONSerialization.jsonObject(
+                with: Data(claude.configurationSnippet.utf8)
+            ) as? [String: Any]
+        )
+        let hooks = try #require(block["hooks"] as? [String: Any])
+        #expect(
+            Set(hooks.keys)
+                == Set(ClaudeCodeHookVocabulary().managedDefinitions.map(\.event))
+        )
+
+        // A product that installs itself has nothing to instruct.
+        #expect(await LiveCodexMonitorService().manualSetup() == nil)
+    }
+
+    /// The store carries each product's registration state separately, which is
+    /// what lets one card show a switch while another shows instructions.
+    @Test @MainActor
+    func theStoreReportsRegistrationStatePerProduct() {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, setupStatus: .active)
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .setupRequired,
+                setupStatus: .repairRequired
+            )
+        )
+
+        #expect(store.setupStatus(for: .codex) == .active)
+        // Partial registration keeps its own value all the way to the card,
+        // because it is the failure with no other symptom: the events left out
+        // never arrive and nothing reports an error.
+        #expect(store.setupStatus(for: .claudeCode) == .repairRequired)
+        #expect(store.agentAvailability(for: .claudeCode) == .setupRequired)
+        // A product nobody has heard from is not registered, not "unknown".
+        #expect(store.setupStatus(for: .claudeCode) != .notInstalled)
+        // And Codex still runs the notch.
+        #expect(store.status == .idle)
+    }
+
     /// Today's tokens are everything processed, cache included, plus output.
     ///
     /// ADR 0008's definition, and not the obvious one: the three candidates
@@ -8176,6 +8235,7 @@ print("{}")
 private actor StuckDeadlineMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    func manualSetup() async -> AgentManualSetup? { nil }
 
     private let deadline: Date
     private var snapshots = 0
@@ -8212,6 +8272,7 @@ private actor StuckDeadlineMonitoringStub: AgentMonitoring {
 private actor GatedMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    func manualSetup() async -> AgentManualSetup? { nil }
 
     private var observedSnapshots = 0
     private var status: HookSetupStatus = .reviewRequired
@@ -8290,6 +8351,7 @@ private actor GatedMonitoringStub: AgentMonitoring {
 private actor IntegrationMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    func manualSetup() async -> AgentManualSetup? { nil }
 
     // Nothing to schedule: the stub's output never changes on its own.
     func nextRefreshDeadline() async -> Date? { nil }
@@ -8738,6 +8800,7 @@ private actor ResponseQueue {
 private actor HoldableMonitoringStub: AgentMonitoring {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    func manualSetup() async -> AgentManualSetup? { nil }
 
     private let snapshot: AgentSnapshot
     private let deadline: Date?

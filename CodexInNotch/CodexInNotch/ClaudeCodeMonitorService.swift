@@ -206,6 +206,15 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         await setup.status()
     }
 
+
+    func manualSetup() async -> AgentManualSetup? {
+        AgentManualSetup(
+            agent: agent,
+            settingsURL: setup.settingsURL,
+            configurationSnippet: await setup.configurationSnippet()
+        )
+    }
+
     /// Registration is the user's to make, so this always refuses.
     ///
     /// Refusing loudly rather than doing nothing: a switch that silently

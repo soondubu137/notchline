@@ -171,6 +171,27 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 这不是缺陷，是一个产品问题。紧凑状态名只有一个，且命名的是跨两个产品最紧急的状态（§3.3），所以它不能像其他紧凑标签那样把产品名省掉——省掉之后「Update」不说明该更新哪一个。可选项：接受 202；或者接受该标签在双产品下不指名产品；或者为 `updateAgent` 设计一个更短的紧凑形式。在此之前，`PanelMetrics.fixedCompactWidth(for:)` 按用户实际配置的产品集合折叠，单 Codex 用户的宽度与今天逐点一致，由 `aCodexOnlyConfigurationHasTodaysExactPanelGeometry` 固定。
 
+## 6.1 Claude Code 集成卡片（新增面）
+
+Figma §09 的 `Codex integration` 卡片围绕一个开关：拨动它，应用写 `~/.codex/hooks.json`。Claude Code 没有开关可拨（[ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md)），因此需要一张 Figma 未画过的卡片。
+
+**位置：紧挨 Codex 卡片，同一列表内的行内展开。** 两个产品在机制上不同，这个不同值得被看见；把它藏进另一条流程，会让这处不对称显得像疏漏，而不是一个决定。
+
+卡片内容：状态圆点与一句话、"不编辑你的设置文件"的说明加上文件路径、一个可展开的 `Configuration to add`（等宽、可选中、可滚动）、以及 `Copy` / `Reveal Settings File` / `Recheck` 三个按钮。
+
+状态有四种，第二种是重点：
+
+| 状态 | 文案 | 颜色 |
+| --- | --- | --- |
+| 未注册 | Not registered yet. | 灰 |
+| **部分注册** | Partly registered. The events left out never arrive and never fail. | 橙 |
+| 已注册且在收事件 | Registered and receiving events. | 绿 |
+| 已注册但端口被占 | Registered, but the port in your settings is unavailable. | 绿点＋该句 |
+
+**部分注册必须单独成一态**，不能与"未注册"合并：漏掉一个事件不会报错，Claude Code 只是永远不推送那一类迁移，这是手工粘贴唯一没有症状的失败方式。端口被占同样要说出来——应用不能替用户改文件，所以只能指出来。
+
+粘贴内容由 reducer 认识的事件列表渲染，因此说明与实现无法漂移；一个测试固定了这一点。
+
 ## 9. 与既有文档的关系
 
 [`figma-design.md`](figma-design.md) 描述单产品契约，其中两处已被本文取代：设置齿轮的位置（§4.5，现为顶栏右上角）与页脚额度行的构成（§4.3，双产品时为两行规则加当日用量行）。其余部分不受影响。
