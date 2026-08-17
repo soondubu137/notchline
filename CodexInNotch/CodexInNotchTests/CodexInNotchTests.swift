@@ -739,7 +739,7 @@ struct CodexInNotchTests {
         await service.setStatus(.reviewRequired)
 
         let store = MonitorStore(
-            service: service,
+            services: [service],
             initialSnapshot: AgentSnapshot(
                 availability: .connecting,
                 sessions: [],
@@ -781,7 +781,7 @@ struct CodexInNotchTests {
         await service.setHoldsSnapshots(true)
 
         let store = MonitorStore(
-            service: service,
+            services: [service],
             initialSnapshot: AgentSnapshot(
                 availability: .connecting,
                 sessions: [],
@@ -820,7 +820,7 @@ struct CodexInNotchTests {
         let service = GatedMonitoringStub()
         await service.setStatus(.notInstalled)
         let store = MonitorStore(
-            service: service,
+            services: [service],
             initialSnapshot: AgentSnapshot(
                 availability: .setupRequired,
                 sessions: [],
@@ -851,7 +851,7 @@ struct CodexInNotchTests {
         let service = GatedMonitoringStub()
         await service.setStatus(.notInstalled)
         let store = MonitorStore(
-            service: service,
+            services: [service],
             initialSnapshot: AgentSnapshot(
                 availability: .setupRequired,
                 sessions: [],
@@ -878,7 +878,7 @@ struct CodexInNotchTests {
     func integrationMasterSwitchInstallsAndRemovesTheManagedSet() async {
         let service = IntegrationMonitoringStub()
         let store = MonitorStore(
-            service: service,
+            services: [service],
             initialSnapshot: AgentSnapshot(
                 availability: .setupRequired,
                 sessions: [],
@@ -3750,7 +3750,7 @@ struct CodexInNotchTests {
                     hasNotch: true
                 )
             ],
-            service: service,
+            services: [service],
             initialSnapshot: .connecting,
             clock: clock,
             timing: timing
@@ -6710,6 +6710,95 @@ for line in sys.stdin:
         )
     }
 
+    /// A fast product's rows are on screen while a slow one is still being
+    /// asked.
+    ///
+    /// Every provider is asked at once and each answer publishes as it lands,
+    /// rather than the cycle waiting for the whole group. A merge that waited
+    /// would let the slowest product decide how quickly the fastest one can
+    /// tell the user that something wants them.
+    @Test @MainActor
+    func aSlowProviderDoesNotDelayTheOtherProvidersPublish() async {
+        let quickRow = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "cc",
+            turnID: "turn",
+            projectName: "codex-in-notch",
+            title: "Wants you",
+            preview: nil,
+            status: .inputNeeded,
+            startedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let slow = HoldableMonitoringStub(agent: .codex, heldOpen: true)
+        let quick = HoldableMonitoringStub(agent: .claudeCode, sessions: [quickRow])
+        // An explicit empty start, so the SwiftUI preview fixture the store
+        // otherwise seeds itself with cannot be mistaken for a published answer.
+        let store = MonitorStore(
+            services: [slow, quick],
+            initialSnapshot: makeAgentSnapshot(.codex, availability: .connecting)
+        )
+
+        let refresh = Task { await store.refreshAndWaitForTesting() }
+
+        for _ in 0 ..< 400 where store.sessions != [quickRow] {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        // Published while the other provider still has not returned.
+        #expect(store.sessions == [quickRow])
+        #expect(store.status == .inputNeeded)
+
+        await slow.release()
+        await refresh.value
+        #expect(store.sessions == [quickRow])
+    }
+
+    /// A provider that cannot advance its own deadline stops being waited on.
+    ///
+    /// It used to be enough that the loop clamped an overdue deadline up to the
+    /// refresh floor rather than down to zero — with one provider, spinning at
+    /// 1 Hz was the worst case. With two, a shared minimum means a provider
+    /// stuck on an instant it will never clear drags every healthy provider
+    /// into a full merged refresh alongside it, once a second, forever.
+    @Test @MainActor
+    func aStuckProvidersDeadlineDoesNotSpinTheSharedLoop() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let overdue = Date(timeIntervalSince1970: 1)
+        let stuck = HoldableMonitoringStub(agent: .codex, deadline: overdue)
+        let healthy = HoldableMonitoringStub(agent: .claudeCode, deadline: nil)
+        let store = MonitorStore(services: [stuck, healthy], clock: clock)
+
+        // The first look reports the overdue instant, so it is still waited on.
+        #expect(await store.nextWakeUpForTesting() == overdue)
+        // The second sees the same instant, unchanged by the refresh that
+        // should have cleared it, and drops it.
+        #expect(await store.nextWakeUpForTesting() == nil)
+    }
+
+    /// One product's integration health never moves another product's switch.
+    ///
+    /// The store drives a single card today. A worst-of merge across products
+    /// would let a product the user has not installed turn off the integration
+    /// of one they have.
+    @Test @MainActor
+    func oneAgentsSetupStatusDoesNotMoveTheOtherAgentsIntegrationSwitch() {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, setupStatus: .active)
+        )
+        #expect(store.integrationSwitchIsOn)
+        #expect(store.hookSetupStatus == .active)
+
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .setupRequired,
+                setupStatus: .notInstalled
+            )
+        )
+        #expect(store.integrationSwitchIsOn)
+        #expect(store.hookSetupStatus == .active)
+    }
+
     private func makeSession(
         agent: AgentKind,
         threadID: String,
@@ -6731,14 +6820,16 @@ for line in sys.stdin:
         _ agent: AgentKind,
         availability: MonitorAvailability = .ready,
         sessions: [MonitoredSession] = [],
-        diagnostic: String? = nil
+        diagnostic: String? = nil,
+        setupStatus: HookSetupStatus = .active
     ) -> AgentSnapshot {
         AgentSnapshot(
             agent: agent,
             availability: availability,
             sessions: sessions,
             quota: .unavailable,
-            diagnostic: diagnostic
+            diagnostic: diagnostic,
+            setupStatus: setupStatus
         )
     }
 
@@ -7262,6 +7353,61 @@ private final class CodexWorkspaceStub: CodexWorkspaceOpening {
         openedURL = url
         openedApplicationURL = applicationURL
     }
+}
+
+/// A provider whose fetch can be held open, and whose product is chosen.
+private actor HoldableMonitoringStub: AgentMonitoring {
+    nonisolated let agent: AgentKind
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+
+    private let snapshot: AgentSnapshot
+    private let deadline: Date?
+    private var isHeld: Bool
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(
+        agent: AgentKind,
+        sessions: [MonitoredSession] = [],
+        availability: MonitorAvailability = .ready,
+        setupStatus: HookSetupStatus = .active,
+        deadline: Date? = nil,
+        heldOpen: Bool = false
+    ) {
+        self.agent = agent
+        self.deadline = deadline
+        self.isHeld = heldOpen
+        self.snapshot = AgentSnapshot(
+            agent: agent,
+            availability: availability,
+            sessions: sessions,
+            quota: .unavailable,
+            diagnostic: nil,
+            setupStatus: setupStatus
+        )
+    }
+
+    func release() {
+        isHeld = false
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+
+    func nextRefreshDeadline() async -> Date? { deadline }
+
+    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+        if isHeld {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        return snapshot
+    }
+
+    func hookSetupStatus() async -> HookSetupStatus { snapshot.setupStatus }
+    func installHooks() async throws {}
+    func removeHooks() async throws {}
+    func clearSessions() async {}
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
+    func discardCollectedPreviews() async {}
+    func disconnect() async {}
 }
 
 @MainActor

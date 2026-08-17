@@ -420,15 +420,24 @@ struct ConnectionStabilityGate {
 
 @MainActor
 final class MonitorStore: ObservableObject {
+    /// Which product the single integration card in Settings belongs to.
+    ///
+    /// There is one card today, and it is Codex's. The second product's card
+    /// arrives with the two-product settings surface; naming the owner here
+    /// means installing or removing one product's hooks can never move the
+    /// other product's switch.
+    static let integrationCardAgent = AgentKind.codex
     private static let liveService = LiveCodexMonitorService()
     static let shared = MonitorStore(
-        service: liveService,
+        services: [liveService],
         navigator: AgentNavigationRouter([
             .codex: CodexDesktopNavigator(targetChecker: liveService)
         ]),
         initialSnapshot: .connecting,
         displayPreferences: .standard,
-        refreshEvents: liveService.stateChangeEvents
+        // Every provider's "ask me again" edges on one stream, so a late
+        // answer from any of them wakes the loop.
+        refreshEvents: DirectoryChangeWatcher.merged([liveService.stateChangeEvents])
     )
 
     @Published private(set) var displays: [DisplayOption]
@@ -475,11 +484,13 @@ final class MonitorStore: ObservableObject {
             // Applied before this setter returns, so the switch cannot land out
             // of order and cannot fail. Everything below is cleanup of text
             // already collected, which is idempotent and may run late.
-            service?.setContentPreviewsEnabled(showsContentPreviews)
+            services.forEach { $0.setContentPreviewsEnabled(showsContentPreviews) }
             guard !showsContentPreviews else { return }
             sessions = sessions.map { $0.hidingContent() }
-            Task { [service] in
-                await service?.discardCollectedPreviews()
+            Task { [services] in
+                for service in services {
+                    await service.discardCollectedPreviews()
+                }
             }
         }
     }
@@ -492,8 +503,11 @@ final class MonitorStore: ObservableObject {
     private static let contentPreviewDefaultsKey = "showsContentPreviews"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
-    private let service: (any AgentMonitoring)?
+    private let services: [any AgentMonitoring]
     private let navigator: (any AgentNavigating)?
+    private var integrationService: (any AgentMonitoring)? {
+        services.first { $0.agent == Self.integrationCardAgent }
+    }
     private let displayPreferences: UserDefaults?
     private let clock: any MonitorClock
     private let timing: MonitorTiming
@@ -514,11 +528,22 @@ final class MonitorStore: ObservableObject {
     /// without asking anyone again. One product answering must never discard
     /// what another already said.
     private var latestByAgent: [AgentKind: AgentSnapshot] = [:]
-    private var connectionStabilityGate: ConnectionStabilityGate
+    /// One gate per product. Sharing one made a Codex blip suppress a Claude
+    /// Code publish, and made the grace period's wake-up a shared resource.
+    private var stabilityGates: [AgentKind: ConnectionStabilityGate] = [:]
+    /// Integration health per product. The expanded panel shows one card today;
+    /// keeping this per product is what stops one product's absence from
+    /// switching another product's integration off.
+    private var setupStatusByAgent: [AgentKind: HookSetupStatus] = [:]
+    /// Deadlines a provider reported and then failed to clear. A provider that
+    /// keeps naming the same overdue instant is not going to advance it, and
+    /// letting it into the shared `min` would drag every other provider down to
+    /// the refresh floor with it.
+    private var stuckDeadlines: [AgentKind: Date] = [:]
 
     init(
         displays: [DisplayOption]? = nil,
-        service: (any AgentMonitoring)? = nil,
+        services: [any AgentMonitoring] = [],
         navigator: (any AgentNavigating)? = nil,
         initialSnapshot: AgentSnapshot? = nil,
         displayPreferences: UserDefaults? = nil,
@@ -540,12 +565,10 @@ final class MonitorStore: ObservableObject {
         self.clock = clock
         self.elapsedTick = CurrentValueSubject(clock.now())
         self.timing = timing
-        self.connectionStabilityGate = ConnectionStabilityGate(
-            gracePeriod: timing.disconnectGracePeriod
-        )
+        self.stuckDeadlines = [:]
         self.preferredDisplayID = persistedDisplayID
             ?? (initialDisplayID.isEmpty ? nil : initialDisplayID)
-        self.service = service
+        self.services = services
         self.navigator = navigator
         self.refreshEvents = refreshEvents
         self.latestByAgent = [snapshot.agent: snapshot]
@@ -570,9 +593,9 @@ final class MonitorStore: ObservableObject {
         // the channel's default to match. Previously nothing did this, so a
         // user who had turned previews off got a helper that came back up
         // collecting text until they toggled it again.
-        service?.setContentPreviewsEnabled(showsContentPreviews)
+        services.forEach { $0.setContentPreviewsEnabled(showsContentPreviews) }
 
-        if service != nil {
+        if !services.isEmpty {
             startMonitoring()
         }
         updateElapsedTicking()
@@ -923,7 +946,9 @@ final class MonitorStore: ObservableObject {
         )
         lastIntegrationMessage = "已清空 Codex in Notch 会话列表；Codex 会话未被删除。"
 
-        await service?.clearSessions()
+        for service in services {
+            await service.clearSessions()
+        }
         return true
     }
 
@@ -982,7 +1007,7 @@ final class MonitorStore: ObservableObject {
     /// on the main actor with no suspension between the loop's last read of
     /// the desired state and the handle being released.
     private func startIntegrationConvergenceIfNeeded() {
-        guard service != nil, integrationTask == nil else { return }
+        guard integrationService != nil, integrationTask == nil else { return }
         integrationTask = Task { [weak self] in
             guard let self else { return }
             while self.desiredIntegrationEnabled != nil {
@@ -1007,7 +1032,7 @@ final class MonitorStore: ObservableObject {
         if succeeded {
             // Re-read health rather than trusting the requested value: the
             // install may have landed in reviewRequired rather than active.
-            if let service {
+            if let service = integrationService {
                 let status = await service.hookSetupStatus()
                 hookSetupStatus = status
                 integrationSwitchIsOn = status.isIntegrationEnabled
@@ -1019,7 +1044,9 @@ final class MonitorStore: ObservableObject {
 
     @discardableResult
     func installIntegrationHooksAndWait() async -> Bool {
-        guard let service, !isInstallingIntegration else { return false }
+        guard let service = integrationService, !isInstallingIntegration else {
+            return false
+        }
         isInstallingIntegration = true
         defer { isInstallingIntegration = false }
 
@@ -1043,7 +1070,9 @@ final class MonitorStore: ObservableObject {
 
     @discardableResult
     func removeIntegrationAndWait() async -> Bool {
-        guard let service, !isRemovingIntegration else { return false }
+        guard let service = integrationService, !isRemovingIntegration else {
+            return false
+        }
         isRemovingIntegration = true
         defer { isRemovingIntegration = false }
 
@@ -1072,10 +1101,26 @@ final class MonitorStore: ObservableObject {
     func stopMonitoring() {
         monitorTask?.cancel()
         refreshEventTask?.cancel()
-        guard let service else { return }
+        let services = services
         Task {
-            await service.disconnect()
+            for service in services {
+                await service.disconnect()
+            }
         }
+    }
+
+    /// Runs one refresh cycle and waits for every product to answer.
+    func refreshAndWaitForTesting() async {
+        await refreshAndWait()
+    }
+
+    /// The instant the loop would next wake for, or nil when only the heartbeat
+    /// is left. Exposed so the deadline arithmetic is assertable without
+    /// running the loop.
+    func nextWakeUpForTesting() async -> Date? {
+        (
+            await providerDeadlines() + stabilityGates.values.map(\.nextPublishDeadline)
+        ).compactMap { $0 }.min()
     }
 
     /// Feeds one product's answer through the same path a refresh uses, so a
@@ -1084,11 +1129,7 @@ final class MonitorStore: ObservableObject {
         _ snapshot: AgentSnapshot,
         observedAt: Date? = nil
     ) {
-        latestByAgent[snapshot.agent] = snapshot
-        publish(
-            AgentSnapshotMerge.merge(Array(latestByAgent.values)),
-            observedAt: observedAt ?? clock.now()
-        )
+        record(snapshot, observedAt: observedAt ?? clock.now())
     }
 
     private func scheduleHoverAction(
@@ -1111,7 +1152,7 @@ final class MonitorStore: ObservableObject {
     }
 
     private func startMonitoring() {
-        guard service != nil else { return }
+        guard !services.isEmpty else { return }
 
         // Refreshes are driven by the directory watchers below. This loop only
         // sleeps until the next moment the service says its own output could
@@ -1123,13 +1164,13 @@ final class MonitorStore: ObservableObject {
                 guard !Task.isCancelled, let self else { return }
 
                 let heartbeat = timing.heartbeatInterval
-                // The gate's own deadline counts: a suppressed disconnect has
-                // to be re-examined when its grace expires, not whenever the
-                // service happens to want attention next.
-                let deadline = [
-                    await service?.nextRefreshDeadline(),
-                    self.connectionStabilityGate.nextPublishDeadline
-                ].compactMap { $0 }.min()
+                // The gates' own deadlines count: a suppressed disconnect has
+                // to be re-examined when its grace expires, not whenever some
+                // provider happens to want attention next.
+                let deadline = (
+                    await self.providerDeadlines()
+                        + self.stabilityGates.values.map(\.nextPublishDeadline)
+                ).compactMap { $0 }.min()
                 // An overdue deadline is clamped up to the floor, never down to
                 // zero. Sleeping zero here re-runs a full snapshot -- a
                 // LaunchServices round trip on the main thread and several stat
@@ -1195,13 +1236,26 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    private func publish(_ snapshot: MonitorSnapshot, observedAt: Date) {
-        guard connectionStabilityGate.shouldPublish(
+    /// Records one product's answer and republishes the merge.
+    ///
+    /// Each product is gated against its *own* previous availability, so a blip
+    /// on one cannot suppress another's publish, and a product that is
+    /// suppressed keeps its last trusted answer rather than dropping out of the
+    /// merge entirely — its rows stay where they were.
+    private func record(_ snapshot: AgentSnapshot, observedAt: Date) {
+        let agent = snapshot.agent
+        var gate = stabilityGates[agent] ?? ConnectionStabilityGate(
+            gracePeriod: timing.disconnectGracePeriod
+        )
+        let shouldPublish = gate.shouldPublish(
             candidate: snapshot.availability,
-            current: availability,
+            current: latestByAgent[agent]?.availability ?? .connecting,
             observedAt: observedAt
-        ) else {
-            let reason = snapshot.diagnostic ?? "Codex App Server 暂时没有响应。"
+        )
+        stabilityGates[agent] = gate
+
+        guard shouldPublish else {
+            let reason = snapshot.diagnostic ?? "\(agent.displayName) 暂时没有响应。"
             let retryMessage = "检测到瞬时连接异常，正在重试：\(reason)"
             if lastIntegrationMessage != retryMessage {
                 lastIntegrationMessage = retryMessage
@@ -1209,7 +1263,49 @@ final class MonitorStore: ObservableObject {
             return
         }
 
-        apply(snapshot)
+        latestByAgent[agent] = snapshot
+        setupStatusByAgent[agent] = snapshot.setupStatus
+        apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
+        applyIntegrationHealth(for: agent)
+    }
+
+    /// Keeps the integration card in step with the product it belongs to.
+    private func applyIntegrationHealth(for agent: AgentKind) {
+        guard agent == Self.integrationCardAgent,
+              let refreshed = setupStatusByAgent[agent] else { return }
+        if hookSetupStatus != refreshed {
+            hookSetupStatus = refreshed
+        }
+        if !isInstallingIntegration,
+           !isRemovingIntegration,
+           integrationSwitchIsOn != refreshed.isIntegrationEnabled {
+            integrationSwitchIsOn = refreshed.isIntegrationEnabled
+        }
+    }
+
+    /// Each provider's next deadline, with providers that cannot advance their
+    /// own dropped.
+    ///
+    /// A provider that reports the same already-overdue instant twice has said
+    /// everything it is going to say about it. Leaving it in the shared minimum
+    /// would pin the loop to the refresh floor and drag every healthy provider
+    /// into a full merged refresh every second alongside it.
+    private func providerDeadlines() async -> [Date?] {
+        var deadlines: [Date?] = []
+        let now = clock.now()
+        for service in services {
+            let agent = service.agent
+            guard let deadline = await service.nextRefreshDeadline() else {
+                stuckDeadlines[agent] = nil
+                continue
+            }
+            if deadline <= now, stuckDeadlines[agent] == deadline {
+                continue
+            }
+            stuckDeadlines[agent] = deadline <= now ? deadline : nil
+            deadlines.append(deadline)
+        }
+        return deadlines
     }
 
     /// Requests a refresh without waiting for it.
@@ -1242,7 +1338,7 @@ final class MonitorStore: ObservableObject {
     }
 
     private func startRefreshRunIfNeeded() {
-        guard service != nil, refreshGate.beginRun() else { return }
+        guard !services.isEmpty, refreshGate.beginRun() else { return }
         refreshTask = Task { [weak self] in
             guard let self else { return }
             repeat {
@@ -1251,28 +1347,34 @@ final class MonitorStore: ObservableObject {
         }
     }
 
+    /// Asks every product at once and publishes each answer as it lands.
+    ///
+    /// Publishing per answer rather than after the whole group is what keeps a
+    /// slow provider from holding up a fast one: the fast product's rows are on
+    /// screen while the slow one is still being asked. The group is still
+    /// awaited, so a caller that wants "everyone has answered" — Recheck — gets
+    /// exactly that.
+    ///
+    /// Nothing here cancels a slow fetch. Cancelling throws the work away and
+    /// the next cycle starts it again, which is how "slow" turns into "never";
+    /// each provider is responsible for bounding its own request instead.
     private func performRefresh() async {
-        guard let service else { return }
+        guard !services.isEmpty else { return }
 
-        let snapshot = await service.fetchSnapshot(
-            showsContentPreviews: showsContentPreviews
-        )
-        guard !Task.isCancelled else { return }
-        latestByAgent[snapshot.agent] = snapshot
-        publish(
-            AgentSnapshotMerge.merge(Array(latestByAgent.values)),
-            observedAt: clock.now()
-        )
-        // The snapshot already carries the health the same refresh observed;
-        // asking the service again would consume the Hook queue twice a cycle.
-        let refreshedHookSetupStatus = snapshot.setupStatus
-        if hookSetupStatus != refreshedHookSetupStatus {
-            hookSetupStatus = refreshedHookSetupStatus
-        }
-        if !isInstallingIntegration,
-           !isRemovingIntegration,
-           integrationSwitchIsOn != refreshedHookSetupStatus.isIntegrationEnabled {
-            integrationSwitchIsOn = refreshedHookSetupStatus.isIntegrationEnabled
+        await withTaskGroup(of: Void.self) { group in
+            for service in services {
+                group.addTask { @MainActor [weak self] in
+                    guard let self else { return }
+                    let snapshot = await service.fetchSnapshot(
+                        showsContentPreviews: self.showsContentPreviews
+                    )
+                    guard !Task.isCancelled else { return }
+                    // The snapshot already carries the health the same refresh
+                    // observed; asking again would consume the Hook queue twice
+                    // a cycle.
+                    self.record(snapshot, observedAt: self.clock.now())
+                }
+            }
         }
     }
 
