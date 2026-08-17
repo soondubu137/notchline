@@ -528,7 +528,7 @@ struct CodexInNotchTests {
         )
         let store = MonitorStore(displays: [display])
         store.applyForTesting(
-            MonitorSnapshot(
+            AgentSnapshot(
                 availability: .ready,
                 sessions: [
                     MonitoredSession(
@@ -551,7 +551,7 @@ struct CodexInNotchTests {
         #expect(store.tokenRemainingPercent == 72)
 
         store.applyForTesting(
-            MonitorSnapshot(
+            AgentSnapshot(
                 availability: .ready,
                 sessions: [
                     MonitoredSession(
@@ -588,7 +588,7 @@ struct CodexInNotchTests {
             startedAt: Date()
         )
         let store = MonitorStore(
-            initialSnapshot: MonitorSnapshot(
+            initialSnapshot: AgentSnapshot(
                 availability: .ready,
                 sessions: [currentTurn],
                 quota: .unavailable,
@@ -604,7 +604,7 @@ struct CodexInNotchTests {
         #expect(store.lastIntegrationMessage.contains("Codex 会话未被删除"))
 
         store.applyForTesting(
-            MonitorSnapshot(
+            AgentSnapshot(
                 availability: .ready,
                 sessions: [currentTurn],
                 quota: .unavailable,
@@ -623,7 +623,7 @@ struct CodexInNotchTests {
             startedAt: Date()
         )
         store.applyForTesting(
-            MonitorSnapshot(
+            AgentSnapshot(
                 availability: .ready,
                 sessions: [currentTurn, nextTurn],
                 quota: .unavailable,
@@ -648,7 +648,7 @@ struct CodexInNotchTests {
 
         let store = MonitorStore(
             service: service,
-            initialSnapshot: MonitorSnapshot(
+            initialSnapshot: AgentSnapshot(
                 availability: .connecting,
                 sessions: [],
                 quota: .unavailable,
@@ -690,7 +690,7 @@ struct CodexInNotchTests {
 
         let store = MonitorStore(
             service: service,
-            initialSnapshot: MonitorSnapshot(
+            initialSnapshot: AgentSnapshot(
                 availability: .connecting,
                 sessions: [],
                 quota: .unavailable,
@@ -729,7 +729,7 @@ struct CodexInNotchTests {
         await service.setStatus(.notInstalled)
         let store = MonitorStore(
             service: service,
-            initialSnapshot: MonitorSnapshot(
+            initialSnapshot: AgentSnapshot(
                 availability: .setupRequired,
                 sessions: [],
                 quota: .unavailable,
@@ -760,7 +760,7 @@ struct CodexInNotchTests {
         await service.setStatus(.notInstalled)
         let store = MonitorStore(
             service: service,
-            initialSnapshot: MonitorSnapshot(
+            initialSnapshot: AgentSnapshot(
                 availability: .setupRequired,
                 sessions: [],
                 quota: .unavailable,
@@ -787,7 +787,7 @@ struct CodexInNotchTests {
         let service = IntegrationMonitoringStub()
         let store = MonitorStore(
             service: service,
-            initialSnapshot: MonitorSnapshot(
+            initialSnapshot: AgentSnapshot(
                 availability: .setupRequired,
                 sessions: [],
                 quota: .unavailable,
@@ -1025,7 +1025,7 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
-    func disconnectedAvailabilityClearsAggregateEvenIfAStaleSessionExists() {
+    func aDisconnectedAgentClearsOnlyItsOwnRowsAndReachesTheAggregateOnlyWhenNoAgentHasSessions() {
         let session = MonitoredSession(
             threadID: "thread",
             turnID: "turn",
@@ -1036,11 +1036,32 @@ struct CodexInNotchTests {
             startedAt: Date()
         )
 
+        // The unhealthy product's own rows go with it, and with nothing left
+        // to show, its availability is what the surface says.
         #expect(
-            MonitorAggregation.status(
-                availability: .disconnected,
-                sessions: [session]
-            ) == .disconnected
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, availability: .disconnected)
+            ]).status == .disconnected
+        )
+
+        // But it only reaches the summary when no product has anything to
+        // show. A live turn somewhere else outranks it: the user is being told
+        // something wants them, which is true, rather than being told the
+        // surface is broken, which is not.
+        #expect(
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, availability: .disconnected),
+                makeAgentSnapshot(.claudeCode, sessions: [session])
+            ]).status == .running
+        )
+
+        // And a product that is merely unhealthy never speaks over one that is
+        // being watched properly and simply has nothing to report.
+        #expect(
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, availability: .disconnected),
+                makeAgentSnapshot(.claudeCode, availability: .ready)
+            ]).status == .idle
         )
     }
 
@@ -1090,7 +1111,7 @@ struct CodexInNotchTests {
     /// implementation detail, so a later change to it reads as the deliberate
     /// product decision it would be.
     @Test @MainActor
-    func aggregateFallsBackToAvailabilityOnlyWhenNotReady() {
+    func availabilitySpeaksForTheAggregateOnlyWhenNoProductHasRows() {
         let running = MonitoredSession(
             threadID: "thread",
             turnID: "turn",
@@ -1108,23 +1129,47 @@ struct CodexInNotchTests {
             .unsupportedVersion,
             .disconnected
         ]
+        // With one product, availability speaks whenever it has no rows —
+        // unchanged from the single-source surface, including the onboarding
+        // path where nothing is installed yet.
         for availability in unready {
             #expect(
-                MonitorAggregation.status(
-                    availability: availability,
-                    sessions: [running]
-                ) == availability.status
+                AgentSnapshotMerge.merge([
+                    makeAgentSnapshot(.codex, availability: availability)
+                ]).status == availability.status
             )
         }
 
         #expect(
-            MonitorAggregation.status(
-                availability: .ready,
-                sessions: [running]
-            ) == .running
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, sessions: [running])
+            ]).status == .running
+        )
+        #expect(AgentSnapshotMerge.merge([makeAgentSnapshot(.codex)]).status == .idle)
+
+        // A second product the user has only just discovered reports
+        // setupRequired. It must not take over the notch from a product that is
+        // running a turn, and it must not take over from one that is simply
+        // idle either.
+        #expect(
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, sessions: [running]),
+                makeAgentSnapshot(.claudeCode, availability: .setupRequired)
+            ]).status == .running
         )
         #expect(
-            MonitorAggregation.status(availability: .ready, sessions: []) == .idle
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex),
+                makeAgentSnapshot(.claudeCode, availability: .setupRequired)
+            ]).status == .idle
+        )
+        // With no product ready, the most actionable one speaks: something to
+        // do outranks something to wait for.
+        #expect(
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, availability: .connecting),
+                makeAgentSnapshot(.claudeCode, availability: .setupRequired)
+            ]).status == .setupRequired
         )
     }
 
@@ -1138,7 +1183,7 @@ struct CodexInNotchTests {
     /// reorders while it is being read is exactly the flicker the fixed compact
     /// width exists to prevent.
     @Test @MainActor
-    func monitorOrderIsATotalOrder() {
+    func theMergedOrderIsTotalSoEqualKeysNeverSwapBetweenRefreshes() {
         let startedAt = Date(timeIntervalSince1970: 1_000)
         let sessions = (0 ..< 6).map { index in
             MonitoredSession(
@@ -1152,9 +1197,74 @@ struct CodexInNotchTests {
             )
         }
 
-        let forward = sessions.sorted(by: CodexSnapshotParser.monitorOrder)
-        let backward = sessions.reversed().sorted(by: CodexSnapshotParser.monitorOrder)
+        let forward = sessions.sorted(by: MonitorAggregation.rowOrder)
+        let backward = sessions.reversed().sorted(by: MonitorAggregation.rowOrder)
         #expect(forward.map(\.id) == backward.map(\.id))
+
+        // Same again across products, where the tie is not hypothetical: two
+        // providers discovering sessions at the same moment report the same
+        // whole-millisecond start time.
+        let mixed = AgentKind.allCases.map { agent in
+            MonitoredSession(
+                agent: agent,
+                threadID: "same-thread",
+                turnID: "same-turn",
+                projectName: "codex-in-notch",
+                title: "Task",
+                preview: nil,
+                status: .running,
+                startedAt: startedAt
+            )
+        }
+        #expect(
+            mixed.reversed().sorted(by: MonitorAggregation.rowOrder).map(\.agent)
+                == [.codex, .claudeCode]
+        )
+    }
+
+    /// A merge is not a replacement: one product going quiet or unhealthy must
+    /// leave the other product's rows exactly where they were.
+    @Test @MainActor
+    func oneAgentsFailureDoesNotClearTheOthersSessions() {
+        let session = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "cc",
+            turnID: "turn",
+            projectName: "codex-in-notch",
+            title: "Still running",
+            preview: nil,
+            status: .running,
+            startedAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        let merged = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .disconnected),
+            makeAgentSnapshot(.claudeCode, sessions: [session])
+        ])
+
+        #expect(merged.sessions == [session])
+        #expect(merged.status == .running)
+        #expect(merged.agent(.codex)?.availability == .disconnected)
+        #expect(merged.agent(.claudeCode)?.availability == .ready)
+    }
+
+    /// Once there are two products, a diagnostic has to say whose it is.
+    ///
+    /// "Disconnected" unattributed reads as a statement about the whole
+    /// surface, which is the one thing it must not say while the other product
+    /// is working.
+    @Test @MainActor
+    func aDiagnosticNamesItsProductOnlyWhenThereIsMoreThanOne() {
+        let alone = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, diagnostic: "App Server 无响应")
+        ])
+        #expect(alone.diagnostic == "App Server 无响应")
+
+        let together = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, diagnostic: "App Server 无响应"),
+            makeAgentSnapshot(.claudeCode)
+        ])
+        #expect(together.diagnostic == "Codex：App Server 无响应")
     }
 
     @Test @MainActor
@@ -1169,13 +1279,13 @@ struct CodexInNotchTests {
             status: .running,
             startedAt: baseDate
         )
-        let ready = MonitorSnapshot(
+        let ready = AgentSnapshot(
             availability: .ready,
             sessions: [session],
             quota: QuotaSnapshot(remainingPercent: 70, resetsAt: nil),
             diagnostic: nil
         )
-        let disconnected = MonitorSnapshot(
+        let disconnected = AgentSnapshot(
             availability: .disconnected,
             sessions: [],
             quota: .unavailable,
@@ -1200,13 +1310,13 @@ struct CodexInNotchTests {
     @Test @MainActor
     func sustainedDisconnectPublishesAfterTheGracePeriod() {
         let baseDate = Date(timeIntervalSince1970: 2_000)
-        let ready = MonitorSnapshot(
+        let ready = AgentSnapshot(
             availability: .ready,
             sessions: [],
             quota: .unavailable,
             diagnostic: nil
         )
-        let disconnected = MonitorSnapshot(
+        let disconnected = AgentSnapshot(
             availability: .disconnected,
             sessions: [],
             quota: .unavailable,
@@ -1232,7 +1342,7 @@ struct CodexInNotchTests {
     @Test @MainActor
     func startupDisconnectDoesNotWaitForTheReadyStateGracePeriod() {
         let store = MonitorStore(initialSnapshot: .connecting)
-        let disconnected = MonitorSnapshot(
+        let disconnected = AgentSnapshot(
             availability: .disconnected,
             sessions: [],
             quota: .unavailable,
@@ -1300,10 +1410,29 @@ struct CodexInNotchTests {
         )
 
         #expect(
-            MonitorAggregation.status(
-                availability: .ready,
-                sessions: [running, input]
-            ) == .inputNeeded
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, sessions: [running, input])
+            ]).status == .inputNeeded
+        )
+
+        // Priority is a property of the merged list, not of either product's.
+        // A Codex turn that is merely running must not outrank a Claude Code
+        // turn that is waiting on the user just because Codex leads the order.
+        let claudeInput = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "cc",
+            turnID: "turn",
+            projectName: "codex-in-notch",
+            title: "Input",
+            preview: nil,
+            status: .inputNeeded,
+            startedAt: input.startedAt
+        )
+        #expect(
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, sessions: [running]),
+                makeAgentSnapshot(.claudeCode, sessions: [claudeInput])
+            ]).status == .inputNeeded
         )
     }
 
@@ -1901,7 +2030,7 @@ struct CodexInNotchTests {
         )
         let store = MonitorStore(
             displays: [display],
-            initialSnapshot: MonitorSnapshot(
+            initialSnapshot: AgentSnapshot(
                 availability: .ready,
                 sessions: [],
                 quota: .unavailable,
@@ -1941,7 +2070,7 @@ struct CodexInNotchTests {
                 )
             }
             store.applyForTesting(
-                MonitorSnapshot(
+                AgentSnapshot(
                     availability: .ready,
                     sessions: sessions,
                     quota: .unavailable,
@@ -2144,12 +2273,7 @@ struct CodexInNotchTests {
 
         #expect(snapshot.availability == .ready)
         #expect(snapshot.sessions.isEmpty)
-        #expect(
-            MonitorAggregation.status(
-                availability: snapshot.availability,
-                sessions: snapshot.sessions
-            ) == .idle
-        )
+        #expect(AgentSnapshotMerge.merge([snapshot]).status == .idle)
         #expect(upgradedScript.contains(#"payload.get("tool_use_id")"#))
         // The upgrade recognised a pre-marker install by its legacy settings
         // file, replaced it with the marker, and carried no privacy state
@@ -2235,12 +2359,7 @@ struct CodexInNotchTests {
         // It must now be ignored: only a post-launch Hook can create a session.
         #expect(ready.availability == .ready)
         #expect(ready.sessions.isEmpty)
-        #expect(
-            MonitorAggregation.status(
-                availability: ready.availability,
-                sessions: ready.sessions
-            ) == .idle
-        )
+        #expect(AgentSnapshotMerge.merge([ready]).status == .idle)
         // Startup still proves the App Server answers a real read, which is what
         // separates Ready from Disconnected.
         #expect(requestedMethods.contains("thread/list"))
@@ -6126,8 +6245,8 @@ for line in sys.stdin:
 
     private func makeSessionSnapshot(
         _ sessions: [MonitoredSession]
-    ) -> MonitorSnapshot {
-        MonitorSnapshot(
+    ) -> AgentSnapshot {
+        AgentSnapshot(
             availability: .ready,
             sessions: sessions,
             quota: .unavailable,
@@ -6381,6 +6500,21 @@ for line in sys.stdin:
         #expect(exists("unknown.invalid"))
     }
 
+    private func makeAgentSnapshot(
+        _ agent: AgentKind,
+        availability: MonitorAvailability = .ready,
+        sessions: [MonitoredSession] = [],
+        diagnostic: String? = nil
+    ) -> AgentSnapshot {
+        AgentSnapshot(
+            agent: agent,
+            availability: availability,
+            sessions: sessions,
+            quota: .unavailable,
+            diagnostic: diagnostic
+        )
+    }
+
     private func makeTemporaryHookPaths() -> HookIntegrationPaths {
         // Deliberately short. The preview socket lives inside this directory,
         // and a Unix domain socket path may not exceed 104 bytes -- the system
@@ -6502,9 +6636,9 @@ private actor StuckDeadlineMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { deadline }
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot {
+    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
         snapshots += 1
-        return MonitorSnapshot(
+        return AgentSnapshot(
             availability: .ready,
             sessions: [],
             quota: .unavailable,
@@ -6540,12 +6674,12 @@ private actor GatedMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { nil }
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot {
+    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
         observedSnapshots += 1
         if holdsSnapshots {
             await withCheckedContinuation { waiters.append($0) }
         }
-        return MonitorSnapshot(
+        return AgentSnapshot(
             availability: .ready,
             sessions: [],
             quota: .unavailable,
@@ -6614,8 +6748,8 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
     private var installRequests = 0
     private var removeRequests = 0
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot {
-        MonitorSnapshot(
+    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+        AgentSnapshot(
             availability: setupStatus.isIntegrationEnabled
                 ? .connecting
                 : .setupRequired,

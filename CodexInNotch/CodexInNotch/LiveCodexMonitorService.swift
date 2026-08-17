@@ -13,7 +13,7 @@ protocol AgentMonitoring: Sendable {
     /// through a deadline, which is what lets a slow provider not hold up a
     /// fast one.
     nonisolated var stateChangeEvents: AsyncStream<Void> { get }
-    func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot
+    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot
     /// Earliest moment a refresh could produce different output.
     ///
     /// The store sleeps until this instead of sampling on a fixed cadence, so a
@@ -84,7 +84,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     private var observedDesktopProcessIdentifier: pid_t?
     private var quotaRefreshTask: Task<Void, Never>?
     private var quotaRetryAfter: Date?
-    private var lastTrustedSnapshot: MonitorSnapshot?
+    private var lastTrustedSnapshot: AgentSnapshot?
     private var terminalUnreadMembershipGate: TerminalUnreadMembershipGate
 
     init(
@@ -128,7 +128,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         self.desktopProcessIdentifierProvider = desktopProcessIdentifierProvider
     }
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot {
+    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
         let hookUpgradeDiagnostic: String?
         do {
             try await hookInstaller.upgradeManagedHookIfNeeded()
@@ -155,7 +155,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 ? "Codex integration is incomplete and must be repaired."
                 : "Codex integration has not been installed."
             return remember(
-                MonitorSnapshot(
+                AgentSnapshot(
                     availability: .setupRequired,
                     sessions: [],
                     quota: .unavailable,
@@ -216,9 +216,9 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 )
                 scheduleQuotaRefreshIfNeeded()
                 return remember(
-                    MonitorSnapshot(
+                    AgentSnapshot(
                         availability: .ready,
-                        sessions: sessions.sorted(by: CodexSnapshotParser.monitorOrder),
+                        sessions: sessions.sorted(by: MonitorAggregation.rowOrder),
                         quota: cachedQuota,
                         diagnostic: combinedDiagnostic(
                             hookDiagnostic,
@@ -252,7 +252,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             )
             scheduleQuotaRefreshIfNeeded()
             return remember(
-                MonitorSnapshot(
+                AgentSnapshot(
                     availability: .ready,
                     sessions: [],
                     quota: cachedQuota,
@@ -262,7 +262,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             )
         } catch let error as CodexAppServerError {
             if error.isUnsupportedMethod {
-                return MonitorSnapshot(
+                return AgentSnapshot(
                     availability: .unsupportedVersion,
                     sessions: [],
                     quota: .unavailable,
@@ -272,7 +272,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             if error.isTransientRequestFailure {
                 guard appServerResponded else {
                     await client.disconnect()
-                    return MonitorSnapshot(
+                    return AgentSnapshot(
                         availability: .disconnected,
                         sessions: [],
                         quota: .unavailable,
@@ -284,7 +284,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             if error.requiresConnectionReset {
                 await client.disconnect()
             }
-            return MonitorSnapshot(
+            return AgentSnapshot(
                 availability: .disconnected,
                 sessions: [],
                 quota: .unavailable,
@@ -292,7 +292,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             )
         } catch {
             await client.disconnect()
-            return MonitorSnapshot(
+            return AgentSnapshot(
                 availability: .disconnected,
                 sessions: [],
                 quota: .unavailable,
@@ -464,7 +464,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         await hookEvents.clearTurnsPreservingObservation()
         terminalUnreadMembershipGate.reset()
         if let snapshot = lastTrustedSnapshot {
-            lastTrustedSnapshot = MonitorSnapshot(
+            lastTrustedSnapshot = AgentSnapshot(
                 availability: snapshot.availability,
                 sessions: [],
                 quota: snapshot.quota,
@@ -821,7 +821,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         }
     }
 
-    private func remember(_ snapshot: MonitorSnapshot) -> MonitorSnapshot {
+    private func remember(_ snapshot: AgentSnapshot) -> AgentSnapshot {
         lastTrustedSnapshot = snapshot
         return snapshot
     }
@@ -852,10 +852,10 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
 
     private func snapshotPreservingTrustedState(
         after error: CodexAppServerError
-    ) -> MonitorSnapshot {
+    ) -> AgentSnapshot {
         let diagnostic = "App Server 请求暂时失败，保留最近状态：\(error.localizedDescription)"
         guard let lastTrustedSnapshot else {
-            return MonitorSnapshot(
+            return AgentSnapshot(
                 availability: .connecting,
                 sessions: [],
                 quota: cachedQuota,
@@ -866,7 +866,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         let quota = cachedQuota.remainingPercent == nil
             ? lastTrustedSnapshot.quota
             : cachedQuota
-        return MonitorSnapshot(
+        return AgentSnapshot(
             availability: lastTrustedSnapshot.availability,
             sessions: lastTrustedSnapshot.sessions,
             quota: quota,
@@ -1099,30 +1099,6 @@ enum CodexSnapshotParser {
             status: status,
             startedAt: state.startedAt
         )
-    }
-
-    nonisolated static func monitorOrder(_ lhs: MonitoredSession, _ rhs: MonitoredSession) -> Bool {
-        let priority: [SessionStatus: Int] = [
-            .inputNeeded: 0,
-            .approvalNeeded: 1,
-            .running: 2,
-            .completed: 3
-        ]
-        let lhsPriority = priority[lhs.status] ?? Int.max
-        let rhsPriority = priority[rhs.status] ?? Int.max
-        if lhsPriority != rhsPriority {
-            return lhsPriority < rhsPriority
-        }
-        let lhsStart = lhs.startedAt ?? .distantPast
-        let rhsStart = rhs.startedAt ?? .distantPast
-        if lhsStart != rhsStart {
-            return lhsStart > rhsStart
-        }
-        // Identity breaks the last tie so the comparator is a total order.
-        // Without it two rows sharing a status and a start time compare equal
-        // both ways, and `sorted(by:)` is free to place them either way round
-        // on each refresh — a list that reorders itself while it is being read.
-        return lhs.id < rhs.id
     }
 
     nonisolated private static func normalizedTitle(_ value: String?) -> String? {

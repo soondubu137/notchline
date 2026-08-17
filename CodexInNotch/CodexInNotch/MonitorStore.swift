@@ -465,13 +465,17 @@ final class MonitorStore: ObservableObject {
     private var integrationTask: Task<Void, Never>?
     private var isNavigationInFlight = false
     private var dismissedSessionIDs: Set<String> = []
+    /// The latest answer from each product, kept so the merge can be recomputed
+    /// without asking anyone again. One product answering must never discard
+    /// what another already said.
+    private var latestByAgent: [AgentKind: AgentSnapshot] = [:]
     private var connectionStabilityGate: ConnectionStabilityGate
 
     init(
         displays: [DisplayOption]? = nil,
         service: (any AgentMonitoring)? = nil,
         navigator: (any CodexNavigating)? = nil,
-        initialSnapshot: MonitorSnapshot? = nil,
+        initialSnapshot: AgentSnapshot? = nil,
         displayPreferences: UserDefaults? = nil,
         refreshEvents: AsyncStream<Void>? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
@@ -499,13 +503,12 @@ final class MonitorStore: ObservableObject {
         self.service = service
         self.navigator = navigator
         self.refreshEvents = refreshEvents
-        self.availability = snapshot.availability
-        self.quota = snapshot.quota
-        self.sessions = snapshot.sessions
-        self.status = MonitorAggregation.status(
-            availability: snapshot.availability,
-            sessions: snapshot.sessions
-        )
+        self.latestByAgent = [snapshot.agent: snapshot]
+        let merged = AgentSnapshotMerge.merge([snapshot])
+        self.availability = merged.availability
+        self.quota = merged.quota
+        self.sessions = merged.sessions
+        self.status = merged.status
         self.showsContentPreviews = UserDefaults.standard.object(
             forKey: Self.contentPreviewDefaultsKey
         ) as? Bool ?? true
@@ -855,7 +858,7 @@ final class MonitorStore: ObservableObject {
         dismissedSessionIDs.formUnion(sessions.map(\.id))
         sessions = []
         status = MonitorAggregation.status(
-            availability: availability,
+            agents: Array(latestByAgent.values),
             sessions: []
         )
         lastIntegrationMessage = "已清空 Codex in Notch 会话列表；Codex 会话未被删除。"
@@ -1015,11 +1018,17 @@ final class MonitorStore: ObservableObject {
         }
     }
 
+    /// Feeds one product's answer through the same path a refresh uses, so a
+    /// test exercises the merge rather than bypassing it.
     func applyForTesting(
-        _ snapshot: MonitorSnapshot,
+        _ snapshot: AgentSnapshot,
         observedAt: Date? = nil
     ) {
-        publish(snapshot, observedAt: observedAt ?? clock.now())
+        latestByAgent[snapshot.agent] = snapshot
+        publish(
+            AgentSnapshotMerge.merge(Array(latestByAgent.values)),
+            observedAt: observedAt ?? clock.now()
+        )
     }
 
     private func scheduleHoverAction(
@@ -1098,8 +1107,10 @@ final class MonitorStore: ObservableObject {
         let visibleSessions = showsContentPreviews
             ? undismissedSessions
             : undismissedSessions.map { $0.hidingContent() }
+        // Re-aggregated rather than taken from the snapshot: a dismissed row
+        // must stop counting towards the summary the moment it stops showing.
         let aggregateStatus = MonitorAggregation.status(
-            availability: snapshot.availability,
+            agents: snapshot.agents,
             sessions: undismissedSessions
         )
         let integrationMessage = snapshot.diagnostic ?? "Codex 数据已刷新"
@@ -1184,7 +1195,11 @@ final class MonitorStore: ObservableObject {
             showsContentPreviews: showsContentPreviews
         )
         guard !Task.isCancelled else { return }
-        publish(snapshot, observedAt: clock.now())
+        latestByAgent[snapshot.agent] = snapshot
+        publish(
+            AgentSnapshotMerge.merge(Array(latestByAgent.values)),
+            observedAt: clock.now()
+        )
         // The snapshot already carries the health the same refresh observed;
         // asking the service again would consume the Hook queue twice a cycle.
         let refreshedHookSetupStatus = snapshot.setupStatus
@@ -1198,10 +1213,10 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    private static var previewSnapshot: MonitorSnapshot {
+    private static var previewSnapshot: AgentSnapshot {
         // SwiftUI preview fixture: display data, not a timing decision.
         let now = Date()
-        return MonitorSnapshot(
+        return AgentSnapshot(
             availability: .ready,
             sessions: [
                 MonitoredSession(

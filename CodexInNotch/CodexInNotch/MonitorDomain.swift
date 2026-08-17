@@ -255,6 +255,26 @@ enum MonitorAvailability: Equatable, Sendable {
         }
     }
 
+    /// How much this state asks of the user, for choosing which unhealthy
+    /// product speaks when none is ready. Something to do outranks something to
+    /// wait for.
+    var actionRank: Int {
+        switch self {
+        case .ready:
+            0
+        case .connecting:
+            1
+        case .disconnected:
+            2
+        case .unsupportedVersion:
+            3
+        case .updateCodex:
+            4
+        case .setupRequired:
+            5
+        }
+    }
+
     var emptyListMessage: String {
         switch self {
         case .setupRequired:
@@ -356,7 +376,9 @@ struct QuotaSnapshot: Equatable, Sendable {
     }
 }
 
-struct MonitorSnapshot: Equatable, Sendable {
+/// What one product's provider observed on one refresh.
+struct AgentSnapshot: Equatable, Sendable {
+    let agent: AgentKind
     let availability: MonitorAvailability
     let sessions: [MonitoredSession]
     let quota: QuotaSnapshot
@@ -367,12 +389,14 @@ struct MonitorSnapshot: Equatable, Sendable {
     let setupStatus: HookSetupStatus
 
     nonisolated init(
+        agent: AgentKind = .codex,
         availability: MonitorAvailability,
         sessions: [MonitoredSession],
         quota: QuotaSnapshot,
         diagnostic: String?,
         setupStatus: HookSetupStatus = .active
     ) {
+        self.agent = agent
         self.availability = availability
         self.sessions = sessions
         self.quota = quota
@@ -380,7 +404,7 @@ struct MonitorSnapshot: Equatable, Sendable {
         self.setupStatus = setupStatus
     }
 
-    static let connecting = MonitorSnapshot(
+    static let connecting = AgentSnapshot(
         availability: .connecting,
         sessions: [],
         quota: .unavailable,
@@ -389,26 +413,154 @@ struct MonitorSnapshot: Equatable, Sendable {
     )
 }
 
+/// Every product's answer, folded into the one thing the UI reads.
+///
+/// Keeping this a single type is the architectural constraint that survives
+/// adding a product: views render a snapshot and never assemble state from
+/// several sources themselves.
+struct MonitorSnapshot: Equatable, Sendable {
+    /// Ordered by ``AgentKind``, so Codex always leads.
+    let agents: [AgentSnapshot]
+    /// Every product's rows, merged and totally ordered.
+    let sessions: [MonitoredSession]
+    let status: MonitorStatus
+
+    nonisolated init(
+        agents: [AgentSnapshot],
+        sessions: [MonitoredSession],
+        status: MonitorStatus
+    ) {
+        self.agents = agents.sorted { $0.agent < $1.agent }
+        self.sessions = sessions
+        self.status = status
+    }
+
+    nonisolated func agent(_ kind: AgentKind) -> AgentSnapshot? {
+        agents.first { $0.agent == kind }
+    }
+
+    /// The availability the surface speaks with.
+    ///
+    /// Ready if any product is being watched properly — a product that is
+    /// unhealthy and has nothing to show is indistinguishable from a product
+    /// that simply has nothing to show, and for the user the conclusion is the
+    /// same. Only when no product is ready does an unhealthy one get to speak,
+    /// and then it is the most actionable of them.
+    nonisolated var availability: MonitorAvailability {
+        MonitorAggregation.availability(agents: agents)
+    }
+
+    /// The single quota window the footer draws while one product is running.
+    /// A two-product footer reads ``agents`` directly, because it has one rule
+    /// per product rather than one rule.
+    nonisolated var quota: QuotaSnapshot {
+        agents.first?.quota ?? .unavailable
+    }
+
+    nonisolated var diagnostic: String? {
+        let reported = agents.compactMap { snapshot in
+            snapshot.diagnostic.map { (snapshot.agent, $0) }
+        }
+        guard let first = reported.first else { return nil }
+        // One product's diagnostic has to say whose it is once there are two,
+        // or "disconnected" reads as a statement about the whole surface.
+        guard agents.count > 1 else { return first.1 }
+        return reported
+            .map { "\($0.0.displayName)：\($0.1)" }
+            .joined(separator: "\n")
+    }
+
+    static let connecting = MonitorSnapshot(
+        agents: [.connecting],
+        sessions: [],
+        status: .connecting
+    )
+}
+
+enum AgentSnapshotMerge {
+    /// Folds every product's answer into the one snapshot the UI reads.
+    ///
+    /// Pure by design: no actor, no clock, no I/O. Everything about how two
+    /// products combine is decided here, where it can be tested as a value.
+    nonisolated static func merge(_ snapshots: [AgentSnapshot]) -> MonitorSnapshot {
+        let agents = snapshots.sorted { $0.agent < $1.agent }
+        let sessions = agents.flatMap(\.sessions).sorted(by: MonitorAggregation.rowOrder)
+        return MonitorSnapshot(
+            agents: agents,
+            sessions: sessions,
+            status: MonitorAggregation.status(agents: agents, sessions: sessions)
+        )
+    }
+}
+
 enum MonitorAggregation {
-    static func status(
-        availability: MonitorAvailability,
+    /// Rows first, availability second.
+    ///
+    /// A live turn always outranks another product's unhealthy availability.
+    /// Without that, a user who has merely seen the second product's settings
+    /// row — and therefore has one agent reporting `setupRequired` — would find
+    /// the notch reading "Set up integration" while the first product is
+    /// perfectly happily running a turn.
+    nonisolated static func status(
+        agents: [AgentSnapshot],
         sessions: [MonitoredSession]
     ) -> MonitorStatus {
-        guard availability == .ready else {
-            return availability.status
-        }
-
         let priority: [SessionStatus] = [
             .inputNeeded,
             .approvalNeeded,
             .running,
             .completed
         ]
-
         for status in priority where sessions.contains(where: { $0.status == status }) {
             return status.monitorStatus
         }
-        return .idle
+        return availability(agents: agents).status
+    }
+
+    nonisolated static func availability(
+        agents: [AgentSnapshot]
+    ) -> MonitorAvailability {
+        guard !agents.isEmpty else { return .connecting }
+        if agents.contains(where: { $0.availability == .ready }) {
+            return .ready
+        }
+        return agents
+            .map(\.availability)
+            .max { $0.actionRank < $1.actionRank } ?? .connecting
+    }
+
+    /// The order rows appear in, and a total one.
+    ///
+    /// Priority, then most recent, then the fixed product order, then identity.
+    /// The last two matter because ties stop being rare with a second product:
+    /// its start times arrive as whole milliseconds and a batch of sessions can
+    /// share one. Two rows that compare equal both ways may be placed either
+    /// way round on each refresh, which reads as a list shuffling itself while
+    /// it is being looked at.
+    nonisolated static func rowOrder(
+        _ lhs: MonitoredSession,
+        _ rhs: MonitoredSession
+    ) -> Bool {
+        let priority: [SessionStatus: Int] = [
+            .inputNeeded: 0,
+            .approvalNeeded: 1,
+            .running: 2,
+            .completed: 3
+        ]
+        let lhsPriority = priority[lhs.status] ?? Int.max
+        let rhsPriority = priority[rhs.status] ?? Int.max
+        if lhsPriority != rhsPriority {
+            return lhsPriority < rhsPriority
+        }
+        let lhsStart = lhs.startedAt ?? .distantPast
+        let rhsStart = rhs.startedAt ?? .distantPast
+        if lhsStart != rhsStart {
+            return lhsStart > rhsStart
+        }
+        if lhs.agent != rhs.agent {
+            return lhs.agent < rhs.agent
+        }
+        return lhs.id < rhs.id
     }
 }
 
