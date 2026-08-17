@@ -2240,8 +2240,11 @@ struct CodexInNotchTests {
             workspace: workspace
         )
 
-        try await navigator.open(threadID: "thread-123")
+        let outcome = try await navigator.open(
+            makeSession(agent: .codex, threadID: "thread-123")
+        )
 
+        #expect(outcome == .openedThread(host: "Codex Desktop"))
         #expect(await checker.requestedThreadIDs() == ["thread-123"])
         #expect(
             workspace.requestedBundleIdentifiers
@@ -2266,7 +2269,9 @@ struct CodexInNotchTests {
         )
 
         do {
-            try await navigator.open(threadID: "deleted-thread")
+            try await navigator.open(
+                makeSession(agent: .codex, threadID: "deleted-thread")
+            )
             Issue.record("Expected navigation to reject a missing thread")
         } catch {
             #expect(error as? CodexNavigationError == .targetUnavailable)
@@ -2287,7 +2292,7 @@ struct CodexInNotchTests {
             status: .completed,
             startedAt: nil
         )
-        let successNavigator = CodexNavigatorStub()
+        let successNavigator = AgentNavigatorStub()
         let successStore = MonitorStore(navigator: successNavigator)
         successStore.isExpanded = true
 
@@ -2297,7 +2302,9 @@ struct CodexInNotchTests {
         #expect(!successStore.isExpanded)
         #expect(successNavigator.requestedThreadIDs == ["thread-123"])
 
-        let failureNavigator = CodexNavigatorStub(error: .openRejected)
+        let failureNavigator = AgentNavigatorStub(
+            error: CodexNavigationError.openRejected
+        )
         let failureStore = MonitorStore(navigator: failureNavigator)
         failureStore.isExpanded = true
 
@@ -6624,6 +6631,102 @@ for line in sys.stdin:
         #expect(exists("unknown.invalid"))
     }
 
+    /// Each row goes to its own product's navigator.
+    @Test @MainActor
+    func theRouterDispatchesByAgent() async throws {
+        let codex = AgentNavigatorStub()
+        let claude = AgentNavigatorStub(
+            outcome: .raisedApplication(host: "Claude Desktop")
+        )
+        let router = AgentNavigationRouter([.codex: codex, .claudeCode: claude])
+
+        let codexOutcome = try await router.open(
+            makeSession(agent: .codex, threadID: "codex-thread")
+        )
+        let claudeOutcome = try await router.open(
+            makeSession(agent: .claudeCode, threadID: "claude-session")
+        )
+
+        #expect(codexOutcome == .openedThread(host: "Codex Desktop"))
+        #expect(claudeOutcome == .raisedApplication(host: "Claude Desktop"))
+        #expect(codex.requestedAgents == [.codex])
+        #expect(claude.requestedAgents == [.claudeCode])
+        #expect(codex.requestedThreadIDs == ["codex-thread"])
+
+        // A product with no navigator registered fails as itself rather than
+        // being quietly handed to whoever is first in the table.
+        let onlyCodex = AgentNavigationRouter([.codex: codex])
+        await #expect(throws: AgentNavigationError.noNavigator(.claudeCode)) {
+            try await onlyCodex.open(makeSession(agent: .claudeCode, threadID: "x"))
+        }
+    }
+
+    /// The sentence after a click says what was actually achieved.
+    ///
+    /// A Claude Code row draws no mark for the fact that it cannot be reopened
+    /// exactly — one mark per row, and the timer has it — so the message is the
+    /// only place the difference can be told. Reporting "已在 Codex Desktop 中
+    /// 打开" for a row that merely raised an app would be a lie in the one
+    /// place left to tell the truth.
+    @Test @MainActor
+    func anImpreciseTargetReportsWhatItActuallyOpened() async {
+        let session = makeSession(agent: .claudeCode, threadID: "cc")
+        let store = MonitorStore(
+            navigator: AgentNavigationRouter([
+                .claudeCode: AgentNavigatorStub(
+                    outcome: .raisedApplication(host: "Claude Desktop")
+                )
+            ])
+        )
+
+        #expect(await store.openAndWait(session))
+        #expect(store.lastIntegrationMessage.contains("已唤起 Claude Desktop"))
+        #expect(store.lastIntegrationMessage.contains("无法定位到具体会话"))
+        #expect(!store.lastIntegrationMessage.contains("Codex"))
+    }
+
+    /// Exact navigation stays a Codex requirement, and only a Codex one.
+    ///
+    /// ADR 0004 makes returning to the exact thread a release gate, worded
+    /// unconditionally. Claude Code has no supported way to focus an existing
+    /// session at all, so applying that gate to both products would block a
+    /// product on a capability that does not exist.
+    @Test @MainActor
+    func exactNavigationRemainsARequirementForCodexOnly() async throws {
+        let codexOutcome = try await AgentNavigationRouter([
+            .codex: AgentNavigatorStub()
+        ]).open(makeSession(agent: .codex, threadID: "t"))
+        #expect(codexOutcome == .openedThread(host: "Codex Desktop"))
+
+        let claudeOutcome = try await AgentNavigationRouter([
+            .claudeCode: AgentNavigatorStub(
+                outcome: .focusedTerminal(host: "iTerm2")
+            )
+        ]).open(makeSession(agent: .claudeCode, threadID: "t"))
+        #expect(claudeOutcome != .openedThread(host: "Codex Desktop"))
+        #expect(
+            claudeOutcome.message(forTitle: "Task")
+                == "已聚焦 iTerm2：Task"
+        )
+    }
+
+    private func makeSession(
+        agent: AgentKind,
+        threadID: String,
+        status: SessionStatus = .completed
+    ) -> MonitoredSession {
+        MonitoredSession(
+            agent: agent,
+            threadID: threadID,
+            turnID: "turn",
+            projectName: "codex-in-notch",
+            title: "Open this chat",
+            preview: nil,
+            status: status,
+            startedAt: nil
+        )
+    }
+
     private func makeAgentSnapshot(
         _ agent: AgentKind,
         availability: MonitorAvailability = .ready,
@@ -7162,19 +7265,28 @@ private final class CodexWorkspaceStub: CodexWorkspaceOpening {
 }
 
 @MainActor
-private final class CodexNavigatorStub: CodexNavigating {
-    private let error: CodexNavigationError?
+private final class AgentNavigatorStub: AgentNavigating {
+    private let error: (any Error)?
+    private let outcome: NavigationOutcome
     private(set) var requestedThreadIDs: [String] = []
+    private(set) var requestedAgents: [AgentKind] = []
 
-    init(error: CodexNavigationError? = nil) {
+    init(
+        error: (any Error)? = nil,
+        outcome: NavigationOutcome = .openedThread(host: "Codex Desktop")
+    ) {
         self.error = error
+        self.outcome = outcome
     }
 
-    func open(threadID: String) async throws {
-        requestedThreadIDs.append(threadID)
+    @discardableResult
+    func open(_ session: MonitoredSession) async throws -> NavigationOutcome {
+        requestedThreadIDs.append(session.threadID)
+        requestedAgents.append(session.agent)
         if let error {
             throw error
         }
+        return outcome
     }
 }
 

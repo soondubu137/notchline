@@ -5,9 +5,72 @@ protocol CodexNavigationTargetChecking: Sendable {
     func isThreadNavigable(_ threadID: String) async throws -> Bool
 }
 
+/// What a navigation attempt actually achieved.
+///
+/// Codex returns to the exact thread. Claude Code cannot — there is no
+/// supported way to focus a session that already exists, so the best available
+/// answer is raising its host. The row deliberately draws no mark for that
+/// difference, because a row carries exactly one mark and the elapsed time has
+/// it. That makes it all the more important that the sentence the user reads
+/// afterwards says what really happened, instead of claiming what Codex would
+/// have done.
+enum NavigationOutcome: Sendable, Equatable {
+    /// The exact turn was reopened in its own host.
+    case openedThread(host: String)
+    /// The host was raised, but not the session inside it.
+    case raisedApplication(host: String)
+    /// The terminal running the session was brought forward.
+    case focusedTerminal(host: String)
+
+    func message(forTitle title: String) -> String {
+        switch self {
+        case let .openedThread(host):
+            "已在 \(host) 中打开：\(title)"
+        case let .raisedApplication(host):
+            "已唤起 \(host)，但无法定位到具体会话：\(title)"
+        case let .focusedTerminal(host):
+            "已聚焦 \(host)：\(title)"
+        }
+    }
+}
+
 @MainActor
-protocol CodexNavigating: AnyObject {
-    func open(threadID: String) async throws
+protocol AgentNavigating: AnyObject {
+    @discardableResult
+    func open(_ session: MonitoredSession) async throws -> NavigationOutcome
+}
+
+enum AgentNavigationError: LocalizedError, Equatable {
+    case noNavigator(AgentKind)
+
+    var errorDescription: String? {
+        switch self {
+        case let .noNavigator(agent):
+            "\(agent.displayName) 会话暂时无法打开。"
+        }
+    }
+}
+
+/// Sends each row to the navigator for its own product.
+///
+/// The whole session is passed rather than a thread id: a Codex row is a deep
+/// link, and a Claude Code row is a process and a working directory. There is
+/// no identifier both of them fit inside.
+@MainActor
+final class AgentNavigationRouter: AgentNavigating {
+    private let navigators: [AgentKind: any AgentNavigating]
+
+    init(_ navigators: [AgentKind: any AgentNavigating]) {
+        self.navigators = navigators
+    }
+
+    @discardableResult
+    func open(_ session: MonitoredSession) async throws -> NavigationOutcome {
+        guard let navigator = navigators[session.agent] else {
+            throw AgentNavigationError.noNavigator(session.agent)
+        }
+        return try await navigator.open(session)
+    }
 }
 
 enum CodexNavigationError: LocalizedError, Equatable {
@@ -94,8 +157,9 @@ final class AppKitCodexWorkspace: CodexWorkspaceOpening {
 }
 
 @MainActor
-final class CodexDesktopNavigator: CodexNavigating {
+final class CodexDesktopNavigator: AgentNavigating {
     static let desktopBundleIdentifier = "com.openai.codex"
+    static let desktopDisplayName = "Codex Desktop"
 
     private let targetChecker: any CodexNavigationTargetChecking
     private let workspace: any CodexWorkspaceOpening
@@ -108,7 +172,9 @@ final class CodexDesktopNavigator: CodexNavigating {
         self.workspace = workspace ?? AppKitCodexWorkspace()
     }
 
-    func open(threadID: String) async throws {
+    @discardableResult
+    func open(_ session: MonitoredSession) async throws -> NavigationOutcome {
+        let threadID = session.threadID
         let deepLink = try CodexDeepLink.threadURL(threadID: threadID)
 
         let isNavigable: Bool
@@ -137,5 +203,6 @@ final class CodexDesktopNavigator: CodexNavigating {
         } catch {
             throw CodexNavigationError.openRejected
         }
+        return .openedThread(host: Self.desktopDisplayName)
     }
 }

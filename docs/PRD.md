@@ -207,9 +207,14 @@ Disconnected 是全局集成健康问题，不能用于单会话。进入 Discon
 
 ## 10. 导航
 
-点击成功的定义是：激活 Codex Desktop，并让其显示传入 `threadId` 对应的完全相同会话。
+点击成功的定义按产品成立。
 
-- 直接导航是 V1 发布门槛，不允许以“只打开 Codex 首页”作为成功 fallback。
+**Codex**：激活 Codex Desktop，并让其显示传入 `threadId` 对应的完全相同会话。
+
+**Claude Code**：唤起该会话的宿主——Desktop 托管的激活 Claude Desktop，终端里的聚焦其标签页。不要求定位到具体会话，因为目前不存在任何受支持的方式做到这一点。
+
+- 直接导航是 Codex 的 V1 发布门槛，不允许以“只打开 Codex 首页”作为成功 fallback。该门槛不适用于 Claude Code（见 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)）。
+- 降级不加标记：一行只携带一个标记，而那个标记是计时。差别只在点击后的反馈文案里说明，且该文案必须报告实际做到了什么。
 - 成功后面板收起；等待 Desktop 真实已读事件再移除该行。
 - 失败时面板保持展开、行保持可见并提供非破坏性反馈。
 - 点击前重新确认会话仍存在、未归档且可导航；竞态失败后触发集合校正。
@@ -238,7 +243,7 @@ V1 设置窗口只包含已经确认的三组能力：
 - `thread/closed` 不等于删除，不可据此移除。
 - 无法识别的新枚举不触发状态流转，并写入脱敏诊断；不能造成崩溃。
 - 只有实时会话状态整体不可靠时才进入 Disconnected。
-- Project、未读成员关系与精确导航不得使用近似值降级。
+- Project、未读成员关系与精确导航不得使用近似值降级。精确导航一条只约束 Codex；Claude Code 的降级是**声明过的**能力边界，不是近似值。
 - Desktop 未读私有状态只允许只读消费；目录监听失败时由现有轮询校正，主文件解析失败时不得根据备份、空集合或 last-known-good 新增移除决定。
 
 ## 13. 发布门槛
@@ -249,9 +254,9 @@ Phase 0 必须证明受支持的集成路径能够可靠取得：
 2. 活动 Turn 与 Input/Approval/Running/终态事件。
 3. Desktop 未读、归档、删除和 Project 身份。
 4. 当前账户 primary rate-limit window 与账户切换。
-5. `threadId → Desktop 同一会话` 的受支持导航动作。
+5. `threadId → Desktop 同一会话` 的受支持导航动作（仅 Codex）。
 
-Project、未读成员关系或精确导航任一无法满足时，V1 不得用 cwd、固定时间、焦点或首页 fallback 伪装完成。
+Project、未读成员关系或精确导航任一无法满足时，V1 不得用 cwd、固定时间、焦点或首页 fallback 伪装完成。第 5 条按 ADR 0004 只约束 Codex：Claude Code 的宿主唤起是已接受的降级，不是伪装完成。
 
 ## 14. 验收标准
 

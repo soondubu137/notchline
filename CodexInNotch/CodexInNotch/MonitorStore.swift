@@ -423,7 +423,9 @@ final class MonitorStore: ObservableObject {
     private static let liveService = LiveCodexMonitorService()
     static let shared = MonitorStore(
         service: liveService,
-        navigator: CodexDesktopNavigator(targetChecker: liveService),
+        navigator: AgentNavigationRouter([
+            .codex: CodexDesktopNavigator(targetChecker: liveService)
+        ]),
         initialSnapshot: .connecting,
         displayPreferences: .standard,
         refreshEvents: liveService.stateChangeEvents
@@ -491,7 +493,7 @@ final class MonitorStore: ObservableObject {
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let service: (any AgentMonitoring)?
-    private let navigator: (any CodexNavigating)?
+    private let navigator: (any AgentNavigating)?
     private let displayPreferences: UserDefaults?
     private let clock: any MonitorClock
     private let timing: MonitorTiming
@@ -517,7 +519,7 @@ final class MonitorStore: ObservableObject {
     init(
         displays: [DisplayOption]? = nil,
         service: (any AgentMonitoring)? = nil,
-        navigator: (any CodexNavigating)? = nil,
+        navigator: (any AgentNavigating)? = nil,
         initialSnapshot: AgentSnapshot? = nil,
         displayPreferences: UserDefaults? = nil,
         refreshEvents: AsyncStream<Void>? = nil,
@@ -882,9 +884,10 @@ final class MonitorStore: ObservableObject {
         defer { isNavigationInFlight = false }
 
         do {
-            try await navigator.open(threadID: session.threadID)
+            let outcome = try await navigator.open(session)
             collapse()
-            lastIntegrationMessage = "已在 Codex Desktop 中打开：\(session.title)"
+            // What the navigator actually managed, not what Codex would have.
+            lastIntegrationMessage = outcome.message(forTitle: session.title)
             return true
         } catch {
             await refreshAndWait()

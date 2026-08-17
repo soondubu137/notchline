@@ -31,7 +31,7 @@ Build:
 xcodebuild build -project CodexInNotch/CodexInNotch.xcodeproj -scheme CodexInNotch -destination 'platform=macOS'
 ```
 
-Unit tests (146 cases today, a few seconds on a warm build):
+Unit tests (149 cases today, a few seconds on a warm build):
 
 ```bash
 xcodebuild test -project CodexInNotch/CodexInNotch.xcodeproj -scheme CodexInNotch -destination 'platform=macOS' -only-testing:CodexInNotchTests
