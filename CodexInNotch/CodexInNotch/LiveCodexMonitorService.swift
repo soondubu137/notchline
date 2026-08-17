@@ -1,7 +1,18 @@
 import AppKit
 import Foundation
 
-protocol CodexMonitoring: Sendable {
+/// One product's boundary, reduced to what the store needs.
+///
+/// The shape was always general — nothing in it names Codex — so a second
+/// product does not widen it, it just means there is more than one of them.
+protocol AgentMonitoring: Sendable {
+    /// Which product this provider speaks for.
+    nonisolated var agent: AgentKind { get }
+    /// Edges that mean "ask me again", merged by the store into one wake-up
+    /// stream. A provider whose answer arrives late reports it here rather than
+    /// through a deadline, which is what lets a slow provider not hold up a
+    /// fast one.
+    nonisolated var stateChangeEvents: AsyncStream<Void> { get }
     func fetchSnapshot(showsContentPreviews: Bool) async -> MonitorSnapshot
     /// Earliest moment a refresh could produce different output.
     ///
@@ -26,7 +37,8 @@ protocol CodexMonitoring: Sendable {
     func disconnect() async
 }
 
-actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
+actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
+    nonisolated let agent = AgentKind.codex
     /// Thread-level metadata cached for one thread.
     ///
     /// `observedAt` is the request start, not its completion, so a Hook that
@@ -43,7 +55,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
     private let hookInstaller: CodexHookInstaller
     private let projectMetadata: any DesktopProjectMetadataProviding
     private let unreadState: any DesktopUnreadStateProviding
-    nonisolated let desktopStateChangeEvents: AsyncStream<Void>
+    nonisolated let stateChangeEvents: AsyncStream<Void>
     nonisolated private let snapshotInvalidations: AsyncStream<Void>.Continuation
     private let desktopProcessIdentifierProvider: @MainActor @Sendable () -> pid_t?
     private var cachedQuota = QuotaSnapshot.unavailable
@@ -104,7 +116,7 @@ actor LiveCodexMonitorService: CodexMonitoring, CodexNavigationTargetChecking {
             bufferingPolicy: .bufferingNewest(1)
         )
         self.snapshotInvalidations = invalidationContinuation
-        self.desktopStateChangeEvents = DirectoryChangeWatcher.merged([
+        self.stateChangeEvents = DirectoryChangeWatcher.merged([
             hookEvents.changeEvents(),
             unreadState.changeEvents(),
             invalidations

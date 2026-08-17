@@ -386,7 +386,7 @@ final class MonitorStore: ObservableObject {
         navigator: CodexDesktopNavigator(targetChecker: liveService),
         initialSnapshot: .connecting,
         displayPreferences: .standard,
-        refreshEvents: liveService.desktopStateChangeEvents
+        refreshEvents: liveService.stateChangeEvents
     )
 
     @Published private(set) var displays: [DisplayOption]
@@ -447,7 +447,7 @@ final class MonitorStore: ObservableObject {
     private static let contentPreviewDefaultsKey = "showsContentPreviews"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
-    private let service: (any CodexMonitoring)?
+    private let service: (any AgentMonitoring)?
     private let navigator: (any CodexNavigating)?
     private let displayPreferences: UserDefaults?
     private let clock: any MonitorClock
@@ -469,7 +469,7 @@ final class MonitorStore: ObservableObject {
 
     init(
         displays: [DisplayOption]? = nil,
-        service: (any CodexMonitoring)? = nil,
+        service: (any AgentMonitoring)? = nil,
         navigator: (any CodexNavigating)? = nil,
         initialSnapshot: MonitorSnapshot? = nil,
         displayPreferences: UserDefaults? = nil,

@@ -3153,7 +3153,7 @@ struct CodexInNotchTests {
             timing: timing
         )
 
-        let triggers = service.desktopStateChangeEvents
+        let triggers = service.stateChangeEvents
         let observer = Task {
             for await _ in triggers {
                 return true
@@ -6489,7 +6489,10 @@ print("{}")
 ///
 /// This is the shape every real instance of the bug took: a deadline derived
 /// from state that the refresh it triggers does not update.
-private actor StuckDeadlineMonitoringStub: CodexMonitoring {
+private actor StuckDeadlineMonitoringStub: AgentMonitoring {
+    nonisolated let agent = AgentKind.codex
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+
     private let deadline: Date
     private var snapshots = 0
 
@@ -6522,7 +6525,10 @@ private actor StuckDeadlineMonitoringStub: CodexMonitoring {
 
 /// A service whose snapshot can be held open, so a refresh can be observed
 /// while it is genuinely in flight.
-private actor GatedMonitoringStub: CodexMonitoring {
+private actor GatedMonitoringStub: AgentMonitoring {
+    nonisolated let agent = AgentKind.codex
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+
     private var observedSnapshots = 0
     private var status: HookSetupStatus = .reviewRequired
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -6597,7 +6603,10 @@ private actor GatedMonitoringStub: CodexMonitoring {
     }
 }
 
-private actor IntegrationMonitoringStub: CodexMonitoring {
+private actor IntegrationMonitoringStub: AgentMonitoring {
+    nonisolated let agent = AgentKind.codex
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+
     // Nothing to schedule: the stub's output never changes on its own.
     func nextRefreshDeadline() async -> Date? { nil }
 
