@@ -6546,16 +6546,24 @@ for line in sys.stdin:
     /// rather than a missing case.
     @Test @MainActor
     func everyRegisteredHookDefinitionMapsToASignalForItsAgent() {
-        let vocabulary = CodexHookVocabulary()
-        #expect(vocabulary.agent == .codex)
-        #expect(!vocabulary.managedDefinitions.isEmpty)
+        let vocabularies: [any AgentHookVocabulary] = [
+            CodexHookVocabulary(),
+            ClaudeCodeHookVocabulary()
+        ]
+        #expect(Set(vocabularies.map(\.agent)) == Set(AgentKind.allCases))
 
-        for definition in vocabulary.managedDefinitions {
-            #expect(
-                vocabulary.signal(forEvent: definition.event, toolName: nil) != nil,
-                "\(definition.event) is registered but produces no signal"
-            )
+        for vocabulary in vocabularies {
+            #expect(!vocabulary.managedDefinitions.isEmpty)
+            for definition in vocabulary.managedDefinitions {
+                #expect(
+                    vocabulary.signal(forEvent: definition.event, toolName: nil) != nil,
+                    Comment(rawValue: "\(vocabulary.agent) registers "
+                        + "\(definition.event) but produces no signal for it")
+                )
+            }
         }
+
+        let vocabulary = CodexHookVocabulary()
 
         // The tool-name refinements are part of the same table, so a rename of
         // either tool has to fail here rather than silently downgrade a wait
@@ -6570,6 +6578,145 @@ for line in sys.stdin:
         )
         #expect(vocabulary.signal(forEvent: "PreToolUse", toolName: "shell") == .toolCallOpened)
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
+    }
+
+    /// Claude Code's spelling of the same lifecycle.
+    @Test @MainActor
+    func claudeCodeVocabularyMapsItsOwnEventNames() {
+        let v = ClaudeCodeHookVocabulary()
+
+        #expect(v.signal(forEvent: "UserPromptSubmit", toolName: nil) == .turnStarted)
+        #expect(
+            v.signal(forEvent: "PreToolUse", toolName: "AskUserQuestion")
+                == .inputWaitOpened
+        )
+        #expect(v.signal(forEvent: "PreToolUse", toolName: "Bash") == .toolCallOpened)
+        // Measured: it names the tool and carries no tool_use_id, so the wait
+        // has to borrow the open call exactly as it does on the Codex side.
+        #expect(
+            v.signal(forEvent: "PermissionRequest", toolName: "Bash")
+                == .approvalWaitInferred
+        )
+        for closing in ["PostToolUse", "PostToolUseFailure", "PermissionDenied"] {
+            #expect(v.signal(forEvent: closing, toolName: "Bash") == .toolCallClosed)
+        }
+        #expect(v.signal(forEvent: "Elicitation", toolName: nil) == .inputWaitOpened)
+        #expect(v.signal(forEvent: "ElicitationResult", toolName: nil) == .toolCallClosed)
+        // Both terminals converge; failure is a reason, never a fifth state.
+        #expect(v.signal(forEvent: "Stop", toolName: nil) == .turnEnded)
+        #expect(v.signal(forEvent: "StopFailure", toolName: nil) == .turnEnded)
+        #expect(v.signal(forEvent: "Notification", toolName: nil) == .inert)
+        #expect(v.signal(forEvent: "NotOurs", toolName: nil) == nil)
+    }
+
+    /// SessionEnd is not registered, and that is a decision rather than an
+    /// oversight.
+    ///
+    /// It is the one event Claude Code does not deliver in the background, so
+    /// with nothing listening it prints a connection-refused warning to the
+    /// user's own stderr once per session — the single visible artifact of the
+    /// whole transport, and disqualifying on its own. Nothing needs it: a
+    /// session going away is visible through the official session list.
+    @Test @MainActor
+    func claudeCodeDoesNotRegisterSessionEnd() {
+        let registered = Set(
+            ClaudeCodeHookVocabulary().managedDefinitions.map(\.event)
+        )
+        #expect(!registered.contains("SessionEnd"))
+        #expect(registered.contains("Stop"))
+        #expect(Set(CodexHookVocabulary().managedDefinitions.map(\.event))
+            .contains("SessionEnd"))
+    }
+
+    /// A product that reports its refusals does not get the inference, and
+    /// unordered delivery is why.
+    ///
+    /// Codex sends nothing when a human refuses, so a borrowed wait there has
+    /// to end on activity against any other call — the turn carrying on is the
+    /// only evidence available. That inference is only sound while events
+    /// arrive in the order they were fired, and Claude Code's are not: they go
+    /// out fire-and-forget over loopback, and a Stop was measured arriving
+    /// ahead of its own subagent's PermissionRequest under one prompt_id.
+    ///
+    /// Applying the Codex rule there would let an unrelated event that arrived
+    /// early clear an approval the human is still being asked for. It is not
+    /// needed either, because PermissionDenied names the call it refused.
+    @Test @MainActor
+    func aProductThatReportsRefusalsDoesNotInferThemFromUnrelatedActivity() async throws {
+        func waitStatus(
+            vocabulary: any AgentHookVocabulary,
+            trailingEvent: [String: Any]
+        ) async throws -> SessionStatus? {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            try FileManager.default.createDirectory(
+                at: paths.eventsDirectory,
+                withIntermediateDirectories: true
+            )
+            let events: [[String: Any]] = [
+                [
+                    "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+                    "session_id": "s", "turn_id": "t"
+                ],
+                [
+                    "received_at": 101.0, "hook_event_name": "PreToolUse",
+                    "session_id": "s", "turn_id": "t",
+                    "tool_name": "Bash", "tool_use_id": "call-1"
+                ],
+                [
+                    "received_at": 102.0, "hook_event_name": "PermissionRequest",
+                    "session_id": "s", "turn_id": "t", "tool_name": "Bash"
+                ],
+                trailingEvent
+            ]
+            for (index, event) in events.enumerated() {
+                try JSONSerialization.data(withJSONObject: event).write(
+                    to: paths.eventsDirectory.appendingPathComponent("\(index).json")
+                )
+            }
+            let repository = HookEventRepository(
+                paths: paths,
+                liveEventCutoff: .distantPast,
+                vocabulary: vocabulary
+            )
+            return await repository.consumeEvents().turns.first?.status
+        }
+
+        // An unrelated call finishing while the human is still being asked.
+        let unrelated: [String: Any] = [
+            "received_at": 103.0, "hook_event_name": "PostToolUse",
+            "session_id": "s", "turn_id": "t", "tool_use_id": "some-other-call"
+        ]
+
+        // Codex has no other evidence, so it must read this as "answered".
+        #expect(
+            try await waitStatus(
+                vocabulary: CodexHookVocabulary(),
+                trailingEvent: unrelated
+            ) == .running
+        )
+        // Claude Code must not: the event may simply have overtaken the one
+        // that would have closed the wait properly.
+        #expect(
+            try await waitStatus(
+                vocabulary: ClaudeCodeHookVocabulary(),
+                trailingEvent: unrelated
+            ) == .approvalNeeded
+        )
+        // What does close it there is a refusal that names the call.
+        #expect(
+            try await waitStatus(
+                vocabulary: ClaudeCodeHookVocabulary(),
+                trailingEvent: [
+                    "received_at": 103.0, "hook_event_name": "PermissionDenied",
+                    "session_id": "s", "turn_id": "t", "tool_use_id": "call-1"
+                ]
+            ) == .running
+        )
     }
 
     /// A recognised event with nothing to say is consumed, not quarantined.

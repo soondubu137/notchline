@@ -202,12 +202,28 @@ protocol AgentHookVocabulary: Sendable {
     /// to a signal, or the integration would install a hook whose events it then
     /// quarantines — a test pins that.
     nonisolated var managedDefinitions: [ManagedHookDefinition] { get }
+    /// Whether a refused approval is reported as an event of its own.
+    ///
+    /// Codex sends nothing at all when a human refuses -- measured 2026-08-15,
+    /// 67 seconds of silence and then the turn's `Stop` -- so a borrowed wait
+    /// there has to end on activity against any *other* call, inferring the
+    /// answer from the fact that the turn carried on.
+    ///
+    /// That inference is only safe while events arrive in the order they were
+    /// fired. A product that reports its own denials needs none of it, and must
+    /// not have it: Claude Code's hooks are delivered fire-and-forget over
+    /// loopback, and a `Stop` was measured arriving ahead of its own subagent's
+    /// `PermissionRequest` under the same `prompt_id` (2026-08-16). Unrelated
+    /// activity arriving early would close a wait the human is still looking at.
+    nonisolated var reportsApprovalDenials: Bool { get }
     /// `nil` means "not recognised": quarantine rather than consume.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
 }
 
 nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated let agent: AgentKind = .codex
+    /// A refusal produces no event whatsoever, so it has to be inferred.
+    nonisolated let reportsApprovalDenials = false
 
     nonisolated var managedDefinitions: [ManagedHookDefinition] {
         [
@@ -249,6 +265,89 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
             .turnEnded
         case ("SessionEnd", _):
             .sessionEnded
+        default:
+            nil
+        }
+    }
+}
+
+/// Claude Code's spelling of the same lifecycle.
+///
+/// Measured against CLI 2.1.233 on 2026-08-16; every claim below is an
+/// observation, not a reading of the documentation.
+nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
+    nonisolated let agent: AgentKind = .claudeCode
+    /// `PermissionDenied` carries the refused call's `tool_use_id`, so a
+    /// refusal closes exactly. This is the one place Claude Code is plainly
+    /// better than Codex, and it is what lets the reducer drop an inference
+    /// that unordered delivery would otherwise be able to fool.
+    nonisolated let reportsApprovalDenials = true
+
+    /// The tool Claude Code uses to put a question to the user.
+    static let inputToolName = "AskUserQuestion"
+
+    nonisolated var managedDefinitions: [ManagedHookDefinition] {
+        [
+            ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
+            ManagedHookDefinition(event: "PreToolUse", matcher: nil),
+            ManagedHookDefinition(event: "PostToolUse", matcher: nil),
+            ManagedHookDefinition(event: "PostToolUseFailure", matcher: nil),
+            ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
+            ManagedHookDefinition(event: "PermissionDenied", matcher: nil),
+            ManagedHookDefinition(event: "Elicitation", matcher: nil),
+            ManagedHookDefinition(event: "ElicitationResult", matcher: nil),
+            ManagedHookDefinition(event: "Notification", matcher: nil),
+            ManagedHookDefinition(event: "Stop", matcher: nil),
+            ManagedHookDefinition(event: "StopFailure", matcher: nil)
+            // SessionEnd is deliberately absent. It is the one event that is
+            // not delivered in the background, so with nothing listening it
+            // prints a connection-refused warning to the user's own stderr,
+            // once per session (measured 2026-08-16). Nothing here needs it: a
+            // session going away is equally visible through the official
+            // session list and the sessions directory watcher.
+        ]
+    }
+
+    nonisolated func signal(
+        forEvent name: String,
+        toolName: String?
+    ) -> HookSignal? {
+        switch (name, toolName) {
+        case ("UserPromptSubmit", _):
+            // `source` would separate a human's prompt from our own polling,
+            // but it was measured absent from every event, including a human
+            // prompt in an interactive session. The working directory is what
+            // separates them instead.
+            .turnStarted
+        case ("PreToolUse", Self.inputToolName):
+            .inputWaitOpened
+        case ("PreToolUse", _):
+            .toolCallOpened
+        case ("PermissionRequest", _):
+            // Carries `tool_name` and no `tool_use_id`, so like Codex the wait
+            // borrows the call that is still open. The exploration notes
+            // claimed otherwise; the payload was measured and it does not.
+            .approvalWaitInferred
+        case ("PostToolUse", _), ("PostToolUseFailure", _), ("PermissionDenied", _):
+            // All three close the call they name. Approved and ran, failed or
+            // was interrupted, or was refused -- the wait is over either way.
+            .toolCallClosed
+        case ("Elicitation", _):
+            .inputWaitOpened
+        case ("ElicitationResult", _):
+            .toolCallClosed
+        case ("Notification", _):
+            // Registered so its types can be measured, and inert until they
+            // are. Every wait this product can open is already covered by an
+            // event that carries an id, and a notification carries none --
+            // opening a wait nothing can close would be worse than ignoring it.
+            .inert
+        case ("Stop", _), ("StopFailure", _):
+            // One terminal. A failure is recorded as the reason a turn ended,
+            // never as a state of its own -- Codex cannot report failure at
+            // all, and a state only one product can reach would make the
+            // shared vocabulary lie about the other.
+            .turnEnded
         default:
             nil
         }
@@ -1192,6 +1291,9 @@ actor HookEventRepository {
         }
 
         let receivedAt = Date(timeIntervalSince1970: event.receivedAt)
+        // Only products that stay silent on a refusal need a wait closed by
+        // unrelated activity; see `reportsApprovalDenials`.
+        let infersDenials = !vocabulary.reportsApprovalDenials
 
         switch signal {
         case .turnStarted:
@@ -1270,7 +1372,9 @@ actor HookEventRepository {
                 adoptContinuationWith: .running,
                 turns: &turns
             ) {
-                Self.resolveInferredApproval(&$0, activityOn: toolUseID)
+                Self.resolveInferredApproval(
+                    &$0, activityOn: toolUseID, whenInferring: infersDenials
+                )
                 $0.pendingInputToolUseID = toolUseID
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
@@ -1288,7 +1392,9 @@ actor HookEventRepository {
                 adoptContinuationWith: .running,
                 turns: &turns
             ) {
-                Self.resolveInferredApproval(&$0, activityOn: toolUseID)
+                Self.resolveInferredApproval(
+                    &$0, activityOn: toolUseID, whenInferring: infersDenials
+                )
                 $0.pendingApproval = PendingApproval(
                     toolUseID: toolUseID,
                     isInferred: false
@@ -1314,7 +1420,9 @@ actor HookEventRepository {
                 adoptContinuationWith: .running,
                 turns: &turns
             ) {
-                Self.resolveInferredApproval(&$0, activityOn: toolUseID)
+                Self.resolveInferredApproval(
+                    &$0, activityOn: toolUseID, whenInferring: infersDenials
+                )
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 if $0.pendingInputToolUseID == nil, $0.pendingApproval == nil {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
@@ -1339,7 +1447,9 @@ actor HookEventRepository {
                 if $0.pendingApproval?.toolUseID == toolUseID {
                     $0.pendingApproval = nil
                 } else {
-                    Self.resolveInferredApproval(&$0, activityOn: toolUseID)
+                    Self.resolveInferredApproval(
+                        &$0, activityOn: toolUseID, whenInferring: infersDenials
+                    )
                 }
                 if $0.openToolUse?.id == toolUseID {
                     $0.openToolUse = nil
@@ -1397,9 +1507,11 @@ actor HookEventRepository {
     /// left strictly alone: it always gets its closing event.
     nonisolated private static func resolveInferredApproval(
         _ state: inout HookTurnState,
-        activityOn toolUseID: String
+        activityOn toolUseID: String,
+        whenInferring infersDenials: Bool
     ) {
-        guard let pending = state.pendingApproval,
+        guard infersDenials,
+              let pending = state.pendingApproval,
               pending.isInferred,
               pending.toolUseID != toolUseID else {
             return
