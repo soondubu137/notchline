@@ -6580,6 +6580,114 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
+    /// An upgrade replaces what the previous version registered.
+    ///
+    /// A handler is found by a string, so moving where this app keeps its
+    /// helper changed what that string is. Without recognising the old one, a
+    /// reinstall would have added the new handler *beside* the stale one — and
+    /// the stale one points at a script the upgrade deletes, so it would fire
+    /// and fail on every event. Exactly the dangling reference CR-013 exists to
+    /// prevent, arriving through the back door of a path change.
+    @Test @MainActor
+    func installingOverAnEarlierVersionsRegistrationReplacesIt() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-up-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")
+        )
+        try FileManager.default.createDirectory(
+            at: paths.hooksConfiguration.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: paths.supportDirectory,
+            withIntermediateDirectories: true
+        )
+
+        // The previous version's world: a helper in the flat layout, and a
+        // registration naming it.
+        try Data("# old helper".utf8).write(to: paths.legacyScript)
+        let legacyCommand = CodexHookInstaller.command(forScript: paths.legacyScript)
+        let legacyHandler: [String: Any] = [
+            "type": "command", "command": legacyCommand, "timeout": 3
+        ]
+        try JSONSerialization.data(withJSONObject: [
+            "hooks": [
+                "Stop": [["hooks": [legacyHandler]]],
+                "PreToolUse": [["hooks": [["type": "command", "command": "theirs"]]]]
+            ]
+        ]).write(to: paths.hooksConfiguration)
+
+        try await CodexHookInstaller(paths: paths).install()
+
+        // Read as written, not re-serialised: the editor writes paths
+        // unescaped, and re-encoding would escape every slash and quietly turn
+        // both assertions below into ones that cannot fail.
+        let raw = try Data(contentsOf: paths.hooksConfiguration)
+        let text = String(decoding: raw, as: UTF8.self)
+        let written = try #require(
+            try JSONSerialization.jsonObject(with: raw) as? [String: Any]
+        )
+        // Nothing of the old registration survives...
+        #expect(!text.contains(legacyCommand))
+        #expect(!FileManager.default.fileExists(atPath: paths.legacyScript.path))
+        // ...the new one is there, in its own place...
+        #expect(text.contains(paths.script.path))
+        #expect(FileManager.default.fileExists(atPath: paths.script.path))
+        // ...and the user's own hook is untouched.
+        #expect(text.contains("theirs"))
+        let stop = try #require(
+            (written["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]]
+        )
+        #expect(stop.count == 1)
+    }
+
+    /// Shipping a second product does not change the first product's panel.
+    ///
+    /// This is the invariance promise at the point it is most likely to break.
+    /// Every panel width folds over the products the user has configured, and
+    /// the tempting way to know that is "which providers answered" — which
+    /// becomes true for everyone the moment a second provider ships, widening
+    /// the pill for someone who never asked for it. Configuration is a setup
+    /// fact, not a wiring fact.
+    @Test @MainActor
+    func anUnregisteredSecondProductDoesNotWidenTheFirstProductsPanel() {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, setupStatus: .active)
+        )
+        #expect(store.configuredAgents == [.codex])
+        let codexOnlyWidth = PanelMetrics.fixedCompactWidth(for: store.configuredAgents)
+
+        // The second provider exists, answers, and has not been set up.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .setupRequired,
+                setupStatus: .notInstalled
+            )
+        )
+        #expect(store.configuredAgents == [.codex])
+        #expect(
+            PanelMetrics.fixedCompactWidth(for: store.configuredAgents) == codexOnlyWidth
+        )
+        // And it contributes nothing to what the notch says.
+        #expect(store.status == .idle)
+        #expect(store.sessions.isEmpty)
+
+        // Once the user actually registers it, the panel is allowed to change —
+        // that is a setting they changed, not something that happened to them.
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, availability: .ready, setupStatus: .active)
+        )
+        #expect(store.configuredAgents == Set(AgentKind.allCases))
+        #expect(
+            PanelMetrics.fixedCompactWidth(for: store.configuredAgents) > codexOnlyWidth
+        )
+    }
+
     /// The quota parser reads two lines out of a paragraph written for a
     /// person, and is not fooled by the numbers around them.
     ///

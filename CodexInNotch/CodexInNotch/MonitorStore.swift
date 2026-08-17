@@ -428,8 +428,13 @@ final class MonitorStore: ObservableObject {
     /// other product's switch.
     static let integrationCardAgent = AgentKind.codex
     private static let liveService = LiveCodexMonitorService()
+    private static let claudeCodeService = ClaudeCodeMonitorService()
     static let shared = MonitorStore(
-        services: [liveService],
+        // Claude Code contributes nothing until its hooks are registered: an
+        // unregistered product reports setupRequired, which loses to any
+        // product that is ready and to any product that has a row. A user who
+        // only runs Codex sees exactly what they saw before.
+        services: [liveService, claudeCodeService],
         navigator: AgentNavigationRouter([
             .codex: CodexDesktopNavigator(targetChecker: liveService)
         ]),
@@ -437,7 +442,10 @@ final class MonitorStore: ObservableObject {
         displayPreferences: .standard,
         // Every provider's "ask me again" edges on one stream, so a late
         // answer from any of them wakes the loop.
-        refreshEvents: DirectoryChangeWatcher.merged([liveService.stateChangeEvents])
+        refreshEvents: DirectoryChangeWatcher.merged([
+            liveService.stateChangeEvents,
+            claudeCodeService.stateChangeEvents
+        ])
     )
 
     @Published private(set) var displays: [DisplayOption]
@@ -704,10 +712,20 @@ final class MonitorStore: ObservableObject {
 
     /// The products this panel is configured to watch.
     ///
-    /// Geometry is derived from this rather than from which products currently
-    /// have rows, so the pill does not resize when one connects or goes quiet.
+    /// A product counts once its integration has been set up, not merely
+    /// because a provider for it exists. Both distinctions matter and they are
+    /// different: deriving this from which providers answered would widen the
+    /// panel the moment a second product was *shipped*, for a user who never
+    /// asked for it; deriving it from which products currently have rows would
+    /// resize the panel whenever one connected or went quiet, which is the
+    /// flicker a fixed width exists to prevent.
     var configuredAgents: Set<AgentKind> {
-        Set(latestByAgent.keys)
+        let configured = latestByAgent.values
+            .filter { $0.setupStatus != .notInstalled }
+            .map(\.agent)
+        // Never empty: a panel with nothing set up still has to have a width,
+        // and it is the one the first product would have.
+        return configured.isEmpty ? [.codex] : Set(configured)
     }
 
     var statusDisplayName: String {

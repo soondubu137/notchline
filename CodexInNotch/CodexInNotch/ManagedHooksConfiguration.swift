@@ -71,6 +71,16 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// when it most needs repairing. So the marker is a fixed path inside the
     /// URL, and identity survives the part of it that moves.
     let identityMarker: String
+    /// Markers earlier versions of this app installed under.
+    ///
+    /// A handler is found by a string, so moving where this app keeps its
+    /// helper changes what that string is -- and an upgrade would then neither
+    /// recognise nor remove what the previous version registered. The old
+    /// handler would survive a reinstall, sitting beside the new one and
+    /// pointing at a script the upgrade had just deleted: a dangling reference,
+    /// firing on every event, which is precisely what this type exists to
+    /// prevent.
+    let legacyIdentityMarkers: [String]
     let definitions: [ManagedHookDefinition]
     /// Written into a file this app creates, and never into one it did not.
     let descriptionForNewFiles: String
@@ -78,11 +88,13 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     nonisolated init(
         managedHandler: [String: Any],
         identityMarker: String,
+        legacyIdentityMarkers: [String] = [],
         definitions: [ManagedHookDefinition],
         descriptionForNewFiles: String = "User-level agent lifecycle hooks."
     ) {
         self.managedHandler = managedHandler
         self.identityMarker = identityMarker
+        self.legacyIdentityMarkers = legacyIdentityMarkers
         self.definitions = definitions
         self.descriptionForNewFiles = descriptionForNewFiles
     }
@@ -90,12 +102,14 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// A configuration that runs a helper script, as Codex requires.
     nonisolated static func command(
         _ command: String,
+        legacyCommands: [String] = [],
         definitions: [ManagedHookDefinition],
         descriptionForNewFiles: String = "User-level Codex lifecycle hooks."
     ) -> ManagedHooksConfiguration {
         ManagedHooksConfiguration(
             managedHandler: ["type": "command", "command": command, "timeout": 3],
             identityMarker: command,
+            legacyIdentityMarkers: legacyCommands,
             definitions: definitions,
             descriptionForNewFiles: descriptionForNewFiles
         )
@@ -162,7 +176,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         // Nothing this app wrote may survive the strip. If a copy of the
         // command is still reachable, it sits in a structure this type cannot
         // edit, and installing on top of it would register the hook twice.
-        if Self.contains(marker: identityMarker, in: hooks) {
+        if Self.containsAnyMarker(of: self, in: hooks) {
             throw ManagedHooksConfigurationError.unremovableManagedCommand
         }
 
@@ -198,7 +212,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         guard root["hooks"] != nil else {
             // No hooks at all is a clean state, but only if the command is not
             // hiding somewhere else in the document.
-            if Self.contains(marker: identityMarker, in: root) {
+            if Self.containsAnyMarker(of: self, in: root) {
                 throw ManagedHooksConfigurationError.unremovableManagedCommand
             }
             return root
@@ -213,7 +227,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         // survived, in any shape, and turns it into a refusal.
         hooks = try strippingManagedHandlers(from: hooks, strictEvents: [])
 
-        if Self.contains(marker: identityMarker, in: hooks) {
+        if Self.containsAnyMarker(of: self, in: hooks) {
             throw ManagedHooksConfigurationError.unremovableManagedCommand
         }
 
@@ -223,7 +237,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
             root["hooks"] = hooks
         }
 
-        if Self.contains(marker: identityMarker, in: root) {
+        if Self.containsAnyMarker(of: self, in: root) {
             throw ManagedHooksConfigurationError.unremovableManagedCommand
         }
         return root
@@ -249,11 +263,17 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
 
     /// Whether any trace of this app's command remains anywhere in `root`.
     nonisolated func isFullyRemoved(from root: [String: Any]) -> Bool {
-        !Self.contains(marker: identityMarker, in: root)
+        !Self.containsAnyMarker(of: self, in: root)
     }
 
+    /// Whether this handler is one of ours, including one an earlier version
+    /// of this app installed.
     nonisolated func isManagedHandler(_ handler: [String: Any]) -> Bool {
-        Self.contains(marker: identityMarker, in: handler)
+        allIdentityMarkers.contains { Self.contains(marker: $0, in: handler) }
+    }
+
+    nonisolated var allIdentityMarkers: [String] {
+        [identityMarker] + legacyIdentityMarkers
     }
 
     // MARK: - Validation
@@ -376,6 +396,13 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     ///
     /// A command matches exactly; a URL matches on containment, because the
     /// port in it is allowed to move and the path is not.
+    nonisolated static func containsAnyMarker(
+        of configuration: ManagedHooksConfiguration,
+        in value: Any
+    ) -> Bool {
+        configuration.allIdentityMarkers.contains { contains(marker: $0, in: value) }
+    }
+
     nonisolated static func contains(marker: String, in value: Any) -> Bool {
         switch value {
         case let string as String:

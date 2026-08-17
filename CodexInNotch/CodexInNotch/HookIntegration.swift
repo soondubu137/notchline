@@ -122,6 +122,11 @@ nonisolated struct HookIntegrationPaths: Sendable {
     /// the old registration stops matching and the old helper stops being
     /// referenced. These are the files it would otherwise leave behind — all of
     /// them paths this app has always owned exclusively.
+    /// Where the helper lived before this app's files were namespaced.
+    var legacyScript: URL {
+        supportDirectory.appendingPathComponent("codex_in_notch_hook.py")
+    }
+
     var legacyFlatLayout: [URL] {
         [
             "codex_in_notch_hook.py",
@@ -216,6 +221,14 @@ protocol AgentHookVocabulary: Sendable {
     /// `PermissionRequest` under the same `prompt_id` (2026-08-16). Unrelated
     /// activity arriving early would close a wait the human is still looking at.
     nonisolated var reportsApprovalDenials: Bool { get }
+    /// Whether this product hands preview text over a side channel.
+    ///
+    /// Codex's helper does, because a hook there is a shell command and text
+    /// must not go through a file. Claude Code posts its whole payload to this
+    /// app, whose decoder simply has no field for the text -- so there is
+    /// nothing for a channel to carry, and binding a socket to receive text
+    /// this product never collects would contradict the claim.
+    nonisolated var usesPreviewChannel: Bool { get }
     /// `nil` means "not recognised": quarantine rather than consume.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
 }
@@ -224,6 +237,7 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated let agent: AgentKind = .codex
     /// A refusal produces no event whatsoever, so it has to be inferred.
     nonisolated let reportsApprovalDenials = false
+    nonisolated let usesPreviewChannel = true
 
     nonisolated var managedDefinitions: [ManagedHookDefinition] {
         [
@@ -282,6 +296,9 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// better than Codex, and it is what lets the reducer drop an inference
     /// that unordered delivery would otherwise be able to fool.
     nonisolated let reportsApprovalDenials = true
+    /// Nothing to carry: the listener's decoder has no field for prompt or
+    /// answer text, so none is ever received.
+    nonisolated let usesPreviewChannel = false
 
     /// The tool Claude Code uses to put a question to the user.
     static let inputToolName = "AskUserQuestion"
@@ -486,7 +503,11 @@ actor CodexHookInstaller {
     }
 
     private var command: String {
-        "/usr/bin/python3 \"\(paths.script.path)\""
+        Self.command(forScript: paths.script)
+    }
+
+    nonisolated static func command(forScript script: URL) -> String {
+        "/usr/bin/python3 \"\(script.path)\""
     }
 
     /// Cached because it is three file reads answering a question that changes
@@ -646,6 +667,10 @@ actor CodexHookInstaller {
     private var managedConfiguration: ManagedHooksConfiguration {
         .command(
             command,
+            // What this app registered before its files were namespaced per
+            // product. Without it an upgrade would leave that handler in place,
+            // pointing at a helper the upgrade itself deleted.
+            legacyCommands: [Self.command(forScript: paths.legacyScript)],
             definitions: Self.managedDefinitions,
             descriptionForNewFiles: "User-level Codex lifecycle hooks."
         )
@@ -915,8 +940,11 @@ actor HookEventRepository {
         self.previewChannel = previewChannel
             ?? HookPreviewChannel(socketURL: paths.previewSocket)
         // Binding fails harmlessly before the support directory exists; the
-        // installer asks again once it has created it.
-        self.previewChannel.start()
+        // installer asks again once it has created it. A product that hands
+        // over no text is never bound at all.
+        if vocabulary.usesPreviewChannel {
+            self.previewChannel.start()
+        }
         self.liveEventCutoff = liveEventCutoff ?? clock.now()
 
         if let data = try? Data(contentsOf: paths.state),
@@ -967,7 +995,9 @@ actor HookEventRepository {
     /// anything has created the directory it binds in.
     @discardableResult
     nonisolated func startPreviewChannel() -> Bool {
-        previewChannel.start()
+        // A product that hands over no text has no channel to bind.
+        guard vocabulary.usesPreviewChannel else { return false }
+        return previewChannel.start()
     }
 
     /// Attaches the event-queue watcher, for the same reason.
