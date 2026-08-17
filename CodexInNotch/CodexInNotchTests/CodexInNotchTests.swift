@@ -6287,6 +6287,100 @@ for line in sys.stdin:
         return combined
     }
 
+    /// Registering a hook whose events are then thrown away is not possible.
+    ///
+    /// The installer's list and the reducer's list used to be two hand-written
+    /// literals. Nothing connected them, and a drift between them fails in the
+    /// worst available way: the hook installs, fires, and every event it
+    /// produces is quarantined as unrecognised — which reads as a corrupt file
+    /// rather than a missing case.
+    @Test @MainActor
+    func everyRegisteredHookDefinitionMapsToASignalForItsAgent() {
+        let vocabulary = CodexHookVocabulary()
+        #expect(vocabulary.agent == .codex)
+        #expect(!vocabulary.managedDefinitions.isEmpty)
+
+        for definition in vocabulary.managedDefinitions {
+            #expect(
+                vocabulary.signal(forEvent: definition.event, toolName: nil) != nil,
+                "\(definition.event) is registered but produces no signal"
+            )
+        }
+
+        // The tool-name refinements are part of the same table, so a rename of
+        // either tool has to fail here rather than silently downgrade a wait
+        // into an ordinary tool call.
+        #expect(
+            vocabulary.signal(forEvent: "PreToolUse", toolName: "request_user_input")
+                == .inputWaitOpened
+        )
+        #expect(
+            vocabulary.signal(forEvent: "PreToolUse", toolName: "request_permissions")
+                == .approvalWaitOpened
+        )
+        #expect(vocabulary.signal(forEvent: "PreToolUse", toolName: "shell") == .toolCallOpened)
+        #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
+    }
+
+    /// A recognised event with nothing to say is consumed, not quarantined.
+    ///
+    /// Quarantine means "we did not understand this file" and raises a
+    /// diagnostic. `SessionEnd` has always been understood and has always been
+    /// a no-op, and the vocabulary has to keep those two answers apart — fold
+    /// them together and every ordinary event a product emits and this app
+    /// ignores gets reported as corruption.
+    @Test @MainActor
+    func aRecognisedButInertEventIsConsumedRatherThanQuarantined() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        func write(_ event: [String: Any], named name: String) throws {
+            try JSONSerialization.data(withJSONObject: event).write(
+                to: paths.eventsDirectory.appendingPathComponent(name)
+            )
+        }
+
+        // Recognised, and deliberately without effect. It carries no turn id,
+        // so it also proves the inert answer lands before the identity gate.
+        try write([
+            "received_at": 100.0,
+            "hook_event_name": "SessionEnd",
+            "session_id": "thread-1"
+        ], named: "inert.json")
+        try write([
+            "received_at": 101.0,
+            "hook_event_name": "SomeEventWeDoNotKnow",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ], named: "unknown.json")
+
+        let repository = HookEventRepository(
+            paths: paths,
+            liveEventCutoff: .distantPast
+        )
+        let snapshot = await repository.consumeEvents()
+        #expect(snapshot.turns.isEmpty)
+
+        func exists(_ name: String) -> Bool {
+            FileManager.default.fileExists(
+                atPath: paths.eventsDirectory.appendingPathComponent(name).path
+            )
+        }
+
+        #expect(!exists("inert.json"))
+        #expect(!exists("inert.invalid"))
+        #expect(!exists("unknown.json"))
+        #expect(exists("unknown.invalid"))
+    }
+
     private func makeTemporaryHookPaths() -> HookIntegrationPaths {
         // Deliberately short. The preview socket lives inside this directory,
         // and a Unix domain socket path may not exceed 104 bytes -- the system

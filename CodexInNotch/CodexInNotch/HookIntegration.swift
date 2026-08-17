@@ -108,6 +108,104 @@ nonisolated struct HookIntegrationPaths: Sendable {
     }
 }
 
+/// What one lifecycle event means, said in words no product owns.
+///
+/// The Turn reducer used to switch on Codex's own event names, which made it
+/// the only place that knew both *what happened* and *what Codex calls it*. A
+/// second product does not rename those two facts, it renames only the second —
+/// so the names move out here and the reducer keeps every rule it had.
+///
+/// The absence of a signal is a third answer, and a load-bearing one: a
+/// vocabulary returning `nil` means "this event is not ours", which quarantines
+/// the file and raises a diagnostic. ``inert`` means "ours, and deliberately
+/// without effect". Collapsing the two would turn every ordinary event a
+/// product emits and we ignore into a corruption report.
+nonisolated enum HookSignal: Sendable, Equatable {
+    /// A user submission opened a new turn.
+    case turnStarted
+    /// A wait for the user's answer opened, carrying its own `tool_use_id`.
+    case inputWaitOpened
+    /// A wait for the user's approval opened, carrying its own `tool_use_id`.
+    case approvalWaitOpened
+    /// A wait for the user's approval opened with no id of its own, so it has
+    /// to borrow the call that is still open.
+    case approvalWaitInferred
+    /// An ordinary tool call was announced. Not evidence a turn began.
+    case toolCallOpened
+    /// An announced call ended, whatever the outcome.
+    case toolCallClosed
+    /// The turn reached its terminal.
+    case turnEnded
+    /// The session itself went away.
+    case sessionEnded
+    /// Recognised and consumed, with nothing to say about turn state.
+    case inert
+}
+
+/// How one product's lifecycle events are spelled.
+///
+/// Everything a product-specific integration owes the reducer: which hook
+/// definitions have to be registered for the reducer to see anything, and what
+/// each arriving event means.
+protocol AgentHookVocabulary: Sendable {
+    nonisolated var agent: AgentKind { get }
+    /// The definitions this product must register. Every one of them has to map
+    /// to a signal, or the integration would install a hook whose events it then
+    /// quarantines — a test pins that.
+    nonisolated var managedDefinitions: [ManagedHookDefinition] { get }
+    /// `nil` means "not recognised": quarantine rather than consume.
+    nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
+}
+
+nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
+    nonisolated let agent: AgentKind = .codex
+
+    nonisolated var managedDefinitions: [ManagedHookDefinition] {
+        [
+            ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
+            ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
+            // Deliberately unmatched. Registering an exact tool-name regex here
+            // means a naming detail decides whether a wait is ever observed, and
+            // a miss is silent. PostToolUse is already catch-all, so the
+            // dispatch cost is the same order; the reducer does the filtering.
+            ManagedHookDefinition(event: "PreToolUse", matcher: nil),
+            ManagedHookDefinition(event: "PostToolUse", matcher: nil),
+            ManagedHookDefinition(event: "Stop", matcher: nil),
+            ManagedHookDefinition(event: "SessionEnd", matcher: nil)
+        ]
+    }
+
+    nonisolated func signal(
+        forEvent name: String,
+        toolName: String?
+    ) -> HookSignal? {
+        switch (name, toolName) {
+        case ("UserPromptSubmit", _):
+            .turnStarted
+        case ("PermissionRequest", _):
+            // Codex names the tool but carries no `tool_use_id`, so the wait has
+            // to borrow the call that is still open.
+            .approvalWaitInferred
+        case ("PreToolUse", "request_user_input"):
+            .inputWaitOpened
+        case ("PreToolUse", "request_permissions"):
+            // A Desktop approval prompt is surfaced as a tool call that stays
+            // open for exactly as long as the human is being asked.
+            .approvalWaitOpened
+        case ("PreToolUse", _):
+            .toolCallOpened
+        case ("PostToolUse", _):
+            .toolCallClosed
+        case ("Stop", _):
+            .turnEnded
+        case ("SessionEnd", _):
+            .sessionEnded
+        default:
+            nil
+        }
+    }
+}
+
 actor CodexHookInstaller {
     private enum ManagedInstallationState {
         case missing
@@ -122,18 +220,14 @@ actor CodexHookInstaller {
         case complete
     }
 
-    nonisolated private static let managedDefinitions = [
-        ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
-        ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
-        // Deliberately unmatched. Registering an exact tool-name regex here
-        // means a naming detail decides whether a wait is ever observed, and a
-        // miss is silent. PostToolUse is already catch-all, so the dispatch cost
-        // is the same order; the reducer does the filtering instead.
-        ManagedHookDefinition(event: "PreToolUse", matcher: nil),
-        ManagedHookDefinition(event: "PostToolUse", matcher: nil),
-        ManagedHookDefinition(event: "Stop", matcher: nil),
-        ManagedHookDefinition(event: "SessionEnd", matcher: nil)
-    ]
+    /// Registered from the vocabulary rather than listed again here.
+    ///
+    /// The installer's list and the reducer's list used to be two hand-synced
+    /// literals, which is a standing invitation to register a hook whose events
+    /// are then quarantined as unrecognised — silently, since a quarantine looks
+    /// like a corrupt file rather than a missing case.
+    nonisolated private static let managedDefinitions =
+        CodexHookVocabulary().managedDefinitions
 
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
@@ -729,6 +823,9 @@ actor HookEventRepository {
     private let fileManager: FileManager
     private let clock: any MonitorClock
     private let timing: MonitorTiming
+    /// How this repository's events are spelled. The rules below are the same
+    /// for every product; only the names arriving on disk differ.
+    private let vocabulary: any AgentHookVocabulary
     nonisolated private let eventsWatcher: DirectoryChangeWatcher
     nonisolated private let previewChannel: HookPreviewChannel
     private let liveEventCutoff: Date
@@ -748,12 +845,14 @@ actor HookEventRepository {
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
         liveEventCutoff: Date? = nil,
-        previewChannel: HookPreviewChannel? = nil
+        previewChannel: HookPreviewChannel? = nil,
+        vocabulary: any AgentHookVocabulary = CodexHookVocabulary()
     ) {
         self.paths = paths
         self.fileManager = fileManager
         self.clock = clock
         self.timing = timing
+        self.vocabulary = vocabulary
         // The helper writes one file per lifecycle event, so watching the queue
         // directory turns a Hook into an immediate refresh instead of one that
         // waits out the poll interval.
@@ -1005,26 +1104,32 @@ actor HookEventRepository {
             return false
         }
 
-        if eventName == "SessionEnd" {
-            return true
+        guard let signal = vocabulary.signal(
+            forEvent: eventName,
+            toolName: event.toolName
+        ) else {
+            // Not this product's event at all. Quarantine rather than consume,
+            // so an unrecognised shape is reported instead of disappearing.
+            return false
         }
 
-        let supportedEvents = Set([
-            "UserPromptSubmit",
-            "PermissionRequest",
-            "PreToolUse",
-            "PostToolUse",
-            "Stop"
-        ])
-        guard supportedEvents.contains(eventName),
-              let turnID = stableIdentifier(event.turnID) else {
+        switch signal {
+        case .sessionEnded, .inert:
+            // Recognised and consumed. Neither needs a turn to address, so both
+            // answer before the identity gate below.
+            return true
+        default:
+            break
+        }
+
+        guard let turnID = stableIdentifier(event.turnID) else {
             return false
         }
 
         let receivedAt = Date(timeIntervalSince1970: event.receivedAt)
 
-        switch eventName {
-        case "UserPromptSubmit":
+        switch signal {
+        case .turnStarted:
             var retiredTurnIDs = Set<String>()
             if let current = turns[threadID] {
                 if current.turnID == turnID {
@@ -1052,7 +1157,7 @@ actor HookEventRepository {
                 promptPreview: claimedPreview(for: event)?.prompt,
                 assistantPreview: nil
             )
-        case "PermissionRequest":
+        case .approvalWaitInferred:
             mutateExactTurn(
                 threadID: threadID,
                 turnID: turnID,
@@ -1087,7 +1192,7 @@ actor HookEventRepository {
                 state.sessionStatus = state.sessionStatus
                     .transitioned(on: .approvalNeeded)
             }
-        case "PreToolUse" where event.toolName == "request_user_input":
+        case .inputWaitOpened:
             observedPreToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return false
@@ -1105,10 +1210,7 @@ actor HookEventRepository {
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
             }
-        case "PreToolUse" where event.toolName == "request_permissions":
-            // Codex surfaces a Desktop approval prompt as a `request_permissions`
-            // tool call that stays open for exactly as long as the human is
-            // being asked -- the same shape as `request_user_input`.
+        case .approvalWaitOpened:
             observedPreToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return false
@@ -1129,10 +1231,10 @@ actor HookEventRepository {
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
             }
-        case "PreToolUse":
-            // Any other tool: no state change on its own, but it records the
-            // open call so a `PermissionRequest` naming that tool has an id to
-            // pair with. It also proves the definition runs.
+        case .toolCallOpened:
+            // No state change on its own, but it records the open call so an
+            // approval that carries no id of its own has something to pair
+            // with. It also proves the definition runs.
             observedPreToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return true
@@ -1153,7 +1255,7 @@ actor HookEventRepository {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
                 }
             }
-        case "PostToolUse":
+        case .toolCallClosed:
             observedPostToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return true
@@ -1189,7 +1291,7 @@ actor HookEventRepository {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
                 }
             }
-        case "Stop":
+        case .turnEnded:
             // Claimed before the mutation so the text is taken exactly once,
             // whether or not this event turns out to address a live turn.
             let assistantPreview = claimedPreview(for: event)?.assistantMessage
@@ -1208,7 +1310,8 @@ actor HookEventRepository {
                 $0.pendingApproval = nil
                 $0.assistantPreview = assistantPreview
             }
-        default:
+        case .sessionEnded, .inert:
+            // Both answered above, before the turn identity gate.
             break
         }
         return true
