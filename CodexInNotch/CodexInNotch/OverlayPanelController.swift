@@ -83,6 +83,10 @@ final class OverlayPanelController {
             store.$quota.map { _ in () }.eraseToAnyPublisher(),
             store.$sessions.map { _ in () }.eraseToAnyPublisher(),
             store.$isExpanded.map { _ in () }.eraseToAnyPublisher(),
+            // Folding the quota block is a height change like any other: the
+            // footer redraws itself, but only the panel can give back the
+            // height the rules were occupying.
+            store.$isQuotaFolded.map { _ in () }.eraseToAnyPublisher(),
             store.$reduceMotion.map { _ in () }.eraseToAnyPublisher(),
             // The compact width is measured from the elapsed string, so the
             // panel has to re-measure when it gains a digit -- but only then.

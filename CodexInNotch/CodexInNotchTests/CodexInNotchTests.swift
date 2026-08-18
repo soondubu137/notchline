@@ -584,6 +584,61 @@ struct CodexInNotchTests {
         #expect(store.foldedTodayText.contains("Claude Code"))
     }
 
+    /// Folding has to move the panel, not just the footer inside it.
+    ///
+    /// The footer redraws itself from `isQuotaFolded`, but the height it gives
+    /// up belongs to the window: without this the rules vanish and their space
+    /// stays behind as an empty band under the last row.
+    @Test @MainActor
+    func foldingShrinksThePanelItself() {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let store = MonitorStore(
+            displays: [display],
+            services: [],
+            initialSnapshot: AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [
+                    MonitoredSession(
+                        threadID: "thread",
+                        turnID: "turn",
+                        projectName: "Project",
+                        title: "Session",
+                        preview: nil,
+                        status: .completed,
+                        startedAt: nil
+                    )
+                ],
+                quota: QuotaSnapshot(
+                    windows: [
+                        QuotaWindow(label: "5 h", remainingPercent: 40, resetsAt: nil),
+                        QuotaWindow(label: "7 d", remainingPercent: 87, resetsAt: nil)
+                    ],
+                    todayTokens: 208_600_000
+                ),
+                diagnostic: nil
+            )
+        )
+        store.isExpanded = true
+        #expect(store.footerRules.map(\.agent) == [.claudeCode])
+
+        let unfolded = store.currentPanelSize.height
+        store.toggleQuotaFold()
+        let folded = store.currentPanelSize.height
+
+        #expect(
+            unfolded - folded
+                == PanelMetrics.claudeCodeOnlyFooterHeight
+                    - PanelMetrics.foldedFooterHeight
+        )
+        #expect(folded < unfolded)
+    }
+
     /// The fold is remembered, and starts showing the rules.
     @Test @MainActor
     func theFoldIsOneRememberedStateForTheWholeFooter() {
