@@ -512,7 +512,9 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - Expanded footer 齿轮：调用系统 `openSettings` 打开现有 Settings scene；不安装集成、不修改偏好，也不在 panel 中创建第二份设置 UI。
 - `Display`：立即将组件移动到所选显示器；目标临时不可用时回退，并在重新连接后恢复用户偏好。
 - `Recheck`：重新运行只读能力检查，不静默改配置。
-- `Codex integration` 总开关：On 安装或修复六种必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。
+- `Codex integration` 总开关：On 安装或修复六种必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。窗口里它是 `Products` 卡片中 Codex 那一行的 switch；Claude Code 那一行按 ADR 0010 给的是 `Set Up…` 而不是开关（`figma-design.md` §8.1）。
+- `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。
+- `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。
 - `Show current content previews`：立即影响所有行；关闭时清空内存预览并重新生成安全标题。
 
 ## 17. SwiftUI 接入边界
@@ -617,7 +619,7 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 | `05 — Panel` / `327:305` | `472 × 40` Expanded footer、今日 tokens、reset 文案与 Settings gear |
 | `07 — Integration States` / `227:3` | 隐私关闭、额度局部降级、成员生命周期和 `520 × 134` 薄层状态 |
 | `08 — Onboarding` / `232:95` | 显式授权的三步首次安装 |
-| `09 — Settings` / `233:3` | 集成管理与预览开关的 On/Off 状态 |
+| `09 — Settings` / `609:2` | macOS 26 单面板设置窗口：Products／Session list／Privacy 三组、两模式颜色；`233:3` 为 v1 参考 |
 
 ## 22. 参考
 

@@ -53,6 +53,8 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 
 字体不存在时必须先安装 SF Pro，再编辑文件；不得以相似字体永久替代。当前设计环境已经提供所需 Regular、Medium、Semibold 和 Bold 字重。
 
+**已知例外：`609:2` 上的 `closing note` 两条文字（浅色 `665:3`／`665:5`，深色 `667:3`／`667:5`）当前是 Inter Regular。** 通过 MCP 编辑时，`listAvailableFontsAsync()` 会列出 SF Pro 且 `loadFontAsync` 不报错，但字形度量取不到：`characters` 写进去了，节点宽度与渲染却停在旧值——同一个按钮实测 SF Pro 下仍是 `49 pt` 的 `Recheck`，换成 Inter 立刻重排为 `115 pt` 的 `Quit Codex in Notch`。两害相权：留在 SF Pro，板上会把一句**不存在的文案**画给每一个看它的人；换成 Inter，板读得对而字体错一处。选后者，并记在验证清单里，等在装有 SF Pro 的 Figma 桌面端重新键入。这条例外只覆盖这四个节点，不放宽 §1.6 的规则。
+
 ### 3.2 Color
 
 - Panel 背景：纯黑或现有 `surface/notch` / `surface/panel` token。
@@ -366,23 +368,30 @@ Input needed
 
 三个分组自上而下是 `Products`、`Session list`、`Privacy`。每个分组的形状都是「小标题 + 一张圆角卡片 + 卡片下方的脚注文字」。脚注取代了 v1 的蓝色提示条——macOS 用脚注而不是色块陈述后果，色块在原生窗口里只会读作一个没人点得动的控件。
 
+窗口最后一行是 `closing note`：左边是那句只读声明，右边是胶囊按钮 `Quit Codex in Notch`。它与 `Recheck` 同形不是巧合——两者都是「说明文字尾部挂一个它所说的那个动作」。退出不属于任何一个分组：它不是一项设置，而它要收走的那个组件也没有自己的窗口可关，Settings 是唯一能承载它的界面。这一行不加内缩（分组脚注的 `2 pt` 左内缩只属于分组），因此它与三个组标题落在同一条竖线上。
+
 所有主标签共用同一左缩进：产品行的绿色状态点移到说明行行首，而不是站在产品名左边，因此三张卡片的标题列在同一条竖线上。
 
-浅色与深色是**同一批节点**：颜色全部绑定到两模式集合 `Color / macOS Window`（`Light` / `Dark`），深色窗口是浅色窗口的 clone 加一次 mode override。改一次颜色两边同时生效，不存在两套值漂移的可能。
+浅色与深色是**同一批节点**：颜色全部绑定到两模式集合 `Color / macOS Window`（`Light` / `Dark`），深色窗口是浅色窗口的 clone 加一次 mode override。改一次颜色两边同时生效，不存在两套值漂移的可能。实现侧对应 [`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift) 的 `MacOSWindowColor`：每个 token 是一个 `NSColor(name:dynamicProvider:)`，一次声明同时回答两种外观，这是两模式集合在代码里的等价物。状态点例外，取系统色 —— `status/green` 的两个值本来就是 `systemGreen` 的两个值，用系统色还能跟随「增强对比度」。
+
+**标题栏按 macOS 自己的样子渲染，不按本表这一行。** 板上的标题栏与窗口同色、高 `52`、不画分隔线；SwiftUI 持有 scene 窗口的标题栏并在每次布局重新应用自己的配置，`titlebarAppearsTransparent`、`backgroundColor`、`titlebarSeparatorStyle` 与 `.fullSizeContentView` 实测全部无效。剩下的做法是 `.hiddenTitleBar` 加自绘 `52` 色带与居中标题——那会让「用原生控件而不是它们的近似物」这个论点里最显眼的一块变成唯一的近似物。因此标题栏保持系统材质，`52` 是板上的排版约定而不是验收项。
 
 ### 8.1 Products
 
 `Codex Desktop` 与 `Claude Code` 是同一张卡片里的两行，不是两个分组。加入第三个产品的代价是一行，而不是一个新面板。
 
 - 每行左侧是产品名，说明行以状态点开头，写连接结论与能力信息（`Connected · compatible version`、`Connected · hooks installed`）。
-- 每行右侧是一个原生 macOS switch，各自启停该产品所需的 lifecycle event 定义；切换进行中 disabled。
-- 卡片下方脚注说明开关只安装 Codex in Notch 需要的六项定义，关闭时移除，用户其他 hooks 不受影响。
+- Codex 行右侧是一个原生 macOS switch，启停该产品所需的 lifecycle event 定义；切换进行中 disabled。
+- **Claude Code 行没有 switch，这是实现与板上不一致的一处，且是刻意的。** [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) 决定本应用永不写 `~/.claude/settings.json`，因此那一行给不出一个能兑现的开关。它的尾部是胶囊按钮 `Set Up…`，展开卡片内的一段：粘贴目标路径、可选中的 JSON 片段、`Copy` 与 `Reveal Settings File`。两行并排正是这个不对称唯一被看见的地方——把它藏进另一个流程，只会让它读起来像疏漏而不是决定。板上的双 switch 保留为「若日后恢复写入能力」的形态。
+- 卡片下方脚注说明开关只安装 Codex in Notch 需要的六项定义，关闭时移除，用户其他 hooks 不受影响，并写明 Claude Code 由用户自己注册。
 - `Recheck` 是脚注行尾部的胶囊按钮，重新检测能力。
 - Off 后保持 Settings 可达；再次 On 安装或修复完整集合。首次安装或定义变化后的 `/hooks` 信任仍由 Codex 处理。
 
 ### 8.2 Session list
 
-只含一个弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品同时运行时有效果；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
+弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品同时运行时有效果；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
+
+卡片里还有第二行 `Clear the session list`，尾部胶囊按钮 `Clear`，列表为空时 disabled。它在 v1 是 Codex 卡片里的一枚破坏性按钮；产品分组现在只讲产品，而这个动作的对象是会话列表，它属于这里。板上没有这一行，因为板只画了三个已确认的**设置**，而这是一个动作。
 
 ### 8.3 Privacy
 
@@ -390,6 +399,14 @@ Input needed
 - On 的脚注写明预览不落盘。
 - Off 的脚注写明 Project、标题与状态仍然显示，且 prompt fallback 被禁用、缺失标题为 `Untitled`。
 - 只有开关本身改变：行高、行几何与说明行都不动，这一点由两个局部切片直接对照。
+
+### 8.4 Display
+
+板上没有这一组，实现里有，位置在 `Products` 与 `Session list` 之间。
+
+`Show Codex in Notch on` 是一个已经存在的控件：组件只出现在一台显示器上，由用户选定，说明行报出该显示器的形态与真实菜单栏高度（`Notch display · 39 pt menu bar`）。删掉它会拿走一个真实功能，所以它按同一形状留下——小标题、一张卡片、一行脚注。
+
+这不是「加入尚未确认的功能」的例外：下面那条禁止的是把没定过的功能塞进设置，而这一项是既有功能在新形状里的安置。板与窗口的差异记在这里，等板更新时一起消掉。
 
 不在 V1 设置画板中加入登录启动、动画、通知、模型选择或其他尚未确认的功能。
 
@@ -445,8 +462,9 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] Claude Code 在场的第二条校正：为陈旧缓存设上限（`90` 秒 = 三次连续失败），超过后在场为未知并落到 `Disconnected`。`freshness` 与 `trustCeiling` 现在是两个参数。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
-- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。
+- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift)），三处与板不一致均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、多一个 `Display` 分组与一行 `Clear the session list`（§8.4、§8.2）。
 - [ ] 在装有 SF Pro 的 Figma 桌面端打开 `609:2`，确认字形正常渲染、多行脚注的换行落位与预期一致。
+- [ ] 同一次打开时，把 `closing note` 的四条 Inter 文字（`665:3`、`665:5`、`667:3`、`667:5`）重新键入为 SF Pro Regular，原因见 §3.1。
 - [x] 会话行已同步 Running／等待人工／Completed 三种计时表现，一行只有一个标记。
 - [ ] 收起态计时变体的文字层改为 hug contents（见 4.6），消除固定文本宽度带来的整体偏宽。
 - [ ] 刘海计时变体中的计时 TEXT 在渲染中不可见（节点数据正确、坐标与实现一致，`24` 高面板中同一文本正常）；需在 Figma 桌面端确认是渲染问题还是文件缺陷。

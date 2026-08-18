@@ -71,7 +71,7 @@ flowchart LR
         panelController["OverlayPanelController NSPanel 几何与动画"]
         notchView["NotchOverlayView 收起与展开会话列表"]
         productRoot["ProductRootView 首次引导"]
-        settingsView["AppSettingsView 集成与隐私设置"]
+        settingsView["AppSettingsView 单面板设置窗口"]
         navigator["CodexDesktopNavigator"]
     end
 
@@ -379,6 +379,7 @@ flowchart LR
 | 精确导航 | `CodexDesktopNavigator` | 预检目标并使用官方 deep link 打开同一 Thread | [`CodexDesktopNavigator.swift`](../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift) |
 | 窗体 | `OverlayPanelController` | NSPanel 生命周期、目标显示器、顶部吸附、尺寸和动画 | [`OverlayPanelController.swift`](../CodexInNotch/CodexInNotch/OverlayPanelController.swift) |
 | 视图 | `NotchOverlayView` | 只渲染 `MonitorStore`，不解析协议、不读文件 | [`NotchOverlayView.swift`](../CodexInNotch/CodexInNotch/NotchOverlayView.swift) |
+| 设置窗口 | `AppSettingsView`、`MacOSWindowColor` | macOS 26 单面板设置：分组卡片自绘，控件全用原生；`Color / macOS Window` 两模式 token（见 `figma-design.md` §8） | [`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift) |
 | 常驻动效 | `NotchStatusMatrix`、`SearchlightLabel`、`SessionRowText` | 用 CALayer 承载持续动画，使叠层不必逐帧重渲染（见第 6 节） | [`NotchStatusMatrix.swift`](../CodexInNotch/CodexInNotch/NotchStatusMatrix.swift) |
 
 ## 6. 常驻动效的渲染边界
