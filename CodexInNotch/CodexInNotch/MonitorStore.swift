@@ -604,7 +604,7 @@ final class MonitorStore: ObservableObject {
             .codex: CodexDesktopNavigator(targetChecker: liveService)
         ]),
         initialSnapshot: .connecting,
-        displayPreferences: .standard,
+        preferences: .standard,
         // Every provider's "ask me again" edges on one stream, so a late
         // answer from any of them wakes the loop.
         refreshEvents: DirectoryChangeWatcher.merged([
@@ -671,7 +671,7 @@ final class MonitorStore: ObservableObject {
     /// have rows; see ``showsProductAttribution``.
     @Published var productAttribution: ProductAttributionStyle {
         didSet {
-            UserDefaults.standard.set(
+            preferences?.set(
                 productAttribution.rawValue,
                 forKey: Self.productAttributionDefaultsKey
             )
@@ -679,7 +679,7 @@ final class MonitorStore: ObservableObject {
     }
     @Published var showsContentPreviews: Bool {
         didSet {
-            UserDefaults.standard.set(
+            preferences?.set(
                 showsContentPreviews,
                 forKey: Self.contentPreviewDefaultsKey
             )
@@ -711,7 +711,9 @@ final class MonitorStore: ObservableObject {
     private var integrationService: (any AgentMonitoring)? {
         services.first { $0.agent == Self.integrationCardAgent }
     }
-    private let displayPreferences: UserDefaults?
+    /// Where every persisted preference is read and written. `nil` in tests,
+    /// which is what keeps them off the running user's real defaults.
+    private let preferences: UserDefaults?
     private let clock: any MonitorClock
     private let timing: MonitorTiming
     private var preferredDisplayID: String?
@@ -750,14 +752,14 @@ final class MonitorStore: ObservableObject {
         services: [any AgentMonitoring] = [],
         navigator: (any AgentNavigating)? = nil,
         initialSnapshot: AgentSnapshot? = nil,
-        displayPreferences: UserDefaults? = nil,
+        preferences: UserDefaults? = nil,
         refreshEvents: AsyncStream<Void>? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
     ) {
         let resolvedDisplays = displays ?? DisplayOption.currentDisplays()
         let snapshot = initialSnapshot ?? Self.previewSnapshot
-        let persistedDisplayID = displayPreferences?.string(
+        let persistedDisplayID = preferences?.string(
             forKey: Self.selectedDisplayDefaultsKey
         )
         let initialDisplayID = persistedDisplayID.flatMap { persistedID in
@@ -765,7 +767,7 @@ final class MonitorStore: ObservableObject {
         } ?? resolvedDisplays.first?.id ?? ""
         self.displays = resolvedDisplays
         self.selectedDisplayID = initialDisplayID
-        self.displayPreferences = displayPreferences
+        self.preferences = preferences
         self.clock = clock
         self.elapsedTick = CurrentValueSubject(clock.now())
         self.timing = timing
@@ -784,15 +786,21 @@ final class MonitorStore: ObservableObject {
         self.statusAgent = merged.availabilityAgent
         self.connectedAgents = merged.connectedAgents
         self.presenceMarks = merged.presenceMarks
-        self.showsContentPreviews = UserDefaults.standard.object(
+        // Through the injected store, not `.standard`. These three used to read
+        // `.standard` directly while only the display preference was injected,
+        // so a `MonitorStore` built in a test inherited whoever was running it:
+        // `rowsAreAttributedOnlyWhenBothProductsHaveThem` failed on any machine
+        // whose owner had chosen `Badge` in Settings, and passed on every other,
+        // which is a test reporting on the developer rather than on the code.
+        self.showsContentPreviews = preferences?.object(
             forKey: Self.contentPreviewDefaultsKey
         ) as? Bool ?? true
-        self.productAttribution = UserDefaults.standard.string(
+        self.productAttribution = preferences?.string(
             forKey: Self.productAttributionDefaultsKey
         ).flatMap(ProductAttributionStyle.init(rawValue:)) ?? .nameAndColour
-        self.hasCompletedOnboarding = UserDefaults.standard.bool(
+        self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
-        )
+        ) ?? false
         self.lastIntegrationMessage = snapshot.diagnostic ?? "等待 Codex 数据"
         if !showsContentPreviews {
             self.sessions = snapshot.sessions.map { $0.hidingContent() }
@@ -1174,7 +1182,7 @@ final class MonitorStore: ObservableObject {
 
         if preferredDisplayID != id {
             preferredDisplayID = id
-            displayPreferences?.set(id, forKey: Self.selectedDisplayDefaultsKey)
+            preferences?.set(id, forKey: Self.selectedDisplayDefaultsKey)
         }
 
         guard selectedDisplayID != id else { return }
@@ -1424,7 +1432,7 @@ final class MonitorStore: ObservableObject {
 
     func completeOnboarding() {
         hasCompletedOnboarding = true
-        UserDefaults.standard.set(true, forKey: Self.onboardingDefaultsKey)
+        preferences?.set(true, forKey: Self.onboardingDefaultsKey)
         refreshNow()
     }
 

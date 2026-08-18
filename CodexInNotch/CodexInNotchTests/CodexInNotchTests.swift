@@ -1475,14 +1475,14 @@ struct CodexInNotchTests {
         )
         let firstStore = MonitorStore(
             displays: [primaryDisplay, externalDisplay],
-            displayPreferences: defaults
+            preferences: defaults
         )
 
         firstStore.selectDisplay(id: externalDisplay.id)
 
         let restoredStore = MonitorStore(
             displays: [primaryDisplay, externalDisplay],
-            displayPreferences: defaults
+            preferences: defaults
         )
         #expect(restoredStore.selectedDisplayID == externalDisplay.id)
         #expect(restoredStore.geometry == .noNotch)
