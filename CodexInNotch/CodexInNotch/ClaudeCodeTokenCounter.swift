@@ -70,8 +70,27 @@ actor ClaudeCodeTokenCounter {
         // Nothing readable is the only reason to report no figure. Once the
         // directory has been listed, an answer of zero is a true one: the
         // transcripts were read and today has nothing in them yet.
-        guard let transcripts = transcripts() else { return nil }
+        //
+        // The whole pass is pooled. Listing the projects and stat-ing every
+        // transcript in them is all bridged Foundation -- `NSURL`s out of the
+        // enumerator, an `NSDictionary` of `NSNumber`s and `NSDate`s out of
+        // every `attributesOfItem` -- and all of it autoreleased. Measured
+        // against this machine's 480-odd transcripts that is 0.93 MB per pass,
+        // and this pass runs whether or not a single byte has been appended.
+        let listed = autoreleasepool {
+            scanTranscripts(now: now, today: today)
+        }
+        guard listed else { return nil }
+
+        return progress.values.reduce(0) { $0 + $1.tokens }
+    }
+
+    /// One pass over the transcripts. False only when nothing could be listed,
+    /// which is the one reason to report no figure at all.
+    private func scanTranscripts(now: Date, today: String) -> Bool {
+        guard let transcripts = transcripts() else { return false }
         let startOfDay = calendar.startOfDay(for: now)
+        var buffer: [UInt8] = []
 
         for url in transcripts {
             guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
@@ -97,13 +116,23 @@ actor ClaudeCodeTokenCounter {
                 continue
             }
 
-            let result = scan(url, from: entry.scannedBytes, today: today)
+            if buffer.isEmpty {
+                // Allocated on the first file that actually needs reading, and
+                // reused by every one after it. Most passes find nothing to
+                // read and never allocate it at all.
+                buffer = [UInt8](repeating: 0, count: Self.chunkBytes)
+            }
+            let result = scan(
+                url,
+                from: entry.scannedBytes,
+                today: today,
+                buffer: &buffer
+            )
             entry.tokens += result.tokens
             entry.scannedBytes = result.scannedTo
             progress[key] = entry
         }
-
-        return progress.values.reduce(0) { $0 + $1.tokens }
+        return true
     }
 
     private func transcripts() -> [URL]? {
@@ -133,33 +162,61 @@ actor ClaudeCodeTokenCounter {
     /// Stopping short is deliberate: the file is being appended to while this
     /// runs, so the final line is very often half-written. Counting it would be
     /// wrong once and counting it again next pass would be wrong twice.
-    private func scan(_ url: URL, from offset: UInt64, today: String) -> ScanResult {
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
+    ///
+    /// **`read(2)` into one reused buffer, not `FileHandle`.** That reads like
+    /// a micro-optimisation and is not one: `FileHandle.read(upToCount:)` hands
+    /// back an *autoreleased* `Data`, and this runs inside a synchronous actor
+    /// method with no pool of its own, so nothing drains until the whole pass
+    /// is over. Measured here: 93 MB read that way grows the process by 94 MB
+    /// and it stays; the identical reads through a reused buffer cost 0.2 MB.
+    /// The app's memory was the day's transcripts, one megabyte of footprint
+    /// per megabyte ever read -- which is why it settled tens of megabytes
+    /// higher after a heavy day of Claude Code than after a quiet one.
+    private func scan(
+        _ url: URL,
+        from offset: UInt64,
+        today: String,
+        buffer: inout [UInt8]
+    ) -> ScanResult {
+        let descriptor = open(url.path, O_RDONLY)
+        guard descriptor >= 0 else { return ScanResult(tokens: 0, scannedTo: offset) }
+        defer { close(descriptor) }
+        guard lseek(descriptor, off_t(offset), SEEK_SET) >= 0 else {
             return ScanResult(tokens: 0, scannedTo: offset)
         }
-        defer { try? handle.close() }
-        try? handle.seek(toOffset: offset)
 
         var tokens: Int64 = 0
-        var consumed = offset
-        var remainder = Data()
+        var read: UInt64 = 0
+        // The tail of a line that ran past the end of a chunk. Empty except at
+        // a chunk boundary, and the one place a very long record is held whole.
+        var pending = Data()
 
-        while let chunk = try? handle.read(upToCount: Self.chunkBytes), !chunk.isEmpty {
-            var buffer = remainder + chunk
-            guard let lastBreak = buffer.lastIndex(of: UInt8(ascii: "\n")) else {
-                remainder = buffer
-                continue
+        while true {
+            let count = buffer.withUnsafeMutableBytes {
+                Darwin.read(descriptor, $0.baseAddress, Self.chunkBytes)
             }
-            let complete = buffer[buffer.startIndex ... lastBreak]
-            remainder = Data(buffer[buffer.index(after: lastBreak)...])
-            buffer = Data()
-
-            for line in complete.split(separator: UInt8(ascii: "\n")) {
-                tokens += Self.tokens(inLine: Data(line), today: today)
+            guard count > 0 else { break }
+            read += UInt64(count)
+            var start = 0
+            buffer.withUnsafeBytes { bytes in
+                for index in 0 ..< count where bytes[index] == UInt8(ascii: "\n") {
+                    let line = Data(bytes[start ..< index])
+                    tokens += Self.tokens(
+                        inLine: pending.isEmpty ? line : pending + line,
+                        today: today
+                    )
+                    if !pending.isEmpty { pending = Data() }
+                    start = index + 1
+                }
+                if start < count { pending.append(contentsOf: bytes[start ..< count]) }
             }
-            consumed += UInt64(complete.count)
         }
-        return ScanResult(tokens: tokens, scannedTo: consumed)
+        // Everything up to the last newline seen. What is still pending is the
+        // half-written line, and the next pass starts at it.
+        return ScanResult(
+            tokens: tokens,
+            scannedTo: offset + read - UInt64(pending.count)
+        )
     }
 
     private struct UsageRecord: Decodable {

@@ -82,6 +82,124 @@ enum ClaudeExecutableLocator {
     }
 }
 
+/// Runs a `claude` subcommand, off the cooperative pool and under a deadline.
+///
+/// Both of the things this fixes are properties of `Process`, not of Claude
+/// Code. `readToEnd` waits for the pipe to close and `waitUntilExit` waits for
+/// the child, and doing either inside an `async` function blocks a cooperative
+/// thread -- there is roughly one per core -- for as long as the child runs.
+/// Four to seven seconds of that once a minute is a real share of a small pool,
+/// and if the child never exits the thread is gone for good.
+///
+/// "Never exits" is not hypothetical here: `claude` starts the user's MCP
+/// servers, one of which was already caught writing to this command's stdout.
+/// Before the deadline, one wedged child meant the reading that owned it never
+/// returned -- the quota froze at its last value, the staleness ceiling never
+/// got to fire because nothing ever completed, and only relaunching the app
+/// recovered it.
+enum ClaudeCommand {
+    private static let log = Logger(
+        subsystem: "com.yinfenglu.CodexInNotch",
+        category: "ClaudeCommand"
+    )
+
+    /// Blocking work belongs on a queue that is allowed to grow threads.
+    private static let queue = DispatchQueue(
+        label: "com.yinfenglu.CodexInNotch.claude-command",
+        qos: .utility,
+        attributes: .concurrent
+    )
+
+    /// How long after `SIGTERM` to stop being polite.
+    private static let killGrace: TimeInterval = 2
+
+    /// - Parameters:
+    ///   - timeout: How long the child may take before it is killed. A killed
+    ///     child reports failure, which is a thing every caller here already
+    ///     knows how to degrade to.
+    ///   - executable: Overridden only by the test that has to watch a command
+    ///     outstay its deadline, which needs one that reliably does.
+    static func run(
+        _ arguments: [String],
+        in directory: URL? = nil,
+        timeout: TimeInterval = 20,
+        executable: URL? = nil
+    ) async -> Data? {
+        guard let executable = executable ?? ClaudeExecutableLocator.locate() else {
+            return nil
+        }
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(
+                    returning: execute(
+                        executable,
+                        arguments: arguments,
+                        in: directory,
+                        timeout: timeout
+                    )
+                )
+            }
+        }
+    }
+
+    private static func execute(
+        _ executable: URL,
+        arguments: [String],
+        in directory: URL?,
+        timeout: TimeInterval
+    ) -> Data? {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.currentDirectoryURL = directory
+        let output = Pipe()
+        process.standardOutput = output
+        // Discarded rather than piped: a pipe nobody reads fills at 64 KB and
+        // then blocks the writer for good, which would hang the read rather
+        // than fail it.
+        process.standardError = FileHandle.nullDevice
+        // Inheriting stdin would let the command wait on a terminal that is not
+        // there.
+        process.standardInput = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            log.error("could not run claude \(arguments.first ?? ""): \(error.localizedDescription)")
+            return nil
+        }
+
+        // SIGTERM at the deadline, SIGKILL shortly after. Politeness alone is
+        // not a deadline: a child that ignores SIGTERM would hold the pipe open
+        // and `readToEnd` would go on waiting for it.
+        let expire = DispatchWorkItem {
+            // Signalled by pid rather than through `terminate()`, which is
+            // documented to raise on a process that was never launched. The
+            // pid guard is not ceremony either: `processIdentifier` is 0 before
+            // launch, and `kill(0, ...)` signals this app's whole process
+            // group -- this app included.
+            let pid = process.processIdentifier
+            guard process.isRunning, pid > 0 else { return }
+            log.error("claude \(arguments.first ?? "") outlived its deadline; terminating")
+            kill(pid, SIGTERM)
+            queue.asyncAfter(deadline: .now() + killGrace) {
+                if process.isRunning { kill(pid, SIGKILL) }
+            }
+        }
+        queue.asyncAfter(deadline: .now() + timeout, execute: expire)
+        defer { expire.cancel() }
+
+        // Pooled: the `Data` off the pipe is autoreleased, and on this queue
+        // nothing would ever drain it.
+        let data = autoreleasepool {
+            try? output.fileHandleForReading.readToEnd()
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return data
+    }
+}
+
 actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     private static let log = Logger(
         subsystem: "com.yinfenglu.CodexInNotch",
@@ -210,28 +328,9 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// session-file schema directly and registering a non-public dependency
     /// (`AGENTS.md` §8) to duplicate a correct public one.
     private static func runOfficialCommand() async -> Data? {
-        guard let executable = ClaudeExecutableLocator.locate() else { return nil }
-
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = ["agents", "--json"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = Pipe()
-        // Inheriting stdin would let the command wait on a terminal that is not
-        // there.
-        process.standardInput = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            Self.log.error("could not run the session list: \(error.localizedDescription)")
-            return nil
-        }
-
-        let data = try? output.fileHandleForReading.readToEnd()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return data
+        // Ten seconds, against a list that is re-read every thirty: a slower
+        // answer than that would be stale before it arrived, and the registry
+        // already keeps its last one when a read fails.
+        await ClaudeCommand.run(["agents", "--json"], timeout: 10)
     }
 }

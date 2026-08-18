@@ -69,6 +69,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             clock: clock
         )
         self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
+        // The quota's own edge. Nothing waits for the reading any more, so the
+        // reading has to say when it landed -- otherwise a figure read at
+        // second five would not be drawn until whatever happened to refresh
+        // next, which is the wait this stopped blocking to avoid.
+        let (quotaUpdates, quotaLanded) = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
         // Pinned to a directory of its own: the reading is a real session that
         // fires real hooks, and the working directory is what keeps its events
         // out of the row list.
@@ -76,7 +83,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             clock: clock,
             workingDirectory: paths.agentDirectory
                 .appendingPathComponent("usage", isDirectory: true),
-            tokens: ClaudeCodeTokenCounter(clock: clock)
+            tokens: ClaudeCodeTokenCounter(clock: clock),
+            transcripts: ClaudeCodeUsageTranscripts(clock: clock),
+            onUpdate: { quotaLanded.yield() }
         )
         self.clock = clock
 
@@ -92,7 +101,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             DirectoryChangeWatcher(
                 directoryURL: watched,
                 debounceInterval: timing.unreadStateDebounceInterval
-            ).events()
+            ).events(),
+            quotaUpdates
         ])
     }
 
@@ -193,7 +203,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             sessions: rows,
             setupStatus: status,
             diagnostic: hookState.diagnostic,
-            quota: await usage.quota(),
+            // Whatever is known right now. Awaiting the reading here is what
+            // made a hook event's row wait on a `claude` launch.
+            quota: await usage.currentQuota(),
             // Not `rows.isEmpty`: a session with no turn in flight is still an
             // open Claude Code. The list answers which sessions exist and the
             // reducer answers what they are doing — presence draws the matrix,
@@ -203,10 +215,27 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         )
     }
 
-    /// No cadence of its own. Turn changes and session changes both arrive as
+    /// No cadence for the rows: turn changes and session changes both arrive as
     /// edges on ``stateChangeEvents``, and reporting a deadline this refresh
     /// could not advance would be a busy-wait wearing a deadline's clothes.
-    func nextRefreshDeadline() async -> Date? { nil }
+    ///
+    /// The quota is the one thing here that changes on the clock rather than on
+    /// an edge, so it reports when it wants reading again -- a cache going
+    /// stale is exactly what a deadline is for, and each refresh moves it. Left
+    /// at nil, the reading was paced by unrelated hook traffic and the
+    /// 60-second heartbeat: a failed attempt, which happens whenever something
+    /// else logs onto the command's stdout, went uncorrected for up to two
+    /// minutes.
+    func nextRefreshDeadline() async -> Date? {
+        await usage.nextReadDeadline()
+    }
+
+    /// The transcripts the quota readings leave in Claude Code's own project
+    /// folder. Reported so the user can see them grow and clear them if they
+    /// want to; never cleared here.
+    func diskFootprint() async -> AgentDiskFootprint? {
+        await usage.transcriptFootprint()
+    }
 
     func hookSetupStatus() async -> HookSetupStatus {
         await setup.status()

@@ -646,6 +646,9 @@ final class MonitorStore: ObservableObject {
     /// Instructions for every product whose registration the user makes by
     /// hand. Absent for a product this app sets up itself.
     @Published private(set) var manualSetups: [AgentKind: AgentManualSetup] = [:]
+    /// What each product's monitoring has left on disk, for the products that
+    /// leave anything. Shown in Settings; never acted on.
+    @Published private(set) var diskFootprints: [AgentKind: AgentDiskFootprint] = [:]
     @Published private(set) var availability: MonitorAvailability
     @Published private(set) var quota: QuotaSnapshot
     @Published private(set) var sessions: [MonitoredSession] {
@@ -749,6 +752,7 @@ final class MonitorStore: ObservableObject {
     /// switching another product's integration off.
     private var setupStatusByAgent: [AgentKind: HookSetupStatus] = [:]
     private var manualSetupTask: Task<Void, Never>?
+    private var diskFootprintTask: Task<Void, Never>?
     /// Deadlines a provider reported and then failed to clear. A provider that
     /// keeps naming the same overdue instant is not going to advance it, and
     /// letting it into the shared `min` would drag every other provider down to
@@ -833,6 +837,7 @@ final class MonitorStore: ObservableObject {
         elapsedTickTask?.cancel()
         refreshTask?.cancel()
         integrationTask?.cancel()
+        diskFootprintTask?.cancel()
     }
 
     /// Advances the elapsed readout once a second while a turn is being timed.
@@ -1625,6 +1630,7 @@ final class MonitorStore: ObservableObject {
         latestByAgent[agent] = snapshot
         setupStatusByAgent[agent] = snapshot.setupStatus
         refreshManualSetupIfNeeded(for: agent)
+        refreshDiskFootprintIfNeeded(for: agent)
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
         applyIntegrationHealth(for: agent)
     }
@@ -1637,6 +1643,30 @@ final class MonitorStore: ObservableObject {
     /// How far along a product's registration is.
     func setupStatus(for agent: AgentKind) -> HookSetupStatus {
         setupStatusByAgent[agent] ?? .notInstalled
+    }
+
+    /// Re-reads what a product has left on disk when it answers.
+    ///
+    /// Off the refresh for the same reason the instructions are: it lists a
+    /// directory, and an open panel does not need that once a second. The
+    /// measurement behind it keeps its own freshness window, so this asking
+    /// often costs nothing.
+    private func refreshDiskFootprintIfNeeded(for agent: AgentKind) {
+        guard diskFootprintTask == nil,
+              let service = services.first(where: { $0.agent == agent }) else {
+            return
+        }
+        diskFootprintTask = Task { [weak self] in
+            let footprint = await service.diskFootprint()
+            guard let self else { return }
+            self.diskFootprintTask = nil
+            guard self.diskFootprints[agent] != footprint else { return }
+            if let footprint {
+                self.diskFootprints[agent] = footprint
+            } else {
+                self.diskFootprints.removeValue(forKey: agent)
+            }
+        }
     }
 
     /// Re-reads the instructions when a product answers.

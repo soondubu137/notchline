@@ -227,20 +227,32 @@ actor ClaudeCodeTranscriptReader {
         return title(in: head(of: handle))
     }
 
+    /// - Note: Pooled, like every `FileHandle` read in this app. The `Data` it
+    ///   hands back is autoreleased, and on a thread with no pool of its own
+    ///   nothing ever drains it -- 64 KB per title, per session, on every
+    ///   refresh, kept for the life of the process. `jsonLines` copies the part
+    ///   worth keeping, so draining the rest costs nothing.
     private func tail(of handle: FileHandle, size: Int) -> [Data] {
         let offset = max(0, size - Self.scannedBytes)
         try? handle.seek(toOffset: UInt64(offset))
-        guard let data = try? handle.readToEnd() else { return [] }
-        var lines = Self.jsonLines(in: data)
+        var lines = autoreleasepool { () -> [Data] in
+            guard let data = try? handle.readToEnd() else { return [] }
+            return Self.jsonLines(in: data)
+        }
         // The first line of a mid-file read is a fragment of a record.
         if offset > 0, !lines.isEmpty { lines.removeFirst() }
         return lines
     }
 
+    /// - Note: Pooled, for the reason given on ``tail(of:size:)``.
     private func head(of handle: FileHandle) -> [Data] {
         try? handle.seek(toOffset: 0)
-        guard let data = try? handle.read(upToCount: Self.scannedBytes) else { return [] }
-        var lines = Self.jsonLines(in: data)
+        var lines = autoreleasepool { () -> [Data] in
+            guard let data = try? handle.read(upToCount: Self.scannedBytes) else {
+                return []
+            }
+            return Self.jsonLines(in: data)
+        }
         // The last line of a truncated read is a fragment.
         if !lines.isEmpty { lines.removeLast() }
         return lines

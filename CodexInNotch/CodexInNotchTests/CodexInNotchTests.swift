@@ -7313,6 +7313,81 @@ for line in sys.stdin:
         #expect(await counter.todayTokens() == 7)
     }
 
+    /// A record longer than one read still counts, and counts once.
+    ///
+    /// The scan reads in 1 MiB chunks, so a record bigger than that arrives in
+    /// pieces with no newline in the first of them. Real transcripts have these
+    /// -- a megabyte of tool output on one line is ordinary -- and the pieces
+    /// have to be rejoined before the line means anything.
+    @Test @MainActor
+    func todayTokensCountARecordThatIsLongerThanOneRead() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        func line(output: Int, padding: Int = 0) throws -> String {
+            var record: [String: Any] = [
+                "type": "assistant",
+                "timestamp": "2026-08-16T12:00:00.000Z",
+                "message": ["role": "assistant", "usage": ["output_tokens": output]]
+            ]
+            if padding > 0 { record["padding"] = String(repeating: "x", count: padding) }
+            return String(
+                decoding: try JSONSerialization.data(withJSONObject: record),
+                as: UTF8.self
+            )
+        }
+
+        // Either side of a record that spans two reads on its own.
+        let text = try [line(output: 3), line(output: 5, padding: 3 << 20), line(output: 7)]
+            .joined(separator: "\n") + "\n"
+        let transcript = project.appendingPathComponent("s-1.jsonl")
+        try Data(text.utf8).write(to: transcript)
+
+        let clock = TestClock(now: ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!)
+        let counter = ClaudeCodeTokenCounter(projectsDirectory: root, clock: clock)
+        #expect(await counter.todayTokens() == 15)
+        // The second pass has nothing left to read and must not count it twice.
+        #expect(await counter.todayTokens() == 15)
+    }
+
+    /// The half-written last line is left for the pass that can read it whole.
+    ///
+    /// A transcript is being appended to while this reads it, so the last line
+    /// is very often a fragment. Counting it would be wrong once and counting
+    /// it again next pass would be wrong twice.
+    @Test @MainActor
+    func todayTokensLeaveAHalfWrittenLastLineForTheNextPass() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let transcript = project.appendingPathComponent("s-1.jsonl")
+
+        let whole = #"{"type":"assistant","timestamp":"2026-08-16T12:00:00.000Z","#
+            + #""message":{"role":"assistant","usage":{"output_tokens":10}}}"#
+        let rest = #"{"type":"assistant","timestamp":"2026-08-16T12:00:01.000Z","#
+            + #""message":{"role":"assistant","usage":{"output_tokens":4}}}"#
+        // A record caught mid-write: no trailing newline, and not valid JSON yet.
+        let fragment = String(rest.prefix(30))
+        try Data((whole + "\n" + fragment).utf8).write(to: transcript)
+
+        let clock = TestClock(now: ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!)
+        let counter = ClaudeCodeTokenCounter(projectsDirectory: root, clock: clock)
+        #expect(await counter.todayTokens() == 10)
+
+        // The writer finishes the line. The pass that finds it whole counts it,
+        // and counts the bytes it already read only once.
+        let handle = try FileHandle(forWritingTo: transcript)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((rest.dropFirst(30) + "\n").utf8))
+        try handle.close()
+        #expect(await counter.todayTokens() == 14)
+    }
+
     /// A directory that cannot be read is no figure, not a figure of zero.
     ///
     /// Zero is a true answer — the transcripts were read and today has nothing
@@ -7410,18 +7485,320 @@ for line in sys.stdin:
         }
     }
 
-    /// A reading that cannot be obtained clears the figure rather than keeping
-    /// the last one.
+    /// The answer does not wait for the reading that comes with it.
+    ///
+    /// The snapshot used to await the reading, which put a `claude` launch --
+    /// four to seven seconds of it -- in front of every row in the panel,
+    /// including rows a hook event had just changed. The reading now runs
+    /// behind the answer and says when it landed.
     @Test @MainActor
-    func aFailedUsageReadingBecomesUnavailableRatherThanStale() async {
+    func theQuotaReadingDoesNotHoldUpTheAnswerItComesWith() async throws {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let updates = UpdateCounter()
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            onUpdate: { Task { await updates.record() } },
+            read: {
+                await Task.yield()
+                return "Current session: 20% used · "
+                    + "resets Aug 16 at 7:19pm (America/Los_Angeles)"
+            }
+        )
+
+        // Answered out of what is known. The reading cannot have finished --
+        // nothing suspended to let it -- so this is the un-read state, and it
+        // is this product's two windows rather than the one-window form.
+        let before = await reader.currentQuota()
+        #expect(before.windows.count == 2)
+        #expect(before.windows.allSatisfy { $0.remainingPercent == nil })
+
+        for _ in 0 ..< 200 {
+            if await updates.count > 0 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(await updates.count == 1)
+        #expect(await reader.currentQuota().remainingPercent == 80)
+        // And the reading that landed is not run again for a fresh caller.
+        #expect(await updates.count == 1)
+    }
+
+    /// The transcripts are measured and reported, and nothing is deleted.
+    ///
+    /// The fixture is the hazard that settled this design. Claude Code files a
+    /// session under a directory named after its working directory, and that
+    /// name flattens separators *and* spaces — measured on 2.1.234, `…/a b` and
+    /// `…/a-b` land in the *same* directory. So the folder this app's readings
+    /// go to can hold somebody's real work beside them, which is why this app
+    /// counts the files rather than clearing them.
+    @Test @MainActor
+    func usageTranscriptsAreMeasuredAndNeverDeleted() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-usage-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shared = root.appendingPathComponent("-tmp-cin-shared", isDirectory: true)
+        let elsewhere = root.appendingPathComponent("-another-project", isDirectory: true)
+        for directory in [shared, elsewhere] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+
+        let ours = UUID().uuidString
+        try Data(repeating: 0x41, count: 3_000)
+            .write(to: shared.appendingPathComponent("\(ours).jsonl"))
+        try Data(repeating: 0x42, count: 1_000)
+            .write(to: shared.appendingPathComponent("\(UUID().uuidString).jsonl"))
+        // Somebody else's session, filed in the same folder. It is counted,
+        // because the folder is what the button opens and what Finder will
+        // show — and it is emphatically not removed.
+        try Data(repeating: 0x43, count: 500)
+            .write(to: shared.appendingPathComponent("\(UUID().uuidString).jsonl"))
+        // Not a transcript, so not counted.
+        try Data(repeating: 0x44, count: 9_000)
+            .write(to: shared.appendingPathComponent("notes.md"))
+        try Data(repeating: 0x45, count: 7_000)
+            .write(to: elsewhere.appendingPathComponent("\(UUID().uuidString).jsonl"))
+
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let transcripts = ClaudeCodeUsageTranscripts(
+            projectsDirectory: root,
+            clock: clock,
+            freshness: 60
+        )
+
+        // Nothing to report until a reading says where the transcripts go.
+        #expect(await transcripts.footprint() == nil)
+
+        await transcripts.noteReading(ours)
+        let footprint = try #require(await transcripts.footprint())
+        // Compared by path: the enumerator hands back a URL without the
+        // trailing slash `isDirectory: true` puts on the one built here.
+        #expect(footprint.directory.standardizedFileURL.path == shared.standardizedFileURL.path)
+        #expect(footprint.fileCount == 3)
+        #expect(footprint.byteCount == 4_500)
+
+        // Every file is still there. This type has no way to remove one.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: shared.path).count == 4)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).count == 1)
+
+        // Within the window the figure stands; past it the folder is counted
+        // again, because a reading has been added to it every few minutes.
+        try Data(repeating: 0x46, count: 1_500)
+            .write(to: shared.appendingPathComponent("\(UUID().uuidString).jsonl"))
+        await clock.advance(by: 30)
+        #expect(await transcripts.footprint()?.byteCount == 4_500)
+        await clock.advance(by: 40)
+        #expect(await transcripts.footprint()?.byteCount == 6_000)
+    }
+
+    /// What a product left on disk reaches Settings, and clearing it is the
+    /// user's to do.
+    ///
+    /// The row is the whole feature: this app measures the folder, says how big
+    /// it is, and opens it. Nothing here removes a file, and the store is where
+    /// that reaches the window.
+    @Test @MainActor
+    func aProductsDiskFootprintIsPublishedForSettings() async {
+        let service = DiskFootprintMonitoringStub()
+        let store = MonitorStore(
+            services: [service],
+            initialSnapshot: AgentSnapshot(
+                availability: .connecting,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        defer { store.stopMonitoring() }
+
+        await store.refreshAndWaitForTesting()
+        for _ in 0 ..< 200 where store.diskFootprints[.claudeCode] == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        let footprint = store.diskFootprints[.claudeCode]
+        #expect(footprint?.byteCount == 43_200_000)
+        #expect(footprint?.fileCount == 1_284)
+        // A product that leaves nothing behind says nothing, and gets no row.
+        #expect(store.diskFootprints[.codex] == nil)
+    }
+
+    /// A session id that is not a UUID is never turned into a path.
+    ///
+    /// It arrives in the command's JSON. A `..` in it would walk the search
+    /// clean out of the projects directory, and what it found there would be
+    /// somebody's real work.
+    @Test @MainActor
+    func aMalformedSessionIdLocatesNothing() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-usage-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-real-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try Data("{}\n".utf8)
+            .write(to: project.appendingPathComponent("\(UUID().uuidString).jsonl"))
+
+        let transcripts = ClaudeCodeUsageTranscripts(projectsDirectory: root)
+        for identifier in ["../../../../etc", "not-a-uuid", "", "a/b"] {
+            await transcripts.noteReading(identifier)
+        }
+        #expect(await transcripts.footprint() == nil)
+    }
+
+    /// The figure reads as a size and a count, not as bytes.
+    @Test @MainActor
+    func aDiskFootprintReadsAsASizeAndACount() {
+        let directory = URL(fileURLWithPath: "/tmp/anywhere")
+        let one = AgentDiskFootprint(directory: directory, fileCount: 1, byteCount: 3_400)
+        #expect(one.summary.hasSuffix("1 file"))
+        let many = AgentDiskFootprint(
+            directory: directory,
+            fileCount: 1_284,
+            byteCount: 43_200_000
+        )
+        #expect(many.summary.contains("MB"))
+        #expect(many.summary.hasSuffix("files"))
+        // Never a negative anything, whatever the file system reported.
+        let empty = AgentDiskFootprint(directory: directory, fileCount: -3, byteCount: -1)
+        #expect(empty.fileCount == 0)
+        #expect(empty.byteCount == 0)
+    }
+
+    /// Today's tokens keep their own, shorter clock.
+    ///
+    /// The two figures share a reading because they are drawn together, not
+    /// because they cost the same. Running the command every five minutes is
+    /// the point of that interval; making the token figure — transcripts, no
+    /// subprocess, and the only one of the two that moves while you work —
+    /// five minutes stale would have been a regression bought with nothing.
+    @Test @MainActor
+    func todaysTokensAreReReadWithoutRunningTheCommandAgain() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
         let responses = TextQueue(items: [
-            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)",
-            nil
+            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)"
+        ])
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            freshness: 300,
+            tokensFreshness: 60,
+            read: { await responses.next() }
+        )
+
+        #expect(await reader.quota().remainingPercent == 80)
+        #expect(await responses.remaining() == 0)
+        // The tokens are due before the windows are, so this is what the
+        // refresh loop is told to come back for.
+        #expect(await reader.nextReadDeadline() == clock.now().addingTimeInterval(60))
+
+        // A minute on: the tokens are re-read and the command is not, so the
+        // one answer left in the queue is still there and the windows still
+        // stand.
+        await clock.advance(by: 61)
+        #expect(await reader.quota().remainingPercent == 80)
+        #expect(await responses.remaining() == 0)
+
+        // Five minutes on the windows are due too, and now the command runs --
+        // the queue is empty, so it fails, and the ceiling keeps the windows.
+        await clock.advance(by: 240)
+        #expect(await reader.quota().remainingPercent == 80)
+    }
+
+    /// A command that outstays its deadline is killed, not waited on.
+    ///
+    /// The reading is a subprocess that starts the user's MCP servers, so it
+    /// can hang for reasons that have nothing to do with this app. Before the
+    /// deadline, one that did took its thread with it and froze the quota at
+    /// whatever it last said -- the staleness ceiling could not fire, because
+    /// nothing ever completed for it to judge.
+    @Test @MainActor
+    func aClaudeCommandThatOutstaysItsDeadlineIsKilled() async {
+        let started = Date()
+        let data = await ClaudeCommand.run(
+            ["30"],
+            timeout: 0.5,
+            executable: URL(fileURLWithPath: "/bin/sleep")
+        )
+        // A killed command is a failed reading, which every caller degrades to.
+        #expect(data == nil)
+        // Generous, because this is a real process on a shared machine. The
+        // point is that it is nowhere near the thirty seconds it asked for.
+        #expect(Date().timeIntervalSince(started) < 15)
+    }
+
+    /// A reset printed on the hour carries no minutes, and still parses.
+    ///
+    /// This is what the weekly window looks like almost every time it is read:
+    /// it resets at midnight, and the output writes that as `12am`. Requiring
+    /// the colon meant the 7-day rule drew a percentage next to
+    /// `Reset unavailable` while the session rule a line above -- reset at
+    /// 10:30pm, so minutes and all -- was fine.
+    @Test @MainActor
+    func aResetOnTheHourIsReadEvenThoughItPrintsNoMinutes() throws {
+        let output = """
+        Current session: 25% used · resets Aug 17 at 10:30pm (America/Los_Angeles)
+        Current week (all models): 25% used · resets Aug 22 at 12am (America/Los_Angeles)
+        """
+
+        let now = ISO8601DateFormatter().date(from: "2026-08-17T20:00:00Z")!
+        let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
+        let session = try #require(windows[checked: 0]?.resetsAt)
+        let week = try #require(windows[checked: 1]?.resetsAt)
+        #expect(week > session)
+
+        // Midnight where the line says it is, not where this machine is.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        #expect(calendar.component(.hour, from: week) == 0)
+        #expect(calendar.component(.minute, from: week) == 0)
+        #expect(calendar.component(.day, from: week) == 22)
+    }
+
+    /// The answer is found even when something else logs onto the same stdout.
+    ///
+    /// Captured from `claude -p "/usage" --output-format json` on 2.1.229,
+    /// where roughly half the runs append that line after the object. Decoding
+    /// the stream as one document rejects the lot over the trailing text, and
+    /// every one of those readings came back as no quota at all.
+    @Test @MainActor
+    func theUsageAnswerSurvivesAStrayLineAfterTheJSON() throws {
+        let envelope = #"{"is_error":false,"result":"Current session: 20% used"}"#
+        let noise = "Client.listTools() called but server does not advertise "
+            + "tools capability - returning empty list"
+
+        #expect(ClaudeCodeUsageReader.usageText(in: Data(envelope.utf8))
+            == "Current session: 20% used")
+        #expect(ClaudeCodeUsageReader.usageText(in: Data("\(envelope)\n\(noise)\n".utf8))
+            == "Current session: 20% used")
+        #expect(ClaudeCodeUsageReader.usageText(in: Data("\(noise)\n\(envelope)".utf8))
+            == "Current session: 20% used")
+        // A reported error is still an error, however tidy the stream.
+        #expect(ClaudeCodeUsageReader.usageText(
+            in: Data(#"{"is_error":true,"result":"nope"}"#.utf8)
+        ) == nil)
+        #expect(ClaudeCodeUsageReader.usageText(in: Data(noise.utf8)) == nil)
+    }
+
+    /// One failed reading keeps the last windows; a run of them gives up.
+    ///
+    /// The split is the session registry's, for the registry's reason.
+    /// `freshness` says when to read again; the ceiling says how long the last
+    /// answer is still evidence. Blanking on the first failure is what made the
+    /// figures come and go on screen -- the reading fails intermittently for
+    /// reasons that are gone by the next attempt, and a quota drawn to the
+    /// percent does not change meaningfully in the seconds between.
+    @Test @MainActor
+    func aFailedUsageReadingKeepsTheLastWindowsOnlyUpToTheCeiling() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = TextQueue(items: [
+            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)"
+            // Every reading after the first one fails.
         ])
         let reader = ClaudeCodeUsageReader(
             clock: clock,
             freshness: 60,
+            retryInterval: 5,
+            trustCeiling: 300,
             read: { await responses.next() }
         )
 
@@ -7429,11 +7806,90 @@ for line in sys.stdin:
         // Still fresh: not re-read.
         await clock.advance(by: 30)
         #expect(await reader.quota().remainingPercent == 80)
-        // Stale, and the reading fails. A stale percentage is worse than none:
-        // it looks like current information.
+        // Stale, and the reading fails. Inside the ceiling it still stands.
         await clock.advance(by: 40)
+        #expect(await reader.quota().remainingPercent == 80)
+        // Past the ceiling nothing here is evidence any more, and unavailable
+        // is a thing the surface knows how to say.
+        await clock.advance(by: 300)
         #expect(await reader.quota().remainingPercent == nil)
         #expect(await reader.quota().windows.allSatisfy { $0.remainingPercent == nil })
+        #expect(await reader.quota().windows.allSatisfy { $0.resetsAt == nil })
+    }
+
+    /// An answer that was read and not recognised is not kept alive.
+    ///
+    /// The ceiling covers a reading that could not be obtained. This is a
+    /// different thing: the command answered, and what it said no longer has
+    /// the lines in it. That is exactly the shape change the parser exists to
+    /// refuse, and hiding it behind the last good figures would mean the app
+    /// went on drawing a quota through a Claude Code update that stopped
+    /// reporting one.
+    @Test @MainActor
+    func usageOutputThatStopsBeingRecognisedGoesUnavailableAtOnce() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = TextQueue(items: [
+            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)",
+            "Usage: 4 of 5 units"
+        ])
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            freshness: 60,
+            trustCeiling: 300,
+            read: { await responses.next() }
+        )
+
+        #expect(await reader.quota().remainingPercent == 80)
+        await clock.advance(by: 61)
+        #expect(await reader.quota().remainingPercent == nil)
+    }
+
+    /// A failed reading is retried in seconds, not held for the full window.
+    @Test @MainActor
+    func aFailedUsageReadingIsRetriedSoonerThanAFreshOneIsReRead() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = TextQueue(items: [
+            nil,
+            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)"
+        ])
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            freshness: 60,
+            retryInterval: 5,
+            read: { await responses.next() }
+        )
+
+        #expect(await reader.quota().remainingPercent == nil)
+        // The refresh loop is told to come back for the retry, not the window.
+        let deadline = await reader.nextReadDeadline()
+        #expect(deadline == clock.now().addingTimeInterval(5))
+
+        await clock.advance(by: 4)
+        #expect(await responses.remaining() == 1)
+        await clock.advance(by: 2)
+        #expect(await reader.quota().remainingPercent == 80)
+        // Read again, so the next visit is a whole freshness window away.
+        #expect(await reader.nextReadDeadline() == clock.now().addingTimeInterval(60))
+    }
+
+    /// Retries back off, so a `claude` that is simply gone is not hammered.
+    @Test @MainActor
+    func repeatedUsageFailuresBackOffUpToTheFreshnessWindow() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        // Every reading fails, for good.
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            freshness: 60,
+            retryInterval: 5,
+            read: { nil }
+        )
+
+        for expected in [5.0, 10.0, 20.0, 40.0, 60.0, 60.0] {
+            _ = await reader.quota()
+            #expect(await reader.nextReadDeadline()
+                == clock.now().addingTimeInterval(expected))
+            await clock.advance(by: expected)
+        }
     }
 
     /// A session running before the app was is visible immediately.
@@ -9387,6 +9843,12 @@ private final class ClaudeCodeHarness {
             transcripts: ClaudeCodeTranscriptReader(
                 projectsDirectory: root.appendingPathComponent("projects", isDirectory: true)
             ),
+            // Injected so the service does not build the live one: see
+            // `ClaudeCodeUsageReader.silent()`. The default reader would run a
+            // real `/usage` against this harness's throwaway root, and leave a
+            // transcript folder named after it in the real `~/.claude/projects`
+            // that nothing here can reach to remove.
+            usage: .silent(),
             sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true)
         )
     }
@@ -9467,6 +9929,48 @@ private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sen
 }
 
 /// Hands back a prepared sequence of text responses, one per read.
+/// Counts the usage reader's "a reading landed" signals.
+private actor UpdateCounter {
+    private(set) var count = 0
+
+    func record() { count += 1 }
+}
+
+/// A product that leaves files behind, for the Settings row that reports them.
+private actor DiskFootprintMonitoringStub: AgentMonitoring {
+    nonisolated let agent = AgentKind.claudeCode
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+
+    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+        AgentSnapshot(
+            agent: .claudeCode,
+            availability: .ready,
+            sessions: [],
+            quota: .unavailable,
+            diagnostic: nil
+        )
+    }
+
+    func nextRefreshDeadline() async -> Date? { nil }
+
+    func diskFootprint() async -> AgentDiskFootprint? {
+        AgentDiskFootprint(
+            directory: URL(fileURLWithPath: "/tmp/somewhere/transcripts"),
+            fileCount: 1_284,
+            byteCount: 43_200_000
+        )
+    }
+
+    func manualSetup() async -> AgentManualSetup? { nil }
+    func hookSetupStatus() async -> HookSetupStatus { .active }
+    func installHooks() async throws {}
+    func removeHooks() async throws {}
+    func clearSessions() async {}
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
+    func discardCollectedPreviews() async {}
+    func disconnect() async {}
+}
+
 private actor TextQueue {
     private var items: [String?]
 
@@ -9478,6 +9982,8 @@ private actor TextQueue {
         guard !items.isEmpty else { return nil }
         return items.removeFirst()
     }
+
+    func remaining() -> Int { items.count }
 }
 
 /// Hands back a prepared sequence of stub responses, one per read.

@@ -366,6 +366,31 @@ nonisolated struct AgentManualSetup: Sendable, Equatable {
     let configurationSnippet: String
 }
 
+/// What a product's monitoring has left lying on disk.
+///
+/// Reported, never acted on. Only a product whose monitoring writes files the
+/// user might one day want back answers with one of these — Codex does not, so
+/// it answers nil.
+nonisolated struct AgentDiskFootprint: Sendable, Equatable {
+    /// The folder to open when the user wants to look at them.
+    let directory: URL
+    let fileCount: Int
+    let byteCount: Int64
+
+    nonisolated init(directory: URL, fileCount: Int, byteCount: Int64) {
+        self.directory = directory
+        self.fileCount = max(0, fileCount)
+        self.byteCount = max(0, byteCount)
+    }
+
+    /// `43.2 MB · 1,284 files`, or the singular where it reads better.
+    nonisolated var summary: String {
+        let size = byteCount.formatted(.byteCount(style: .file))
+        let files = fileCount.formatted(.number.grouping(.automatic))
+        return "\(size) · \(files) \(fileCount == 1 ? "file" : "files")"
+    }
+}
+
 struct MonitoredSession: Identifiable, Equatable, Sendable {
     let agent: AgentKind
     let threadID: String

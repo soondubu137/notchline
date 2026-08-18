@@ -101,6 +101,11 @@ struct AppSettingsView: View {
                     claudeCodeSetup(setup)
                 }
             }
+
+            if let footprint = store.diskFootprints[.claudeCode] {
+                SettingsSeparator()
+                claudeCodeTranscriptRow(footprint)
+            }
         } footnote: {
             SettingsFootnote(
                 "The switch installs only the six lifecycle events Codex in Notch needs, "
@@ -109,6 +114,36 @@ struct AppSettingsView: View {
             ) {
                 Button("Recheck") {
                     store.refreshNow()
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+            }
+        }
+    }
+
+    /// What reading the quota costs on disk, and a way to go and look.
+    ///
+    /// Shown rather than tidied away. Each reading is a real Claude Code
+    /// session and leaves a transcript behind; the folder they go to belongs to
+    /// Claude Code and can hold the user's own sessions as well, so this app
+    /// reports the size and opens the door rather than deleting anything on
+    /// somebody's behalf.
+    private func claudeCodeTranscriptRow(_ footprint: AgentDiskFootprint) -> some View {
+        SettingsRow(
+            title: "Quota reading transcripts",
+            caption: "Each reading leaves one in Claude Code's project folder. "
+                + "Codex in Notch never deletes them."
+        ) {
+            HStack(spacing: 10) {
+                // Beside the button rather than in the status slot: that slot
+                // draws a health dot, and a number of megabytes is not a health.
+                Text(footprint.summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(MacOSWindowColor.secondaryText)
+                    .monospacedDigit()
+
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([footprint.directory])
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
