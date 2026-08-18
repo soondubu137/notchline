@@ -561,7 +561,57 @@ struct CodexInNotchTests {
         #expect(store.productAttribution == .nameAndColour)
         // And every option is reachable, because a preference the user cannot
         // find until a second product happens to be running is one they never find.
-        #expect(ProductAttributionStyle.allCases.count == 3)
+        #expect(ProductAttributionStyle.allCases.count == 4)
+    }
+
+    /// `Colour bar` takes the product off the caption entirely.
+    ///
+    /// The other three all spend caption room — that is the cost the rail was
+    /// added to avoid — so the split is: `nameAndColour` and `nameOnly` prefix
+    /// the words, `badge` moves them into a block of their own, and `colourBar`
+    /// leaves the caption as the bare project name. Getting this wrong prints
+    /// the product twice, once as a word and once as a rail.
+    @Test @MainActor
+    func onlyTheTwoNamingStylesPutTheProductOnTheCaption() {
+        #expect(ProductAttributionStyle.nameAndColour.namesProductInCaption)
+        #expect(ProductAttributionStyle.nameOnly.namesProductInCaption)
+        #expect(!ProductAttributionStyle.badge.namesProductInCaption)
+        #expect(!ProductAttributionStyle.colourBar.namesProductInCaption)
+
+        // Every option is offered by name, and the rail is last: it is the one
+        // that is purely hue, so it is a choice rather than the default.
+        #expect(
+            ProductAttributionStyle.allCases.map(\.displayName)
+                == ["Name and colour", "Name only", "Badge", "Colour bar"]
+        )
+    }
+
+    /// The rail is a mark in the gutter, not a fifth element inside the row.
+    ///
+    /// It lives in the `6` the row gave back, so it costs no caption room and
+    /// moves no text — the whole reason it is worth a stroke. Half the row tall
+    /// keeps it clear of the block's own corners.
+    @Test @MainActor
+    func theAttributionRailFitsInTheGutterWithoutMovingAnything() {
+        #expect(PanelMetrics.sessionRowRailWidth < PanelMetrics.sessionRowGutter)
+        #expect(PanelMetrics.sessionRowRailWidth == 2)
+        #expect(PanelMetrics.sessionRowRailHeight == 40)
+        #expect(
+            PanelMetrics.sessionRowRailHeight < PanelMetrics.sessionRowHeight
+        )
+    }
+
+    /// A preference written before the rail existed still reads back.
+    @Test @MainActor
+    func anUnknownAttributionStyleFallsBackToTheDefault() {
+        let defaults = UserDefaults(suiteName: "rail-\(UUID().uuidString)")!
+        defaults.set("colourBar", forKey: "productAttribution")
+        #expect(MonitorStore(services: [], preferences: defaults)
+            .productAttribution == .colourBar)
+
+        defaults.set("somethingWeRemoved", forKey: "productAttribution")
+        #expect(MonitorStore(services: [], preferences: defaults)
+            .productAttribution == .nameAndColour)
     }
 
     /// The notch's label is shorter than the panel's because the matrix beside

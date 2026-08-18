@@ -569,11 +569,11 @@ struct AgentSnapshot: Equatable, Sendable {
 
 /// How a row says which product it came from.
 ///
-/// All three live on the row's existing 11pt caption line, so none of them adds
-/// a stroke to the panel. That is the reason there are three rather than the
-/// other candidates: a leading colour bar would add three vertical lines to a
-/// surface that already has four horizontal ones, and a per-row matrix would put
-/// a second mark on a row that already has one.
+/// The first three live on the row's existing 11pt caption line, so none of them
+/// adds a stroke to the panel. ``colourBar`` does add one, and was left out for
+/// exactly that reason until the footer could fold its rules away — see
+/// `dual-agent-design.md` §4. A per-row matrix is still not offered: it puts a
+/// second mark on a row that is meant to carry one.
 enum ProductAttributionStyle: String, CaseIterable, Codable, Sendable, Identifiable {
     /// The caption is prefixed `Codex ·` in that product's lit colour. Default:
     /// the only option that adds nothing, and the only one where hue reinforces
@@ -586,6 +586,14 @@ enum ProductAttributionStyle: String, CaseIterable, Codable, Sendable, Identifia
     /// A small badge: the matrix's unlit colour as the ground, its lit colour as
     /// the text.
     case badge
+    /// A rail down the row block's leading edge, in the product's lit colour,
+    /// and nothing on the caption at all.
+    ///
+    /// The only option that costs no caption room, and the only one that groups
+    /// — consecutive rows of one product read as a run rather than as three
+    /// separate rows. It is last rather than default because it is the only one
+    /// that is purely hue: nothing is left when the colour cannot be seen.
+    case colourBar
 
     nonisolated var id: Self { self }
 
@@ -594,7 +602,16 @@ enum ProductAttributionStyle: String, CaseIterable, Codable, Sendable, Identifia
         case .nameAndColour: "Name and colour"
         case .nameOnly: "Name only"
         case .badge: "Badge"
+        case .colourBar: "Colour bar"
         }
+    }
+
+    /// Whether the caption carries the product name.
+    ///
+    /// ``badge`` moves it into its own block and ``colourBar`` off the caption
+    /// entirely, so both leave the caption as the bare project name.
+    var namesProductInCaption: Bool {
+        self == .nameAndColour || self == .nameOnly
     }
 }
 

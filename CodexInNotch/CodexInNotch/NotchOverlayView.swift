@@ -495,12 +495,34 @@ private struct SessionRowContent: View {
             }
             .padding(.horizontal, PanelMetrics.sessionRowPadding)
         }
+        // Flush with the block's leading edge, so it reads as a mark beside the
+        // row rather than as a fifth thing inside it. Half the row tall, which
+        // keeps it clear of the block's own 12 pt corners.
+        .overlay(alignment: .leading) {
+            if drawsRail {
+                RoundedRectangle(
+                    cornerRadius: PanelMetrics.sessionRowRailRadius,
+                    style: .continuous
+                )
+                .fill(NotchPalette.ink(for: session.agent).on)
+                .frame(
+                    width: PanelMetrics.sessionRowRailWidth,
+                    height: PanelMetrics.sessionRowRailHeight
+                )
+            }
+        }
         .contentShape(Rectangle())
         .frame(
             maxWidth: .infinity,
             minHeight: PanelMetrics.sessionRowHeight,
             maxHeight: PanelMetrics.sessionRowHeight
         )
+    }
+
+    /// The rail is drawn on the same terms as every other attribution: only
+    /// while there are two products to tell apart.
+    private var drawsRail: Bool {
+        store.showsProductAttribution && store.productAttribution == .colourBar
     }
 
     /// A session sweeps its body until it finishes. Hovering no longer changes
@@ -605,7 +627,9 @@ private struct SessionRowCaption: View {
     }
 
     private var captionText: String {
-        guard showsAttribution, style != .badge else { return session.projectName }
+        guard showsAttribution, style.namesProductInCaption else {
+            return session.projectName
+        }
         return "\(session.agent.displayName) · \(session.projectName)"
     }
 

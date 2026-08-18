@@ -140,6 +140,13 @@ enum PanelMetrics {
     static let sessionRowGutter: CGFloat = 6
     static let sessionRowPadding: CGFloat = expandedHorizontalPadding
         - sessionRowGutter
+    /// The `Colour bar` attribution rail, flush with the row block's leading
+    /// edge. It sits in the gutter the row just gave back, so it marks the row
+    /// without moving anything: the caption keeps its full width and the text
+    /// stays on `expandedHorizontalPadding`.
+    static let sessionRowRailWidth: CGFloat = 2
+    static let sessionRowRailHeight = sessionRowHeight / 2
+    static let sessionRowRailRadius: CGFloat = 1
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
     /// Single-Codex footer: one rule and one inline caption, as today.
