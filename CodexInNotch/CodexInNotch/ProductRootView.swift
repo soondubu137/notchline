@@ -236,6 +236,8 @@ struct AppSettingsView: View {
                 displayCard
                 integrationCard
                 claudeCodeCard
+                sessionListCard
+
                 privacyCard
 
                 Text("Settings affect Codex in Notch only. Passive Notch states never modify Codex.")
@@ -450,6 +452,40 @@ struct AppSettingsView: View {
             "Partly registered. The events left out never arrive and never fail."
         default:
             "Not registered yet."
+        }
+    }
+
+    /// How rows say which product they belong to.
+    ///
+    /// The control is always available even though the marks only draw when two
+    /// products have rows: a preference the user cannot find until a second
+    /// product happens to be running is a preference they will never find.
+    private var sessionListCard: some View {
+        SettingsCard {
+            Text("Session list")
+                .font(.system(size: 15, weight: .semibold))
+
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Distinguish products")
+                        .font(.system(size: 13, weight: .medium))
+                    Text(
+                        "Shown on each row while Codex and Claude Code both have sessions."
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignColor.tertiaryText)
+                }
+                Spacer()
+                Picker("Distinguish products", selection: $store.productAttribution) {
+                    ForEach(ProductAttributionStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 168)
+            }
+            .frame(height: 58)
         }
     }
 

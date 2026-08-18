@@ -239,7 +239,8 @@ V1 设置窗口只包含已经确认的三组能力：
 
 1. **Display**：选择组件显示在哪个已连接显示器；选择跨启动保留，显示器临时断开时回退到可用屏幕。
 2. **Codex integration**：显示连接与兼容状态，提供一个总开关同时启停全部六种必需 lifecycle event 定义；提供重新检测。关闭只移除本应用管理的定义并保留用户其他 Hooks；重新开启会安装或修复完整集合。
-3. **Privacy**：`Show current content previews` 全局开关。
+3. **Session list**：`Distinguish products` 选择器，三选一——`Name and colour`（默认）、`Name only`、`Badge`。控件始终可见，即使标记只在两个产品都有会话时才绘制：一个要等到第二个产品恰好在运行才找得到的偏好，用户永远找不到。
+4. **Privacy**：`Show current content previews` 全局开关。
 
 设置只影响 Codex in Notch。`Update Codex`、`Codex version unsupported` 和 `Codex disconnected` 不提供操作；它们已退出收起态，只在展开面板与 Settings 的产品行中出现（见 6.3）。
 

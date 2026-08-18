@@ -12,6 +12,69 @@ enum NotchPalette {
     private static let matrixOnRGB = (red: 0.424, green: 0.706, blue: 1.0)
     private static let labelRGB = (red: 0.486, green: 0.486, blue: 0.502)
 
+    /// One matrix's two colours.
+    ///
+    /// Hue says which product, brightness says whether it wants the user, and
+    /// the two channels never swap jobs. Presence is the third channel and it
+    /// is carried by the mark's *existence* rather than by any colour here.
+    nonisolated struct MatrixInk: Equatable, Sendable {
+        let offRed, offGreen, offBlue: Double
+        let onRed, onGreen, onBlue: Double
+
+        var off: Color { Color(red: offRed, green: offGreen, blue: offBlue) }
+        var on: Color { Color(red: onRed, green: onGreen, blue: onBlue) }
+        var offLayerColor: CGColor {
+            CGColor(srgbRed: offRed, green: offGreen, blue: offBlue, alpha: 1)
+        }
+        var onLayerColor: CGColor {
+            CGColor(srgbRed: onRed, green: onGreen, blue: onBlue, alpha: 1)
+        }
+    }
+
+    /// Codex blue. `#101B26` unlit, `#6CB4FF` lit.
+    static let codexInk = MatrixInk(
+        offRed: matrixOffRGB.red,
+        offGreen: matrixOffRGB.green,
+        offBlue: matrixOffRGB.blue,
+        onRed: matrixOnRGB.red,
+        onGreen: matrixOnRGB.green,
+        onBlue: matrixOnRGB.blue
+    )
+
+    /// Claude Code terracotta. `#21120D` unlit, `#D97757` lit.
+    ///
+    /// The unlit colour keeps the same 15% relationship to the lit one that
+    /// Codex's pair has, so "dim" reads identically across products and only
+    /// the hue tells them apart.
+    static let claudeCodeInk = MatrixInk(
+        offRed: 0x21 / 255, offGreen: 0x12 / 255, offBlue: 0x0D / 255,
+        onRed: 0xD9 / 255, onGreen: 0x77 / 255, onBlue: 0x57 / 255
+    )
+
+    /// The resting mark, for when no product is there to own one.
+    ///
+    /// Grey is not a fourth product colour, and it is the darkest thing on the
+    /// surface: `#151515` is the brightest neutral still at or below both
+    /// products' unlit luminance (`0.0075` against `#21120D`'s `0.0079` and
+    /// `#101B26`'s `0.0104`). That ordering is the point — "an agent is
+    /// connected" must never look dimmer than "nothing is connected".
+    ///
+    /// Lit and unlit are the same colour because this mark cannot light: with
+    /// nothing connected there is nothing that could be running.
+    static let restingInk = MatrixInk(
+        offRed: 0x15 / 255, offGreen: 0x15 / 255, offBlue: 0x15 / 255,
+        onRed: 0x15 / 255, onGreen: 0x15 / 255, onBlue: 0x15 / 255
+    )
+
+    /// The ink for one product, or the resting grey when no product owns the mark.
+    nonisolated static func ink(for agent: AgentKind?) -> MatrixInk {
+        switch agent {
+        case .codex: codexInk
+        case .claudeCode: claudeCodeInk
+        case nil: restingInk
+        }
+    }
+
     /// `text/notch-label` — the dim base every notch label sits at.
     static let label = Color(
         red: labelRGB.red,
@@ -227,17 +290,21 @@ struct UsageMeter: View {
     /// 0–1 remaining, or nil when quota is unavailable.
     let fill: Double?
     var height: CGFloat = 3
+    /// Whose rule this is. The footer carries one rule per product, so the rule
+    /// takes the same hue as that product's matrix — the two readouts on this
+    /// surface stay one system, and a rule is attributable at a glance.
+    var ink: NotchPalette.MatrixInk = NotchPalette.codexInk
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(NotchPalette.matrixOff)
+                Capsule().fill(ink.off)
 
                 if let fill {
                     Capsule()
-                        .fill(NotchPalette.matrixOn)
+                        .fill(ink.on)
                         .frame(width: proxy.size.width * min(max(fill, 0), 1))
-                        .shadow(color: NotchPalette.matrixOn.opacity(0.35), radius: 2)
+                        .shadow(color: ink.on.opacity(0.35), radius: 2)
                 }
             }
         }
@@ -364,11 +431,18 @@ struct NotchStatusMatrix: View {
     let state: NotchMatrixState
     let size: CGFloat
     var isAnimated = true
+    /// Which product this mark belongs to, or nil for the resting grey.
+    var agent: AgentKind?
 
     var body: some View {
-        MatrixIndicator(state: state, size: size, isAnimated: isAnimated)
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
+        MatrixIndicator(
+            state: state,
+            size: size,
+            isAnimated: isAnimated,
+            ink: NotchPalette.ink(for: agent)
+        )
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 
@@ -376,13 +450,14 @@ private struct MatrixIndicator: NSViewRepresentable {
     let state: NotchMatrixState
     let size: CGFloat
     let isAnimated: Bool
+    let ink: NotchPalette.MatrixInk
 
     func makeNSView(context: Context) -> MatrixIndicatorView {
         MatrixIndicatorView()
     }
 
     func updateNSView(_ view: MatrixIndicatorView, context: Context) {
-        view.apply(state: state, size: size, isAnimated: isAnimated)
+        view.apply(state: state, size: size, isAnimated: isAnimated, ink: ink)
     }
 }
 
@@ -396,6 +471,7 @@ final class MatrixIndicatorView: NSView {
     private var appliedState: NotchMatrixState?
     private var appliedSize: CGFloat = 0
     private var appliedIsAnimated = true
+    private var appliedInk = NotchPalette.codexInk
 
     // Row 0 is the top row, as in the SVG.
     override var isFlipped: Bool { true }
@@ -410,15 +486,22 @@ final class MatrixIndicatorView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    func apply(state: NotchMatrixState, size: CGFloat, isAnimated: Bool) {
+    func apply(
+        state: NotchMatrixState,
+        size: CGFloat,
+        isAnimated: Bool,
+        ink: NotchPalette.MatrixInk
+    ) {
         guard state != appliedState
             || size != appliedSize
-            || isAnimated != appliedIsAnimated else {
+            || isAnimated != appliedIsAnimated
+            || ink != appliedInk else {
             return
         }
         appliedState = state
         appliedSize = size
         appliedIsAnimated = isAnimated
+        appliedInk = ink
         rebuild()
     }
 
@@ -503,7 +586,7 @@ final class MatrixIndicatorView: NSView {
         root.addSublayer(
             pass(
                 GlowPass(blur: nil, opacity: 1),
-                color: NotchPalette.matrixOffLayerColor,
+                color: appliedInk.offLayerColor,
                 animated: false
             )
         )
@@ -520,7 +603,7 @@ final class MatrixIndicatorView: NSView {
             root.addSublayer(
                 pass(
                     glowPass,
-                    color: NotchPalette.matrixOnLayerColor,
+                    color: appliedInk.onLayerColor,
                     animated: appliedIsAnimated
                 )
             )

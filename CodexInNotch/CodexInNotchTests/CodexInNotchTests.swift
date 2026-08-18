@@ -222,6 +222,318 @@ struct CodexInNotchTests {
         }
     }
 
+
+    /// Grey is not a fourth product colour, and it must be the darkest thing here.
+    ///
+    /// The ordering is the whole reason `#151515` was picked: "an agent is
+    /// connected" must never look dimmer than "nothing is connected", or the
+    /// presence channel reads backwards. Asserted as relative luminance rather
+    /// than as a hex string, because that is the property that has to hold.
+    @Test @MainActor
+    func theRestingGreyIsDarkerThanEitherProductsUnlitColour() {
+        func luminance(_ ink: NotchPalette.MatrixInk) -> Double {
+            func channel(_ value: Double) -> Double {
+                value <= 0.03928
+                    ? value / 12.92
+                    : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(ink.offRed)
+                + 0.7152 * channel(ink.offGreen)
+                + 0.0722 * channel(ink.offBlue)
+        }
+
+        let resting = luminance(NotchPalette.restingInk)
+        #expect(resting <= luminance(NotchPalette.codexInk))
+        #expect(resting <= luminance(NotchPalette.claudeCodeInk))
+
+        // The resting mark cannot light: with nothing connected there is
+        // nothing that could be running.
+        #expect(NotchPalette.restingInk.on == NotchPalette.restingInk.off)
+        // Each product's does.
+        for agent in AgentKind.allCases {
+            #expect(NotchPalette.ink(for: agent).on != NotchPalette.ink(for: agent).off)
+        }
+        // And the two products are told apart by hue, not by brightness.
+        #expect(NotchPalette.ink(for: .codex) != NotchPalette.ink(for: .claudeCode))
+    }
+
+    /// One mark per connected product, in `AgentKind` order, never by urgency.
+    @Test @MainActor
+    func theMarksAreOnePerConnectedProductInAFixedOrder() {
+        let running = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t", turnID: "u", projectName: "p", title: "t",
+            preview: nil, status: .running, startedAt: nil
+        )
+
+        // Claude Code is busy and Codex is quiet: the busy one must NOT jump to
+        // the front, or the marks swap under the eye reading them.
+        let both = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .ready),
+            makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [running])
+        ])
+        #expect(both.presenceMarks.map(\.agent) == [.codex, .claudeCode])
+        // Each matrix runs its own curve: Codex is quiet, Claude Code is running.
+        #expect(both.presenceMarks.map(\.status) == [.connected, .running])
+
+        // Only the second product connected: its mark takes the single slot
+        // rather than leaving a gap where the first would have been.
+        let claudeOnly = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .ready, presence: .closed),
+            makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [running])
+        ])
+        #expect(claudeOnly.presenceMarks.map(\.agent) == [.claudeCode])
+
+        // Nothing connected: exactly one resting mark, never zero and never two.
+        let nothing = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
+        ])
+        #expect(nothing.presenceMarks.count == 1)
+        #expect(nothing.presenceMarks[0].isResting)
+        #expect(nothing.presenceMarks[0].status == .disconnected)
+    }
+
+    /// One product's turn must not light the other product's mark.
+    @Test @MainActor
+    func aTurnOnlyLightsItsOwnProductsMark() {
+        let codexTurn = MonitoredSession(
+            agent: .codex,
+            threadID: "t", turnID: "u", projectName: "p", title: "t",
+            preview: nil, status: .approvalNeeded, startedAt: nil
+        )
+        let merged = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [codexTurn]),
+            makeAgentSnapshot(.claudeCode, availability: .ready)
+        ])
+
+        #expect(merged.presenceMarks.map(\.status) == [.approvalNeeded, .connected])
+        // The summary still speaks for the whole surface, and takes the urgent one.
+        #expect(merged.status == .approvalNeeded)
+    }
+
+    /// The two form factors differ in whether the resting state is visible at all.
+    ///
+    /// A notched display already has a shape cut into the menu bar, so a grey
+    /// mark beside it is a second shape carrying no information — the wing goes
+    /// away entirely. A no-notch pill has nothing to hide behind: a control that
+    /// vanishes from the menu bar takes its position with it and everything to
+    /// its left slides over, so it keeps the mark and holds its place.
+    @Test @MainActor
+    func onlyTheNotchedFormDrawsNothingWhileResting() {
+        let notched = makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 38, hasNotch: true)
+        let external = makeDisplay(id: "external", ordinal: 2, menuBarHeight: 24, hasNotch: false)
+        let store = MonitorStore(displays: [notched, external], services: [])
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
+        )
+        #expect(store.isRestingOnly)
+
+        #expect(store.geometry == .notched)
+        #expect(!store.drawsCompactMarks)
+
+        store.selectDisplay(id: external.id)
+        #expect(store.geometry == .noNotch)
+        #expect(store.drawsCompactMarks)
+
+        // A notched panel resting with nothing connected is the cut-out and
+        // nothing else -- no leading wing at all.
+        let restingNotched = PanelMetrics.size(
+            geometry: .notched,
+            isExpanded: false,
+            statusReadoutText: "Disconnected",
+            timerText: nil,
+            centerOcclusionWidth: 200,
+            compactHeight: 46,
+            status: .disconnected,
+            matrixCount: 1,
+            drawsCompactMarks: false
+        )
+        #expect(restingNotched.width == 200)
+
+        // Once something connects, the wing comes back.
+        let connectedNotched = PanelMetrics.size(
+            geometry: .notched,
+            isExpanded: false,
+            statusReadoutText: "Connected",
+            timerText: nil,
+            centerOcclusionWidth: 200,
+            compactHeight: 46,
+            status: .connected,
+            matrixCount: 1,
+            drawsCompactMarks: true
+        )
+        #expect(connectedNotched.width > restingNotched.width)
+    }
+
+    /// A second mark widens the notched wing by exactly one matrix and its gap.
+    @Test @MainActor
+    func aSecondMarkWidensTheNotchedWingByOneMatrix() {
+        func width(markCount: Int) -> CGFloat {
+            PanelMetrics.size(
+                geometry: .notched,
+                isExpanded: false,
+                statusReadoutText: "Running",
+                timerText: nil,
+                centerOcclusionWidth: 200,
+                compactHeight: 46,
+                status: .running,
+                matrixCount: markCount,
+                drawsCompactMarks: true
+            ).width
+        }
+        let step = width(markCount: 2) - width(markCount: 1)
+        #expect(
+            abs(step - (PanelMetrics.statusMatrixSize + PanelMetrics.compactMatrixSpacing))
+                <= 1
+        )
+        // The pair spacing lands on the matrix's own cell pitch so the gap reads
+        // as a missing column rather than an arbitrary space.
+        #expect(PanelMetrics.compactMatrixSpacing == 6)
+    }
+
+    /// Hovering with nothing connected widens the pill and drops no panel.
+    @Test @MainActor
+    func theRestingPillGrowsSidewaysRatherThanOpeningAnEmptyPanel() {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
+        )
+        #expect(store.expandsToPillOnly)
+
+        for geometry in DisplayGeometry.allCases {
+            let occlusion: CGFloat = geometry == .notched ? 200 : 0
+            let resting = PanelMetrics.size(
+                geometry: geometry,
+                isExpanded: false,
+                statusReadoutText: "Disconnected",
+                timerText: nil,
+                centerOcclusionWidth: occlusion,
+                compactHeight: 46,
+                status: .disconnected,
+                matrixCount: 1,
+                drawsCompactMarks: geometry == .noNotch
+            )
+            let hovered = PanelMetrics.size(
+                geometry: geometry,
+                isExpanded: true,
+                statusReadoutText: "Disconnected",
+                timerText: nil,
+                centerOcclusionWidth: occlusion,
+                compactHeight: 46,
+                status: .disconnected,
+                matrixCount: 1,
+                expandsToPillOnly: true
+            )
+            // Sideways only: it stays exactly one menu bar tall.
+            #expect(hovered.height == 46)
+            #expect(hovered.width > resting.width)
+            // And it is nowhere near the full panel, which is what it is not opening.
+            #expect(hovered.width < PanelMetrics.expandedBaselineWidth)
+        }
+
+        // Once a product connects, hovering opens the panel properly again.
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
+        #expect(!store.expandsToPillOnly)
+    }
+
+    /// The footer has exactly as many rules as the notch has marks.
+    @Test @MainActor
+    func theFooterDrawsOneRuleBlockPerConnectedProduct() {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .codex,
+                availability: .ready,
+                sessions: [],
+                quota: QuotaSnapshot(remainingPercent: 72, resetsAt: nil, todayTokens: 1000),
+                diagnostic: nil
+            )
+        )
+        #expect(store.footerRules.map(\.agent) == [.codex])
+        // Codex spans the full width because it has one window.
+        #expect(store.footerRules[0].windows.count == 1)
+        // One window leaves room in the caption, so today's tokens stay inline.
+        #expect(store.footerTodayText == nil)
+        #expect(store.expandedFooterHeight == PanelMetrics.expandedFooterHeight)
+
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [],
+                quota: QuotaSnapshot(
+                    windows: [
+                        QuotaWindow(label: "5 h", remainingPercent: 59, resetsAt: nil),
+                        QuotaWindow(label: "7 d", remainingPercent: 85, resetsAt: nil)
+                    ],
+                    todayTokens: 2000
+                ),
+                diagnostic: nil
+            )
+        )
+        #expect(store.footerRules.map(\.agent) == [.codex, .claudeCode])
+        // Claude Code is halved because it genuinely has two windows.
+        #expect(store.footerRules[1].windows.count == 2)
+        // Four captions fill the line, so today's usage needs one of its own.
+        let today = try? #require(store.footerTodayText)
+        #expect(today?.contains("Codex") == true)
+        #expect(today?.contains("Claude Code") == true)
+        #expect(store.expandedFooterHeight == PanelMetrics.dualFooterHeight)
+    }
+
+    /// The panel grows for the second product's rules, and by exactly that much.
+    @Test @MainActor
+    func theDualProductPanelIsTallerByTheExtraFooterRules() {
+        let single = PanelMetrics.expandedContentHeight(
+            forSessionCount: 3,
+            footerHeight: PanelMetrics.expandedFooterHeight
+        )
+        let dual = PanelMetrics.expandedContentHeight(
+            forSessionCount: 3,
+            footerHeight: PanelMetrics.dualFooterHeight
+        )
+        // 46 + 240 + 40 and 46 + 240 + 84, from dual-agent-design 5.1.
+        #expect(PanelMetrics.referenceCompactHeight + single == 326)
+        #expect(PanelMetrics.referenceCompactHeight + dual == 370)
+        // Claude Code alone sits between them: two windows fill its caption
+        // line, so today's usage still needs a line of its own.
+        #expect(PanelMetrics.claudeCodeOnlyFooterHeight > PanelMetrics.expandedFooterHeight)
+        #expect(PanelMetrics.claudeCodeOnlyFooterHeight < PanelMetrics.dualFooterHeight)
+    }
+
+    /// Rows only say which product they are while there is something to tell apart.
+    @Test @MainActor
+    func rowsAreAttributedOnlyWhenBothProductsHaveThem() {
+        let store = MonitorStore(services: [])
+        func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u", projectName: "p", title: "t",
+                preview: nil, status: .running, startedAt: nil
+            )
+        }
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex, "a")])
+        )
+        #expect(!store.showsProductAttribution)
+
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                sessions: [session(.claudeCode, "b")]
+            )
+        )
+        #expect(store.showsProductAttribution)
+
+        // The default is the only option that adds nothing to the panel.
+        #expect(store.productAttribution == .nameAndColour)
+        // And every option is reachable, because a preference the user cannot
+        // find until a second product happens to be running is one they never find.
+        #expect(ProductAttributionStyle.allCases.count == 3)
+    }
+
     /// The notch's label is shorter than the panel's because the matrix beside
     /// it already says a turn wants the user.
     @Test @MainActor

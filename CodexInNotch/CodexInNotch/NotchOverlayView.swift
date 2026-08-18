@@ -18,7 +18,7 @@ struct NotchOverlayView: View {
                     OverlayHeader()
                         .frame(height: store.compactHeight)
 
-                    if store.isExpanded {
+                    if store.isExpanded, !store.expandsToPillOnly {
                         ExpandedPanelContent()
                             .transition(
                                 .asymmetric(
@@ -143,11 +143,13 @@ private struct OverlayHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             StatusReadout(
-                status: store.status,
+                marks: store.presenceMarks,
+                drawsMarks: store.drawsCompactMarks,
                 text: statusText,
                 showsText: showsStatusText,
                 spacing: PanelMetrics.expandedReadoutSpacing,
                 matrixSize: PanelMetrics.statusMatrixSize,
+                markSpacing: PanelMetrics.compactMatrixSpacing,
                 reduceMotion: store.reduceMotion
             )
 
@@ -162,6 +164,14 @@ private struct OverlayHeader: View {
                     tick: store.elapsedTick.eraseToAnyPublisher()
                 )
             }
+
+            // The gear lives up here now rather than in the footer, for one and
+            // two products alike. The footer became three quota rules and had no
+            // room left; the top bar's trailing side is empty whenever the panel
+            // is open, because the compact timer only draws while collapsed.
+            if store.isExpanded {
+                SettingsButton()
+            }
         }
         .padding(.horizontal, horizontalPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -171,7 +181,14 @@ private struct OverlayHeader: View {
     }
 
     private var statusText: String {
-        store.isExpanded ? store.statusDisplayName : store.compactStatusReadoutText
+        // The resting pill keeps the short, unattributed word even when it is
+        // widened. Nothing is connected, so naming one product ("Codex
+        // disconnected") would single out a product for a state that is about
+        // all of them — and it would overflow a pill sized for the short form.
+        if store.expandsToPillOnly {
+            return store.status.compactDisplayName(for: nil)
+        }
+        return store.isExpanded ? store.statusDisplayName : store.compactStatusReadoutText
     }
 
     private var showsStatusText: Bool {
@@ -190,33 +207,83 @@ private struct OverlayHeader: View {
 }
 
 private struct StatusReadout: View {
-    let status: MonitorStatus
+    let marks: [PresenceMark]
+    let drawsMarks: Bool
     let text: String
     let showsText: Bool
     let spacing: CGFloat
     let matrixSize: CGFloat
+    let markSpacing: CGFloat
     let reduceMotion: Bool
 
     var body: some View {
         HStack(spacing: spacing) {
-            NotchStatusMatrix(
-                state: state,
-                size: matrixSize,
-                isAnimated: !reduceMotion
-            )
+            if drawsMarks {
+                HStack(spacing: markSpacing) {
+                    // Order is `AgentKind`'s and never urgency's, so a mark
+                    // never moves out from under the eye reading it.
+                    ForEach(marks, id: \.agent) { mark in
+                        NotchStatusMatrix(
+                            state: NotchMatrixState(mark.status),
+                            size: matrixSize,
+                            isAnimated: !reduceMotion,
+                            agent: mark.agent
+                        )
+                    }
+                }
+            }
 
             if showsText {
                 SearchlightLabel(
                     text: text,
-                    isSweeping: state.isActive && !reduceMotion
+                    isSweeping: isActive && !reduceMotion
                 )
             }
         }
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    private var state: NotchMatrixState {
-        NotchMatrixState(status)
+    /// The label sweeps if *any* mark is in flight. There is one label for both
+    /// products and it takes the most urgent status, so it has to follow the
+    /// most urgent mark rather than a single product's.
+    private var isActive: Bool {
+        marks.contains { NotchMatrixState($0.status).isActive }
+    }
+}
+
+/// The gear, shared by the expanded top bar and the resting pill.
+private struct SettingsButton: View {
+    @Environment(\.openSettings) private var openSettings
+    @EnvironmentObject private var store: MonitorStore
+
+    @State private var isHovered = false
+
+    private var size: CGFloat {
+        PanelMetrics.settingsButtonSize(compactHeight: store.compactHeight)
+    }
+
+    var body: some View {
+        Button {
+            openSettings()
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 15, weight: .regular))
+                .frame(width: size, height: size)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.white.opacity(isHovered ? 0.12 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isHovered ? NotchPalette.sessionTitle : NotchPalette.label)
+        .onHover { isHovered = $0 }
+        .animation(
+            store.reduceMotion ? nil : .easeOut(duration: 0.12),
+            value: isHovered
+        )
+        .accessibilityLabel("Open Settings")
+        .help("Open Settings")
     }
 }
 
@@ -268,53 +335,81 @@ private struct ExpandedPanelContent: View {
     }
 }
 
+/// The quota footer: one rule per product, and a shared usage line.
+///
+/// One product draws a single full-width rule, exactly as before. Two draw
+/// Codex's full-width rule above a split row of Claude Code's two windows —
+/// the halving is not to make them fit but because that product genuinely has
+/// two windows to report, a 5-hour session one and a 7-day one.
 private struct ExpandedPanelFooter: View {
-    @Environment(\.openSettings) private var openSettings
     @EnvironmentObject private var store: MonitorStore
 
-    @State private var isSettingsHovered = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: PanelMetrics.footerRuleSpacing) {
+            ForEach(store.footerRules) { rule in
+                FooterRuleRow(rule: rule, inlineTodayText: inlineTodayText)
+            }
+
+            if let today = store.footerTodayText {
+                FooterCaption(today)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: store.expandedFooterHeight, alignment: .top)
+        .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
+    }
+
+    /// The single-Codex footer keeps today's tokens in the one caption it has,
+    /// rather than spending a second line on three words.
+    private var inlineTodayText: String? {
+        store.footerTodayText == nil ? store.expandedFooterText : nil
+    }
+}
+
+/// One product's rules, and the captions under them.
+private struct FooterRuleRow: View {
+    let rule: FooterRule
+    let inlineTodayText: String?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(store.expandedFooterText)
-                .font(.system(size: 11, weight: .light))
-                .foregroundStyle(NotchPalette.label)
-                .lineLimit(1)
-
-            Spacer(minLength: 8)
-
-            Button {
-                openSettings()
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 15, weight: .regular))
-                    .frame(width: 28, height: 28)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Color.white.opacity(isSettingsHovered ? 0.12 : 0))
+        VStack(alignment: .leading, spacing: PanelMetrics.footerCaptionSpacing) {
+            HStack(spacing: PanelMetrics.footerWindowSpacing) {
+                ForEach(rule.windows.indices, id: \.self) { index in
+                    UsageMeter(
+                        fill: rule.windows[index].fill,
+                        ink: NotchPalette.ink(for: rule.agent)
                     )
-                    .contentShape(Rectangle())
+                }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(
-                isSettingsHovered ? NotchPalette.sessionTitle : NotchPalette.label
-            )
-            .onHover { isSettingsHovered = $0 }
-            .animation(
-                store.reduceMotion ? nil : .easeOut(duration: 0.12),
-                value: isSettingsHovered
-            )
-            .accessibilityLabel("Open Settings")
-            .help("Open Settings")
+            .frame(height: PanelMetrics.footerRuleHeight)
+
+            if let inlineTodayText {
+                FooterCaption(inlineTodayText)
+            } else {
+                HStack(spacing: PanelMetrics.footerWindowSpacing) {
+                    ForEach(rule.windows.indices, id: \.self) { index in
+                        FooterCaption(rule.windows[index].caption)
+                    }
+                }
+            }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: PanelMetrics.expandedFooterHeight)
-        .overlay(alignment: .top) {
-            // The separator *is* the quota meter — all usage lives down here now,
-            // and the rule was already spanning this width doing nothing.
-            UsageMeter(fill: store.usageMeterFill)
-        }
-        .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
+    }
+}
+
+/// The footer's 11pt caption, which every line down here uses.
+private struct FooterCaption: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .light))
+            .foregroundStyle(NotchPalette.label)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -368,11 +463,11 @@ private struct SessionRowContent: View {
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.projectName)
-                        .font(.system(size: 11, weight: .light))
-                        .foregroundStyle(NotchPalette.label)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    SessionRowCaption(
+                        session: session,
+                        style: store.productAttribution,
+                        showsAttribution: store.showsProductAttribution
+                    )
 
                     SessionRowText(
                         text: session.title,
@@ -464,6 +559,62 @@ private struct SessionStatusControl: View {
 
     private var weight: NSFont.Weight {
         wantsAttention ? .medium : .light
+    }
+}
+
+/// The row's leading 11pt line: the Project, and — when two products have rows —
+/// which product this one is.
+///
+/// The attribution costs horizontal space and what it costs comes out of the
+/// Project text: `Claude Code ·` takes about 73 of the caption's 394. That is
+/// accepted rather than overlooked. The caption is the least important line in
+/// the row and it ends in a fade rather than an ellipsis, so losing its tail is
+/// the cheapest thing on this surface to lose.
+private struct SessionRowCaption: View {
+    let session: MonitoredSession
+    let style: ProductAttributionStyle
+    let showsAttribution: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if showsAttribution, style == .badge {
+                Text(session.agent.displayName)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(NotchPalette.ink(for: session.agent).on)
+                    .padding(.horizontal, 6)
+                    .frame(height: 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(NotchPalette.ink(for: session.agent).off)
+                    )
+                    .fixedSize()
+            }
+
+            Text(captionText)
+                .font(.system(size: 11, weight: .light))
+                .foregroundStyle(captionColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        // The badge is a point taller than the text line, so the caption's own
+        // height moves 14 -> 16 with it. The row height does not: the content
+        // block absorbs it.
+        .frame(height: showsAttribution && style == .badge ? 16 : 14)
+    }
+
+    private var captionText: String {
+        guard showsAttribution, style != .badge else { return session.projectName }
+        return "\(session.agent.displayName) · \(session.projectName)"
+    }
+
+    /// Only `nameAndColour` tints, and it tints the whole line rather than the
+    /// prefix alone — the Project belongs to that product too, and a two-colour
+    /// caption would be a third encoding of the same fact.
+    private var captionColor: Color {
+        guard showsAttribution, style == .nameAndColour else {
+            return NotchPalette.label
+        }
+        return NotchPalette.ink(for: session.agent).on
     }
 }
 

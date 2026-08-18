@@ -542,6 +542,72 @@ struct AgentSnapshot: Equatable, Sendable {
     )
 }
 
+/// How a row says which product it came from.
+///
+/// All three live on the row's existing 11pt caption line, so none of them adds
+/// a stroke to the panel. That is the reason there are three rather than the
+/// other candidates: a leading colour bar would add three vertical lines to a
+/// surface that already has four horizontal ones, and a per-row matrix would put
+/// a second mark on a row that already has one.
+enum ProductAttributionStyle: String, CaseIterable, Codable, Sendable, Identifiable {
+    /// The caption is prefixed `Codex ·` in that product's lit colour. Default:
+    /// the only option that adds nothing, and the only one where hue reinforces
+    /// the signal rather than being all of it — remove the colour and the words
+    /// still say it.
+    case nameAndColour
+    /// The same words in the ordinary caption grey. Geometry is identical, so
+    /// switching moves nothing, and it depends on colour not at all.
+    case nameOnly
+    /// A small badge: the matrix's unlit colour as the ground, its lit colour as
+    /// the text.
+    case badge
+
+    nonisolated var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .nameAndColour: "Name and colour"
+        case .nameOnly: "Name only"
+        case .badge: "Badge"
+        }
+    }
+}
+
+/// One quota window as the footer draws it: a rule and the caption under it.
+nonisolated struct FooterWindow: Equatable, Sendable {
+    /// 0–1 remaining, or nil when the reading is unavailable.
+    let fill: Double?
+    let caption: String
+}
+
+/// One product's row of quota rules.
+///
+/// Codex spans the full width because it has one window; Claude Code is halved
+/// because it genuinely has two, a 5-hour session window and a 7-day one. The
+/// halving is not to make them fit — it is what having two windows looks like.
+nonisolated struct FooterRule: Identifiable, Equatable, Sendable {
+    let agent: AgentKind
+    let windows: [FooterWindow]
+
+    nonisolated var id: AgentKind { agent }
+}
+
+/// One mark on the collapsed surface.
+///
+/// The marks *are* the presence channel: a product that is not connected has no
+/// mark at all rather than a dimmed one. Dimming it would be advertising a tool
+/// the user does not open, which is the whole reason the resting matrix went
+/// away.
+nonisolated struct PresenceMark: Equatable, Sendable {
+    /// The product this mark belongs to, or nil for the resting grey.
+    let agent: AgentKind?
+    /// This product's own status. Each matrix runs its own curve — the pair is
+    /// two independent readouts, not one aggregate drawn twice.
+    let status: MonitorStatus
+
+    var isResting: Bool { agent == nil }
+}
+
 /// Every product's answer, folded into the one thing the UI reads.
 ///
 /// Keeping this a single type is the architectural constraint that survives
@@ -595,11 +661,21 @@ struct MonitorSnapshot: Equatable, Sendable {
 
     /// The products that are open and reachable, in display order.
     ///
-    /// One matrix is drawn per entry, so this is also what the collapsed pill
-    /// is sized for. Empty means the surface is `Disconnected` and draws the
-    /// grey resting mark instead of any product's.
+    /// Empty means the surface is `Disconnected` and draws the grey resting
+    /// mark instead of any product's.
     nonisolated var connectedAgents: [AgentKind] {
         agents.filter(\.isConnected).map(\.agent)
+    }
+
+    /// What the collapsed surface draws, left to right.
+    ///
+    /// Never empty: with nothing connected it is the single resting mark, which
+    /// takes the one slot rather than adding one. Order is fixed by
+    /// ``AgentKind`` and never by urgency — once the two hues are learned,
+    /// position is the only thing identifying a mark, and re-sorting would swap
+    /// them under the user's eye at the moment they are being read.
+    nonisolated var presenceMarks: [PresenceMark] {
+        MonitorAggregation.marks(agents: agents, sessions: sessions)
     }
 
     /// The single quota window the footer draws while one product is running.
@@ -678,6 +754,28 @@ enum MonitorAggregation {
         // explain a wait. They now speak in the expanded panel and in Settings,
         // where there is room to say what to do about them.
         return agents.contains(where: \.isConnected) ? .connected : .disconnected
+    }
+
+    /// One mark per connected product, or the single resting mark.
+    nonisolated static func marks(
+        agents: [AgentSnapshot],
+        sessions: [MonitoredSession]
+    ) -> [PresenceMark] {
+        let connected = agents.filter(\.isConnected)
+        guard !connected.isEmpty else {
+            return [PresenceMark(agent: nil, status: .disconnected)]
+        }
+        return connected.map { snapshot in
+            PresenceMark(
+                agent: snapshot.agent,
+                // This product's own rows only. A Codex turn must not light
+                // Claude Code's mark.
+                status: status(
+                    agents: [snapshot],
+                    sessions: sessions.filter { $0.agent == snapshot.agent }
+                )
+            )
+        }
     }
 
     /// Ready if any product is being watched properly; otherwise the most

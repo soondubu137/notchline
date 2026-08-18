@@ -107,7 +107,73 @@ enum PanelMetrics {
     static let expandedHorizontalPadding: CGFloat = 24
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
+    /// Single-Codex footer: one rule and one inline caption, as today.
     static let expandedFooterHeight: CGFloat = 40
+    /// Claude Code alone: two windows fill the caption line, so today's usage
+    /// needs a line of its own. This asymmetry between the two single-product
+    /// forms is known and accepted — it follows from one product having two
+    /// windows and the other having one.
+    static let claudeCodeOnlyFooterHeight: CGFloat = 54
+    /// Both products: two rule blocks and a shared usage line.
+    static let dualFooterHeight: CGFloat = 84
+    static let footerRuleHeight: CGFloat = 3
+    /// A rule to its own caption.
+    static let footerCaptionSpacing: CGFloat = 5
+    /// One product's block to the next product's.
+    static let footerRuleSpacing: CGFloat = 9
+    /// Between two half-width rules of the same product.
+    static let footerWindowSpacing: CGFloat = 8
+
+    /// The gear scales with the menu bar: `32` under a `46pt` bar, `20` under a
+    /// `24pt` one. It is trailing-aligned inside the footer's content box, which
+    /// is where macOS panels put their settings control.
+    static func settingsButtonSize(compactHeight: CGFloat) -> CGFloat {
+        let ratio = (compactHeight - 24) / (46 - 24)
+        return min(32, max(20, 20 + ratio * 12))
+    }
+
+    /// The resting pill once it is hovered.
+    ///
+    /// It grows sideways to put the gear within reach, and does nothing else.
+    /// With nothing connected there is no content to drop into a panel, so
+    /// dropping one would open an empty box; the reason lives in Settings, and
+    /// the gear is the one action that reaches it.
+    ///
+    /// Composed from measured text like every other compact width rather than
+    /// taken as a constant. `figma-design.md` §6.4 gives `400 × 46` notched and
+    /// `208 × 46` no-notch, while its own checklist gives `400.6` and `224.6`;
+    /// the two disagree, so the composition rule is authoritative here and the
+    /// derived values are recorded in that doc.
+    static func restingExpandedWidth(
+        geometry: DisplayGeometry,
+        centerOcclusionWidth: CGFloat,
+        compactHeight: CGFloat
+    ) -> CGFloat {
+        let leading = expandedHorizontalPadding
+            + statusMatrixSize
+            + expandedReadoutSpacing
+            + compactLabelWidth(.disconnected)
+        let trailing = expandedReadoutSpacing
+            + settingsButtonSize(compactHeight: compactHeight)
+            + expandedHorizontalPadding
+        guard geometry == .notched, centerOcclusionWidth >= 1 else {
+            return ceil(leading + trailing)
+        }
+        return ceil(
+            leading
+                + expandedNotchClearance
+                + centerOcclusionWidth
+                + expandedNotchClearance
+                + trailing
+        )
+    }
+
+    /// Footer height by shape. See `dual-agent-design.md` §5.1.
+    static func footerHeight(rules: [FooterRule]) -> CGFloat {
+        if rules.count > 1 { return dualFooterHeight }
+        if rules.first?.windows.count ?? 0 > 1 { return claudeCodeOnlyFooterHeight }
+        return expandedFooterHeight
+    }
     static let thinExpandedBodyHeight: CGFloat = 48
     static let expandedContentHeight: CGFloat = expandedSessionViewportHeight
         + expandedFooterHeight
@@ -137,14 +203,26 @@ enum PanelMetrics {
     /// label scales with it, so it governs panel height and corner radius only.
     static func compactLeadingWidth(
         statusReadoutText: String,
-        showsStatusText: Bool
+        showsStatusText: Bool,
+        markCount: Int = 1
     ) -> CGFloat {
-        var width = expandedHorizontalPadding + statusMatrixSize
+        var width = expandedHorizontalPadding + marksWidth(markCount)
         if showsStatusText {
             width += expandedReadoutSpacing
                 + textWidth(statusReadoutText, font: statusLabelFont)
         }
         return width
+    }
+
+    /// The marks themselves: one matrix each, with the pair spacing between.
+    ///
+    /// `6` because it lands on the matrix's own `5.84` cell pitch, so the gap
+    /// reads as a missing column rather than an arbitrary space. `4` merges the
+    /// pair into one 3×6 grid; `8` stops reading as a pair at all.
+    static func marksWidth(_ markCount: Int) -> CGFloat {
+        guard markCount > 0 else { return 0 }
+        return CGFloat(markCount) * statusMatrixSize
+            + CGFloat(markCount - 1) * compactMatrixSpacing
     }
 
     /// Compact content trailing the notch, including its own trailing padding.
@@ -167,21 +245,30 @@ enum PanelMetrics {
         isExpanded: Bool,
         statusReadoutText: String,
         timerText: String?,
-        centerOcclusionWidth: CGFloat
+        centerOcclusionWidth: CGFloat,
+        markCount: Int = 1
     ) -> CGFloat {
         guard !isExpanded, geometry == .notched, centerOcclusionWidth >= 1 else {
             return 0
         }
-        let leading = notchedLeadingWidth(statusReadoutText: statusReadoutText)
+        let leading = notchedLeadingWidth(markCount: markCount)
         let trailing = notchedTrailingWidth(timerText: timerText)
         return (trailing - leading) / 2
     }
 
-    private static func notchedLeadingWidth(statusReadoutText: String) -> CGFloat {
-        compactLeadingWidth(
-            statusReadoutText: statusReadoutText,
-            showsStatusText: false
-        ) + expandedNotchClearance
+    /// Leading wing on a notched display: padding, the marks, and the clearance.
+    ///
+    /// Zero marks draws nothing at all. A notched display at rest hides the
+    /// whole wing rather than parking a grey mark beside the cut-out — the
+    /// cut-out is already a shape on the screen, and a second one next to it
+    /// carries no information. A no-notch display keeps its mark instead,
+    /// because a control that vanishes from the menu bar takes its position
+    /// with it and everything to its left slides over.
+    private static func notchedLeadingWidth(markCount: Int) -> CGFloat {
+        guard markCount > 0 else { return 0 }
+        return expandedHorizontalPadding
+            + marksWidth(markCount)
+            + expandedNotchClearance
     }
 
     private static func notchedTrailingWidth(timerText: String?) -> CGFloat {
@@ -213,9 +300,21 @@ enum PanelMetrics {
         configuredAgents: Set<AgentKind> = [.codex],
         status: MonitorStatus = .connected,
         matrixCount: Int = 1,
+        drawsCompactMarks: Bool = true,
+        expandsToPillOnly: Bool = false,
         expandedContentHeight: CGFloat = expandedContentHeight
     ) -> CGSize {
         guard !isExpanded else {
+            guard !expandsToPillOnly else {
+                return CGSize(
+                    width: restingExpandedWidth(
+                        geometry: geometry,
+                        centerOcclusionWidth: centerOcclusionWidth,
+                        compactHeight: compactHeight
+                    ),
+                    height: compactHeight
+                )
+            }
             return CGSize(
                 width: expandedWidth(
                     centerOcclusionWidth: centerOcclusionWidth,
@@ -237,7 +336,9 @@ enum PanelMetrics {
             }
             // A notched panel still wraps the cut-out, so its width is set by
             // the wings around a fixed obstacle rather than by its content.
-            let width = notchedLeadingWidth(statusReadoutText: statusReadoutText)
+            let width = notchedLeadingWidth(
+                markCount: drawsCompactMarks ? matrixCount : 0
+            )
                 + centerOcclusionWidth
                 + notchedTrailingWidth(timerText: timerText)
             return CGSize(width: ceil(width), height: compactHeight)
@@ -362,12 +463,14 @@ enum PanelMetrics {
         sessionRowHeight * CGFloat(min(max(sessionCount, 0), maximumVisibleSessionCount))
     }
 
-    static func expandedContentHeight(forSessionCount sessionCount: Int) -> CGFloat {
+    static func expandedContentHeight(
+        forSessionCount sessionCount: Int,
+        footerHeight: CGFloat = expandedFooterHeight
+    ) -> CGFloat {
         guard sessionCount > 0 else {
-            return thinExpandedContentHeight
+            return thinExpandedBodyHeight + footerHeight
         }
-        return sessionViewportHeight(forSessionCount: sessionCount)
-            + expandedFooterHeight
+        return sessionViewportHeight(forSessionCount: sessionCount) + footerHeight
     }
 
     static func expandedWidth(
@@ -510,6 +613,14 @@ final class MonitorStore: ObservableObject {
     /// mid-turn throughout — and a width that changed without a publish would
     /// leave the panel sized for the wrong number of marks.
     @Published private(set) var connectedAgents: [AgentKind] = []
+    /// What the collapsed surface draws, left to right — never empty.
+    ///
+    /// Published for the same reason `connectedAgents` is: a second product
+    /// opening, or one product's own turn starting, changes a mark without
+    /// necessarily changing the aggregate status.
+    @Published private(set) var presenceMarks: [PresenceMark] = [
+        PresenceMark(agent: nil, status: .disconnected)
+    ]
     /// Instructions for every product whose registration the user makes by
     /// hand. Absent for a product this app sets up itself.
     @Published private(set) var manualSetups: [AgentKind: AgentManualSetup] = [:]
@@ -542,6 +653,16 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var integrationSwitchIsOn = false
     @Published var isExpanded = false
     @Published var reduceMotion = false
+    /// How a row says which product it came from. Only drawn when both products
+    /// have rows; see ``showsProductAttribution``.
+    @Published var productAttribution: ProductAttributionStyle {
+        didSet {
+            UserDefaults.standard.set(
+                productAttribution.rawValue,
+                forKey: Self.productAttributionDefaultsKey
+            )
+        }
+    }
     @Published var showsContentPreviews: Bool {
         didSet {
             UserDefaults.standard.set(
@@ -568,6 +689,7 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var hasCompletedOnboarding: Bool
 
     private static let contentPreviewDefaultsKey = "showsContentPreviews"
+    private static let productAttributionDefaultsKey = "productAttribution"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
@@ -647,9 +769,13 @@ final class MonitorStore: ObservableObject {
         self.status = merged.status
         self.statusAgent = merged.availabilityAgent
         self.connectedAgents = merged.connectedAgents
+        self.presenceMarks = merged.presenceMarks
         self.showsContentPreviews = UserDefaults.standard.object(
             forKey: Self.contentPreviewDefaultsKey
         ) as? Bool ?? true
+        self.productAttribution = UserDefaults.standard.string(
+            forKey: Self.productAttributionDefaultsKey
+        ).flatMap(ProductAttributionStyle.init(rawValue:)) ?? .nameAndColour
         self.hasCompletedOnboarding = UserDefaults.standard.bool(
             forKey: Self.onboardingDefaultsKey
         )
@@ -789,6 +915,32 @@ final class MonitorStore: ObservableObject {
         return configured.isEmpty ? [.codex] : Set(configured)
     }
 
+    /// Whether the collapsed surface draws any mark.
+    ///
+    /// False only for a notched display resting with nothing connected, where
+    /// the whole leading wing goes away and the panel is just the cut-out. This
+    /// is the one place the two form factors differ in *what is visible* rather
+    /// than in how it is drawn: a no-notch pill has no cut-out to hide behind,
+    /// so it keeps the grey mark and holds its position in the menu bar.
+    var drawsCompactMarks: Bool {
+        guard !isExpanded, geometry == .notched else { return true }
+        return !isRestingOnly
+    }
+
+    /// Nothing is connected, so the only mark is the grey one.
+    var isRestingOnly: Bool {
+        presenceMarks.allSatisfy(\.isResting)
+    }
+
+    /// Hovering grows the pill sideways instead of dropping the panel.
+    ///
+    /// True exactly when nothing is connected. The panel would have nothing in
+    /// it, and the one thing the user might want — why nothing is connected —
+    /// is in Settings, which the gear reaches in one action.
+    var expandsToPillOnly: Bool {
+        isRestingOnly
+    }
+
     var statusDisplayName: String {
         status.displayName(for: statusAgent)
     }
@@ -854,6 +1006,69 @@ final class MonitorStore: ObservableObject {
         )
     }
 
+    /// Whether rows say which product they belong to.
+    ///
+    /// Only when both products actually have rows. Ordering is by urgency and
+    /// not by product, so a mixed list is interleaved and every row has to
+    /// identify itself — but a list that is all one product's has nothing to
+    /// disambiguate, and the prefix would cost caption width for no reason.
+    var showsProductAttribution: Bool {
+        Set(sessions.map(\.agent)).count > 1
+    }
+
+    /// One rule block per connected product, in display order.
+    ///
+    /// Exactly as many rules as the notch has marks: the footer reports on the
+    /// products that are there, and a product that is not connected has no rows
+    /// and no quota worth drawing.
+    var footerRules: [FooterRule] {
+        let now = clock.now()
+        return connectedAgents.compactMap { agent in
+            guard let snapshot = latestByAgent[agent] else { return nil }
+            let windows = snapshot.quota.windows.map { window in
+                FooterWindow(
+                    fill: window.remainingPercent.map { Double($0) / 100 },
+                    caption: Self.caption(for: window, now: now)
+                )
+            }
+            guard !windows.isEmpty else { return nil }
+            return FooterRule(agent: agent, windows: windows)
+        }
+    }
+
+    /// One window's caption: its label when it has one, then what is left and
+    /// when it resets.
+    private static func caption(for window: QuotaWindow, now: Date) -> String {
+        let remaining = window.remainingPercent.map { "\($0)% left" } ?? "-- left"
+        let reset = UsageSummaryFormatter.resetText(resetsAt: window.resetsAt, now: now)
+        let body = "\(remaining) · \(reset)"
+        return window.label.isEmpty ? body : "\(window.label) · \(body)"
+    }
+
+    /// The bottom line: every product's tokens for today, on one line.
+    ///
+    /// Nil for the single-Codex footer, which keeps today's inline form — one
+    /// window leaves room in the caption, so a second line would be a line of
+    /// whitespace with three words in it.
+    var footerTodayText: String? {
+        let rules = footerRules
+        guard rules.count > 1 || (rules.first?.windows.count ?? 0) > 1 else {
+            return nil
+        }
+        let parts = rules.compactMap { rule -> String? in
+            guard let tokens = latestByAgent[rule.agent]?.quota.todayTokens else {
+                return nil
+            }
+            return "\(rule.agent.displayName) \(UsageSummaryFormatter.compactTokenCount(tokens))"
+        }
+        guard !parts.isEmpty else { return "-- today" }
+        return parts.joined(separator: " · ") + " today"
+    }
+
+    var expandedFooterHeight: CGFloat {
+        PanelMetrics.footerHeight(rules: footerRules)
+    }
+
     var expandedFooterText: String {
         UsageSummaryFormatter.summary(
             remainingPercent: quota.remainingPercent,
@@ -873,7 +1088,10 @@ final class MonitorStore: ObservableObject {
     }
 
     var expandedContentHeight: CGFloat {
-        PanelMetrics.expandedContentHeight(forSessionCount: sessions.count)
+        PanelMetrics.expandedContentHeight(
+            forSessionCount: sessions.count,
+            footerHeight: expandedFooterHeight
+        )
     }
 
     var currentPanelSize: CGSize {
@@ -886,10 +1104,11 @@ final class MonitorStore: ObservableObject {
             compactHeight: compactHeight,
             configuredAgents: configuredAgents,
             status: status,
-            // One matrix per connected product, and never fewer than one slot:
-            // with nothing connected the grey resting mark takes the single
-            // slot rather than adding one beside it.
-            matrixCount: max(1, connectedAgents.count),
+            // Exactly what the header draws. The resting mark counts as one,
+            // because it takes the single slot rather than adding one beside it.
+            matrixCount: presenceMarks.count,
+            drawsCompactMarks: drawsCompactMarks,
+            expandsToPillOnly: expandsToPillOnly,
             expandedContentHeight: expandedContentHeight
         )
     }
@@ -902,7 +1121,8 @@ final class MonitorStore: ObservableObject {
             isExpanded: isExpanded,
             statusReadoutText: compactStatusReadoutText,
             timerText: compactTimerText,
-            centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0
+            centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
+            markCount: drawsCompactMarks ? presenceMarks.count : 0
         )
     }
 
@@ -1317,6 +1537,16 @@ final class MonitorStore: ObservableObject {
         }
         if connectedAgents != snapshot.connectedAgents {
             connectedAgents = snapshot.connectedAgents
+        }
+        // Rebuilt from the visible rows, not taken from the snapshot: a
+        // dismissed row must stop lighting its product's mark the moment it
+        // stops showing, exactly as it stops counting towards the summary.
+        let marks = MonitorAggregation.marks(
+            agents: snapshot.agents,
+            sessions: undismissedSessions
+        )
+        if presenceMarks != marks {
+            presenceMarks = marks
         }
         if lastIntegrationMessage != integrationMessage {
             lastIntegrationMessage = integrationMessage
