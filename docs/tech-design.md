@@ -116,7 +116,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 - 共享展开基准宽度 `520`；`46` 高菜单栏、三行会话时参考总高度 `326`。
 - 顶部汇总区参考高 `46`，始终等于目标菜单栏高度；展开只横向扩张。
-- 下方内容区由列表视口和 footer 组成：列表视口最多 `472 × 240`，三行可见并垂直滚动；footer 固定 `472 × 40`。
+- 下方内容区由列表视口和 footer 组成：列表视口最多 `496 × 240`，三行可见并垂直滚动；footer 固定 `496 × 40`。
 - 健康空列表与全局可用性状态使用 `520 × 134` 薄层，其中状态正文 `48`、footer `40`。
 - footer 在有会话与无会话时必须同为 `40` 高，不能在其下方追加 padding。顶部用与 header/list 相同的 hairline 分隔；左侧是今日 token 总量与 reset 文案，右侧是 `32 × 32` Settings 点击目标和 `16 × 16` 齿轮。
 - Figma 与产品 UI 字体统一使用 SF Pro。
@@ -418,7 +418,7 @@ Input needed
 
 ### 13.1 Footer 格式
 
-Expanded footer 固定 `40 pt` 高，位于会话/空状态正文之后且无额外 bottom padding；其顶部 hairline 与 header/正文分隔线使用同一视觉 token。外层跟随面板 `24 pt` 水平 inset，因此 `520 pt` 面板中的 footer 内容宽 `472 pt`。
+Expanded footer 固定 `40 pt` 高，位于会话/空状态正文之后且无额外 bottom padding；其顶部 hairline 与 header/正文分隔线使用同一视觉 token。外层跟随面板 `12 pt` 水平 inset，因此 `520 pt` 面板中的 footer 内容宽 `496 pt`。
 
 左侧文案为：
 
@@ -616,7 +616,7 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 | 页面/节点 | 技术契约 |
 | --- | --- |
 | `06 — Notch Core` / `118:120` | `520 × 326` 共享展开、顶部 `46`、底部 `40` footer |
-| `05 — Panel` / `327:305` | `472 × 40` Expanded footer、今日 tokens、reset 文案与 Settings gear |
+| `05 — Panel` / `327:305` | `496 × 40` Expanded footer、今日 tokens、reset 文案与 Settings gear |
 | `07 — Integration States` / `227:3` | 隐私关闭、额度局部降级、成员生命周期和 `520 × 134` 薄层状态 |
 | `08 — Onboarding` / `232:95` | 显式授权的三步首次安装 |
 | `09 — Settings` / `609:2` | macOS 26 单面板设置窗口：Products／Session list／Privacy 三组、两模式颜色；`233:3` 为 v1 参考 |

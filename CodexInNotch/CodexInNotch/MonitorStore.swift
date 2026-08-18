@@ -121,7 +121,15 @@ enum PanelMetrics {
     static let maximumVisibleSessionCount = 3
     static let expandedSessionViewportHeight = sessionRowHeight
         * CGFloat(maximumVisibleSessionCount)
-    static let expandedHorizontalPadding: CGFloat = 24
+    /// The panel's horizontal inset, collapsed and expanded alike.
+    ///
+    /// `12`, not the `24` this started at. The name says `expanded` because
+    /// that is where it was first measured, but it has always governed both:
+    /// the compact side margin, the wings around a cut-out, and the inset of
+    /// the expanded rows and footer. Halving it moves every one of those, and
+    /// the reference widths derived from it move with it — see
+    /// `figma-design.md` §3.3 for the numbers this composes.
+    static let expandedHorizontalPadding: CGFloat = 12
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
     /// Single-Codex footer: one rule and one inline caption, as today.

@@ -59,12 +59,16 @@ struct CodexInNotchTests {
     /// contract — the doc names them, a Figma frame is drawn at them, and a
     /// change to padding or to the widest label is supposed to fail loudly
     /// rather than quietly move a pill that lives in the user's menu bar.
+    ///
+    /// It did exactly that when the horizontal padding went `24 → 12`: these
+    /// were `220`, `242` and `160`, each `24` wider. The numbers below are the
+    /// same composition re-measured, not a relaxation of it.
     @Test @MainActor
     func theFixedCompactWidthsAreTheOnesTheDesignMeasured() {
-        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) == 220)
-        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2) == 242)
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) == 196)
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2) == 218)
         #expect(
-            PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) == 160
+            PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) == 136
         )
 
         // Zero connected products is the grey resting mark, which takes the one
@@ -669,9 +673,11 @@ struct CodexInNotchTests {
 
         // Leading wing plus the cut-out and nothing else. No text is measured on
         // a notched compact panel, so this width is exact -- and it is the one
-        // number a Figma variant can be checked against directly.
+        // number a Figma variant can be checked against directly. `12` padding
+        // + `16.6` matrix + `8` clearance + the `200` cut-out; it was `249`
+        // while the padding was `24`.
         let notchedIdle = width(geometry: .notched, timerText: nil, compactHeight: 46)
-        #expect(notchedIdle == 249)
+        #expect(notchedIdle == 237)
 
         // Timing a turn adds the trailing wing, and nothing but the trailing wing.
         let notchedTimed = width(geometry: .notched, timerText: "1:23", compactHeight: 46)
