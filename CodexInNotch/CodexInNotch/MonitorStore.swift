@@ -130,6 +130,16 @@ enum PanelMetrics {
     /// the reference widths derived from it move with it — see
     /// `figma-design.md` §3.3 for the numbers this composes.
     static let expandedHorizontalPadding: CGFloat = 12
+    /// The session row's block stops short of the panel's own inset, so its
+    /// hover fill has a gutter rather than running into the edge.
+    ///
+    /// The row's padding makes that gutter back up again, which is why the two
+    /// are written against each other instead of both being spelled `6`: a row's
+    /// text lands on `expandedHorizontalPadding` — the same margin as the matrix
+    /// above it and the quota rules below it — whatever that value becomes.
+    static let sessionRowGutter: CGFloat = 6
+    static let sessionRowPadding: CGFloat = expandedHorizontalPadding
+        - sessionRowGutter
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
     /// Single-Codex footer: one rule and one inline caption, as today.

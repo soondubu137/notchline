@@ -78,13 +78,16 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 | No-notch expanded / `24` 高菜单栏 | `520 × 280` 参考基线 |
 | Expanded header | 宽 `520`、高为真实 `menuBarHeight`；`46` 高时内容宽 `496` |
 | Expanded content region | `256` 高 |
-| Session viewport | `496 × 240` |
-| Session row | `496 × 80` |
+| Session viewport | `508 × 240` |
+| Session row | `508 × 80` |
 | Thin expanded state | `520 × 94` |
 | Horizontal Panel padding | `12` |
+| Session row gutter / padding | `6` + `6`；见下 |
 | Status dot | `8 × 8` |
 | Usage ring | `18 × 18`, stroke `2` |
 | Row badge | `24` 高 |
+
+**会话行比面板其余部分宽两个 `6`。** 行块从面板边缘缩进 `6` 而不是 `12`，好让 hover 的填充不撞到边；行自己再补回 `6`，于是行内文字仍然落在 `12`——与 header 里的状态矩阵、页脚里的额度规则同一条边距上。两个数因此是互相定义的（`PanelMetrics.sessionRowGutter` 与 `sessionRowPadding = expandedHorizontalPadding − sessionRowGutter`），不是两个各写死的 `6`；`aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` 锁定这条关系。行块 `520 − 6 − 6 = 508`，内容盒 `520 − 12 − 12 = 496`。
 
 目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。例如无刘海 `24` 高菜单栏的展开参考尺寸为 `520 × 280`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed`、`Codex version unsupported` 等最长状态名完整位于可显示区域。
 
@@ -452,7 +455,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 
 - [x] 展开宽度 `520`，参考高度 `302`。
 - [x] header 固定参考 `46`，只横向扩张。
-- [x] 三行 `496 × 80` 视口与滚动契约。
+- [x] 三行 `508 × 80` 视口与滚动契约。
 - [x] SF Pro 文件级字体统一。
 - [x] 隐私关闭场景。
 - [x] Quota unavailable 局部降级。
@@ -461,7 +464,10 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] hover 只横向展开药丸、不落下面板；展开尾部为齿轮。**宽度改为按组成计算**，原因见 §6.4 的实现记录。
 - [x] `Disconnected` 按 §6.7 重定义为「没有任何智能体已连接」；灰色取 `#151515`，为界面上最暗值（§6.4）。
 - [x] 无刘海药丸在单产品工作集合内固定为 `196`，双产品 `218`，`Disconnected` 为 `136`；宽度用系统字体本机实测（§6.4）。
-- [ ] 会话行里的 `alpha fade mask` 仍是 `273` 定宽。行从 `472` 加宽到 `496` 之后，渐隐的收尾离右缘比原先远 `24`；遮罩应该跟着行走，或改为距右缘定距。
+- [ ] 会话行里的 `alpha fade mask` 仍是 `273` 定宽。行从 `472` 一路走到 `508`、内边距又从 `16` 收到 `6` 之后，渐隐的收尾离右缘比原先远了 `56`；遮罩应该跟着行走，或改为距右缘定距。
+- [x] 会话行的边距拆成 `6` 行块缩进 + `6` 行内边距，行内文字因此与状态矩阵、额度规则同落在 `12`（§3.3）；由 `aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` 锁定。
+- [ ] 折叠额度块（[`dual-agent-design.md`](dual-agent-design.md) §5.4，Figma §09）：折叠后页脚 `28`、面板恒为 `520 × 314`；`quota fold` 控件 `16 × 16`，两个状态由同一枚 chevron 旋转 `180°` 得到。**设计已定稿，尚未实现。**
+- [ ] `Colour bar` 作为第四个 `Distinguish products` 选项（[`dual-agent-design.md`](dual-agent-design.md) §4，Figma §06）：`2 × 40` 竖条、圆角 `1`，行内 `x = 0`。**设计已定稿，尚未实现**；它成立的前提是上一条的折叠先落地。
 - [ ] §3.3 的三条 compact 参考基线（`348 × 46`、`168 × 46`、`200 × 46`）在这次改动前就与文件里的组件不一致，本次未一并修正；组件当前是 `237`（刘海静息）、`285`（刘海计时）与 `165`（无刘海）。
 - [ ] `Disconnected` 这个词是否保留（备选 `No agents`、`Nothing running`），上屏后判断。
 - [x] ~~Claude Code 在场的第一条校正：按 `pid` + `procStart` 成对过滤幽灵会话。~~ **实测后撤销：`claude agents --json` 自己就是这么校验的**，而且它不输出 `procStart`，自己重做只能改读私有 schema。见 §6.5。

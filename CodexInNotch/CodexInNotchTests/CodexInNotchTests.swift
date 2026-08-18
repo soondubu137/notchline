@@ -506,6 +506,31 @@ struct CodexInNotchTests {
         #expect(PanelMetrics.claudeCodeOnlyFooterHeight < PanelMetrics.dualFooterHeight)
     }
 
+    /// A row's gutter and its padding are one margin split in two.
+    ///
+    /// The block is inset `6` so the hover fill does not run into the panel
+    /// edge, and the row pads the other `6` back, which puts its text on the
+    /// same margin as the matrix in the header and the quota rules in the
+    /// footer. Splitting it any other way is a visible change — the text stops
+    /// lining up with everything else in the panel — so it fails here first.
+    @Test @MainActor
+    func aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel() {
+        #expect(
+            PanelMetrics.sessionRowGutter + PanelMetrics.sessionRowPadding
+                == PanelMetrics.expandedHorizontalPadding
+        )
+        #expect(PanelMetrics.sessionRowGutter == 6)
+
+        // The block itself is wider than the panel's content box by the two
+        // gutters it gives back: 520 - 6 - 6, against the header's 520 - 12 - 12.
+        let block = PanelMetrics.expandedBaselineWidth
+            - PanelMetrics.sessionRowGutter * 2
+        let contentBox = PanelMetrics.expandedBaselineWidth
+            - PanelMetrics.expandedHorizontalPadding * 2
+        #expect(block == 508)
+        #expect(contentBox == 496)
+    }
+
     /// Rows only say which product they are while there is something to tell apart.
     @Test @MainActor
     func rowsAreAttributedOnlyWhenBothProductsHaveThem() {

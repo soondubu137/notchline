@@ -319,7 +319,7 @@ private struct ExpandedPanelContent: View {
                 }
                 .frame(
                     width: store.currentPanelSize.width
-                        - PanelMetrics.expandedHorizontalPadding * 2,
+                        - PanelMetrics.sessionRowGutter * 2,
                     height: PanelMetrics.sessionViewportHeight(
                         forSessionCount: store.sessions.count
                     )
@@ -493,7 +493,7 @@ private struct SessionRowContent: View {
                 SessionStatusControl(session: session)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, PanelMetrics.sessionRowPadding)
         }
         .contentShape(Rectangle())
         .frame(
