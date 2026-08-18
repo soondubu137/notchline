@@ -466,7 +466,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] 无刘海药丸在单产品工作集合内固定为 `196`，双产品 `218`，`Disconnected` 为 `136`；宽度用系统字体本机实测（§6.4）。
 - [ ] 会话行里的 `alpha fade mask` 仍是 `273` 定宽。行从 `472` 一路走到 `508`、内边距又从 `16` 收到 `6` 之后，渐隐的收尾离右缘比原先远了 `56`；遮罩应该跟着行走，或改为距右缘定距。
 - [x] 会话行的边距拆成 `6` 行块缩进 + `6` 行内边距，行内文字因此与状态矩阵、额度规则同落在 `12`（§3.3）；由 `aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` 锁定。
-- [ ] 折叠额度块（[`dual-agent-design.md`](dual-agent-design.md) §5.4，Figma §09）：折叠后页脚 `28`、面板恒为 `520 × 314`；`quota fold` 控件 `16 × 16`，两个状态由同一枚 chevron 旋转 `180°` 得到。**设计已定稿，尚未实现。**
+- [x] 折叠额度块（[`dual-agent-design.md`](dual-agent-design.md) §5.4，Figma §09）：折叠后页脚 `28`、面板恒为 `520 × 314`；`quota fold` 控件 `16 × 16`，两个状态由同一枚 chevron 旋转 `180°` 得到。**已实现**；点击区是整条末行，状态存于 `quotaFolded`。
 - [x] `Colour bar` 作为第四个 `Distinguish products` 选项（[`dual-agent-design.md`](dual-agent-design.md) §4，Figma §06）：`2 × 40` 竖条、圆角 `1`，行内 `x = 0`。**已实现**；`Distinguish products` 弹出菜单现在是四项。
 - [ ] §3.3 的三条 compact 参考基线（`348 × 46`、`168 × 46`、`200 × 46`）在这次改动前就与文件里的组件不一致，本次未一并修正；组件当前是 `237`（刘海静息）、`285`（刘海计时）与 `165`（无刘海）。
 - [ ] `Disconnected` 这个词是否保留（备选 `No agents`、`Nothing running`），上屏后判断。

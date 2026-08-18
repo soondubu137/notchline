@@ -210,8 +210,19 @@ enum PanelMetrics {
         )
     }
 
-    /// Footer height by shape. See `dual-agent-design.md` §5.1.
-    static func footerHeight(rules: [FooterRule]) -> CGFloat {
+    /// Folded, the footer keeps today's line and nothing else.
+    ///
+    /// One height for every shape, which is the point: folded, the expanded
+    /// panel is `314` whether one product is connected or both, and its height
+    /// stops depending on what happens to be running. See §5.4.
+    static let foldedFooterHeight: CGFloat = 28
+    /// The disclosure at the trailing end of the footer's last line.
+    static let quotaFoldControlSize: CGFloat = 16
+
+    /// Footer height by shape. See `dual-agent-design.md` §5.1 and §5.4.
+    static func footerHeight(rules: [FooterRule], isFolded: Bool = false) -> CGFloat {
+        // With no rules there is nothing to fold, so folding cannot shrink it.
+        if isFolded, !rules.isEmpty { return foldedFooterHeight }
         if rules.count > 1 { return dualFooterHeight }
         if rules.first?.windows.count ?? 0 > 1 { return claudeCodeOnlyFooterHeight }
         return expandedFooterHeight
@@ -705,6 +716,18 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
+    /// Whether the footer is showing today's line alone.
+    ///
+    /// One state for the whole footer, not one per product: the two share a
+    /// footer, and folding one product's rules while the other's stayed would
+    /// be a shape nothing in §5.1 describes. Remembered across openings so a
+    /// user who wants the quiet footer does not re-fold it every time, and it
+    /// defaults to unfolded so the rules are what a first open shows.
+    @Published var isQuotaFolded: Bool {
+        didSet {
+            preferences?.set(isQuotaFolded, forKey: Self.quotaFoldedDefaultsKey)
+        }
+    }
     @Published var showsContentPreviews: Bool {
         didSet {
             preferences?.set(
@@ -732,6 +755,7 @@ final class MonitorStore: ObservableObject {
 
     private static let contentPreviewDefaultsKey = "showsContentPreviews"
     private static let productAttributionDefaultsKey = "productAttribution"
+    private static let quotaFoldedDefaultsKey = "quotaFolded"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
@@ -827,6 +851,9 @@ final class MonitorStore: ObservableObject {
         self.productAttribution = preferences?.string(
             forKey: Self.productAttributionDefaultsKey
         ).flatMap(ProductAttributionStyle.init(rawValue:)) ?? .nameAndColour
+        self.isQuotaFolded = preferences?.object(
+            forKey: Self.quotaFoldedDefaultsKey
+        ) as? Bool ?? false
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
         ) ?? false
@@ -1107,18 +1134,48 @@ final class MonitorStore: ObservableObject {
         guard rules.count > 1 || (rules.first?.windows.count ?? 0) > 1 else {
             return nil
         }
+        return Self.todayLine(for: rules, tokensBy: todayTokens)
+    }
+
+    /// Today's tokens as the folded footer prints them.
+    ///
+    /// Folded there is no rule caption left to ride, so every shape needs this
+    /// line — including single-Codex, which does without one while its rule is
+    /// showing because the tokens are inline in that caption.
+    var foldedTodayText: String {
+        Self.todayLine(for: footerRules, tokensBy: todayTokens)
+    }
+
+    /// Nothing to fold when quota is unavailable and no rule is drawn.
+    var showsQuotaFoldControl: Bool { !footerRules.isEmpty }
+
+    func toggleQuotaFold() { isQuotaFolded.toggle() }
+
+    private func todayTokens(for agent: AgentKind) -> Int64? {
+        latestByAgent[agent]?.quota.todayTokens
+    }
+
+    /// Every connected product's tokens for today, on one line.
+    ///
+    /// The product is named only when there are two of them. With one connected
+    /// there is nothing to tell apart, so naming it is the same redundancy the
+    /// rows already avoid — see ``showsProductAttribution``.
+    private static func todayLine(
+        for rules: [FooterRule],
+        tokensBy tokens: (AgentKind) -> Int64?
+    ) -> String {
+        let names = rules.count > 1
         let parts = rules.compactMap { rule -> String? in
-            guard let tokens = latestByAgent[rule.agent]?.quota.todayTokens else {
-                return nil
-            }
-            return "\(rule.agent.displayName) \(UsageSummaryFormatter.compactTokenCount(tokens))"
+            guard let count = tokens(rule.agent) else { return nil }
+            let compact = UsageSummaryFormatter.compactTokenCount(count)
+            return names ? "\(rule.agent.displayName) \(compact)" : compact
         }
         guard !parts.isEmpty else { return "-- today" }
         return parts.joined(separator: " · ") + " today"
     }
 
     var expandedFooterHeight: CGFloat {
-        PanelMetrics.footerHeight(rules: footerRules)
+        PanelMetrics.footerHeight(rules: footerRules, isFolded: isQuotaFolded)
     }
 
     var expandedFooterText: String {

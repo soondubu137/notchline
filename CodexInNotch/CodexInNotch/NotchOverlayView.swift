@@ -348,12 +348,18 @@ private struct ExpandedPanelFooter: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.footerRuleSpacing) {
-            ForEach(store.footerRules) { rule in
-                FooterRuleRow(rule: rule, inlineTodayText: inlineTodayText)
-            }
+            if isFolded {
+                // Today's line rises to where a caption always starts, at the
+                // top of the footer box, and the rules are simply not drawn.
+                QuotaFoldLine { FooterCaption(store.foldedTodayText) }
+            } else {
+                ForEach(store.footerRules) { rule in
+                    FooterRuleRow(rule: rule, inlineTodayText: inlineTodayText)
+                }
 
-            if let today = store.footerTodayText {
-                FooterCaption(today)
+                if let today = store.footerTodayText {
+                    QuotaFoldLine { FooterCaption(today) }
+                }
             }
 
             Spacer(minLength: 0)
@@ -363,10 +369,77 @@ private struct ExpandedPanelFooter: View {
         .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
     }
 
+    private var isFolded: Bool {
+        store.isQuotaFolded && store.showsQuotaFoldControl
+    }
+
     /// The single-Codex footer keeps today's tokens in the one caption it has,
     /// rather than spending a second line on three words.
     private var inlineTodayText: String? {
         store.footerTodayText == nil ? store.expandedFooterText : nil
+    }
+}
+
+/// The footer's last line, and the disclosure that folds the rules away.
+///
+/// The whole line is the hit target — the chevron is the affordance, not the
+/// target — so clicking the quota caption itself folds the block, which is what
+/// a user tries first.
+private struct QuotaFoldLine<Content: View>: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        Group {
+            if store.showsQuotaFoldControl {
+                Button {
+                    store.toggleQuotaFold()
+                } label: {
+                    HStack(spacing: PanelMetrics.footerWindowSpacing) {
+                        content()
+                        QuotaFoldChevron(isFolded: store.isQuotaFolded)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    store.isQuotaFolded ? "Show quota rules" : "Hide quota rules"
+                )
+            } else {
+                content()
+            }
+        }
+        // The control is a point taller than the caption it rides. The footer's
+        // own height does not move: the trailing `Spacer` absorbs it.
+        .frame(height: PanelMetrics.quotaFoldControlSize)
+    }
+}
+
+/// One glyph, turned 180° between the two states rather than swapped for a
+/// second drawing.
+///
+/// It points down while folded because the panel hangs from the notch and can
+/// only grow downward — the chevron points the way the panel will move, which is
+/// also the "show more" every list uses.
+private struct QuotaFoldChevron: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    let isFolded: Bool
+
+    var body: some View {
+        Image(systemName: "chevron.down")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(NotchPalette.label)
+            .frame(
+                width: PanelMetrics.quotaFoldControlSize,
+                height: PanelMetrics.quotaFoldControlSize
+            )
+            .rotationEffect(.degrees(isFolded ? 0 : 180))
+            .animation(
+                store.reduceMotion ? nil : .easeOut(duration: 0.16),
+                value: isFolded
+            )
     }
 }
 
@@ -388,7 +461,11 @@ private struct FooterRuleRow: View {
             .frame(height: PanelMetrics.footerRuleHeight)
 
             if let inlineTodayText {
-                FooterCaption(inlineTodayText)
+                // Today's tokens are already on this caption, so there is no
+                // totals line below to carry the disclosure — and adding one
+                // would spend exactly the height folding is meant to save. It
+                // rides this line instead.
+                QuotaFoldLine { FooterCaption(inlineTodayText) }
             } else {
                 HStack(spacing: PanelMetrics.footerWindowSpacing) {
                     ForEach(rule.windows.indices, id: \.self) { index in

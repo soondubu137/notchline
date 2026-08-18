@@ -486,6 +486,126 @@ struct CodexInNotchTests {
         #expect(store.expandedFooterHeight == PanelMetrics.dualFooterHeight)
     }
 
+    /// Folded, the panel is one height whatever is connected.
+    ///
+    /// That is the whole point of §5.4: unfolded the expanded panel is `326`,
+    /// `340` or `370` depending on which products happen to be running, and
+    /// folded it stops depending on that at all.
+    @Test @MainActor
+    func aFoldedFooterIsTheSameHeightForEveryShape() {
+        func rules(_ shape: [(AgentKind, Int)]) -> [FooterRule] {
+            shape.map { agent, windowCount in
+                FooterRule(
+                    agent: agent,
+                    windows: (0..<windowCount).map { _ in
+                        FooterWindow(fill: 0.5, caption: "c")
+                    }
+                )
+            }
+        }
+        let codexAlone = rules([(.codex, 1)])
+        let claudeAlone = rules([(.claudeCode, 2)])
+        let both = rules([(.codex, 1), (.claudeCode, 2)])
+
+        func panelHeight(_ shape: [FooterRule], folded: Bool) -> CGFloat {
+            PanelMetrics.referenceCompactHeight
+                + PanelMetrics.expandedContentHeight(
+                    forSessionCount: 3,
+                    footerHeight: PanelMetrics.footerHeight(
+                        rules: shape, isFolded: folded
+                    )
+                )
+        }
+
+        // Unfolded: three shapes, three heights. 46 + 240 + footer.
+        #expect(panelHeight(codexAlone, folded: false) == 326)
+        #expect(panelHeight(claudeAlone, folded: false) == 340)
+        #expect(panelHeight(both, folded: false) == 370)
+
+        // Folded: one footer height, and the same panel every time.
+        #expect(panelHeight(codexAlone, folded: true) == 314)
+        #expect(panelHeight(claudeAlone, folded: true) == 314)
+        #expect(panelHeight(both, folded: true) == 314)
+        #expect(
+            PanelMetrics.footerHeight(rules: both, isFolded: true)
+                == PanelMetrics.foldedFooterHeight
+        )
+
+        // Nothing drawn is nothing to fold, so folding must not shrink it.
+        #expect(
+            PanelMetrics.footerHeight(rules: [], isFolded: true)
+                == PanelMetrics.footerHeight(rules: [], isFolded: false)
+        )
+    }
+
+    /// Today's line is the one thing folding never takes away.
+    ///
+    /// Codex alone is the trap: its tokens live inline in the rule's caption, so
+    /// unfolded there is no totals line at all — and folded, that line has to
+    /// come back or the number disappears with the rule.
+    @Test @MainActor
+    func foldingKeepsTodaysTokensInEveryShape() {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .codex,
+                availability: .ready,
+                sessions: [],
+                quota: QuotaSnapshot(
+                    remainingPercent: 72, resetsAt: nil, todayTokens: 310_100_000
+                ),
+                diagnostic: nil
+            )
+        )
+        // Unfolded there is no totals line; the tokens ride the rule's caption.
+        #expect(store.footerTodayText == nil)
+        // Folded there has to be one, and with one product it does not name it.
+        #expect(store.foldedTodayText == "310M today")
+        #expect(!store.foldedTodayText.contains("Codex"))
+
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [],
+                quota: QuotaSnapshot(
+                    windows: [
+                        QuotaWindow(label: "5 h", remainingPercent: 40, resetsAt: nil),
+                        QuotaWindow(label: "7 d", remainingPercent: 87, resetsAt: nil)
+                    ],
+                    todayTokens: 208_600_000
+                ),
+                diagnostic: nil
+            )
+        )
+        // Two products, so both are named, folded or not — the line is the same.
+        #expect(store.foldedTodayText == store.footerTodayText)
+        #expect(store.foldedTodayText.contains("Codex"))
+        #expect(store.foldedTodayText.contains("Claude Code"))
+    }
+
+    /// The fold is remembered, and starts showing the rules.
+    @Test @MainActor
+    func theFoldIsOneRememberedStateForTheWholeFooter() {
+        let defaults = UserDefaults(suiteName: "fold-\(UUID().uuidString)")!
+        let store = MonitorStore(services: [], preferences: defaults)
+        #expect(!store.isQuotaFolded)
+
+        store.toggleQuotaFold()
+        #expect(store.isQuotaFolded)
+        #expect(MonitorStore(services: [], preferences: defaults).isQuotaFolded)
+
+        store.toggleQuotaFold()
+        #expect(!MonitorStore(services: [], preferences: defaults).isQuotaFolded)
+
+        // The control follows the rules, not the reading: an unavailable quota
+        // still draws its track greyed, and that track is one a user may well
+        // want folded away. It is only withheld when no rule is drawn at all,
+        // which `aFoldedFooterIsTheSameHeightForEveryShape` covers by height.
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
+        #expect(store.showsQuotaFoldControl)
+    }
+
     /// The panel grows for the second product's rules, and by exactly that much.
     @Test @MainActor
     func theDualProductPanelIsTallerByTheExtraFooterRules() {
