@@ -152,6 +152,14 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         if hookState.didConsumeEvents {
             observedDesktopProcessIdentifier = desktopProcessIdentifier
         }
+        // Presence is kernel truth here, so it is never `unknown`: the running
+        // application list cannot go stale or fail to answer the way a cached
+        // command output can. It is also knowable before anything is known
+        // about turns, which is the asymmetry worth keeping — a just-launched
+        // app can say Codex is open while still knowing nothing about its work.
+        let presence: AgentPresence = desktopProcessIdentifier == nil
+            ? .closed
+            : .open
 
         let hasLiveHookObservation = hasCurrentHookObservation(
             hookState: hookState,
@@ -170,7 +178,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     sessions: [],
                     quota: .unavailable,
                     diagnostic: diagnostic,
-                    setupStatus: setupStatus
+                    setupStatus: setupStatus,
+                    presence: presence
                 )
             )
         }
@@ -238,7 +247,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                                 metadata: projectSnapshot
                             )
                         ),
-                        setupStatus: setupStatus
+                        setupStatus: setupStatus,
+                        presence: presence
                     )
                 )
             }
@@ -267,7 +277,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     sessions: [],
                     quota: cachedQuota,
                     diagnostic: nil,
-                    setupStatus: setupStatus
+                    setupStatus: setupStatus,
+                    presence: presence
                 )
             )
         } catch let error as CodexAppServerError {
@@ -276,7 +287,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     availability: .unsupportedVersion,
                     sessions: [],
                     quota: .unavailable,
-                    diagnostic: error.localizedDescription
+                    diagnostic: error.localizedDescription,
+                    presence: presence
                 )
             }
             if error.isTransientRequestFailure {
@@ -286,7 +298,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                         availability: .disconnected,
                         sessions: [],
                         quota: .unavailable,
-                        diagnostic: "Codex App Server 未响应：\(error.localizedDescription)"
+                        diagnostic: "Codex App Server 未响应：\(error.localizedDescription)",
+                        presence: presence
                     )
                 }
                 return snapshotPreservingTrustedState(after: error)
@@ -298,7 +311,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 availability: .disconnected,
                 sessions: [],
                 quota: .unavailable,
-                diagnostic: error.localizedDescription
+                diagnostic: error.localizedDescription,
+                presence: presence
             )
         } catch {
             await client.disconnect()
@@ -306,7 +320,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 availability: .disconnected,
                 sessions: [],
                 quota: .unavailable,
-                diagnostic: error.localizedDescription
+                diagnostic: error.localizedDescription,
+                presence: presence
             )
         }
     }

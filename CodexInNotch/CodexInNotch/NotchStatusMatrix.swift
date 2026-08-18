@@ -249,8 +249,9 @@ struct UsageMeter: View {
 /// What the 3×3 indicator is doing, independent of which status drove it.
 ///
 /// Several statuses collapse onto one appearance: input and approval both read
-/// as "needs attention", and every non-session state (idle, connecting, the
-/// setup and version states) reads as "inactive".
+/// as "needs attention", and every non-session state (connected, disconnected,
+/// and the retired thin states the expanded panel still says) reads as
+/// "inactive".
 enum NotchMatrixState: Equatable {
     case running
     case needsAttention
@@ -265,7 +266,7 @@ enum NotchMatrixState: Equatable {
             self = .needsAttention
         case .completed:
             self = .completed
-        case .idle, .connecting, .disconnected,
+        case .connected, .connecting, .disconnected,
              .setupRequired, .updateAgent, .unsupportedVersion:
             self = .inactive
         }
@@ -319,7 +320,7 @@ private enum MatrixTrack {
         0.946, 0.883, 0.800, 0.704, 0.600, 0.496, 0.400, 0.317,
         0.254, 0.214, 0.200, 0.214, 0.254, 0.317, 0.400, 0.496
     ]
-    /// Idle and disconnected hold the resting floor of the completed breath.
+    /// Connected and disconnected hold the resting floor of the completed breath.
     static let inactiveLevel = 0.200
 }
 

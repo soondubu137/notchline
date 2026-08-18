@@ -30,8 +30,32 @@ enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
     }
 }
 
+/// Whether a product is open, as the user would judge it by glancing at their
+/// own machine.
+///
+/// Deliberately not derived from whether the product has work in flight.
+/// ``ClaudeCodeSessionListing`` answers "which sessions exist" and the Turn
+/// reducer answers "what are they doing"; presence draws the matrix and the
+/// reducer lights it. Re-merging the two would put the mark back to reporting
+/// our own plumbing instead of something the user can check for themselves.
+enum AgentPresence: String, CaseIterable, Codable, Sendable {
+    /// Open, on evidence.
+    case open
+    /// Not open, on evidence.
+    case closed
+    /// No trustworthy evidence either way — the only source has been failing
+    /// long enough that its last answer has expired. It joins `closed` in every
+    /// decision; it stays a separate value because the reason differs, and
+    /// because a source that can never say this is a source that believes a
+    /// stale answer forever.
+    case unknown
+
+    /// Only `open` is presence. Unknown is not a weak yes.
+    var isOpen: Bool { self == .open }
+}
+
 enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
-    case idle
+    case connected
     case setupRequired
     case connecting
     case running
@@ -57,8 +81,8 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     /// would be a lie.
     func displayName(for agent: AgentKind?) -> String {
         switch self {
-        case .idle:
-            "Idle"
+        case .connected:
+            "Connected"
         case .setupRequired:
             "Set up integration"
         case .connecting:
@@ -94,8 +118,8 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     /// decides how wide that panel is.
     func compactDisplayName(for agent: AgentKind?) -> String {
         switch self {
-        case .idle:
-            "Idle"
+        case .connected:
+            "Connected"
         case .setupRequired:
             "Set up"
         case .connecting:
@@ -133,8 +157,8 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     func controlTitle(for agent: AgentKind?) -> String {
         let product = agent?.displayName ?? "智能体"
         switch self {
-        case .idle:
-            return "空闲"
+        case .connected:
+            return "已连接"
         case .setupRequired:
             return "设置 \(product) 集成"
         case .connecting:
@@ -159,6 +183,22 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     var isRunning: Bool {
         self == .running
     }
+
+    /// The values the collapsed surface is allowed to reach.
+    ///
+    /// Six, not ten: two system values plus the four session ones. The other
+    /// four stay in the enum because the expanded panel and Settings still say
+    /// them, but they no longer appear beside the notch — the collapsed mark
+    /// reports whether the user has an agent open, not how our own plumbing is
+    /// doing. See `docs/figma-design.md` §6.4 and §6.6.
+    static let collapsedReachable: Set<MonitorStatus> = [
+        .connected,
+        .disconnected,
+        .running,
+        .inputNeeded,
+        .approvalNeeded,
+        .completed
+    ]
 }
 
 enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
@@ -255,6 +295,13 @@ enum MonitorAvailability: Equatable, Sendable {
     case unsupportedVersion
     case disconnected
 
+    /// The sentence the *expanded* panel uses for this availability.
+    ///
+    /// No longer the collapsed status: that one is decided by presence as well
+    /// (``AgentSnapshot/isConnected``), so availability alone can no longer
+    /// name it. `.ready` maps to `.connected` for coherence only —
+    /// ``emptyListMessage(for:)`` answers "No active turns" for that case
+    /// before ever reaching here.
     var status: MonitorStatus {
         switch self {
         case .setupRequired:
@@ -262,7 +309,7 @@ enum MonitorAvailability: Equatable, Sendable {
         case .connecting:
             .connecting
         case .ready:
-            .idle
+            .connected
         case .updateAgent:
             .updateAgent
         case .unsupportedVersion:
@@ -442,6 +489,10 @@ struct AgentSnapshot: Equatable, Sendable {
     /// snapshot. It rides along so the store never has to ask a second time --
     /// asking used to consume the Hook queue a second time per cycle.
     let setupStatus: HookSetupStatus
+    /// Whether the product itself is open, independent of whether we can watch
+    /// it. Sourced per product: Codex from the running-application list, Claude
+    /// Code from its live session list.
+    let presence: AgentPresence
 
     nonisolated init(
         agent: AgentKind = .codex,
@@ -449,7 +500,8 @@ struct AgentSnapshot: Equatable, Sendable {
         sessions: [MonitoredSession],
         quota: QuotaSnapshot,
         diagnostic: String?,
-        setupStatus: HookSetupStatus = .active
+        setupStatus: HookSetupStatus = .active,
+        presence: AgentPresence = .open
     ) {
         self.agent = agent
         self.availability = availability
@@ -457,6 +509,27 @@ struct AgentSnapshot: Equatable, Sendable {
         self.quota = quota
         self.diagnostic = diagnostic
         self.setupStatus = setupStatus
+        self.presence = presence
+    }
+
+    /// Whether this product counts as connected: open *and* observable.
+    ///
+    /// The two halves are independent facts that can contradict each other.
+    /// ADR 0010 leaves Claude Code's hook registration to the user, so "open
+    /// but not reachable" is an ordinary first run rather than an edge case,
+    /// and it reads as disconnected — which is what the word means. You cannot
+    /// be disconnected from something you never opened; you certainly are from
+    /// something open that you cannot reach.
+    ///
+    /// `.connecting` is not connected. It is the state of not having
+    /// established the observation contract yet, and reporting a connection we
+    /// have not made would be guessing at business state — the one thing
+    /// recovery logic is never allowed to do. On a notched display the cost is
+    /// nil anyway: at rest a disconnected surface draws nothing, so a product
+    /// still being reached shows no mark rather than a wrong one, and the mark
+    /// arrives when the contract does.
+    nonisolated var isConnected: Bool {
+        presence.isOpen && availability == .ready
     }
 
     static let connecting = AgentSnapshot(
@@ -464,7 +537,8 @@ struct AgentSnapshot: Equatable, Sendable {
         sessions: [],
         quota: .unavailable,
         diagnostic: nil,
-        setupStatus: .notInstalled
+        setupStatus: .notInstalled,
+        presence: .unknown
     )
 }
 
@@ -519,6 +593,15 @@ struct MonitorSnapshot: Equatable, Sendable {
         return owners.count == 1 ? owners.first : nil
     }
 
+    /// The products that are open and reachable, in display order.
+    ///
+    /// One matrix is drawn per entry, so this is also what the collapsed pill
+    /// is sized for. Empty means the surface is `Disconnected` and draws the
+    /// grey resting mark instead of any product's.
+    nonisolated var connectedAgents: [AgentKind] {
+        agents.filter(\.isConnected).map(\.agent)
+    }
+
     /// The single quota window the footer draws while one product is running.
     /// A two-product footer reads ``agents`` directly, because it has one rule
     /// per product rather than one rule.
@@ -539,10 +622,16 @@ struct MonitorSnapshot: Equatable, Sendable {
             .joined(separator: "\n")
     }
 
+    /// The seed the store holds before any provider has answered.
+    ///
+    /// Disconnected, not `Connecting`: we have not reached anything yet, and
+    /// that is exactly what the word now means (§6.7). It also means a launch
+    /// draws nothing on a notched display until a product actually answers,
+    /// instead of flashing a state about ourselves.
     static let connecting = MonitorSnapshot(
         agents: [.connecting],
         sessions: [],
-        status: .connecting
+        status: .disconnected
     )
 }
 
@@ -583,7 +672,12 @@ enum MonitorAggregation {
         for status in priority where sessions.contains(where: { $0.status == status }) {
             return status.monitorStatus
         }
-        return availability(agents: agents).status
+        // No turns: the surface reports presence rather than our own plumbing.
+        // Six thin states used to live here, four of which the user could do
+        // nothing about and one of which — `Connecting` — existed only to
+        // explain a wait. They now speak in the expanded panel and in Settings,
+        // where there is room to say what to do about them.
+        return agents.contains(where: \.isConnected) ? .connected : .disconnected
     }
 
     /// Ready if any product is being watched properly; otherwise the most

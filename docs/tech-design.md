@@ -34,7 +34,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 尚未满足、因此仍阻塞 V1 发布：
 
-- 独立 App Server 不共享 Codex Desktop 的进程内事件流，且实测无法回答 Turn 级问题（见下），因此启动不做现状同步：只要 App Server 完成握手并成功返回一次 `thread/list`，即发布 Ready 并以空集合聚合为 Idle。只有 App Server 没有响应或连接失败才显示 `Codex disconnected`；校验请求尚未完成时保持 Connecting。跨 Codex in Notch 重启持久化的 Hook 标记只用于配置健康判断，不得恢复任何会话状态。
+- 独立 App Server 不共享 Codex Desktop 的进程内事件流，且实测无法回答 Turn 级问题（见下），因此启动不做现状同步：只要 App Server 完成握手并成功返回一次 `thread/list`，即发布 Ready 并以空集合发布。在场此时已经可知（Codex Desktop 是否在运行），所以收起态可以诚实地显示 `Connected` 而对轮次一无所知——这处不对称是刻意保留的：在场在本应用启动的瞬间就可知，轮次不可知。只有 App Server 没有响应或连接失败才显示 `Codex disconnected`；校验请求尚未完成时保持 Connecting。跨 Codex in Notch 重启持久化的 Hook 标记只用于配置健康判断，不得恢复任何会话状态。
 - **实测边界（Codex CLI `0.148.0-alpha.9`，在一个真实运行中的 Turn 上采样）**：独立 App Server 的 `thread/loaded/list` 返回空；所有 Thread 的 `status.type` 恒为 `notLoaded`；`thread/list` 契约上永不返回 `turns`；`thread/read` 即使带 `includeTurns: true` 也从不出现 `inProgress`——正在运行的 Turn 被记为 `interrupted` 且 `completedAt` 为 null。直接后果：依赖 `status.type == "active"` 的 `activeFlags` 校正在当前拓扑下**永远不成立**。该机制（`activeEvidence`、`terminalStatus`、`reconcileActiveStatus`、`markCompleted` 与 `hasLiveBoundary`）已整体删除，因为保留空转代码会让后续设计误以为存在这条能力。若将来出现共享运行时拓扑，应基于当时验证过的字段重新设计，而不是复活这段代码。
 - 当前公开协议仍没有 Desktop 蓝点对应的已读字段；生产实现依赖第 1.3 节登记的 Desktop 私有只读 schema。Desktop 升级后的真实 read/unread 版本矩阵仍是发布验证项，任何不兼容都必须保守保留终态行。
 - Hooks 可以可靠覆盖开始、两种审批形态、`request_user_input` 和终态边界；Approval needed 一律由某个工具调用的开合区间证明（专用审批工具自成区间，普通工具由 `PermissionRequest` 指名并借用其仍打开的调用 id），孤立的 `PermissionRequest` 不证明仍需人工批准。App Server 的 `completed`、`failed`、`interrupted` 都映射为 Completed，仍需真实 Desktop 样本矩阵验证端到端覆盖。
@@ -204,7 +204,14 @@ struct TurnEvidence: Equatable {
 }
 ```
 
-`SessionStatus` 不包含 Idle 或 Disconnected。Idle 从“集成 ready 且成员集合为空”推导；Disconnected 属于 `IntegrationAvailability`。
+`SessionStatus` 不包含 Connected 或 Disconnected。收起态在成员集合为空时显示的两个系统状态由 `MonitorAggregation.status` 推导：**任一产品「已打开且 availability 为 ready」时是 `Connected`，否则是 `Disconnected`**。availability 本身仍是 `MonitorAvailability`，但它不再单独决定收起态取值——「打开了却够不着」和「没打开」都落到 `Disconnected`。
+
+在场是 `AgentSnapshot.presence`（`AgentPresence`：已打开／未打开／未知），与 availability 并列的独立事实：
+
+- **Codex**：`NSRunningApplication.runningApplications(withBundleIdentifier:)`，内核事实，因此永不为未知。
+- **Claude Code**：`ClaudeCodeSessionListing.presence()`，由活跃会话列表是否非空回答。列表是缓存的，所以只有它能报告未知——见第 15 节的可信上限。
+
+`ClaudeCodeSessionListing` 的两个方法回答两个不同的问题，不得合并：`liveSessions()` 回答「有哪些会话」，Turn reducer 回答「它们在做什么」。**在场画出矩阵，reducer 点亮它。** 一个没有轮次在跑的会话仍然是一个打开着的 Claude Code。
 
 `TurnEvidence` 是内存中的 reducer 真值，不直接持久化。当前 Turn 从 Running 开始；Input needed 与 Approval needed 都只是在同一活动 Turn 上暂时覆盖 Running，等待恢复信号回到 Running；任何可信执行结束信号进入不可逆的 Completed。缺失、超时或未知信号不创建第五种状态，只保留最后可信值。
 
@@ -271,7 +278,7 @@ Hook helper 的源码发生版本变化不等于集成未安装。安装器直�
 
 写入前后各有一道保护：写入前比对文件字节是否仍是读取时那份（避免与 Codex `/hooks` 的并发写互相覆盖），写入后重新读回校验六个定义确实存在／确实已清除。无改动时根本不写，避免无谓地重排用户的文件格式。
 
-这里**不再记录内容 hash**。曾经存在的 `managedHookSHA256` 与 helper 位于同一目录、同一属主与权限，能改写 helper 的主体同样能改写该 hash，因此它不提供任何防篡改能力；而 `repairRequired` 并不会把 helper 从 `hooks.json` 注销，Codex 仍会继续执行它。也就是说，遇到被替换的 helper 时，自动升级回内置版本比标记 `repairRequired` 更快地消除外来代码。缺少任一定义、定义结构不精确，或 helper 存在但安装标记缺失（本应用没有安装记录、来源不明）时仍 fail closed 为 `repairRequired`；Settings 总开关显示 Off，用户显式重新开启后才修复。这样应用升级后无需重新接受未改变的受信 helper；但完整注册集合和历史信任本身不能让运行时进入 Ready。只有当前态来源确认集合确实为空时，才能由空集合推导 Idle。
+这里**不再记录内容 hash**。曾经存在的 `managedHookSHA256` 与 helper 位于同一目录、同一属主与权限，能改写 helper 的主体同样能改写该 hash，因此它不提供任何防篡改能力；而 `repairRequired` 并不会把 helper 从 `hooks.json` 注销，Codex 仍会继续执行它。也就是说，遇到被替换的 helper 时，自动升级回内置版本比标记 `repairRequired` 更快地消除外来代码。缺少任一定义、定义结构不精确，或 helper 存在但安装标记缺失（本应用没有安装记录、来源不明）时仍 fail closed 为 `repairRequired`；Settings 总开关显示 Off，用户显式重新开启后才修复。这样应用升级后无需重新接受未改变的受信 helper；但完整注册集合和历史信任本身不能让运行时进入 Ready。只有当前态来源确认集合确实为空时，才能由空集合推导「没有东西在工作」。同一条规则对称地约束在场：只有确实读到了一个空的会话列表才算「未打开」，读不到时是**未知**，未知落到 `Disconnected`。
 
 ### 7.3 集合校正时机
 
@@ -355,7 +362,7 @@ Input needed
 > Completed
 ```
 
-ready 且集合为空时为 Idle。availability 非 ready 时，汇总改由全局可用性状态驱动并清空列表。
+集合为空时，收起态取 `Connected` 或 `Disconnected`：至少一个产品已打开且 ready 时为前者，否则为后者。availability 非 ready 时清空该产品的列表；具体原因（尚未集成、版本过旧、连接断开）不进入收起态，只在展开面板与 Settings 中说明。
 
 列表按同一优先级排序，同级按 `observedAtMs` 降序。repository 立即提交顺序，但 UI 在用户滚动或悬停时保留当前可见锚点；变化发生在视口外时显示轻量更新指示。
 
@@ -448,22 +455,38 @@ reset 按本地日历日而不是 24 小时浮点时长计算：同一天为 `Re
 
 ## 15. 可用性与局部降级
 
-| 故障 | UI |
-| --- | --- |
-| 无活动或未读终态 | 薄层 `No active turns` |
-| App Server 已开始连接、会话快照尚未返回 | 薄层 `Connecting to Codex`，≤ 5s |
-| 版本过旧 | 清空列表，薄层 `Update Codex` |
-| 版本未知/未经验证 | 清空列表，薄层 `Codex version unsupported` |
-| App Server 无响应、启动失败或连接断开 | 清空列表，薄层 `Codex disconnected` |
-| Desktop 未读主状态缺失、损坏或不兼容 | 保留尚未隐藏的终态行并显示诊断；不得把 backup/LKG 的空集合作为已读证据 |
-| 额度失败 | 灰色圆环；列表不变 |
-| 某行预览失败 | 隐藏该预览；其他字段不变 |
+下表的「薄层」全部指**展开面板**。收起态只有 `Connected` 与 `Disconnected` 两个系统状态，原因不在收起态出现（见第 4 节与 `figma-design.md` §6.6）。
+
+| 故障 | 收起态 | 展开面板 |
+| --- | --- | --- |
+| 无活动或未读终态，且产品已打开 | `Connected` | 薄层 `No active turns` |
+| App Server 已开始连接、会话快照尚未返回 | `Disconnected` | 薄层 `Connecting to Codex`，≤ 5s |
+| 尚未注册集成（产品可能已打开） | `Disconnected` | 薄层 `Set up integration` |
+| 版本过旧 | `Disconnected` | 清空列表，薄层 `Update Codex` |
+| 版本未知/未经验证 | `Disconnected` | 清空列表，薄层 `Codex version unsupported` |
+| App Server 无响应、启动失败或连接断开 | `Disconnected` | 清空列表，薄层 `Codex disconnected` |
+| Desktop 未读主状态缺失、损坏或不兼容 | 不变 | 保留尚未隐藏的终态行并显示诊断；不得把 backup/LKG 的空集合作为已读证据 |
+| 额度失败 | 不变 | 灰色圆环；列表不变 |
+| 某行预览失败 | 不变 | 隐藏该预览；其他字段不变 |
 
 上述 Notch 薄层不提供按钮。修复/移除集成只在首次引导或 Settings 中执行。
 
+### 15.1 在场的可信上限
+
+Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的在场来自 `claude agents --json` 的一次外部读取，因此需要两个独立的时间参数：
+
+| 参数 | 值 | 含义 |
+| --- | --- | --- |
+| `freshness` | `30s` | 多久之后重新读取 |
+| `trustCeiling` | `90s` | **陈旧答案还能被相信多久**（三次连续失败） |
+
+读取失败时仍然返回上一次结果，且不更新「上次成功时间」。这对**行**是对的——一次失败不是所有会话都结束了的证据，不该据此退休所有行。但在场现在决定 `Connected` 与 `Disconnected`：`claude` 被卸载、改名或移出 `PATH` 后读取会永久失败，若两个参数合一，药丸会在该进程的余生里一直显示 `Connected`。超过 `trustCeiling` 后在场为**未知**，未知落到 `Disconnected`——按第 4 节的语义这不是妥协而是字面真相：我们确实没有任何可用的连接。
+
+**幽灵会话不需要本应用处理。** 被 `SIGKILL` 的会话来不及删除 `~/.claude/sessions/<pid>.json`，但 `claude agents --json` 按 `pid` + `procStart` 成对校验后才输出，实测（2.1.229）会滤掉它，也滤掉指向被回收 PID 的条目。该命令不输出 `procStart`，自己重做这条校验必须改读私有 schema，反而会新增一项非公开依赖去复制一条已经正确的公开实现。详见 `figma-design.md` §6.5。
+
 单次 App Server 查询超时不等于连接断开。传输层保留现有连接，UI 继续展示最后一次可信内存快照，并在同一连接上启动至多一个独立探活流程：先等待 3 秒宽限期；其间任意带 `id` 的响应（包括晚到响应）都证明 RPC event loop 仍活跃并取消探活。宽限期内没有响应时，调用官方只读且只访问内存集合的 `thread/loaded/list`，单次最多等待 5 秒；只有该探活也超时且期间仍无任何响应，才重建只读 App Server 传输。并行业务请求超时共享同一个探活，不累计为多次连接失败；远端方法错误和协议错误本身已经收到响应，也不得触发进程重启。该恢复动作不清空 Hook reducer 或最近可信 UI。已有 Ready 等可信状态时，只有 `disconnected` 连续超过 3 秒才发布全局断开状态并清空列表；启动仍为 Connecting 且初始化已确认无响应时直接发布 Disconnected。
 
-尚未建立本次启动后的 Hook 观察时，启动与常规轮询只用最多 5 秒的 `thread/list` 做一次**只读连通性校验**，其结果不得产生任何会话行。请求完成前保持 Connecting；成功返回后发布 Ready 并以空集合聚合为 Idle；App Server 未响应或连接失败才发布 Disconnected。该分支不重建启动前的任何会话（cold-start sync 已明确列为非目标，理由见 PRD 第 3 节），因此也不需要 `thread/loaded/list` 或逐 Thread 详情读取。建立启动后 Hook 观察后，Hook 状态立即发布；后台校正按成本分成两条独立的单飞路径。Hook 跟踪的 Thread 用 `thread/read`（`includeTurns: false`，最多 5 秒，单条元数据陈旧超过 10 秒才重取）刷新标题、preview 与 `status`；全量分页 `thread/list` 只在 Hook 出现从未列出过的 Thread、或 30 秒成员关系到期时运行，最多 15 秒。两条路径各自同一时间只允许一个请求，失败后至少 60 秒再重试，且都不得位于 Hook → UI 关键路径上。服务端不支持 `thread/read`（`-32601`）时只探测一次，之后永久回退为由 `thread/list` 提供元数据，行为退化为旧路径而不丢标题。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 直接把同一 Turn 标记为 Completed，不发起终态详情读取。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
+尚未建立本次启动后的 Hook 观察时，启动与常规轮询只用最多 5 秒的 `thread/list` 做一次**只读连通性校验**，其结果不得产生任何会话行。请求完成前保持 Connecting（该 availability 不进入收起态，收起态在此期间为 `Disconnected`——观察契约尚未建立，就还没连上）；成功返回后发布 Ready，此时若 Codex Desktop 也在运行，收起态转为 `Connected`；App Server 未响应或连接失败才发布 availability 层面的 Disconnected。该分支不重建启动前的任何会话（cold-start sync 已明确列为非目标，理由见 PRD 第 3 节），因此也不需要 `thread/loaded/list` 或逐 Thread 详情读取。建立启动后 Hook 观察后，Hook 状态立即发布；后台校正按成本分成两条独立的单飞路径。Hook 跟踪的 Thread 用 `thread/read`（`includeTurns: false`，最多 5 秒，单条元数据陈旧超过 10 秒才重取）刷新标题、preview 与 `status`；全量分页 `thread/list` 只在 Hook 出现从未列出过的 Thread、或 30 秒成员关系到期时运行，最多 15 秒。两条路径各自同一时间只允许一个请求，失败后至少 60 秒再重试，且都不得位于 Hook → UI 关键路径上。服务端不支持 `thread/read`（`-32601`）时只探测一次，之后永久回退为由 `thread/list` 提供元数据，行为退化为旧路径而不丢标题。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 直接把同一 Turn 标记为 Completed，不发起终态详情读取。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
 
 ## 16. 设置与持久化
 

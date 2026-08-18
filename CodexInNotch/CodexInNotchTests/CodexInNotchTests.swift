@@ -5,17 +5,21 @@ import Testing
 @testable import CodexInNotch
 
 struct CodexInNotchTests {
-    /// A no-notch panel is one width, always. It used to measure itself, so it
-    /// resized whenever the status changed or a turn started or finished —
-    /// which on a menu bar reads as flicker rather than information.
+    /// A no-notch panel is one width across the whole working set.
+    ///
+    /// It used to measure itself, so it resized whenever the status changed or
+    /// a turn started or finished — which on a menu bar reads as flicker rather
+    /// than information. The set it has to hold still has changed: it is now
+    /// the states an agent that is *connected* can be in, and a `Disconnected`
+    /// pill is deliberately allowed to be narrower.
     @Test @MainActor
-    func noNotchCompactIsOneFixedWidthPerConfiguredAgentSet() {
-        for configured in [Set([AgentKind.codex]), Set(AgentKind.allCases)] {
+    func noNotchCompactIsOneFixedWidthAcrossTheWorkingSet() {
+        for matrixCount in 1 ... 2 {
             var widths: Set<CGFloat> = []
             var heights: Set<CGFloat> = []
-            for status in MonitorStatus.allCases {
-                for agent in configured {
-                    for timerText in [nil, "0:07", "1:23", "1:02:03"] as [String?] {
+            for status in PanelMetrics.workingStatuses {
+                for agent in AgentKind.allCases {
+                    for timerText in [nil, "0:07", "1:23", "00:00:00"] as [String?] {
                         for barHeight in [CGFloat(46), 38, 24] {
                             let size = PanelMetrics.size(
                                 geometry: .noNotch,
@@ -24,7 +28,8 @@ struct CodexInNotchTests {
                                 timerText: timerText,
                                 centerOcclusionWidth: 0,
                                 compactHeight: barHeight,
-                                configuredAgents: configured
+                                status: status,
+                                matrixCount: matrixCount
                             )
                             widths.insert(size.width)
                             heights.insert(size.height)
@@ -33,63 +38,142 @@ struct CodexInNotchTests {
                 }
             }
 
-            #expect(widths == [PanelMetrics.fixedCompactWidth(for: configured)])
+            #expect(
+                widths == [
+                    PanelMetrics.fixedCompactWidth(
+                        for: .running,
+                        matrixCount: matrixCount
+                    )
+                ]
+            )
             // Height still follows the menu bar; only width came loose.
             #expect(heights == [46, 38, 24])
         }
     }
 
-    /// The fixed width is a reservation, so it has to actually fit every state —
-    /// and not be so generous that it is reserving space nothing can use.
+    /// The three widths in the design, to the point.
+    ///
+    /// `docs/figma-design.md` §6.4 fixes them by measurement rather than by
+    /// choice, so they are checkable here against the same fonts the app draws
+    /// with. Golden numbers are usually the wrong assertion; here they are the
+    /// contract — the doc names them, a Figma frame is drawn at them, and a
+    /// change to padding or to the widest label is supposed to fail loudly
+    /// rather than quietly move a pill that lives in the user's menu bar.
     @Test @MainActor
-    func fixedCompactWidthFitsEveryStatusForEveryConfiguredAgent() {
-        for configured in [Set([AgentKind.codex]), Set(AgentKind.allCases)] {
-            var widest: CGFloat = 0
-            for status in MonitorStatus.allCases {
-                for agent in configured {
-                    let needed = PanelMetrics.compactChromeWidth
-                        + PanelMetrics.compactContentWidth(for: status, agent: agent)
-                    #expect(needed <= PanelMetrics.fixedCompactWidth(for: configured))
-                    widest = max(widest, needed)
-                }
-            }
-            // Only the rounding up should separate them.
-            #expect(PanelMetrics.fixedCompactWidth(for: configured) - widest < 1)
+    func theFixedCompactWidthsAreTheOnesTheDesignMeasured() {
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) == 220)
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2) == 242)
+        #expect(
+            PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) == 160
+        )
+
+        // Zero connected products is the grey resting mark, which takes the one
+        // slot rather than adding one — so it must not be wider than one product.
+        #expect(
+            PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 0)
+                == PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1)
+        )
+    }
+
+    /// The reservation has to actually fit, and not be so generous that it is
+    /// holding space nothing can use.
+    @Test @MainActor
+    func theFixedWidthFitsEveryWorkingStatusWithItsLongestTimer() {
+        var widest: CGFloat = 0
+        for status in PanelMetrics.workingStatuses {
+            let needed = PanelMetrics.compactChromeWidth
+                + PanelMetrics.compactContentWidth(status)
+            #expect(needed <= PanelMetrics.fixedCompactWidth(for: status, matrixCount: 1))
+            widest = max(widest, needed)
+        }
+        // Only the rounding up should separate them.
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) - widest < 1)
+
+        // The maximiser is `Approval`, and it is worth naming: two working
+        // states have longer *labels* — `Connected` and `Completed` — and both
+        // lose because neither can be counting. Reserving the timer slot behind
+        // the longest label rather than the longest timed one over-reserves.
+        #expect(
+            PanelMetrics.workingStatuses.max {
+                PanelMetrics.compactContentWidth($0)
+                    < PanelMetrics.compactContentWidth($1)
+            } == .approvalNeeded
+        )
+        for longerWord in [MonitorStatus.connected, .completed] {
+            #expect(
+                PanelMetrics.compactLabelWidth(longerWord)
+                    > PanelMetrics.compactLabelWidth(.approvalNeeded)
+            )
+            #expect(!longerWord.canShowElapsed)
+            #expect(
+                PanelMetrics.compactContentWidth(longerWord)
+                    < PanelMetrics.compactContentWidth(.approvalNeeded)
+            )
         }
     }
 
-    /// Today's panel, for today's user, to the point.
+    /// `Disconnected` is the one state allowed to be narrower.
     ///
-    /// This is the anti-regression for the whole two-product refactor. A Codex
-    /// user's surface has to be exactly what it was, and the way that quietly
-    /// stops being true is geometry: every width is derived by folding over
-    /// `MonitorStatus.allCases`, so anything that adds a case, renames a label,
-    /// or lets a second product into the fold moves a panel nobody asked to
-    /// move.
+    /// Nothing follows it into the timer slot — a surface with nothing
+    /// connected has no turn to count — so reserving one would leave a visibly
+    /// empty pill beside a short word.
     @Test @MainActor
-    func aCodexOnlyConfigurationHasTodaysExactPanelGeometry() {
-        let codexOnly = PanelMetrics.fixedCompactWidth(for: [.codex])
-        let both = PanelMetrics.fixedCompactWidth(for: Set(AgentKind.allCases))
+    func onlyDisconnectedIsNarrowerThanTheWorkingWidth() {
+        let working = PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1)
+        #expect(PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) < working)
+        for status in PanelMetrics.workingStatuses {
+            #expect(PanelMetrics.fixedCompactWidth(for: status, matrixCount: 1) == working)
+        }
+    }
 
-        // Configuring a second product must not reach back into the first
-        // product's panel.
-        #expect(PanelMetrics.fixedCompactWidth(for: [.codex]) == codexOnly)
-        #expect(both >= codexOnly)
-
-        for occlusion in [CGFloat(0), 200, 320] {
-            let codexExpanded = PanelMetrics.expandedWidth(
-                centerOcclusionWidth: occlusion,
-                configuredAgents: [.codex]
-            )
-            #expect(
-                PanelMetrics.expandedWidth(
-                    centerOcclusionWidth: occlusion,
-                    configuredAgents: [.codex]
-                ) == codexExpanded
-            )
+    /// The collapsed surface reports on products, not on us.
+    ///
+    /// This is the invariant that replaced six thin states with two. The four
+    /// retired ones stay in the enum because the expanded panel and Settings
+    /// still say them, so the thing worth pinning is not that they are gone but
+    /// that the *aggregate* can never return one — including from the seed the
+    /// store starts with, which used to publish `Connecting`.
+    @Test @MainActor
+    func theCollapsedAggregateOnlyEverReachesTheSixReachableStatuses() {
+        let retired: [MonitorStatus] = [
+            .connecting, .setupRequired, .updateAgent, .unsupportedVersion
+        ]
+        for status in retired {
+            #expect(!MonitorStatus.collapsedReachable.contains(status))
         }
 
-        // The four sentences a Codex user reads are unchanged word for word.
+        // Every availability, with and without presence, for one and two
+        // products: the aggregate has to land inside the reachable set every time.
+        let availabilities: [MonitorAvailability] = [
+            .ready, .connecting, .setupRequired,
+            .updateAgent, .unsupportedVersion, .disconnected
+        ]
+        for availability in availabilities {
+            for presence in AgentPresence.allCases {
+                let one = AgentSnapshot(
+                    availability: availability,
+                    sessions: [],
+                    quota: .unavailable,
+                    diagnostic: nil,
+                    presence: presence
+                )
+                let merged = AgentSnapshotMerge.merge([one])
+                #expect(MonitorStatus.collapsedReachable.contains(merged.status))
+            }
+        }
+
+        #expect(
+            MonitorStatus.collapsedReachable.contains(MonitorSnapshot.connecting.status)
+        )
+    }
+
+    /// The retired states did not lose their words, only their place.
+    ///
+    /// They still have to read correctly wherever they do appear — the expanded
+    /// panel and the Settings product rows — so the sentences stay pinned even
+    /// though nothing beside the notch says them any more.
+    @Test @MainActor
+    func theRetiredThinStatesStillReadCorrectlyWhereTheyStillAppear() {
         #expect(MonitorStatus.connecting.displayName(for: .codex) == "Connecting to Codex")
         #expect(MonitorStatus.updateAgent.displayName(for: .codex) == "Update Codex")
         #expect(
@@ -102,55 +186,40 @@ struct CodexInNotchTests {
             MonitorAvailability.disconnected.emptyListMessage(for: .codex)
                 == "Codex disconnected"
         )
+
+        // The expanded panel still folds over every state and both products, so
+        // a product-naming label still has to be able to widen it. This is the
+        // fold the compact width used to share, and the reason #29 existed.
+        for occlusion in [CGFloat(0), 200, 320] {
+            #expect(
+                PanelMetrics.expandedWidth(
+                    centerOcclusionWidth: occlusion,
+                    configuredAgents: Set(AgentKind.allCases)
+                )
+                    >= PanelMetrics.expandedWidth(
+                        centerOcclusionWidth: occlusion,
+                        configuredAgents: [.codex]
+                    )
+            )
+        }
     }
 
-    /// Which status sets the compact width, named rather than measured.
+    /// No compact label in the working set names a product.
     ///
-    /// Pinning the *identity* of the widest status rather than a golden float
-    /// keeps the assertion true across system font changes while still failing
-    /// the moment the maximiser moves.
-    ///
-    /// It does move, and that is worth having written down. For Codex the
-    /// widest state is `Approval`, which wins by reserving the timer slot as
-    /// well as its label — no untimed state can overtake it. Adding Claude Code
-    /// hands the title to an *untimed* state: "Update Claude Code" is a longer
-    /// run of text than "Approval" plus a timer, so the widest compact label
-    /// stops being a state that can even be counting. Measured on this machine:
-    /// Approval + timer 112.3, "Update Claude Code" 124.8, so the no-notch pill
-    /// goes 189 → 202 for a user who configures both.
-    ///
-    /// That is a real product question for the two-product surface rather than
-    /// a bug — the compact label names the most urgent state across both
-    /// products, so it cannot silently drop the product name the way the other
-    /// compact labels do — but it must not be discovered by someone wondering
-    /// why a measured width disagrees with the one in Figma.
+    /// This is what let the compact width stop folding over configured
+    /// products. `Update Claude Code` was the widest compact label and it set
+    /// the two-product pill width for a state Claude Code cannot reach (issue
+    /// #29); with the working set free of product names, what widens the pill
+    /// is a second matrix and nothing else.
     @Test @MainActor
-    func theWidestCompactStatusIsTimedForCodexAndUntimedOnceClaudeCodeIsConfigured() {
-        func widest(for agent: AgentKind) -> MonitorStatus? {
-            MonitorStatus.allCases.max {
-                PanelMetrics.compactContentWidth(for: $0, agent: agent)
-                    < PanelMetrics.compactContentWidth(for: $1, agent: agent)
+    func noWorkingCompactLabelNamesAProduct() {
+        for status in PanelMetrics.workingStatuses {
+            let unattributed = status.compactDisplayName(for: nil)
+            for agent in AgentKind.allCases {
+                #expect(status.compactDisplayName(for: agent) == unattributed)
+                #expect(!unattributed.contains(agent.displayName))
             }
         }
-
-        #expect(widest(for: .codex) == .approvalNeeded)
-        #expect(widest(for: .codex)?.canShowElapsed == true)
-
-        let widestUntimedForCodex = MonitorStatus.allCases
-            .filter { !$0.canShowElapsed }
-            .map { PanelMetrics.compactContentWidth(for: $0, agent: .codex) }
-            .max() ?? 0
-        #expect(
-            widestUntimedForCodex
-                < PanelMetrics.compactContentWidth(for: .approvalNeeded, agent: .codex)
-        )
-
-        #expect(widest(for: .claudeCode) == .updateAgent)
-        #expect(widest(for: .claudeCode)?.canShowElapsed == false)
-        #expect(
-            PanelMetrics.fixedCompactWidth(for: Set(AgentKind.allCases))
-                > PanelMetrics.fixedCompactWidth(for: [.codex])
-        )
     }
 
     /// The notch's label is shorter than the panel's because the matrix beside
@@ -692,7 +761,7 @@ struct CodexInNotchTests {
 
         #expect(didClear)
         #expect(store.sessions.isEmpty)
-        #expect(store.status == .idle)
+        #expect(store.status == .connected)
         #expect(store.lastIntegrationMessage.contains("Codex 会话未被删除"))
 
         store.applyForTesting(
@@ -922,7 +991,7 @@ struct CodexInNotchTests {
         #expect(
             Set(MonitorStatus.allCases).subtracting(sessionStatuses)
                 == [
-                    .idle,
+                    .connected,
                     .setupRequired,
                     .connecting,
                     .updateAgent,
@@ -1185,7 +1254,7 @@ struct CodexInNotchTests {
             AgentSnapshotMerge.merge([
                 makeAgentSnapshot(.codex, availability: .disconnected),
                 makeAgentSnapshot(.claudeCode, availability: .ready)
-            ]).status == .idle
+            ]).status == .connected
         )
     }
 
@@ -1253,14 +1322,21 @@ struct CodexInNotchTests {
             .unsupportedVersion,
             .disconnected
         ]
-        // With one product, availability speaks whenever it has no rows —
-        // unchanged from the single-source surface, including the onboarding
-        // path where nothing is installed yet.
+        // Availability no longer speaks on the collapsed surface at all. Every
+        // unready product lands on Disconnected, because not one of them is
+        // connected — that is the whole convergence, and the states that had
+        // something for the user to do moved to where there is room to say it.
         for availability in unready {
+            let merged = AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, availability: availability)
+            ])
+            #expect(merged.status == .disconnected)
+            // The reason did not vanish with the state: the expanded panel
+            // still names it, which is the channel it moved to.
+            #expect(merged.availability == availability)
             #expect(
-                AgentSnapshotMerge.merge([
-                    makeAgentSnapshot(.codex, availability: availability)
-                ]).status == availability.status
+                merged.availability.emptyListMessage(for: .codex)
+                    == availability.emptyListMessage(for: .codex)
             )
         }
 
@@ -1269,12 +1345,12 @@ struct CodexInNotchTests {
                 makeAgentSnapshot(.codex, sessions: [running])
             ]).status == .running
         )
-        #expect(AgentSnapshotMerge.merge([makeAgentSnapshot(.codex)]).status == .idle)
+        #expect(AgentSnapshotMerge.merge([makeAgentSnapshot(.codex)]).status == .connected)
 
         // A second product the user has only just discovered reports
         // setupRequired. It must not take over the notch from a product that is
         // running a turn, and it must not take over from one that is simply
-        // idle either.
+        // connected and quiet either.
         #expect(
             AgentSnapshotMerge.merge([
                 makeAgentSnapshot(.codex, sessions: [running]),
@@ -1285,16 +1361,17 @@ struct CodexInNotchTests {
             AgentSnapshotMerge.merge([
                 makeAgentSnapshot(.codex),
                 makeAgentSnapshot(.claudeCode, availability: .setupRequired)
-            ]).status == .idle
+            ]).status == .connected
         )
-        // With no product ready, the most actionable one speaks: something to
-        // do outranks something to wait for.
-        #expect(
-            AgentSnapshotMerge.merge([
-                makeAgentSnapshot(.codex, availability: .connecting),
-                makeAgentSnapshot(.claudeCode, availability: .setupRequired)
-            ]).status == .setupRequired
-        )
+        // With no product connected the collapsed surface says one thing, not
+        // whichever unhealthy product was most actionable. The ranking survives
+        // for the expanded panel, which is why availability is asserted too.
+        let neitherConnected = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .connecting),
+            makeAgentSnapshot(.claudeCode, availability: .setupRequired)
+        ])
+        #expect(neitherConnected.status == .disconnected)
+        #expect(neitherConnected.availability == .setupRequired)
     }
 
     /// The row comparator has to be a total order, or the list reshuffles.
@@ -2404,7 +2481,7 @@ struct CodexInNotchTests {
 
         #expect(snapshot.availability == .ready)
         #expect(snapshot.sessions.isEmpty)
-        #expect(AgentSnapshotMerge.merge([snapshot]).status == .idle)
+        #expect(AgentSnapshotMerge.merge([snapshot]).status == .connected)
         #expect(upgradedScript.contains(#"payload.get("tool_use_id")"#))
         // The upgrade recognised a pre-marker install by its legacy settings
         // file, replaced it with the marker, and carried no privacy state
@@ -2490,7 +2567,7 @@ struct CodexInNotchTests {
         // It must now be ignored: only a post-launch Hook can create a session.
         #expect(ready.availability == .ready)
         #expect(ready.sessions.isEmpty)
-        #expect(AgentSnapshotMerge.merge([ready]).status == .idle)
+        #expect(AgentSnapshotMerge.merge([ready]).status == .connected)
         // Startup still proves the App Server answers a real read, which is what
         // separates Ready from Disconnected.
         #expect(requestedMethods.contains("thread/list"))
@@ -6647,19 +6724,30 @@ for line in sys.stdin:
     /// Shipping a second product does not change the first product's panel.
     ///
     /// This is the invariance promise at the point it is most likely to break.
-    /// Every panel width folds over the products the user has configured, and
-    /// the tempting way to know that is "which providers answered" — which
-    /// becomes true for everyone the moment a second provider ships, widening
-    /// the pill for someone who never asked for it. Configuration is a setup
-    /// fact, not a wiring fact.
+    /// The pill's width follows how many product matrices are drawn, and the
+    /// tempting way to know that is "which providers answered" — which becomes
+    /// true for everyone the moment a second provider ships, widening the pill
+    /// for someone who never asked for it.
+    ///
+    /// Presence answers it instead, and answers it better than the setup fact
+    /// that used to: a product only takes a slot while it is open *and*
+    /// reachable, so registering a second product does not widen the pill on
+    /// its own, and closing it hands the slot back.
     @Test @MainActor
     func anUnregisteredSecondProductDoesNotWidenTheFirstProductsPanel() {
         let store = MonitorStore(services: [])
+        func compactWidth() -> CGFloat {
+            PanelMetrics.fixedCompactWidth(
+                for: store.status,
+                matrixCount: max(1, store.connectedAgents.count)
+            )
+        }
+
         store.applyForTesting(
             makeAgentSnapshot(.codex, availability: .ready, setupStatus: .active)
         )
-        #expect(store.configuredAgents == [.codex])
-        let codexOnlyWidth = PanelMetrics.fixedCompactWidth(for: store.configuredAgents)
+        #expect(store.connectedAgents == [.codex])
+        let codexOnlyWidth = compactWidth()
 
         // The second provider exists, answers, and has not been set up.
         store.applyForTesting(
@@ -6669,23 +6757,35 @@ for line in sys.stdin:
                 setupStatus: .notInstalled
             )
         )
-        #expect(store.configuredAgents == [.codex])
-        #expect(
-            PanelMetrics.fixedCompactWidth(for: store.configuredAgents) == codexOnlyWidth
-        )
+        #expect(store.connectedAgents == [.codex])
+        #expect(compactWidth() == codexOnlyWidth)
         // And it contributes nothing to what the notch says.
-        #expect(store.status == .idle)
+        #expect(store.status == .connected)
         #expect(store.sessions.isEmpty)
 
-        // Once the user actually registers it, the panel is allowed to change —
-        // that is a setting they changed, not something that happened to them.
+        // Registered, open and reachable: a second mark appeared, so the pill
+        // has to hold it. That is the one thing allowed to widen it.
         store.applyForTesting(
             makeAgentSnapshot(.claudeCode, availability: .ready, setupStatus: .active)
         )
-        #expect(store.configuredAgents == Set(AgentKind.allCases))
-        #expect(
-            PanelMetrics.fixedCompactWidth(for: store.configuredAgents) > codexOnlyWidth
+        #expect(store.connectedAgents == [.codex, .claudeCode])
+        #expect(compactWidth() > codexOnlyWidth)
+
+        // Registered but closed takes the slot back again. Setup alone never
+        // held it, which is the difference from the width this replaced.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                setupStatus: .active,
+                presence: .closed
+            )
         )
+        #expect(store.connectedAgents == [.codex])
+        #expect(compactWidth() == codexOnlyWidth)
+        // The expanded panel still sizes itself off what is *configured*, so
+        // that fact has to survive a product going quiet.
+        #expect(store.configuredAgents == Set(AgentKind.allCases))
     }
 
     /// The settings card only exists for a product the app will not set up.
@@ -6744,7 +6844,7 @@ for line in sys.stdin:
         // A product nobody has heard from is not registered, not "unknown".
         #expect(store.setupStatus(for: .claudeCode) != .notInstalled)
         // And Codex still runs the notch.
-        #expect(store.status == .idle)
+        #expect(store.status == .connected)
     }
 
     /// Today's tokens are everything processed, cache included, plus output.
@@ -7430,6 +7530,177 @@ for line in sys.stdin:
         #expect(await registry.liveSessions().first?.sessionID == "s-2")
     }
 
+    /// A cached answer stops being believed, even though it is still returned.
+    ///
+    /// The two intervals are different questions. `freshness` says when to read
+    /// again; the trust ceiling says how long a *stale* answer may still decide
+    /// presence. They were effectively one number, which meant a read that
+    /// failed forever — a `claude` uninstalled, renamed, or moved off `PATH` —
+    /// kept answering `open` for the life of the process, and the pill would
+    /// have said `Connected` about a product that was not there.
+    ///
+    /// The rows deliberately do not drain with it: one failed read is not
+    /// evidence that every session ended, and the surface retires them by going
+    /// `Disconnected` rather than by the registry inventing an empty list.
+    @Test @MainActor
+    func aSessionListThatCannotBeReReadStopsDecidingPresence() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = ResponseQueue(items: [
+            Data("""
+            [{"pid": 1, "cwd": "/a", "kind": "interactive",
+              "startedAt": 1000, "sessionId": "s-1"}]
+            """.utf8)
+            // Every read after the first one fails.
+        ])
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            trustCeiling: 90,
+            read: { await responses.next() }
+        )
+
+        #expect(await registry.presence() == .open)
+
+        // Stale but inside the ceiling: still believed, still reported open.
+        await clock.advance(by: 60)
+        #expect(await registry.presence() == .open)
+        #expect(await registry.liveSessions().count == 1)
+
+        // Past the ceiling the answer is no longer evidence of anything.
+        await clock.advance(by: 40)
+        #expect(await registry.presence() == .unknown)
+        // ...but the sessions themselves are still handed back, because a
+        // failed read never proves a session ended.
+        #expect(await registry.liveSessions().count == 1)
+    }
+
+    /// An empty list is only `closed` when the list is known to be empty.
+    @Test @MainActor
+    func anEmptySessionListIsClosedOnlyWhenItWasActuallyRead() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = ResponseQueue(items: [Data("[]".utf8)])
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            trustCeiling: 90,
+            read: { await responses.next() }
+        )
+
+        #expect(await registry.presence() == .closed)
+        await clock.advance(by: 200)
+        // The same empty list, now unreadable: absence of evidence stops being
+        // evidence of absence.
+        #expect(await registry.presence() == .unknown)
+    }
+
+    /// A registry that has never had a successful read knows nothing.
+    @Test @MainActor
+    func aSessionListThatNeverAnsweredReportsUnknownRatherThanClosed() async {
+        let registry = ClaudeCodeSessionRegistry(read: { nil })
+        #expect(await registry.presence() == .unknown)
+        #expect(await registry.liveSessions().isEmpty)
+    }
+
+    /// Presence and observability are independent, and both are required.
+    ///
+    /// `docs/figma-design.md` §6.7: `Disconnected` means no agent is *connected*,
+    /// not that no agent is open. ADR 0010 leaves Claude Code's hook
+    /// registration to the user, so "open but not reachable" is an ordinary
+    /// first run — and it has to read as disconnected without inventing a third
+    /// state to say so.
+    @Test @MainActor
+    func onlyAProductThatIsBothOpenAndReachableCountsAsConnected() {
+        func merged(
+            _ availability: MonitorAvailability,
+            _ presence: AgentPresence
+        ) -> MonitorSnapshot {
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, availability: availability, presence: presence)
+            ])
+        }
+
+        #expect(merged(.ready, .open).status == .connected)
+        // Open, but we cannot watch it: the first run of an unregistered product.
+        #expect(merged(.setupRequired, .open).status == .disconnected)
+        // Watchable in principle, but not open.
+        #expect(merged(.ready, .closed).status == .disconnected)
+        // No trustworthy answer at all. Unknown is not a weak yes.
+        #expect(merged(.ready, .unknown).status == .disconnected)
+        // Still being reached is not yet reached.
+        #expect(merged(.connecting, .open).status == .disconnected)
+
+        // And only the connected one draws a mark.
+        #expect(merged(.ready, .open).connectedAgents == [.codex])
+        #expect(merged(.setupRequired, .open).connectedAgents.isEmpty)
+        #expect(merged(.ready, .closed).connectedAgents.isEmpty)
+    }
+
+    /// Presence draws the matrix; the reducer lights it.
+    ///
+    /// The two must not be re-merged. A product with no turn in flight is still
+    /// open, and that is the whole point of the resting mark — it says the user
+    /// has the thing running, which they can check for themselves, rather than
+    /// reporting our own connection health, which they cannot.
+    ///
+    /// The Codex asymmetry rides on this: its presence is knowable the instant
+    /// this app launches while its turns are deliberately not, so a fresh
+    /// launch can honestly show `Connected` while knowing nothing about work.
+    @Test @MainActor
+    func aConnectedProductWithNoTurnsStillShowsItsOwnMark() {
+        let quiet = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .ready, presence: .open)
+        ])
+        #expect(quiet.sessions.isEmpty)
+        #expect(quiet.status == .connected)
+        #expect(quiet.connectedAgents == [.codex])
+
+        // A second product opening adds a mark without changing the status,
+        // which is exactly why the pill's width cannot be derived from status.
+        let both = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .ready, presence: .open),
+            makeAgentSnapshot(.claudeCode, availability: .ready, presence: .open)
+        ])
+        #expect(both.status == .connected)
+        #expect(both.connectedAgents == [.codex, .claudeCode])
+        #expect(
+            PanelMetrics.fixedCompactWidth(for: both.status, matrixCount: 2)
+                > PanelMetrics.fixedCompactWidth(for: quiet.status, matrixCount: 1)
+        )
+    }
+
+    /// The first product to open takes the grey slot rather than adding one.
+    ///
+    /// Grey means "no product". Once a product is there, there is no "no
+    /// product" left to draw, so the count goes 0 → 1 without the pill growing.
+    /// Only the second product adds a slot.
+    @Test @MainActor
+    func theFirstConnectedProductTakesTheRestingSlotRatherThanAddingOne() {
+        let nothing = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
+        ])
+        #expect(nothing.status == .disconnected)
+        #expect(nothing.connectedAgents.isEmpty)
+
+        let restingWidth = PanelMetrics.fixedCompactWidth(
+            for: .disconnected,
+            matrixCount: max(1, nothing.connectedAgents.count)
+        )
+        let oneOpen = PanelMetrics.fixedCompactWidth(for: .connected, matrixCount: 1)
+        let twoOpen = PanelMetrics.fixedCompactWidth(for: .connected, matrixCount: 2)
+
+        // Resting is narrower — it is the one state with no timer behind it.
+        #expect(restingWidth < oneOpen)
+        // And the step from one product to two is one matrix and its gap —
+        // within the rounding, since each width rounds up independently and
+        // ceil(a + b) is not ceil(a) + ceil(b).
+        #expect(
+            abs(
+                (twoOpen - oneOpen)
+                    - (PanelMetrics.statusMatrixSize + PanelMetrics.compactMatrixSpacing)
+            ) <= 1
+        )
+    }
+
     /// Entries missing anything that makes them addressable are dropped rather
     /// than filled in.
     @Test @MainActor
@@ -8049,7 +8320,8 @@ for line in sys.stdin:
         availability: MonitorAvailability = .ready,
         sessions: [MonitoredSession] = [],
         diagnostic: String? = nil,
-        setupStatus: HookSetupStatus = .active
+        setupStatus: HookSetupStatus = .active,
+        presence: AgentPresence = .open
     ) -> AgentSnapshot {
         AgentSnapshot(
             agent: agent,
@@ -8057,7 +8329,8 @@ for line in sys.stdin:
             sessions: sessions,
             quota: .unavailable,
             diagnostic: diagnostic,
-            setupStatus: setupStatus
+            setupStatus: setupStatus,
+            presence: presence
         )
     }
 

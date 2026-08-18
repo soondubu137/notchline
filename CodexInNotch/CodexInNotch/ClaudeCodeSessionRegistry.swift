@@ -29,6 +29,25 @@ nonisolated struct ClaudeCodeSession: Sendable, Equatable {
 /// product shows nothing from before launch; Claude Code does.
 protocol ClaudeCodeSessionListing: Sendable {
     func liveSessions() async -> [ClaudeCodeSession]
+    /// Whether Claude Code is open at all.
+    ///
+    /// There is no application to ask -- Claude Code is a CLI the user starts
+    /// per directory -- so the session list is the presence signal. That is the
+    /// only thing it is used for here: this reports *whether* sessions exist,
+    /// never what they are doing.
+    func presence() async -> AgentPresence
+}
+
+extension ClaudeCodeSessionListing {
+    /// Presence read straight off the session list.
+    ///
+    /// Correct for any source that cannot go stale, which is every test double
+    /// and would be any future source that reads live state directly. A source
+    /// that caches has to override this, because a cache that never expires
+    /// answers `open` forever.
+    func presence() async -> AgentPresence {
+        await liveSessions().isEmpty ? .closed : .open
+    }
 }
 
 /// Finds the `claude` executable the same way a user's shell would.
@@ -82,20 +101,49 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     private let read: @Sendable () async -> Data?
     private let clock: any MonitorClock
     private let freshness: TimeInterval
+    private let trustCeiling: TimeInterval
     private var cached: [ClaudeCodeSession] = []
     private var readAt: Date?
 
-    /// - Parameter read: Returns the raw JSON, or nil when it could not be
-    ///   obtained. Injected so the parsing and staleness rules can be tested
-    ///   without a real Claude Code install.
+    /// - Parameters:
+    ///   - freshness: How long before the answer is re-read.
+    ///   - trustCeiling: How long a *stale* answer may still be believed.
+    ///   - read: Returns the raw JSON, or nil when it could not be obtained.
+    ///     Injected so the parsing and staleness rules can be tested without a
+    ///     real Claude Code install.
+    ///
+    /// The two intervals are deliberately separate. They were effectively one
+    /// number before, and that made a permanently failing read -- a `claude`
+    /// that was uninstalled, renamed or moved off `PATH` -- keep the last good
+    /// answer alive for the life of the process. Rows can survive a single
+    /// failed read and should; presence cannot survive an unbounded run of
+    /// them, because presence is now the difference between `Connected` and
+    /// `Disconnected`. Three consecutive failures is the ceiling.
     init(
         clock: any MonitorClock = SystemMonitorClock(),
         freshness: TimeInterval = 30,
+        trustCeiling: TimeInterval = 90,
         read: (@Sendable () async -> Data?)? = nil
     ) {
         self.clock = clock
         self.freshness = freshness
+        self.trustCeiling = trustCeiling
         self.read = read ?? { await Self.runOfficialCommand() }
+    }
+
+    /// Presence, with the cache's own age taken into account.
+    ///
+    /// An empty list means closed only when the list is *known* to be empty. A
+    /// cache past its ceiling knows nothing, and unknown is not a weak "closed"
+    /// -- it lands on `Disconnected` by the plain meaning of the word (§6.7):
+    /// we have no working connection to report on.
+    func presence() async -> AgentPresence {
+        let sessions = await liveSessions()
+        guard let readAt,
+              clock.now().timeIntervalSince(readAt) <= trustCeiling else {
+            return .unknown
+        }
+        return sessions.isEmpty ? .closed : .open
     }
 
     func liveSessions() async -> [ClaudeCodeSession] {
@@ -145,6 +193,22 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// included, and as not requiring a TTY. That is a promise in the CLI's own
     /// help rather than an observed coincidence, which is what makes this a
     /// supported interface instead of a private one.
+    ///
+    /// **Dead sessions are already filtered, and by the right test.** A session
+    /// that was `SIGKILL`ed cannot delete its own `~/.claude/sessions/<pid>.json`,
+    /// and those files carry no heartbeat, so the obvious worry is that this
+    /// command lists ghosts. Measured against 2.1.229, it does not: a session
+    /// file copied verbatim from a live session, with *only* `procStart`
+    /// altered, is dropped from the output, and so is one naming a live pid
+    /// that belongs to some other process. The command validates `pid` and
+    /// `procStart` as a pair -- which is exactly the check that would be needed
+    /// here, and is the one thing PID recycling defeats if you only ask whether
+    /// the pid is alive.
+    ///
+    /// So this app does not redo it, and must not: `--json` does not even emit
+    /// `procStart`, so re-implementing the check would mean reading the private
+    /// session-file schema directly and registering a non-public dependency
+    /// (`AGENTS.md` §8) to duplicate a correct public one.
     private static func runOfficialCommand() async -> Data? {
         guard let executable = ClaudeExecutableLocator.locate() else { return nil }
 

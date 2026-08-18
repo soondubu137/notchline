@@ -193,7 +193,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             sessions: rows,
             setupStatus: status,
             diagnostic: hookState.diagnostic,
-            quota: await usage.quota()
+            quota: await usage.quota(),
+            // Not `rows.isEmpty`: a session with no turn in flight is still an
+            // open Claude Code. The list answers which sessions exist and the
+            // reducer answers what they are doing — presence draws the matrix,
+            // the reducer lights it, and merging the two would put the mark
+            // back to reporting turns instead of openness.
+            presence: await sessions.presence()
         )
     }
 
@@ -303,12 +309,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         return component.isEmpty ? "Untitled folder" : component
     }
 
+    /// - Parameter presence: Defaults to `unknown` because the branches that do
+    ///   not reach the session list genuinely did not look. Asking would mean
+    ///   spawning `claude` on every refresh for a user who has not registered
+    ///   the hooks — the exact work the early return exists to skip — and it
+    ///   would change nothing: those branches are not `ready`, so the product
+    ///   is not connected whatever its presence turns out to be.
     private func snapshot(
         availability: MonitorAvailability,
         sessions: [MonitoredSession],
         setupStatus: HookSetupStatus,
         diagnostic: String?,
-        quota: QuotaSnapshot = .unavailable
+        quota: QuotaSnapshot = .unavailable,
+        presence: AgentPresence = .unknown
     ) -> AgentSnapshot {
         lastDiagnostic = diagnostic
         return AgentSnapshot(
@@ -317,7 +330,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             sessions: sessions,
             quota: quota,
             diagnostic: diagnostic,
-            setupStatus: setupStatus
+            setupStatus: setupStatus,
+            presence: presence
         )
     }
 }

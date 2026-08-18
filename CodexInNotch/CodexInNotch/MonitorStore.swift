@@ -211,6 +211,8 @@ enum PanelMetrics {
         centerOcclusionWidth: CGFloat,
         compactHeight: CGFloat,
         configuredAgents: Set<AgentKind> = [.codex],
+        status: MonitorStatus = .connected,
+        matrixCount: Int = 1,
         expandedContentHeight: CGFloat = expandedContentHeight
     ) -> CGSize {
         guard !isExpanded else {
@@ -229,7 +231,7 @@ enum PanelMetrics {
                 // Notched display with no measurable cut-out: nothing to wrap
                 // around, so lay it out as an emulated notch instead.
                 return CGSize(
-                    width: fixedCompactWidth(for: configuredAgents),
+                    width: fixedCompactWidth(for: status, matrixCount: matrixCount),
                     height: compactHeight
                 )
             }
@@ -241,47 +243,79 @@ enum PanelMetrics {
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
             return CGSize(
-                width: fixedCompactWidth(for: configuredAgents),
+                width: fixedCompactWidth(for: status, matrixCount: matrixCount),
                 height: compactHeight
             )
         }
     }
 
-    /// The widest elapsed readout inside a turn that has run for hours. Sizing
-    /// the slot for it means the pill does not widen at 1:00:00 either.
-    private static let timerSlotTemplate = "1:02:03"
+    /// The widest elapsed readout the slot has to hold.
+    ///
+    /// `00:00:00` rather than a real reading: with tabular figures every digit
+    /// is the same width, so the widest form is simply the one with the most
+    /// digits, and a turn crossing ten hours must not move the pill. Measured
+    /// at Medium — the heaviest weight any surface draws it at — so the
+    /// reservation is an upper bound however it is drawn.
+    private static let timerSlotTemplate = "00:00:00"
+    private static let timerSlotFont = NSFont.monospacedDigitSystemFont(
+        ofSize: 13,
+        weight: .medium
+    )
+    /// Between the status name and the right-aligned timer slot.
+    ///
+    /// Wider than the gap after the matrix, and not the same kind of thing: it
+    /// is the distance at the moment the timer is at its longest, not a
+    /// constant visual gap.
+    static let compactTimerClearance: CGFloat = 32
+    /// Between two product matrices, when both are drawn.
+    static let compactMatrixSpacing: CGFloat = 6
 
-    /// One width for every no-notch compact panel, whatever the state.
+    /// One width for the whole single-product working set.
     ///
-    /// Derived rather than fixed by hand: the widest content any state can
-    /// produce, which is the longest compact label that also carries a timer,
-    /// plus the timer slot. Reserving that on every state — including the ones
-    /// with no timer and a short label — is the point. A pill that measured
-    /// itself resized whenever the status changed or a turn started, which on a
-    /// menu bar reads as flicker rather than information.
-    /// Computed rather than a stored `static let`: a lazily-initialised one runs
-    /// its initialiser in a nonisolated context, and this measures text. Ten
-    /// cases of measurement per panel update is not worth the isolation dance.
-    /// Folded over every state *and* every product the user has configured.
+    /// `Connected`, `Running`, `Input`, `Approval`, `Completed` and any elapsed
+    /// reading up to `00:00:00` all render at the same width, so nothing in
+    /// ordinary use moves the pill or the menu bar icons to its left. The timer
+    /// is right-aligned inside its reserved slot, so a turn crossing an hour
+    /// grows leftwards into space that was already empty.
     ///
-    /// One label names its product, so what a panel is configured to watch is
-    /// what decides how wide it is. Deriving the set from settings rather than
-    /// from whichever products currently have rows is the whole point: a width
-    /// that followed live membership would resize the pill the moment a second
-    /// product connected, which is the flicker this fixed width exists to
-    /// prevent.
+    /// Two things changed here when presence arrived. The fold over
+    /// `MonitorStatus.allCases` is gone: it reserved room for states the
+    /// collapsed surface can no longer reach, and one of them —
+    /// `Update Claude Code` — was setting the dual-product width for a state
+    /// Claude Code cannot even be in (issue #29). And the fold over configured
+    /// products is gone with it, because no label in the working set names a
+    /// product any more; what widens the pill now is a second matrix, not a
+    /// second product's vocabulary.
+    ///
+    /// `Disconnected` is the one state allowed to be narrower. Nothing follows
+    /// it into the timer slot, so reserving one would leave a visibly empty
+    /// pill beside a short word.
+    ///
+    /// - Parameter matrixCount: How many product matrices are drawn. Zero and
+    ///   one are the same width — the grey resting mark occupies the single
+    ///   slot rather than adding one.
     static func fixedCompactWidth(
-        for configuredAgents: Set<AgentKind>
+        for status: MonitorStatus,
+        matrixCount: Int
     ) -> CGFloat {
-        let agents: [AgentKind?] = configuredAgents.isEmpty
-            ? [nil]
-            : configuredAgents.sorted().map { $0 }
-        let widest = MonitorStatus.allCases
-            .flatMap { status in
-                agents.map { compactContentWidth(for: status, agent: $0) }
-            }
-            .max() ?? 0
-        return ceil(compactChromeWidth + widest)
+        let extraMatrices = CGFloat(max(0, matrixCount - 1))
+            * (statusMatrixSize + compactMatrixSpacing)
+        guard status != .disconnected else {
+            return ceil(
+                compactChromeWidth
+                    + compactLabelWidth(.disconnected)
+                    + extraMatrices
+            )
+        }
+        return ceil(compactChromeWidth + workingContentWidth + extraMatrices)
+    }
+
+    /// One status name, at the weight the notch actually draws it.
+    ///
+    /// No product argument: nothing the collapsed surface can say names a
+    /// product any more.
+    static func compactLabelWidth(_ status: MonitorStatus) -> CGFloat {
+        textWidth(status.compactDisplayName(for: nil), font: statusLabelFont)
     }
 
     /// Everything in a compact panel that is not the label or the timer.
@@ -290,21 +324,35 @@ enum PanelMetrics {
         + expandedReadoutSpacing
         + expandedHorizontalPadding
 
-    /// What one status needs beside the chrome: its label, plus the timer slot
-    /// when that status can be counting.
-    static func compactContentWidth(
-        for status: MonitorStatus,
-        agent: AgentKind?
-    ) -> CGFloat {
-        let label = textWidth(
-            status.compactDisplayName(for: agent),
-            font: statusLabelFont
-        )
+    /// The widest the working set gets beside the chrome.
+    ///
+    /// Not "widest label plus a timer slot": only three of these states can be
+    /// counting, and they are not the ones with the longest names. `Connected`
+    /// and `Completed` are both longer words than `Approval`, and both lose to
+    /// it anyway because `Approval` is the widest state that *also* reserves
+    /// the timer. Adding the slot to the widest label instead of to the widest
+    /// timed one over-reserves by about 13pt for a pill that sits in the menu
+    /// bar.
+    ///
+    /// Computed rather than a stored `static let`: a lazily-initialised one runs
+    /// its initialiser in a nonisolated context, and this measures text.
+    static var workingContentWidth: CGFloat {
+        workingStatuses.map(compactContentWidth).max() ?? 0
+    }
+
+    /// One status's own content: its label, plus the timer slot when that state
+    /// can be counting.
+    static func compactContentWidth(_ status: MonitorStatus) -> CGFloat {
+        let label = compactLabelWidth(status)
         guard status.canShowElapsed else { return label }
         return label
-            + expandedReadoutSpacing
-            + textWidth(timerSlotTemplate, font: timerFont)
+            + compactTimerClearance
+            + textWidth(timerSlotTemplate, font: timerSlotFont)
     }
+
+    /// What the collapsed surface can say while an agent is connected.
+    static let workingStatuses = MonitorStatus.collapsedReachable
+        .subtracting([.disconnected])
 
     static func expandedHeight(compactHeight: CGFloat) -> CGFloat {
         compactHeight + expandedContentHeight
@@ -454,6 +502,14 @@ final class MonitorStore: ObservableObject {
     /// Which product the summary is speaking about, or nil when it speaks for
     /// none — nothing is wrong, or more than one product is equally unhealthy.
     @Published private(set) var statusAgent: AgentKind?
+    /// The products that are open *and* reachable, in display order.
+    ///
+    /// This is what the collapsed surface draws a matrix for, one each, and so
+    /// it is also what sets the pill's width. Published because a second
+    /// product connecting need not change the status — the first one may be
+    /// mid-turn throughout — and a width that changed without a publish would
+    /// leave the panel sized for the wrong number of marks.
+    @Published private(set) var connectedAgents: [AgentKind] = []
     /// Instructions for every product whose registration the user makes by
     /// hand. Absent for a product this app sets up itself.
     @Published private(set) var manualSetups: [AgentKind: AgentManualSetup] = [:]
@@ -590,6 +646,7 @@ final class MonitorStore: ObservableObject {
         self.sessions = merged.sessions
         self.status = merged.status
         self.statusAgent = merged.availabilityAgent
+        self.connectedAgents = merged.connectedAgents
         self.showsContentPreviews = UserDefaults.standard.object(
             forKey: Self.contentPreviewDefaultsKey
         ) as? Bool ?? true
@@ -828,6 +885,11 @@ final class MonitorStore: ObservableObject {
             centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight,
             configuredAgents: configuredAgents,
+            status: status,
+            // One matrix per connected product, and never fewer than one slot:
+            // with nothing connected the grey resting mark takes the single
+            // slot rather than adding one beside it.
+            matrixCount: max(1, connectedAgents.count),
             expandedContentHeight: expandedContentHeight
         )
     }
@@ -1252,6 +1314,9 @@ final class MonitorStore: ObservableObject {
         }
         if statusAgent != snapshot.availabilityAgent {
             statusAgent = snapshot.availabilityAgent
+        }
+        if connectedAgents != snapshot.connectedAgents {
+            connectedAgents = snapshot.connectedAgents
         }
         if lastIntegrationMessage != integrationMessage {
             lastIntegrationMessage = integrationMessage

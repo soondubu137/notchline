@@ -2,9 +2,9 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | V1 SwiftUI 四态契约已同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个；外部 Figma 的旧状态变体待清理 |
-| 版本 | 1.0 |
-| 日期 | 2026-08-16 |
+| 文档状态 | V1 SwiftUI 四态契约已同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个，在场与宽度已实现、画法待 [#35](https://github.com/soondubu137/codex-in-notch/issues/35)；外部 Figma 的旧状态变体待清理 |
+| 版本 | 1.1 |
+| 日期 | 2026-08-17 |
 | 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
 
 ## 1. 设计原则
@@ -100,7 +100,7 @@ cornerRadius = min(10, 10 × max(0, menuBarHeight) / 38)
 
 `Status Dot` 包含两类互不混用的状态：会话级 Running、Input Needed、Approval Needed、Completed，以及系统级 Idle、Connecting、Disconnected、Update Codex、Unsupported Version、Setup Required。
 
-- Idle 只用于健康空集合的汇总。
+- Idle（旧名）只用于健康空集合的汇总，现已并入 `Connected`；变体保留见下一条。
 - Disconnected 不用于会话行。
 - **系统级取值收敛为两个**：`Disconnected` 与 `Connected`（§6.4）。`Idle` 并入 `Connected`，`Connecting`、`Update Codex`、`Unsupported Version`、`Setup Required` 退出收起态（§6.6），只在展开面板与设置中出现，组件变体因此保留。
 
@@ -150,7 +150,9 @@ PRD 8.2 与技术设计第 12 节已明确权威时间语义、等待/睡眠行�
 
 收起态宽度不是设计常量：实现按真实渲染文本测量后向上取整，宽度是布局的结果而不是谁定下的数值。因此 **Figma 变体中的计时与状态文字层必须 hug contents，不得写死宽度**。写死是唯一需要记住的失败模式——上一次同步把计时 TEXT 固定为 `34`（自然宽约 `28.6`），刘海计时变体因此整体偏宽 `5.4`；无刘海一对同样因固定文本宽度偏出十余 pt。
 
-可以直接对照的固定值只有一处：刘海形态左翼 = `24` padding + `18.4` 状态矩阵 + `8` clearance = `50.4`，加 `200` 遮挡后收起态总宽为 `251`。计时文本从 `x = 258.4` 开始（`50.4 + 200 + 8`），宽度随文本自身变化；无刘海形态在 `24` 高菜单栏上触及 `120` 宽度下限。这些关系由 `compactGeometryComposesTheNotchWings` 锁定，其余宽度不写入契约。
+可以直接对照的固定值只有一处：刘海形态左翼 = `24` padding + `16.6` 状态矩阵 + `8` clearance = `48.6`，加 `200` 遮挡后收起态总宽为 `249`。计时文本从 `x = 256.6` 开始（`48.6 + 200 + 8`），宽度随文本自身变化；无刘海形态在 `24` 高菜单栏上触及 `120` 宽度下限。这些关系由 `compactGeometryComposesTheNotchWings` 锁定，其余宽度不写入契约。
+
+> 本段此前写的是 `18.4` / `50.4` / `251`，那是矩阵改用 `16.6`（`13 × 1.2778`，见 `PanelMetrics.statusMatrixSize`）之前的数字，代码一直画的是 `249`。§6.4 的宽度表用 `16.62` 记这同一个值；两者差 `0.02`，三个 ceil 之后的宽度（`220` / `242` / `160`）完全相同，所以下表不受影响。
 
 ## 5. 实时监视列表
 
@@ -248,13 +250,15 @@ Input needed
 | 前导内边距 | `24` |
 | 状态矩阵 | `16.62` |
 | 间距 | `12` |
-| 最宽紧凑状态名 `Approval` | `52.74` |
+| 最宽紧凑状态名 `Approval`（**最宽的可计时状态**，见下注） | `52.74` |
 | clearance | `32` |
 | 最宽计时 `00:00:00`（等宽数字，Medium） | `57.91` |
 | 尾部内边距 | `24` |
 | **固定工作宽度** | **`219.27` → `220`** |
 
-其余全部落在它之内：`Completed 142.43`、`Connected 142.67`、`Input + 00:00:00 196.98`、`Running + 00:00:00 213.18`、`Approval + 00:00:00 219.27`。双产品为 `241.89 → 242`（一个矩阵加一个 `6` 间距）；`Disconnected` 为 `159.58 → 160`。
+其余全部落在它之内：`Completed 142.43`、`Connected 142.67`、`Input + 00:00:00 196.98`、`Running + 00:00:00 215.52`、`Approval + 00:00:00 219.27`。双产品为 `241.89 → 242`（一个矩阵加一个 `6` 间距）；`Disconnected` 为 `159.58 → 160`。
+
+**`Approval` 是最宽的可计时状态，不是最宽的状态名。** `Connected`（`66.05`）与 `Completed`（`65.81`）都比 `Approval`（`52.74`）长，但两者都不会计时，所以都输给「`Approval` 再加计时槽」。把计时槽预留在最长的*名字*后面而不是最长的*可计时状态*后面，会多留约 `13pt`——对一个常驻菜单栏的药丸来说是看得见的。实现按状态各自计算（`PanelMetrics.compactContentWidth`），由 `theFixedWidthFitsEveryWorkingStatusWithItsLongestTimer` 指名锁定。
 
 计时在预留空间内**右对齐**且使用等宽数字，因此轮次跨过一小时时数字只向左长进本来就空着的位置，药丸不动，菜单栏里它左边的图标也不动。
 
@@ -266,7 +270,7 @@ Input needed
 
 | 产品 | 「打开」的含义 | 来源 | 现有实现 |
 | --- | --- | --- | --- |
-| Codex Desktop | 应用正在运行 | `NSRunningApplication.runningApplications(withBundleIdentifier:)`，配合 `NSWorkspace` 启动与退出通知；事件驱动、公共 API、无轮询 | `LiveCodexMonitorService.swift:976` |
+| Codex Desktop | 应用正在运行 | `NSRunningApplication.runningApplications(withBundleIdentifier:)`；每次刷新取一次，本来就已经在取，用于把实时 Hook 绑定到同一个 Desktop 进程生命周期 | `LiveCodexMonitorService.swift:990` |
 | Claude Code | 至少有一个活跃会话 | `claude agents --json`，经 `ClaudeCodeSessionListing.liveSessions()`。没有应用可问，会话列表就是在场信号 | `ClaudeCodeSessionRegistry.swift` |
 
 `ClaudeCodeSessionRegistry` 自己的契约就是这里需要的那条界线：它的输出无论会话正在处理还是空闲都逐字节相同——它回答「有哪些会话」，Turn reducer 回答「它们在做什么」。**在场画出矩阵，reducer 点亮它**，两者不得重新合并。
@@ -277,7 +281,9 @@ Input needed
 
 在场的可信度按产品不同，只有 Claude Code 一侧需要额外规则：`NSRunningApplication` 是内核事实，不存在缓存与过期；`claude agents --json` 背后是 `~/.claude/sessions/<pid>.json`，每个会话一个文件，**没有心跳字段，mtime 也不更新**，因此文件本身无法自行过期。两处后果：
 
-1. **幽灵会话。** 被 `SIGKILL` 的会话来不及删除自己的文件。校验必须用 `pid` + `procStart`（该文件已同时给出这两个字段）成对判断，**不能只用 `kill(pid, 0)`**——PID 会被回收，只查存活会把一个不相干的新进程认成旧会话，比幽灵更糟。
+1. **幽灵会话——已实测，官方命令自己做掉了，而且用的正是那条正确的判据。** 被 `SIGKILL` 的会话确实来不及删除自己的文件，所以这个担心是对的；但 `claude agents --json` 并不会列出它。实测 2.1.229：把一个活会话的文件逐字节复制、**只改 `procStart`**，它就从输出里消失；写一个指向活着但不相干进程（`pid 1`）的会话文件，同样消失。也就是说该命令按 `pid` + `procStart` 成对校验——正是这里需要的判据，也正是只查 `kill(pid, 0)` 会被 PID 回收骗过的那一条。
+
+    因此本应用**不重做、也不应重做**这条校验：`--json` 根本不输出 `procStart`，要自己判断就必须改去直接读 `~/.claude/sessions/<pid>.json` 这套私有 schema，等于为了复制一条已经正确的公开实现而登记一项非公开依赖（`AGENTS.md` §8）。结论记在 [`ClaudeCodeSessionRegistry.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeSessionRegistry.swift) 的 `runOfficialCommand` 注释里。
 2. **我们自己的缓存没有上限。** `ClaudeCodeSessionRegistry.refresh()` 在读取失败时返回上一次结果且不更新 `readAt`。这对「行」是对的（一次失败不该退休所有行），但在场现在决定 `Connected` 与 `Disconnected`：只要 `claude` 被卸载或改名，读取会永久失败，而药丸会永远显示 `Connected`。因此「多久重读一次」（`freshness`，`30` 秒）与「陈旧答案还能被相信多久」必须分开，后者建议 `90` 秒（三次连续失败）。
 
 超过上限时在场是**未知**，而未知落到 `Disconnected`。按 §6.7 的语义这不是妥协而是字面真相：我们确实没有任何可用的连接。这与 tech-design 为 `Idle` 写下的规则是同一条，只是对称地用在非空集合上。
@@ -305,7 +311,11 @@ Input needed
 
 ### 6.8 已知代价与未决
 
-已定：`Disconnected` 的语义（§6.7）、灰色取最暗（§6.4）、单产品工作集合共用 `220`（§6.4）。剩下三条：
+已定：`Disconnected` 的语义（§6.7）、灰色取最暗（§6.4）、单产品工作集合共用 `220`（§6.4）。
+
+**`Connecting` 算不算已连接：已定为不算。** §6.5 说刚启动的应用可以诚实地为 Codex 显示 `Connected`，§6.7 说「打开了但监视不到」读作 `Disconnected`；App Server 尚在连接的那几秒同时落在两句话之间。取「不算」，因为 §6.7 的定义是字面的——观察契约还没建立，就还没连上——而且反过来做等于在没有证据时报告一个业务状态，正是 `AGENTS.md` §6.2 禁止的猜测。代价接近于零：有刘海形态静息时本来就什么都不画，所以正在连接的产品是「还没有标记」而不是「一个错的标记」，标记随契约一起到达。§6.5 那段不对称仍然成立，它讲的是轮次不可知而非连接未建立。
+
+剩下三条：
 
 - **`Disconnected` 这个词本身。** 它现在指认的是一次真实的连接失败，反对意见因此弱了很多；但它仍然是新用户在「一切正常、只是还没打开任何东西」时读到的第一句话。备选 `No agents`、`Nothing running`，上屏后再判断。
 - **有刘海形态在静息时没有任何绘制**，因此 `Disconnected` 是一个只在无刘海形态与 hover 时可见的状态名；两种形态第一次在「系统状态是否可见」上产生差异，而不只是画法不同。
@@ -415,11 +425,14 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] Quota unavailable 局部降级。
 - [x] ~~No active turns、Connecting、Disconnected、Update、unsupported、setup 薄层。~~ 收敛为 `Disconnected` 与 `Connected` 两个系统状态，见 §6.4 与 §6.6。
 - [x] 收起态在场规则与开合序列（§6.4，`624:1560`）：矩阵随智能体打开与关闭出现和离开，第一个产品接管灰槽。
+  - 已实现：在场取源、`Connected` / `Disconnected` 两态、槽位计数与由它决定的药丸宽度。
+  - **未实现：画法。** 收起态目前仍只画一个矩阵，没有灰色静息槽，也没有第二个产品的矩阵——双产品绘制随 [#35](https://github.com/soondubu137/codex-in-notch/issues/35) 一起落地。单产品用户看到的宽度与状态已经是最终形态。
 - [x] hover 只横向展开药丸、不落下面板；展开尾部为齿轮（`400.6 × 46` 有刘海／`224.6 × 46` 无刘海）。
 - [x] `Disconnected` 按 §6.7 重定义为「没有任何智能体已连接」；灰色取 `#151515`，为界面上最暗值（§6.4）。
 - [x] 无刘海药丸在单产品工作集合内固定为 `220`，双产品 `242`，`Disconnected` 为 `160`；宽度用系统字体本机实测（§6.4）。
 - [ ] `Disconnected` 这个词是否保留（备选 `No agents`、`Nothing running`），上屏后判断。
-- [ ] Claude Code 在场的两条校正（§6.5）：按 `pid` + `procStart` 成对过滤幽灵会话；为陈旧缓存设上限（建议 `90` 秒），超过后在场为未知并落到 `Disconnected`。
+- [x] ~~Claude Code 在场的第一条校正：按 `pid` + `procStart` 成对过滤幽灵会话。~~ **实测后撤销：`claude agents --json` 自己就是这么校验的**，而且它不输出 `procStart`，自己重做只能改读私有 schema。见 §6.5。
+- [x] Claude Code 在场的第二条校正：为陈旧缓存设上限（`90` 秒 = 三次连续失败），超过后在场为未知并落到 `Disconnected`。`freshness` 与 `trustCeiling` 现在是两个参数。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
 - [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。

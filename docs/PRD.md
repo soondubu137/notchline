@@ -109,20 +109,31 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 3. Running
 4. Completed
 
-健康且列表为空时，收起态显示 Idle。
+列表为空时，收起态显示的是**在场**而不是我们自己的连接健康：有智能体已连接时显示 `Connected`，一个都没有时显示 `Disconnected`（见 6.3）。
 
 列表使用同一优先级排序；同优先级按最近可信更新时间降序。状态变化立即重排，但用户正在滚动或悬停列表时不得强制跳动当前视口，应显示轻量的顺序更新提示。
 
 ### 6.3 全局可用性状态
 
+支持两个产品之后，收起态的系统状态收敛为两个。为一个用户从不打开的产品长期画一个变暗的矩阵，就是替别人的工具做广告；矩阵因此改为报告一件用户能自己核对的事——**是否有编码智能体处于已连接状态**。设计与理由见 [`figma-design.md`](figma-design.md) §6.4–§6.8。
+
+| 收起态状态 | 成立条件 |
+| --- | --- |
+| `Connected` | 至少一个产品**已打开且可观察**，且没有任何轮次在进行 |
+| `Disconnected` | 没有任何产品同时满足这两件事 |
+
+**已连接 = 已打开 且 可观察。** 两者是彼此独立的事实，可以互相矛盾：[ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) 把 Claude Code 的 hook 注册留给用户自己写，所以「打开了但监视不到」是普通的首次运行。它读作 `Disconnected`，而这正是这个词的字面意思——你不会与一个从未打开的东西断开，但与一个打开了却够不着的东西确实是断开的。这样就不需要第三个状态。
+
+下面四种情况因此**退出收起态**，只在展开面板与 Settings 中出现——那里有地方说明该怎么办：
+
 | 场景 | 列表 | 展开文案 | 是否提供操作 |
 | --- | --- | --- | --- |
-| 健康但无监视轮次 | 空 | `No active turns` | 否 |
 | 首次尚未集成 | 空 | `Set up integration` | 引导流程中处理 |
-| App Server 已开始连接、会话快照尚未返回 | 空 | `Connecting to Codex`，最长 5 秒 | 否 |
 | Codex 版本过旧 | 空 | `Update Codex` | 否 |
 | Codex 版本未经验证 | 空 | `Codex version unsupported` | 否 |
 | App Server 无响应、启动失败或连接断开 | 清空 | `Codex disconnected` | 否 |
+
+`Connecting to Codex` 被删除而不是搬家：在场由系统 API 直接回答，没有需要向用户解释的等待。`No active turns` 并入 `Connected`；这次改名值得——`Idle` 描述的是我们看到的空列表，用户无从核对，`Connected` 描述的是用户瞄一眼自己的 Dock 就能核对的事实。
 
 Disconnected 是全局集成健康问题，不能用于单会话。进入 Disconnected 时必须清空列表，不显示最后一次可信快照。应用不自动启动 Codex；用户在 Codex 或系统中自行完成相应操作。
 
@@ -230,16 +241,18 @@ V1 设置窗口只包含已经确认的三组能力：
 2. **Codex integration**：显示连接与兼容状态，提供一个总开关同时启停全部六种必需 lifecycle event 定义；提供重新检测。关闭只移除本应用管理的定义并保留用户其他 Hooks；重新开启会安装或修复完整集合。
 3. **Privacy**：`Show current content previews` 全局开关。
 
-设置只影响 Codex in Notch。Notch 中的 `No active turns`、`Update Codex`、`Codex version unsupported` 和 `Codex disconnected` 不提供操作。
+设置只影响 Codex in Notch。`Update Codex`、`Codex version unsupported` 和 `Codex disconnected` 不提供操作；它们已退出收起态，只在展开面板与 Settings 的产品行中出现（见 6.3）。
 
 ## 12. 可靠性与降级
 
-- 应用启动时列表为空，先显示 Connecting；App Server 成功返回一次只读校验后进入 Ready 并显示 Idle。该校验只用于区分 Ready 与 Disconnected，**不得据此产出任何会话行**。只有 App Server 无响应、启动失败或连接断开才显示 Disconnected。
+- 应用启动时列表为空，收起态显示 `Disconnected`——此刻确实还没有连上任何东西。App Server 成功返回一次只读校验后进入 Ready；该产品此时若也处于打开状态，收起态转为 `Connected`。该校验只用于区分 Ready 与 Disconnected，**不得据此产出任何会话行**。
+- **在场不得由轮次推断，可观察性也不得由在场推断。** 在场回答「这个产品有没有打开」，Turn reducer 回答「它在做什么」；前者画出矩阵，后者点亮它。Codex 的在场取 `NSRunningApplication`，Claude Code 取活跃会话列表是否非空。由此保留一处刻意的不对称：Codex 的在场在本应用启动的瞬间就可知，而它的轮次不可知（产品刻意不显示启动前的任何东西），所以刚启动的应用可以诚实地显示 `Connected` 而对工作一无所知。
+- **在场的可信度有上限。** Claude Code 的会话列表来自一次外部读取，读取失败时保留上一次结果——这对「行」是对的，一次失败不该退休所有行。但缓存不能无限期地决定 `Connected`：`claude` 被卸载或改名后读取会永久失败。因此「多久重读一次」（30 秒）与「陈旧答案还能被相信多久」（90 秒，即三次连续失败）分开；超过上限时在场为**未知**，未知落到 `Disconnected`。
 - 启动 cutoff 之前的 Hook、Stop、SessionEnd 或其他 lifecycle 信号不得创建、恢复、终止或修改当前 Turn；当前状态只能来自启动后的实时事件。App Server 数据只能为已由实时事件建立身份的会话补充元数据，永远不能独立创建会话。
 - 用户在 Desktop 中中断后继续同一响应时，即使恢复后的执行使用新的 Turn ID 且没有新的 UserPromptSubmit，启动后携带该新身份的实时 Hook 也必须让同一会话继续保持 Running，并让最终 Stop 正确进入 Completed；旧 Turn 的迟到事件不得覆盖恢复后的 Turn。
 - 首次验证过 Hook 后，应用自身重启不得要求再次产生事件才能恢复连接；恢复必须同时确认当前 Codex Desktop 正在运行。
 - 六种必需定义缺少、重复或 matcher/handler/timeout 被改变时不得显示为已连接；总开关显示 Off，并明确进入可由用户重新开启修复的状态。
-- 实时事件负责即时变化；`thread/list` 等集合校正必须在后台合并，不能阻塞 Idle、Running、Input 或 Approval 的发布。重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
+- 实时事件负责即时变化；`thread/list` 等集合校正必须在后台合并，不能阻塞 Connected、Running、Input 或 Approval 的发布。重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
 - 启动和常规刷新不得逐会话读取详情；状态快照失败时保留该 Turn 的最后一个可信四态值，不能据此制造新的会话状态。
 - 单次 App Server 请求超时保留连接与最近可信状态；若其间没有任何有效响应且连续请求都超时，应重建只读 App Server 传输，再在后续轮询恢复校正。
 - `thread/closed` 不等于删除，不可据此移除。
