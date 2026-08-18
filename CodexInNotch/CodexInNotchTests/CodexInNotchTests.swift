@@ -6656,6 +6656,19 @@ for line in sys.stdin:
                 with: Data(contentsOf: eventURL)
             ) as? [String: Any]
         )
+        // The helper sends its preview over the socket and *then* writes the
+        // event file, so in the app the reducer's debounce always sits between
+        // the two. This test consumes the moment the helper exits, which can
+        // outrun the channel's receive thread and claim an event whose preview
+        // has been written to the socket but not yet read off it -- and because
+        // consuming deletes the event, the preview is then gone for good.
+        // Waiting for it to land tests the pairing rather than the scheduling.
+        var attempts = 0
+        while channel.retainedPreviewCount == 0, attempts < 200 {
+            try await Task.sleep(for: .milliseconds(10))
+            attempts += 1
+        }
+
         let snapshot = await repository.consumeEvents()
         let everythingOnDisk = allFileContents(under: paths.supportDirectory)
         channel.stop()
@@ -7501,7 +7514,7 @@ for line in sys.stdin:
 
         let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
         #expect(snapshot.sessions.count == 1)
-        #expect(snapshot.sessions[0].status == .completed)
+        #expect(try #require(snapshot.sessions.first).status == .completed)
     }
 
     /// A title the user typed outranks one the product generated, and a title
@@ -7615,14 +7628,19 @@ for line in sys.stdin:
 
         #expect(snapshot.availability == .ready)
         #expect(snapshot.sessions.map(\.threadID) == ["alive"])
-        #expect(snapshot.sessions[0].agent == .claudeCode)
-        #expect(snapshot.sessions[0].status == .running)
+        // `#require`, not `sessions[0]`. An out-of-range subscript inside
+        // `#expect` is a Swift runtime trap, and a trap takes the whole test
+        // process with it -- one short array here used to end the run and
+        // report every case after it as a `0.000s` failure.
+        let alive = try #require(snapshot.sessions.first)
+        #expect(alive.agent == .claudeCode)
+        #expect(alive.status == .running)
         // Project is the working directory's last component (ADR 0009) — the
         // ban on deriving one from a path binds Codex only.
-        #expect(snapshot.sessions[0].projectName == "notch")
+        #expect(alive.projectName == "notch")
         // No title source yet, and the folder name is never allowed to stand in.
-        #expect(snapshot.sessions[0].title == "Untitled")
-        #expect(snapshot.sessions[0].preview == nil)
+        #expect(alive.title == "Untitled")
+        #expect(alive.preview == nil)
     }
 
     /// Without a registration there is nothing to listen for, and the product
@@ -9287,8 +9305,33 @@ private final class ClaudeCodeHarness {
     /// Its own port per harness: these tests run in parallel, and two of them
     /// asking for one fixed port is the same collision the product surfaces to
     /// the user rather than working around.
-    let port = UInt16.random(in: 49_200 ... 50_900)
+    ///
+    /// Handed out by a counter rather than drawn at random. It used to be
+    /// `UInt16.random(in: 49_200 ... 50_900)`, which is inside the range macOS
+    /// hands out for outbound connections (`net.inet.ip.portrange.first` is
+    /// `49152`), so a harness could draw a port something else on the machine
+    /// already held for a moment. That is not a product bug — the app binds the
+    /// port the user's file names or reports that it cannot, and never
+    /// substitutes one (ADR 0010) — so a taken port made `fetchSnapshot` return
+    /// `.disconnected` with **no sessions**, and a test asserting a row got an
+    /// empty array. `sessions[0]` on it trapped, and a trap took the whole test
+    /// process down: that is where the runs of "138 passed, 67 failed in
+    /// `0.000s`" came from. Random also let two harnesses draw the same number.
+    /// A counter outside the ephemeral range removes both causes.
+    let port = ClaudeCodeHarness.reservePort()
+    private let listener: AgentHookListener
     private let listing = StubSessionListing()
+
+    private static let portLock = NSLock()
+    private static var nextPort: UInt16 = 21_000
+
+    private static func reservePort() -> UInt16 {
+        portLock.lock()
+        defer { portLock.unlock() }
+        let port = nextPort
+        nextPort += 1
+        return port
+    }
 
     var live: [ClaudeCodeSession] {
         get { listing.sessions }
@@ -9305,6 +9348,7 @@ private final class ClaudeCodeHarness {
             agent: .claudeCode
         )
         setup = ClaudeCodeHookSetup(paths: paths)
+        listener = AgentHookListener(eventsDirectory: paths.eventsDirectory)
         service = ClaudeCodeMonitorService(
             paths: paths,
             setup: setup,
@@ -9314,7 +9358,7 @@ private final class ClaudeCodeHarness {
                 vocabulary: ClaudeCodeHookVocabulary()
             ),
             sessions: listing,
-            listener: AgentHookListener(eventsDirectory: paths.eventsDirectory),
+            listener: listener,
             transcripts: ClaudeCodeTranscriptReader(
                 projectsDirectory: root.appendingPathComponent("projects", isDirectory: true)
             ),
@@ -9323,6 +9367,9 @@ private final class ClaudeCodeHarness {
     }
 
     func tearDown() {
+        // Releases the port. Without this every harness in a run held its own
+        // until the process exited, so the ports only ever accumulated.
+        listener.stop()
         try? FileManager.default.removeItem(at: root)
     }
 
