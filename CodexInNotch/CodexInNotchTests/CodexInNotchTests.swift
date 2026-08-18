@@ -8320,6 +8320,50 @@ for line in sys.stdin:
         #expect(hidden.sessions.first?.privacySafeTitle == "Untitled")
     }
 
+    /// A Claude Code row has a third line, and the switch governs it (CC-015).
+    ///
+    /// It did not until `MessageDisplay` was registered. The event was missing
+    /// from the exploration document's table, so the first read of this product
+    /// concluded the text was unreachable without a channel equivalent to the
+    /// Codex side's `HookPreviewChannel`; it needs no such thing, because the
+    /// payload is already inside this process when it lands.
+    ///
+    /// Previews-off is checked as well as previews-on. Two things implement it
+    /// — collection stops at the listener, and the row is built without one —
+    /// and only the second is exercised by turning the setting off after the
+    /// text has already been collected.
+    @Test @MainActor
+    func aClaudeCodeRowShowsWhatTheSessionIsSaying() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "t1", at: 100)
+        harness.live = [harness.session(id: "s-1", cwd: "/Users/someone/Projects/thing")]
+
+        // Binds the port the registration names; nothing can post before this.
+        _ = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        try await post(port: harness.port, token: "harness-token", body: [
+            "hook_event_name": "MessageDisplay", "session_id": "s-1",
+            "message_id": "m-1", "index": 0, "final": false,
+            "delta": "Checking the event order before "
+        ])
+        try await post(port: harness.port, token: "harness-token", body: [
+            "hook_event_name": "MessageDisplay", "session_id": "s-1",
+            "message_id": "m-1", "index": 1, "final": true,
+            "delta": "touching anything."
+        ])
+
+        let shown = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let row = try #require(shown.sessions.first)
+        #expect(row.preview == "Checking the event order before touching anything.")
+        // The line is drawn from the same field the Codex rows use, so both
+        // products' rows are now the same three lines.
+        #expect(row.status == .running)
+
+        let hidden = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(hidden.sessions.first?.preview == nil)
+    }
+
     /// A turn whose session has gone is gone with it.
     ///
     /// SessionEnd is deliberately not registered, so the session list is the
@@ -8353,6 +8397,9 @@ for line in sys.stdin:
         #expect(alive.projectName == "notch")
         // No title source yet, and the folder name is never allowed to stand in.
         #expect(alive.title == "Untitled")
+        // No preview either, and since CC-015 that means something narrower
+        // than it used to: not "this product cannot receive text", but "this
+        // session has not said anything since we started listening".
         #expect(alive.preview == nil)
     }
 
@@ -8441,6 +8488,40 @@ for line in sys.stdin:
         // to paste for the same install.
         #expect(await setup.proposedRegistration() == proposal)
         #expect(await setup.configurationSnippet() == snippet)
+    }
+
+    /// Adding an event to the vocabulary asks the user to paste again.
+    ///
+    /// The app cannot repair this product's registration (ADR 0010), so a
+    /// registration that predates a new event is *incomplete*, not *active* —
+    /// and it has to say so, because the missing event raises no error and
+    /// simply never arrives. `MessageDisplay` is the first event to exercise
+    /// this: everyone registered before CC-015 has the other eleven and needs
+    /// to re-paste before a row grows its third line.
+    @Test @MainActor
+    func aRegistrationMissingANewlyAddedEventAsksToBeRepaired() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+
+        // Everything the vocabulary asks for is active.
+        try harness.registerHooks()
+        #expect(await harness.setup.status() == .active)
+
+        // The same file with one event removed is not.
+        let raw = try Data(contentsOf: harness.paths.hooksConfiguration)
+        var root = try #require(
+            try JSONSerialization.jsonObject(with: raw) as? [String: Any]
+        )
+        var hooks = try #require(root["hooks"] as? [String: Any])
+        #expect(hooks.removeValue(forKey: "MessageDisplay") != nil)
+        root["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: root)
+            .write(to: harness.paths.hooksConfiguration)
+
+        #expect(await harness.setup.status() == .repairRequired)
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(snapshot.availability == .setupRequired)
+        #expect(snapshot.diagnostic != nil)
     }
 
     /// What the user pasted is the authority, not what the app once proposed.
@@ -8981,6 +9062,205 @@ for line in sys.stdin:
                 as? [String: Any]
         )
         #expect(decoded["session_id"] as? String == "real")
+    }
+
+    /// The one text-bearing payload this product reads, and it never lands.
+    ///
+    /// `MessageDisplay` — officially "While assistant message text is
+    /// displayed" — is what gives a Claude Code row its third line (CC-015).
+    /// The event is registered, so the text does arrive; diverting it inside
+    /// the listener is what keeps "no preview text is written to disk" true
+    /// anyway. The events directory is a directory of files, so an event that
+    /// reached it would be text on disk.
+    ///
+    /// The directory is checked *after* an event that does queue has landed.
+    /// Asserting on an empty directory straight after the post would pass
+    /// while proving only that nothing had been processed yet.
+    @Test @MainActor
+    func messageDisplayTextIsHeldInMemoryAndNeverQueued() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let events = root.appendingPathComponent("events", isDirectory: true)
+
+        let listener = AgentHookListener(eventsDirectory: events, token: "t")
+        defer { listener.stop() }
+        let port = try #require(listener.start())
+
+        let said = "Reading the listener before changing it."
+        try await post(port: port, token: "t", body: [
+            "hook_event_name": "MessageDisplay",
+            "session_id": "s-1", "message_id": "m-1", "index": 0,
+            "delta": said, "final": false
+        ])
+        // Queues, so its arrival proves the one before it was processed too:
+        // both are recorded on the listener's own serial queue.
+        try await post(port: port, token: "t", body: [
+            "hook_event_name": "Stop", "session_id": "s-1", "prompt_id": "p-1"
+        ])
+
+        let queued = try await waitForQueuedEvents(in: events, count: 1)
+        #expect(queued.count == 1, "MessageDisplay must not add a file of its own")
+        let raw = try Data(contentsOf: try #require(queued.first))
+        #expect(!String(decoding: raw, as: UTF8.self).contains("Reading the listener"))
+
+        #expect(listener.preview(forSession: "s-1") == said)
+    }
+
+    /// Deltas join into one line, and stop at the head of the message.
+    ///
+    /// The chunk boundary regularly falls on a space, so an implementation that
+    /// trims each delta before appending welds the last word of one onto the
+    /// first word of the next. Only the head is kept, which is what bounds the
+    /// memory a talking session can cost by a constant instead of by how much
+    /// the model said.
+    @Test @MainActor
+    func streamedDeltasJoinIntoOneCappedLine() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let listener = AgentHookListener(
+            eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
+            token: "t"
+        )
+        defer { listener.stop() }
+        let port = try #require(listener.start())
+
+        func display(_ delta: String, message: String, session: String = "s-1") async throws {
+            try await post(port: port, token: "t", body: [
+                "hook_event_name": "MessageDisplay", "session_id": session,
+                "message_id": message, "delta": delta
+            ])
+        }
+
+        // The boundary case: delta one ends on the space that separates them.
+        try await display("Reading the ", message: "m-1")
+        try await display("listener", message: "m-1")
+        #expect(listener.preview(forSession: "s-1") == "Reading the listener")
+
+        // And the other boundary case. A delta is published as "the newly
+        // completed lines", so two deltas are two lines and neither carries the
+        // separator: concatenating them directly would produce `listenerthen`.
+        try await display("then", message: "m-1")
+        #expect(listener.preview(forSession: "s-1") == "Reading the listener then")
+
+        // One line: newlines and runs of whitespace collapse to single spaces.
+        // A multi-line delta is the measured shape under `-p` — the whole
+        // message arrives at once with its newlines intact.
+        try await display("\n\nfirst,\tthen  writing.", message: "m-1")
+        #expect(
+            listener.preview(forSession: "s-1")
+                == "Reading the listener then first, then writing."
+        )
+
+        // A new message replaces rather than extends: the row shows what is
+        // being said now, not the whole turn concatenated.
+        try await display("A second thing.", message: "m-2")
+        #expect(listener.preview(forSession: "s-1") == "A second thing.")
+
+        // The measured shape, which none of the cases above is: driving an
+        // interactive session under a pty against a listener registered through
+        // a temporary `--settings` file, CLI 2.1.234 delivered one message as
+        // eleven deltas, each a whole numbered line ending in a newline, each
+        // starting where the last stopped -- incremental, never cumulative.
+        // Appending is only correct because of that; a cumulative `delta` would
+        // repeat the message on every chunk.
+        try await display("1. Lava is molten rock.\n", message: "m-lines")
+        try await display("2. Magma is the same rock underground.\n", message: "m-lines")
+        try await display("3. Ash travels furthest.", message: "m-lines")
+        #expect(
+            listener.preview(forSession: "s-1")
+                == "1. Lava is molten rock. 2. Magma is the same rock underground."
+                + " 3. Ash travels furthest."
+        )
+
+        // And a long answer is cut at the same 240 the Codex helper cuts at.
+        try await display(String(repeating: "a", count: 400), message: "m-3")
+        let capped = try #require(listener.preview(forSession: "s-1"))
+        #expect(capped.count == AgentHookListener.maximumPreviewCharacters)
+        // Every later delta of the same message is dropped, not appended and
+        // re-cut — otherwise the cap would bound the row and not the memory.
+        try await display("ignored", message: "m-3")
+        #expect(listener.preview(forSession: "s-1") == capped)
+    }
+
+    /// The privacy switch is real again on this side, and it is not a setting.
+    ///
+    /// It was an empty implementation for as long as this product collected
+    /// nothing, and that emptiness was the claim. Registering `MessageDisplay`
+    /// spends it: "never received" becomes "not retained while this is off",
+    /// which is the claim the Codex side has always made. An in-memory flag,
+    /// for the reasons in CR-012 — a switch written to a file can fail, and did.
+    @Test @MainActor
+    func turningPreviewsOffDropsHeldTextAndRefusesMore() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let listener = AgentHookListener(
+            eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
+            token: "t"
+        )
+        defer { listener.stop() }
+        let port = try #require(listener.start())
+
+        func display(_ delta: String, message: String) async throws {
+            try await post(port: port, token: "t", body: [
+                "hook_event_name": "MessageDisplay", "session_id": "s-1",
+                "message_id": message, "delta": delta
+            ])
+        }
+
+        try await display("Something said out loud.", message: "m-1")
+        #expect(listener.preview(forSession: "s-1") != nil)
+
+        listener.setAcceptsText(false)
+        #expect(
+            listener.preview(forSession: "s-1") == nil,
+            "text already held is dropped, not merely hidden"
+        )
+        try await display("Said while the switch is off.", message: "m-2")
+        #expect(listener.preview(forSession: "s-1") == nil)
+
+        listener.setAcceptsText(true)
+        try await display("Said after it is back on.", message: "m-3")
+        #expect(listener.preview(forSession: "s-1") == "Said after it is back on.")
+
+        // Discarding is the ordering-insensitive half: it clears what is held
+        // without deciding whether more is accepted.
+        listener.discardPreviews()
+        #expect(listener.preview(forSession: "s-1") == nil)
+        try await display("And after a discard.", message: "m-4")
+        #expect(listener.preview(forSession: "s-1") == "And after a discard.")
+    }
+
+    /// Text does not outlive the row that showed it.
+    ///
+    /// Pruned against the same live-session set the transcript titles are, so a
+    /// session that has ended takes its words with it rather than sitting in
+    /// memory until the app quits.
+    @Test @MainActor
+    func previewsAreDroppedWithTheSessionsTheyBelongTo() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let listener = AgentHookListener(
+            eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
+            token: "t"
+        )
+        defer { listener.stop() }
+        let port = try #require(listener.start())
+
+        for session in ["alive", "ghost"] {
+            try await post(port: port, token: "t", body: [
+                "hook_event_name": "MessageDisplay", "session_id": session,
+                "message_id": "m-1", "delta": "Words from \(session)."
+            ])
+        }
+        #expect(listener.preview(forSession: "ghost") != nil)
+
+        listener.retainPreviews(forSessions: ["alive"])
+        #expect(listener.preview(forSession: "alive") == "Words from alive.")
+        #expect(listener.preview(forSession: "ghost") == nil)
     }
 
     @discardableResult

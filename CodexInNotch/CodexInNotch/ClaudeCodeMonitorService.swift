@@ -144,6 +144,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         )
 
         await transcripts.retain(sessionIDs: Set(liveByID.keys))
+        // Text belonging to a session that has ended does not outlive the row
+        // that showed it. Pruned against the same set as the titles.
+        listener.retainPreviews(forSessions: Set(liveByID.keys))
 
         func title(for session: ClaudeCodeSession) async -> String? {
             // A title is content, so it is only read when previews are on.
@@ -154,6 +157,17 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             )
         }
 
+        /// What the session is currently saying, from `MessageDisplay`.
+        ///
+        /// Two switches, not one, and both are load-bearing. Collection is off
+        /// at the listener when the setting is off, so nothing is held; this
+        /// one is the render-time half, and it is what makes the setting take
+        /// effect on the first refresh rather than on the next message.
+        func preview(for session: ClaudeCodeSession) -> String? {
+            guard showsContentPreviews else { return nil }
+            return listener.preview(forSession: session.sessionID)
+        }
+
         var rows: [MonitoredSession] = []
         var accountedFor: Set<String> = []
         for turn in hookState.turns {
@@ -161,7 +175,14 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // the session list is load-bearing rather than a convenience.
             guard let session = liveByID[turn.threadID] else { continue }
             accountedFor.insert(turn.threadID)
-            rows.append(row(for: turn, in: session, title: await title(for: session)))
+            rows.append(
+                row(
+                    for: turn,
+                    in: session,
+                    title: await title(for: session),
+                    preview: preview(for: session)
+                )
+            )
         }
 
         // Sessions the reducer has never heard of: either they were running
@@ -187,7 +208,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
                     projectName: projectName(for: session),
                     title: await title(for: session) ?? "Untitled",
                     privacySafeTitle: "Untitled",
-                    preview: nil,
+                    // A reconstructed turn started before this app did, so the
+                    // deltas that would have described it were never sent. It
+                    // gets a preview from the first message printed after we
+                    // began listening, and nothing before then.
+                    preview: preview(for: session),
                     // Only ever Running. Nothing is written while a turn waits
                     // on the user, so a reconstruction cannot tell a wait from
                     // work -- and guessing which would be inventing a state.
@@ -266,14 +291,24 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         await hookEvents.clearTurnsPreservingObservation()
     }
 
-    /// Nothing to switch. The listener's decoder has no field for prompt or
-    /// answer text, so this side never collects any -- the privacy control has
-    /// nothing to turn off here, rather than something it turns off later.
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
+    /// Stops the listener retaining assistant text, and drops what it holds.
+    ///
+    /// This was an empty implementation for as long as this side collected
+    /// nothing, and its emptiness was the privacy claim. Since CC-015 it is a
+    /// real switch again: `MessageDisplay` is registered, so text does arrive,
+    /// and "not received" has become "not retained while this is off". The
+    /// weaker claim is the honest one, and it is the same one the Codex side
+    /// has always made.
+    ///
+    /// Synchronous, `nonisolated`, and an in-memory flag, for the reasons on
+    /// the protocol: a control routed through an unheld `Task` is reorderable
+    /// and one routed to a file is failable — see CR-012.
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {
+        listener.setAcceptsText(isEnabled)
+    }
 
     func discardCollectedPreviews() async {
-        // Nothing to discard: the listener's decoder has no field for prompt or
-        // answer text, so none was ever received.
+        listener.discardPreviews()
     }
 
     func disconnect() async {
@@ -306,7 +341,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     private func row(
         for turn: HookTurnState,
         in session: ClaudeCodeSession,
-        title: String?
+        title: String?,
+        preview: String?
     ) -> MonitoredSession {
         // Project is the working directory (ADR 0009). The ban on deriving a
         // Project from a path binds Codex only: there a path is an approximation
@@ -323,7 +359,20 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // title is as much the user's content as a prompt is.
             title: title ?? "Untitled",
             privacySafeTitle: "Untitled",
-            preview: nil,
+            // The same text whatever the status, unlike Codex, which swaps
+            // between the prompt and the answer. There is one source here and
+            // it reads the same in every state: the beginning of the newest
+            // message printed. When a turn stops, that is exactly the PRD's
+            // "beginning of the final answer"; while it runs it is the opening
+            // of whatever it last said, which is a weaker reading of "latest
+            // progress" than Codex's and is the deliberate trade — a rolling
+            // tail would track a long answer more closely but would stop being
+            // the beginning of it at the moment the turn ends. Messages between
+            // tool calls are mostly shorter than the cap, so the two readings
+            // usually coincide. A wait shows the words that led up to the
+            // question — never the question's own tool arguments, the command
+            // being approved, or a path.
+            preview: preview,
             status: turn.status,
             startedAt: turn.startedAt
         )

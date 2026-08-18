@@ -377,7 +377,7 @@ Input needed
 
 处理步骤：去控制字符 → 合并空白 → 取第一可见行 → 内存限制 → 交给 UI Alpha mask。禁止写日志、数据库、UserDefaults 或诊断包。
 
-### 正文如何到达本进程
+### 正文如何到达本进程（Codex）
 
 **正文永远不写文件。** helper 在写事件文件之前，先通过 support 目录下权限 `0600` 的 Unix domain socket（`preview.sock`）把 `{event_id, prompt?, last_assistant_message?}` 交给正在运行的应用，随后才写那份不含正文的事件文件。应用按 `event_id` 把两者接上。
 
@@ -390,6 +390,29 @@ Input needed
 不能改用 `thread.preview` 代替：实测它是**线程的首条用户消息**，不随轮次前进（17 轮的线程仍返回第 1 轮的文本），因此它满足不了 PRD 2.7 的「当前内容预览」。
 
 `showCurrentContentPreviews == false` 时，socket 收到的正文在到达瞬间即被丢弃，extractor 不产生正文，并禁止标题生成器访问 prompt fallback。该开关是一个进程内标志而非落盘设置：写盘的开关可能失败、可能乱序，也确实曾经 fail open（CR-012）。
+
+### 正文如何到达本进程（Claude Code）
+
+**不需要第二条 `HookPreviewChannel`。** 这曾经是 #34 认定的前提，它是错的：Claude Code 把整个 payload POST 进本进程，正文抵达时**已经在内存里**，再绑一个 socket 什么也没搬动。
+
+来源是官方 Hook `MessageDisplay`（官方描述 "While assistant message text is displayed"，公开 payload 为 `turn_id, message_id, index, final, delta`）。它此前从未进入本仓库的事件表，Phase 0 的 30 事件清单里没有它——这正是「取不到正文」这个结论的由来。
+
+**先量再写。** 用 pty 驱动一个交互式会话，注册指向临时 `--settings` 文件里的独立监听器（**未改动 `~/.claude/settings.json`**），CLI 2.1.234 实测：一条 1561 字符的消息拆成 **11 个 delta**，间隔 **0.20–0.44 秒、均值 0.29 秒**，单个 payload 728–865 字节。这就是下面每一条的由来——三次每秒是这条路径唯一需要设计的东西，隐私不是（见 PRD 第 7 节，那条裁决已按不重要处理）。
+
+`AgentHookListener` 对它做四件事：
+
+1. **在写队列之前转向。** 事件队列是一个文件目录。三次每秒写一个文件、再由 reducer 读一个删一个，是这条路径最贵的做法；`record(_:)` 认出 `MessageDisplay` 后交给内存并直接返回，**不产生任何文件**。这同时也是「正文不落盘」这句话的实现。
+2. **先应答，再处理。** 本应用发出的粘贴片段带 `async: true`，但它**不能**写用户的设置文件（ADR 0010），所以真正装着的是用户当年粘的那一份；早于该字段的注册是**同步**的，Claude Code 会等这个响应。实测本机 `~/.claude/settings.json`：12 个事件，无一带 `async`。因此响应先于任何工作发出，排在已经串行化每个连接的那条队列上——一个正在说话的轮次不会一秒钟等三次。
+3. **只留每条消息的头部 240 字符。** 内存由常数决定，而不是由模型说了多少决定：头写满之后，后续 delta 在被扫描进任何保留结构之前就停下。
+4. **一趟扫完，只扫新 delta。** 折叠函数以已规范化的头部为种子往下写，长度用 `Int` 随行。此前的写法是重建 `carried + delta` 再在每个字符后取 `.count`——`String.count` 要走一遍字素边界，于是相对截断长度是平方级，还额外整份拷贝了 delta（上限 `maximumBodyBytes`，1 MB）。现在超长 delta 与普通 delta 同价。
+
+`delta` 的官方措辞是「**newly completed lines**」，实测确实如此，而且**是增量、不是累计**：同一条消息的相邻 delta 依次以 `1. `、`2. `、`3. ` 开头，各自从上一个停下的地方开始——若是累计，逐块追加会把整条消息重复一遍。除最后一个之外，**每个 delta 都以换行结束**，规范化后塌成一个尾随空格，所以下一个 delta 直接接上去，分隔符不需要被发明；`pendingSpace` 的种子只为消息的最后一个 delta 而存在，那一个才停在行中间。`-p` 非交互是另一种形状：一次交付、`index: 0`、`final: true`，多行消息带着换行整份到达。
+
+**它也不进 `changeEvents()`。** 不写文件的第二个后果：一个正在说话的轮次不会每秒把面板重画三次。正文由该轮次自身生命周期事件引起的刷新顺带取走，也就是面板本来的节奏——这条约束见 [`AGENTS.md`](../AGENTS.md) §7。
+
+开关是 `AgentHookListener.setAcceptsText(_:)`，与 Codex 侧同构：进程内标志、同步、关闭时连同已持有的正文一起丢弃。`ClaudeCodeMonitorService.setContentPreviewsEnabled` 因此从空实现变回真开关。行侧另有一道 `showsContentPreviews` 判断，两道都在：一道让开关在下一条消息前就生效，另一道保证已收的不再被画出来。
+
+预览按 live 会话集合裁剪（与标题缓存同一个集合），所以会话结束后它的正文不会比那一行活得更久。
 
 ## 12. 处理时间
 
@@ -515,7 +538,7 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - `Codex integration` 总开关：On 安装或修复六种必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。窗口里它是 `Products` 卡片中 Codex 那一行的 switch；Claude Code 那一行按 ADR 0010 给的是 `Set Up…` 而不是开关（`figma-design.md` §8.1）。
 - `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。
 - `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。
-- `Show current content previews`：立即影响所有行；关闭时清空内存预览并重新生成安全标题。
+- `Show current content previews`：立即影响所有行；关闭时清空内存预览并重新生成安全标题。两个产品都停止收取，不只是停止显示。
 
 ## 17. SwiftUI 接入边界
 

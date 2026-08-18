@@ -18,11 +18,33 @@ import os
 /// The reducer's freshness rule needs one, so it is taken here, at the moment
 /// the request lands.
 ///
-/// **Refuse to see the text.** A hook payload carries `prompt`, `tool_input`,
-/// `tool_response` and `last_assistant_message`: shell command lines, file
-/// paths, diffs, whole answers. ``Payload`` has no field for any of them, so
-/// they are dropped by the decoder and cannot reach memory, let alone the
-/// queue. What the product promises not to persist, it does not receive.
+/// **Keep the text out of the queue.** A hook payload carries `prompt`,
+/// `tool_input`, `tool_response` and `last_assistant_message`: shell command
+/// lines, file paths, diffs, whole answers. ``Payload`` has no field for any of
+/// them, so they are dropped by the decoder and cannot reach the queue — which
+/// is a directory of files, and therefore the disk.
+///
+/// One exception is collected, on purpose and only in memory: `MessageDisplay`
+/// carries the assistant text as it is printed to the screen, and that is the
+/// row's third line (CC-015). It is decoded by a *second* decoder, diverted in
+/// ``record(_:)`` before the queue is touched, and held in
+/// ``previewsBySessionID`` — never encoded into ``QueuedEvent``, never written.
+/// The Codex side needs a whole Unix socket for the same guarantee, because
+/// there a hook is a shell command and the only other way home is a file; here
+/// the text is already inside this process when it arrives.
+///
+/// Two consequences of the event's shape. Measured against CLI 2.1.234 by
+/// driving an interactive session under a pty, against a listener registered
+/// through a temporary `--settings` file — one 1561-character message arrived
+/// as eleven deltas, 0.20s to 0.44s apart, mean 0.29s:
+///
+/// - at three a second it must not become a file each time, which is what
+///   diverting it in ``record(_:)`` is for;
+/// - only the *head* of each message is kept, so a long answer costs nothing
+///   after its first 240 characters and the retained bytes per session are
+///   bounded by a constant rather than by how much the model said. The row
+///   therefore shows the beginning of whatever message is being printed now —
+///   not a running tail, and not the turn concatenated.
 final class AgentHookListener: @unchecked Sendable {
     private static let log = Logger(
         subsystem: "com.yinfenglu.CodexInNotch",
@@ -30,6 +52,9 @@ final class AgentHookListener: @unchecked Sendable {
     )
 
     /// The fields taken from a payload. Everything absent here is discarded.
+    ///
+    /// Deliberately without any text field. Everything decoded here is eligible
+    /// to be written into the queue, so the absence is the guarantee.
     private struct Payload: Decodable {
         let hookEventName: String?
         let sessionID: String?
@@ -50,6 +75,51 @@ final class AgentHookListener: @unchecked Sendable {
             case permissionMode = "permission_mode"
             case cwd
         }
+    }
+
+    /// The fields taken from a `MessageDisplay` payload.
+    ///
+    /// A second decoder rather than two more cases on ``Payload``, because this
+    /// one carries the assistant's words and ``Payload`` is what feeds the
+    /// queue. Nothing decoded here is reachable from ``QueuedEvent``.
+    ///
+    /// The published payload is `turn_id, message_id, index, final, delta`, and
+    /// only two of the five are needed: a new `message_id` is what ends the
+    /// previous message, and only the head of each is kept, so there is nothing
+    /// for a completion flag or an ordinal to decide. `turn_id` is worth a note
+    /// even unused — this is the only event carrying both it and `prompt_id`,
+    /// and the reducer's identity is `prompt_id`.
+    ///
+    /// `delta` is documented as *"the newly completed lines"*, and measured to
+    /// be exactly that on CLI 2.1.234 — which is what makes the fold in
+    /// ``normalizedPreview(appending:to:carriedLength:)`` a line join rather
+    /// than a concatenation. Two shapes were measured:
+    ///
+    /// - **interactive**: incremental, never cumulative — successive deltas of
+    ///   one message began `1. `, `2. `, `3. `, each starting where the last
+    ///   stopped — and every non-final one ended on a newline;
+    /// - **`-p`**: one delivery, `index: 0`, `final: true`, the whole message
+    ///   with its newlines intact inside the single delta.
+    ///
+    /// The first of those is the load-bearing one. Were `delta` cumulative,
+    /// appending would repeat the message on every chunk.
+    private struct MessageDisplayPayload: Decodable {
+        let messageID: String?
+        let delta: String?
+
+        enum CodingKeys: String, CodingKey {
+            case messageID = "message_id"
+            case delta
+        }
+    }
+
+    /// One session's live preview, and the message it was read from.
+    private struct SessionPreview {
+        /// Whichever assistant message is currently being printed. When this
+        /// changes the text starts again — the newest message is the progress,
+        /// and its head is what the row reports.
+        let messageID: String?
+        var text: String
     }
 
     /// The queue file shape, which is the helper's shape unchanged so both
@@ -79,6 +149,27 @@ final class AgentHookListener: @unchecked Sendable {
     /// A request body larger than this is refused outright rather than read.
     static let maximumBodyBytes = 1 << 20
 
+    /// The event that carries assistant text, and the only one that does.
+    ///
+    /// Officially described as "While assistant message text is displayed".
+    /// It is absent from the exploration document's table of events, which is
+    /// why the first pass at this product concluded no such thing existed.
+    static let messageDisplayEventName = "MessageDisplay"
+
+    /// How much of one message is kept.
+    ///
+    /// The same 240 the Codex helper truncates to, so the two products' rows
+    /// are cut at the same place. It is also the memory bound: once the head is
+    /// full every further delta is dropped without being stored.
+    static let maximumPreviewCharacters = 240
+
+    /// How many sessions' previews are held before the oldest is dropped.
+    ///
+    /// Previews are pruned to the live session list on every refresh, so this
+    /// is a leak stop for text belonging to a session that never appears there
+    /// — not a working set.
+    static let maximumRetainedPreviews = 64
+
     private let eventsDirectory: URL
     /// Set when the listener binds, because it comes from the user's settings
     /// rather than from this app: whatever token their registration carries is
@@ -97,6 +188,18 @@ final class AgentHookListener: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.yinfenglu.CodexInNotch.hook-listener")
     private var listener: NWListener?
     private var boundPort: UInt16?
+
+    /// Preview state, under a lock of its own rather than under ``queue``.
+    ///
+    /// ``setAcceptsText(_:)`` is a privacy control and has to take effect on the
+    /// caller's thread, in order. `queue` also serves connections and writes
+    /// queue files, so putting the switch behind it would make an infallible
+    /// control wait on file I/O for no reason. Same shape, and same reasoning,
+    /// as ``HookPreviewChannel``.
+    private let previewLock = NSLock()
+    private var previewsBySessionID: [String: SessionPreview] = [:]
+    private var previewOrder: [String] = []
+    private var acceptsText = true
 
     init(
         eventsDirectory: URL,
@@ -206,8 +309,8 @@ final class AgentHookListener: @unchecked Sendable {
                     self.receive(connection, buffer: buffer)
                 }
             case let .answer(status, body):
-                if let body { self.record(body) }
                 self.respond(connection, status: status)
+                if let body { self.record(body) }
             }
         }
     }
@@ -278,10 +381,27 @@ final class AgentHookListener: @unchecked Sendable {
         )
     }
 
-    /// Writes one event into the queue, having already answered the request.
+    /// Takes one event: to memory if it is text, to the queue otherwise.
     ///
-    /// Answering first is deliberate: nothing this app does may sit on a user's
-    /// session. A hook that blocked here would slow every tool call they make.
+    /// **Answering comes first**, and since `MessageDisplay` it matters more
+    /// than it used to. The snippet this app offers carries `async: true`, and
+    /// a hook registered that way is fire-and-forget — but the app cannot write
+    /// the user's settings (ADR 0010), so what is actually installed is
+    /// whatever they pasted, and a registration predating that flag is
+    /// *synchronous*. Measured on this machine's own `~/.claude/settings.json`:
+    /// twelve events, none of them carrying `async`. On such a registration
+    /// Claude Code waits for this response, and a talking turn waits three
+    /// times a second. Nothing this app does may sit on a user's session, so
+    /// the response goes out before any work is done, on the serial queue that
+    /// already orders every connection.
+    ///
+    /// The work is bounded regardless: one decode, and for `MessageDisplay` a
+    /// scan of one delta that stops at ``maximumPreviewCharacters``.
+    ///
+    /// A body over ``maximumBodyBytes`` is refused before it reaches here. For a
+    /// lifecycle event that loses the event; for `MessageDisplay` it loses one
+    /// message's preview, which is the same degradation as no listener at all:
+    /// a missing preview rather than a stale one.
     private func record(_ body: Data) {
         guard let payload = try? JSONDecoder().decode(Payload.self, from: body),
               let eventName = payload.hookEventName,
@@ -295,6 +415,20 @@ final class AgentHookListener: @unchecked Sendable {
         if let ignoredWorkingDirectory, let cwd = payload.cwd,
            URL(fileURLWithPath: cwd).standardizedFileURL.path
             == ignoredWorkingDirectory.standardizedFileURL.path {
+            return
+        }
+
+        // Assistant text turns back here. It goes to memory and the method
+        // returns: no queue file is written, which is both the privacy
+        // guarantee and the reason a 0.3s event does not become 0.3s of disk.
+        //
+        // Returning also keeps this event off ``HookEventRepository``'s change
+        // stream, so a talking turn does not redraw the panel three times a
+        // second. The text is picked up by whatever refresh the turn's own
+        // lifecycle events cause, which is the cadence the panel already runs
+        // at — see AGENTS.md §7.
+        if eventName == Self.messageDisplayEventName {
+            recordPreview(from: body, sessionID: sessionID)
             return
         }
 
@@ -328,5 +462,166 @@ final class AgentHookListener: @unchecked Sendable {
         } catch {
             Self.log.error("failed to queue hook event: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Previews
+
+    /// The text this session is currently printing, if any was collected.
+    ///
+    /// Read, not consumed. A preview stands until the message it came from is
+    /// replaced or the session leaves the live list, because a turn spends most
+    /// of its life between events and a row that blanked itself after one
+    /// refresh would flicker rather than report.
+    func preview(forSession sessionID: String) -> String? {
+        previewLock.lock()
+        let text = previewsBySessionID[sessionID]?.text
+        previewLock.unlock()
+        // The stored form keeps its trailing space so the next delta can join
+        // onto it; a row never shows one.
+        guard let trimmed = text?.trimmingCharacters(in: .whitespaces),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    /// Drops previews for sessions that are no longer live.
+    ///
+    /// Called with the same set the transcript reader is pruned with, so the
+    /// text of a session that has ended does not outlive the row that showed
+    /// it.
+    func retainPreviews(forSessions sessionIDs: Set<String>) {
+        previewLock.lock()
+        defer { previewLock.unlock() }
+        previewsBySessionID = previewsBySessionID.filter { sessionIDs.contains($0.key) }
+        previewOrder.removeAll { !sessionIDs.contains($0) }
+    }
+
+    /// Whether received text is retained at all.
+    ///
+    /// The privacy switch, and an in-memory flag for the same reason
+    /// ``HookPreviewChannel``'s is: there is no write to lose, no revision to
+    /// race, and no way for the settings to show "off" while text is still
+    /// being kept. Turning it off discards what is already held.
+    func setAcceptsText(_ accepts: Bool) {
+        previewLock.lock()
+        acceptsText = accepts
+        if !accepts {
+            previewsBySessionID.removeAll()
+            previewOrder.removeAll()
+        }
+        previewLock.unlock()
+    }
+
+    /// Discards collected text without changing whether more is accepted.
+    func discardPreviews() {
+        previewLock.lock()
+        previewsBySessionID.removeAll()
+        previewOrder.removeAll()
+        previewLock.unlock()
+    }
+
+    /// Folds one `MessageDisplay` delta into the session's preview.
+    ///
+    /// Only the head of a message is ever held. Once it is full the delta is
+    /// dropped before it is decoded into anything retained, so the cost of a
+    /// long answer is a comparison — and the bytes held per session cannot grow
+    /// past ``maximumPreviewCharacters`` no matter how much the model says.
+    private func recordPreview(from body: Data, sessionID: String) {
+        previewLock.lock()
+        let accepts = acceptsText
+        let existing = previewsBySessionID[sessionID]
+        previewLock.unlock()
+        guard accepts else { return }
+
+        guard let payload = try? JSONDecoder().decode(
+            MessageDisplayPayload.self,
+            from: body
+        ), let delta = payload.delta, !delta.isEmpty else { return }
+
+        // A new message replaces the old one rather than extending it: the row
+        // shows the message being printed now, not the whole turn concatenated.
+        let carried = existing?.messageID == payload.messageID ? (existing?.text ?? "") : ""
+        let carriedLength = carried.count
+        guard carriedLength < Self.maximumPreviewCharacters else { return }
+        let text = Self.normalizedPreview(
+            appending: delta,
+            to: carried,
+            carriedLength: carriedLength
+        )
+        guard !text.isEmpty else { return }
+
+        previewLock.lock()
+        defer { previewLock.unlock() }
+        // Re-checked under the lock: the switch may have been turned off while
+        // this delta was being decoded, and a privacy control that loses a race
+        // is not one.
+        guard acceptsText else { return }
+        if previewsBySessionID[sessionID] == nil {
+            previewOrder.append(sessionID)
+        }
+        previewsBySessionID[sessionID] = SessionPreview(
+            messageID: payload.messageID,
+            text: text
+        )
+        while previewOrder.count > Self.maximumRetainedPreviews {
+            previewsBySessionID.removeValue(forKey: previewOrder.removeFirst())
+        }
+    }
+
+    /// Folds one delta onto a head that is already normalised, in one pass.
+    ///
+    /// One line, collapsed and cut, the way the Codex side cuts its own:
+    /// control characters dropped, runs of whitespace collapsed to one space,
+    /// no leading space, and never longer than ``maximumPreviewCharacters``.
+    ///
+    /// `carried` is seeded rather than rescanned, and the running length is
+    /// carried as an `Int`. Both matter: `String.count` walks grapheme breaks,
+    /// so the previous form — rebuild `carried + delta`, then test `.count`
+    /// after every character — was quadratic in the cap and additionally copied
+    /// the whole delta, which may be up to ``maximumBodyBytes``. Now the scan
+    /// touches only the new delta and stops the moment the head is full, so an
+    /// oversized delta costs the same as an ordinary one.
+    ///
+    /// A single trailing space **is** kept, unlike the Codex side's one-shot
+    /// version, and the seed relies on it: measured on CLI 2.1.234, every
+    /// non-final delta ends on a line break, which collapses to that trailing
+    /// space — so the next delta joins onto it and no separator is invented.
+    /// Only a message's final delta ends mid-line, and that is what
+    /// `pendingSpace` is seeded for. Trimming the tail here instead would weld
+    /// the last word of one delta onto the first word of the next; the caller
+    /// trims it when the text is read.
+    nonisolated private static func normalizedPreview(
+        appending delta: String,
+        to carried: String,
+        carriedLength: Int
+    ) -> String {
+        var normalized = carried
+        normalized.reserveCapacity(maximumPreviewCharacters)
+        var length = carriedLength
+        var pendingSpace = !normalized.isEmpty && !normalized.hasSuffix(" ")
+
+        for character in delta {
+            if character.isWhitespace {
+                // Never leading: a message that opens with a newline should not
+                // spend its first character on it.
+                pendingSpace = !normalized.isEmpty
+                continue
+            }
+            guard !character.unicodeScalars.contains(
+                where: CharacterSet.controlCharacters.contains
+            ) else { continue }
+
+            if pendingSpace {
+                normalized.append(" ")
+                pendingSpace = false
+                length += 1
+                if length >= maximumPreviewCharacters { return normalized }
+            }
+            normalized.append(character)
+            length += 1
+            if length >= maximumPreviewCharacters { return normalized }
+        }
+
+        if pendingSpace { normalized.append(" ") }
+        return normalized
     }
 }

@@ -296,8 +296,14 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// better than Codex, and it is what lets the reducer drop an inference
     /// that unordered delivery would otherwise be able to fool.
     nonisolated let reportsApprovalDenials = true
-    /// Nothing to carry: the listener's decoder has no field for prompt or
-    /// answer text, so none is ever received.
+    /// No side channel, and none needed — which is not the same as no preview.
+    ///
+    /// Codex's helper needs one because a hook there is a shell command: the
+    /// only ways home are a file or a socket, and text may not go in a file.
+    /// Claude Code POSTs its payload straight into this process, so the text is
+    /// already in memory when it arrives; ``AgentHookListener`` diverts
+    /// `MessageDisplay` there and never lets it reach the queue. Binding a
+    /// second socket would move nothing.
     nonisolated let usesPreviewChannel = false
 
     /// The tool Claude Code uses to put a question to the user.
@@ -314,6 +320,13 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             ManagedHookDefinition(event: "Elicitation", matcher: nil),
             ManagedHookDefinition(event: "ElicitationResult", matcher: nil),
             ManagedHookDefinition(event: "Notification", matcher: nil),
+            // The row's third line (CC-015). Officially "While assistant
+            // message text is displayed", and absent from the exploration
+            // document's table of events — which is why the first pass at this
+            // product concluded the text was unreachable without a new
+            // transport. It is the one registered event whose payload is
+            // consumed entirely inside the listener; see below.
+            ManagedHookDefinition(event: "MessageDisplay", matcher: nil),
             ManagedHookDefinition(event: "Stop", matcher: nil),
             ManagedHookDefinition(event: "StopFailure", matcher: nil)
             // SessionEnd is deliberately absent. It is the one event that is
@@ -358,6 +371,15 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             // are. Every wait this product can open is already covered by an
             // event that carries an id, and a notification carries none --
             // opening a wait nothing can close would be worse than ignoring it.
+            .inert
+        case ("MessageDisplay", _):
+            // Never actually reaches the reducer: ``AgentHookListener`` takes
+            // the text into memory and returns without queueing a file, so
+            // there is nothing here to reduce. The case exists because the
+            // registration list and this table must agree — an event that is
+            // registered and produces no signal would be quarantined as
+            // corruption if one ever did arrive, which is exactly what a queue
+            // file left by an older build would do.
             .inert
         case ("Stop", _), ("StopFailure", _):
             // One terminal. A failure is recorded as the reason a turn ended,

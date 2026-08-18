@@ -30,6 +30,7 @@
 - 实时 Turn 生命周期桥、Hook 安装/升级/总开关/移除使用官方 Codex Hooks、公开事件与 `hooks.json` 配置，不在本表记录。
 - Claude Code 的会话发现使用官方公开命令 `claude agents --json`——其 `--help` 明确承诺 `--json` 打印包含交互式在内的活动会话且不需要 TTY——不在本表记录。
 - Claude Code 的 Hook 事件、`type: "http"` handler 与 `~/.claude/settings.json` 中的 `hooks` 配置位置均为官方公开能力，不在本表记录。本应用**不写**该文件（见 [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md)），只读取它以判断注册是否完整。
+- **Claude Code 行的内容预览同样不在本表记录**，尽管同一行的**标题**在表内。两者来源不同：标题只能靠解析私有 transcript JSONL 拿到，预览来自官方 Hook `MessageDisplay`——官方描述 "While assistant message text is displayed"，官方 payload `turn_id, message_id, index, final, delta`，走的是已经在用的 `type: "http"` handler。既没有私有 schema，也没有私有路径，因此按 [`AGENTS.md`](../AGENTS.md) §8.1「不得仅因未经 App Server 实现就登记」不构成登记项。
 - 精确打开 Desktop thread 使用官方 `codex://threads/<thread-id>` deep link 和 macOS 公共 Launch Services，不在本表记录。
 - 额度、今日 token、Thread 列表、标题、Turn 详情和状态校正使用公开 App Server 方法，不在本表记录。
 

@@ -117,6 +117,13 @@ flowchart LR
 | Input needed | `Notification(notification_type: idle_prompt / agent_needs_input)`、`Elicitation` | `ElicitationResult`、`Notification(elicitation_complete)` |
 | Completed | `Stop`（带 `last_assistant_message`、`background_tasks`）、`StopFailure`（字段名是 `error`，非 `error_type`） | 终态粘性 |
 | 会话消失 | `SessionEnd`（字段名是 `reason`） | — |
+| 行内容预览 | **`MessageDisplay`**（官方描述 "While assistant message text is displayed"；公开 payload `turn_id, message_id, index, final, delta`） | 新的 `message_id` 替换旧文本 |
+
+> **更正（2026-08-18）。** `MessageDisplay` 这一行是后补的。上面那句「官方 Hooks 文档公开 30 个事件」在本次调研时逐个映射过，**唯独漏掉了它**，于是 `ClaudeCodeHookVocabulary.managedDefinitions` 也没有它，于是 [#34 / CC-015](https://github.com/soondubu137/codex-in-notch/issues/34) 得出了「Claude Code 侧取不到正文，要取就得再造一条等价于 `HookPreviewChannel` 的通道」这个结论。两半都是错的：正文取得到，而且不需要新通道——payload 本来就是 POST 进本进程的，正文抵达时已经在内存里。
+>
+> 本机实测（CLI 2.1.234，注册到一个临时 `--settings` 文件上的独立监听器，**全程未改动 `~/.claude/settings.json`**）：`-p` 非交互一次交付，`index: 0`、`final: true`，多行消息带着换行整份到达；交互式会话按增量交付，实测约每 0.3 秒一次。它也是唯一同时带 `prompt_id` 与 `turn_id` 的事件（两者不同值）；reducer 的身份仍用 `prompt_id`，此处只作记录。
+>
+> 已实现，见 [`tech-design.md` 第 11 节](../../tech-design.md)「正文如何到达本进程（Claude Code）」。
 
 关键结构性优势：
 
