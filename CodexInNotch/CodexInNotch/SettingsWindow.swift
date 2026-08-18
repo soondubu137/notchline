@@ -333,9 +333,12 @@ struct AppSettingsView: View {
         }
     }
 
-    /// Partial registration gets its own sentence because it is the failure
-    /// with no other symptom: the events left out simply never arrive, and
-    /// nothing anywhere reports an error.
+    /// A registration that does not match this build gets its own sentence,
+    /// because it is the failure with no other symptom. An event left out
+    /// simply never arrives; a handler in an older shape does arrive and
+    /// misbehaves quietly — one missing `async` is a session that waits on
+    /// this app three times a second while a turn talks. Neither reports an
+    /// error anywhere.
     private var claudeCodeStatusLine: String {
         switch store.setupStatus(for: .claudeCode) {
         case .active:
@@ -343,7 +346,7 @@ struct AppSettingsView: View {
                 ? "Registered · the port in your settings is unavailable"
                 : "Connected · hooks installed"
         case .repairRequired:
-            "Partly registered · the missing events never arrive and never fail"
+            "Registration is out of date · nothing here reports an error"
         default:
             "Not registered yet"
         }

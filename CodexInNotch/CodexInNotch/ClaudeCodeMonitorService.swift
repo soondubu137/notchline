@@ -116,7 +116,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
                 sessions: [],
                 setupStatus: status,
                 diagnostic: status == .repairRequired
-                    ? "Claude Code 的 Hook 注册不完整，缺少的事件不会报错，只会永远不到达。"
+                    ? "Claude Code 的 Hook 注册与本版本需要的不一致，请在设置里重新粘贴："
+                        + "缺少的事件不会报错，只会永远不到达；"
+                        + "形状过时的 handler（例如少了 `async`）会让会话等待本应用响应。"
                     : "Claude Code 集成尚未注册。"
             )
         }

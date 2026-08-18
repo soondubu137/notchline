@@ -246,18 +246,34 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     // MARK: - Verification
 
     /// Whether `root` holds exactly one current definition per managed event.
+    ///
+    /// Two conditions, because they catch different failures. **Exactly one of
+    /// ours** rules out a second copy, which would fire alongside the first.
+    /// **And it is the current one** rules out a handler this app would no
+    /// longer install — an older shape still fires, and fires wrongly.
+    ///
+    /// The second condition used to be missing here, and the gap had teeth on
+    /// the Claude Code side, where the app cannot repair the file itself
+    /// (ADR 0010) and a registration is whatever the user once pasted. A paste
+    /// predating `async: true` was reported `active`: every event arrived, and
+    /// every one of them made the session *wait* for this app's response. With
+    /// `MessageDisplay` registered that is three waits a second (CC-015). The
+    /// app had no way to say so, because identity here is deliberately just a
+    /// marker inside the handler — it has to survive a rebind — and a marker
+    /// cannot tell a current handler from a stale one.
     nonisolated func isFullyInstalled(in root: [String: Any]) -> Bool {
         guard let hooks = root["hooks"] as? [String: Any] else { return false }
         return definitions.allSatisfy { definition in
             guard let groups = hooks[definition.event] as? [[String: Any]] else {
                 return false
             }
-            let matches = groups.reduce(into: 0) { count, group in
-                guard matcher(in: group, matches: definition.matcher) else { return }
+            var managed: [[String: Any]] = []
+            for group in groups where matcher(in: group, matches: definition.matcher) {
                 let handlers = group["hooks"] as? [[String: Any]] ?? []
-                count += handlers.filter(isManagedHandler).count
+                managed.append(contentsOf: handlers.filter(isManagedHandler))
             }
-            return matches == 1
+            guard managed.count == 1 else { return false }
+            return isCurrentManagedHandler(managed[0])
         }
     }
 
@@ -268,8 +284,29 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
 
     /// Whether this handler is one of ours, including one an earlier version
     /// of this app installed.
+    ///
+    /// Deliberately loose, and it must stay that way: removal and reinstall
+    /// both depend on recognising a handler this app no longer writes. Use
+    /// ``isCurrentManagedHandler(_:)`` to ask the narrower question.
     nonisolated func isManagedHandler(_ handler: [String: Any]) -> Bool {
         allIdentityMarkers.contains { Self.contains(marker: $0, in: handler) }
+    }
+
+    /// Whether this handler is ours *and* the one this build installs.
+    ///
+    /// Whole-value equality against ``managedHandler`` rather than a list of
+    /// fields to check, so a field added to the handler later is covered the
+    /// day it is added instead of the day somebody remembers this method. It
+    /// subsumes what the Codex installer used to spell out by hand — a key
+    /// count and one `timeout` — and it is what makes a paste that is missing
+    /// `async`, or carries the wrong `timeout`, or names another port than the
+    /// one it was read from, report as needing repair rather than as active.
+    ///
+    /// Equality is `NSDictionary`'s, which is what both sides already are once
+    /// `JSONSerialization` has been through them: nested objects compare by
+    /// value, and `true` compares equal to `1` the way JSON means it.
+    nonisolated func isCurrentManagedHandler(_ handler: [String: Any]) -> Bool {
+        (handler as NSDictionary) == (managedHandler as NSDictionary)
     }
 
     nonisolated var allIdentityMarkers: [String] {

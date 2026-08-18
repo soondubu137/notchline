@@ -8524,6 +8524,75 @@ for line in sys.stdin:
         #expect(snapshot.diagnostic != nil)
     }
 
+    /// A registration in an older *shape* asks to be repaired too (CC-015).
+    ///
+    /// Every event being present is not the same as the registration being
+    /// right, and this is the failure that proved it. The snippet this app
+    /// offers carries `async: true`, which is what keeps the hook off the
+    /// user's critical path; a paste predating that flag registers all the
+    /// same events and reports `active`, while every event makes the session
+    /// wait for this app to answer — three times a second once `MessageDisplay`
+    /// is registered. The app cannot repair the file (ADR 0010), so noticing
+    /// and saying so is the whole of what it can do.
+    ///
+    /// Identity here is deliberately just a marker inside the handler, because
+    /// it has to survive a rebind to another port. So the marker cannot answer
+    /// this question, and whole-value equality against the handler this build
+    /// installs is what does.
+    @Test @MainActor
+    func aRegistrationInAnOlderHandlerShapeAsksToBeRepaired() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        #expect(await harness.setup.status() == .active)
+
+        func rewriteHandlers(
+            _ transform: ([String: Any]) -> [[String: Any]]
+        ) throws {
+            let raw = try Data(contentsOf: harness.paths.hooksConfiguration)
+            var root = try #require(
+                try JSONSerialization.jsonObject(with: raw) as? [String: Any]
+            )
+            var hooks = try #require(root["hooks"] as? [String: Any])
+            var groups = try #require(hooks["MessageDisplay"] as? [[String: Any]])
+            var group = groups[0]
+            let handler = try #require((group["hooks"] as? [[String: Any]])?.first)
+            group["hooks"] = transform(handler)
+            groups[0] = group
+            hooks["MessageDisplay"] = groups
+            root["hooks"] = hooks
+            try JSONSerialization.data(withJSONObject: root)
+                .write(to: harness.paths.hooksConfiguration)
+        }
+
+        // The shape a paste made before `async: true` has: same events, same
+        // URL, same token -- and the marker that identifies it as ours is
+        // still right there, which is exactly why the marker cannot decide it.
+        try rewriteHandlers { handler in
+            var stale = handler
+            #expect(stale.removeValue(forKey: "async") != nil)
+            return [stale]
+        }
+        #expect(await harness.setup.status() == .repairRequired)
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(snapshot.availability == .setupRequired)
+        #expect(snapshot.diagnostic != nil)
+
+        // Restoring it is enough: nothing else about the file changed.
+        try rewriteHandlers { handler in
+            var current = handler
+            current["async"] = true
+            return [current]
+        }
+        #expect(await harness.setup.status() == .active)
+
+        // And the older half of the rule still holds. A second copy of our own
+        // handler fires alongside the first, so one current handler is not
+        // enough -- there has to be exactly one of ours.
+        try rewriteHandlers { handler in [handler, handler] }
+        #expect(await harness.setup.status() == .repairRequired)
+    }
+
     /// What the user pasted is the authority, not what the app once proposed.
     ///
     /// The hook URL names a port, and since the app cannot rewrite their file

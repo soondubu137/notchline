@@ -642,12 +642,14 @@ actor CodexHookInstaller {
         return group["matcher"] == nil
     }
 
+    /// Kept as a name rather than inlined: this reads as one of the three
+    /// conditions `managedRegistrationState` weighs, and the definition of
+    /// "current" belongs to the configuration that writes the handler, not
+    /// here. It used to spell out the key count and the `timeout` by hand,
+    /// which was a copy of the handler literal a few lines away in another
+    /// file, and would have missed any field added to it since.
     private func isCurrentManagedHandler(_ handler: [String: Any]) -> Bool {
-        guard managedConfiguration.isManagedHandler(handler),
-              handler.count == 3 else {
-            return false
-        }
-        return (handler["timeout"] as? NSNumber)?.intValue == 3
+        managedConfiguration.isCurrentManagedHandler(handler)
     }
 
     private func writeCurrentHookScript() throws {

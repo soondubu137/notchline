@@ -228,11 +228,11 @@ Figma §09 的 `Codex integration` 卡片围绕一个开关：拨动它，应用
 | 状态 | 文案 | 颜色 |
 | --- | --- | --- |
 | 未注册 | Not registered yet. | 灰 |
-| **部分注册** | Partly registered. The events left out never arrive and never fail. | 橙 |
+| **注册与本版本不符** | Registration is out of date. Nothing here reports an error. | 橙 |
 | 已注册且在收事件 | Registered and receiving events. | 绿 |
 | 已注册但端口被占 | Registered, but the port in your settings is unavailable. | 绿点＋该句 |
 
-**部分注册必须单独成一态**，不能与"未注册"合并：漏掉一个事件不会报错，Claude Code 只是永远不推送那一类迁移，这是手工粘贴唯一没有症状的失败方式。端口被占同样要说出来——应用不能替用户改文件，所以只能指出来。
+**这一态必须单独存在**，不能与"未注册"合并：它是手工粘贴唯一没有症状的失败方式，而且有两种形状。漏掉一个事件不会报错，Claude Code 只是永远不推送那一类迁移。**事件齐全但 handler 形状过时也算**——早于 `async: true` 的那一份粘贴，事件一个不少，每一个却都让会话停下来等本应用应答；注册了 `MessageDisplay` 之后就是每秒三次（CC-015）。因此判定不能只看"我们的 handler 在不在"，而要看"在的那个是不是本版本会装的那个"：本应用的 handler 身份是 URL 里的一段固定路径（它必须能扛住换端口），而一段路径分不出当前与过时。端口被占同样要说出来——应用不能替用户改文件，所以只能指出来。
 
 粘贴内容由 reducer 认识的事件列表渲染，因此说明与实现无法漂移；一个测试固定了这一点。
 
