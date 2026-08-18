@@ -263,7 +263,7 @@ struct CodexInNotchTests {
 
     /// One mark per connected product, in `AgentKind` order, never by urgency.
     @Test @MainActor
-    func theMarksAreOnePerConnectedProductInAFixedOrder() {
+    func theMarksAreOnePerConnectedProductInAFixedOrder() throws {
         let running = MonitoredSession(
             agent: .claudeCode,
             threadID: "t", turnID: "u", projectName: "p", title: "t",
@@ -293,8 +293,9 @@ struct CodexInNotchTests {
             makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
         ])
         #expect(nothing.presenceMarks.count == 1)
-        #expect(nothing.presenceMarks[0].isResting)
-        #expect(nothing.presenceMarks[0].status == .disconnected)
+        let resting = try #require(nothing.presenceMarks.first)
+        #expect(resting.isResting)
+        #expect(resting.status == .disconnected)
     }
 
     /// One product's turn must not light the other product's mark.
@@ -442,7 +443,7 @@ struct CodexInNotchTests {
 
     /// The footer has exactly as many rules as the notch has marks.
     @Test @MainActor
-    func theFooterDrawsOneRuleBlockPerConnectedProduct() {
+    func theFooterDrawsOneRuleBlockPerConnectedProduct() throws {
         let store = MonitorStore(services: [])
         store.applyForTesting(
             AgentSnapshot(
@@ -455,7 +456,7 @@ struct CodexInNotchTests {
         )
         #expect(store.footerRules.map(\.agent) == [.codex])
         // Codex spans the full width because it has one window.
-        #expect(store.footerRules[0].windows.count == 1)
+        #expect(try #require(store.footerRules[checked: 0]).windows.count == 1)
         // One window leaves room in the caption, so today's tokens stay inline.
         #expect(store.footerTodayText == nil)
         #expect(store.expandedFooterHeight == PanelMetrics.expandedFooterHeight)
@@ -477,7 +478,7 @@ struct CodexInNotchTests {
         )
         #expect(store.footerRules.map(\.agent) == [.codex, .claudeCode])
         // Claude Code is halved because it genuinely has two windows.
-        #expect(store.footerRules[1].windows.count == 2)
+        #expect(try #require(store.footerRules[checked: 1]).windows.count == 2)
         // Four captions fill the line, so today's usage needs one of its own.
         let today = try? #require(store.footerTodayText)
         #expect(today?.contains("Codex") == true)
@@ -4524,13 +4525,17 @@ struct CodexInNotchTests {
             Data("ult\":{}}\n{\"id\":2}\n\n{\"id".utf8)
         )
         #expect(middleMessages.count == 3)
-        #expect(String(data: middleMessages[0], encoding: .utf8) == #"{"id":1,"result":{}}"#)
-        #expect(String(data: middleMessages[1], encoding: .utf8) == #"{"id":2}"#)
-        #expect(middleMessages[2].isEmpty)
+        let firstFrame = try #require(middleMessages[checked: 0])
+        let secondFrame = try #require(middleMessages[checked: 1])
+        let thirdFrame = try #require(middleMessages[checked: 2])
+        #expect(String(data: firstFrame, encoding: .utf8) == #"{"id":1,"result":{}}"#)
+        #expect(String(data: secondFrame, encoding: .utf8) == #"{"id":2}"#)
+        #expect(thirdFrame.isEmpty)
 
         let finalMessages = buffer.append(Data("\":3}\n".utf8))
         #expect(finalMessages.count == 1)
-        #expect(String(data: finalMessages[0], encoding: .utf8) == #"{"id":3}"#)
+        let lastFrame = try #require(finalMessages.first)
+        #expect(String(data: lastFrame, encoding: .utf8) == #"{"id":3}"#)
         #expect(buffer.bufferedByteCount == 0)
     }
 
@@ -7278,19 +7283,19 @@ for line in sys.stdin:
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         let transcript = project.appendingPathComponent("s-1.jsonl")
 
-        func line(_ output: Int) -> String {
+        func line(_ output: Int) throws -> String {
             let record: [String: Any] = [
                 "type": "assistant",
                 "timestamp": "2026-08-16T12:00:00.000Z",
                 "message": ["role": "assistant", "usage": ["output_tokens": output]]
             ]
             return String(
-                decoding: try! JSONSerialization.data(withJSONObject: record),
+                decoding: try JSONSerialization.data(withJSONObject: record),
                 as: UTF8.self
             )
         }
 
-        try Data((line(10) + "\n").utf8).write(to: transcript)
+        try Data((try line(10) + "\n").utf8).write(to: transcript)
         let clock = TestClock(now: ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!)
         let counter = ClaudeCodeTokenCounter(projectsDirectory: root, clock: clock)
         #expect(await counter.todayTokens() == 10)
@@ -7298,13 +7303,13 @@ for line in sys.stdin:
         // Append, exactly as a live session does.
         let handle = try FileHandle(forWritingTo: transcript)
         try handle.seekToEnd()
-        try handle.write(contentsOf: Data((line(5) + "\n").utf8))
+        try handle.write(contentsOf: Data((try line(5) + "\n").utf8))
         try handle.close()
         #expect(await counter.todayTokens() == 15)
 
         // Replaced rather than appended to: anything remembered describes a
         // file that no longer exists, so it is counted again from scratch.
-        try Data((line(7) + "\n").utf8).write(to: transcript)
+        try Data((try line(7) + "\n").utf8).write(to: transcript)
         #expect(await counter.todayTokens() == 7)
     }
 
@@ -7335,7 +7340,7 @@ for line in sys.stdin:
     /// under the ones that matter, and anything hunting for a percentage would
     /// find it.
     @Test @MainActor
-    func theUsageParserAnchorsOnItsTwoLinesAndIgnoresTheProseBelow() {
+    func theUsageParserAnchorsOnItsTwoLinesAndIgnoresTheProseBelow() throws {
         let output = """
         You are currently using your subscription to power your Claude Code usage
 
@@ -7355,30 +7360,32 @@ for line in sys.stdin:
         let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
 
         #expect(windows.count == 2)
+        let sessionWindow = try #require(windows[checked: 0])
+        let weekWindow = try #require(windows[checked: 1])
         // Reported as used; a rule draws what is left.
-        #expect(windows[0].label == "5 h")
-        #expect(windows[0].remainingPercent == 78)
-        #expect(windows[1].label == "7 d")
-        #expect(windows[1].remainingPercent == 82)
+        #expect(sessionWindow.label == "5 h")
+        #expect(sessionWindow.remainingPercent == 78)
+        #expect(weekWindow.label == "7 d")
+        #expect(weekWindow.remainingPercent == 82)
         // The per-model window is deliberately not one of them: which model it
         // names varies, so a rule that changed meaning would have to be read
         // rather than glanced at.
         #expect(!windows.contains { $0.remainingPercent == 100 })
 
         // The year is not printed. It is inferred, and both resets land ahead.
-        let session = try! #require(windows[0].resetsAt)
-        let week = try! #require(windows[1].resetsAt)
+        let session = try #require(sessionWindow.resetsAt)
+        let week = try #require(weekWindow.resetsAt)
         #expect(session > now)
         #expect(week > session)
     }
 
     /// A reset printed before today's date belongs to next year.
     @Test @MainActor
-    func aResetThatWouldBeInThePastRollsIntoTheFollowingYear() {
+    func aResetThatWouldBeInThePastRollsIntoTheFollowingYear() throws {
         let output = "Current session: 10% used · resets Jan 2 at 9:00am (America/Los_Angeles)"
         let now = ISO8601DateFormatter().date(from: "2026-12-30T12:00:00Z")!
         let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
-        let reset = try! #require(windows[0].resetsAt)
+        let reset = try #require(windows[checked: 0]?.resetsAt)
         #expect(reset > now)
         #expect(reset.timeIntervalSince(now) < 5 * 24 * 3600)
     }
@@ -7845,7 +7852,7 @@ for line in sys.stdin:
     /// "no sessions", one hiccup would clear every Claude Code row at once —
     /// the same fail-closed rule the Desktop unread adapter holds to.
     @Test @MainActor
-    func theSessionListKeepsItsLastAnswerWhenAReadFails() async {
+    func theSessionListKeepsItsLastAnswerWhenAReadFails() async throws {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
         let responses = ResponseQueue(items: [
             Data("""
@@ -7863,11 +7870,12 @@ for line in sys.stdin:
 
         let first = await registry.refresh()
         #expect(first.count == 1)
-        #expect(first[0].sessionID == "s-1")
-        #expect(first[0].processIdentifier == 42)
-        #expect(first[0].workingDirectory.path == "/Users/someone/Projects/thing")
+        let onlySession = try #require(first.first)
+        #expect(onlySession.sessionID == "s-1")
+        #expect(onlySession.processIdentifier == 42)
+        #expect(onlySession.workingDirectory.path == "/Users/someone/Projects/thing")
         // Reported in milliseconds.
-        #expect(first[0].startedAt == Date(timeIntervalSince1970: 1_786_919_144.634))
+        #expect(onlySession.startedAt == Date(timeIntervalSince1970: 1_786_919_144.634))
 
         // A read that could not be obtained keeps the previous answer.
         #expect(await registry.refresh() == first)
@@ -8186,7 +8194,8 @@ for line in sys.stdin:
         )
 
         let queued = try await waitForQueuedEvents(in: events, count: 1)
-        let raw = try Data(contentsOf: queued[0])
+        let queuedEvent = try #require(queued.first)
+        let raw = try Data(contentsOf: queuedEvent)
         let decoded = try #require(
             try JSONSerialization.jsonObject(with: raw) as? [String: Any]
         )
@@ -8260,8 +8269,9 @@ for line in sys.stdin:
         ])
 
         let queued = try await waitForQueuedEvents(in: events, count: 1)
+        let queuedEvent = try #require(queued.first)
         let decoded = try #require(
-            try JSONSerialization.jsonObject(with: Data(contentsOf: queued[0]))
+            try JSONSerialization.jsonObject(with: Data(contentsOf: queuedEvent))
                 as? [String: Any]
         )
         #expect(decoded["session_id"] as? String == "real")
@@ -9297,6 +9307,21 @@ private final class CodexWorkspaceStub: CodexWorkspaceOpening {
 
 /// Stands up a Claude Code service over temporary paths.
 @MainActor
+private extension Collection {
+    /// Bounds-checked access, for reading into something the code under test
+    /// produced.
+    ///
+    /// A literal-index subscript is a Swift runtime trap, and a trap takes the
+    /// whole test process with it rather than failing one case: one short array
+    /// used to end the run and report every case after it as a `0.000s`
+    /// failure. Paired with `#require` this fails only its own test, and says
+    /// which index was missing while doing it.
+    nonisolated subscript(checked offset: Int) -> Element? {
+        guard offset >= 0, offset < count else { return nil }
+        return self[index(startIndex, offsetBy: offset)]
+    }
+}
+
 private final class ClaudeCodeHarness {
     let root: URL
     let paths: HookIntegrationPaths
