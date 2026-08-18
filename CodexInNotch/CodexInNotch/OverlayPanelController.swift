@@ -148,7 +148,8 @@ final class OverlayPanelController {
         let targetFrame = OverlayPanelLayout.frame(
             on: selectedDisplay.frame,
             panelSize: size,
-            horizontalOffset: store.currentPanelHorizontalOffset
+            surfaceShoulder: store.surfaceCornerRadius,
+            trailingAnchor: store.currentPanelTrailingAnchor
         )
 
         guard panel.frame != targetFrame else {
@@ -206,18 +207,40 @@ final class OverlayPanelController {
 }
 
 enum OverlayPanelLayout {
-    /// `horizontalOffset` displaces the panel from the centre of the display.
-    /// A notched compact panel needs it: with no trailing wing it hangs to the
-    /// left of the cut-out, and centring would slide the notch out from under it.
+    /// The window frame that puts a panel body of `panelSize` where it belongs.
+    ///
+    /// Two things separate the window from the panel it carries.
+    ///
+    /// `surfaceShoulder` is the concave shoulder `PanelContour` draws on each
+    /// side of the body — one corner radius wide (see
+    /// `PanelMetrics.surfaceCornerRadius`). The window is that much wider so
+    /// the shoulders have somewhere to live and the body's own edges land where
+    /// they were asked to.
+    ///
+    /// `trailingAnchor` pins the body's trailing edge in screen coordinates. A
+    /// notched compact panel needs it: that edge has to sit on the cut-out's,
+    /// and deriving the position from the display centre instead both assumes
+    /// the cut-out is centred and rounds the panel against the display's
+    /// midpoint rather than against the edge it has to meet. Everything else
+    /// passes `nil` and is centred.
     static func frame(
         on screenFrame: NSRect,
         panelSize: CGSize,
-        horizontalOffset: CGFloat = 0
+        surfaceShoulder: CGFloat = 0,
+        trailingAnchor: CGFloat? = nil
     ) -> NSRect {
-        NSRect(
-            x: screenFrame.midX - panelSize.width / 2 + horizontalOffset,
+        let width = panelSize.width + surfaceShoulder * 2
+        // Anchored, the trailing edge is arithmetic the panel must land on
+        // exactly; centred, it is the midpoint that must survive intact. Each
+        // case is written from the thing it has to preserve, because deriving
+        // one from the other loses an ulp and a half-open window seam is
+        // visible against a black cut-out.
+        let x = trailingAnchor.map { $0 + surfaceShoulder - width }
+            ?? (screenFrame.midX - width / 2)
+        return NSRect(
+            x: x,
             y: screenFrame.maxY - panelSize.height,
-            width: panelSize.width,
+            width: width,
             height: panelSize.height
         )
     }

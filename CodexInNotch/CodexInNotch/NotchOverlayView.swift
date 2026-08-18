@@ -7,12 +7,7 @@ struct NotchOverlayView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .top) {
-                PanelSurface(
-                    cornerRadius: PanelMetrics.surfaceCornerRadius(
-                        geometry: store.geometry,
-                        menuBarHeight: store.compactHeight
-                    )
-                )
+                PanelSurface(cornerRadius: store.surfaceCornerRadius)
 
                 VStack(spacing: 0) {
                     OverlayHeader()
@@ -28,23 +23,30 @@ struct NotchOverlayView: View {
                             )
                     }
                 }
+                // The window is one shoulder wider than the panel on each side,
+                // because that is where `PanelContour` draws the curve back up
+                // to the menu bar. Content is laid out in the body inside them,
+                // so its padding is measured from the black edge and not from
+                // an invisible window bound — and so is the region that answers
+                // to the pointer, which leaves the shoulders passing clicks
+                // through to the menu bar items they overhang.
                 .frame(
-                    width: proxy.size.width,
+                    width: max(0, proxy.size.width - store.surfaceCornerRadius * 2),
                     height: proxy.size.height,
                     alignment: .top
                 )
+                .contentShape(Rectangle())
+                .onHover { isInside in
+                    if isInside {
+                        store.pointerEnteredPanel()
+                    } else {
+                        store.pointerExitedPanel()
+                    }
+                }
                 .animation(contentAnimation, value: store.isExpanded)
             }
         }
-        .contentShape(Rectangle())
         .clipped()
-        .onHover { isInside in
-            if isInside {
-                store.pointerEnteredPanel()
-            } else {
-                store.pointerExitedPanel()
-            }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(panelAccessibilityLabel)
     }

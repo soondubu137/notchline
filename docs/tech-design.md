@@ -533,7 +533,7 @@ protocol MonitorViewModelProtocol: ObservableObject {
 
 Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入口注入真实 repository。SwiftUI 不直接解析协议事件、不读取本地文件、不构造导航 URL。
 
-几何继续由现有 AppKit overlay 负责：使用完整 `NSScreen.frame`，所有中间帧保持相同 `midX` 与 `maxY`；顶部高度来自目标菜单栏。三行会话展开总高为 `menuBarHeight + 280`（`240` viewport + `40` footer），空/全局状态为 `menuBarHeight + 88`（`48` body + `40` footer）。因此 `46 pt` 参考分别是 `326` 与 `134`，无刘海 `24 pt` 三行参考是 `304`。
+几何继续由现有 AppKit overlay 负责：使用完整 `NSScreen.frame`，所有中间帧保持相同 `maxY`；顶部高度来自目标菜单栏。水平方向上展开态锁定 `midX`，带刘海的收起态改为锚定缺口右缘，窗口另在本体左右各留一个圆角半径的肩（见 `figma-design.md` §3.4）。三行会话展开总高为 `menuBarHeight + 280`（`240` viewport + `40` footer），空/全局状态为 `menuBarHeight + 88`（`48` body + `40` footer）。因此 `46 pt` 参考分别是 `326` 与 `134`，无刘海 `24 pt` 三行参考是 `304`。
 
 ## 18. Phase 0 验证计划
 

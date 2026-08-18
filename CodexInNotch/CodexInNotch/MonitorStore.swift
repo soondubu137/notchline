@@ -59,6 +59,23 @@ struct DisplayOption: Identifiable {
         return max(0, auxiliaryTopRightArea.minX - auxiliaryTopLeftArea.maxX)
     }
 
+    /// The cut-out's trailing edge, in screen coordinates.
+    ///
+    /// The compact panel is pinned to this edge rather than to the display
+    /// centre. Centring assumes the camera housing is centred on the panel --
+    /// true on every Mac measured so far, but it also rounds the panel against
+    /// the display's midpoint instead of against the one edge it has to meet,
+    /// and a fraction of a point there is a visible seam beside a black cut-out.
+    var centerOcclusionMaxX: CGFloat? {
+        guard geometry == .notched,
+              let auxiliaryTopRightArea,
+              centerOcclusionWidth >= 1 else {
+            return nil
+        }
+
+        return auxiliaryTopRightArea.minX
+    }
+
     var configurationSummary: String {
         "\(geometry.title) · 菜单栏 \(Int(menuBarHeight.rounded())) pt"
     }
@@ -235,25 +252,16 @@ enum PanelMetrics {
         return textWidth(timerText, font: timerFont) + expandedHorizontalPadding
     }
 
-    /// How far the compact panel sits from the centre of the display.
+    /// How far the compact body reaches past the cut-out's trailing edge.
     ///
-    /// A notched panel is pinned to the notch, not the screen: with no trailing
-    /// wing the panel hangs entirely to the left of the notch, so centring it
-    /// would slide the real notch out from under the cut-out.
-    static func compactHorizontalOffset(
-        geometry: DisplayGeometry,
-        isExpanded: Bool,
-        statusReadoutText: String,
-        timerText: String?,
-        centerOcclusionWidth: CGFloat,
-        markCount: Int = 1
-    ) -> CGFloat {
-        guard !isExpanded, geometry == .notched, centerOcclusionWidth >= 1 else {
-            return 0
-        }
-        let leading = notchedLeadingWidth(markCount: markCount)
-        let trailing = notchedTrailingWidth(timerText: timerText)
-        return (trailing - leading) / 2
+    /// A notched panel is pinned to the notch, not the screen: its right edge
+    /// sits on the cut-out's right edge, plus whatever trailing wing is drawn.
+    /// Everything that rounds -- the ceiled width, a cut-out that is not
+    /// perfectly centred -- is absorbed by the leading wing, which is padding
+    /// and can take it, rather than by the edge that has to meet the hardware.
+    static func compactTrailingWingWidth(timerText: String?) -> CGFloat {
+        let content = compactTrailingWidth(timerText: timerText)
+        return content > 0 ? content + expandedNotchClearance : 0
     }
 
     /// Leading wing on a notched display: padding, the marks, and the clearance.
@@ -271,11 +279,17 @@ enum PanelMetrics {
             + expandedNotchClearance
     }
 
-    private static func notchedTrailingWidth(timerText: String?) -> CGFloat {
-        let content = compactTrailingWidth(timerText: timerText)
-        return content > 0 ? content + expandedNotchClearance : 0
-    }
-
+    /// The contour's corner radius — and, because of the shape it draws, the
+    /// width of the shoulder it needs on each side of the panel.
+    ///
+    /// `PanelContour` spans its rect only along the very top edge and then
+    /// curves inward: its straight sides sit one radius in. So every width in
+    /// this type describes the **body** — the black surface, the thing that has
+    /// to line up with the cut-out — and the window is one radius wider on each
+    /// side to leave the shoulders somewhere to be drawn. Sizing the window to
+    /// the body instead was the bug: the compact panel's right edge landed a
+    /// radius inside the cut-out, and its bottom-right corner curve took another
+    /// radius off that, which read as a bite out of the notch.
     static func surfaceCornerRadius(
         geometry: DisplayGeometry,
         menuBarHeight: CGFloat
@@ -340,7 +354,7 @@ enum PanelMetrics {
                 markCount: drawsCompactMarks ? matrixCount : 0
             )
                 + centerOcclusionWidth
-                + notchedTrailingWidth(timerText: timerText)
+                + compactTrailingWingWidth(timerText: timerText)
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
             return CGSize(
@@ -1113,16 +1127,28 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// Horizontal displacement from the centre of the display. Non-zero only
-    /// for a notched compact panel, which is pinned to the cut-out.
-    var currentPanelHorizontalOffset: CGFloat {
-        PanelMetrics.compactHorizontalOffset(
+    /// Where the panel body's trailing edge has to land, in screen coordinates.
+    ///
+    /// Non-`nil` only for a notched compact panel, which is pinned to the
+    /// cut-out. Everything else is centred on the display: an expanded panel is
+    /// far wider than the cut-out and reads as a sheet under the menu bar, not
+    /// as an extension of the notch.
+    var currentPanelTrailingAnchor: CGFloat? {
+        guard !isExpanded,
+              let occlusionMaxX = selectedDisplay?.centerOcclusionMaxX else {
+            return nil
+        }
+
+        return occlusionMaxX
+            + PanelMetrics.compactTrailingWingWidth(timerText: compactTimerText)
+    }
+
+    /// The contour's corner radius on the selected display, which is also the
+    /// shoulder the window has to leave outside the body on each side.
+    var surfaceCornerRadius: CGFloat {
+        PanelMetrics.surfaceCornerRadius(
             geometry: geometry,
-            isExpanded: isExpanded,
-            statusReadoutText: compactStatusReadoutText,
-            timerText: compactTimerText,
-            centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
-            markCount: drawsCompactMarks ? presenceMarks.count : 0
+            menuBarHeight: compactHeight
         )
     }
 

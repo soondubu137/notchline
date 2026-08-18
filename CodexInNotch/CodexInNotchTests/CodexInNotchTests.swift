@@ -580,33 +580,70 @@ struct CodexInNotchTests {
         #expect(size(timerText: "1:23").width > idle.width)
     }
 
+    /// The panel's black edge lands on the cut-out's, which is the one
+    /// alignment a notched compact panel has to get right.
+    ///
+    /// This replaces an assertion on `compactHorizontalOffset`, which stated
+    /// the same thing as a displacement from the display centre — equivalent
+    /// only while the cut-out is centred and the width is not rounded, and
+    /// blind to the shoulder the window carries outside the body either way.
     @Test @MainActor
-    func notchedCompactPanelStaysPinnedToTheCutOut() {
-        func offset(timerText: String?) -> CGFloat {
-            PanelMetrics.compactHorizontalOffset(
-                geometry: .notched,
-                isExpanded: false,
-                statusReadoutText: "Running",
-                timerText: timerText,
-                centerOcclusionWidth: 200
-            )
-        }
-
-        // With no trailing wing the panel hangs left of the cut-out, so it has
-        // to be displaced left of the display centre to stay aligned.
-        #expect(offset(timerText: nil) < 0)
-        // A trailing wing pulls it back toward centre.
-        #expect(offset(timerText: "1:23") > offset(timerText: nil))
-        // Nothing to pin to when there is no notch.
-        #expect(
-            PanelMetrics.compactHorizontalOffset(
-                geometry: .noNotch,
-                isExpanded: false,
-                statusReadoutText: "Running",
-                timerText: "1:23",
-                centerOcclusionWidth: 0
-            ) == 0
+    func notchedCompactBodyEndsWhereTheCutOutEnds() throws {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
         )
+        let store = MonitorStore(displays: [display])
+        let occlusionMaxX = try #require(display.centerOcclusionMaxX)
+
+        // The cut-out's own edge, held out by whatever trailing wing is drawn —
+        // and nothing is drawn there until a turn is being timed.
+        #expect(PanelMetrics.compactTrailingWingWidth(timerText: nil) == 0)
+        #expect(
+            PanelMetrics.compactTrailingWingWidth(timerText: "1:23")
+                > PanelMetrics.compactTrailingWingWidth(timerText: nil)
+        )
+        #expect(
+            store.currentPanelTrailingAnchor
+                == occlusionMaxX + PanelMetrics.compactTrailingWingWidth(
+                    timerText: store.compactTimerText
+                )
+        )
+
+        let shoulder = store.surfaceCornerRadius
+        #expect(shoulder > 0)
+        let frame = OverlayPanelLayout.frame(
+            on: display.frame,
+            panelSize: store.currentPanelSize,
+            surfaceShoulder: shoulder,
+            trailingAnchor: occlusionMaxX
+        )
+
+        // The window is the panel plus one shoulder on each side. `PanelContour`
+        // draws its straight sides a radius inside the rect it is given, so a
+        // window sized to the panel puts the black that far inside the cut-out.
+        #expect(frame.width == store.currentPanelSize.width + shoulder * 2)
+        #expect(frame.maxX - shoulder == occlusionMaxX)
+        #expect(frame.minX + shoulder == occlusionMaxX - store.currentPanelSize.width)
+
+        // Nothing to pin to when there is no notch, and nothing pinned stays
+        // centred on the display.
+        let external = makeDisplay(
+            id: "external",
+            ordinal: 2,
+            menuBarHeight: 24,
+            hasNotch: false
+        )
+        #expect(external.centerOcclusionMaxX == nil)
+        let centred = OverlayPanelLayout.frame(
+            on: external.frame,
+            panelSize: CGSize(width: 168, height: 24),
+            surfaceShoulder: shoulder,
+            trailingAnchor: nil
+        )
+        #expect(centred.midX == external.frame.midX)
     }
 
     /// The compact panel measures itself from rendered text, so only the widths
