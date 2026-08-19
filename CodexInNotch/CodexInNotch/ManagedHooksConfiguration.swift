@@ -117,8 +117,32 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
 
     /// A configuration that posts to this app, as Claude Code allows.
     ///
-    /// `async` is what keeps the hook off the user's critical path, and it is
-    /// also why nothing here may depend on delivery order.
+    /// Deliberately no `async` key. It reads like the one thing that would keep
+    /// these hooks off the user's critical path, and this app used to write it,
+    /// but Claude Code's HTTP hook schema does not have such a field -- the
+    /// accepted keys are `type`, `url`, `if`, `timeout`, `headers`,
+    /// `allowedEnvVars`, `statusMessage` and `once` (read out of 2.1.233 and
+    /// 2.1.235). Unknown keys are dropped by the settings parser without a
+    /// word, and **every** write to `~/.claude/settings.json` -- a theme, an
+    /// effort level, a permission, a plugin -- rewrites the whole file from
+    /// that parsed model. So a handler carrying `async` decays into one that
+    /// does not, on a schedule nobody controls.
+    ///
+    /// That mattered here more than a stripped key normally would, because
+    /// ``isCurrentManagedHandler(_:)`` compares the whole handler: the strip
+    /// turned an installed registration into `repairRequired`, the user pasted
+    /// it back, and the next settings write undid them again. Writing what the
+    /// schema accepts is what ends that loop.
+    ///
+    /// Nothing is lost by it. Delivery was never actually deferred -- a
+    /// registration with the key behaved exactly like one without, measured
+    /// against 2.1.235 -- and ``AgentHookListener`` answers `200` with an empty
+    /// body immediately, so the session's wait is one loopback round trip. If a
+    /// handler here ever does need to keep working after answering, `async`
+    /// lives in the *response* now: `{"async": true, "asyncTimeout": n}`.
+    ///
+    /// Delivery order is still not guaranteed, and nothing here may depend on
+    /// it.
     nonisolated static func loopbackPost(
         port: UInt16,
         path: String,
@@ -130,7 +154,6 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
             managedHandler: [
                 "type": "http",
                 "url": "http://127.0.0.1:\(port)\(path)",
-                "async": true,
                 "timeout": 5,
                 "headers": ["Authorization": "Bearer \(token)"]
             ],
@@ -255,12 +278,18 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// The second condition used to be missing here, and the gap had teeth on
     /// the Claude Code side, where the app cannot repair the file itself
     /// (ADR 0010) and a registration is whatever the user once pasted. A paste
-    /// predating `async: true` was reported `active`: every event arrived, and
-    /// every one of them made the session *wait* for this app's response. With
-    /// `MessageDisplay` registered that is three waits a second (CC-015). The
-    /// app had no way to say so, because identity here is deliberately just a
-    /// marker inside the handler — it has to survive a rebind — and a marker
-    /// cannot tell a current handler from a stale one.
+    /// naming a port this build no longer listens on was reported `active`,
+    /// and so was one whose `timeout` had since changed: the events go to
+    /// nobody, or wait longer than they should, and the notch simply stays
+    /// empty. The app had no way to say so, because identity here is
+    /// deliberately just a marker inside the handler — it has to survive a
+    /// rebind — and a marker cannot tell a current handler from a stale one.
+    ///
+    /// One stale shape heals on its own: a paste carrying `async: true`, which
+    /// this app used to write. Claude Code's settings parser drops the key at
+    /// the next write of the file, after which the handler matches again. It
+    /// reports as needing repair until then, which is honest — it is not the
+    /// handler this build installs.
     nonisolated func isFullyInstalled(in root: [String: Any]) -> Bool {
         guard let hooks = root["hooks"] as? [String: Any] else { return false }
         return definitions.allSatisfy { definition in
@@ -298,9 +327,10 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// fields to check, so a field added to the handler later is covered the
     /// day it is added instead of the day somebody remembers this method. It
     /// subsumes what the Codex installer used to spell out by hand — a key
-    /// count and one `timeout` — and it is what makes a paste that is missing
-    /// `async`, or carries the wrong `timeout`, or names another port than the
-    /// one it was read from, report as needing repair rather than as active.
+    /// count and one `timeout` — and it is what makes a paste that carries the
+    /// wrong `timeout`, or names another port than the one it was read from, or
+    /// still carries a key this app has stopped writing, report as needing
+    /// repair rather than as active.
     ///
     /// Equality is `NSDictionary`'s, which is what both sides already are once
     /// `JSONSerialization` has been through them: nested objects compare by

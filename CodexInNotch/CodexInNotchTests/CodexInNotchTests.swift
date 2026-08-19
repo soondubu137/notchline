@@ -9612,13 +9612,16 @@ for line in sys.stdin:
     /// A registration in an older *shape* asks to be repaired too (CC-015).
     ///
     /// Every event being present is not the same as the registration being
-    /// right, and this is the failure that proved it. The snippet this app
-    /// offers carries `async: true`, which is what keeps the hook off the
-    /// user's critical path; a paste predating that flag registers all the
-    /// same events and reports `active`, while every event makes the session
-    /// wait for this app to answer — three times a second once `MessageDisplay`
-    /// is registered. The app cannot repair the file (ADR 0010), so noticing
-    /// and saying so is the whole of what it can do.
+    /// right, and this is the failure that proved it. A paste from an older
+    /// build of this app registers all the same events, under the same URL and
+    /// the same token, and used to report `active` — while carrying a handler
+    /// this build would no longer install. The app cannot repair the file
+    /// (ADR 0010), so noticing and saying so is the whole of what it can do.
+    ///
+    /// The shape used here is the real one: `async: true`, which this app wrote
+    /// until it was measured to be no key of Claude Code's — dropped from the
+    /// settings file by its own parser at the next write, and never honoured
+    /// while it was there.
     ///
     /// Identity here is deliberately just a marker inside the handler, because
     /// it has to survive a rebind to another port. So the marker cannot answer
@@ -9650,12 +9653,14 @@ for line in sys.stdin:
                 .write(to: harness.paths.hooksConfiguration)
         }
 
-        // The shape a paste made before `async: true` has: same events, same
-        // URL, same token -- and the marker that identifies it as ours is
-        // still right there, which is exactly why the marker cannot decide it.
+        // The shape a paste made while this app still wrote `async` has: same
+        // events, same URL, same token -- and the marker that identifies it as
+        // ours is still right there, which is exactly why the marker cannot
+        // decide it.
         try rewriteHandlers { handler in
             var stale = handler
-            #expect(stale.removeValue(forKey: "async") != nil)
+            #expect(stale["async"] == nil)
+            stale["async"] = true
             return [stale]
         }
         #expect(await harness.setup.status() == .repairRequired)
@@ -9663,10 +9668,12 @@ for line in sys.stdin:
         #expect(snapshot.availability == .setupRequired)
         #expect(snapshot.diagnostic != nil)
 
-        // Restoring it is enough: nothing else about the file changed.
+        // Dropping it again is enough: nothing else about the file changed.
+        // This is also what Claude Code itself does to the key, on its own, at
+        // the next write of the settings file.
         try rewriteHandlers { handler in
             var current = handler
-            current["async"] = true
+            #expect(current.removeValue(forKey: "async") != nil)
             return [current]
         }
         #expect(await harness.setup.status() == .active)
@@ -12097,7 +12104,6 @@ private final class ClaudeCodeHarness {
         let handler: [String: Any] = [
             "type": "http",
             "url": "http://127.0.0.1:\(port)\(ClaudeCodeHookSetup.hookPath)",
-            "async": true,
             "timeout": 5,
             "headers": ["Authorization": "Bearer harness-token"]
         ]

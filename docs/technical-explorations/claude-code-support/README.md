@@ -130,7 +130,7 @@ flowchart LR
 - **`prompt_id`（v2.1.196+，当前 2.1.229 满足）是 `turn_id` 的直接对应物。** 现有 `HookTurnState` 的“精确 `threadID + turnID` 身份 + 退休 ID 不可复活”规则可以原样保留。
 - **`agent_id` / `agent_type` 在子智能体上下文中存在。** 现有产品要求“子智能体不显示为独立行”，在 Codex 侧靠推断，在这里是精确过滤。
 - **Hook 配置是热加载的。** 官方文档明确“对 settings 文件中 hooks 的直接编辑通常由 file watcher 自动生效”，不需要重启会话。
-- **存在 `http` 类型 hook 与 `async: true`。** 意味着可以让 Claude Code 直接 POST 到应用内的 loopback listener，不需要 Codex 侧那套 “Python helper 写 0600 事件文件 + 应用轮询消费” 的落盘管线，且 `async` 保证不阻塞用户的会话。这是一条值得单独评估的实现路线（见 §6.2）。
+- **存在 `http` 类型 hook。** 意味着可以让 Claude Code 直接 POST 到应用内的 loopback listener，不需要 Codex 侧那套 “Python helper 写 0600 事件文件 + 应用轮询消费” 的落盘管线。这是一条值得单独评估的实现路线（见 §6.2）。（本条原写作 “`http` 类型 hook 与 `async: true`”，`async` 部分已于 2026-08-18 证伪，见该日更正。）
 
 **待验证：** Hook 是否确实在 Desktop 托管的会话中触发。间接证据很强——Desktop 启动 CLI 时实测带 `--setting-sources=user,project,local`，即显式加载用户级 `~/.claude/settings.json`，且 `--settings {"fastMode":false}` 这一 inline override 不含 `disableAllHooks`。但本次调研**没有**写入任何 hook 配置去实证，因为那会修改用户配置。这是 Phase 0 的第一项。
 
@@ -276,7 +276,7 @@ flowchart LR
     end
 
     subgraph push ["稳态：全部由 Claude Code 推送"]
-        hooks["http hook async:true"]
+        hooks["http hook"]
         listener["应用内 loopback listener"]
         reducer["HookEventRepository\n现有 reducer 规则不变"]
     end
@@ -305,7 +305,6 @@ flowchart LR
       { "hooks": [{
           "type": "http",
           "url": "http://127.0.0.1:<port>/hook",
-          "async": true,
           "timeout": 5,
           "headers": { "Authorization": "Bearer <install-time-token>" }
       }]}
@@ -318,8 +317,8 @@ flowchart LR
 
 - **不需要安装任何 helper 脚本**，因此不需要脚本升级、权限校验与哈希校验逻辑。
 - **不产生事件文件**，因此不需要 0600 原子写、cutoff 分类、消费后删除与隔离目录。
-- **`async: true` 保证不阻塞用户会话**，官方文档明确后台执行。
-- **应用未运行时 hook 静默失败**（非 2xx 按非阻塞错误处理），这反而是优点：不会像落盘方案那样在应用关闭期间堆积无人消费的事件文件，也天然实现了“启动前事件不进入 reducer”这条既有规则。
+- **不阻塞用户会话靠的是监听器立刻应答**，不是任何配置项：`AgentHookListener` 回 `200` + 空 body，会话的等待就是一次 loopback 往返。**没有 `async` 这个配置键**（2026-08-18 读 schema 证实），写进去只会被 settings 解析器悄悄丢掉。
+- **应用未运行时 hook 连接被拒**（按非阻塞错误处理，会话正常完成、不进模型上下文），不会像落盘方案那样在应用关闭期间堆积无人消费的事件文件，也天然实现了“启动前事件不进入 reducer”这条既有规则。**但交互式会话会为每个事件打印一行 `hook error`**，这是代价而不是优点，见 2026-08-18 更正与 CC-021。
 
 代价与必须处理的点：
 
@@ -370,14 +369,14 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 执行前必须获得用户明确授权，因为这会修改用户的 Claude Code 配置。
 
 1. 备份现有 `~/.claude/settings.json`（本机当前**不存在**该文件，需注意首次创建与后续合并的差异）。
-2. 安装 §6.2 的四条注册，`type: "http"` 指向一个临时 loopback listener，`async: true`。
+2. 安装 §6.2 的四条注册，`type: "http"` 指向一个临时 loopback listener。
 3. 在 Claude Desktop 中发起一轮对话，确认事件是否到达。
 4. 在终端 `claude` 中重复同一验证。
 5. **验证 `Notification` 的类型覆盖面**，这是能否压到 3–4 条注册的关键：
    - `permission_prompt` 是否在普通交互会话触发，以及**审批被批准/拒绝后是否有对应的关闭通知**；若没有，加回 `PermissionRequest` + `PermissionDenied` 走 `tool_use_id` 成对模型。
    - `agent_completed` 是否在普通交互会话触发；若是，可省掉 `Stop`。
    - `idle_prompt` 的实际触发条件（是否有空闲延迟，会不会把 Running 误报成 Input needed）。
-6. **验证 `http` hook 的可靠性：** 应用未监听时会话是否完全无感（预期非阻塞）；`async: true` 是否真的不阻塞；超时行为；高频事件下是否丢事件。
+6. **验证 `http` hook 的可靠性：** 应用未监听时会话是否完全无感（2026-08-18 已答：**交互式会话每个事件打印一行错误**，非阻塞但可见）；超时行为；高频事件下是否丢事件。
 7. 确认热加载：不重启会话直接改 hook 定义，观察是否生效。
 8. 确认 workspace trust 的实际影响：官方文档说明 settings 文件中的 hooks 需要接受 workspace trust 对话框，需实测新增 hook 是否触发新的信任提示。
 9. 完整移除 hook，确认配置恢复原状。
@@ -497,15 +496,15 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 | # | 结果 | 影响 |
 | --- | --- | --- |
 | 1 | 15 条注册全部投递成功 | `http` hook 可用 |
-| 2 | 监听器关闭时，`async: true` 的 hook **完全静默失败**，会话正常完成（`is_error: false`） | 应用未运行不影响用户 |
-| 3 | **`SessionEnd` 例外**：向 stderr 打印 `SessionEnd hook [...] failed: connect ECONNREFUSED`，每次会话一行 | 这是 §9 NO-GO 里「应用未运行时对用户会话产生可见影响」。**对策：不要用 http 注册 `SessionEnd`**——它在本产品里只负责移除行，而会话消失同样能由 `claude agents --json` 与 `~/.claude/sessions/` watcher 观察到。去掉它，可见影响归零 |
+| 2 | 监听器关闭时，hook **完全静默失败**，会话正常完成（`is_error: false`） | 应用未运行不影响用户。**⚠️ 已于 2026-08-18 部分更正：静默只成立于 `-p`；交互式会话每个事件都打印 `hook error`** |
+| 3 | **`SessionEnd` 例外**：向 stderr 打印 `SessionEnd hook [...] failed: connect ECONNREFUSED`，每次会话一行 | 这是 §9 NO-GO 里「应用未运行时对用户会话产生可见影响」。**对策：不要用 http 注册 `SessionEnd`**——它在本产品里只负责移除行，而会话消失同样能由 `claude agents --json` 与 `~/.claude/sessions/` watcher 观察到。去掉它，**stderr 上的**可见影响归零。**⚠️ 已于 2026-08-18 更正：交互式会话里其余事件照样每条打印一行 `hook error`，所以“可见影响归零”只对 `-p` / 脚本场景成立**（该日复测：`Stop` 与 `PreToolUse` 同时注册，stderr 只有 `SessionEnd` 一行） |
 | 4 | **`PermissionRequest` 不带 `tool_use_id`**（实测字段：`agent_id, agent_type, cwd, hook_event_name, permission_mode, permission_suggestions, prompt_id, session_id, tool_input, tool_name, transcript_path`） | 证实 §4.2 与 §3 第 3 条写错了。Codex 侧的「借用仍打开的调用 id」模型在 Claude Code 侧**仍然必需**，不会消失 |
 | 5 | 非交互运行中 `PermissionRequest` 照样触发，无人被询问 | 与 Codex 同一教训：孤立的 `PermissionRequest` 不是「有人在等」的证据 |
 | 6 | `prompt_id` 出现在**每一个**事件上，包括 `SessionEnd` | 它就是 `turn_id`，身份规则可原样保留 |
 | 7 | **子智能体事件带父会话的 `session_id` 与 `prompt_id`**，另加 `agent_id` / `agent_type` | 子智能体活动天然折叠进父 Turn，不需要额外身份工作，也不会产生独立行 |
 | 8 | **`UserPromptSubmit` 在 `-p` 运行中没有 `source` 字段** | 自噪声过滤**不能**依赖 `source == "user"`；把额度轮询钉在专用工作目录、按 `cwd` 过滤才是主防线 |
 | 9 | **payload 里没有任何时间戳** | Codex 的 helper 自己写 `received_at`；http 监听器必须在到达时自己盖时间戳 |
-| 10 | **投递无序。** 同一 `prompt_id` 下，父 `Stop` 先于子智能体的 `PermissionRequest` 与 `SubagentStop` 到达 | `async: true` 是发完即忘。reducer 依赖 `lastEventAt` 单调，只能由监听器的到达时刻喂给它；而「另一个 `tool_use_id` 上的活动关闭借用审批」这条规则在乱序下可能误判，需要在设计里单独处理 |
+| 10 | **投递无序。** 同一 `prompt_id` 下，父 `Stop` 先于子智能体的 `PermissionRequest` 与 `SubagentStop` 到达 | 投递不保证顺序（与 `async` 无关，该键不存在）。reducer 依赖 `lastEventAt` 单调，只能由监听器的到达时刻喂给它；而「另一个 `tool_use_id` 上的活动关闭借用审批」这条规则在乱序下可能误判，需要在设计里单独处理 |
 | 11 | `Stop` 额外带 `session_crons`（此前未记录），`background_tasks` 本次为 0 | — |
 | 12 | `PostToolUseFailure` 在普通工具错误（文件不存在）时触发，带 `error` / `is_interrupt` / `duration_ms` | 中断与错误可区分 |
 
@@ -548,3 +547,17 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 - 当前导航：[`CodexDesktopNavigator.swift`](../../../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift)
 - 当前架构：[`system-architecture.md`](../../system-architecture.md)
 - 非公开依赖登记规则：[`AGENTS.md`](../../../AGENTS.md)
+
+### 2026-08-18 — 更正：`async` 不是配置键，且“静默失败”只成立于 `-p`
+
+基线：Claude Code CLI `2.1.235`（schema 同时在 `2.1.233` 上核对），macOS `Darwin 25.5.0`。起因是用户报告 CLI 会话刷出成百上千行 `connect ECONNREFUSED 127.0.0.1:51741`。
+
+| # | 结果 | 依据 | 影响 |
+| --- | --- | --- | --- |
+| 1 | **`http` hook 的配置 schema 里没有 `async`。** 接受的键只有 `type` / `url` / `if` / `timeout` / `headers` / `allowedEnvVars` / `statusMessage` / `once` | 从 `2.1.233` 与 `2.1.235` 两个二进制中读出 `HttpHookSchema` | 本文档此前多处“`async` 保证不阻塞”的说法作废。`async` 现在是**响应体**字段：hook 回 `{"async": true, "asyncTimeout": n}` 表示自己会在后台继续 |
+| 2 | **写进去的 `async` 会被悄悄删掉。** hooks 经 zod 解析（未知键直接丢弃、不告警），而任何一次设置写入（`/effort`、`/theme`、`/config`、权限、插件安装）都用解析后的模型整体重写 `~/.claude/settings.json` | `updateSettingsForSource`：`l = 校验后的设置` → 合并 → `write(JSON.stringify(merged, null, 2))` | 这就是用户“改了好几次又没了”的原因，不是别的程序在改文件。对本应用的后果更重：`isCurrentManagedHandler` 比的是整个 handler，键被删 → 报 `repairRequired` → 用户重贴 → 下次写入再删。已从 `loopbackPost` 去掉该键 |
+| 3 | 带 `async` 与不带 `async` 的注册**行为完全一致**：同样的错误记录、同样的时长、同样接受响应注入 | 两次 `claude -p` 对照，各 4 轮工具调用 | 佐证 #1。去掉它不损失任何东西 |
+| 4 | **交互式会话会为每个失败事件打印一行 `<hookName> hook error`。** 渲染处只对 `Stop` / `SubagentStop` 返回 `null`，其余一律打印，且**没有任何设置或环境变量可以关闭** | 二进制中 `case "hook_non_blocking_error"` 分支；另查 `suppressHook` / `hideHook` / `HOOK_SILENT` / `DISABLE_HOOK` 均无 | 2026-08-16 的“完全静默失败”只在 `-p` 下成立（`-p` 不把它写到 stderr，但仍写进 transcript）。§9 NO-GO 里“应用未运行时对用户会话产生可见影响”这一条，因此**对所有事件成立，而不只是 `SessionEnd`**。见 CC-021 |
+| 5 | 失败**不进模型上下文、不花 token**：记录为 `{"type":"hook_non_blocking_error","exitCode":0}` 的 attachment | 8 个错误与 16 个错误的两次运行，前四条 assistant 消息 input token 完全相同（25258） | 噪声是 UI 层面的，不影响会话质量、时长或成本 |
+| 6 | 连接被拒在 loopback 上是立即返回，`timeout: 5` 不会被等满 | 两次运行时长一致 | 只有当地址变成“不可达”而非“被拒”（例如过滤型防火墙）时才会真的卡住 |
+| 7 | **端口无人占用时是可以被别的进程抢走的。** `51741` 落在 macOS ephemeral 区间（`net.inet.ip.portrange.first: 49152`） | 用一个 40 行的本地监听器冒充本应用，收到了完整 `prompt`、`cwd`、`transcript_path`、`session_id` 与 bearer token；回一段 `additionalContext` 后，下一次会话按注入的内容作答 | bearer token 只能证明 CLI 的身份、不能证明监听器的身份。这是本条通道的真实风险面，见 CC-021 |

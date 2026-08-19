@@ -384,16 +384,15 @@ final class AgentHookListener: @unchecked Sendable {
     /// Takes one event: to memory if it is text, to the queue otherwise.
     ///
     /// **Answering comes first**, and since `MessageDisplay` it matters more
-    /// than it used to. The snippet this app offers carries `async: true`, and
-    /// a hook registered that way is fire-and-forget — but the app cannot write
-    /// the user's settings (ADR 0010), so what is actually installed is
-    /// whatever they pasted, and a registration predating that flag is
-    /// *synchronous*. Measured on this machine's own `~/.claude/settings.json`:
-    /// twelve events, none of them carrying `async`. On such a registration
-    /// Claude Code waits for this response, and a talking turn waits three
-    /// times a second. Nothing this app does may sit on a user's session, so
-    /// the response goes out before any work is done, on the serial queue that
-    /// already orders every connection.
+    /// than it used to. Every registration is *synchronous*: Claude Code's HTTP
+    /// hook configuration has no key for background delivery — the `async: true`
+    /// this app used to write is not one of its schema's fields and is dropped
+    /// by its settings parser, measured against 2.1.233 and 2.1.235. So the CLI
+    /// waits for this response, and a talking turn waits three times a second.
+    /// Nothing this app does may sit on a user's session, so the response goes
+    /// out before any work is done, on the serial queue that already orders
+    /// every connection. That ordering is the whole of what keeps these hooks
+    /// off the user's critical path; there is no configuration doing it.
     ///
     /// The work is bounded regardless: one decode, and for `MessageDisplay` a
     /// scan of one delta that stops at ``maximumPreviewCharacters``.

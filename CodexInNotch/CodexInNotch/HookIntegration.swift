@@ -340,12 +340,23 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             ManagedHookDefinition(event: "MessageDisplay", matcher: nil),
             ManagedHookDefinition(event: "Stop", matcher: nil),
             ManagedHookDefinition(event: "StopFailure", matcher: nil)
-            // SessionEnd is deliberately absent. It is the one event that is
-            // not delivered in the background, so with nothing listening it
-            // prints a connection-refused warning to the user's own stderr,
-            // once per session (measured 2026-08-16). Nothing here needs it: a
-            // session going away is equally visible through the official
-            // session list and the sessions directory watcher.
+            // SessionEnd is deliberately absent, and it is the only event
+            // worth excluding on these grounds. With nothing listening it
+            // writes `SessionEnd hook [...] failed: connect ECONNREFUSED` to
+            // the CLI's own stderr, once per session -- measured 2026-08-16,
+            // re-measured against 2.1.235 on 2026-08-18 with `Stop` and
+            // `PreToolUse` registered alongside it, which wrote nothing there.
+            //
+            // Stderr is the point. Every registered event prints a `hook error`
+            // line in an interactive session and there is no way to suppress
+            // it (CC-021), so excluding this one does not buy silence. What it
+            // buys is that the failure stays out of `claude -p`, and so out of
+            // scripts, pipelines and CI, where nothing is watching a notch and
+            // a stray line lands in somebody's output.
+            //
+            // Nothing here needs the event anyway: a session going away is
+            // equally visible through the official session list and the
+            // sessions directory watcher.
         ]
     }
 
