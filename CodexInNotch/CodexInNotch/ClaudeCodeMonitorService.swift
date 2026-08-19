@@ -49,6 +49,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// the app that was built that way; the Hook queue's and the Codex unread
     /// adapter's have always been stored properties.
     nonisolated private let sessionsWatcher: DirectoryChangeWatcher
+    /// The records of the sessions whose turn is still going.
+    ///
+    /// Held for the same reason ``sessionsWatcher`` is, and answering what that
+    /// one cannot: a session being interrupted neither creates nor removes a
+    /// file, so the directory says nothing about it.
+    ///
+    /// Not private, so a test can read how many records are being watched.
+    /// What it costs to watch one is a `claude` launch per rewrite, so "only
+    /// while that turn is going" is a real invariant and not an implementation
+    /// detail -- and asserting it through the change stream instead means
+    /// asserting that an edge did *not* arrive, which any other source firing
+    /// would make untrue.
+    nonisolated let recordWatcher: ClaudeCodeSessionRecordWatcher
     private let clock: any MonitorClock
     private var boundPort: UInt16?
     private var lastDiagnostic: String?
@@ -133,10 +146,25 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             debounceInterval: timing.unreadStateDebounceInterval
         )
         self.sessionsWatcher = sessionsWatcher
+        let recordWatcher = ClaudeCodeSessionRecordWatcher(
+            directory: watched,
+            debounceInterval: timing.unreadStateDebounceInterval
+        )
+        self.recordWatcher = recordWatcher
         self.stateChangeEvents = DirectoryChangeWatcher.merged([
             repository.changeEvents(),
             Self.sessionsChanged(
                 sessionsWatcher.events(),
+                invalidating: resolvedSessions
+            ),
+            // Two edges from one directory, answering two different questions.
+            // The one above is a session appearing or going away, which is the
+            // list being *wrong*; this one is a record being rewritten, which
+            // is the list being *out of date* about what that session is doing.
+            // Both invalidate it, because in both cases the held answer cannot
+            // be the current one.
+            Self.sessionsChanged(
+                recordWatcher.events(),
                 invalidating: resolvedSessions
             ),
             quotaUpdates
@@ -148,6 +176,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
         let status = await setup.status()
         guard status == .active else {
+            // Nothing is being monitored, so nothing is worth an edge. Left
+            // alone, an integration switched off would keep a descriptor open
+            // on the record of whatever turn happened to be running when it
+            // was.
+            recordWatcher.watch(processIdentifiers: [])
             return snapshot(
                 availability: .setupRequired,
                 sessions: [],
@@ -173,6 +206,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         // may edit their file to agree with it.
         guard let registration = await setup.installedRegistration(),
               await bindListenerIfNeeded(registration) else {
+            recordWatcher.watch(processIdentifiers: [])
             return snapshot(
                 availability: .disconnected,
                 sessions: [],
@@ -315,6 +349,26 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             )
         }
         rows.sort(by: MonitorAggregation.rowOrder)
+
+        // Watch the records of exactly the turns that are still going -- and
+        // watch them from `rows` rather than from what is about to be reported,
+        // because a row withheld for presence is a turn this app still holds
+        // and still has to be able to end.
+        //
+        // The cost of an edge is one `claude agents --json`, so what is watched
+        // matters. A session with no turn in flight is not watched at all: the
+        // turn it starts next announces itself with a hook, and its record
+        // flips `busy` in the same moment, which would have bought a launch for
+        // an answer already on its way. What is left is the flip that nothing
+        // else reports -- `busy` or `waiting` to `idle` with no `Stop` behind
+        // it -- and the registry's own `edgeFloor` caps a burst of them.
+        recordWatcher.watch(
+            processIdentifiers: Set(
+                rows
+                    .filter { $0.status.keepsTiming }
+                    .compactMap { liveByID[$0.threadID]?.processIdentifier }
+            )
+        )
 
         return snapshot(
             availability: .ready,

@@ -3,12 +3,17 @@ import Dispatch
 import Foundation
 import OSLog
 
-/// Coalesced change notifications for one directory.
+/// Coalesced change notifications for one path.
 ///
-/// Both state sources this app reads are rewritten by atomic replace, so the
-/// target inode changes and watching the file itself would stop working after
-/// the first write. Watching the containing directory survives that, and a
-/// trailing debounce collapses the burst a replace produces into one signal.
+/// **Which path is the whole decision, and it goes both ways.** Codex's state
+/// files and this app's own hook queue are rewritten by atomic replace: the
+/// inode changes, a descriptor on the file goes deaf after the first write, and
+/// only the containing directory keeps reporting. Claude Code's session records
+/// are the opposite -- rewritten in place -- and a directory vnode source does
+/// not fire for a write *inside* the directory, so there only the file itself
+/// reports (see ``ClaudeCodeSessionRecordWatcher``, which points instances of
+/// this at files for exactly that reason). A trailing debounce collapses the
+/// burst either produces into one signal.
 ///
 /// The stream is a low-latency hint, never a source of truth: a caller that
 /// misses an event still converges on its next refresh.

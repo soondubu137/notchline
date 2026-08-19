@@ -5378,6 +5378,54 @@ for line in sys.stdin:
         #expect(await receivesChange(stream))
     }
 
+    /// A session record is watched as a file, and the set is reconciled.
+    ///
+    /// Every other watcher in this app points at a directory, because what it
+    /// watches is replaced atomically. Claude Code's session records are the
+    /// other case: rewritten **in place**, which a directory source never
+    /// reports -- so the file itself has to be watched, and that is the whole
+    /// reason this type exists.
+    ///
+    /// Reconciling is the other half. Left to accumulate, this would hold one
+    /// descriptor per session the app had ever seen working, and one `claude`
+    /// launch per rewrite of each.
+    @Test
+    func sessionRecordsAreWatchedAsFilesAndOnlyWhileAsked() async throws {
+        let root = makeTemporaryWatchRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = root.appendingPathComponent("1.json")
+        let second = root.appendingPathComponent("2.json")
+        try Data(#"{"status":"busy"}"#.utf8).write(to: first)
+        try Data(#"{"status":"busy"}"#.utf8).write(to: second)
+
+        let watcher = ClaudeCodeSessionRecordWatcher(directory: root, debounceInterval: 0.05)
+        #expect(watcher.recordURL(forProcessIdentifier: 1) == first)
+
+        watcher.watch(processIdentifiers: [1, 2])
+        #expect(watcher.watchedCount == 2)
+
+        // In place: same path, same inode, no rename -- the write a directory
+        // watcher is blind to.
+        try Data(#"{"status":"idle"}"#.utf8).write(to: second)
+        #expect(await receivesChange(watcher.events()))
+
+        // Dropped from the set, and then silent.
+        watcher.watch(processIdentifiers: [2])
+        #expect(watcher.watchedCount == 1)
+        let afterDrop = watcher.events()
+        try Data(#"{"status":"idle"}"#.utf8).write(to: first)
+        #expect(await receivesChange(afterDrop, within: 1) == false)
+
+        // The one still asked for goes on reporting.
+        try Data(#"{"status":"busy"}"#.utf8).write(to: second)
+        #expect(await receivesChange(watcher.events()))
+
+        watcher.watch(processIdentifiers: [])
+        #expect(watcher.watchedCount == 0)
+    }
+
     /// Deleting and recreating the directory is the uninstall/reinstall path.
     @Test
     func watcherReattachesAfterItsDirectoryIsDeletedAndRecreated() async throws {
@@ -8651,6 +8699,64 @@ for line in sys.stdin:
         #expect(try #require(quiet.sessions.first).status == .running)
     }
 
+    /// A record rewritten in place wakes the product, and only while it matters.
+    ///
+    /// This is the edge the interrupt fix needs and the sessions *directory*
+    /// cannot give: a session being interrupted neither creates nor removes a
+    /// file, it rewrites its own record in place -- and a directory vnode
+    /// source does not fire for a write inside the directory. Without this the
+    /// row waited for whatever refresh came next, up to a whole heartbeat.
+    ///
+    /// The second half is the cost. Every edge here buys a `claude agents
+    /// --json`, so a record is watched only while that session's turn is still
+    /// going; once it has ended, nothing is watching that file at all.
+    ///
+    /// Both halves are asserted through the invalidation count rather than the
+    /// change stream. Only the watchers invalidate the list, so a rise proves
+    /// one of them fired -- and an in-place write is a thing only the record
+    /// watcher can see. The stream would prove neither: it carries hook and
+    /// quota edges as well, and it buffers.
+    @Test @MainActor
+    func aSessionRecordRewrittenInPlaceWakesTheProductWhileItsTurnIsGoing() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        try FileManager.default.createDirectory(
+            at: harness.sessionsDirectory,
+            withIntermediateDirectories: true
+        )
+        let cwd = "/Users/someone/Projects/thing"
+        // `ClaudeCodeHarness.session(id:cwd:...)` reports pid 1, and the record
+        // is named after the pid -- the whole of what this app knows about the
+        // file.
+        let record = harness.sessionsDirectory.appendingPathComponent("1.json")
+        try Data(#"{"status":"busy"}"#.utf8).write(to: record)
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        harness.live = [harness.session(id: "s-1", cwd: cwd, activity: .busy, observedAt: 200)]
+        let running = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(running.sessions.first).status == .running)
+        #expect(harness.watchedRecords == 1)
+
+        let beforeRewrite = harness.invalidations
+        // Written in place, exactly as Claude Code writes it: same path, same
+        // inode, no rename. This is the write that produces no directory event
+        // at all.
+        try Data(#"{"status":"idle"}"#.utf8).write(to: record)
+        #expect(await harness.invalidationsRise(above: beforeRewrite))
+
+        // The refresh that edge causes ends the turn -- and a turn that has
+        // ended is not worth a descriptor or a `claude` launch any more.
+        harness.live = [harness.session(id: "s-1", cwd: cwd, activity: .idle, observedAt: 300)]
+        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(ended.sessions.first).status == .completed)
+        #expect(harness.watchedRecords == 0)
+
+        let beforeQuiet = harness.invalidations
+        try Data(#"{"status":"busy"}"#.utf8).write(to: record)
+        #expect(await harness.invalidationsRise(above: beforeQuiet, within: 1) == false)
+    }
+
     /// A title the user typed outranks one the product generated, and a title
     /// that cannot be read is never replaced by the folder name.
     @Test @MainActor
@@ -11293,6 +11399,24 @@ private final class ClaudeCodeHarness {
 
     /// How many times the service has reported the session list out of date.
     var invalidations: Int { listing.invalidations }
+
+    /// How many session records the service is currently watching.
+    var watchedRecords: Int { service.recordWatcher.watchedCount }
+
+    /// Waits for the service to report the list out of date again.
+    ///
+    /// The count, rather than the change stream: only the two watchers call
+    /// ``ClaudeCodeSessionListing/invalidate()``, so a rise here is proof one
+    /// of them fired. The stream carries hook and quota edges too, and it
+    /// buffers, so a wake-up on it proves nothing about which source caused it.
+    func invalidationsRise(above count: Int, within seconds: Double = 3) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if invalidations > count { return true }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return invalidations > count
+    }
 
     init() throws {
         root = URL(fileURLWithPath: "/tmp")
