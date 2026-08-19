@@ -744,7 +744,19 @@ final class MonitorStore: ObservableObject {
             // of order and cannot fail. Everything below is cleanup of text
             // already collected, which is idempotent and may run late.
             services.forEach { $0.setContentPreviewsEnabled(showsContentPreviews) }
-            guard !showsContentPreviews else { return }
+            guard !showsContentPreviews else {
+                // The other direction has to be just as immediate, and it
+                // cannot be done here: the rows on screen were *built* with
+                // previews suppressed, so there is nothing in them to unhide --
+                // the titles and text have to be read again. Nothing else would
+                // ask soon. No watcher fires for a settings change, and the
+                // events that do fire belong to the sessions; a list of
+                // finished rows produces none at all, so the switch appeared to
+                // do nothing until the 60-second heartbeat came round, and the
+                // rows that will never speak again stayed blank past it.
+                requestRefresh()
+                return
+            }
             sessions = sessions.map { $0.hidingContent() }
             Task { [services] in
                 for service in services {

@@ -200,6 +200,29 @@ final class AgentHookListener: @unchecked Sendable {
     private var previewsBySessionID: [String: SessionPreview] = [:]
     private var previewOrder: [String] = []
     private var acceptsText = true
+    /// The sessions the last refresh listed, as handed to ``retainPreviews``.
+    ///
+    /// Held only to qualify the edge below.
+    private var listedSessionIDs: Set<String> = []
+    /// Told when a session gains a preview it did not have.
+    ///
+    /// Deltas themselves are deliberately off the change stream -- three a
+    /// second is not a redraw rate -- but a row holding *no* text is a
+    /// different case: nothing on screen is stale, something is missing, and
+    /// the next thing that would ask happens to be whatever the session does
+    /// next. That gap is what made turning content previews back on look
+    /// broken: collection resumes at once, but the row it belongs to was drawn
+    /// while previews were off and nobody was going to draw it again.
+    ///
+    /// Only the absent-to-present edge, so the cost is one wake per session per
+    /// spell of having nothing to show, not one per delta.
+    ///
+    /// Set after construction rather than taken in `init`, so the service wires
+    /// it to whichever listener it ends up with -- its own or an injected one.
+    /// Held under ``previewLock`` with the previews themselves: it is read on
+    /// the connection queue, and a handler installed while a delta is being
+    /// folded must not be a data race.
+    private var onPreviewAppeared: (@Sendable () -> Void)?
 
     init(
         eventsDirectory: URL,
@@ -213,6 +236,13 @@ final class AgentHookListener: @unchecked Sendable {
         self.ignoredWorkingDirectory = ignoredWorkingDirectory
         self.clock = clock
         self.fileManager = fileManager
+    }
+
+    /// Registers the handler for ``onPreviewAppeared``.
+    func setOnPreviewAppeared(_ handler: (@Sendable () -> Void)?) {
+        previewLock.lock()
+        onPreviewAppeared = handler
+        previewLock.unlock()
     }
 
     /// The port events are being accepted on, once bound.
@@ -492,6 +522,7 @@ final class AgentHookListener: @unchecked Sendable {
         defer { previewLock.unlock() }
         previewsBySessionID = previewsBySessionID.filter { sessionIDs.contains($0.key) }
         previewOrder.removeAll { !sessionIDs.contains($0) }
+        listedSessionIDs = sessionIDs
     }
 
     /// Whether received text is retained at all.
@@ -549,12 +580,15 @@ final class AgentHookListener: @unchecked Sendable {
         guard !text.isEmpty else { return }
 
         previewLock.lock()
-        defer { previewLock.unlock() }
         // Re-checked under the lock: the switch may have been turned off while
         // this delta was being decoded, and a privacy control that loses a race
         // is not one.
-        guard acceptsText else { return }
-        if previewsBySessionID[sessionID] == nil {
+        guard acceptsText else {
+            previewLock.unlock()
+            return
+        }
+        let isFirstSinceEmpty = previewsBySessionID[sessionID] == nil
+        if isFirstSinceEmpty {
             previewOrder.append(sessionID)
         }
         previewsBySessionID[sessionID] = SessionPreview(
@@ -564,6 +598,20 @@ final class AgentHookListener: @unchecked Sendable {
         while previewOrder.count > Self.maximumRetainedPreviews {
             previewsBySessionID.removeValue(forKey: previewOrder.removeFirst())
         }
+        // Only for a session the last refresh actually listed. Without that
+        // test this is a 3 Hz loop rather than one wake: text from a session
+        // the list does not carry is pruned by the very refresh it asks for,
+        // which makes the next delta an absent-to-present edge again -- and
+        // the row it would draw is not on screen either way.
+        let appeared = isFirstSinceEmpty && listedSessionIDs.contains(sessionID)
+            ? onPreviewAppeared
+            : nil
+        previewLock.unlock()
+
+        // Outside the lock. Whoever is told asks this listener what it holds
+        // straight back, and a privacy switch that can deadlock behind a redraw
+        // is not one either.
+        appeared?()
     }
 
     /// Folds one delta onto a head that is already normalised, in one pass.

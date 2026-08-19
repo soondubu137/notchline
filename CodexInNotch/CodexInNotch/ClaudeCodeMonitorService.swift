@@ -158,13 +158,26 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             ignoringWorkingDirectory: quotaDirectory
         )
         self.sessions = resolvedSessions
+        // A row's third line arriving where there was none. Assistant deltas
+        // are kept off this stream on purpose -- see ``AgentHookListener`` --
+        // but a session that has *nothing* to show is not a stale row waiting
+        // for a tidier moment, and the moments that would otherwise carry it
+        // belong to the session rather than to this app: a turn that talks for
+        // a minute between tool calls fires nothing at all. Without this, text
+        // collected after the user turned content previews back on sat unread
+        // until some unrelated edge or the 60-second heartbeat.
+        let (previewsAppeared, previewLanded) = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
         // The token is not supplied here: it lives in the user's settings, and
         // the listener is told it when it binds.
-        self.listener = listener ?? AgentHookListener(
+        let resolvedListener = listener ?? AgentHookListener(
             eventsDirectory: paths.eventsDirectory,
             ignoredWorkingDirectory: quotaDirectory,
             clock: clock
         )
+        resolvedListener.setOnPreviewAppeared { previewLanded.yield() }
+        self.listener = resolvedListener
         self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
         // The quota's own edge. Nothing waits for the reading any more, so the
         // reading has to say when it landed -- otherwise a figure read at
@@ -259,7 +272,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // to be read should leave on the gesture that reads it, not on the
             // next re-check after it.
             resolvedActivations.changeEvents(),
-            quotaUpdates
+            quotaUpdates,
+            previewsAppeared
         ])
     }
 

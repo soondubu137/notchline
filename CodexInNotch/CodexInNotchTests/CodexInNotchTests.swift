@@ -1778,6 +1778,56 @@ struct CodexInNotchTests {
         store.stopMonitoring()
     }
 
+    /// Turning content previews back on has to land as fast as turning them off.
+    ///
+    /// Off applies to the rows already on screen inside the setter. On cannot
+    /// be done the same way -- those rows were *built* with previews
+    /// suppressed, so there is nothing in them left to unhide, only titles and
+    /// text to read again -- and nothing was going to ask. No watcher fires for
+    /// a settings change, and the edges that do fire belong to the sessions, so
+    /// a list of finished rows produced none at all: the switch looked dead
+    /// until the 60-second heartbeat, and the rows that will never speak again
+    /// stayed blank past it.
+    @Test @MainActor
+    func turningPreviewsBackOnReReadsTheRowsAtOnce() async throws {
+        let service = PreviewMonitoringStub()
+        // Parked, so the only thing that can produce a second reading is
+        // something asking for one. On a real clock the heartbeat and the
+        // gates' own deadlines would eventually hide the bug this pins.
+        let store = MonitorStore(
+            services: [service],
+            initialSnapshot: AgentSnapshot(
+                availability: .connecting,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                setupStatus: .active
+            ),
+            clock: ParkedMonitorClock()
+        )
+        defer { store.stopMonitoring() }
+
+        for _ in 0 ..< 200 where store.sessions.first?.preview == nil {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(store.sessions.first?.preview == PreviewMonitoringStub.previewText)
+
+        store.showsContentPreviews = false
+        #expect(
+            store.sessions.first?.preview == nil,
+            "hiding is immediate, and stays that way"
+        )
+
+        store.showsContentPreviews = true
+        for _ in 0 ..< 200 where store.sessions.first?.preview == nil {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(
+            store.sessions.first?.preview == PreviewMonitoringStub.previewText,
+            "the row stayed hidden: nothing re-read it after the switch went back on"
+        )
+    }
+
     /// Flipping the switch faster than the work completes must still end where
     /// the user left it, and must not run two changes at once.
     @Test @MainActor
@@ -8929,6 +8979,53 @@ for line in sys.stdin:
         #expect(harness.invalidations >= 1)
     }
 
+    /// Text arriving for a row that has none wakes the product on its own.
+    ///
+    /// Deltas are deliberately kept off this stream -- three a second is not a
+    /// redraw rate, and a row that already shows the previous message only goes
+    /// stale until the session's next lifecycle event. A row showing *nothing*
+    /// is the case that reasoning does not cover, and it is where the user is
+    /// left after turning content previews back on: collection resumes at once,
+    /// but a turn that talks for a minute between tool calls fires nothing that
+    /// would draw what it collected.
+    @Test @MainActor
+    func textArrivingForARowThatHasNoneWakesTheProduct() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        harness.live = [
+            harness.session(id: "s-1", cwd: "/Users/someone/Projects/thing")
+        ]
+        // Binds the listener, which is what makes the port below answer.
+        _ = await harness.service.fetchSnapshot(showsContentPreviews: true)
+
+        // Counted rather than awaited once: this stream buffers, so starting up
+        // may already have left an edge on it, and "an edge arrived" would then
+        // be true before the delta was ever sent.
+        let edges = PreviewWakeUpCounter()
+        let observer = Task {
+            for await _ in harness.service.stateChangeEvents {
+                edges.record()
+            }
+        }
+        defer { observer.cancel() }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let beforeTheDelta = edges.count
+
+        try await post(port: harness.port, token: "harness-token", body: [
+            "hook_event_name": "MessageDisplay", "session_id": "s-1",
+            "message_id": "m-1", "delta": "Reading the settings window."
+        ])
+
+        for _ in 0 ..< 150 where edges.count == beforeTheDelta {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(
+            edges.count > beforeTheDelta,
+            "the text was collected and nothing asked for it to be drawn"
+        )
+    }
+
     /// A finished turn from before launch stays invisible.
     @Test @MainActor
     func aTurnThatEndedBeforeLaunchIsNotReconstructed() async throws {
@@ -11370,6 +11467,86 @@ for line in sys.stdin:
         #expect(listener.preview(forSession: "ghost") == nil)
     }
 
+    /// A row with nothing to show is redrawn as soon as there is something.
+    ///
+    /// Deltas are kept off the change stream on purpose -- they arrive three a
+    /// second, which is not a redraw rate -- and the text is picked up by
+    /// whatever refresh the session's own lifecycle causes. That works while a
+    /// row already shows the previous message and only goes stale. It does not
+    /// work when the row shows *nothing*: after the user turns content previews
+    /// back on, collection resumes at once but the rows were drawn while it was
+    /// off, and a turn that talks for a minute between tool calls fires no
+    /// lifecycle event to redraw them with.
+    ///
+    /// So only the absent-to-present edge is reported: once per session per
+    /// spell of having nothing to say, not once per delta.
+    @Test @MainActor
+    func aPreviewArrivingWhereThereWasNoneAsksToBeDrawn() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let wakeUps = PreviewWakeUpCounter()
+        let listener = AgentHookListener(
+            eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
+            token: "t"
+        )
+        listener.setOnPreviewAppeared { wakeUps.record() }
+        defer { listener.stop() }
+        let port = try #require(listener.start())
+
+        func display(_ delta: String, message: String) async throws {
+            try await post(port: port, token: "t", body: [
+                "hook_event_name": "MessageDisplay", "session_id": "s-1",
+                "message_id": message, "delta": delta
+            ])
+        }
+
+        /// The callback lands on the listener's own queue, after the response
+        /// this awaited has already gone out, so every count is waited for
+        /// rather than read on the assumption that it is in yet.
+        func settled(at expected: Int) async throws -> Int {
+            for _ in 0 ..< 200 where wakeUps.count < expected {
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+            return wakeUps.count
+        }
+
+        // What a refresh does, and what qualifies the edge: text from a session
+        // no list carries is pruned by the refresh it would ask for.
+        listener.retainPreviews(forSessions: ["s-1"])
+
+        try await display("First words.", message: "m-1")
+        #expect(try await settled(at: 1) == 1)
+
+        try await display(" and more of the same message.", message: "m-1")
+        #expect(
+            try await settled(at: 1) == 1,
+            "a row that already has a line does not ask to be drawn per delta"
+        )
+
+        listener.setAcceptsText(false)
+        try await display("Said while the switch is off.", message: "m-2")
+        #expect(
+            try await settled(at: 1) == 1,
+            "nothing was retained, so there is nothing to draw"
+        )
+
+        listener.setAcceptsText(true)
+        try await display("Said once it is back on.", message: "m-3")
+        #expect(
+            try await settled(at: 2) == 2,
+            "the row was left blank with no edge that would ever redraw it"
+        )
+
+        // A session the list has dropped keeps its text collected and asks for
+        // nothing: the refresh it would ask for is the one that prunes it, so
+        // reporting it would be a loop at the rate the deltas arrive.
+        listener.retainPreviews(forSessions: [])
+        try await display("Said by a session nothing lists.", message: "m-4")
+        #expect(try await settled(at: 2) == 2)
+    }
+
     @discardableResult
     private func postStatus(
         port: UInt16,
@@ -12018,6 +12195,78 @@ private actor StuckDeadlineMonitoringStub: AgentMonitoring {
 
 /// A service whose snapshot can be held open, so a refresh can be observed
 /// while it is genuinely in flight.
+/// A product whose row carries a third line only while the switch allows one.
+///
+/// Both real services work this way: the preview is not stored on the row and
+/// then filtered, it is read -- or not read -- as the row is built. That is why
+/// the switch going back on has to produce a fresh reading rather than an
+/// unhide.
+/// Counts the listener's absent-to-present preview edges from whatever thread
+/// they arrive on.
+/// A clock whose waits never come due, so a store built on it refreshes only
+/// when something asks it to.
+private struct ParkedMonitorClock: MonitorClock {
+    nonisolated func now() -> Date { Date(timeIntervalSince1970: 1_000_000) }
+
+    nonisolated func sleep(nanoseconds: UInt64) async throws {
+        try await Task.sleep(nanoseconds: 60 * 60 * 1_000_000_000)
+    }
+}
+
+private final class PreviewWakeUpCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var wakeUps = 0
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return wakeUps
+    }
+
+    func record() {
+        lock.lock()
+        wakeUps += 1
+        lock.unlock()
+    }
+}
+
+private actor PreviewMonitoringStub: AgentMonitoring {
+    nonisolated let agent = AgentKind.codex
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    nonisolated static let previewText = "Reading the settings window."
+
+    func manualSetup() async -> AgentManualSetup? { nil }
+    func nextRefreshDeadline() async -> Date? { nil }
+
+    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+        AgentSnapshot(
+            availability: .ready,
+            sessions: [
+                MonitoredSession(
+                    threadID: "thread-1",
+                    turnID: "turn-1",
+                    projectName: "codex-in-notch",
+                    title: "Fix the previews switch",
+                    preview: showsContentPreviews ? Self.previewText : nil,
+                    status: .running,
+                    startedAt: Date(timeIntervalSince1970: 1_000)
+                )
+            ],
+            quota: .unavailable,
+            diagnostic: nil,
+            setupStatus: .active
+        )
+    }
+
+    func hookSetupStatus() async -> HookSetupStatus { .active }
+    func installHooks() async throws {}
+    func removeHooks() async throws {}
+    func clearSessions() async {}
+    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
+    func discardCollectedPreviews() async {}
+    func disconnect() async {}
+}
+
 private actor GatedMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
