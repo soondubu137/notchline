@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | 第一实现切片、精确导航、Desktop Project 身份、Desktop 未读终态移除与 Expanded footer 已实现；真实版本矩阵仍待验证 |
+| 文档状态 | 第一实现切片、精确导航、Desktop Project 身份、两侧的未读终态移除与 Expanded footer 已实现；真实版本矩阵仍待验证 |
 | 版本 | 0.19 |
 | 日期 | 2026-08-15 |
 | 范围 | 将 SwiftUI 原型中的 Mock 状态、额度、今日 tokens、会话列表与点击导航替换为真实 Codex Desktop 数据；处理时间按第 12 节实现 |
@@ -90,6 +90,29 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、空 Project 名称、重复 remote id 与 Project/Chats 冲突成员关系；不记录原始 JSON、root path 或 thread id。
 
 该适配器已在 Desktop `26.810.50856` build `6644`、CLI `0.148.0-alpha.9` 验证。它仍是高版本风险的私有 schema，更新与失效排查必须遵守 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。
+
+### 1.5 Claude Code 已读私有只读适配器（已实现）
+
+Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次提交、会话消失或手动清空退出（CC-013）。产品语义与两半的分工见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)；这里只记实现。
+
+对 Claude Desktop `1.32885.1`、CLI `2.1.235` 的只读核验（2026-08-19）表明：
+
+- 每个 Desktop 托管会话在 `~/Library/Application Support/Claude/claude-code-sessions/<org>/<account>/local_<uuid>.json` 有一份记录，其中 `cliSessionId` 就是 hook 携带的 `session_id`，因此身份连接不需要推断。
+- `lastFocusedAt` 由 `setSessionVisibility(id, isVisible, reason)` 在 `isVisible` 为真时写成 `Date.now()`，随即 `saveSession`。它的语义是"最后一次被显示到屏幕上"，不是"最后一次活动"。
+- 写入是同目录临时文件 `rename` 原子替换（实测 inode 变化），因此**目录级** watcher 能看见它——这与 `~/.claude/sessions/<pid>.json` 的原地重写相反，那里只有文件级 watcher 有用（见 §15.1）。
+- 纯终端会话在这棵树里没有任何文件，Claude Code 自己的会话记录也不写任何 focus 字段（2.1.235 二进制内检索：无 focus/read/seen 落盘键）。
+
+生产实现：
+
+1. `ClaudeCodeDesktopReadStateRepository` 默认读 `~/Library/Application Support/Claude/claude-code-sessions`，可用 `CODEX_IN_NOTCH_CLAUDE_DESKTOP_HOME` 覆盖 Claude Desktop 的 application-support 根目录。目录结构按 `<org>/<account>` 恰好两级枚举，不做递归搜索。
+2. 每条记录只解码三个字段：`cliSessionId`、`lastFocusedAt`、`isArchived`。同一文件里的标题、`cwd` 与 MCP 配置一律不解码。读取器拒绝 symlink、非当前用户普通文件与超过 4 MiB 的文件。
+3. **按 `(size, mtime, inode)` 缓存解析结果**，每次读取只打开真正变化过的记录。本机 31 份记录（约 2 MB）实测首读 5 ms、全部命中缓存 1 ms。记录数超过 512 时按 mtime 取最新的 512 份——活着的会话必然是最近被显示或恢复过的那些，尾部答 unknown 并保留其行。
+4. 判定分两层。文件这一层在 provider 里：`readState(forSession:terminalBoundaryAt:)` 用 Turn 自己的终止时刻做比较左边（`HookTurnState.lastEventAt`），`lastFocusedAt >= boundary` 即已读，`isArchived` 同样为已读，**记录不存在则是 unknown 而不是未读**。跨来源的那一层在编排器里（`AGENTS.md` §6.1「决策跨数据源就属于编排中心」）：文件说未读时，若该会话正是 `mostRecentlyDisplayedSessionID`、且 `DesktopActivationReporting.lastActivation()` 晚于 `boundary`，同样判为已读。
+   **第二条是实测逼出来的，不是补强。** 2026-08-19 实机：用户切走、等轮次跑完、切回同一个会话读完，整个 `~/Library/Application Support/Claude` 树在 6 分钟内 **0 个文件**被修改——`lastFocusedAt` 只在「把会话放上屏幕」时盖章，窗口重新获得焦点时什么都不写。产品语义、被推翻的两条既有规则与代价见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
+   激活信号来自公开的 `NSWorkspace.didActivateApplicationNotification`（`DesktopActivationWatcher`），按 bundle identifier 过滤，只记录**跃迁**的时刻、从不记录「此刻是否在前台」，且只知道本应用启动之后发生的激活。
+5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**unknown 的行根本不进 gate**，因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动清空。
+6. 边沿有两个：Claude Desktop 写记录，以及它回到前台。后者直接来自激活通知，因此「切回去读」这个手势与行离开 notch 是同一件事，不需要等 gate 的 1 秒复查。前者来自 `PathSetChangeWatcher`——一个可以随时替换被监听路径集合的 watcher，`ClaudeCodeSessionRecordWatcher` 与本适配器共用它。适配器监听状态根目录加每个发现到的账户目录；账户目录在第一次读取时才被发现，新账户由根目录的边沿或心跳发现。
+7. 失败一律 fail closed：树不存在（纯终端用户的常态）是 `unavailable` 且**不产生诊断**；单份记录读不出只让那个会话答 unknown；**全部记录都读不出**才判定为 schema 不兼容，发出诊断并保留 last-known-good，此时不做任何新的隐藏。
 
 ## 2. 设计约束
 

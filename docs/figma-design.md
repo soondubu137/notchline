@@ -173,7 +173,7 @@ PRD 8.2 与技术设计第 12 节已明确权威时间语义、等待/睡眠行�
 
 ### 5.1 成员语义
 
-一行代表一个可导航根 Thread。Running、Input needed、Approval needed 始终显示；Completed 只在 Desktop 仍为未读时显示。Desktop 已读、归档、删除或失去可导航性后自动移除。
+一行代表一个可导航根 Thread。Running、Input needed、Approval needed 始终显示；Completed 只在该产品的桌面端仍认为用户没看过时显示，桌面端已读、归档、删除或失去可导航性后自动移除。**终端里的 Claude Code 会话没有已读可读**，它的 Completed 行留到该会话的下一次提交、会话消失或用户手动清空为止（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）——注释卡必须写出这条差异，否则设计稿看起来像是所有行都会自己消失。
 
 列表覆盖当前 Desktop 账户所有 Project 与 `Chats`，不跟随侧边栏选择，不展示子智能体，也不承担历史浏览。
 
@@ -215,7 +215,7 @@ Input needed
 
 ### 6.3 Monitoring lifecycle
 
-注释卡明确：提交输入后入列；活动 Turn 始终保留；终态只在 Desktop 未读时保留；已读、归档、删除或失去可导航性后自动移除；Notch 不主动标记已读。
+注释卡明确：提交输入后入列；活动 Turn 始终保留；终态只在桌面端仍未读时保留；已读、归档、删除或失去可导航性后自动移除；Notch 不主动标记已读；**已读无从回答的终态行（终端里的 Claude Code 会话）不参与自动移除**。
 
 ### 6.4 在场：两个系统状态
 

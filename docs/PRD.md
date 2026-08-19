@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | Desktop Project 身份与未读终态自动移除已实现；真实版本矩阵仍待 Phase 0 验证 |
+| 文档状态 | Desktop Project 身份与未读终态自动移除已实现（Codex 与 Claude Code Desktop 托管会话两侧）；真实版本矩阵仍待 Phase 0 验证 |
 | 版本 | 0.11 |
 | 日期 | 2026-08-15 |
 | 目标版本 | V1 MVP |
@@ -37,7 +37,7 @@ V1 不包含：
 - 把 CLI、IDE 或子智能体作为独立列表来源。只有已经成为可在 Desktop 中精确导航的同一根会话时，才可能被纳入。（Claude Code 的子智能体同样不单独成行：其事件携带父会话的 `session_id` 与 `prompt_id`，天然并入父轮次。）
 - 历史会话搜索、最近 N 条或固定时间窗列表。
 - **启动时与 Codex Desktop 做任何形式的现状同步（cold-start sync）。** 应用启动前的所有会话状态——正在运行、已完成未读、正在等待审批——一律无视。理由是能力边界而非取舍：针对 Codex CLI `0.148.0-alpha.9` 在真实运行中的 Turn 上实测，独立 App Server 的 `thread/loaded/list` 为空、所有 Thread 恒为 `notLoaded`、从不出现 `inProgress` Turn，正在运行的 Turn 在持久化数据中甚至被记为 `interrupted`。没有任何受支持的读取能回答“Codex Desktop 此刻在做什么”，因此任何启动列表都只能是猜测。相关取舍与实测记录见 [`system-architecture.md` §2.1](system-architecture.md#21-启动边界不做现状同步)。
-- 通过窗口焦点、路径、标题、时间接近度或 GUI 自动化猜测会话身份、Project、已读状态或导航目标。
+- 通过窗口焦点、路径、标题、时间接近度或 GUI 自动化猜测会话身份、Project、已读状态或导航目标。**唯一的例外经产品批准并写在 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md) 里**：Claude Desktop 在某个 Turn 结束**之后**回到前台，且 Desktop 自己的记录显示它最后放上屏幕的就是那个会话时，该会话算已读。它不是「获得焦点即已读」——两件可查的事实合起来才成立，缺一不作数——而且只在 Claude Code 一侧成立，Codex 一侧本条禁令原样有效。窗口标题、时间接近度、计时器、Accessibility 与 GUI 自动化在任何一侧都仍然禁止。
 - 展示原始推理、工具参数、命令输出、文件差异、敏感路径或批准理由。
 - 将正文预览、会话列表快照或旧账户额度持久化。
 - 在 Notch 的被动状态中提供修复、更新或启动 Codex 的按钮。
@@ -58,12 +58,21 @@ V1 不包含：
 
 1. 用户提交输入后立即进入列表。
 2. 尚未进入终态时始终保留。
-3. 进入终态后，只要 Codex Desktop 仍将对应会话标记为未读，且会话未归档、未删除、仍可导航，就继续保留。
-4. Desktop 标记已读、会话被归档、删除或失去可导航性时，立即从列表移除。
+3. 进入终态后，只要该产品的桌面端仍认为用户没有看过它，且会话未归档、未删除、仍可导航，就继续保留。
+4. 桌面端表明用户已经看过、会话被归档、删除或失去可导航性时，立即从列表移除。
 
-Codex in Notch 不主动修改已读状态。点击会话成功后，组件收起并等待 Codex Desktop 发出真实已读变化；Notch 点击本身不等于已读。
+Codex in Notch 不主动修改已读状态。点击会话成功后，组件收起并等待桌面端发出真实已读变化；Notch 点击本身不等于已读。
 
-当前公开接口不提供 Desktop 未读成员关系。经产品批准，实现可使用 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) 登记的严格只读适配器；只有当前 Desktop 主状态文件成功解析出的未读集合可以成为移除依据。主文件缺失、损坏、权限异常或 schema 不兼容时必须保守保留尚未隐藏的终态会话，不得把解析失败解释为已读。
+**「用户已经看过」按产品各自取源，两者都是登记在 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) 的严格只读适配器。**
+
+- **Codex**：Desktop 未读集合（蓝点）。只有当前 Desktop 主状态文件成功解析出的未读集合可以成为移除依据。
+- **Claude Code（Desktop 托管会话）**：两条路径，满足其一即为已读。
+  1. Claude Desktop 记录的「最后一次把该会话显示在屏幕上」的时刻**晚于该 Turn 的结束时刻**。比较的左边是本应用自己掌握的 Turn 终止时刻，不是桌面端记录的「最后活动」。
+  2. **Claude Desktop 在该 Turn 结束之后回到前台，且它最后放上屏幕的就是这个会话。** 这一条覆盖的是最常见的用法——停在同一个会话上、切走、再切回来读——实测表明这次阅读在磁盘上不留任何痕迹，因此只读文件永远看不见它。它要求的是「回到前台」这个跃迁而不是「此刻在前台」，否则把窗口留在前台然后离开座位的用户会被替他读掉。
+  用户在 Claude Desktop 归档该会话同样移除。用户全程盯着会话跑完的那一种情况两条都不成立，行会留到下一次交互，见 ADR 0012。
+- **Claude Code（终端会话）**：**没有任何"已读"概念存在**——Claude Code 自己的会话记录只有 `status` / `waitingFor` / `updatedAt`，不记录焦点。这类会话的终态行按既有方式退出：该会话的下一次提交、会话从官方会话列表消失，或用户手动清空。这是**声明过的能力边界**，与 ADR 0004 对 Claude Code 导航的处理同性质，不得用窗口焦点、终端 tty、固定时间或 Notch 点击伪装成已读（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）。
+
+主状态缺失、损坏、权限异常或 schema 不兼容时必须保守保留尚未隐藏的终态会话，不得把解析失败解释为已读；无法回答已读的会话一律保留，不得因为"没说未读"就移除。
 
 ### 4.3 范围与 Project
 
@@ -289,7 +298,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 
 1. 用户提交输入后一秒内出现对应会话行；同一 Thread 的后续 Turn 不产生重复行。
 2. Input needed、Approval needed、Running、Completed 四态及优先级正确；专用审批工具与普通工具（如 Bash 命令）两种审批形态都必须进入 Approval needed，孤立的 PermissionRequest 不误报，任意执行结束信号都使当前 Turn 直接进入 Completed。Claude Code 里被用户中断的 Turn 同样必须到达 Completed——包括中断发生在审批对话框打开时——尽管那里没有任何 hook 到达。
-3. 活动轮次始终显示；终态轮次在 Desktop 已读、归档或删除后自动移除。
+3. 活动轮次始终显示；终态轮次在桌面端已读、归档或删除后自动移除——Codex 按未读集合，Claude Code Desktop 托管会话按 4.2 的两条路径（显示时刻晚于该轮次终止时刻，或轮次结束后应用回到前台且它最后显示的就是该会话）。终端里的 Claude Code 会话不参与本条，理由见 ADR 0012。
 4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
 5. 应用重启时不显示缓存行，也不恢复任何启动前的会话；列表从空开始，只累积启动后产生 lifecycle 事件的 Turn。
 6. 处理时间按 8.2 计时：未完成行逐秒推进，转入 Approval needed 或 Input needed 后继续计时不暂停，Completed 后停止并让位给状态点；收起态右端显示所有未完成轮次中的最长值，全部完成后该区域消失；朗读使用时长读法；无未完成轮次时不存在每秒刷新。

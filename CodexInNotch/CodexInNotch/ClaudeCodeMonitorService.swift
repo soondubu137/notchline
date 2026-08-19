@@ -30,6 +30,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     nonisolated let agent = AgentKind.claudeCode
     nonisolated let stateChangeEvents: AsyncStream<Void>
 
+    /// Claude Desktop's bundle identifier, used only to recognise the
+    /// application in the workspace's activation notification. It is not
+    /// promised by any official contract -- see the registry.
+    nonisolated static let desktopBundleIdentifier = "com.anthropic.claudefordesktop"
+
     private let setup: ClaudeCodeHookSetup
     private let hookEvents: HookEventRepository
     private let sessions: any ClaudeCodeSessionListing
@@ -62,6 +67,27 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// asserting that an edge did *not* arrive, which any other source firing
     /// would make untrue.
     nonisolated let recordWatcher: ClaudeCodeSessionRecordWatcher
+    /// Which sessions the user has already read, when anything can say.
+    private let readState: any ClaudeCodeReadStateProviding
+    /// When Claude Desktop last came to the front.
+    ///
+    /// The second of the two routes to "read", and the one that covers the
+    /// ordinary way people use this product: you leave a session running, go
+    /// somewhere else, and come back to the same session. Claude Desktop stamps
+    /// a focus when it *puts* a session on screen and writes nothing at all
+    /// when its window regains focus over a session already there -- measured
+    /// 2026-08-19 across the whole application-support tree, zero files touched
+    /// -- so the file alone can never see that reading happen.
+    private let activations: any DesktopActivationReporting
+    /// Keeps a finished row listed until it has been read, and retires it the
+    /// moment it has been.
+    ///
+    /// The same gate the Codex side uses, given the same shape of answer: this
+    /// product's evidence is a focus instant rather than a blue dot, so the
+    /// unread set handed over is computed per refresh from those instants and
+    /// each Turn's own last moment -- see
+    /// ``ClaudeCodeReadStateSnapshot/readState(forSession:terminalBoundaryAt:)``.
+    private var terminalReadMembershipGate: TerminalUnreadMembershipGate
     private let clock: any MonitorClock
     private var boundPort: UInt16?
     private var lastDiagnostic: String?
@@ -74,6 +100,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         listener: AgentHookListener? = nil,
         transcripts: ClaudeCodeTranscriptReader? = nil,
         usage: ClaudeCodeUsageReader? = nil,
+        readState: (any ClaudeCodeReadStateProviding)? = nil,
+        activations: (any DesktopActivationReporting)? = nil,
         sessionsDirectory: URL? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
@@ -133,6 +161,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             onUpdate: { quotaLanded.yield() }
         )
         self.clock = clock
+        let resolvedReadState = readState ?? ClaudeCodeDesktopReadStateRepository(
+            changeDebounceInterval: timing.unreadStateDebounceInterval
+        )
+        self.readState = resolvedReadState
+        let resolvedActivations = activations ?? DesktopActivationWatcher(
+            bundleIdentifier: Self.desktopBundleIdentifier,
+            clock: clock
+        )
+        self.activations = resolvedActivations
+        self.terminalReadMembershipGate = TerminalUnreadMembershipGate(
+            settlingInterval: timing.terminalReadSettlingInterval,
+            unreadRecheckInterval: timing.terminalUnreadRecheckInterval
+        )
 
         // Two edges, no cadence. An event arriving means a turn moved; the
         // sessions directory changing means one appeared or went away, which is
@@ -167,6 +208,18 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
                 recordWatcher.events(),
                 invalidating: resolvedSessions
             ),
+            // Claude Desktop writing a session's record. It is the low-latency
+            // half of retiring a finished row: the write that stamps a focus is
+            // an atomic replace inside the account folder, so this edge lands
+            // on the same gesture that reads the answer. Nothing here
+            // invalidates the session list -- that file says who has read what,
+            // not which sessions exist.
+            resolvedReadState.changeEvents(),
+            // Claude Desktop coming to the front. It is an edge rather than a
+            // deadline for the same reason the record write is: a row waiting
+            // to be read should leave on the gesture that reads it, not on the
+            // next re-check after it.
+            resolvedActivations.changeEvents(),
             quotaUpdates
         ])
     }
@@ -181,6 +234,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // on the record of whatever turn happened to be running when it
             // was.
             recordWatcher.watch(processIdentifiers: [])
+            // Nothing is listed, so nothing is waiting to be read. Left alone,
+            // the gate would go on reporting a re-check deadline for rows this
+            // branch is not going to publish.
+            terminalReadMembershipGate.reset()
             return snapshot(
                 availability: .setupRequired,
                 sessions: [],
@@ -207,6 +264,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         guard let registration = await setup.installedRegistration(),
               await bindListenerIfNeeded(registration) else {
             recordWatcher.watch(processIdentifiers: [])
+            // Nothing is listed, so nothing is waiting to be read. Left alone,
+            // the gate would go on reporting a re-check deadline for rows this
+            // branch is not going to publish.
+            terminalReadMembershipGate.reset()
             return snapshot(
                 availability: .disconnected,
                 sessions: [],
@@ -284,19 +345,25 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
 
         var rows: [MonitoredSession] = []
         var accountedFor: Set<String> = []
+        // Each row's last moment, keyed the way the rows are. Only a finished
+        // row uses it, and for that row it is the instant the Turn ended -- the
+        // event that ended it, or the reading that found the session no longer
+        // working. That is the left-hand side of "has this been read": a focus
+        // recorded before it cannot have shown the user this answer.
+        var boundaryByRowID: [String: Date] = [:]
         for turn in hookState.turns {
             // A turn whose session is gone is gone. This is the whole reason
             // the session list is load-bearing rather than a convenience.
             guard let session = liveByID[turn.threadID] else { continue }
             accountedFor.insert(turn.threadID)
-            rows.append(
-                row(
-                    for: turn,
-                    in: session,
-                    title: await title(for: session),
-                    preview: preview(for: session)
-                )
+            let built = row(
+                for: turn,
+                in: session,
+                title: await title(for: session),
+                preview: preview(for: session)
             )
+            boundaryByRowID[built.id] = turn.lastEventAt
+            rows.append(built)
         }
 
         // Sessions the reducer has never heard of: either they were running
@@ -349,6 +416,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             )
         }
         rows.sort(by: MonitorAggregation.rowOrder)
+        let read = await rowsStillWorthShowing(rows, boundaryByRowID: boundaryByRowID)
+        let visibleRows = read.rows
 
         // Watch the records of exactly the turns that are still going -- and
         // watch them from `rows` rather than from what is about to be reported,
@@ -384,9 +453,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // had its row on screen saying `Running`. That is the state the
             // user sees as Claude Code vanishing while it carries on working,
             // and it is the surface's half of the contract, not the registry's.
-            sessions: presence.isOpen ? rows : [],
+            sessions: presence.isOpen ? visibleRows : [],
             setupStatus: status,
-            diagnostic: hookDiagnostic,
+            diagnostic: hookDiagnostic ?? read.diagnostic,
             // Whatever is known right now. Awaiting the reading here is what
             // made a hook event's row wait on a `claude` launch.
             quota: await usage.currentQuota(),
@@ -397,6 +466,98 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // back to reporting turns instead of openness.
             presence: presence
         )
+    }
+
+    /// Drops the finished rows the user has already read.
+    ///
+    /// **Only a session Claude Desktop knows about is ever judged.** A session
+    /// started from a terminal has no read state anywhere -- see
+    /// ``ClaudeCodeDesktopReadStateRepository`` -- so it is not merely reported
+    /// unread, it is kept out of the gate entirely. That is the difference
+    /// between a row that is *waiting* on the user and a row nothing can ever
+    /// clear: putting the second kind in the gate would have it book a re-check
+    /// deadline once a second, for the life of the session, to re-ask a
+    /// question with no possible answer.
+    ///
+    /// The cost of that choice is one narrow case: if the whole account tree
+    /// stops being readable while a row is already hidden, its session goes
+    /// back to `unknown` and the row returns. Deleting a session in Claude
+    /// Desktop is the only way to reach it, and that also ends the session, so
+    /// the row leaves on the next refresh anyway.
+    private func rowsStillWorthShowing(
+        _ rows: [MonitoredSession],
+        boundaryByRowID: [String: Date]
+    ) async -> (rows: [MonitoredSession], diagnostic: String?) {
+        let readState = await readState.snapshot()
+        let activatedAt = await activations.lastActivation()
+        var unreadThreadIDs: Set<String> = []
+        var judged: [(row: MonitoredSession, boundary: Date)] = []
+        var shown: [MonitoredSession] = []
+
+        /// Whether coming back to Claude Desktop showed the user this session.
+        ///
+        /// Two facts, and neither is a guess on its own: Claude Desktop's own
+        /// record says which session it last put on screen, and the workspace
+        /// says the application came to the front. Requiring the activation to
+        /// be *later than the Turn's end* is what makes it evidence of reading
+        /// rather than of having been there -- and requiring an activation at
+        /// all, rather than "is frontmost now", is what stops a user who walked
+        /// away with the window in front from having the row retired for them.
+        func comingBackShowedIt(_ sessionID: String, since boundary: Date) -> Bool {
+            guard sessionID == readState.mostRecentlyDisplayedSessionID,
+                  let activatedAt else {
+                return false
+            }
+            return activatedAt >= boundary
+        }
+
+        for row in rows {
+            // Every hook-driven row carries one. The fallback is for a
+            // reconstructed row, which is only ever Running and therefore only
+            // ever clears a gate entry -- the value it clears with is not read.
+            let boundary = boundaryByRowID[row.id] ?? row.startedAt ?? clock.now()
+            switch readState.readState(
+                forSession: row.threadID,
+                terminalBoundaryAt: boundary
+            ) {
+            case .unknown:
+                shown.append(row)
+            case .unread:
+                if comingBackShowedIt(row.threadID, since: boundary) {
+                    judged.append((row, boundary))
+                } else {
+                    unreadThreadIDs.insert(row.threadID)
+                    judged.append((row, boundary))
+                }
+            case .read:
+                judged.append((row, boundary))
+            }
+        }
+
+        let unreadState = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: unreadThreadIDs,
+            // A reading that is not current may not hide anything, exactly as
+            // on the Codex side. It matters less here -- a focus instant older
+            // than the Turn cannot claim the Turn was read, whatever generation
+            // it came from -- but the rule is the product's, not the schema's.
+            source: readState.source.isAuthoritative ? .current : .lastKnownGood
+        )
+        let now = clock.now()
+        for (row, boundary) in judged where terminalReadMembershipGate.shouldDisplay(
+            sessionID: row.id,
+            threadID: row.threadID,
+            status: row.status,
+            terminalBoundaryAt: boundary,
+            unreadState: unreadState,
+            now: now
+        ) {
+            shown.append(row)
+        }
+        terminalReadMembershipGate.retain(sessionIDs: Set(judged.map(\.row.id)))
+
+        // Sorted again: the two halves above are appended in the order they
+        // were judged, not in row order.
+        return (shown.sorted(by: MonitorAggregation.rowOrder), readState.diagnostic)
     }
 
     /// No cadence for the rows: turn changes and session changes both arrive as
@@ -410,8 +571,21 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// 60-second heartbeat: a failed attempt, which happens whenever something
     /// else logs onto the command's stdout, went uncorrected for up to two
     /// minutes.
+    ///
+    /// The second one is a finished, Desktop-hosted row waiting to be read. It
+    /// waits on the user rather than on time, so its deadline is a floor under
+    /// the account-folder watcher and not a sampling cadence -- the same
+    /// reasoning, and the same numbers, as
+    /// ``TerminalUnreadMembershipGate/nextDeadline(now:)`` on the Codex side.
+    /// A row nothing can ever clear never reaches the gate, so it never books
+    /// one of these.
     func nextRefreshDeadline() async -> Date? {
-        await usage.nextReadDeadline()
+        [
+            await usage.nextReadDeadline(),
+            terminalReadMembershipGate.nextDeadline(now: clock.now())
+        ]
+        .compactMap { $0 }
+        .min()
     }
 
     /// The transcripts the quota readings leave in Claude Code's own project

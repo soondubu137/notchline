@@ -2651,6 +2651,233 @@ struct CodexInNotchTests {
         #expect(snapshot.unreadThreadIDs == ["thread-2"])
     }
 
+    /// What counts as having read a Claude Code session.
+    ///
+    /// The left-hand side is the Turn's own last moment, supplied by whoever
+    /// ended it, not `lastActivityAt` from the same file. That is deliberate:
+    /// this app already knows exactly when the Turn finished, and taking the
+    /// other half from Desktop as well would let a Desktop that lags or stops
+    /// writing activity make a Turn look read.
+    @Test @MainActor
+    func claudeDesktopReadStateComparesFocusAgainstTheTurnsLastMoment() {
+        let boundary = Date(timeIntervalSince1970: 1_000)
+        let snapshot = ClaudeCodeReadStateSnapshot(
+            entries: [
+                "before": .init(
+                    lastFocusedAt: Date(timeIntervalSince1970: 999),
+                    isArchived: false
+                ),
+                "after": .init(
+                    lastFocusedAt: Date(timeIntervalSince1970: 1_001),
+                    isArchived: false
+                ),
+                "never": .init(lastFocusedAt: nil, isArchived: false),
+                "archived": .init(lastFocusedAt: nil, isArchived: true)
+            ],
+            source: .current
+        )
+
+        #expect(
+            snapshot.readState(forSession: "before", terminalBoundaryAt: boundary)
+                == .unread
+        )
+        #expect(
+            snapshot.readState(forSession: "after", terminalBoundaryAt: boundary)
+                == .read
+        )
+        // Recorded but never displayed is unread, and can only ever be unread.
+        #expect(
+            snapshot.readState(forSession: "never", terminalBoundaryAt: boundary)
+                == .unread
+        )
+        // Archiving is a deliberate act on that session, and Codex's rule
+        // already says it removes the row.
+        #expect(
+            snapshot.readState(forSession: "archived", terminalBoundaryAt: boundary)
+                == .read
+        )
+        // A session Desktop has never heard of -- every terminal one -- is not
+        // reported unread, it is reported unanswerable.
+        #expect(
+            snapshot.readState(forSession: "terminal", terminalBoundaryAt: boundary)
+                == .unknown
+        )
+    }
+
+    /// No Claude Desktop at all is not a fault, and says nothing to the user.
+    @Test @MainActor
+    func claudeDesktopReadStateIsSilentWhenThereIsNoTreeToRead() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let repository = ClaudeCodeDesktopReadStateRepository(
+            stateDirectoryURL: root.appendingPathComponent("claude-code-sessions"),
+            changeDebounceInterval: 0.01
+        )
+
+        let snapshot = await repository.snapshot()
+        #expect(snapshot.source == .unavailable)
+        #expect(snapshot.diagnostic == nil)
+        #expect(
+            snapshot.readState(
+                forSession: "anything",
+                terminalBoundaryAt: Date(timeIntervalSince1970: 1)
+            ) == .unknown
+        )
+    }
+
+    /// Records that no longer join on `cliSessionId` are a schema change, and
+    /// are reported as one rather than as "nobody has read anything".
+    @Test @MainActor
+    func claudeDesktopReadStateReportsARecordSchemaItCanNoLongerJoin() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let account = root
+            .appendingPathComponent("claude-code-sessions", isDirectory: true)
+            .appendingPathComponent("org", isDirectory: true)
+            .appendingPathComponent("account", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: account,
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"sessionId": "local_1", "lastFocusedAt": 2000}"#.utf8).write(
+            to: account.appendingPathComponent("local_1.json")
+        )
+        let repository = ClaudeCodeDesktopReadStateRepository(
+            stateDirectoryURL: root.appendingPathComponent("claude-code-sessions"),
+            changeDebounceInterval: 0.01
+        )
+
+        let broken = await repository.snapshot()
+        #expect(broken.source == .unavailable)
+        #expect(broken.diagnostic?.contains("schema") == true)
+        // Fail closed: an unreadable schema hides nothing.
+        #expect(
+            broken.readState(
+                forSession: "s-1",
+                terminalBoundaryAt: Date(timeIntervalSince1970: 1)
+            ) == .unknown
+        )
+
+        try JSONSerialization.data(withJSONObject: [
+            "sessionId": "local_2",
+            "cliSessionId": "s-1",
+            "lastFocusedAt": 2_000_000
+        ]).write(to: account.appendingPathComponent("local_2.json"))
+
+        let recovered = await repository.snapshot()
+        #expect(recovered.source == .current)
+        #expect(recovered.diagnostic == nil)
+        #expect(
+            recovered.readState(
+                forSession: "s-1",
+                terminalBoundaryAt: Date(timeIntervalSince1970: 1_000)
+            ) == .read
+        )
+    }
+
+    /// Two records naming one session cannot make a row disappear sooner.
+    @Test @MainActor
+    func claudeDesktopReadStateKeepsTheConservativeHalfOfADuplicate() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let account = root
+            .appendingPathComponent("claude-code-sessions", isDirectory: true)
+            .appendingPathComponent("org", isDirectory: true)
+            .appendingPathComponent("account", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: account,
+            withIntermediateDirectories: true
+        )
+        for (name, focused, archived) in [
+            ("local_1.json", 2_000_000.0, true),
+            ("local_2.json", 900_000.0, false)
+        ] {
+            try JSONSerialization.data(withJSONObject: [
+                "cliSessionId": "s-1",
+                "lastFocusedAt": focused,
+                "isArchived": archived
+            ]).write(to: account.appendingPathComponent(name))
+        }
+        let repository = ClaudeCodeDesktopReadStateRepository(
+            stateDirectoryURL: root.appendingPathComponent("claude-code-sessions"),
+            changeDebounceInterval: 0.01
+        )
+
+        let snapshot = await repository.snapshot()
+        // The earlier focus wins and archiving has to be unanimous, so the row
+        // stays listed rather than vanishing on the more eager of the two.
+        #expect(
+            snapshot.readState(
+                forSession: "s-1",
+                terminalBoundaryAt: Date(timeIntervalSince1970: 1_000)
+            ) == .unread
+        )
+    }
+
+    /// Claude Desktop writes a record by atomic replace, so the folder reports
+    /// it -- which is what lets the row leave on the same gesture that reads it.
+    @Test @MainActor
+    func claudeDesktopAccountFolderReportsARecordBeingReplaced() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let account = root
+            .appendingPathComponent("claude-code-sessions", isDirectory: true)
+            .appendingPathComponent("org", isDirectory: true)
+            .appendingPathComponent("account", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: account,
+            withIntermediateDirectories: true
+        )
+        let record = account.appendingPathComponent("local_1.json")
+        try JSONSerialization.data(withJSONObject: [
+            "cliSessionId": "s-1",
+            "lastFocusedAt": 1_000_000
+        ]).write(to: record, options: .atomic)
+
+        let repository = ClaudeCodeDesktopReadStateRepository(
+            stateDirectoryURL: root.appendingPathComponent("claude-code-sessions"),
+            changeDebounceInterval: 0.01
+        )
+        // The account folders are discovered by a reading, so the first one is
+        // what puts a watcher on this directory at all.
+        _ = await repository.snapshot()
+
+        let events = repository.changeEvents()
+        let eventTask = Task {
+            for await _ in events { return true }
+            return false
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try JSONSerialization.data(withJSONObject: [
+            "cliSessionId": "s-1",
+            "lastFocusedAt": 2_000_000
+        ]).write(to: record, options: .atomic)
+
+        let observed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await eventTask.value }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            eventTask.cancel()
+            return result
+        }
+        let snapshot = await repository.snapshot()
+
+        #expect(observed)
+        #expect(
+            snapshot.readState(
+                forSession: "s-1",
+                terminalBoundaryAt: Date(timeIntervalSince1970: 1_500)
+            ) == .read
+        )
+    }
+
     @Test @MainActor
     func terminalUnreadMembershipHidesOnlyAfterAuthoritativeReadEvidence() {
         let boundary = Date(timeIntervalSince1970: 1_000)
@@ -8523,6 +8750,285 @@ for line in sys.stdin:
         #expect(try #require(snapshot.sessions.first).status == .completed)
     }
 
+    /// Reading the answer in Claude Desktop takes the row off the notch.
+    ///
+    /// The Codex half of this has always worked, off Desktop's blue dot. Claude
+    /// Code had no equivalent, so a finished row could only leave on that
+    /// session's next prompt, on the session ending, or by hand (CC-013) — a
+    /// user who read the answer and moved on kept the row forever.
+    ///
+    /// The evidence is `lastFocusedAt`, compared against the Turn's own last
+    /// moment rather than against Desktop's idea of when the session was last
+    /// active: a focus recorded *before* the Turn ended cannot have shown the
+    /// user this answer, whatever else the file says.
+    @Test @MainActor
+    func aFinishedRowLeavesWhenClaudeDesktopSaysItWasRead() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+
+        // Nothing has spoken for this session yet.
+        let unknown = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(unknown.sessions.count == 1)
+
+        // Desktop has a record, and it says the session was last on screen
+        // before this Turn finished.
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 100,
+            desktopID: "d-1"
+        )
+        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(unread.sessions.count == 1)
+        #expect(try #require(unread.sessions.first).status == .completed)
+
+        // The user opens it. Desktop stamps the focus and rewrites the record.
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 102,
+            desktopID: "d-1"
+        )
+        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(read.sessions.isEmpty)
+    }
+
+    /// The activation watcher hears the workspace, and hears only its own
+    /// application.
+    ///
+    /// Worth its own test because everything above it is stubbed: the rule that
+    /// consumes an activation is covered by the rows tests, but whether an
+    /// activation ever *arrives* is one notification name and one `userInfo`
+    /// key, and getting either wrong fails silently — the row would simply
+    /// never leave, which is exactly the bug this route exists to fix.
+    @Test @MainActor
+    func desktopActivationWatcherHearsOnlyItsOwnApplication() async throws {
+        let current = try #require(NSRunningApplication.current.bundleIdentifier)
+        let mine = DesktopActivationWatcher(bundleIdentifier: current)
+        let somebodyElse = DesktopActivationWatcher(
+            bundleIdentifier: "com.example.not-this-one"
+        )
+        #expect(await mine.lastActivation() == nil)
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: NSWorkspace.shared,
+            userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current]
+        )
+        // Delivered on the main queue, so let it drain.
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(await mine.lastActivation() != nil)
+        #expect(await somebodyElse.lastActivation() == nil)
+    }
+
+    /// Coming back to Claude Desktop takes the row off the notch.
+    ///
+    /// This is the ordinary way the product is used — leave a session running,
+    /// go somewhere else, come back to the *same* session — and the file alone
+    /// cannot see it. Claude Desktop stamps a focus when it **puts** a session
+    /// on screen; when its window regains focus over a session already there it
+    /// writes nothing at all. Measured 2026-08-19: across the whole
+    /// application-support tree, zero files were modified while the user
+    /// switched back and read a finished turn.
+    ///
+    /// So the second route is an activation of the application itself, and it
+    /// is two facts rather than one guess: Desktop's own record says which
+    /// session it last displayed, and the workspace says the app came to the
+    /// front after this Turn had already ended.
+    @Test @MainActor
+    func aFinishedRowLeavesWhenTheUserComesBackToClaudeDesktop() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        // On screen since before the Turn ran, and never re-stamped: this is
+        // exactly the file state the failing scenario leaves behind.
+        try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+
+        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(unread.sessions.count == 1)
+
+        harness.desktopActivatedAt = Date(timeIntervalSince1970: 102)
+        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(read.sessions.isEmpty)
+    }
+
+    /// Having been in Claude Desktop before the Turn ended is not evidence of
+    /// having read what it said.
+    @Test @MainActor
+    func anActivationOlderThanTheTurnIsNotEvidenceOfReading() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+        // The user was in Claude Desktop when the prompt was submitted, then
+        // left. Nothing has brought the window forward since.
+        harness.desktopActivatedAt = Date(timeIntervalSince1970: 100)
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 1)
+    }
+
+    /// An activation speaks for one session: the one Desktop last displayed.
+    ///
+    /// Coming back to the window shows whatever was on screen. A second
+    /// finished session behind it was not read, and keeps its row.
+    @Test @MainActor
+    func anActivationOnlyRetiresTheSessionDesktopLastDisplayed() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        for session in ["front", "behind"] {
+            try harness.queue(
+                event: "UserPromptSubmit",
+                session: session,
+                turn: "p-\(session)",
+                at: 100
+            )
+            try harness.queue(
+                event: "Stop",
+                session: session,
+                turn: "p-\(session)",
+                at: 101
+            )
+        }
+        harness.live = [
+            harness.session(id: "front", cwd: cwd),
+            harness.session(id: "behind", cwd: cwd)
+        ]
+        try harness.writeDesktopRecord(session: "front", lastFocusedAt: 99)
+        try harness.writeDesktopRecord(session: "behind", lastFocusedAt: 98)
+        harness.desktopActivatedAt = Date(timeIntervalSince1970: 102)
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.map(\.threadID) == ["behind"])
+    }
+
+    /// An activation cannot retire a row Claude Desktop knows nothing about.
+    ///
+    /// A terminal session is not displayed by Claude Desktop under any
+    /// circumstances, so bringing that application forward says nothing about
+    /// it. Without this the activation route would quietly become "any Claude
+    /// Code row disappears when you touch Claude Desktop".
+    @Test @MainActor
+    func anActivationNeverRetiresATerminalSessionsRow() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "cli", cwd: cwd)]
+        harness.desktopActivatedAt = Date(timeIntervalSince1970: 102)
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 1)
+    }
+
+    /// A session started from a terminal keeps its finished row, and books no
+    /// re-check for it.
+    ///
+    /// Claude Code's own session record carries `status`, `waitingFor` and
+    /// `updatedAt` and nothing about focus, so nothing anywhere can say whether
+    /// such a session has been read. Two things follow, and the second is the
+    /// one easy to get wrong: the row stays, **and** it must not enter the
+    /// unread gate — a row nothing can ever clear would otherwise ask again
+    /// every second for the life of the session.
+    @Test @MainActor
+    func aTerminalSessionsFinishedRowIsNeverRetiredNorRechecked() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "cli", cwd: cwd)]
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 1)
+        let deadline = await harness.service.nextRefreshDeadline()
+        // Whatever the quota wants is minutes away; a gate re-check would be a
+        // second away.
+        #expect((deadline?.timeIntervalSinceNow ?? .infinity) > 2)
+
+        // The same session with a Desktop record that says unread *does* wait
+        // on the user, and says so.
+        try harness.writeDesktopRecord(session: "cli", lastFocusedAt: 100)
+        _ = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let waiting = await harness.service.nextRefreshDeadline()
+        #expect((waiting?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+    }
+
+    /// Archiving a session in Claude Desktop retires its row like reading it.
+    @Test @MainActor
+    func archivingInClaudeDesktopRetiresTheFinishedRow() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        // Never displayed since the Turn ended, and archived anyway.
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: nil,
+            isArchived: true
+        )
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.isEmpty)
+    }
+
+    /// One unreadable record speaks for nobody, and for nobody else either.
+    ///
+    /// A record being written right now looks exactly like a record that has
+    /// stopped making sense. Its session answers "unknown" and keeps its row;
+    /// every other session is judged as usual.
+    @Test @MainActor
+    func anUnreadableDesktopRecordKeepsItsRowWithoutSilencingTheRest() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "read", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "read", turn: "p-1", at: 101)
+        try harness.queue(event: "UserPromptSubmit", session: "mute", turn: "p-2", at: 100)
+        try harness.queue(event: "Stop", session: "mute", turn: "p-2", at: 101)
+        harness.live = [
+            harness.session(id: "read", cwd: cwd),
+            harness.session(id: "mute", cwd: cwd)
+        ]
+        try harness.writeDesktopRecord(session: "read", lastFocusedAt: 102)
+        try harness.writeUnreadableDesktopRecord()
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.map(\.threadID) == ["mute"])
+        // A half-written neighbour is not a schema change, so it says nothing
+        // to the user.
+        #expect(snapshot.diagnostic == nil)
+    }
+
     /// An interrupt ends the turn, because the session stops saying it is busy.
     ///
     /// `Esc` fires no hook of any kind -- measured against 2.1.235, the CLI has
@@ -11366,6 +11872,14 @@ private final class ClaudeCodeHarness {
     let port = ClaudeCodeHarness.reservePort()
     private let listener: AgentHookListener
     private let listing = StubSessionListing()
+    private let activationStub = StubDesktopActivation()
+
+    /// When Claude Desktop last came to the front, as this harness's service
+    /// sees it. `nil` is the state a freshly launched app is in.
+    var desktopActivatedAt: Date? {
+        get { activationStub.lastActivatedAt }
+        set { activationStub.lastActivatedAt = newValue }
+    }
 
     private static let portLock = NSLock()
     private static var nextPort: UInt16 = 21_000
@@ -11395,6 +11909,16 @@ private final class ClaudeCodeHarness {
     /// once, which is the state the watcher has to survive.
     var sessionsDirectory: URL {
         root.appendingPathComponent("sessions", isDirectory: true)
+    }
+
+    /// Claude Desktop's account folder, where it records what it has shown the
+    /// user. Not created here either: a user who has never opened Claude
+    /// Desktop has no tree at all, and that has to keep working.
+    var desktopAccountDirectory: URL {
+        root
+            .appendingPathComponent("claude-code-sessions", isDirectory: true)
+            .appendingPathComponent("org-1", isDirectory: true)
+            .appendingPathComponent("account-1", isDirectory: true)
     }
 
     /// How many times the service has reported the session list out of date.
@@ -11448,7 +11972,62 @@ private final class ClaudeCodeHarness {
             // transcript folder named after it in the real `~/.claude/projects`
             // that nothing here can reach to remove.
             usage: .silent(),
+            // The real adapter, pointed at this harness's own tree. Injected
+            // for the same reason the usage reader is: the default one reads
+            // the machine's actual Claude Desktop state, so a test would be
+            // answering with whatever the developer happens to have open.
+            readState: ClaudeCodeDesktopReadStateRepository(
+                stateDirectoryURL: root.appendingPathComponent(
+                    "claude-code-sessions",
+                    isDirectory: true
+                ),
+                changeDebounceInterval: 0.01
+            ),
+            activations: activationStub,
             sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true)
+        )
+    }
+
+    /// Writes the record Claude Desktop keeps for one session.
+    ///
+    /// - Parameter lastFocusedAt: When Desktop last put the session on screen,
+    ///   in seconds since the epoch — the same scale the hook events here use,
+    ///   so a test can place a focus either side of the Turn's last moment.
+    func writeDesktopRecord(
+        session: String,
+        lastFocusedAt: Double?,
+        isArchived: Bool = false,
+        desktopID: String = UUID().uuidString
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: desktopAccountDirectory,
+            withIntermediateDirectories: true
+        )
+        var record: [String: Any] = [
+            "sessionId": "local_\(desktopID)",
+            "cliSessionId": session,
+            "cwd": "/Users/someone/Projects/thing",
+            "title": "Something the user typed",
+            "isArchived": isArchived
+        ]
+        if let lastFocusedAt {
+            record["lastFocusedAt"] = lastFocusedAt * 1_000
+        }
+        try JSONSerialization.data(withJSONObject: record).write(
+            to: desktopAccountDirectory
+                .appendingPathComponent("local_\(desktopID).json"),
+            options: .atomic
+        )
+    }
+
+    /// Writes a file where a record should be, carrying something else.
+    func writeUnreadableDesktopRecord(named name: String = UUID().uuidString) throws {
+        try FileManager.default.createDirectory(
+            at: desktopAccountDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data("{\"sessionId\": \"local_x\"}".utf8).write(
+            to: desktopAccountDirectory.appendingPathComponent("local_\(name).json")
         )
     }
 
@@ -11556,6 +12135,13 @@ private final class ClaudeCodeHarness {
 /// has to talk to the registry it belongs to cannot capture it directly.
 private final class RegistryHolder: @unchecked Sendable {
     var registry: ClaudeCodeSessionRegistry?
+}
+
+/// Stands in for the workspace's activation notification.
+private final class StubDesktopActivation: DesktopActivationReporting, @unchecked Sendable {
+    var lastActivatedAt: Date?
+    func lastActivation() async -> Date? { lastActivatedAt }
+    func changeEvents() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
 }
 
 private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sendable {

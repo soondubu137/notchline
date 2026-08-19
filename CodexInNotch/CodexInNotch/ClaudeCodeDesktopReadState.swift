@@ -1,0 +1,498 @@
+import Darwin
+import Foundation
+import os
+
+/// Whether the user has looked at a Claude Code session, and when.
+///
+/// The question this answers is the one the notch needs to retire a finished
+/// row: a Turn that has ended stays listed until the user has actually read it
+/// (`未读终态`). Codex answers it with Desktop's blue dot; Claude Code has no
+/// equivalent public signal at all -- see
+/// ``ClaudeCodeDesktopReadStateRepository`` for what is read instead, and for
+/// the half of the product this cannot cover.
+nonisolated protocol ClaudeCodeReadStateProviding: Sendable {
+    func snapshot() async -> ClaudeCodeReadStateSnapshot
+    nonisolated func changeEvents() -> AsyncStream<Void>
+}
+
+/// What is known right now about which sessions have been read.
+///
+/// **Keyed by the id the hooks use.** Claude Desktop files its own session
+/// state under an id of its own (`local_<uuid>`) and records the CLI's id
+/// alongside it, so the two can be joined without guessing.
+struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
+    /// What Claude Desktop last recorded about one session.
+    struct Entry: Equatable, Sendable {
+        /// When Claude Desktop last put this session on screen.
+        ///
+        /// Absent for a session it has recorded but never displayed, which is
+        /// not the same as "never read": absent can only ever mean *unread*
+        /// here, never read.
+        let lastFocusedAt: Date?
+        /// Whether the user has archived the session in Claude Desktop.
+        let isArchived: Bool
+
+        nonisolated init(lastFocusedAt: Date?, isArchived: Bool) {
+            self.lastFocusedAt = lastFocusedAt
+            self.isArchived = isArchived
+        }
+    }
+
+    /// How much this snapshot may be trusted to *hide* a row.
+    ///
+    /// It never decides whether a row may be *shown*: the timestamps do that on
+    /// their own, and they are self-limiting in a way an unread set is not. A
+    /// stale reading carries old focus instants, and an old instant can only
+    /// fail to clear a newer Turn -- so the worst a stale reading does is keep
+    /// a row the user has already read, which is the failure this product
+    /// prefers.
+    enum Source: Equatable, Sendable {
+        case current
+        case lastKnownGood
+        case unavailable
+
+        nonisolated var isAuthoritative: Bool {
+            if case .current = self { return true }
+            return false
+        }
+    }
+
+    /// Whether one session has been read, when that is knowable at all.
+    enum SessionReadState: Equatable, Sendable {
+        case read
+        case unread
+        /// Claude Desktop has no record of this session, so nothing here can
+        /// speak for it. Every session started from a terminal is in this
+        /// state, permanently -- see ``ClaudeCodeDesktopReadStateRepository``.
+        case unknown
+    }
+
+    private let entries: [String: Entry]
+    let source: Source
+    let diagnostic: String?
+    /// The session Claude Desktop most recently put on screen, if it has
+    /// recorded putting any there.
+    ///
+    /// **This is the closest thing to "which session is on screen right now",
+    /// and it is not the same claim.** Desktop stamps the instant a session is
+    /// *shown* and never records it being hidden, so the newest stamp is the
+    /// last thing it displayed — which is still on screen unless the user
+    /// closed that window. It is used for exactly one thing: deciding which
+    /// session an app activation could have shown the user, and being wrong
+    /// about it can only retire a row whose window was closed, which is a
+    /// window the user was looking at not long ago.
+    let mostRecentlyDisplayedSessionID: String?
+
+    nonisolated init(
+        entries: [String: Entry],
+        source: Source,
+        diagnostic: String? = nil
+    ) {
+        self.entries = entries
+        self.source = source
+        self.diagnostic = diagnostic
+        // Ties broken by id so the answer cannot flap between two records that
+        // were stamped in the same millisecond.
+        var displayed: (id: String, at: Date)?
+        for (id, entry) in entries {
+            guard let at = entry.lastFocusedAt else { continue }
+            guard let current = displayed else {
+                displayed = (id, at)
+                continue
+            }
+            if at > current.at || (at == current.at && id > current.id) {
+                displayed = (id, at)
+            }
+        }
+        self.mostRecentlyDisplayedSessionID = displayed?.id
+    }
+
+    nonisolated static func unavailable(_ diagnostic: String? = nil) -> Self {
+        Self(entries: [:], source: .unavailable, diagnostic: diagnostic)
+    }
+
+    nonisolated func retainingData(
+        source: Source,
+        diagnostic: String
+    ) -> Self {
+        Self(entries: entries, source: source, diagnostic: diagnostic)
+    }
+
+    nonisolated func entry(forSession sessionID: String) -> Entry? {
+        entries[sessionID]
+    }
+
+    /// Whether the user has read what ended at `terminalBoundaryAt`.
+    ///
+    /// **Compared against the Turn's own last moment, not against Desktop's
+    /// idea of when the session was last active.** Claude Desktop records both
+    /// halves -- `lastFocusedAt` and `lastActivityAt` -- and their difference is
+    /// the natural unread equivalent, but this app already holds a better left
+    /// half than the file does: the instant the Turn actually ended, from the
+    /// event that ended it. Using it means a Desktop that lags, throttles or
+    /// stops writing activity cannot make a Turn look read; only a focus
+    /// recorded *after* the Turn finished can.
+    ///
+    /// Archiving counts as reading. It is a deliberate act on that session and
+    /// it is what Codex's rule already says (`已读、归档、删除后移除`).
+    nonisolated func readState(
+        forSession sessionID: String,
+        terminalBoundaryAt: Date
+    ) -> SessionReadState {
+        guard let entry = entries[sessionID] else { return .unknown }
+        if entry.isArchived { return .read }
+        guard let lastFocusedAt = entry.lastFocusedAt else { return .unread }
+        return lastFocusedAt >= terminalBoundaryAt ? .read : .unread
+    }
+}
+
+/// Claude Desktop's own record of which sessions it has shown the user.
+///
+/// **Why this exists at all.** A finished Claude Code row used to disappear in
+/// exactly three cases: that session's next `UserPromptSubmit`, the session
+/// leaving the official session list, or the user clearing it by hand (CC-013).
+/// Reading the answer in Claude Desktop was not one of them, so a user who read
+/// a turn and moved on kept the row forever.
+///
+/// **What is read.** `~/Library/Application Support/Claude/claude-code-sessions/
+/// <org>/<account>/local_<uuid>.json`, and out of it three fields:
+/// `cliSessionId` (the id the hooks carry, so no id has to be guessed),
+/// `lastFocusedAt`, and `isArchived`. Nothing else in those files is decoded --
+/// they also hold the session's title, its working directory and its MCP
+/// configuration, none of which this app takes from here.
+///
+/// `lastFocusedAt` is stamped by Claude Desktop when it puts a session on
+/// screen, and the record is written immediately afterwards, by atomic replace
+/// -- so a directory watcher reports it, and the row leaves the notch on the
+/// same gesture that reads it.
+///
+/// **What it cannot cover, by construction.** A session started from a terminal
+/// has no file here and no concept of "read" anywhere else: Claude Code's own
+/// session record carries `status`, `waitingFor` and `updatedAt` and nothing
+/// about focus (checked against 2.1.235). Such a session is reported
+/// ``ClaudeCodeReadStateSnapshot/SessionReadState/unknown`` and its finished row
+/// keeps the behaviour it has always had. Guessing from window focus or a timer
+/// is banned outright (`AGENTS.md` §6.2), and this adapter does not do it.
+///
+/// **Fail closed.** Every failure -- a missing tree, an unreadable file, a
+/// schema that no longer carries `cliSessionId` -- reports `unknown` for the
+/// sessions it could not speak for, which keeps their rows listed.
+actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
+    private static let log = Logger(
+        subsystem: "com.yinfenglu.CodexInNotch",
+        category: "ClaudeCodeDesktopReadState"
+    )
+
+    /// An override for tests and for an install somewhere unusual. Points at
+    /// Claude Desktop's application-support directory, the way
+    /// `CODEX_IN_NOTCH_CODEX_HOME` points at `$CODEX_HOME`.
+    nonisolated static let homeOverrideKey = "CODEX_IN_NOTCH_CLAUDE_DESKTOP_HOME"
+
+    nonisolated private static let sessionsDirectoryName = "claude-code-sessions"
+    nonisolated private static let recordPrefix = "local_"
+    nonisolated private static let recordSuffix = ".json"
+    nonisolated private static let maximumRecordSize = 4 * 1_024 * 1_024
+    /// A ceiling on how many records one reading opens.
+    ///
+    /// Records accumulate for as long as the user keeps sessions, and this app
+    /// only ever asks about sessions that are running right now. A running
+    /// session's record was necessarily written when Claude Desktop last
+    /// displayed or resumed it, so the ones that can matter are the most
+    /// recently written ones; the tail beyond this cap answers `unknown` and
+    /// keeps its row, which is the same conservative outcome as any other gap.
+    nonisolated private static let maximumScannedRecords = 512
+
+    private struct FileRevision: Equatable {
+        let size: UInt64
+        let modificationDate: Date?
+        let fileNumber: UInt64?
+    }
+
+    private struct Record: Decodable {
+        let cliSessionID: String
+        let lastFocusedAt: Date?
+        let isArchived: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case cliSessionID = "cliSessionId"
+            case lastFocusedAt
+            case isArchived
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            guard container.contains(.cliSessionID) else {
+                throw ReadStateError.incompatibleSchema
+            }
+            let sessionID = try container.decode(String.self, forKey: .cliSessionID)
+            guard !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ReadStateError.incompatibleSchema
+            }
+            cliSessionID = sessionID
+            // Milliseconds since the epoch, the way every timestamp in these
+            // files is written.
+            lastFocusedAt = try container
+                .decodeIfPresent(Double.self, forKey: .lastFocusedAt)
+                .map { Date(timeIntervalSince1970: $0 / 1_000) }
+            isArchived = try container
+                .decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        }
+    }
+
+    private enum ReadStateError: LocalizedError {
+        case incompatibleSchema
+        case oversizedFile(Int)
+        case unsafeFile
+
+        var errorDescription: String? {
+            switch self {
+            case .incompatibleSchema:
+                "Claude Desktop 会话状态 schema 不兼容。"
+            case let .oversizedFile(size):
+                "Claude Desktop 会话状态文件异常过大（\(size) bytes）。"
+            case .unsafeFile:
+                "Claude Desktop 会话状态文件不是当前用户拥有的普通文件。"
+            }
+        }
+    }
+
+    private let stateDirectoryURL: URL
+    private let fileManager: FileManager
+    nonisolated private let watcher: PathSetChangeWatcher
+    /// Parsed records, keyed by file and answered against the file's revision.
+    ///
+    /// The whole tree is stat'ed on every reading and only the records that
+    /// changed since the last one are opened. Claude Desktop rewrites a record
+    /// for reasons of its own as well as for focus, so this is what keeps a
+    /// reading proportional to what actually moved rather than to how many
+    /// sessions the user has ever had.
+    private var cachedRecords: [URL: (revision: FileRevision, record: Record?)] = [:]
+    private var lastKnownGood: ClaudeCodeReadStateSnapshot?
+
+    nonisolated static func liveStateDirectoryURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        let home: URL
+        if let configured = environment[homeOverrideKey], !configured.isEmpty {
+            home = URL(
+                fileURLWithPath: (configured as NSString).expandingTildeInPath,
+                isDirectory: true
+            )
+        } else {
+            home = fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent(
+                    "Library/Application Support/Claude",
+                    isDirectory: true
+                )
+        }
+        return home.appendingPathComponent(sessionsDirectoryName, isDirectory: true)
+    }
+
+    init(
+        stateDirectoryURL: URL = ClaudeCodeDesktopReadStateRepository
+            .liveStateDirectoryURL(),
+        fileManager: FileManager = .default,
+        changeDebounceInterval: TimeInterval =
+            MonitorTiming.standard.unreadStateDebounceInterval
+    ) {
+        self.stateDirectoryURL = stateDirectoryURL
+        self.fileManager = fileManager
+        self.watcher = PathSetChangeWatcher(debounceInterval: changeDebounceInterval)
+        // The root on its own until the first reading discovers the account
+        // folders under it. It is also the edge that reports a *new* account
+        // folder, which is the one thing the reconcile below cannot find on its
+        // own.
+        watcher.watch(paths: [stateDirectoryURL])
+    }
+
+    nonisolated func changeEvents() -> AsyncStream<Void> {
+        watcher.events()
+    }
+
+    func snapshot() async -> ClaudeCodeReadStateSnapshot {
+        guard let accountDirectories = accountDirectories() else {
+            // No tree at all. That is the ordinary state for a user who runs
+            // Claude Code only from a terminal, so it carries no diagnostic:
+            // there is nothing wrong and nothing for them to fix.
+            watcher.watch(paths: [stateDirectoryURL])
+            return .unavailable()
+        }
+        watcher.watch(paths: Set([stateDirectoryURL] + accountDirectories))
+
+        let recordURLs = recordURLs(in: accountDirectories)
+        var entries: [String: ClaudeCodeReadStateSnapshot.Entry] = [:]
+        var refreshed: [URL: (revision: FileRevision, record: Record?)] = [:]
+        var failures = 0
+
+        for (url, revision) in recordURLs {
+            let record: Record?
+            if let cached = cachedRecords[url], cached.revision == revision {
+                record = cached.record
+            } else {
+                do {
+                    record = try loadRecord(from: url)
+                } catch {
+                    record = nil
+                    Self.log.debug(
+                        "unreadable Claude Desktop session record: \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+            refreshed[url] = (revision, record)
+            guard let record else {
+                failures += 1
+                continue
+            }
+            entries[record.cliSessionID] = Self.merging(
+                entries[record.cliSessionID],
+                with: ClaudeCodeReadStateSnapshot.Entry(
+                    lastFocusedAt: record.lastFocusedAt,
+                    isArchived: record.isArchived
+                )
+            )
+        }
+        cachedRecords = refreshed
+
+        // Everything unreadable, with something there to read, is the shape a
+        // schema change takes. One unreadable record among many is not: a
+        // record being written right now looks exactly like that, and the
+        // session it belongs to answers `unknown` and keeps its row anyway.
+        guard entries.isEmpty == false || failures == 0 else {
+            let diagnostic = ReadStateError.incompatibleSchema.localizedDescription
+                + " 已保守保留已结束的 Claude Code 行。"
+            if let lastKnownGood {
+                return lastKnownGood.retainingData(
+                    source: .lastKnownGood,
+                    diagnostic: diagnostic
+                )
+            }
+            return .unavailable(diagnostic)
+        }
+
+        let snapshot = ClaudeCodeReadStateSnapshot(
+            entries: entries,
+            source: .current
+        )
+        lastKnownGood = snapshot
+        return snapshot
+    }
+
+    /// The conservative half of two records naming one session.
+    ///
+    /// Two files should never carry the same `cliSessionId`, and if they ever
+    /// do, the one that hides a row is the wrong one to believe. The earlier
+    /// focus wins and archiving has to be unanimous, so a duplicate can only
+    /// ever keep a row listed for longer.
+    nonisolated private static func merging(
+        _ existing: ClaudeCodeReadStateSnapshot.Entry?,
+        with entry: ClaudeCodeReadStateSnapshot.Entry
+    ) -> ClaudeCodeReadStateSnapshot.Entry {
+        guard let existing else { return entry }
+        let focused: Date?
+        switch (existing.lastFocusedAt, entry.lastFocusedAt) {
+        case let (lhs?, rhs?): focused = min(lhs, rhs)
+        // One of them says the session was never displayed, which is the
+        // reading that keeps the row.
+        default: focused = nil
+        }
+        return ClaudeCodeReadStateSnapshot.Entry(
+            lastFocusedAt: focused,
+            isArchived: existing.isArchived && entry.isArchived
+        )
+    }
+
+    /// `<root>/<org>/<account>`, or nil when there is no tree to read.
+    ///
+    /// Exactly two levels: this is a location, not a search. A tree that has
+    /// grown a level answers nothing rather than guessing where the records
+    /// moved to.
+    private func accountDirectories() -> [URL]? {
+        guard let organizations = subdirectories(of: stateDirectoryURL) else {
+            return nil
+        }
+        return organizations.flatMap { subdirectories(of: $0) ?? [] }
+    }
+
+    private func subdirectories(of url: URL) -> [URL]? {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        return contents.filter {
+            (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+    }
+
+    /// Every record worth opening, newest first and capped.
+    private func recordURLs(in accountDirectories: [URL]) -> [(URL, FileRevision)] {
+        var found: [(URL, FileRevision)] = []
+        for directory in accountDirectories {
+            guard let contents = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [
+                    .fileSizeKey,
+                    .contentModificationDateKey
+                ],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            for url in contents {
+                let name = url.lastPathComponent
+                guard name.hasPrefix(Self.recordPrefix),
+                      name.hasSuffix(Self.recordSuffix),
+                      let revision = try? revision(of: url) else {
+                    continue
+                }
+                found.append((url, revision))
+            }
+        }
+        guard found.count > Self.maximumScannedRecords else { return found }
+        return found
+            .sorted {
+                ($0.1.modificationDate ?? .distantPast)
+                    > ($1.1.modificationDate ?? .distantPast)
+            }
+            .prefix(Self.maximumScannedRecords)
+            .map { $0 }
+    }
+
+    private func loadRecord(from url: URL) throws -> Record {
+        let resourceValues = try url.resourceValues(forKeys: [
+            .fileSizeKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey
+        ])
+        guard resourceValues.isRegularFile == true,
+              resourceValues.isSymbolicLink != true else {
+            throw ReadStateError.unsafeFile
+        }
+        let fileSize = resourceValues.fileSize ?? 0
+        guard fileSize <= Self.maximumRecordSize else {
+            throw ReadStateError.oversizedFile(fileSize)
+        }
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        if let owner = attributes[.ownerAccountID] as? NSNumber,
+           owner.uint32Value != getuid() {
+            throw ReadStateError.unsafeFile
+        }
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard data.count <= Self.maximumRecordSize else {
+            throw ReadStateError.oversizedFile(data.count)
+        }
+        return try JSONDecoder().decode(Record.self, from: data)
+    }
+
+    private func revision(of url: URL) throws -> FileRevision {
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        return FileRevision(
+            size: (attributes[.size] as? NSNumber)?.uint64Value ?? 0,
+            modificationDate: attributes[.modificationDate] as? Date,
+            fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
+        )
+    }
+}

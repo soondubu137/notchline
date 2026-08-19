@@ -377,6 +377,9 @@ flowchart LR
 | 纯解析 | `CodexSnapshotParser` | 根线程判定、标题、预览、额度解析与排序；不推导状态 | [`LiveCodexMonitorService.swift`](../CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift) |
 | 私有 Project 边界 | `CodexDesktopProjectMetadataRepository` | 只读并严格校验 Desktop Project/Chats 映射 | [`CodexDesktopProjectMetadata.swift`](../CodexInNotch/CodexInNotch/CodexDesktopProjectMetadata.swift) |
 | 私有未读边界 | `CodexDesktopUnreadStateRepository` | 只读 unread 集合、标记来源权威性、发出目录变化事件 | [`CodexDesktopUnreadState.swift`](../CodexInNotch/CodexInNotch/CodexDesktopUnreadState.swift) |
+| 私有已读边界（Claude Code） | `ClaudeCodeDesktopReadStateRepository` | 只读 Claude Desktop 的会话记录，按 `cliSessionId` 连接身份，只取 `lastFocusedAt` 与 `isArchived`；**没有记录就是 unknown 而不是未读**；发出账户目录变化事件（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)） | [`ClaudeCodeDesktopReadState.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeDesktopReadState.swift) |
+| 应用激活边界 | `DesktopActivationWatcher` | 用公开的 `NSWorkspace.didActivateApplicationNotification` 记录某个 bundle id 的应用**回到前台的时刻**（只记跃迁，从不回答「此刻是否在前台」），并把它作为一条边沿发出 | [`DesktopActivationWatcher.swift`](../CodexInNotch/CodexInNotch/DesktopActivationWatcher.swift) |
+| 路径集合监听 | `PathSetChangeWatcher` | 监听一个**运行期间会变化**的路径集合并合成单一事件流；`ClaudeCodeSessionRecordWatcher` 与私有已读边界共用它 | [`PathSetChangeWatcher.swift`](../CodexInNotch/CodexInNotch/PathSetChangeWatcher.swift) |
 | 领域模型 | `MonitorSnapshot`、`MonitoredSession`、`MonitorAggregation` | 定义 UI 唯一消费的数据契约与聚合优先级 | [`MonitorDomain.swift`](../CodexInNotch/CodexInNotch/MonitorDomain.swift) |
 | 精确导航 | `CodexDesktopNavigator` | 预检目标并使用官方 deep link 打开同一 Thread | [`CodexDesktopNavigator.swift`](../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift) |
 | 窗体 | `OverlayPanelController` | NSPanel 生命周期、目标显示器、顶部吸附、尺寸和动画 | [`OverlayPanelController.swift`](../CodexInNotch/CodexInNotch/OverlayPanelController.swift) |
