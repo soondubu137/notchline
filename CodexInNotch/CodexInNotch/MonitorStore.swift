@@ -676,7 +676,13 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var manualSetups: [AgentKind: AgentManualSetup] = [:]
     /// What each product's monitoring has left on disk, for the products that
     /// leave anything. Shown in Settings; never acted on.
-    @Published private(set) var diskFootprints: [AgentKind: AgentDiskFootprint] = [:]
+    ///
+    /// Keyed only by the products that leave something: a product answering
+    /// ``AgentDiskFootprintReport/leavesNothing`` is absent, and everything
+    /// else — including a measurement still on its way — is present, because
+    /// the presence of the key is what decides whether Settings draws the row
+    /// and the row must not appear and disappear under the pointer (CC-020).
+    @Published private(set) var diskFootprints: [AgentKind: AgentDiskFootprintReport] = [:]
     @Published private(set) var availability: MonitorAvailability
     @Published private(set) var quota: QuotaSnapshot
     @Published private(set) var sessions: [MonitoredSession] {
@@ -1731,12 +1737,20 @@ final class MonitorStore: ObservableObject {
             return
         }
         diskFootprintTask = Task { [weak self] in
-            let footprint = await service.diskFootprint()
+            let report = await service.diskFootprint()
             guard let self else { return }
             self.diskFootprintTask = nil
-            guard self.diskFootprints[agent] != footprint else { return }
-            if let footprint {
-                self.diskFootprints[agent] = footprint
+            // Absence *is* `leavesNothing`, so it has to be folded into the
+            // optional before the comparison. Compared the other way round,
+            // every refresh of a product that leaves nothing would find `nil`
+            // unequal to `.leavesNothing`, write the same absence back, and
+            // publish -- and one publish on this store re-evaluates the whole
+            // overlay (`AGENTS.md` §7).
+            let stored: AgentDiskFootprintReport? =
+                report == .leavesNothing ? nil : report
+            guard self.diskFootprints[agent] != stored else { return }
+            if let stored {
+                self.diskFootprints[agent] = stored
             } else {
                 self.diskFootprints.removeValue(forKey: agent)
             }

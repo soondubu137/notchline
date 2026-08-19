@@ -102,9 +102,9 @@ struct AppSettingsView: View {
                 }
             }
 
-            if let footprint = store.diskFootprints[.claudeCode] {
+            if let transcripts = store.diskFootprints[.claudeCode] {
                 SettingsSeparator()
-                claudeCodeTranscriptRow(footprint)
+                claudeCodeTranscriptRow(transcripts)
             }
         } footnote: {
             SettingsFootnote(
@@ -128,7 +128,15 @@ struct AppSettingsView: View {
     /// Claude Code and can hold the user's own sessions as well, so this app
     /// reports the size and opens the door rather than deleting anything on
     /// somebody's behalf.
-    private func claudeCodeTranscriptRow(_ footprint: AgentDiskFootprint) -> some View {
+    ///
+    /// The row is drawn from the first refresh, before there is a figure to put
+    /// in it. Locating the folder means waiting for a quota reading to finish —
+    /// several seconds of subprocess — and while the row waited for that, the
+    /// card grew a line under whoever had just opened the window. So the state
+    /// is drawn instead of the row being withheld: `Calculating…` where the
+    /// figure will go, and a button that is plainly not ready rather than one
+    /// that would reveal nowhere (CC-020).
+    private func claudeCodeTranscriptRow(_ report: AgentDiskFootprintReport) -> some View {
         SettingsRow(
             title: "Quota reading transcripts",
             caption: "Each reading leaves one in Claude Code's project folder. "
@@ -137,16 +145,18 @@ struct AppSettingsView: View {
             HStack(spacing: 10) {
                 // Beside the button rather than in the status slot: that slot
                 // draws a health dot, and a number of megabytes is not a health.
-                Text(footprint.summary)
+                Text(report.summary)
                     .font(.system(size: 11))
                     .foregroundStyle(MacOSWindowColor.secondaryText)
                     .monospacedDigit()
 
                 Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([footprint.directory])
+                    guard let directory = report.directory else { return }
+                    NSWorkspace.shared.activateFileViewerSelecting([directory])
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
+                .disabled(report.directory == nil)
             }
         }
     }

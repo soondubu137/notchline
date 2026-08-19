@@ -374,20 +374,66 @@ nonisolated struct AgentManualSetup: Sendable, Equatable {
 nonisolated struct AgentDiskFootprint: Sendable, Equatable {
     /// The folder to open when the user wants to look at them.
     let directory: URL
-    let fileCount: Int
     let byteCount: Int64
 
-    nonisolated init(directory: URL, fileCount: Int, byteCount: Int64) {
+    nonisolated init(directory: URL, byteCount: Int64) {
         self.directory = directory
-        self.fileCount = max(0, fileCount)
         self.byteCount = max(0, byteCount)
     }
 
-    /// `43.2 MB · 1,284 files`, or the singular where it reads better.
+    /// `43.2 MB`.
+    ///
+    /// The size alone. This used to read `43.2 MB · 1,284 files`, and the count
+    /// was the half nobody could act on: the question the row answers is
+    /// whether the residue is worth going and clearing, and how many files it
+    /// is spread across does not change that answer. The folder is one button
+    /// away for anyone who does want to count them.
     nonisolated var summary: String {
-        let size = byteCount.formatted(.byteCount(style: .file))
-        let files = fileCount.formatted(.number.grouping(.automatic))
-        return "\(size) · \(files) \(fileCount == 1 ? "file" : "files")"
+        byteCount.formatted(.byteCount(style: .file))
+    }
+}
+
+/// A footprint, or the reason there is no figure to draw yet.
+///
+/// The row exists before the measurement does, and that is the whole point of
+/// this type. Claude Code's transcripts are *found* rather than derived — the
+/// folder is named by a rule this app does not know, so it is located from a
+/// reading that has already happened (see ``ClaudeCodeUsageTranscripts``), and
+/// a reading takes seconds. Reported as an optional footprint, "not measured
+/// yet" and "this product leaves nothing" were the same nil, so Settings drew
+/// no row at all until the first reading landed and then grew one under the
+/// pointer. They are different answers and this says which (CC-020).
+nonisolated enum AgentDiskFootprintReport: Sendable, Equatable {
+    /// This product's monitoring writes nothing the user could ever want back,
+    /// so there is no row. Codex is here permanently: its quota arrives over
+    /// the app server and leaves no files anywhere.
+    case leavesNothing
+    /// It does leave files, and nothing has said where they are yet.
+    case measuring
+    case measured(AgentDiskFootprint)
+    /// It leaves files and this app cannot say where they are or what they
+    /// weigh. Distinct from ``measuring``: that one is still an answer on its
+    /// way, and a word that means "in progress" must stop saying so once the
+    /// attempt behind it has finished and failed.
+    case unavailable
+
+    /// The trailing readout. Empty only for ``leavesNothing``, which draws no
+    /// row to put it in.
+    nonisolated var summary: String {
+        switch self {
+        case .leavesNothing: ""
+        case .measuring: "Calculating…"
+        case .measured(let footprint): footprint.summary
+        case .unavailable: "Unavailable"
+        }
+    }
+
+    /// The folder to open, and nil whenever there is no folder to open — which
+    /// is also what greys the button out. A button that reveals nowhere is
+    /// worse than one that is plainly not ready.
+    nonisolated var directory: URL? {
+        guard case .measured(let footprint) = self else { return nil }
+        return footprint.directory
     }
 }
 

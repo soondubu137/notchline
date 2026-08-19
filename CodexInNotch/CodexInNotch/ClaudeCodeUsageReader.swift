@@ -214,13 +214,24 @@ actor ClaudeCodeUsageReader {
         inFlight = nil
     }
 
-    /// What the readings have left on disk, once one has said where that is.
+    /// What the readings have left on disk, and what to say before one has
+    /// told this where that is.
     ///
     /// Reported to Settings and nothing else. This app does not clear them: see
     /// ``ClaudeCodeUsageTranscripts`` for why that is a decision and not an
     /// omission.
-    func transcriptFootprint() async -> AgentDiskFootprint? {
-        await transcripts?.footprint()
+    ///
+    /// `attemptedAt` is the whole difference between *still looking* and
+    /// *looked and found nothing*, and it is the right signal for it: the
+    /// reading notes its own session id from inside ``read``, before this is
+    /// set, so a folder that a finished reading located is never still being
+    /// reported as on its way. Without the distinction a machine with no
+    /// `claude` on it would read `Calculating…` for the life of the process,
+    /// which is a progress claim about work that has already stopped.
+    func transcriptFootprint() async -> AgentDiskFootprintReport {
+        guard let transcripts else { return .leavesNothing }
+        if let measured = await transcripts.footprint() { return .measured(measured) }
+        return attemptedAt == nil ? .measuring : .unavailable
     }
 
     /// A failure is worth retrying sooner than a success is worth re-reading --

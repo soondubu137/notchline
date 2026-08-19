@@ -74,7 +74,6 @@ actor ClaudeCodeUsageTranscripts {
             return measured
         }
 
-        var files = 0
         var bytes: Int64 = 0
         for url in contents(of: directory) where url.pathExtension == "jsonl" {
             guard let values = try? url.resourceValues(
@@ -82,15 +81,10 @@ actor ClaudeCodeUsageTranscripts {
             ), values.isRegularFile == true else {
                 continue
             }
-            files += 1
             bytes += Int64(values.fileSize ?? 0)
         }
 
-        let footprint = AgentDiskFootprint(
-            directory: directory,
-            fileCount: files,
-            byteCount: bytes
-        )
+        let footprint = AgentDiskFootprint(directory: directory, byteCount: bytes)
         measured = footprint
         measuredAt = clock.now()
         return footprint

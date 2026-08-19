@@ -7825,7 +7825,6 @@ for line in sys.stdin:
         // Compared by path: the enumerator hands back a URL without the
         // trailing slash `isDirectory: true` puts on the one built here.
         #expect(footprint.directory.standardizedFileURL.path == shared.standardizedFileURL.path)
-        #expect(footprint.fileCount == 3)
         #expect(footprint.byteCount == 4_500)
 
         // Every file is still there. This type has no way to remove one.
@@ -7867,9 +7866,11 @@ for line in sys.stdin:
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        let footprint = store.diskFootprints[.claudeCode]
-        #expect(footprint?.byteCount == 43_200_000)
-        #expect(footprint?.fileCount == 1_284)
+        guard case .measured(let footprint) = store.diskFootprints[.claudeCode] else {
+            Issue.record("the measured footprint never reached the store")
+            return
+        }
+        #expect(footprint.byteCount == 43_200_000)
         // A product that leaves nothing behind says nothing, and gets no row.
         #expect(store.diskFootprints[.codex] == nil)
     }
@@ -7896,23 +7897,151 @@ for line in sys.stdin:
         #expect(await transcripts.footprint() == nil)
     }
 
-    /// The figure reads as a size and a count, not as bytes.
+    /// The figure reads as a size, and as nothing else.
+    ///
+    /// It used to carry the file count beside it — `43.2 MB · 1,284 files` —
+    /// and that half answered a question nobody was asking. The row exists so
+    /// somebody can decide whether the residue is worth clearing, and the
+    /// number of files it is spread across does not move that decision.
     @Test @MainActor
-    func aDiskFootprintReadsAsASizeAndACount() {
+    func aDiskFootprintReadsAsASize() {
         let directory = URL(fileURLWithPath: "/tmp/anywhere")
-        let one = AgentDiskFootprint(directory: directory, fileCount: 1, byteCount: 3_400)
-        #expect(one.summary.hasSuffix("1 file"))
-        let many = AgentDiskFootprint(
-            directory: directory,
-            fileCount: 1_284,
-            byteCount: 43_200_000
-        )
+        let many = AgentDiskFootprint(directory: directory, byteCount: 43_200_000)
         #expect(many.summary.contains("MB"))
-        #expect(many.summary.hasSuffix("files"))
-        // Never a negative anything, whatever the file system reported.
-        let empty = AgentDiskFootprint(directory: directory, fileCount: -3, byteCount: -1)
-        #expect(empty.fileCount == 0)
-        #expect(empty.byteCount == 0)
+        #expect(!many.summary.contains("file"))
+        #expect(!many.summary.contains("·"))
+        // Never a negative size, whatever the file system reported.
+        #expect(AgentDiskFootprint(directory: directory, byteCount: -1).byteCount == 0)
+    }
+
+    /// Every state the row can be in has something to draw, and only one of
+    /// them has anywhere to go.
+    ///
+    /// The button is greyed by the absence of a directory rather than by a flag
+    /// standing beside one, so the two cannot disagree: one place knows whether
+    /// there is anywhere to reveal, and both the button and its enabled state
+    /// read it.
+    @Test @MainActor
+    func aDiskFootprintReportSaysWhatToDrawBeforeThereIsAFigure() {
+        let measured = AgentDiskFootprintReport.measured(
+            AgentDiskFootprint(
+                directory: URL(fileURLWithPath: "/tmp/anywhere"),
+                byteCount: 43_200_000
+            )
+        )
+
+        #expect(AgentDiskFootprintReport.measuring.summary == "Calculating…")
+        #expect(measured.summary.contains("MB"))
+        // Not "Calculating…". The attempt that word describes has finished.
+        #expect(AgentDiskFootprintReport.unavailable.summary == "Unavailable")
+
+        #expect(AgentDiskFootprintReport.measuring.directory == nil)
+        #expect(AgentDiskFootprintReport.unavailable.directory == nil)
+        #expect(measured.directory?.path == "/tmp/anywhere")
+    }
+
+    /// The reader answers about the transcripts before it can count them.
+    ///
+    /// Locating the folder means waiting for a reading to finish — several
+    /// seconds of subprocess — and Settings used to have nothing at all to draw
+    /// until it did. The reading here notes its own session id from inside
+    /// `read`, which is where the real command notes it, so the ordering under
+    /// test is the ordering that ships.
+    @Test @MainActor
+    func theTranscriptFootprintIsReportedAsMeasuringUntilAReadingLocatesIt() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-usage-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-real-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let ours = UUID().uuidString
+        try Data(repeating: 0x41, count: 3_000)
+            .write(to: project.appendingPathComponent("\(ours).jsonl"))
+
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let transcripts = ClaudeCodeUsageTranscripts(
+            projectsDirectory: root,
+            clock: clock
+        )
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            transcripts: transcripts,
+            read: {
+                await transcripts.noteReading(ours)
+                return "Current session: 20% used · "
+                    + "resets Aug 16 at 7:19pm (America/Los_Angeles)"
+            }
+        )
+
+        // Before the first reading there is still an answer, and the row that
+        // draws it exists from here on.
+        #expect(await reader.transcriptFootprint() == .measuring)
+
+        _ = await reader.quota()
+        guard case .measured(let footprint) = await reader.transcriptFootprint() else {
+            Issue.record("the located folder was never reported")
+            return
+        }
+        #expect(footprint.byteCount == 3_000)
+        #expect(
+            footprint.directory.standardizedFileURL.path
+                == project.standardizedFileURL.path
+        )
+    }
+
+    /// A machine with no `claude` on it must not read `Calculating…` forever.
+    ///
+    /// "In progress" is a claim about work, and the work stops being in
+    /// progress the moment an attempt comes back with nothing. The reading is
+    /// still retried — a later one that lands replaces this with a figure — but
+    /// until then the row says what is true, which is that this app cannot say.
+    @Test @MainActor
+    func aReadingThatCameBackWithNothingStopsTheRowSayingItIsCalculating() async {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-usage-\(UUID().uuidString.prefix(8))")
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            transcripts: ClaudeCodeUsageTranscripts(projectsDirectory: root, clock: clock),
+            read: { nil }
+        )
+
+        #expect(await reader.transcriptFootprint() == .measuring)
+        _ = await reader.quota()
+        #expect(await reader.transcriptFootprint() == .unavailable)
+    }
+
+    /// Settings has a row to draw before there is a figure to put in it.
+    ///
+    /// The key's presence in the map is what decides whether the row exists, so
+    /// a product that is still measuring has to be in it. While "not measured
+    /// yet" and "leaves nothing" were the same absence, the card grew a line
+    /// several seconds after the window opened, under whoever had just opened
+    /// it (CC-020).
+    @Test @MainActor
+    func aProductStillMeasuringIsPublishedSoItsRowExistsFromTheStart() async {
+        let service = DiskFootprintMonitoringStub(report: .measuring)
+        let store = MonitorStore(
+            services: [service],
+            initialSnapshot: AgentSnapshot(
+                availability: .connecting,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        defer { store.stopMonitoring() }
+
+        await store.refreshAndWaitForTesting()
+        for _ in 0 ..< 200 where store.diskFootprints[.claudeCode] == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        #expect(store.diskFootprints[.claudeCode] == .measuring)
+        #expect(store.diskFootprints[.claudeCode]?.summary == "Calculating…")
+        // And a product that leaves nothing behind is still absent, which is
+        // still no row.
+        #expect(store.diskFootprints[.codex] == nil)
     }
 
     /// Today's tokens keep their own, shorter clock.
@@ -11051,6 +11180,18 @@ private actor UpdateCounter {
 private actor DiskFootprintMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.claudeCode
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    private let report: AgentDiskFootprintReport
+
+    init(
+        report: AgentDiskFootprintReport = .measured(
+            AgentDiskFootprint(
+                directory: URL(fileURLWithPath: "/tmp/somewhere/transcripts"),
+                byteCount: 43_200_000
+            )
+        )
+    ) {
+        self.report = report
+    }
 
     func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
         AgentSnapshot(
@@ -11064,13 +11205,7 @@ private actor DiskFootprintMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { nil }
 
-    func diskFootprint() async -> AgentDiskFootprint? {
-        AgentDiskFootprint(
-            directory: URL(fileURLWithPath: "/tmp/somewhere/transcripts"),
-            fileCount: 1_284,
-            byteCount: 43_200_000
-        )
-    }
+    func diskFootprint() async -> AgentDiskFootprintReport { report }
 
     func manualSetup() async -> AgentManualSetup? { nil }
     func hookSetupStatus() async -> HookSetupStatus { .active }

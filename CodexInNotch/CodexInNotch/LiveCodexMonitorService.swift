@@ -27,12 +27,14 @@ protocol AgentMonitoring: Sendable {
     /// that does not answers with the file to edit and the text to put in it,
     /// and gets instructions instead. See ADR 0010 for why the two differ.
     func manualSetup() async -> AgentManualSetup?
-    /// Non-nil when this product's monitoring leaves files on disk that the
-    /// user might want to look at or clear.
+    /// What this product's monitoring has left on disk, or why there is not a
+    /// figure for it yet.
     ///
     /// Reporting only. Nothing in this app deletes them — the folder they go to
-    /// can hold a user's own sessions as well, so the decision is theirs.
-    func diskFootprint() async -> AgentDiskFootprint?
+    /// can hold a user's own sessions as well, so the decision is theirs. A
+    /// product that leaves files answers even before it can measure them, so
+    /// that Settings can draw the row it is going to draw anyway.
+    func diskFootprint() async -> AgentDiskFootprintReport
     func hookSetupStatus() async -> HookSetupStatus
     func installHooks() async throws
     func removeHooks() async throws
@@ -54,7 +56,7 @@ extension AgentMonitoring {
     /// Nothing, which is the ordinary case and the one Codex is in: its quota
     /// arrives over the app server and leaves no files anywhere. Only a product
     /// that writes something the user might want back overrides this.
-    func diskFootprint() async -> AgentDiskFootprint? { nil }
+    func diskFootprint() async -> AgentDiskFootprintReport { .leavesNothing }
 }
 
 actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {

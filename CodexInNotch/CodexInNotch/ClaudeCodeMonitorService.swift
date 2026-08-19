@@ -321,7 +321,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// The transcripts the quota readings leave in Claude Code's own project
     /// folder. Reported so the user can see them grow and clear them if they
     /// want to; never cleared here.
-    func diskFootprint() async -> AgentDiskFootprint? {
+    ///
+    /// Answers from the first refresh, before there is anything to count: this
+    /// product always leaves transcripts, so the row is never in doubt even
+    /// while the figure in it is.
+    func diskFootprint() async -> AgentDiskFootprintReport {
         await usage.transcriptFootprint()
     }
 

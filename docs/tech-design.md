@@ -554,6 +554,7 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - `Recheck`：重新运行只读能力检查，不静默改配置。
 - `Codex integration` 总开关：On 安装或修复六种必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。窗口里它是 `Products` 卡片中 Codex 那一行的 switch；Claude Code 那一行按 ADR 0010 给的是 `Set Up…` 而不是开关（`figma-design.md` §8.1）。
 - `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。
+- `Quota reading transcripts`：报出本应用的额度读取在 Claude Code 自己的 project 目录里留下的 transcript 总大小，尾部 `Reveal in Finder` 打开那个目录（**只报大小**：个数那一半回答的是没人会问的问题，判断值不值得去清只看大小）；**只统计不删除**，理由见 `ClaudeCodeUsageTranscripts`。**这一行有三种读数，而不是「有数字」与「没有行」两种。** 目录靠一次已经发生的读取反查出来，因此第一次读取落地之前无从计数：那时写 `Calculating…` 并把按钮置灰；量到了写 `43.2 MB` 并恢复按钮；读取已经跑完却仍未找到目录时写 `Unavailable`。判据是「有没有跑完过一次读取」（`ClaudeCodeUsageReader.attemptedAt`）而不是失败次数——`session_id` 在 `read` 内部就已记下，所以一次跑完的读取找到的目录不会还被报成在路上；而机器上没有 `claude` 时那件「正在进行的工作」已经停了，再写 `Calculating…` 就是一句不再成立的进度声明。产品若根本不留文件（Codex）则整行不存在——把它和「还没量出来」用同一个 nil 表示，正是 CC-020 里卡片自己长出一行的成因。按钮的置灰由「有没有目录」这一个来源决定，不设第二个标志位，两者因此不可能互相矛盾。
 - `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。
 - `Show current content previews`：立即影响所有行；关闭时清空内存预览并重新生成安全标题。两个产品都停止收取，不只是停止显示。
 
