@@ -61,11 +61,24 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             vocabulary: ClaudeCodeHookVocabulary()
         )
         self.hookEvents = repository
-        self.sessions = sessions ?? ClaudeCodeSessionRegistry(clock: clock)
+        // The one folder this app's own quota reading runs in, named once and
+        // given to everything that has to be able to tell that reading apart
+        // from a session the user started. It reaches the app by two routes and
+        // both of them need it: the reading is listed by `claude agents --json`
+        // like any other session, and it is a session that could fire hooks.
+        // Before this the directory was only ever spelled out where the reading
+        // was pinned to it -- the listener was handed nothing, and the registry
+        // had no notion that such a session existed.
+        let quotaDirectory = paths.quotaWorkingDirectory
+        self.sessions = sessions ?? ClaudeCodeSessionRegistry(
+            clock: clock,
+            ignoringWorkingDirectory: quotaDirectory
+        )
         // The token is not supplied here: it lives in the user's settings, and
         // the listener is told it when it binds.
         self.listener = listener ?? AgentHookListener(
             eventsDirectory: paths.eventsDirectory,
+            ignoredWorkingDirectory: quotaDirectory,
             clock: clock
         )
         self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
@@ -76,13 +89,18 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         let (quotaUpdates, quotaLanded) = AsyncStream<Void>.makeStream(
             bufferingPolicy: .bufferingNewest(1)
         )
-        // Pinned to a directory of its own: the reading is a real session that
-        // fires real hooks, and the working directory is what keeps its events
-        // out of the row list.
+        // Pinned to a directory of its own, which is the only thing that
+        // separates this reading from the user's own sessions -- `claude agents
+        // --json` reports it as `kind: "interactive"` like any other.
+        //
+        // Measured on 2.1.234, 2026-08-18: `-p "/usage"` is a slash command, so
+        // it reaches no model (`num_turns: 0`) and fires **no hooks at all**.
+        // The listener's filter is therefore belt to the registry's braces
+        // today, and is wired anyway: "fires no hooks" is a property of
+        // somebody else's command, not a promise to this app.
         self.usage = usage ?? ClaudeCodeUsageReader(
             clock: clock,
-            workingDirectory: paths.agentDirectory
-                .appendingPathComponent("usage", isDirectory: true),
+            workingDirectory: quotaDirectory,
             tokens: ClaudeCodeTokenCounter(clock: clock),
             transcripts: ClaudeCodeUsageTranscripts(clock: clock),
             onUpdate: { quotaLanded.yield() }

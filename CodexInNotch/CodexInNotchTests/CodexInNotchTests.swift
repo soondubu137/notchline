@@ -9118,6 +9118,117 @@ for line in sys.stdin:
         #expect(sessions.map(\.sessionID) == ["keep"])
     }
 
+    /// This app's own quota reading is not one of the user's sessions.
+    ///
+    /// `claude -p "/usage"` is a real Claude Code session for the second or so
+    /// it runs, and the command reports it as `kind: "interactive"` — the same
+    /// word it uses for a human's, so the working directory is the only thing
+    /// that separates them (measured on 2.1.234, 2026-08-18).
+    ///
+    /// Both halves matter. Left in the list it becomes a row named after this
+    /// app's own folder — see
+    /// `theQuotaReadingsOwnTranscriptLooksLikeARunningTurn` for why that row
+    /// says *Running* — and it answers presence, so a user with no Claude Code
+    /// open at all had the product light up in the notch every five minutes
+    /// because this app had just run `claude` itself. The second is why the
+    /// filter belongs here and not at the surface: dropping the row later would
+    /// still leave the product reported as open.
+    @Test @MainActor
+    func theAppsOwnQuotaReadingIsNotCountedAsASessionOrAsPresence() async {
+        let quota = URL(fileURLWithPath: "/Users/someone/Library/Application Support/CodexInNotch/agents/claudeCode/usage")
+        func registry(_ json: String) -> ClaudeCodeSessionRegistry {
+            let responses = ResponseQueue(items: [Data(json.utf8)])
+            return ClaudeCodeSessionRegistry(
+                ignoringWorkingDirectory: quota,
+                read: { await responses.next() }
+            )
+        }
+
+        // Alone, the reading is not evidence that Claude Code is open.
+        let onlyOurs = registry("""
+        [{"pid": 9, "cwd": "\(quota.path)", "kind": "interactive",
+          "startedAt": 1000, "sessionId": "ours"}]
+        """)
+        #expect(await onlyOurs.liveSessions().isEmpty)
+        #expect(await onlyOurs.presence() == .closed)
+
+        // Beside a real session it is dropped and the real one is untouched.
+        let both = registry("""
+        [{"pid": 9, "cwd": "\(quota.path)", "kind": "interactive",
+          "startedAt": 1000, "sessionId": "ours"},
+         {"pid": 10, "cwd": "/Users/someone/Projects/thing", "kind": "interactive",
+          "startedAt": 2000, "sessionId": "theirs"}]
+        """)
+        #expect(await both.liveSessions().map(\.sessionID) == ["theirs"])
+        #expect(await both.presence() == .open)
+
+        // And a registry told to ignore nothing still reports everything, so
+        // the exclusion is the wiring's doing and never the default.
+        let responses = ResponseQueue(items: [Data("""
+        [{"pid": 9, "cwd": "\(quota.path)", "kind": "interactive",
+          "startedAt": 1000, "sessionId": "ours"}]
+        """.utf8)])
+        let unfiltered = ClaudeCodeSessionRegistry(read: { await responses.next() })
+        #expect(await unfiltered.liveSessions().count == 1)
+    }
+
+    /// The quota reading's own transcript never stops looking mid-turn.
+    ///
+    /// This is why excluding it from the session list is not tidiness. A
+    /// slash command reaches no model — `num_turns: 0` — so the transcript it
+    /// leaves carries `user` records and **no `assistant` record at all**, and
+    /// nothing ever supplies the `stop_reason` that ends a turn. The
+    /// reconstruction that exists to show a session running since before
+    /// launch therefore reports this one as running, for as long as the
+    /// session list still holds it — up to a full freshness window, against a
+    /// subprocess that lived a second or two.
+    ///
+    /// Records captured from a real reading on 2.1.234, 2026-08-18.
+    @Test @MainActor
+    func theQuotaReadingsOwnTranscriptLooksLikeARunningTurn() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-quota-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let projects = root.appendingPathComponent("projects", isDirectory: true)
+        let cwd = "/Users/someone/Library/Application Support"
+            + "/CodexInNotch/agents/claudeCode/usage"
+        let project = projects.appendingPathComponent(
+            cwd.replacingOccurrences(of: "/", with: "-"),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: project,
+            withIntermediateDirectories: true
+        )
+
+        let records: [[String: Any]] = [
+            ["type": "queue-operation", "timestamp": "2026-08-19T03:15:11.893Z"],
+            ["type": "user", "promptId": "q-1",
+             "timestamp": "2026-08-19T03:15:12.115Z",
+             "message": ["role": "user", "content": "/usage"]],
+            ["type": "user", "promptId": "q-1",
+             "timestamp": "2026-08-19T03:15:11.902Z",
+             "message": ["role": "user", "content": "/usage"]],
+            ["type": "system", "timestamp": "2026-08-19T03:15:12.114Z"],
+            ["type": "last-prompt"]
+        ]
+        let lines = try records.map {
+            String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self)
+        }
+        try Data((lines.joined(separator: "\n") + "\n").utf8)
+            .write(to: project.appendingPathComponent("q.jsonl"))
+
+        let reader = ClaudeCodeTranscriptReader(projectsDirectory: projects)
+        let turn = await reader.currentTurn(
+            forSession: "q",
+            workingDirectory: URL(fileURLWithPath: cwd)
+        )
+
+        let reconstructed = try #require(turn)
+        #expect(reconstructed.turnID == "q-1")
+        #expect(reconstructed.isUnfinished)
+    }
+
     /// Somebody else's log line does not cost the whole session list.
     ///
     /// `claude` starts the user's MCP servers, and one of them was measured

@@ -76,6 +76,17 @@ nonisolated struct HookIntegrationPaths: Sendable {
             .appendingPathComponent(agent.rawValue, isDirectory: true)
     }
 
+    /// The folder this app's own quota reading runs in.
+    ///
+    /// Named here rather than spelled out at each use because three
+    /// collaborators have to agree on it exactly: the reading is pinned to it,
+    /// the session registry excludes it, and the hook listener drops events
+    /// carrying it. Spelling it out separately is how two of those three came
+    /// to have it and the third did not.
+    var quotaWorkingDirectory: URL {
+        agentDirectory.appendingPathComponent("usage", isDirectory: true)
+    }
+
     var script: URL {
         agentDirectory.appendingPathComponent("codex_in_notch_hook.py")
     }

@@ -27,6 +27,11 @@ nonisolated struct ClaudeCodeSession: Sendable, Equatable {
 /// ``ClaudeCodeHookVocabulary``. And it is what makes cold start possible at
 /// all: Codex has no supported way to ask what is happening right now, so the
 /// product shows nothing from before launch; Claude Code does.
+///
+/// **The question is which sessions the *user* has, not which exist.** This
+/// app's own quota reading is a Claude Code session too, and the command
+/// reports it as `kind: "interactive"` — indistinguishable from a human's by
+/// anything except the directory it runs in.
 protocol ClaudeCodeSessionListing: Sendable {
     func liveSessions() async -> [ClaudeCodeSession]
     /// Whether Claude Code is open at all.
@@ -220,6 +225,8 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     private let clock: any MonitorClock
     private let freshness: TimeInterval
     private let trustCeiling: TimeInterval
+    /// Resolved once, because it is compared against every entry of every read.
+    private let ignoredWorkingDirectoryPath: String?
     private var cached: [ClaudeCodeSession] = []
     /// When the command last *answered*. Decides how long the answer is
     /// believed.
@@ -250,15 +257,44 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// failed read and should; presence cannot survive an unbounded run of
     /// them, because presence is now the difference between `Connected` and
     /// `Disconnected`. Three consecutive failures is the ceiling.
+    ///
+    /// - Parameter ignoringWorkingDirectory: A directory whose sessions are not
+    ///   the user's. There is exactly one — the folder the quota reading is
+    ///   pinned to — and leaving it unset is what made this app monitor itself.
+    ///
+    ///   `claude -p "/usage"` is a real Claude Code session for the second or so
+    ///   it runs, and `claude agents --json` reports it as `kind: "interactive"`,
+    ///   exactly as it reports a human's (measured on 2.1.234, 2026-08-18).
+    ///   Two things followed. Its transcript carries two `user` records and
+    ///   **no `assistant` record at all** — a slash command never reaches the
+    ///   model, `num_turns: 0` — so nothing ever supplies the `stop_reason`
+    ///   that ends a turn, and
+    ///   ``ClaudeCodeTranscriptReader/currentTurn(forSession:workingDirectory:)``
+    ///   reconstructs it as *Running*: a row named after this app's own folder,
+    ///   held for as long as the list is cached rather than for as long as the
+    ///   subprocess lives. And it answers presence, so a user with no Claude
+    ///   Code open at all had the product light up in the notch every five
+    ///   minutes because this app had just run `claude` itself.
+    ///
+    ///   Filtered here rather than at the surface because presence is decided
+    ///   here: a consumer that dropped the row afterwards would still have been
+    ///   told the product was open.
     init(
         clock: any MonitorClock = SystemMonitorClock(),
         freshness: TimeInterval = 30,
         trustCeiling: TimeInterval = 90,
+        ignoringWorkingDirectory: URL? = nil,
         read: (@Sendable () async -> Data?)? = nil
     ) {
         self.clock = clock
         self.freshness = freshness
         self.trustCeiling = trustCeiling
+        // Symlinks resolved on both sides: the command reports a working
+        // directory the kernel already resolved, and a home reached through a
+        // link would otherwise never compare equal to the one this app built
+        // out of `FileManager`.
+        self.ignoredWorkingDirectoryPath = ignoringWorkingDirectory
+            .map { $0.resolvingSymlinksInPath().standardizedFileURL.path }
         self.read = read ?? { await Self.runOfficialCommand() }
     }
 
@@ -338,9 +374,19 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
             return cached
         }
 
-        cached = sessions
+        cached = sessions.filter { !isOwnReading($0) }
         readAt = clock.now()
         return cached
+    }
+
+    /// Whether an entry is this app's own quota reading rather than a session
+    /// the user started.
+    private func isOwnReading(_ session: ClaudeCodeSession) -> Bool {
+        guard let ignoredWorkingDirectoryPath else { return false }
+        return session.workingDirectory
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path == ignoredWorkingDirectoryPath
     }
 
     /// The sessions in one run of stdout, or nil when there are none to be had.
