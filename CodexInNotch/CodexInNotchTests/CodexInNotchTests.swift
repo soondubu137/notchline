@@ -8475,6 +8475,182 @@ for line in sys.stdin:
         #expect(try #require(snapshot.sessions.first).status == .completed)
     }
 
+    /// An interrupt ends the turn, because the session stops saying it is busy.
+    ///
+    /// `Esc` fires no hook of any kind -- measured against 2.1.235, the CLI has
+    /// no cancel event and every abort path returns before its `Stop` hooks run
+    /// -- so a row interrupted mid-stream used to sit on *Running* with its
+    /// clock still counting until the session's next prompt (CC-019, #38).
+    ///
+    /// Worse than that, and the reason this is not cosmetic: the same silence
+    /// follows an `Esc` pressed at an approval dialog, so the row froze on
+    /// *Approval needed*, asking the user to answer something nobody was
+    /// waiting for any more. Both cases are here.
+    @Test @MainActor
+    func aSessionThatSaysItStoppedWorkingEndsTheTurnNoHookEverClosed() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        // A turn mid-stream, and one parked on an approval this app inferred
+        // from the call that was still open -- the two states an interrupt can
+        // land on.
+        try harness.queue(event: "UserPromptSubmit", session: "run", turn: "p-1", at: 100)
+        try harness.queue(event: "UserPromptSubmit", session: "ask", turn: "p-2", at: 101)
+        try harness.queue(
+            event: "PreToolUse", session: "ask", turn: "p-2", at: 102,
+            toolName: "Bash", toolUseID: "call-1"
+        )
+        try harness.queue(
+            event: "PermissionRequest", session: "ask", turn: "p-2", at: 103,
+            toolName: "Bash"
+        )
+        harness.live = [
+            harness.session(id: "run", cwd: cwd),
+            harness.session(id: "ask", cwd: cwd)
+        ]
+
+        let before = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(before.sessions.first { $0.threadID == "run" }?.status == .running)
+        #expect(before.sessions.first { $0.threadID == "ask" }?.status == .approvalNeeded)
+
+        // The user presses Esc in both. Nothing arrives; the sessions simply
+        // stop reporting that they are working.
+        harness.live = [
+            harness.session(id: "run", cwd: cwd, activity: .idle, observedAt: 200),
+            harness.session(id: "ask", cwd: cwd, activity: .idle, observedAt: 200)
+        ]
+        // And something the same refresh has to keep saying: ending these turns
+        // reads the reducer a second time, and that second reading knows
+        // nothing about the files this refresh found.
+        try Data("not json".utf8)
+            .write(to: harness.paths.eventsDirectory.appendingPathComponent("999.json"))
+
+        let after = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(after.sessions.first { $0.threadID == "run" }?.status == .completed)
+        #expect(after.sessions.first { $0.threadID == "ask" }?.status == .completed)
+        #expect(after.diagnostic != nil)
+    }
+
+    /// Only a session that says it stopped ends anything.
+    ///
+    /// Three ways of not saying it, and all three have to leave the turn alone.
+    /// `busy` and `waiting` are the session working; **no activity at all** is
+    /// every desktop-hosted session there is (#41) and every older CLI, and
+    /// silence is not a report of idleness.
+    @Test @MainActor
+    func onlyAStoppedSessionEndsATurnAndSilenceIsNotStopped() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        // One event file per moment: the queue is named after it, as the real
+        // one is.
+        for (index, (session, activity)) in [
+            ("busy", ClaudeCodeActivity.State.busy),
+            ("wait", .waiting)
+        ].enumerated() {
+            try harness.queue(
+                event: "UserPromptSubmit",
+                session: session,
+                turn: "p-\(session)",
+                at: 100 + Double(index)
+            )
+            harness.live.append(
+                harness.session(id: session, cwd: cwd, activity: activity, observedAt: 200)
+            )
+        }
+        try harness.queue(event: "UserPromptSubmit", session: "quiet", turn: "p-q", at: 102)
+        harness.live.append(harness.session(id: "quiet", cwd: cwd))
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 3)
+        #expect(snapshot.sessions.allSatisfy { $0.status == .running })
+    }
+
+    /// A reading that began before the turn's last event cannot end it.
+    ///
+    /// This is what makes a *cached* list safe to act on. The list is re-read
+    /// at most every thirty seconds, so the answer in hand is routinely older
+    /// than the events that arrived since -- and an `idle` read before a turn
+    /// started describes the quiet that preceded it, not the turn.
+    @Test @MainActor
+    func anIdleReadingOlderThanTheTurnProvesNothingAboutIt() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 500)
+        // Read before the prompt was submitted.
+        harness.live = [
+            harness.session(id: "s-1", cwd: cwd, activity: .idle, observedAt: 400)
+        ]
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(snapshot.sessions.first).status == .running)
+
+        // The next reading is newer than the event, and that one lands.
+        harness.live = [
+            harness.session(id: "s-1", cwd: cwd, activity: .idle, observedAt: 600)
+        ]
+        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(ended.sessions.first).status == .completed)
+    }
+
+    /// A session interrupted before this app launched reconstructs as nothing.
+    ///
+    /// The cold-start reader answers *which* turn and *when* it started, and it
+    /// reads a turn as unfinished whenever a `user` record is the last thing in
+    /// the file. An interrupt is written as exactly that -- an ordinary `user`
+    /// record carrying the interrupted turn's prompt id -- so the transcript on
+    /// its own reconstructs a turn nobody is running (CC-019). The session says
+    /// otherwise, and it is the half the file cannot honestly give.
+    @Test @MainActor
+    func aTurnInterruptedBeforeLaunchIsNotReconstructed() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        let cwd = "/Users/someone/Projects/thing"
+        let records: [[String: Any]] = [
+            ["type": "user", "promptId": "p-1",
+             "timestamp": "2026-08-16T10:00:00.000Z",
+             "message": ["role": "user", "content": "do the thing"]],
+            ["type": "assistant",
+             "message": ["role": "assistant", "stop_reason": "tool_use"]],
+            // What the CLI writes for an interrupt: same prompt id, no marker
+            // this app is allowed to read, and the reader has to call it
+            // unfinished.
+            ["type": "user", "promptId": "p-1",
+             "timestamp": "2026-08-16T10:00:09.000Z",
+             "message": ["role": "user",
+                         "content": [["type": "text", "text": "[Request interrupted by user]"]]]]
+        ]
+        try harness.writeTranscript(session: "older", cwd: cwd, records: records)
+
+        harness.live = [
+            harness.session(id: "older", cwd: cwd, activity: .idle, observedAt: 200)
+        ]
+        #expect(await harness.service.fetchSnapshot(showsContentPreviews: true).sessions.isEmpty)
+
+        // Still working, so the reconstruction is exactly what it always was.
+        harness.live = [
+            harness.session(id: "older", cwd: cwd, activity: .busy, observedAt: 200)
+        ]
+        let running = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(try #require(running.sessions.first).turnID == "p-1")
+        #expect(try #require(running.sessions.first).status == .running)
+
+        // And a session that reports nothing reconstructs as it did before any
+        // of this existed -- the desktop case (#41).
+        harness.live = [harness.session(id: "older", cwd: cwd)]
+        let quiet = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(try #require(quiet.sessions.first).status == .running)
+    }
+
     /// A title the user typed outranks one the product generated, and a title
     /// that cannot be read is never replaced by the folder name.
     @Test @MainActor
@@ -8982,6 +9158,35 @@ for line in sys.stdin:
         #expect(await registry.refresh() == first)
         // An answer that really is empty is believed.
         #expect(await registry.refresh().isEmpty)
+    }
+
+    /// An activity is stamped with when the command *started*, not when it
+    /// answered.
+    ///
+    /// The difference is the whole guard. `claude agents --json` takes a couple
+    /// of seconds -- it starts the user's MCP servers on the way -- and a turn
+    /// can begin inside that window. A reading stamped with its answer would
+    /// then look newer than the event that opened the turn, and report the turn
+    /// it never saw as idle. Stamped with its start, it simply proves nothing
+    /// and is ignored.
+    @Test @MainActor
+    func anActivityIsStampedWithTheMomentItsReadingBegan() async throws {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            read: {
+                // The command is out for four seconds.
+                await clock.advance(by: 4)
+                return Data("""
+                [{"pid": 1, "cwd": "/a", "kind": "interactive",
+                  "startedAt": 1000, "sessionId": "s-1", "status": "idle"}]
+                """.utf8)
+            }
+        )
+
+        let session = try #require(await registry.refresh().first)
+        #expect(session.activity?.state == .idle)
+        #expect(session.activity?.observedAt == Date(timeIntervalSince1970: 10_000))
     }
 
     /// A fresh answer is not re-read; a stale one is.
@@ -9544,6 +9749,70 @@ for line in sys.stdin:
         // is still refused rather than guessed at.
         #expect(ClaudeCodeSessionRegistry.sessions(in: Data("[]".utf8))?.isEmpty == true)
         #expect(ClaudeCodeSessionRegistry.sessions(in: Data("no list here".utf8)) == nil)
+    }
+
+    /// The command reports what a session is doing, and one word this app does
+    /// not know is no report at all.
+    ///
+    /// The output was described in this repository as "byte-identical whether
+    /// the session is mid-turn or sitting idle". Measured against 2.1.235 on
+    /// 2026-08-18 it is not: it carries `status`, and `waitingFor` while a
+    /// prompt sits in front of the user. That field is the only trace a user
+    /// interrupt leaves anywhere (CC-019), which is why it is parsed at all.
+    ///
+    /// Its vocabulary belongs to Claude Code and can grow. A word this app has
+    /// never seen is therefore dropped rather than sorted into "working" or
+    /// "not working" -- guessing that a new word means idle is how a live turn
+    /// gets retired out from under a user.
+    @Test @MainActor
+    func theSessionListCarriesWhatEachSessionIsDoing() throws {
+        let json = Data("""
+        [
+          { "pid": 1, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "busy",
+            "status": "busy" },
+          { "pid": 2, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "waiting",
+            "status": "waiting", "waitingFor": "permission prompt" },
+          { "pid": 3, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "idle",
+            "status": "idle" },
+          { "pid": 4, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "shell",
+            "status": "shell" },
+          { "pid": 5, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "unknown",
+            "status": "meditating" },
+          { "pid": 6, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "desktop" }
+        ]
+        """.utf8)
+
+        let read = Date(timeIntervalSince1970: 500)
+        let sessions = try #require(
+            ClaudeCodeSessionRegistry.sessions(in: json, observedAt: read)
+        )
+        let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.sessionID, $0) })
+
+        #expect(byID["busy"]?.activity?.state == .busy)
+        #expect(byID["waiting"]?.activity?.state == .waiting)
+        #expect(byID["idle"]?.activity?.state == .idle)
+        #expect(byID["shell"]?.activity?.state == .shell)
+        // Not understood, and a desktop-hosted session that never reports at
+        // all (#41): the same answer, and it is silence rather than idleness.
+        #expect(byID["unknown"]?.activity == nil)
+        #expect(byID["desktop"]?.activity == nil)
+
+        // `waiting` is the session working -- the turn is alive and parked on
+        // the user, which is a state the reducer already owns.
+        #expect(byID["busy"]?.activity?.isWorking == true)
+        #expect(byID["waiting"]?.activity?.isWorking == true)
+        #expect(byID["idle"]?.activity?.isWorking == false)
+        #expect(byID["shell"]?.activity?.isWorking == false)
+
+        // Stamped with the reading, so a reader can tell whether it is newer
+        // than the event it is about to overrule.
+        #expect(byID["idle"]?.activity?.observedAt == read)
+        // And parsed with no reading behind it -- as every test that only
+        // checks the shape does -- it reports an age that can prove nothing.
+        #expect(
+            ClaudeCodeSessionRegistry.sessions(in: json)?
+                .first { $0.sessionID == "idle" }?.activity?.observedAt == .distantPast
+        )
     }
 
     /// An HTTP handler stays recognisable after its port moves.
@@ -11085,18 +11354,29 @@ private final class ClaudeCodeHarness {
             .write(to: paths.hooksConfiguration)
     }
 
-    func queue(event: String, session: String, turn: String, at received: Double) throws {
+    func queue(
+        event: String,
+        session: String,
+        turn: String,
+        at received: Double,
+        toolName: String? = nil,
+        toolUseID: String? = nil
+    ) throws {
         try FileManager.default.createDirectory(
             at: paths.eventsDirectory,
             withIntermediateDirectories: true
         )
-        try JSONSerialization.data(withJSONObject: [
+        var payload: [String: Any] = [
             "event_id": UUID().uuidString,
             "received_at": received,
             "hook_event_name": event,
             "session_id": session,
             "turn_id": turn
-        ]).write(to: paths.eventsDirectory.appendingPathComponent("\(received).json"))
+        ]
+        if let toolName { payload["tool_name"] = toolName }
+        if let toolUseID { payload["tool_use_id"] = toolUseID }
+        try JSONSerialization.data(withJSONObject: payload)
+            .write(to: paths.eventsDirectory.appendingPathComponent("\(received).json"))
     }
 
     func writeTranscript(session: String, cwd: String, title: String) throws {
@@ -11118,13 +11398,30 @@ private final class ClaudeCodeHarness {
             .write(to: project.appendingPathComponent("\(session).jsonl"))
     }
 
-    func session(id: String, cwd: String) -> ClaudeCodeSession {
+    /// - Parameters:
+    ///   - activity: What the session says it is doing. `nil` is the case that
+    ///     has to keep working unchanged: every desktop-hosted session reports
+    ///     no activity at all.
+    ///   - observedAt: When the reading behind that activity began, in seconds
+    ///     since the epoch, on the same scale as ``queue(event:session:turn:at:toolName:toolUseID:)``.
+    func session(
+        id: String,
+        cwd: String,
+        activity: ClaudeCodeActivity.State? = nil,
+        observedAt: Double = 1_000
+    ) -> ClaudeCodeSession {
         ClaudeCodeSession(
             sessionID: id,
             processIdentifier: 1,
             workingDirectory: URL(fileURLWithPath: cwd),
             startedAt: Date(timeIntervalSince1970: 100),
-            name: nil
+            name: nil,
+            activity: activity.map {
+                ClaudeCodeActivity(
+                    state: $0,
+                    observedAt: Date(timeIntervalSince1970: observedAt)
+                )
+            }
         )
     }
 }

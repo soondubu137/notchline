@@ -182,7 +182,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             )
         }
 
-        let hookState = await hookEvents.consumeEvents()
+        let consumed = await hookEvents.consumeEvents()
         // Presence first, and once. It is asked before the list rather than
         // after it so both come from the same reading: asked afterwards, the
         // two calls could land either side of a refresh and describe different
@@ -193,6 +193,35 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             live.map { ($0.sessionID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+
+        // The events are drained first and this is applied to what they left,
+        // so an event that arrived after the list was read still wins -- the
+        // reducer compares the two instants and keeps the later one.
+        //
+        // This is the only route out of a turn a user interrupted: no hook
+        // fires for that, so without it the row keeps saying *Running* -- or
+        // *Approval needed*, which asks the user to answer something nobody is
+        // waiting for any more (CC-019).
+        let stopped = Dictionary(
+            live.compactMap { session -> (String, Date)? in
+                guard let activity = session.activity, !activity.isWorking else {
+                    return nil
+                }
+                return (session.sessionID, activity.observedAt)
+            },
+            // The list is keyed the same way ``liveByID`` above is, and for the
+            // same reason: two entries naming one session is somebody else's
+            // bug, not a reason to trap.
+            uniquingKeysWith: { first, _ in first }
+        )
+        let hookState = stopped.isEmpty
+            ? consumed
+            : await hookEvents.endTurnsForStoppedSessions(stopped)
+        // What draining the queue had to say about it survives the second call,
+        // which knows nothing about the files this refresh read: a corrupt
+        // event is reported on the refresh that found it, whether or not some
+        // session also went idle in the same one.
+        let hookDiagnostic = consumed.diagnostic ?? hookState.diagnostic
 
         await transcripts.retain(sessionIDs: Set(liveByID.keys))
         // Text belonging to a session that has ended does not outlive the row
@@ -245,6 +274,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         // The reducer always wins where it has an opinion, including when that
         // opinion is Completed — a real event outranks a reconstruction.
         for session in liveByID.values where !accountedFor.contains(session.sessionID) {
+            // A session that says it has stopped working is not mid-turn,
+            // whatever its transcript looks like -- and after an interrupt the
+            // transcript looks exactly like a turn still in flight, because the
+            // record the CLI writes for one is an ordinary `user` record
+            // carrying the interrupted turn's prompt id (CC-019). The
+            // transcript answers *which* turn and *when* it started; the
+            // session answers whether it is still going, which is the half the
+            // file cannot honestly give.
+            //
+            // Fail-closed on silence: a session reporting no activity at all --
+            // every desktop-hosted one (#41), and any older CLI -- is
+            // reconstructed exactly as it was before.
+            guard session.activity?.isWorking != false else { continue }
             guard let reconstructed = await transcripts.currentTurn(
                 forSession: session.sessionID,
                 workingDirectory: session.workingDirectory
@@ -290,7 +332,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // and it is the surface's half of the contract, not the registry's.
             sessions: presence.isOpen ? rows : [],
             setupStatus: status,
-            diagnostic: hookState.diagnostic,
+            diagnostic: hookDiagnostic,
             // Whatever is known right now. Awaiting the reading here is what
             // made a hook event's row wait on a `claude` launch.
             quota: await usage.currentQuota(),

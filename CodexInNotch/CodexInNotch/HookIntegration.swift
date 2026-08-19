@@ -1157,6 +1157,61 @@ actor HookEventRepository {
         )
     }
 
+    /// Ends the turns of sessions that report they have stopped working.
+    ///
+    /// **The one thing that ends a turn without a hook event, and why.** A user
+    /// interrupt fires nothing at all: measured against 2.1.235, the hook event
+    /// registry has no cancel event of any kind, and every abort path in the
+    /// CLI returns before its `Stop` hooks run -- so `Esc` leaves a row saying
+    /// *Running*, or worse *Approval needed*, until the session's next prompt
+    /// (CC-019, #38). A timeout is not the answer to that and never will be
+    /// (`AGENTS.md` §6.2): a turn that has been quiet for a while is not a turn
+    /// that has ended. What arrives instead is evidence -- the session itself
+    /// stops saying it is busy, in the output of the same command that answers
+    /// which sessions exist.
+    ///
+    /// The reducer stays the only thing that computes turn state. This does not
+    /// hand the caller a turn to edit; it takes a fact about a *session* and
+    /// applies the same rules any event gets, which is why it lives here and
+    /// not in the service that reads the list. ``removeThreads(notIn:snapshotStartedAt:)``
+    /// is the same shape for the same reason: a second source is allowed to
+    /// retire something, under an ordering guard, inside this actor.
+    ///
+    /// - Parameter observations: Session id to the moment its reading *began*.
+    ///   A reading that started before the turn's last event proves nothing
+    ///   about it -- the state it describes may predate that event entirely --
+    ///   so it is ignored. That guard is what makes a cached list safe to act
+    ///   on: an answer read half a minute ago cannot retire a turn that has
+    ///   moved since.
+    ///
+    /// A turn ended this way is `completed` like any other. The product exposes
+    /// one terminal, and an interrupted turn is a turn that is over.
+    func endTurnsForStoppedSessions(
+        _ observations: [String: Date]
+    ) -> HookStateSnapshot {
+        for (threadID, observedAt) in observations {
+            guard var turn = turnsByThreadID[threadID],
+                  turn.sessionStatus != .completed,
+                  observedAt > turn.lastEventAt else {
+                continue
+            }
+            turn.sessionStatus = turn.sessionStatus.transitioned(on: .completed)
+            turn.pendingInputToolUseID = nil
+            turn.pendingApproval = nil
+            turn.openToolUse = nil
+            // Counted as the turn's last moment, so an event that really is
+            // older than this reading cannot reopen what it ended -- the same
+            // monotonic rule ``mutateExactTurn(threadID:turnID:at:createWith:adoptContinuationWith:turns:mutation:)``
+            // applies to everything else.
+            turn.lastEventAt = observedAt
+            turnsByThreadID[threadID] = turn
+        }
+        // Nothing to persist: turn state is deliberately memory-only, and the
+        // observation marker this file does write is about hook trust, which
+        // has not changed.
+        return snapshot()
+    }
+
     func removeThreads(
         notIn unarchivedThreadIDs: Set<String>,
         snapshotStartedAt: Date

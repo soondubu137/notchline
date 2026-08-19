@@ -11,15 +11,85 @@ nonisolated struct ClaudeCodeSession: Sendable, Equatable {
     /// because the command reports it and dropping it would make a future
     /// question ("was this session named by the user?") unanswerable.
     let name: String?
+    /// What the session says it is doing, when it says anything at all.
+    let activity: ClaudeCodeActivity?
+
+    nonisolated init(
+        sessionID: String,
+        processIdentifier: Int32,
+        workingDirectory: URL,
+        startedAt: Date,
+        name: String?,
+        activity: ClaudeCodeActivity? = nil
+    ) {
+        self.sessionID = sessionID
+        self.processIdentifier = processIdentifier
+        self.workingDirectory = workingDirectory
+        self.startedAt = startedAt
+        self.name = name
+        self.activity = activity
+    }
+}
+
+/// Whether a session is working, and the moment that was true.
+///
+/// Claude Code derives this in its own terminal UI from whether a turn is in
+/// flight and whether a dialog is open, and publishes it with each session --
+/// `busy`, `waiting` while a prompt sits in front of the user, `idle`, and
+/// `shell` for an idle session that still has a shell running. Measured
+/// against 2.1.235 on 2026-08-18: a submitted prompt reached `busy` within
+/// 150 ms, an approval dialog reached `waiting` (`waitingFor: "permission
+/// prompt"`) within 150 ms, and `Esc` reached `idle` within 160 ms -- with the
+/// dialog still open, which is the case no hook reports at all (CC-019).
+///
+/// **This says nothing about which turn.** It cannot: there is no turn id
+/// anywhere in the command's output. So it is never allowed to open, name or
+/// describe a turn -- only to say that whatever turn the reducer is holding is
+/// no longer being worked on. Everything else about a turn still comes from the
+/// hooks and from nowhere else.
+nonisolated struct ClaudeCodeActivity: Sendable, Equatable {
+    /// The four words Claude Code uses. Anything else is not understood, and
+    /// an activity that is not understood is not reported at all.
+    enum State: String, Sendable, Equatable {
+        case busy
+        case waiting
+        case idle
+        case shell
+    }
+
+    let state: State
+    /// When the command that read this **started running**, not when it
+    /// answered.
+    ///
+    /// The stricter of the two, and deliberately: it is what lets a reader say
+    /// "this reading is entirely newer than that event". Stamping the answer
+    /// would let a command that started before a turn did, and returned after,
+    /// report that turn's session as idle.
+    let observedAt: Date
+
+    /// Whether a turn could still be running behind this.
+    ///
+    /// `waiting` counts as working: the turn is alive and parked on the user,
+    /// which is a state the reducer already owns and must not be overruled.
+    var isWorking: Bool {
+        state == .busy || state == .waiting
+    }
 }
 
 /// Which Claude Code sessions exist right now.
 ///
-/// **Identity, not state.** The command this reads reports nothing about what a
-/// session is doing — its output is byte-identical whether the session is
-/// mid-turn or sitting idle. State comes from the Turn reducer and only from
-/// there; this answers "which sessions are there", and the two must not be
-/// confused.
+/// **Identity first, and one bounded fact about state.** This answers "which
+/// sessions are there"; turn state comes from the Turn reducer and only from
+/// there. The one exception is ``ClaudeCodeActivity``, which the command does
+/// report and which this used to drop on the floor -- the comment here claimed
+/// for a while that the output was "byte-identical whether the session is
+/// mid-turn or sitting idle", and that was measured false on 2026-08-18: it
+/// carries `status` and `waitingFor`. It is carried because it is the only
+/// signal a *user interrupt* produces anywhere (CC-019, #38): no hook fires,
+/// and the session simply stops saying it is busy.
+///
+/// Even so it is not turn state. It names no turn, so it can only ever end the
+/// one the reducer is already holding -- see ``ClaudeCodeActivity``.
 ///
 /// It matters more here than the equivalent would on the Codex side, for two
 /// reasons. It is the only way a row whose session died can be retired, because
@@ -236,6 +306,10 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         let startedAt: Double?
         let sessionId: String?
         let name: String?
+        /// Absent for a session the Claude Code desktop app hosts, always: it
+        /// drives the CLI over `stream-json` with no terminal UI, and the
+        /// terminal UI is what publishes this (#41). Absent is not `idle`.
+        let status: String?
     }
 
     private let read: @Sendable () async -> Data?
@@ -281,9 +355,17 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     ///     Two seconds caps that at 30 launches a minute against the four the
     ///     cadence allows, and the measured rate is far below either --
     ///     `~/.claude/sessions` changed **0 times in 45 seconds** of an active
-    ///     desktop session plus two idle ones (measured 2026-08-18), because
-    ///     those files are written when a session starts or stops and when a
-    ///     CLI session flips busy/idle, not while a turn runs.
+    ///     desktop session plus two idle ones (measured 2026-08-18). The reason
+    ///     given here used to be that those files are written only when a
+    ///     session starts or stops; that is half right. A CLI session rewrites
+    ///     its own record on every `busy`/`waiting`/`idle` flip, several times
+    ///     a turn -- but in place, with no rename, and a directory vnode source
+    ///     does not fire for a write *inside* the directory. Measured
+    ///     2026-08-18 with this app's own event mask: an in-place rewrite
+    ///     produced no directory event and a create, a delete or an atomic
+    ///     replace produced one each. So the edges stay as rare as the number
+    ///     above says, and the flips reach this app only when something reads
+    ///     the list again.
     ///   - trustCeiling: How long a *stale* answer may still be believed.
     ///   - read: Returns the raw JSON, or nil when it could not be obtained.
     ///     Injected so the parsing and staleness rules can be tested without a
@@ -445,6 +527,10 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         // while it is running survives it: that read cannot have seen what the
         // edge is reporting -- see ``invalidations``.
         let answering = invalidations
+        // The same instant, and the same reasoning, for what the answer is
+        // allowed to prove: a reading that *began* before an event cannot
+        // report on the state that event describes. See ``ClaudeCodeActivity``.
+        let observedAt = clock.now()
         let data = await read()
         // Stamped whether or not there was an answer: this is what paces the
         // next attempt, and a failure that booked no time at all is what let
@@ -457,7 +543,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
             // treating it as such would retire every row at once.
             return cached
         }
-        guard let sessions = Self.sessions(in: data) else {
+        guard let sessions = Self.sessions(in: data, observedAt: observedAt) else {
             Self.log.error("could not decode the session list; keeping the last one")
             return cached
         }
@@ -497,7 +583,14 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     ///
     /// Made `static` and non-private so the rule can be tested against captured
     /// bytes rather than by running anything, exactly as the quota's parser is.
-    nonisolated static func sessions(in data: Data) -> [ClaudeCodeSession]? {
+    /// - Parameter observedAt: When the command that produced these bytes
+    ///   started. Defaults to the distant past, which is the fail-closed
+    ///   answer: a list parsed without a reading behind it reports an activity
+    ///   old enough to prove nothing, so it can never end a turn.
+    nonisolated static func sessions(
+        in data: Data,
+        observedAt: Date = .distantPast
+    ) -> [ClaudeCodeSession]? {
         let decoder = JSONDecoder()
         let reported = (try? decoder.decode([Reported].self, from: data))
             ?? bracketedSpan(in: data).flatMap { try? decoder.decode([Reported].self, from: $0) }
@@ -515,7 +608,14 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
                 workingDirectory: URL(fileURLWithPath: cwd),
                 // Reported in milliseconds.
                 startedAt: Date(timeIntervalSince1970: startedAt / 1000),
-                name: entry.name
+                name: entry.name,
+                // A word this app does not know is no activity at all. The
+                // vocabulary is Claude Code's and it can grow; guessing which
+                // side of "working" a new word falls on is how a live turn
+                // gets retired.
+                activity: entry.status
+                    .flatMap(ClaudeCodeActivity.State.init(rawValue:))
+                    .map { ClaudeCodeActivity(state: $0, observedAt: observedAt) }
             )
         }
     }
