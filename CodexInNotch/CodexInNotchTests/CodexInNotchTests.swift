@@ -8994,6 +8994,247 @@ for line in sys.stdin:
         #expect(snapshot.sessions.count == 1)
     }
 
+    /// Reading it where it already stood takes the row off the notch.
+    ///
+    /// The shape neither of the first two routes can reach, and the most
+    /// ordinary one there is: the session was on screen before the Turn ended
+    /// and the user never went anywhere. Claude Desktop writes nothing — it
+    /// stamps a focus only when it *puts* a session on screen — and no
+    /// activation happens, because the window never lost the front. What is
+    /// left is the first thing a reader does: a keystroke or a scroll into that
+    /// window, after the Turn ended.
+    @Test @MainActor
+    func aParkedReadersNextGestureRetiresTheRow() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        // On screen since before the Turn ran, and never re-stamped.
+        try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+
+        // Watching it finish is not reading it: at this instant somebody
+        // sitting there and somebody who submitted and walked away have done
+        // exactly the same last thing.
+        let watching = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(watching.sessions.count == 1)
+
+        harness.desktopReadingGestureAt = Date(timeIntervalSince1970: 102)
+        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(read.sessions.isEmpty)
+    }
+
+    /// Having typed into Claude Desktop before the Turn ended is not evidence
+    /// of having read what it said.
+    ///
+    /// This is the whole safety argument for the route, and the reason it is a
+    /// gesture rather than "the window is in front": submitting the prompt is
+    /// itself a keystroke, so a rule that ignored the boundary would retire
+    /// every row the moment it appeared.
+    @Test @MainActor
+    func aGestureOlderThanTheTurnIsNotEvidenceOfReading() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+        // The prompt was typed, and nothing has been touched since.
+        harness.desktopReadingGestureAt = Date(timeIntervalSince1970: 100)
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 1)
+    }
+
+    /// A gesture speaks for one session: the one Desktop has on screen.
+    ///
+    /// Scrolling reaches whatever the window is showing. A second finished
+    /// session behind it was not read, and keeps its row.
+    @Test @MainActor
+    func aGestureOnlyRetiresTheSessionDesktopHasOnScreen() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        for session in ["front", "behind"] {
+            try harness.queue(
+                event: "UserPromptSubmit",
+                session: session,
+                turn: "p-\(session)",
+                at: 100
+            )
+            try harness.queue(
+                event: "Stop",
+                session: session,
+                turn: "p-\(session)",
+                at: 101
+            )
+        }
+        harness.live = [
+            harness.session(id: "front", cwd: cwd),
+            harness.session(id: "behind", cwd: cwd)
+        ]
+        try harness.writeDesktopRecord(session: "front", lastFocusedAt: 99)
+        try harness.writeDesktopRecord(session: "behind", lastFocusedAt: 98)
+        harness.desktopReadingGestureAt = Date(timeIntervalSince1970: 102)
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.map(\.threadID) == ["behind"])
+    }
+
+    /// A gesture cannot retire a row Claude Desktop knows nothing about.
+    ///
+    /// A terminal session is never on Claude Desktop's screen, so typing into
+    /// that window says nothing about it. Without this the route would quietly
+    /// become "any Claude Code row disappears when you type in Claude Desktop".
+    @Test @MainActor
+    func aGestureNeverRetiresATerminalSessionsRow() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "cli", cwd: cwd)]
+        harness.desktopReadingGestureAt = Date(timeIntervalSince1970: 102)
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 1)
+    }
+
+    /// Moving on to another session in Claude Desktop retires the one left
+    /// behind.
+    ///
+    /// The user was in that window, with this finished answer on screen, and
+    /// chose to go elsewhere. Nothing will ever stamp the session they left —
+    /// Desktop records a session being *shown*, never being hidden — so without
+    /// this the row waits for them to come back to a session they are done
+    /// with.
+    @Test @MainActor
+    func movingOnToAnotherSessionRetiresTheOneLeftBehind() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+
+        // Seen on screen with its Turn already over. On its own this is not a
+        // verdict: Claude Desktop leaves a session on screen whether anybody is
+        // in front of it or not.
+        let onScreen = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(onScreen.sessions.count == 1)
+
+        // Desktop puts a different session there.
+        try harness.writeDesktopRecord(session: "s-2", lastFocusedAt: 103)
+        let movedOn = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(movedOn.sessions.isEmpty)
+    }
+
+    /// A session that was never on screen is not retired by another one being
+    /// displayed.
+    ///
+    /// The membership is what makes the route evidence rather than "somebody
+    /// touched Claude Desktop": a finished session sitting behind the one on
+    /// screen has not been read, and every later navigation happens without it.
+    @Test @MainActor
+    func aSessionNeverOnScreenSurvivesAnotherBeingDisplayed() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+        // Something else has been on screen the whole time.
+        try harness.writeDesktopRecord(session: "s-2", lastFocusedAt: 103)
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 1)
+    }
+
+    /// A new Turn does not inherit what the finished one earned.
+    ///
+    /// Being on screen is recorded against the *Turn* that was over at the
+    /// time, not against the session. Left to accumulate on the session, the
+    /// next Turn would be retired the moment it ended and the user happened to
+    /// be on some other session — a row nobody ever saw.
+    @Test @MainActor
+    func aNewTurnDoesNotInheritTheFinishedOnesMembership() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+
+        let first = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(first.sessions.count == 1)
+
+        // A second Turn starts and finishes, and while it runs the user is
+        // taken to be somewhere else entirely.
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-2", at: 102)
+        let running = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(running.sessions.first?.status == .running)
+
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-2", at: 103)
+        try harness.writeDesktopRecord(session: "s-2", lastFocusedAt: 104)
+        let finished = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(finished.sessions.count == 1)
+    }
+
+    /// The reading watcher hears the workspace, and answers only while its own
+    /// application holds the front.
+    ///
+    /// Worth its own test for the same reason the activation watcher's is:
+    /// everything above it is stubbed, and getting the notification name, the
+    /// `userInfo` key or the front-holding test wrong fails silently — the row
+    /// would simply never leave.
+    @Test @MainActor
+    func desktopReadingWatcherAnswersOnlyWhileItsOwnApplicationIsInFront() async throws {
+        let current = try #require(NSRunningApplication.current.bundleIdentifier)
+        let clock = TestClock()
+        let mine = DesktopReadingWatcher(
+            bundleIdentifier: current,
+            clock: clock,
+            secondsSinceLastGesture: { 5 }
+        )
+        let somebodyElse = DesktopReadingWatcher(
+            bundleIdentifier: "com.example.not-this-one",
+            clock: clock,
+            secondsSinceLastGesture: { 5 }
+        )
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: NSWorkspace.shared,
+            userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current]
+        )
+        // Delivered on the main queue, so let it drain.
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(await mine.lastReadingGesture() == clock.now().addingTimeInterval(-5))
+        // Somebody else's application holds the front, so the same keystroke
+        // says nothing about reading a Claude Code answer.
+        #expect(await somebodyElse.lastReadingGesture() == nil)
+    }
+
     /// A session started from a terminal keeps its finished row, and books no
     /// re-check for it.
     ///
@@ -11932,12 +12173,21 @@ private final class ClaudeCodeHarness {
     private let listener: AgentHookListener
     private let listing = StubSessionListing()
     private let activationStub = StubDesktopActivation()
+    private let readingStub = StubDesktopReading()
 
     /// When Claude Desktop last came to the front, as this harness's service
     /// sees it. `nil` is the state a freshly launched app is in.
     var desktopActivatedAt: Date? {
         get { activationStub.lastActivatedAt }
         set { activationStub.lastActivatedAt = newValue }
+    }
+
+    /// When the user last typed or scrolled into Claude Desktop. `nil` is both
+    /// "that application is not in front" and "nobody has touched anything",
+    /// which are one answer as far as the rule is concerned.
+    var desktopReadingGestureAt: Date? {
+        get { readingStub.lastGestureAt }
+        set { readingStub.lastGestureAt = newValue }
     }
 
     private static let portLock = NSLock()
@@ -12043,6 +12293,11 @@ private final class ClaudeCodeHarness {
                 changeDebounceInterval: 0.01
             ),
             activations: activationStub,
+            // Injected for the same reason as the two above: the real one reads
+            // whether Claude Desktop is in front on the developer's machine and
+            // how long ago they last touched the keyboard, so a test left with
+            // it would pass or fail depending on where the mouse was.
+            reading: readingStub,
             sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true)
         )
     }
@@ -12200,6 +12455,14 @@ private final class StubDesktopActivation: DesktopActivationReporting, @unchecke
     var lastActivatedAt: Date?
     func lastActivation() async -> Date? { lastActivatedAt }
     func changeEvents() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
+}
+
+private final class StubDesktopReading: DesktopReadingReporting, @unchecked Sendable {
+    /// nil is both "Claude Desktop does not hold the front" and "nobody has
+    /// touched the keyboard", which are the same answer to the only question
+    /// asked of it.
+    var lastGestureAt: Date?
+    func lastReadingGesture() async -> Date? { lastGestureAt }
 }
 
 private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sendable {

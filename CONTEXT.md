@@ -49,7 +49,7 @@ _Avoid_: 历史日志、持久化状态、完整快照
 _Avoid_: 待恢复状态、启动快照、历史 Stop 状态
 
 **未读终态**：
-处理轮次已进入终态，但对应会话仍未被用户查看。**证据按产品各自取源**：Codex 是 Desktop 的未读集合（蓝点）；Claude Code 是两条路径之一：Claude Desktop 记录的「最后一次把该会话显示在屏幕上」的时刻晚于该轮次终止时刻，或者 Claude Desktop 在该轮次结束之后回到前台且它最后显示的就是这个会话。**终端里的 Claude Code 会话不存在已读这个概念**，它们的终态既不是未读也不是已读，而是无从回答——那样的行不因已读退出（见 [ADR 0012](docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）。
+处理轮次已进入终态，但对应会话仍未被用户查看。**证据按产品各自取源**：Codex 是 Desktop 的未读集合（蓝点）；Claude Code 是四条路径之一，它们是同一句话的四种形状——**答案在用户面前时，用户做了一个只有人会做的动作**：Claude Desktop 记录的「最后一次把该会话显示在屏幕上」的时刻晚于该轮次终止时刻（含归档）；或该轮次结束之后 Claude Desktop 回到前台且它最后显示的就是这个会话；或该轮次结束之后用户往 Claude Desktop 里敲了键、滚了页，而它屏幕上的就是这个会话；或该会话曾带着已结束的轮次停在 Claude Desktop 的屏幕上，而 Desktop 此后把别的会话放了上去。**轮次结束的那一刻本身不是证据**——那一刻盯着看的人和提交完就走的人做过的最后一件事完全相同。**终端里的 Claude Code 会话不存在已读这个概念**，它们的终态既不是未读也不是已读，而是无从回答——那样的行不因已读退出（见 [ADR 0012](docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）。
 _Avoid_: 最近完成、短暂终态、Notch 未读
 
 **Project**：

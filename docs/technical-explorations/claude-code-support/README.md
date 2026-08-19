@@ -604,3 +604,21 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 随后对整个 `~/Library/Application Support/Claude` 做「最近 6 分钟内被修改过的文件」扫描：**0 个**。所以不只是 `lastFocusedAt` 不盖章——**那次阅读在磁盘上完全没有痕迹**。`reason === 'blur'` 分支的存在曾让人推断「获得焦点大概也会发 `true`」，实测证伪：渲染进程发的是 document 可见性的跃迁，而 macOS 上另一个应用抢走焦点并不改变 `document.hidden`。
 
 结论：**只读文件的适配器不可能覆盖「停在同一个会话上、切走再切回」这个最常见的用法。** 由此加入第二条判定路径（应用回到前台 + Desktop 记录里最后被显示的就是这个会话），它推翻了两条只为 Codex 写的既有规则，理由与代价见 [ADR 0012](../../adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
+
+### 2026-08-19（复查）— 文件侧到此为止，剩下的两条只能从人的动作来（CC-013）
+
+基线同上（Claude Desktop `1.32885.1`）。执行范围：只读——`app.asar` 与 `~/Library/Logs/Claude/main.log` 的字符串检索、`local_*.json` 全字段转储、`claude agents --json` 一次，未写入任何文件、未调用任何 IPC。
+
+上一节收尾时留了一句「用户全程盯着会话跑完那一种仍不覆盖」。这次去找那条路，先把还没查过的来源查干净：
+
+| # | 结果 | 依据 | 影响 |
+| --- | --- | --- | --- |
+| 1 | **Claude Desktop 对 Claude Code 会话没有任何已读字段。** `lastReadAt` / `hasUnread` / `seenAt` / `viewedAt` 在安装包里 0 命中；`markAsRead`(8) 与 `isRead`(89) 的命中**全部**属于 Outlook MCP connector 的邮件规则 schema，与会话无关 | `app.asar` 全文检索 | 没有可以当蓝点用的集合。ADR 0012「按产品各自取源」的判断在这一版上再次成立 |
+| 2 | **`main.log` 比文件只少不多。** `[CCD] LocalSessions.setFocusedSession: sessionId=…` 以 `[info]` 落盘（本机 4 天 531 行），但它只在**切换会话**时出现，是 `lastFocusedAt` 盖章时刻的子集 | 把 25 个会话的最后一条日志时刻与记录里的 `lastFocusedAt` 对齐 | 日志路线不能多覆盖任何东西，而且日志级别、行文本与轮转都不是契约。已拒绝 |
+| 3 | **窗口重新获得焦点确实什么都不写。** 日志里 46 行 `[SkillsPlugin] Window focused`，其后 60 行内没有任何 visibility 写入的有 23:11:42、00:17:05 两处；其余每一处紧跟的都是用户自己的一次会话切换 | 同上 | 从另一个方向独立证实了上一节的「0 个文件变化」 |
+| 4 | **`lastFocusedAt` 会在没有人的情况下被盖章。** 09:29:00 `system woke — reconnecting`、`main process blocked for 603508ms [likely sleep: power_event]`，09:29:06 `[WarmLifecycle] Warming up session local_e7cca89e…`，记录里的 `lastFocusedAt` 落在 09:29:09——全程没有 `setFocusedSession` | 日志时刻与记录值对齐（该会话上一条 `setFocusedSession` 在 8 小时前的 01:29:35） | 第一条判定有一个朝「提前移除」倒的方向。醒来时那个答案就在屏幕上，所以离谱有限，但它是既有规则里唯一一处不需要人也会成立的路径 |
+| 5 | **Desktop 托管的行并不是「永远留着」。** 本地会话隐藏 900 秒后被 `teardownSession` 拆掉（`idle_timeout` 且 `shouldKillOnIdlePause()` 为真），进程消失、会话离开 `claude agents --json`，行随之退出 | 22:04:26 `Starting idle timeout … 900s` → 22:19:27 `Pausing session … (idle_timeout)`；`app.asar` 里的分支 | **修正 issue #32 的前提**：Desktop 会话切走之后最迟 15 分钟自己消失，CC-013 要修的是「读完还要再等最多十五分钟」。真正无限期留着的只有「停在那个会话上不动」（终端会话另计，它们不进这条规则） |
+| 6 | `CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType:)` 可按事件类型分别取值，公开、无 entitlement、不弹授权 | 本机实测 `keyDown 82.9s` / `scrollWheel 574.1s` / `leftMouseDown 294.6s` / `mouseMoved 293.4s` | 「按键或滚动」与「鼠标移动」可以分开问，这正是第三条判定成立的前提——前两者投递给持有前台的应用，移动不是 |
+| 7 | `com.apple.loginwindow` 的 `activationPolicy` 是 `.accessory`(1)，不是 `.regular`(0) | 本机 `NSWorkspace.runningApplications` 枚举 | 记录下来是因为它反过来支持了**拒绝**「别的常规应用从 Desktop 手里拿走前台即已读」：那条路要靠这个策略过滤锁屏，而抢焦点的常规应用它挡不住 |
+
+**结论：结束的那一刻退不掉，而且这不是缺一个 API。** Turn 结束那一瞬间，坐着看它跑完的用户和提交完就走开的用户在任何可观察的信号上完全相同——两个人最后做的都是提交那一下。能拿到的是读的人**接下来做的第一件事**，于是有了第三条（往 Desktop 里敲键或滚页，且它屏幕上的就是这个会话）和第四条（该会话带着已结束的 Turn 停在屏幕上之后被别的会话顶下去）。规则、限定与代价见 [ADR 0012](../../adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
