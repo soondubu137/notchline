@@ -8182,6 +8182,59 @@ for line in sys.stdin:
         #expect(row.title == "Doing the thing")
     }
 
+    /// A session coming or going wakes the product and tells the list.
+    ///
+    /// Two failures met here, and either one alone was enough to lose a whole
+    /// turn. The watcher was built inline and only its stream kept, so the
+    /// instance died at the end of the expression that created it and its
+    /// `deinit` finished every continuation: the edge was not slow, it never
+    /// existed. And the edge, once it does exist, has to reach the session list
+    /// — a refresh that asks a cache up to a freshness old answers from before
+    /// the session did.
+    ///
+    /// The product this cost is Claude Code in the desktop app, whose sessions
+    /// are created *by* their first prompt rather than minutes before it.
+    @Test @MainActor
+    func aSessionAppearingWakesTheProductAndReportsTheListOutOfDate() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        // `~/.claude/sessions` does not exist until Claude Code has run once,
+        // so the attach made in `init` fails and the refresh has to retry it.
+        try FileManager.default.createDirectory(
+            at: harness.sessionsDirectory,
+            withIntermediateDirectories: true
+        )
+        _ = await harness.service.fetchSnapshot(showsContentPreviews: false)
+
+        let triggers = harness.service.stateChangeEvents
+        let observer = Task {
+            for await _ in triggers { return true }
+            return false
+        }
+
+        try Data("{}".utf8).write(
+            to: harness.sessionsDirectory.appendingPathComponent("4242.json")
+        )
+
+        let signalled = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await observer.value }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        observer.cancel()
+        #expect(signalled)
+        // Told before anyone was woken, so the refresh this edge causes is the
+        // one that re-reads.
+        #expect(harness.invalidations >= 1)
+    }
+
     /// A finished turn from before launch stays invisible.
     @Test @MainActor
     func aTurnThatEndedBeforeLaunchIsNotReconstructed() async throws {
@@ -8827,6 +8880,103 @@ for line in sys.stdin:
         #expect(await registry.liveSessions().first?.sessionID == "s-1")
         #expect(await responses.remaining() == 1)
         await clock.advance(by: 2)
+        #expect(await registry.liveSessions().first?.sessionID == "s-2")
+    }
+
+    /// An edge cuts the freshness window short, because it is evidence.
+    ///
+    /// This is what made a Claude Code desktop session invisible. A CLI session
+    /// is started by hand and then sits at its prompt, so by the time the user
+    /// types anything the list has long since caught up; a desktop session is
+    /// created *by* the first prompt — the process, its session file and
+    /// `UserPromptSubmit` all arrive inside a second — so the whole turn ran
+    /// while the list still said that session did not exist, and
+    /// `ClaudeCodeMonitorService` drops a turn whose session is not listed.
+    /// Measured 2026-08-18 against 2.1.234: the row appeared 20 and 23 seconds
+    /// after the turn's `Stop`, so *Running* was never drawn at all.
+    @Test @MainActor
+    func aReportedChangeReadsTheSessionListWithoutWaitingOutItsFreshness() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = ResponseQueue(items: [
+            Data("""
+            [{"pid": 1, "cwd": "/a", "kind": "interactive",
+              "startedAt": 1000, "sessionId": "s-1"}]
+            """.utf8),
+            Data("""
+            [{"pid": 2, "cwd": "/b", "kind": "interactive",
+              "startedAt": 2000, "sessionId": "s-2"}]
+            """.utf8),
+            Data("""
+            [{"pid": 3, "cwd": "/c", "kind": "interactive",
+              "startedAt": 3000, "sessionId": "s-3"}]
+            """.utf8)
+        ])
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            edgeFloor: 2,
+            read: { await responses.next() }
+        )
+
+        #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        await clock.advance(by: 3)
+        // Nowhere near stale, and nothing has said otherwise.
+        #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        #expect(await responses.remaining() == 2)
+
+        await registry.invalidate()
+        #expect(await registry.liveSessions().first?.sessionID == "s-2")
+
+        // A second edge straight away does not become a second launch: the
+        // floor is what stops a stream of edges doing what an unpaced failure
+        // once did.
+        await registry.invalidate()
+        #expect(await registry.liveSessions().first?.sessionID == "s-2")
+        #expect(await responses.remaining() == 1)
+        await clock.advance(by: 2)
+        #expect(await registry.liveSessions().first?.sessionID == "s-3")
+    }
+
+    /// An edge that lands while the command is out is not answered by it.
+    ///
+    /// The read was already on its way when the session file changed, so it
+    /// cannot have seen the change. Clearing the report on its return would
+    /// leave the app holding a list that is known to be wrong until the
+    /// freshness window ran out anyway — the exact wait the report exists to
+    /// cut short.
+    @Test @MainActor
+    func anEdgeDuringAReadIsNotClearedByThatRead() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = ResponseQueue(items: [
+            Data("""
+            [{"pid": 1, "cwd": "/a", "kind": "interactive",
+              "startedAt": 1000, "sessionId": "s-1"}]
+            """.utf8),
+            Data("""
+            [{"pid": 2, "cwd": "/b", "kind": "interactive",
+              "startedAt": 2000, "sessionId": "s-2"}]
+            """.utf8)
+        ])
+        let holder = RegistryHolder()
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            edgeFloor: 2,
+            read: {
+                // The session file changes while this command is running.
+                await holder.registry?.invalidate()
+                return await responses.next()
+            }
+        )
+        holder.registry = registry
+
+        #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        // The floor still applies — an edge asks for a read sooner, never for
+        // one on top of the read that is already finishing.
+        #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        await clock.advance(by: 2)
+        // ...and once the floor has passed the report is still outstanding,
+        // rather than having been consumed by the read it arrived during.
         #expect(await registry.liveSessions().first?.sessionID == "s-2")
     }
 
@@ -10736,6 +10886,16 @@ private final class ClaudeCodeHarness {
         set { listing.presenceOverride = newValue }
     }
 
+    /// The directory this harness's service watches for sessions coming and
+    /// going. Not created here: it does not exist until Claude Code has run
+    /// once, which is the state the watcher has to survive.
+    var sessionsDirectory: URL {
+        root.appendingPathComponent("sessions", isDirectory: true)
+    }
+
+    /// How many times the service has reported the session list out of date.
+    var invalidations: Int { listing.invalidations }
+
     init() throws {
         root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-svc-\(UUID().uuidString.prefix(8))")
@@ -10840,8 +11000,18 @@ private final class ClaudeCodeHarness {
     }
 }
 
+/// Lets a registry's own read closure call back into it.
+///
+/// Only a test needs this: the read is injected at `init`, so a closure that
+/// has to talk to the registry it belongs to cannot capture it directly.
+private final class RegistryHolder: @unchecked Sendable {
+    var registry: ClaudeCodeSessionRegistry?
+}
+
 private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sendable {
     var sessions: [ClaudeCodeSession] = []
+    /// How many times the service reported the list out of date.
+    var invalidations = 0
     /// Set when a test needs the list and the presence to disagree.
     ///
     /// That is not a contrived pairing: it is precisely what the real registry
@@ -10853,6 +11023,7 @@ private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sen
     func presence() async -> AgentPresence {
         presenceOverride ?? (sessions.isEmpty ? .closed : .open)
     }
+    func invalidate() async { invalidations += 1 }
 }
 
 /// Counts how many times the session list was actually read.

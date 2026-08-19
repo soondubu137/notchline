@@ -41,6 +41,23 @@ protocol ClaudeCodeSessionListing: Sendable {
     /// only thing it is used for here: this reports *whether* sessions exist,
     /// never what they are doing.
     func presence() async -> AgentPresence
+    /// Says the answer being held is known to be out of date.
+    ///
+    /// The caller is `~/.claude/sessions` changing: a session file appeared or
+    /// went away, which is the one event that makes a cached list wrong rather
+    /// than merely old. Whether that costs a read is the source's decision, not
+    /// the caller's -- see ``ClaudeCodeSessionRegistry/invalidate()``.
+    ///
+    /// **Deliberately without a default implementation**, unlike ``presence()``
+    /// above, even though every source that cannot go stale would want the
+    /// empty one. A default here is a trap: an actor satisfies this `async`
+    /// requirement with a synchronous method, and `await source.invalidate()`
+    /// on the concrete type then resolves to the *extension's* empty body
+    /// rather than the actor's -- silently, since both compile and only one
+    /// does anything. A source that has nothing to do writes the empty body
+    /// itself; a source that forgets gets a compile error rather than a
+    /// no-op.
+    func invalidate() async
 }
 
 extension ClaudeCodeSessionListing {
@@ -224,6 +241,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     private let read: @Sendable () async -> Data?
     private let clock: any MonitorClock
     private let freshness: TimeInterval
+    private let edgeFloor: TimeInterval
     private let trustCeiling: TimeInterval
     /// Resolved once, because it is compared against every entry of every read.
     private let ignoredWorkingDirectoryPath: String?
@@ -234,6 +252,17 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// When the command was last *run*, answer or none. Decides when it is run
     /// again, which is a different question -- see ``liveSessions()``.
     private var attemptedAt: Date?
+    /// How many times something has said the held answer is wrong.
+    ///
+    /// Counted rather than flagged, and answered against ``answeredInvalidation``
+    /// below, so an edge that lands *while a read is out* is not cleared by
+    /// that read: the command was already on its way and cannot have seen what
+    /// the edge was reporting. A single flag loses exactly that case, and a
+    /// timestamp cannot tell it from "the edge landed a moment before the read
+    /// started" without a clock finer than the events being compared.
+    private var invalidations = 0
+    /// The invalidation count the last completed read answered.
+    private var answeredInvalidation = 0
     /// The read that is out, so callers arriving mid-read wait for it instead
     /// of starting one of their own.
     private var inFlight: Task<[ClaudeCodeSession], Never>?
@@ -245,6 +274,16 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     ///   - freshness: How long before the command is run again, counted from
     ///     the last *attempt* rather than the last answer -- see
     ///     ``liveSessions()``.
+    ///   - edgeFloor: The shortest gap between two attempts that an
+    ///     ``invalidate()`` may ask for. It is not a second freshness: an edge
+    ///     already means the answer is wrong, so the only thing left to decide
+    ///     is how fast a *stream* of edges may make this app launch `claude`.
+    ///     Two seconds caps that at 30 launches a minute against the four the
+    ///     cadence allows, and the measured rate is far below either --
+    ///     `~/.claude/sessions` changed **0 times in 45 seconds** of an active
+    ///     desktop session plus two idle ones (measured 2026-08-18), because
+    ///     those files are written when a session starts or stops and when a
+    ///     CLI session flips busy/idle, not while a turn runs.
     ///   - trustCeiling: How long a *stale* answer may still be believed.
     ///   - read: Returns the raw JSON, or nil when it could not be obtained.
     ///     Injected so the parsing and staleness rules can be tested without a
@@ -282,12 +321,14 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     init(
         clock: any MonitorClock = SystemMonitorClock(),
         freshness: TimeInterval = 30,
+        edgeFloor: TimeInterval = 2,
         trustCeiling: TimeInterval = 90,
         ignoringWorkingDirectory: URL? = nil,
         read: (@Sendable () async -> Data?)? = nil
     ) {
         self.clock = clock
         self.freshness = freshness
+        self.edgeFloor = edgeFloor
         self.trustCeiling = trustCeiling
         // Symlinks resolved on both sides: the command reports a working
         // directory the kernel already resolved, and a home reached through a
@@ -331,11 +372,53 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// ``freshness`` apart; unpaced, the ceiling was reached by wall-clock
     /// after dozens of them, and reached it while a busy session was at its
     /// busiest.
+    ///
+    /// **An edge cuts the wait short, because it is evidence and the clock is
+    /// not.** ``freshness`` is a guess about how long a list stays true;
+    /// ``invalidate()`` is somebody reporting that it has stopped being true.
+    /// Waiting out a guess after receiving the report is what made a session
+    /// that is *born with its first prompt* invisible for its whole first turn
+    /// -- see ``invalidate()``.
     func liveSessions() async -> [ClaudeCodeSession] {
-        if let attemptedAt, clock.now().timeIntervalSince(attemptedAt) < freshness {
+        if let attemptedAt,
+           clock.now().timeIntervalSince(attemptedAt)
+            < (isKnownStale ? edgeFloor : freshness) {
             return cached
         }
         return await refresh()
+    }
+
+    /// Whether something has reported this list wrong since it was last read.
+    private var isKnownStale: Bool {
+        invalidations > answeredInvalidation
+    }
+
+    /// Says the held list is wrong, so the next reader re-reads it.
+    ///
+    /// The signal is `~/.claude/sessions` changing, and it is the only thing
+    /// that separates "old" from "wrong": a session file appears when a session
+    /// starts and goes away when it ends, so an edge means the list this
+    /// registry is holding is missing a session or holding a dead one.
+    ///
+    /// Nothing was listening to that before, and the cost fell entirely on one
+    /// product. A CLI session is started by hand and then sits at its prompt,
+    /// so by the time the user types anything the list has long since caught
+    /// up. A session in the Claude Code desktop app is created *by* the first
+    /// prompt -- the process, its `~/.claude/sessions/<pid>.json`, and
+    /// `UserPromptSubmit` all arrive inside a second -- so the whole turn ran
+    /// inside the window where the list still said that session did not exist.
+    /// ``ClaudeCodeMonitorService`` drops any turn whose session is not listed,
+    /// which is deliberate and right; the list simply has to be told. Measured
+    /// 2026-08-18 against 2.1.234: a desktop-shaped session's row appeared 20
+    /// and 23 seconds after its `Stop`, so *Running* was never drawn at all and
+    /// *Completed* arrived long after the turn it described.
+    ///
+    /// Deliberately not a read of its own. Reading here would put a `claude`
+    /// launch on the watcher's thread, which is exactly the storm the pacing
+    /// above exists to prevent; this only moves the *next* reader's deadline
+    /// forward, and no closer than ``edgeFloor``.
+    func invalidate() {
+        invalidations += 1
     }
 
     /// Reads again regardless of freshness, for when something said to.
@@ -358,11 +441,16 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     }
 
     private func performRead() async -> [ClaudeCodeSession] {
+        // Taken immediately before the command goes out, so an edge that lands
+        // while it is running survives it: that read cannot have seen what the
+        // edge is reporting -- see ``invalidations``.
+        let answering = invalidations
         let data = await read()
         // Stamped whether or not there was an answer: this is what paces the
         // next attempt, and a failure that booked no time at all is what let
         // one failed read become a run of them.
         attemptedAt = clock.now()
+        answeredInvalidation = max(answeredInvalidation, answering)
         guard let data else {
             // Keep the last good answer rather than reporting that every
             // session vanished: a failed read is not evidence of absence, and

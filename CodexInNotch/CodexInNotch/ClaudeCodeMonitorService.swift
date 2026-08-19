@@ -36,6 +36,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     private let listener: AgentHookListener
     private let transcripts: ClaudeCodeTranscriptReader
     private let usage: ClaudeCodeUsageReader
+    /// Held, because a watcher nobody holds is a watcher that has already
+    /// stopped.
+    ///
+    /// It used to be built inline and only its stream kept. ``AsyncStream``
+    /// does not retain the object that vends it -- the subscription is a
+    /// continuation stored *in* the watcher, and the termination handler holds
+    /// the watcher weakly -- so the instance died at the end of the expression
+    /// that created it, and its `deinit` finished every continuation and
+    /// cancelled the dispatch source. The stream was therefore not merely
+    /// silent: it was over before `init` returned. This is the only watcher in
+    /// the app that was built that way; the Hook queue's and the Codex unread
+    /// adapter's have always been stored properties.
+    nonisolated private let sessionsWatcher: DirectoryChangeWatcher
     private let clock: any MonitorClock
     private var boundPort: UInt16?
     private var lastDiagnostic: String?
@@ -70,10 +83,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         // was pinned to it -- the listener was handed nothing, and the registry
         // had no notion that such a session existed.
         let quotaDirectory = paths.quotaWorkingDirectory
-        self.sessions = sessions ?? ClaudeCodeSessionRegistry(
+        let resolvedSessions = sessions ?? ClaudeCodeSessionRegistry(
             clock: clock,
             ignoringWorkingDirectory: quotaDirectory
         )
+        self.sessions = resolvedSessions
         // The token is not supplied here: it lives in the user's settings, and
         // the listener is told it when it binds.
         self.listener = listener ?? AgentHookListener(
@@ -114,12 +128,17 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         let watched = sessionsDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".claude/sessions", isDirectory: true)
+        let sessionsWatcher = DirectoryChangeWatcher(
+            directoryURL: watched,
+            debounceInterval: timing.unreadStateDebounceInterval
+        )
+        self.sessionsWatcher = sessionsWatcher
         self.stateChangeEvents = DirectoryChangeWatcher.merged([
             repository.changeEvents(),
-            DirectoryChangeWatcher(
-                directoryURL: watched,
-                debounceInterval: timing.unreadStateDebounceInterval
-            ).events(),
+            Self.sessionsChanged(
+                sessionsWatcher.events(),
+                invalidating: resolvedSessions
+            ),
             quotaUpdates
         ])
     }
@@ -140,6 +159,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
                     : "Claude Code 集成尚未注册。"
             )
         }
+
+        // `~/.claude/sessions` does not exist until Claude Code has run once,
+        // so the attach made in `init` fails for a user who registered the
+        // hooks first. Retried here, on work this refresh was doing anyway, for
+        // the reason the Hook queue's watcher is: nothing else would ever ask
+        // again, and one failed `open` per refresh is cheaper than a timer.
+        sessionsWatcher.attachIfNeeded()
 
         // Bind whatever the user's settings name. Their file is the authority,
         // so a port that moved there moves here -- and a port this app cannot
@@ -354,6 +380,36 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     }
 
     // MARK: - Internals
+
+    /// The sessions-directory edge, with the session list told before anyone is
+    /// woken by it.
+    ///
+    /// The order is the entire point, and getting it wrong is what the bug was.
+    /// The edge already woke a refresh; what it did not do was tell the list,
+    /// so the refresh it caused asked a cache that was up to a ``freshness``
+    /// old and got back the answer from before the session existed. Telling the
+    /// registry inside the forwarder -- before the yield the consumer is
+    /// waiting on -- means the refresh this edge causes is the one that re-reads.
+    ///
+    /// A yield still happens when the list refuses to re-read that soon: the
+    /// edge is also how a row whose session died gets retired, and the
+    /// consumer's own reasons for refreshing are none of this function's
+    /// business.
+    nonisolated private static func sessionsChanged(
+        _ events: AsyncStream<Void>,
+        invalidating sessions: any ClaudeCodeSessionListing
+    ) -> AsyncStream<Void> {
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let forwarder = Task {
+                for await _ in events {
+                    await sessions.invalidate()
+                    continuation.yield(())
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in forwarder.cancel() }
+        }
+    }
 
     private func bindListenerIfNeeded(
         _ registration: ClaudeCodeHookRegistration
