@@ -39,7 +39,7 @@
 | **精确导航** | **不可行，已决定降级。** 无任何受支持接口能聚焦已存在的会话 | 官方 deep link 只能新建会话；`claude://code/sessions/local_…` 实测被拒 |
 | 原生实时状态源 | **不存在。** Hook 是唯一受支持的状态推送通道 | 五个候选源全部只描述身份或已发生的事实，见 §4.7 |
 | 实现整洁度 | **可优于 Codex 侧。** 稳态零轮询、零落盘、无 helper 脚本 | `http` hook 直推 loopback listener + 事件驱动的会话发现，见 §6 |
-| 已读自动移除 | 私有只读可行，风险等级与现有 Codex 未读适配器相同 | Desktop 侧 `lastFocusedAt` / `lastActivityAt` |
+| 已读自动移除 | 私有只读可行，风险等级与现有 Codex 未读适配器相同。**已于 2026-08-19 实现（CC-013）**，判定规则与本行的推测不同——见该日记录 | Desktop 侧 `lastFocusedAt` / `lastActivityAt` |
 | 额度圆环 | Desktop 用户可行；纯 CLI 用户无等价数据源 | `plan-usage-history.json` 属于 Claude Desktop 私有状态 |
 
 **总判断：** 除导航外，Claude Code 的集成面比 Codex 更宽、更公开、更容易做对。产品价值主张里“快速跳回会话”这一半目前没有落点，这是决定要不要做的关键，而不是工程难度。
@@ -187,6 +187,8 @@ completedTurns / model / permissionMode
 ```
 
 `lastActivityAt > lastFocusedAt` 是“未读”的自然等价物，`isArchived` 直接对应归档。`cliSessionId` 字段还提供了 Hook 的 `session_id` ↔ Desktop 会话 ID 的映射。
+
+> **2026-08-19 更正：实现没有采用这个等价物。** `lastFocusedAt` 的真实语义已测实为“会话被显示到屏幕上的那一刻”，而本应用自己就知道轮次是什么时候结束的，所以判定用的是 `lastFocusedAt` 晚于**该轮次的终止时刻**，右边不再取自同一个文件。理由与代价见该日记录与 [ADR 0012](../../adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
 
 风险等级与现有 Codex 未读适配器完全相同：私有只读 schema、高版本风险、必须 fail closed。纯 CLI 会话没有任何已读概念，其终态行只能靠手动 dismiss 或下一次 `UserPromptSubmit` 移除——`MonitorStore` 已有 dismissed-row 机制可复用。
 
@@ -561,3 +563,44 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 | 5 | 失败**不进模型上下文、不花 token**：记录为 `{"type":"hook_non_blocking_error","exitCode":0}` 的 attachment | 8 个错误与 16 个错误的两次运行，前四条 assistant 消息 input token 完全相同（25258） | 噪声是 UI 层面的，不影响会话质量、时长或成本 |
 | 6 | 连接被拒在 loopback 上是立即返回，`timeout: 5` 不会被等满 | 两次运行时长一致 | 只有当地址变成“不可达”而非“被拒”（例如过滤型防火墙）时才会真的卡住 |
 | 7 | **端口无人占用时是可以被别的进程抢走的。** `51741` 落在 macOS ephemeral 区间（`net.inet.ip.portrange.first: 49152`） | 用一个 40 行的本地监听器冒充本应用，收到了完整 `prompt`、`cwd`、`transcript_path`、`session_id` 与 bearer token；回一段 `additionalContext` 后，下一次会话按注入的内容作答 | bearer token 只能证明 CLI 的身份、不能证明监听器的身份。这是本条通道的真实风险面，见 CC-021 |
+
+### 2026-08-19 — 已读自动移除：`lastFocusedAt` 的语义已确认，并已实现（CC-013）
+
+基线：Claude Desktop `1.32885.1`、内置 Claude Code CLI `2.1.234`、本机 CLI `2.1.235`，macOS `Darwin 25.5.0`。执行范围：只读——`local_*.json` 与两个二进制的字符串检索，未写入任何文件、未调用任何 IPC。
+
+§2 表里那条“已读自动移除：`lastActivityAt` vs `lastFocusedAt`”当时是**推测**。这次把它测实了，并且**改了判定规则**：
+
+| # | 结果 | 依据 | 影响 |
+| --- | --- | --- | --- |
+| 1 | `lastFocusedAt` 的语义是「**会话被显示到屏幕上**」，不是「最后一次活动」。写法是 `setSessionVisibility(id, isVisible, reason)` 在 `isVisible` 为真时 `lastFocusedAt = Date.now()` 并**立即** `saveSession` | 安装包 `app.asar` 只读检索 | 这正好就是「用户读了它」，比 `lastActivityAt > lastFocusedAt` 这个推测更直接 |
+| 2 | **判定改为 `lastFocusedAt` 晚于该 Turn 自己的终止时刻**，不再与同文件的 `lastActivityAt` 相比 | 本应用已由 reducer 掌握终止时刻 | 桌面端的活动记账延迟、节流或停写都不能把一个轮次说成已读；陈旧快照也只会让行多留一会儿 |
+| 3 | 记录写入是**同目录临时文件 `rename` 原子替换**（实测 inode 变化：`63502564 → 63503966`） | 250 ms 采样器观察真实写入 | 目录级 watcher 有效，与 `~/.claude/sessions/<pid>.json` 的原地重写相反 |
+| 4 | 本机 31 份记录、约 2 MB。全部解析 **5 ms**，按 `(size, mtime, inode)` 缓存后重读 **1 ms** | 用生产 adapter 对真实目录跑一次 | 每次刷新都读得起；不需要单独的节流 |
+| 5 | 真实数据里 20 份记录中 17 份 `lastFocusedAt > lastActivityAt` | 同上 | 用户读完会话后确实会再盖一次章，规则在真实使用轨迹上成立 |
+| 6 | **纯终端会话在这棵树里没有文件**，Claude Code 自己也不落盘任何 focus / read / seen 字段（`~/.claude/sessions/<pid>.json` 只有 `status` / `waitingFor` / `updatedAt` / `statusUpdatedAt` / `entrypoint`；二进制里的 `isFocused` 全部是 Ink 组件入参） | `2.1.235` 字符串检索；本机四个会话的记录 | 已读只能覆盖 Desktop 托管的一半，这是能力边界不是实现缺口。产品语义见 [ADR 0012](../../adr/0012-read-state-is-answered-per-product-or-not-at-all.md) |
+| 7 | 本机验证：两个 Desktop 托管会话（`0141019a…`、`84a0c44a…`）能按 `cliSessionId` 连接到记录并取到 focus 时刻；本文档所在的终端会话（`f5eb12c1…`）报告 `unknown` | 生产 adapter 对真实目录的一次探针运行 | 身份连接不需要任何推断 |
+
+**同日晚间的实时观察（250 ms 采样器，跨 30 分钟）：** 用户在 Claude Desktop 里打开一个会话，采样器只捕到**一次**写入，内容正是这条规则要的东西——
+
+| 观察 | 值 |
+| --- | --- |
+| `lastFocusedAt` | `1787114114311`（08-18 21:35:14.311）→ `1787126484364`（08-19 01:01:24.364） |
+| 写入方式 | 新 inode（`63521014`），即临时文件 `rename` |
+| 该会话此前的状态 | `lastFocusedAt` 21:35:14 < `lastActivityAt` 21:38:54，两种规则下都是未读 |
+| 打开之后 | 已读 |
+| 该会话的 CLI 进程 `startedAt` | `1787126485613`，比 focus 盖章**晚 1.249 秒** |
+
+最后一行是这次唯一的意外收获：**盖章发生在恢复该会话的 CLI 进程之前**，所以「用户打开了一个会话」这件事，本应用在那个会话的进程存在之前就已经能看见了。同一形态在 8 月 18 日的另一份记录里也成立（focus 早于 `startedAt` 约 1.1 秒）。
+
+**同日的第二次实机验证，答案是否定的，而且比预想的更彻底。** 用户在 notch 上跑了一次完整流程：Desktop 里开会话 → 提交 → 切到别的窗口 → 轮次跑完（notch 出现 Completed）→ 切回 Claude Desktop 读它。采样器记录：
+
+| 时刻 | 变化 |
+| --- | --- |
+| 01:06:33.307 | `lastFocusedAt` ← now（在侧栏里选中该会话） |
+| 01:06:43.458 | `lastActivityAt` ← now（提交） |
+| 01:07:37.826 | `lastActivityAt` ← now，`completedTurns` 1→2（**轮次结束**） |
+| 之后 | **无任何写入** |
+
+随后对整个 `~/Library/Application Support/Claude` 做「最近 6 分钟内被修改过的文件」扫描：**0 个**。所以不只是 `lastFocusedAt` 不盖章——**那次阅读在磁盘上完全没有痕迹**。`reason === 'blur'` 分支的存在曾让人推断「获得焦点大概也会发 `true`」，实测证伪：渲染进程发的是 document 可见性的跃迁，而 macOS 上另一个应用抢走焦点并不改变 `document.hidden`。
+
+结论：**只读文件的适配器不可能覆盖「停在同一个会话上、切走再切回」这个最常见的用法。** 由此加入第二条判定路径（应用回到前台 + Desktop 记录里最后被显示的就是这个会话），它推翻了两条只为 Codex 写的既有规则，理由与代价见 [ADR 0012](../../adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
