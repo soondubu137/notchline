@@ -995,12 +995,25 @@ enum UsageSummaryFormatter {
     ///
     /// This reads the remaining *duration*, not calendar days: "Resets today"
     /// was true at both 00:30 and 23:30 and told you nothing about which.
+    ///
+    /// A missing reset has two meanings and this tells them apart by what else
+    /// the window knows. Claude Code's 5-hour window starts on the first
+    /// request, so until one is made there is no instant to count down to and
+    /// the line simply omits it -- an untouched window, not a failed reading.
+    /// Reported as "Reset unavailable" it read as the quota display being
+    /// broken, which is the one thing it was not. A window with nothing spent
+    /// and no reset has not started; any other missing reset is still a reading
+    /// this app could not make, and keeps saying so -- a *partly spent* window
+    /// with no reset is the documented signal that the output's wording moved.
     nonisolated static func resetText(
         resetsAt: Date?,
+        remainingPercent: Int? = nil,
         now: Date,
         calendar: Calendar = .current
     ) -> String {
-        guard let resetsAt else { return "Reset unavailable" }
+        guard let resetsAt else {
+            return remainingPercent == 100 ? "Not started" : "Reset unavailable"
+        }
 
         let remaining = resetsAt.timeIntervalSince(now)
         guard remaining > 0 else { return "Resets now" }
@@ -1038,7 +1051,12 @@ enum UsageSummaryFormatter {
         let remainingText = remainingPercent.map { "\($0)% left" } ?? "-- left"
         let usageText = todayTokens.map { "\(compactTokenCount($0)) today" }
             ?? "-- today"
-        let reset = resetText(resetsAt: resetsAt, now: now, calendar: calendar)
+        let reset = resetText(
+            resetsAt: resetsAt,
+            remainingPercent: remainingPercent,
+            now: now,
+            calendar: calendar
+        )
         return "\(remainingText) · \(usageText) · \(reset)"
     }
 }

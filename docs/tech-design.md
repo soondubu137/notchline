@@ -447,7 +447,9 @@ Input needed
 
 `delta` 的官方措辞是「**newly completed lines**」，实测确实如此，而且**是增量、不是累计**：同一条消息的相邻 delta 依次以 `1. `、`2. `、`3. ` 开头，各自从上一个停下的地方开始——若是累计，逐块追加会把整条消息重复一遍。除最后一个之外，**每个 delta 都以换行结束**，规范化后塌成一个尾随空格，所以下一个 delta 直接接上去，分隔符不需要被发明；`pendingSpace` 的种子只为消息的最后一个 delta 而存在，那一个才停在行中间。`-p` 非交互是另一种形状：一次交付、`index: 0`、`final: true`，多行消息带着换行整份到达。
 
-**它也不进 `changeEvents()`。** 不写文件的第二个后果：一个正在说话的轮次不会每秒把面板重画三次。正文由该轮次自身生命周期事件引起的刷新顺带取走，也就是面板本来的节奏——这条约束见 [`AGENTS.md`](../AGENTS.md) §7。
+**它也不进 `changeEvents()`，只有一个例外。** 不写文件的第二个后果：一个正在说话的轮次不会每秒把面板重画三次。正文由该轮次自身生命周期事件引起的刷新顺带取走，也就是面板本来的节奏——这条约束见 [`AGENTS.md`](../AGENTS.md) §7。
+
+例外是**从没有到有**这一个边沿：`onPreviewAppeared`，由 `ClaudeCodeMonitorService` 接到自己的 `stateChangeEvents` 上。上一段的理由只覆盖「行上已经有一句、它变旧了」，不覆盖「行上什么都没有」——后者要等的不是一次更整齐的重画，而是那个会话下一次做点别的，而一个说上一分钟才调一次工具的轮次期间什么生命周期事件都不发。用户把内容预览重新打开之后正落在这个格子里：收取立刻恢复，但那些行是在开关关着时画出来的，没有任何东西会再画它们一次。只报这一个边沿，因此代价是每个会话每一段「无话可说」一次唤醒，而不是每个 delta 一次；并且只为**上一次刷新列出过**的会话报（`retainPreviews` 收下的那个集合）——列表不带的会话，它的正文会被它自己求来的那次刷新裁掉，于是下一个 delta 又是一次「从没有到有」，那不是一次唤醒而是一个按 delta 速率跑的循环，何况那一行本来也不在屏幕上。
 
 开关是 `AgentHookListener.setAcceptsText(_:)`，与 Codex 侧同构：进程内标志、同步、关闭时连同已持有的正文一起丢弃。`ClaudeCodeMonitorService.setContentPreviewsEnabled` 因此从空实现变回真开关。行侧另有一道 `showsContentPreviews` 判断，两道都在：一道让开关在下一条消息前就生效，另一道保证已收的不再被画出来。
 
@@ -490,7 +492,9 @@ Expanded footer 固定 `40 pt` 高，位于会话/空状态正文之后且无额
 
 token 总量使用固定 `en_US` Compact notation 与 `1 ... 3` 位有效数字，保留必要小数并移除尾随零，例如 `13.4K`、`323K`、`2.8M`、`1.03B`；`0 ... 999` 直接显示整数。数据 unavailable 时显示 `--`。
 
-reset 按本地日历日而不是 24 小时浮点时长计算：同一天为 `Resets today`，明天为 `Resets in 1 day`，超过一天为 `Resets in x days`；日期不可用时为 `Reset unavailable`。已经落在今天以前的 stale 时间也钳制为 `Resets today`，等待下一轮账户刷新纠正。
+reset 按**剩余时长**而不是本地日历日计算——`Resets today` 在 00:30 与 23:30 同样成立，等于什么都没说：不足一小时为 `Resets in under an hour`，不足一天为 `Resets in x hours`，整天为 `Resets in x days`，两者都有为 `Resets in x days y hours`；已经落在当下以前的 stale 时间钳制为 `Resets now`，等待下一轮刷新纠正。
+
+没有 reset 时间有两种含义，按窗口**已知的其余部分**区分：Claude Code 的 5 小时窗口在第一次请求时才起算，在那之前它那一行只有百分比、没有 `resets ...` 从句——这是一个还没开始的窗口，不是一次失败的读取，写作 `Not started`（未消耗，即 `100% left`）。其余情况仍为 `Reset unavailable`：**已消耗**却读不到 reset 的窗口正是输出措辞变化的信号，那一条必须继续说读数不可用。
 
 左侧生产字体为 SF Pro Regular `11/14`、secondary text；Figma 中的 Inter 只是 MCP 字体不可用时的渲染替代。右侧使用 `32 × 32` 原生 `Button` 点击目标与 `16 pt` `gearshape`，VoiceOver 名称为 `Open Settings`，调用 SwiftUI `openSettings` 打开现有 `Settings` scene，不在 overlay 内复制设置界面。
 
@@ -597,7 +601,7 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。单行的对应动作是在终态行上右键（§17），两者共用同一个 `dismissedSessionIDs`。
 - `Quota reading transcripts`：报出本应用的额度读取在 Claude Code 自己的 project 目录里留下的 transcript 总大小，尾部 `Reveal in Finder` 打开那个目录（**只报大小**：个数那一半回答的是没人会问的问题，判断值不值得去清只看大小）；**只统计不删除**，理由见 `ClaudeCodeUsageTranscripts`。**这一行有三种读数，而不是「有数字」与「没有行」两种。** 目录靠一次已经发生的读取反查出来，因此第一次读取落地之前无从计数：那时写 `Calculating…` 并把按钮置灰；量到了写 `43.2 MB` 并恢复按钮；读取已经跑完却仍未找到目录时写 `Unavailable`。判据是「有没有跑完过一次读取」（`ClaudeCodeUsageReader.attemptedAt`）而不是失败次数——`session_id` 在 `read` 内部就已记下，所以一次跑完的读取找到的目录不会还被报成在路上；而机器上没有 `claude` 时那件「正在进行的工作」已经停了，再写 `Calculating…` 就是一句不再成立的进度声明。产品若根本不留文件（Codex）则整行不存在——把它和「还没量出来」用同一个 nil 表示，正是 CC-020 里卡片自己长出一行的成因。按钮的置灰由「有没有目录」这一个来源决定，不设第二个标志位，两者因此不可能互相矛盾。
 - `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。
-- `Show current content previews`：立即影响所有行；关闭时清空内存预览并重新生成安全标题。两个产品都停止收取，不只是停止显示。
+- `Show current content previews`：立即影响所有行，**两个方向都是**。关闭时清空内存预览并重新生成安全标题，两个产品都停止收取，不只是停止显示；打开时 setter 直接 `requestRefresh()`，因为屏幕上那些行是在关着时**构造**出来的，里面没有可以「取消隐藏」的东西，只有需要重新读一遍的标题与正文——而且没有任何监视器会为一次设置改动发边沿，会发边沿的都属于会话本身，一列终态行一个都不发。少了这一句，开关看起来是坏的：要等 60 秒心跳，而不会再说话的那些行连心跳也等不来。**关着时丢掉的正文不会回来**——那正是这个开关的承诺——回来的是各个会话接下来说的话；Claude Code 侧由 `onPreviewAppeared` 这个边沿即时画出（第 11 节），Codex 侧一个进行中的轮次要等到下一轮才重新有 prompt 正文。
 
 ## 17. SwiftUI 接入边界
 

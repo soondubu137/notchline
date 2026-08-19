@@ -1155,7 +1155,11 @@ final class MonitorStore: ObservableObject {
     /// when it resets.
     private static func caption(for window: QuotaWindow, now: Date) -> String {
         let remaining = window.remainingPercent.map { "\($0)% left" } ?? "-- left"
-        let reset = UsageSummaryFormatter.resetText(resetsAt: window.resetsAt, now: now)
+        let reset = UsageSummaryFormatter.resetText(
+            resetsAt: window.resetsAt,
+            remainingPercent: window.remainingPercent,
+            now: now
+        )
         let body = "\(remaining) · \(reset)"
         return window.label.isEmpty ? body : "\(window.label) · \(body)"
     }

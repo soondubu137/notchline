@@ -487,6 +487,43 @@ struct CodexInNotchTests {
         #expect(store.expandedFooterHeight == PanelMetrics.dualFooterHeight)
     }
 
+    /// The footer says a fresh 5-hour window has not started, not that its
+    /// reset is unavailable.
+    ///
+    /// The window's clock begins at the first request of the day, so a user who
+    /// has not made one yet is looking at a full rule with nothing to count
+    /// down to. The old caption blamed the app for that.
+    @Test @MainActor
+    func theFooterCallsAnUntouchedWindowNotStarted() throws {
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [],
+                quota: QuotaSnapshot(
+                    windows: [
+                        QuotaWindow(label: "5 h", remainingPercent: 100, resetsAt: nil),
+                        QuotaWindow(label: "7 d", remainingPercent: 85, resetsAt: nil)
+                    ],
+                    todayTokens: 0
+                ),
+                diagnostic: nil
+            )
+        )
+        let windows = try #require(store.footerRules[checked: 0]).windows
+        #expect(
+            try #require(windows[checked: 0]).caption
+                == "5 h · 100% left · Not started"
+        )
+        // The spent window is untouched by this: a percentage with no reset is
+        // still how a wording change announces itself.
+        #expect(
+            try #require(windows[checked: 1]).caption
+                == "7 d · 85% left · Reset unavailable"
+        )
+    }
+
     /// Folded, the panel is one height whatever is connected.
     ///
     /// That is the whole point of §5.4: unfolded the expanded panel is `326`,
@@ -1139,6 +1176,41 @@ struct CodexInNotchTests {
         #expect(
             UsageSummaryFormatter.resetText(resetsAt: nil, now: now)
                 == "Reset unavailable"
+        )
+    }
+
+    /// An untouched window says so instead of claiming the reading failed.
+    ///
+    /// Claude Code's 5-hour window has no reset time until the first request
+    /// starts it, so its line prints a percentage and no `resets ...` clause.
+    /// That is the ordinary idle state and it read as `Reset unavailable` --
+    /// the wording reserved for a reading this app could not make.
+    @Test
+    func aWindowWithNothingSpentAndNoResetReadsAsNotStarted() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 0)
+
+        #expect(
+            UsageSummaryFormatter.resetText(
+                resetsAt: nil,
+                remainingPercent: 100,
+                now: now
+            ) == "Not started"
+        )
+        // Spent but reset-less is the documented signal that Claude Code's
+        // wording moved, so it keeps saying the reading is unavailable.
+        #expect(
+            UsageSummaryFormatter.resetText(
+                resetsAt: nil,
+                remainingPercent: 60,
+                now: now
+            ) == "Reset unavailable"
+        )
+        #expect(
+            UsageSummaryFormatter.resetText(
+                resetsAt: nil,
+                remainingPercent: nil,
+                now: now
+            ) == "Reset unavailable"
         )
     }
 
