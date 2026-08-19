@@ -9671,17 +9671,18 @@ for line in sys.stdin:
         _ = DesktopReadingWatcher.systemScreenIsAvailable()
     }
 
-    /// A session started from a terminal keeps its finished row, and books no
+    /// A session nothing can speak for keeps its finished row, and books no
     /// re-check for it.
     ///
-    /// Claude Code's own session record carries `status`, `waitingFor` and
-    /// `updatedAt` and nothing about focus, so nothing anywhere can say whether
-    /// such a session has been read. Two things follow, and the second is the
-    /// one easy to get wrong: the row stays, **and** it must not enter the
-    /// unread gate — a row nothing can ever clear would otherwise ask again
-    /// every second for the life of the session.
+    /// This used to be every session started from a terminal. It is now the
+    /// narrow case it was always meant to describe: a session with no Desktop
+    /// record **and** no controlling terminal — a `-p` run with its output
+    /// piped, or a session whose device could not be read. Two things follow,
+    /// and the second is the one easy to get wrong: the row stays, **and** it
+    /// must not enter the unread gate — a row nothing can ever clear would
+    /// otherwise ask again every second for the life of the session.
     @Test @MainActor
-    func aTerminalSessionsFinishedRowIsNeverRetiredNorRechecked() async throws {
+    func aRowNothingCanSpeakForIsNeverRetiredNorRechecked() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
         try harness.registerHooks()
@@ -9689,6 +9690,8 @@ for line in sys.stdin:
 
         try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
         try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        // No entry in `lastTerminalGestureByPID`: this session has no
+        // controlling terminal to ask.
         harness.live = [harness.session(id: "cli", cwd: cwd)]
 
         let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
@@ -9704,6 +9707,222 @@ for line in sys.stdin:
         _ = await harness.service.fetchSnapshot(showsContentPreviews: false)
         let waiting = await harness.service.nextRefreshDeadline()
         #expect((waiting?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+    }
+
+    /// Being at the session's own terminal after it finished retires its row.
+    ///
+    /// The terminal half of CC-013, and the whole of it for a user who never
+    /// opens Claude Desktop. There is no Desktop tree in this harness at all,
+    /// which is that user's machine exactly: the read state reports
+    /// `unavailable`, and a verdict that borrowed *that* authority could never
+    /// hide anything. The terminal reading carries its own.
+    ///
+    /// What the gesture is stays out of the rule on purpose — a key, the tab
+    /// coming to the front, or the user leaving it are one fact to the kernel
+    /// and one fact to this product: somebody was at that terminal, after the
+    /// answer landed.
+    @Test @MainActor
+    func aFinishedRowLeavesWhenTheUserIsAtItsTerminalAgain() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "cli", cwd: cwd, pid: 4_242)]
+
+        // Last touched when the prompt was submitted, which is before the Turn
+        // ended: the user has not been back since it answered.
+        harness.lastTerminalGestureByPID = [4_242: Date(timeIntervalSince1970: 100)]
+        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(unread.sessions.count == 1)
+        #expect(try #require(unread.sessions.first).status == .completed)
+        // And it is waiting on the user rather than on time, so it says so.
+        let waiting = await harness.service.nextRefreshDeadline()
+        #expect((waiting?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+
+        harness.lastTerminalGestureByPID = [4_242: Date(timeIntervalSince1970: 102)]
+        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(read.sessions.isEmpty)
+    }
+
+    /// A remote-controlled session is read wherever the user actually reads
+    /// it, including in the terminal it is running in.
+    ///
+    /// Remote control puts one session in front of the user in two places at
+    /// once: the terminal it runs in, and Claude Desktop. The two are read by
+    /// different gestures, and only one of them is written down where this app
+    /// can see it — reading in the terminal stamps nothing in Desktop's record.
+    ///
+    /// So the terminal route is a **peer** of the Desktop routes rather than a
+    /// fallback behind them. Written as a fallback, this row would wait
+    /// forever on a `lastFocusedAt` that is never going to move, for a user
+    /// who is reading the session where it is running.
+    ///
+    /// (Measured 2026-08-19: a remote-controlled CLI session has no
+    /// `local_*.json` at all — nothing under Claude's whole support tree names
+    /// it or its bridge id — so today it answers `unknown` and never reaches
+    /// this branch. That is a fact about one version of Claude Desktop, not a
+    /// property the product should rest on, which is what this pins.)
+    @Test @MainActor
+    func aSessionKnownToBothProductsIsRetiredByEitherOnesEvidence() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd, pid: 909)]
+        // Desktop knows this session and says it has not been on its screen
+        // since before the Turn ended — which stays true no matter how
+        // thoroughly the user reads it in the terminal.
+        try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+        harness.lastTerminalGestureByPID = [909: Date(timeIntervalSince1970: 100)]
+
+        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(unread.sessions.count == 1)
+
+        // The user comes back to the terminal. Desktop's record does not move.
+        harness.lastTerminalGestureByPID = [909: Date(timeIntervalSince1970: 102)]
+        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(read.sessions.isEmpty)
+    }
+
+    /// A gesture at one terminal says nothing about the session in another.
+    ///
+    /// The property that makes this readable at all, and the one the Desktop
+    /// routes have to work for: a terminal hands input to the surface the user
+    /// is at and to no other, so there is no equivalent here of "activating
+    /// the application retires every row".
+    @Test @MainActor
+    func aGestureAtOneTerminalLeavesTheOtherSessionsRowAlone() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        for session in ["cli-a", "cli-b"] {
+            try harness.queue(
+                event: "UserPromptSubmit", session: session, turn: "p-\(session)", at: 100
+            )
+            try harness.queue(
+                event: "Stop", session: session, turn: "p-\(session)", at: 101
+            )
+        }
+        harness.live = [
+            harness.session(id: "cli-a", cwd: cwd, pid: 11),
+            harness.session(id: "cli-b", cwd: cwd, pid: 22)
+        ]
+        harness.lastTerminalGestureByPID = [
+            11: Date(timeIntervalSince1970: 102),
+            22: Date(timeIntervalSince1970: 100)
+        ]
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.map(\.threadID) == ["cli-b"])
+    }
+
+    /// A running turn is never retired by a gesture, however recent.
+    ///
+    /// Typing while it works — an interrupt that did not take, a stray key —
+    /// is not reading an answer that has not arrived. The gate already refuses
+    /// to hide a row that is not in a terminal state; this pins that the
+    /// terminal route did not find a way around it.
+    @Test @MainActor
+    func aGestureDoesNotRetireATurnThatIsStillRunning() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        harness.live = [
+            harness.session(id: "cli", cwd: cwd, activity: .busy, observedAt: 100, pid: 7)
+        ]
+        harness.lastTerminalGestureByPID = [7: Date(timeIntervalSince1970: 200)]
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 1)
+        #expect(try #require(snapshot.sessions.first).status == .running)
+    }
+
+    /// Reading a terminal moves its access time, and writing to it does not.
+    ///
+    /// The one fact the whole terminal route rests on, pinned against the real
+    /// kernel rather than against a stub. A pty is opened here directly, so
+    /// this asserts the mechanism (`ESC [ I`, a keystroke, anything the
+    /// terminal hands the session moves the access time) without needing a
+    /// terminal emulator or a window.
+    ///
+    /// The second half matters as much as the first: the CLI writes its answer
+    /// out about twice a second for as long as a Turn runs, and reading the
+    /// *modification* time would report every one of those as the user.
+    @Test
+    func aTerminalsAccessTimeMovesWhenItIsReadFromAndNotWhenItIsWrittenTo() throws {
+        let master = posix_openpt(O_RDWR | O_NOCTTY)
+        try #require(master >= 0)
+        defer { close(master) }
+        #expect(grantpt(master) == 0)
+        #expect(unlockpt(master) == 0)
+        let device = String(cString: try #require(ptsname(master)))
+        let slave = open(device, O_RDWR | O_NOCTTY)
+        try #require(slave >= 0)
+        defer { close(slave) }
+        // Raw mode, which is the mode Claude Code puts its own terminal in and
+        // the only one in which this reads a focus report at all: a canonical
+        // terminal hands nothing over until a line is complete, and `ESC [ I`
+        // never completes one.
+        var attributes = termios()
+        #expect(tcgetattr(slave, &attributes) == 0)
+        cfmakeraw(&attributes)
+        #expect(tcsetattr(slave, TCSANOW, &attributes) == 0)
+
+        let before = try #require(
+            ControllingTerminalGestureReader.systemLastAccess(ofDevice: device)
+        )
+
+        // The session writing its answer out. Nothing about the user.
+        "an answer\r\n".withCString { _ = write(slave, $0, strlen($0)) }
+        #expect(
+            ControllingTerminalGestureReader.systemLastAccess(ofDevice: device) == before
+        )
+
+        // The terminal handing the session something -- a key, or a focus
+        // report. Times have a whole-second floor on some file systems, so the
+        // assertion is "not earlier", taken across a real interval.
+        Thread.sleep(forTimeInterval: 1.1)
+        "\u{1B}[I".withCString { _ = write(master, $0, strlen($0)) }
+        var buffer = [UInt8](repeating: 0, count: 64)
+        #expect(read(slave, &buffer, 64) > 0)
+
+        let after = try #require(
+            ControllingTerminalGestureReader.systemLastAccess(ofDevice: device)
+        )
+        #expect(after > before)
+    }
+
+    /// A process with no controlling terminal answers nothing, not "not
+    /// recently".
+    ///
+    /// `launchd` is the case that has to be right: it exists, it is readable,
+    /// and it is attached to no terminal. Answering an instant for it would
+    /// put a row into the gate on evidence that does not exist.
+    @Test
+    func aProcessWithNoControllingTerminalIsNotAskedAboutOne() {
+        #expect(
+            ControllingTerminalGestureReader
+                .systemControllingTerminalPath(forProcessIdentifier: 1) == nil
+        )
+        #expect(
+            ControllingTerminalGestureReader
+                .systemControllingTerminalPath(forProcessIdentifier: 0) == nil
+        )
+        #expect(
+            ControllingTerminalGestureReader
+                .systemControllingTerminalPath(forProcessIdentifier: -1) == nil
+        )
     }
 
     /// Archiving a session in Claude Desktop retires its row like reading it.
@@ -12762,6 +12981,16 @@ private final class ClaudeCodeHarness {
     private let listing = StubSessionListing()
     private let activationStub = StubDesktopActivation()
     private let readingStub = StubDesktopReading()
+    private let terminalStub = StubControllingTerminalGestures()
+
+    /// When the user was last at a session's terminal, keyed by the process it
+    /// runs as. A pid with no entry is a session with no controlling terminal
+    /// at all -- which is what every session in this suite is unless a test
+    /// says otherwise, so nothing here answers with the developer's own tty.
+    var lastTerminalGestureByPID: [Int32: Date] {
+        get { terminalStub.lastGestureByPID }
+        set { terminalStub.lastGestureByPID = newValue }
+    }
 
     /// When Claude Desktop last came to the front, as this harness's service
     /// sees it. `nil` is the state a freshly launched app is in.
@@ -12885,6 +13114,11 @@ private final class ClaudeCodeHarness {
             // a test left with it would pass or fail depending on which window
             // happened to be active while the suite ran.
             reading: readingStub,
+            // And again for the same reason: the real reader would resolve
+            // each session's controlling terminal on this machine, so a test
+            // would be answering with whichever tty the developer last typed
+            // into.
+            terminalGestures: terminalStub,
             sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true)
         )
     }
@@ -13011,11 +13245,12 @@ private final class ClaudeCodeHarness {
         id: String,
         cwd: String,
         activity: ClaudeCodeActivity.State? = nil,
-        observedAt: Double = 1_000
+        observedAt: Double = 1_000,
+        pid: Int32 = 1
     ) -> ClaudeCodeSession {
         ClaudeCodeSession(
             sessionID: id,
-            processIdentifier: 1,
+            processIdentifier: pid,
             workingDirectory: URL(fileURLWithPath: cwd),
             startedAt: Date(timeIntervalSince1970: 100),
             name: nil,
@@ -13042,6 +13277,19 @@ private final class StubDesktopActivation: DesktopActivationReporting, @unchecke
     var lastActivatedAt: Date?
     func lastActivation() async -> Date? { lastActivatedAt }
     func changeEvents() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
+}
+
+/// Stands in for the kernel's record of a session's controlling terminal.
+///
+/// A pid it has never heard of answers `nil`, which is a session with no
+/// controlling terminal -- the reading that keeps a row listed.
+private final class StubControllingTerminalGestures:
+    ControllingTerminalGestureReporting, @unchecked Sendable {
+    var lastGestureByPID: [Int32: Date] = [:]
+
+    func lastUserGesture(forProcessIdentifier pid: Int32) async -> Date? {
+        lastGestureByPID[pid]
+    }
 }
 
 private final class StubDesktopReading: DesktopReadingReporting, @unchecked Sendable {

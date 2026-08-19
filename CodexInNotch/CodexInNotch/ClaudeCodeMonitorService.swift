@@ -90,6 +90,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// see ``DesktopReadingWatcher`` for why that is the accepted trade and
     /// what it excludes.
     private let reading: any DesktopReadingReporting
+    /// When the user was last at a session's own terminal.
+    ///
+    /// The answer for the half of this product Claude Desktop cannot speak for
+    /// at all. It is not the same claim as any of the three above — nothing
+    /// here says which tab is on screen, which is the question a terminal
+    /// cannot answer and this app does not ask. It says that *this* session's
+    /// terminal handed it something, which no other tab, window or application
+    /// can cause: a key, or that surface gaining or losing the front. See
+    /// ``ControllingTerminalGestureReporting``.
+    private let terminalGestures: any ControllingTerminalGestureReporting
     /// The sessions this app has seen on Claude Desktop's screen while their
     /// Turn was already finished.
     ///
@@ -131,6 +141,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         readState: (any ClaudeCodeReadStateProviding)? = nil,
         activations: (any DesktopActivationReporting)? = nil,
         reading: (any DesktopReadingReporting)? = nil,
+        terminalGestures: (any ControllingTerminalGestureReporting)? = nil,
         sessionsDirectory: URL? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
@@ -222,6 +233,15 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         self.reading = reading ?? DesktopReadingWatcher(
             bundleIdentifier: Self.desktopBundleIdentifier
         )
+        // No change stream of its own either, and for a sharper reason than
+        // the reading above: a device's access time moves in the kernel and
+        // leaves nothing a file-system watcher can attach to. It is sampled at
+        // the same re-check a row waiting on the user already books, so the
+        // bound on how late such a row leaves is
+        // ``MonitorTiming/terminalUnreadRecheckInterval`` -- one `sysctl` and
+        // one `stat` per listed terminal row per second, and nothing at all
+        // when no such row is listed.
+        self.terminalGestures = terminalGestures ?? ControllingTerminalGestureReader()
         self.terminalReadMembershipGate = TerminalUnreadMembershipGate(
             settlingInterval: timing.terminalReadSettlingInterval,
             unreadRecheckInterval: timing.terminalUnreadRecheckInterval
@@ -475,7 +495,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             )
         }
         rows.sort(by: MonitorAggregation.rowOrder)
-        let read = await rowsStillWorthShowing(rows, boundaryByRowID: boundaryByRowID)
+        let read = await rowsStillWorthShowing(
+            rows,
+            boundaryByRowID: boundaryByRowID,
+            // Which process each row belongs to, from the same list that
+            // proved the session exists. It is the only way to reach a
+            // terminal session's read state: the answer is a property of the
+            // device that process is attached to, and nothing in the row
+            // carries it.
+            processIdentifierByThreadID: liveByID.mapValues(\.processIdentifier)
+        )
         let visibleRows = read.rows
 
         // Watch the records of exactly the turns that are still going -- and
@@ -529,10 +558,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
 
     /// Drops the finished rows the user has already read.
     ///
-    /// **Four routes to "read", answering four different ways of reading it.**
+    /// **Five routes to "read", answering five different ways of reading it.**
     /// The first is the file's own and lives in the provider: Claude Desktop
     /// put the session on screen after the Turn ended, or the user archived it.
-    /// The other three are decided here, because each needs a fact the file
+    /// The other four are decided here, because each needs a fact the file
     /// does not hold, and a decision spanning sources belongs in the
     /// orchestrator (`AGENTS.md` §6.1):
     ///
@@ -542,24 +571,46 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     ///   waking, unlocked screen, with this session on it (the user never went
     ///   anywhere);
     /// - **moved on from it** -- this session was seen on screen with its Turn
-    ///   already over, and Claude Desktop has since put a different one there.
+    ///   already over, and Claude Desktop has since put a different one there;
+    /// - **they were at its terminal** -- the session's own controlling
+    ///   terminal handed it something after the Turn ended. The only one of
+    ///   the five that never mentions Claude Desktop, and the only one a
+    ///   session started from a terminal can reach.
     ///
-    /// Two of them are the same claim in two shapes -- *the user made a move
-    /// only a person makes, while the answer was in front of them*. The middle
-    /// one is not, and it is the one that decides how this product fails: at
+    /// Three of them are the same claim in three shapes -- *the user made a
+    /// move only a person makes, while the answer was in front of them*. The
+    /// second is not, and it is the one that decides how this product fails: at
     /// the instant a Turn ends, somebody watching it finish and somebody who
     /// submitted and walked away have done exactly the same last thing, so no
     /// move separates them. Rather than keep every such row, the product
     /// retires it and accepts losing the row for the second user.
     ///
-    /// **Only a session Claude Desktop knows about is ever judged.** A session
-    /// started from a terminal has no read state anywhere -- see
-    /// ``ClaudeCodeDesktopReadStateRepository`` -- so it is not merely reported
-    /// unread, it is kept out of the gate entirely. That is the difference
-    /// between a row that is *waiting* on the user and a row nothing can ever
-    /// clear: putting the second kind in the gate would have it book a re-check
-    /// deadline once a second, for the life of the session, to re-ask a
-    /// question with no possible answer.
+    /// **The fifth route asks the session's own terminal, and it is asked for
+    /// every session, not only the ones Claude Desktop has never heard of.**
+    /// The first four all rest on Desktop's record of which session it has on
+    /// screen, and a session started from a terminal has no such record -- so
+    /// the obvious shape is a fallback, consulted only when Desktop answers
+    /// `unknown`. Remote control is why it is not written that way: it puts
+    /// one session in front of the user in both places at once, and reading it
+    /// in the terminal stamps nothing Desktop writes down. A row that deferred
+    /// to Desktop's record would then never leave for a user who reads where
+    /// the session is actually running. See
+    /// ``ControllingTerminalGestureReporting``.
+    ///
+    /// It answers a **narrower** question than the Desktop routes on purpose.
+    /// Those ask "was this session on screen when the user did something";
+    /// this one cannot, because which tab of a terminal emulator is visible is
+    /// not knowable without inspecting windows, and that ban stands. What it
+    /// asks instead is "was the user at *this* session's terminal after the
+    /// Turn ended", which the kernel already records per device.
+    ///
+    /// **Only a session nothing can speak for is kept out of the gate.** That
+    /// is now the narrow case rather than the common one: a session with no
+    /// controlling terminal, and no Desktop record either. Its row keeps the
+    /// behaviour it has always had -- the next submission, the session going
+    /// away, or the user removing it -- and it books no re-check, because a
+    /// question with no possible answer must not be re-asked once a second for
+    /// the life of the session.
     ///
     /// The cost of that choice is one narrow case: if the whole account tree
     /// stops being readable while a row is already hidden, its session goes
@@ -568,13 +619,22 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// the row leaves on the next refresh anyway.
     private func rowsStillWorthShowing(
         _ rows: [MonitoredSession],
-        boundaryByRowID: [String: Date]
+        boundaryByRowID: [String: Date],
+        processIdentifierByThreadID: [String: Int32]
     ) async -> (rows: [MonitoredSession], diagnostic: String?) {
         let readState = await readState.snapshot()
         let activatedAt = await activations.lastActivation()
         let desktopIsInFrontOfTheUser = await reading.isInFrontOfTheUser()
         var unreadThreadIDs: Set<String> = []
-        var judged: [(row: MonitoredSession, boundary: Date)] = []
+        /// A judged row, and whether the terminal reading is what decides it.
+        ///
+        /// The two sources carry different authority and one snapshot cannot
+        /// hold both -- see where they are built below.
+        var judged: [(
+            row: MonitoredSession,
+            boundary: Date,
+            restsOnTerminal: Bool
+        )] = []
         var shown: [MonitoredSession] = []
 
         /// Whether coming back to Claude Desktop showed the user this session.
@@ -638,6 +698,46 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             return displayed != sessionID
         }
 
+        /// When the user was last at this session's own terminal.
+        ///
+        /// Read once per row per refresh rather than lazily inside the switch,
+        /// so a row's verdict and its gate entry come from one reading. Only a
+        /// session with a controlling terminal answers at all.
+        var lastGestureByThreadID: [String: Date] = [:]
+        for row in rows {
+            guard let pid = processIdentifierByThreadID[row.threadID],
+                  let at = await terminalGestures
+                    .lastUserGesture(forProcessIdentifier: pid) else {
+                continue
+            }
+            lastGestureByThreadID[row.threadID] = at
+        }
+
+        /// Whether the user was at this session's own terminal after it
+        /// finished.
+        ///
+        /// **A peer of the three routes above, not a fallback behind them.**
+        /// It is tempting to ask this only when Claude Desktop has nothing to
+        /// say, because the two halves normally partition cleanly -- a session
+        /// Desktop hosts has a record, a session started from a terminal does
+        /// not. Remote control is the case that shows why the product must not
+        /// depend on that: it puts one session in front of the user in *both*
+        /// places, and the two are read by different gestures. A session
+        /// answered only by Desktop's record would then keep its row forever
+        /// for a user who reads it in the terminal, because reading there
+        /// stamps nothing Desktop writes down.
+        ///
+        /// Asking both and taking either is safe in the direction that
+        /// matters, and the reason is structural rather than lucky: this can
+        /// only fire for a session that **has** a controlling terminal, and a
+        /// session Claude Desktop hosts has none -- Desktop runs the CLI as
+        /// `--output-format stream-json` over pipes, with no terminal UI at
+        /// all, which is also why those sessions report no `status` (#41).
+        func wereAtItsTerminal(_ threadID: String, since boundary: Date) -> Bool {
+            guard let at = lastGestureByThreadID[threadID] else { return false }
+            return at >= boundary
+        }
+
         for row in rows {
             // Every hook-driven row carries one. The fallback is for a
             // reconstructed row, which is only ever Running and therefore only
@@ -659,20 +759,39 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             } else if row.status != .completed {
                 sessionsSeenOnScreenSinceTheirTurnEnded.remove(row.threadID)
             }
+            // Whether a reading that cannot be a generation behind is what
+            // decides this row -- see where the two snapshots are built.
+            let terminalCanSpeak = lastGestureByThreadID[row.threadID] != nil
+            let terminalSaysRead = wereAtItsTerminal(row.threadID, since: boundary)
             switch state {
             case .unknown:
-                shown.append(row)
+                // Claude Desktop cannot speak for this session, so only its
+                // terminal can. A gesture *after* the Turn ended is what makes
+                // it evidence of reading rather than of having been there at
+                // some point — the same shape as every rule above.
+                guard terminalCanSpeak else {
+                    // Nothing anywhere can speak for it. Kept out of the gate
+                    // entirely rather than reported unread, so it books no
+                    // re-check for a question with no possible answer.
+                    shown.append(row)
+                    break
+                }
+                if !terminalSaysRead {
+                    unreadThreadIDs.insert(row.threadID)
+                }
+                judged.append((row, boundary, true))
             case .unread:
                 if comingBackShowedIt(row.threadID, since: boundary)
                     || isInFrontOfThem(row.threadID)
-                    || movedOnFrom(row.threadID) {
-                    judged.append((row, boundary))
+                    || movedOnFrom(row.threadID)
+                    || terminalSaysRead {
+                    judged.append((row, boundary, terminalSaysRead))
                 } else {
                     unreadThreadIDs.insert(row.threadID)
-                    judged.append((row, boundary))
+                    judged.append((row, boundary, false))
                 }
             case .read:
-                judged.append((row, boundary))
+                judged.append((row, boundary, false))
             }
         }
         // A session nobody is listing any more takes its membership with it, so
@@ -681,7 +800,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             Set(rows.map(\.threadID))
         )
 
-        let unreadState = DesktopUnreadStateSnapshot(
+        let desktopUnreadState = DesktopUnreadStateSnapshot(
             unreadThreadIDs: unreadThreadIDs,
             // A reading that is not current may not hide anything, exactly as
             // on the Codex side. It matters less here -- a focus instant older
@@ -689,13 +808,32 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // it came from -- but the rule is the product's, not the schema's.
             source: readState.source.isAuthoritative ? .current : .lastKnownGood
         )
+        // A terminal verdict carries its own authority rather than Claude
+        // Desktop's, and the difference is not cosmetic: a user who has never
+        // opened Claude Desktop has no tree at all, which reports
+        // `unavailable`, and a non-authoritative snapshot may hide nothing --
+        // so borrowing that source would leave every terminal row permanently
+        // ungated, on exactly the machines this route exists for.
+        //
+        // It is honest as well as necessary. The Desktop source exists because
+        // a reading can be a generation behind: a snapshot retained after a
+        // parse failure carries yesterday's focus instants. A device's access
+        // time cannot be behind -- it is read from the kernel in the same
+        // refresh that uses it, and a reading that fails answers nil and takes
+        // its row out of the gate entirely rather than into it with a stale
+        // verdict.
+        let terminalUnreadState = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: unreadThreadIDs,
+            source: .current
+        )
         let now = clock.now()
-        for (row, boundary) in judged where terminalReadMembershipGate.shouldDisplay(
+        for (row, boundary, restsOnTerminal) in judged
+        where terminalReadMembershipGate.shouldDisplay(
             sessionID: row.id,
             threadID: row.threadID,
             status: row.status,
             terminalBoundaryAt: boundary,
-            unreadState: unreadState,
+            unreadState: restsOnTerminal ? terminalUnreadState : desktopUnreadState,
             now: now
         ) {
             shown.append(row)
@@ -727,11 +865,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// A row nothing can ever clear never reaches the gate, so it never books
     /// one of these.
     ///
-    /// One of the routes to "read" does turn that floor into a sampling
-    /// cadence, and only for as long as a row is standing: `isInFrontOfThem`
-    /// reads three states that have to agree, so it can only be asked at a
-    /// re-check. It still costs nothing when nothing is listed, and it is
-    /// bounded by the same second.
+    /// Two of the routes to "read" do turn that floor into a sampling cadence,
+    /// and only for as long as a row is standing. `isInFrontOfThem` reads three
+    /// states that have to agree, so it can only be asked at a re-check; a
+    /// terminal session's last gesture is a device timestamp the kernel moves
+    /// with nothing to watch it, so it can only be asked at one either. Both
+    /// still cost nothing when nothing is listed, and both are bounded by the
+    /// same second.
     func nextRefreshDeadline() async -> Date? {
         [
             await usage.nextReadDeadline(),

@@ -91,16 +91,16 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 该适配器已在 Desktop `26.810.50856` build `6644`、CLI `0.148.0-alpha.9` 验证。它仍是高版本风险的私有 schema，更新与失效排查必须遵守 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。
 
-### 1.5 Claude Code 已读私有只读适配器（已实现）
+### 1.5 Claude Code 已读适配器（已实现）
 
-Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次提交、会话消失或手动清空退出（CC-013）。产品语义与两半的分工见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)；这里只记实现。
+Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次提交、会话消失或手动清空退出（CC-013）。它现在分成两半，**证据来源完全不同**：Desktop 托管的会话读 Claude Desktop 的私有记录（下文 1–7），终端里的会话读内核记的控制终端访问时间（下文 §1.5.1，不涉及任何私有 schema）。产品语义与两半的分工见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)；这里只记实现。
 
 对 Claude Desktop `1.32885.1`、CLI `2.1.235` 的只读核验（2026-08-19）表明：
 
 - 每个 Desktop 托管会话在 `~/Library/Application Support/Claude/claude-code-sessions/<org>/<account>/local_<uuid>.json` 有一份记录，其中 `cliSessionId` 就是 hook 携带的 `session_id`，因此身份连接不需要推断。
 - `lastFocusedAt` 由 `setSessionVisibility(id, isVisible, reason)` 在 `isVisible` 为真时写成 `Date.now()`，随即 `saveSession`。它的语义是"最后一次被显示到屏幕上"，不是"最后一次活动"。
 - 写入是同目录临时文件 `rename` 原子替换（实测 inode 变化），因此**目录级** watcher 能看见它——这与 `~/.claude/sessions/<pid>.json` 的原地重写相反，那里只有文件级 watcher 有用（见 §15.1）。
-- 纯终端会话在这棵树里没有任何文件，Claude Code 自己的会话记录也不写任何 focus 字段（2.1.235 二进制内检索：无 focus/read/seen 落盘键）。
+- 纯终端会话在这棵树里没有任何文件，Claude Code 自己的会话记录也不写任何 focus 字段（2.1.235 与 2.1.236 二进制内检索：无 focus/read/seen 落盘键；进程内有一个 `userPresence` 对象持有 `lastInteractionTime` 与 `terminalFocus`，但它不落盘、不发 hook）。**那一半因此不问 Claude Code，改问它的终端——见 §1.5.1。**
 
 生产实现：
 
@@ -116,9 +116,46 @@ Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次�
    激活信号来自公开的 `NSWorkspace.didActivateApplicationNotification`（`DesktopActivationWatcher`），按 bundle identifier 过滤，只记录**跃迁**的时刻、从不记录「此刻是否在前台」，且只知道本应用启动之后发生的激活。
    「在不在人眼前」来自 `DesktopReadingWatcher`：同一个公开通知维护「那个应用此刻是否持有前台」（构造时从 `NSWorkspace.frontmostApplication` 读一次种子，之后只由通知驱动），再减去三种持有前台但等于没有的状态——`CGDisplayIsAsleep` 显示器休眠、`CGSessionCopyCurrentDictionary` 报告锁屏或不在 console、公开的 `com.apple.screensaver.didstart` / `didstop` 报告屏保在跑。三者全部公开、无需 entitlement、实测不弹授权；会话字典读不出来时答 `false`，即朝保留的方向倒。隐藏应用不单列（隐藏会交出前台）；**最小化、另一块显示器、另一个 Space 无法分辨**，落在这三种状态里的行会被没人看见地撤掉，这是被接受的代价而不是缺口。
    曾经上线过一版用「一次按键或滚动」当证据的实现（`c1052bb`，`CGEventSource.secondsSinceLastEventType` 取 `.keyDown` 与 `.scrollWheel`），它更安全但答不了「坐着看完、什么都不做」，已被本条取代；细节与它的一处硬伤记在 ADR 0012 的拒绝清单里。
-5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**unknown 的行根本不进 gate**，因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动移除（在该行上右键，或清空整张列表）。
+5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**问不出来的行根本不进 gate**（既无 Desktop 记录、也无控制终端），因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动移除（在该行上右键，或清空整张列表）。**gate 收到的未读快照按行分成两份**：Desktop 判出来的那些带 Desktop 读数的 source（`unavailable` 时不得隐藏任何行），终端判出来的那些带 `.current`。这一分不是修饰——从没开过 Claude Desktop 的用户整棵树都不存在，读数恒为 `unavailable`，让终端结论借用它就等于在最需要这条路径的机器上把它整个关掉。它同时是诚实的：Desktop 的 source 存在是因为读数可能落后一个 generation（解析失败后保留的快照带着旧的 focus 时刻），而设备访问时间不可能落后——它在用到它的那一次刷新里现读，读失败答 `nil` 并把该行**移出** gate，而不是带着陈旧结论进去。
 6. 边沿有两个：Claude Desktop 写记录，以及它回到前台。后者直接来自激活通知，因此「切回去读」这个手势与行离开 notch 是同一件事，不需要等 gate 的 1 秒复查。**`isInFrontOfThem` 没有边沿**：它要三个状态同时成立（前台、显示器、锁屏），因此在 gate 已经为等待中的行预约的 1 秒复查上采样，那个 1 秒同时是它的上界；没有行在等的时候不产生任何采样。用户点亮屏幕或解锁之后行的消失也走这一秒。前者来自 `PathSetChangeWatcher`——一个可以随时替换被监听路径集合的 watcher，`ClaudeCodeSessionRecordWatcher` 与本适配器共用它。适配器监听状态根目录加每个发现到的账户目录；账户目录在第一次读取时才被发现，新账户由根目录的边沿或心跳发现。
 7. 失败一律 fail closed：树不存在（纯终端用户的常态）是 `unavailable` 且**不产生诊断**；单份记录读不出只让那个会话答 unknown；**全部记录都读不出**才判定为 schema 不兼容，发出诊断并保留 last-known-good，此时不做任何新的隐藏。
+
+#### 1.5.1 终端会话：控制终端的访问时间（已实现）
+
+Desktop 那棵树对终端会话什么都不说，而 Claude Code 自己没有已读概念。这一半因此换了个对象问：**该会话的控制终端**。
+
+`ControllingTerminalGestureReader` 三步，全部是公开 BSD 接口，不打开任何文件内容：
+
+1. `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid)` → `kp_eproc.e_tdev`，该进程的控制终端设备号（`-1` 即没有控制终端）。pid 来自公开命令 `claude agents --json`，与 `~/.claude/sessions/<pid>.json` 的命名用的是同一个。
+2. `devname_r(dev, S_IFCHR, …)` → `ttysNNN`，拼成 `/dev/ttysNNN`。**回查一次**：`stat` 出来必须仍是字符设备且 `st_rdev` 等于第 1 步那个设备号——`devname_r` 答的是一份按设备号缓存的名字表，名字被复用会把别的终端的动作算到这个会话头上。
+3. `stat` 的 `st_atimespec`，即**最后一次有东西从这个设备被读走**的时刻。
+
+判定在编排器里（`ClaudeCodeMonitorService.rowsStillWorthShowing`），是 Desktop 那四条之外的第五条：**访问时间 ≥ 该 Turn 的终止时刻即已读**，比较左边与前四条同源（Turn 自己的终止时刻）。答 `nil`（没有控制终端 / 读不出）的会话完全不进 gate。
+
+**它是前四条的平级，不是它们的兜底**，尽管写成兜底看上去更自然（Desktop 托管的会话有记录，终端起的没有，两边本该正好分完）。**远程控制**是不能那样写的原因：同一个会话同时摆在终端和 Claude Desktop 面前，而两边由不同的手势读，只有一边写进本应用看得见的地方——在终端里读它，Desktop 的记录一个字节都不动。写成兜底，这样一行会为一个永远不会前进的 `lastFocusedAt` 无限期等下去。
+
+反方向安全，而且是结构性的而不是撞运气：这一条只可能对**真的有控制终端**的会话成立，而 Claude Desktop 托管的会话没有——Desktop 把 CLI 跑成 `--output-format stream-json`、走管道、没有终端界面，这也正是那些会话没有 `status` 的原因（[#41](https://github.com/soondubu137/codex-in-notch/issues/41)）。
+
+（实测 2026-08-19：一个开着远程控制的 CLI 会话在 `claude-code-sessions` 树里**根本没有记录**——整棵 Claude Application Support 树里没有任何文件提到它的 `sessionId` 或它的 `bridgeSessionId`——所以今天它答 `unknown`，走不到「两边都有」这个分支。那是某一个 Desktop 版本的事实，不是产品该依赖的性质。）
+
+实测（2026-08-19，Ghostty + CLI `2.1.236`）：
+
+| 事情 | 访问时间 | 修改时间 |
+| --- | --- | --- |
+| 敲键 | 前进 | — |
+| 那个界面拿到前台（`ESC [ I`） | 前进 | — |
+| 那个界面失去前台（`ESC [ O`） | 前进 | — |
+| **隐藏的界面**经历两轮完整前台切换 | **0 次变化** | — |
+| CLI 渲染输出 | 不变 | 每秒约 2 次 |
+| **一整轮跑完**（提交 → 答案 → Stop hook → `OSC 777` 通知） | **只在提交那一下前进**，此后 67 秒不变 | 全程在动 |
+
+第四行是这条路径能成立的全部理由，第五行是必须读访问时间而不是修改时间的全部理由。焦点上报是 Claude Code 自己开的（`ESC [ ? 1004 h` 在发布二进制里，每次离开 alternate screen 写一次）。
+
+**没有边沿，只有采样。** 设备访问时间由内核推进，不产生任何文件系统事件，因此它在 gate 已经为等待中的行预约的 `terminalUnreadRecheckInterval`（1 秒）上采样，那一秒同时是行离开的上界。代价是每个列出的终态终端行每秒一次 `sysctl` 加一次 `stat`；没有行在等的时候一次也不问。
+
+**退化方向。** 不实现焦点上报的终端（或没开 `focus-events` 的 multiplexer）只剩按键，行等的是下一次敲键而不是回到 tab；没有控制终端的会话保持既有行为。**唯一朝提前移除倒的**是失去前台那一下不由用户产生——某个应用自己跳到前台，屏幕上那个界面就收到一次 `ESC [ O`。
+
+单测按两层：`aTerminalsAccessTimeMovesWhenItIsReadFromAndNotWhenItIsWrittenTo` 直接开一个 pty 对着真内核验上表的第一行与最后一行；行为层的四个用例走注入的替身，因此不依赖跑测试时开发者在哪个终端里。
 
 ## 2. 设计约束
 
