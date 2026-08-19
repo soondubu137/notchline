@@ -139,6 +139,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         }
 
         let hookState = await hookEvents.consumeEvents()
+        // Presence first, and once. It is asked before the list rather than
+        // after it so both come from the same reading: asked afterwards, the
+        // two calls could land either side of a refresh and describe different
+        // instants.
+        let presence = await sessions.presence()
         let live = await sessions.liveSessions()
         let liveByID = Dictionary(
             live.map { ($0.sessionID, $0) },
@@ -227,7 +232,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
 
         return snapshot(
             availability: .ready,
-            sessions: rows,
+            // A product that is not connected contributes no rows.
+            //
+            // The registry is written against exactly this: it goes on handing
+            // back its last list when a read fails, because a failed read is
+            // not evidence a session ended, and it says so on the understanding
+            // that "the surface retires them by going Disconnected". The
+            // surface did not. ``MonitorAggregation/status(agents:sessions:)``
+            // reads the rows before it reads presence, so a product whose mark
+            // had already gone -- presence `unknown`, no matrix drawn -- still
+            // had its row on screen saying `Running`. That is the state the
+            // user sees as Claude Code vanishing while it carries on working,
+            // and it is the surface's half of the contract, not the registry's.
+            sessions: presence.isOpen ? rows : [],
             setupStatus: status,
             diagnostic: hookState.diagnostic,
             // Whatever is known right now. Awaiting the reading here is what
@@ -238,7 +255,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // reducer answers what they are doing — presence draws the matrix,
             // the reducer lights it, and merging the two would put the mark
             // back to reporting turns instead of openness.
-            presence: await sessions.presence()
+            presence: presence
         )
     }
 

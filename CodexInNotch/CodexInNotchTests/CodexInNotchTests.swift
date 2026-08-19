@@ -8203,6 +8203,69 @@ for line in sys.stdin:
         #expect(snapshot.sessions.isEmpty)
     }
 
+    /// A product that is no longer known to be open shows no rows either.
+    ///
+    /// The two channels have to agree, and they did not. The registry goes on
+    /// handing back its last list when a read fails — a failed read is not
+    /// evidence a session ended — and says so on the stated understanding that
+    /// "the surface retires them by going Disconnected". The surface did not
+    /// hold up that end: ``MonitorAggregation/status(agents:sessions:)`` reads
+    /// the rows before it reads presence, so a product whose mark had already
+    /// been dropped kept a row on screen reading `Running`.
+    ///
+    /// That is what the user sees as Claude Code losing its connection and
+    /// vanishing while the notch still says it is working, and it is the state
+    /// §6.2 forbids: a claim about a product we have just admitted we cannot
+    /// see.
+    @Test @MainActor
+    func aProductThatIsNoLongerKnownToBeOpenContributesNoRows() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        let cwd = "/Users/someone/Projects/thing"
+        try harness.writeTranscript(session: "live", cwd: cwd, records: [
+            ["type": "user", "promptId": "p-1",
+             "timestamp": "2026-08-16T10:00:00.000Z",
+             "message": ["role": "user", "content": "do the thing"]],
+            ["type": "assistant",
+             "message": ["role": "assistant", "stop_reason": "tool_use"]]
+        ])
+        harness.live = [harness.session(id: "live", cwd: cwd)]
+
+        let connected = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(connected.presence == .open)
+        #expect(connected.sessions.count == 1)
+        #expect(
+            MonitorAggregation.status(
+                agents: [connected],
+                sessions: connected.sessions
+            ) == .running
+        )
+
+        // The list is unchanged and still handed back; only our evidence that
+        // it still describes anything has expired.
+        harness.presence = .unknown
+        let lost = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(lost.presence == .unknown)
+        #expect(!lost.isConnected)
+        #expect(lost.sessions.isEmpty)
+        // And the surface now says the one thing that is true.
+        #expect(
+            MonitorAggregation.status(
+                agents: [lost],
+                sessions: lost.sessions
+            ) == .disconnected
+        )
+
+        // It comes straight back with the next answer, without waiting on a
+        // hook: the rows were never thrown away, only withheld.
+        harness.presence = nil
+        let regained = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(regained.presence == .open)
+        #expect(regained.sessions.count == 1)
+    }
+
     /// A real event always outranks a reconstruction, including when it says
     /// the turn is over.
     @Test @MainActor
@@ -8767,6 +8830,105 @@ for line in sys.stdin:
         #expect(await registry.liveSessions().first?.sessionID == "s-2")
     }
 
+    /// A read that fails books the same wait a read that succeeds does.
+    ///
+    /// The freshness window used to be measured from the last *answer*, so a
+    /// failure booked no time at all: the next caller found the answer still
+    /// stale and ran `claude agents --json` again straight away, and so did the
+    /// one after that. Nothing on this side asks on a cadence — a refresh is
+    /// driven by hook events, and a busy turn fires several a second — so one
+    /// failed read turned into a run of Node launches at hook rate. Measured on
+    /// the live app against an induced failure: 71 launches in 110 seconds,
+    /// where the cadence allows four. Twenty-four concurrent launches take 1.6s
+    /// each against 0.25s alone, so the storm also made the next read slower.
+    @Test @MainActor
+    func aFailedSessionListReadIsPacedLikeAnAnswerAndDoesNotStormTheCommand() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let counter = ReadCounter()
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            read: { await counter.read() }
+        )
+
+        _ = await registry.liveSessions()
+        #expect(await counter.count == 1)
+
+        // Ten more asks inside the window, which is what a busy turn's hook
+        // traffic looks like. The command is not run again for any of them.
+        for _ in 0 ..< 10 { _ = await registry.liveSessions() }
+        #expect(await counter.count == 1)
+
+        await clock.advance(by: 31)
+        _ = await registry.liveSessions()
+        #expect(await counter.count == 2)
+    }
+
+    /// The ceiling really is three consecutive failures, as it says it is.
+    ///
+    /// It is written as a wall-clock interval, and that only means three
+    /// failures if failures are spaced a `freshness` apart. Unpaced they were
+    /// not: the ceiling was crossed by the clock while the command was being
+    /// run dozens of times, and it was crossed soonest on exactly the busy
+    /// session the user was watching. Presence going `unknown` takes the
+    /// product's mark off the notch, so what this pins is how long a live
+    /// Claude Code has to be unreachable before it stops being drawn.
+    @Test @MainActor
+    func presenceSurvivesTwoFailedReadsAndOnlyTheThirdCrossesTheCeiling() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = ResponseQueue(items: [
+            Data("""
+            [{"pid": 1, "cwd": "/a", "kind": "interactive",
+              "startedAt": 1000, "sessionId": "s-1"}]
+            """.utf8)
+            // Every read after the first one fails.
+        ])
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            trustCeiling: 90,
+            read: { await responses.next() }
+        )
+        #expect(await registry.presence() == .open)
+
+        // First failure.
+        await clock.advance(by: 31)
+        #expect(await registry.presence() == .open)
+        // Second.
+        await clock.advance(by: 31)
+        #expect(await registry.presence() == .open)
+        // Third: now the last answer is older than the ceiling.
+        await clock.advance(by: 31)
+        #expect(await registry.presence() == .unknown)
+    }
+
+    /// Two callers that arrive together share one reading.
+    ///
+    /// An actor suspends at every `await`, so a second caller runs while the
+    /// command is still out. Without single-flighting it found nothing to wait
+    /// behind and started a second `claude`. This was not a rare interleaving:
+    /// one refresh asks the registry twice by design — once for the rows and
+    /// once for the mark — so the ordinary path paid for two launches.
+    @Test @MainActor
+    func twoCallersArrivingTogetherShareOneReadOfTheSessionList() async {
+        let counter = ReadCounter(answer: Data("""
+        [{"pid": 1, "cwd": "/a", "kind": "interactive",
+          "startedAt": 1000, "sessionId": "s-1"}]
+        """.utf8))
+        let registry = ClaudeCodeSessionRegistry(
+            freshness: 30,
+            read: { await counter.read() }
+        )
+
+        async let rows = registry.liveSessions()
+        async let mark = registry.presence()
+        let (listed, presence) = await (rows, mark)
+
+        #expect(listed.count == 1)
+        #expect(presence == .open)
+        #expect(await counter.count == 1)
+    }
+
     /// A cached answer stops being believed, even though it is still returned.
     ///
     /// The two intervals are different questions. `freshness` says when to read
@@ -8954,6 +9116,44 @@ for line in sys.stdin:
         let registry = ClaudeCodeSessionRegistry(read: { await responses.next() })
         let sessions = await registry.refresh()
         #expect(sessions.map(\.sessionID) == ["keep"])
+    }
+
+    /// Somebody else's log line does not cost the whole session list.
+    ///
+    /// `claude` starts the user's MCP servers, and one of them was measured
+    /// writing a line of its own to a `claude` command's stdout on two runs in
+    /// five — the reason ``ClaudeCodeUsageReader`` reads its envelope line by
+    /// line. Here the array is pretty-printed across lines, so that trick does
+    /// not transfer and the whole-stream decode simply failed.
+    ///
+    /// The cost was not one lost reading. A list that cannot be decoded is
+    /// indistinguishable at this boundary from a command that never answered,
+    /// so a stray line ages the product towards the trust ceiling and takes
+    /// Claude Code's mark off the notch.
+    @Test @MainActor
+    func aStraySubprocessLogLineDoesNotHideTheSessionList() {
+        let noise = Data("""
+        Client.listTools() called but server does not advertise tools capability - returning empty list
+        [
+          {
+            "pid": 11115,
+            "cwd": "/Users/someone/Projects/thing",
+            "kind": "interactive",
+            "startedAt": 1786919144634,
+            "sessionId": "s-1",
+            "name": "thing-21"
+          }
+        ]
+        Client.listTools() called but server does not advertise tools capability - returning empty list
+        """.utf8)
+
+        let sessions = ClaudeCodeSessionRegistry.sessions(in: noise)
+        #expect(sessions?.map(\.sessionID) == ["s-1"])
+
+        // A clean answer still decodes, and an answer that is not a list at all
+        // is still refused rather than guessed at.
+        #expect(ClaudeCodeSessionRegistry.sessions(in: Data("[]".utf8))?.isEmpty == true)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: Data("no list here".utf8)) == nil)
     }
 
     /// An HTTP handler stays recognisable after its port moves.
@@ -10418,6 +10618,13 @@ private final class ClaudeCodeHarness {
         set { listing.sessions = newValue }
     }
 
+    /// What the session list says about the product being open, when a test
+    /// needs that to differ from "the list is not empty".
+    var presence: AgentPresence? {
+        get { listing.presenceOverride }
+        set { listing.presenceOverride = newValue }
+    }
+
     init() throws {
         root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-svc-\(UUID().uuidString.prefix(8))")
@@ -10524,7 +10731,30 @@ private final class ClaudeCodeHarness {
 
 private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sendable {
     var sessions: [ClaudeCodeSession] = []
+    /// Set when a test needs the list and the presence to disagree.
+    ///
+    /// That is not a contrived pairing: it is precisely what the real registry
+    /// reports once its reads have been failing past the trust ceiling — the
+    /// last list is still handed back, because a failed read never proved a
+    /// session ended, while presence has stopped being evidence of anything.
+    var presenceOverride: AgentPresence?
     func liveSessions() async -> [ClaudeCodeSession] { sessions }
+    func presence() async -> AgentPresence {
+        presenceOverride ?? (sessions.isEmpty ? .closed : .open)
+    }
+}
+
+/// Counts how many times the session list was actually read.
+private actor ReadCounter {
+    private(set) var count = 0
+    private let answer: Data?
+
+    init(answer: Data? = nil) { self.answer = answer }
+
+    func read() -> Data? {
+        count += 1
+        return answer
+    }
 }
 
 /// Hands back a prepared sequence of text responses, one per read.

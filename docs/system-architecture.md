@@ -369,6 +369,7 @@ flowchart LR
 | Turn reducer | `HookEventRepository` | 用精确身份消费事件、拒绝回放复活、维护内存 `HookTurnState` | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
 | 正文边界（Codex） | `HookPreviewChannel` | 经 Unix socket 收取 prompt/回答并只留在内存；持有预览开关这一进程内标志 | [`HookPreviewChannel.swift`](../CodexInNotch/CodexInNotch/HookPreviewChannel.swift) |
 | 正文边界（Claude Code） | `AgentHookListener` | loopback 收取生命周期事件并落成 0600 事件文件；**先应答再处理**，**`MessageDisplay` 在写队列之前转向内存**，只留每条消息头部 240 字符，另持有本侧预览开关这一进程内标志 | [`AgentHookListener.swift`](../CodexInNotch/CodexInNotch/AgentHookListener.swift) |
+| 会话身份（Claude Code） | `ClaudeCodeSessionRegistry` | 按节拍运行 `claude agents --json` 并对读取单飞；新鲜度从**上一次尝试**起算，失败保留上一次列表；在 stdout 里定位数组而不假定它独占该流（见 `tech-design.md` §15.1） | [`ClaudeCodeSessionRegistry.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeSessionRegistry.swift) |
 | Hook 管理 | `CodexHookInstaller` | 安装、升级、校验和移除本应用管理的六类 Hook 定义 | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
 | 用户配置编辑 | `ManagedHooksConfiguration` | 在用户拥有的配置里严格增删本应用的定义；看不懂的结构一律不改，必须改才能继续时整体拒绝 | [`ManagedHooksConfiguration.swift`](../CodexInNotch/CodexInNotch/ManagedHooksConfiguration.swift) |
 | 公开协议边界 | `CodexAppServerClient` | 子进程、stdio JSON-RPC、握手、请求关联、超时、探活与传输重建 | [`CodexAppServerClient.swift`](../CodexInNotch/CodexInNotch/CodexAppServerClient.swift) |

@@ -221,10 +221,23 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     private let freshness: TimeInterval
     private let trustCeiling: TimeInterval
     private var cached: [ClaudeCodeSession] = []
+    /// When the command last *answered*. Decides how long the answer is
+    /// believed.
     private var readAt: Date?
+    /// When the command was last *run*, answer or none. Decides when it is run
+    /// again, which is a different question -- see ``liveSessions()``.
+    private var attemptedAt: Date?
+    /// The read that is out, so callers arriving mid-read wait for it instead
+    /// of starting one of their own.
+    private var inFlight: Task<[ClaudeCodeSession], Never>?
+    /// Distinguishes the read this call started from a later one, so an
+    /// earlier caller cannot clear somebody else's.
+    private var readGeneration = 0
 
     /// - Parameters:
-    ///   - freshness: How long before the answer is re-read.
+    ///   - freshness: How long before the command is run again, counted from
+    ///     the last *attempt* rather than the last answer -- see
+    ///     ``liveSessions()``.
     ///   - trustCeiling: How long a *stale* answer may still be believed.
     ///   - read: Returns the raw JSON, or nil when it could not be obtained.
     ///     Injected so the parsing and staleness rules can be tested without a
@@ -264,28 +277,98 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         return sessions.isEmpty ? .closed : .open
     }
 
+    /// The list, re-read when the last *attempt* has gone stale.
+    ///
+    /// Paced on the attempt and not on the answer, which is the whole of the
+    /// difference. Pacing on the answer meant a read that failed left nothing
+    /// to wait behind: the next caller found the answer still stale and ran the
+    /// command again immediately, and so did the one after that. On the Claude
+    /// Code side a refresh is driven by hook events, so a busy turn asks
+    /// several times a second -- and a single failed read therefore became a
+    /// run of `claude` launches at that rate, measured here at 71 of them
+    /// inside 110 seconds against the four the cadence allows for. Each is a
+    /// Node process; 24 of them at once take 1.6s apiece against 0.25s alone,
+    /// so the storm makes the next read slower, which is the wrong direction.
+    ///
+    /// It also restores what the ceiling above is written against. "Three
+    /// consecutive failures" is only three if failures are spaced a
+    /// ``freshness`` apart; unpaced, the ceiling was reached by wall-clock
+    /// after dozens of them, and reached it while a busy session was at its
+    /// busiest.
     func liveSessions() async -> [ClaudeCodeSession] {
-        if let readAt, clock.now().timeIntervalSince(readAt) < freshness {
+        if let attemptedAt, clock.now().timeIntervalSince(attemptedAt) < freshness {
             return cached
         }
         return await refresh()
     }
 
     /// Reads again regardless of freshness, for when something said to.
+    ///
+    /// Single-flighted: an actor suspends at every `await`, so without this two
+    /// callers that arrive while the command is out would each start one of
+    /// their own. One refresh asks twice by design -- once for the rows and
+    /// once for the mark -- so that was not a rare interleaving but the
+    /// ordinary path.
     @discardableResult
     func refresh() async -> [ClaudeCodeSession] {
-        guard let data = await read() else {
+        if let inFlight { return await inFlight.value }
+        readGeneration += 1
+        let generation = readGeneration
+        let task = Task { await self.performRead() }
+        inFlight = task
+        let sessions = await task.value
+        if readGeneration == generation { inFlight = nil }
+        return sessions
+    }
+
+    private func performRead() async -> [ClaudeCodeSession] {
+        let data = await read()
+        // Stamped whether or not there was an answer: this is what paces the
+        // next attempt, and a failure that booked no time at all is what let
+        // one failed read become a run of them.
+        attemptedAt = clock.now()
+        guard let data else {
             // Keep the last good answer rather than reporting that every
             // session vanished: a failed read is not evidence of absence, and
             // treating it as such would retire every row at once.
             return cached
         }
-        guard let reported = try? JSONDecoder().decode([Reported].self, from: data) else {
+        guard let sessions = Self.sessions(in: data) else {
             Self.log.error("could not decode the session list; keeping the last one")
             return cached
         }
 
-        cached = reported.compactMap { entry in
+        cached = sessions
+        readAt = clock.now()
+        return cached
+    }
+
+    /// The sessions in one run of stdout, or nil when there are none to be had.
+    ///
+    /// **The array is found rather than assumed to be the whole stream.** This
+    /// is the same problem ``ClaudeCodeUsageReader`` already answers and it is
+    /// answered here for the same measured reason: `claude` starts the user's
+    /// MCP servers, and one of them was caught writing a line of its own --
+    /// `Client.listTools() called but server does not advertise tools
+    /// capability - returning empty list` -- to this command's stdout, on two
+    /// runs in five. `JSONDecoder` rejects the whole stream over text the
+    /// object did not ask for.
+    ///
+    /// That mattered more here than it looks. A list that cannot be decoded is
+    /// indistinguishable at this boundary from a command that never answered,
+    /// so somebody else's log line does not merely cost one reading — it ages
+    /// this product towards `Disconnected` and takes its mark off the notch.
+    /// The line-by-line trick used for the quota does not transfer, because
+    /// this array is pretty-printed across many lines; the bracketed span does.
+    ///
+    /// Made `static` and non-private so the rule can be tested against captured
+    /// bytes rather than by running anything, exactly as the quota's parser is.
+    nonisolated static func sessions(in data: Data) -> [ClaudeCodeSession]? {
+        let decoder = JSONDecoder()
+        let reported = (try? decoder.decode([Reported].self, from: data))
+            ?? bracketedSpan(in: data).flatMap { try? decoder.decode([Reported].self, from: $0) }
+        guard let reported else { return nil }
+        return reported.compactMap { entry in
             guard let sessionID = entry.sessionId, !sessionID.isEmpty,
                   let pid = entry.pid,
                   let cwd = entry.cwd, !cwd.isEmpty,
@@ -301,8 +384,17 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
                 name: entry.name
             )
         }
-        readAt = clock.now()
-        return cached
+    }
+
+    /// From the first `[` to the last `]`, which is the array and whatever the
+    /// array itself contains -- never a line printed before or after it.
+    nonisolated private static func bracketedSpan(in data: Data) -> Data? {
+        guard let start = data.firstIndex(of: UInt8(ascii: "[")),
+              let end = data.lastIndex(of: UInt8(ascii: "]")),
+              start < end else {
+            return nil
+        }
+        return Data(data[start ... end])
     }
 
     /// Runs the documented command and returns its stdout.
