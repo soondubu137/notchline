@@ -1374,6 +1374,48 @@ final class MonitorStore: ObservableObject {
         requestRefresh()
     }
 
+    /// Takes one finished row off the list, at the user's asking.
+    ///
+    /// **Only a Completed row.** Every other status is a Turn that is still
+    /// going — the user has not been told anything yet, and a row they dismiss
+    /// by accident is one they cannot get back until the Turn ends. Dismissing
+    /// a finished row throws away only the notice that it finished, which is
+    /// the whole of what the row was still there to say.
+    ///
+    /// **What it does not do.** Nothing is deleted, in either product: the
+    /// thread, its Turn and its transcript are untouched, exactly as
+    /// ``clearSessionsAndWait()`` leaves them. Nor is it a claim that the user
+    /// read the answer — the read routes decide that from the products' own
+    /// evidence, and this one is the user saying they are done with the row,
+    /// which needs no evidence beyond their having asked.
+    ///
+    /// **It ends this Turn's row, not the session's.** The dismissed set is
+    /// keyed by ``MonitoredSession/id``, which carries the Turn id, so the next
+    /// Turn on the same thread arrives as a new row and lists normally. And
+    /// because the set is intersected with what the products still report on
+    /// every refresh, the entry costs nothing once the row is gone upstream.
+    ///
+    /// This is the only exit a terminal Claude Code row has that does not take
+    /// the whole list with it: read state is not a question those rows can be
+    /// asked (see [ADR 0012](../../docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)),
+    /// so before this the user's choices were the next prompt or
+    /// `Clear the session list`.
+    @discardableResult
+    func dismiss(_ session: MonitoredSession) -> Bool {
+        guard session.status == .completed else { return false }
+        guard !dismissedSessionIDs.contains(session.id) else { return false }
+
+        dismissedSessionIDs.insert(session.id)
+        // Republished through the merge rather than by striking the row out of
+        // `sessions` here. The list is not the only thing that has to change:
+        // the summary status and the product marks are both derived from the
+        // rows that are showing, and `apply` is where all three are kept in
+        // agreement. Editing the array alone would leave a dismissed row still
+        // lighting its product's mark.
+        apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
+        return true
+    }
+
     func clearSessions() {
         Task { [weak self] in
             _ = await self?.clearSessionsAndWait()

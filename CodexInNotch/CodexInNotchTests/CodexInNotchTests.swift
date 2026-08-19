@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Darwin
+import SwiftUI
 import Testing
 @testable import CodexInNotch
 
@@ -1393,6 +1394,243 @@ struct CodexInNotchTests {
         #expect(store.compactStatusReadoutText == "Input")
         #expect(store.statusDisplayName == "Input needed")
         #expect(store.tokenRemainingPercent == 72)
+    }
+
+    /// A secondary click on a finished row takes that row off the list, and
+    /// leaves the session it belongs to alone.
+    ///
+    /// The dismissed set is keyed by Turn, so the same thread's next Turn is a
+    /// new row and lists as usual -- the same rule `Clear the session list`
+    /// already obeys, applied to one row instead of all of them.
+    @Test @MainActor
+    func dismissingAFinishedRowHidesThatTurnButAllowsTheNext() {
+        let finished = MonitoredSession(
+            threadID: "thread",
+            turnID: "turn-1",
+            projectName: "Chats",
+            title: "Finished turn",
+            preview: nil,
+            status: .completed,
+            startedAt: Date()
+        )
+        let store = MonitorStore(
+            initialSnapshot: AgentSnapshot(
+                availability: .ready,
+                sessions: [finished],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+
+        #expect(store.dismiss(finished))
+        #expect(store.sessions.isEmpty)
+
+        // Still reported upstream, and still not shown.
+        store.applyForTesting(
+            AgentSnapshot(
+                availability: .ready,
+                sessions: [finished],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        #expect(store.sessions.isEmpty)
+
+        let nextTurn = MonitoredSession(
+            threadID: "thread",
+            turnID: "turn-2",
+            projectName: "Chats",
+            title: "Next turn",
+            preview: nil,
+            status: .running,
+            startedAt: Date()
+        )
+        store.applyForTesting(
+            AgentSnapshot(
+                availability: .ready,
+                sessions: [finished, nextTurn],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        #expect(store.sessions.map(\.id) == [nextTurn.id])
+    }
+
+    /// Only a finished row can be dismissed.
+    ///
+    /// The other three statuses are Turns that are still going: the user has
+    /// not been told anything yet, so there is nothing to dismiss, and a row
+    /// taken away by a stray click could not be recovered until it ended.
+    @Test @MainActor
+    func onlyAFinishedRowCanBeDismissed() {
+        for status in [SessionStatus.running, .inputNeeded, .approvalNeeded] {
+            let live = MonitoredSession(
+                threadID: "thread-\(status)",
+                turnID: "turn",
+                projectName: "Chats",
+                title: "Live turn",
+                preview: nil,
+                status: status,
+                startedAt: Date()
+            )
+            let store = MonitorStore(
+                initialSnapshot: AgentSnapshot(
+                    availability: .ready,
+                    sessions: [live],
+                    quota: .unavailable,
+                    diagnostic: nil
+                )
+            )
+
+            #expect(!store.dismiss(live))
+            #expect(store.sessions.map(\.id) == [live.id])
+        }
+    }
+
+    /// A dismissed row stops counting the moment it stops showing.
+    ///
+    /// The summary status and the product marks are both derived from the rows
+    /// on the list, so a dismissal that only edited the array would leave the
+    /// notch reporting a finished Turn nobody can see and the product's mark
+    /// lit for it.
+    @Test @MainActor
+    func dismissingARowStopsItCountingTowardsTheSummary() {
+        let finished = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "session",
+            turnID: "turn",
+            projectName: "Chats",
+            title: "Finished turn",
+            preview: nil,
+            status: .completed,
+            startedAt: Date()
+        )
+        let store = MonitorStore(
+            initialSnapshot: AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [finished],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+
+        #expect(store.status == .completed)
+        #expect(store.presenceMarks.map(\.status) == [.completed])
+
+        #expect(store.dismiss(finished))
+
+        #expect(store.status == .connected)
+        #expect(store.presenceMarks.map(\.status) == [.connected])
+    }
+
+    /// Dismissing the same row twice changes nothing the second time.
+    ///
+    /// A secondary press is easy to repeat, and the row is gone from the panel
+    /// by then anyway -- what this pins is that the second call reports it did
+    /// nothing rather than reporting a fresh dismissal.
+    @Test @MainActor
+    func dismissingARowTwiceIsNotASecondDismissal() {
+        let finished = MonitoredSession(
+            threadID: "thread",
+            turnID: "turn",
+            projectName: "Chats",
+            title: "Finished turn",
+            preview: nil,
+            status: .completed,
+            startedAt: Date()
+        )
+        let store = MonitorStore(
+            initialSnapshot: AgentSnapshot(
+                availability: .ready,
+                sessions: [finished],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+
+        #expect(store.dismiss(finished))
+        #expect(!store.dismiss(finished))
+        #expect(store.sessions.isEmpty)
+    }
+
+    /// The row's catcher takes the secondary press and nothing else.
+    ///
+    /// It covers the whole row, so every event it claims is one the button
+    /// underneath never sees. Claiming a primary press would silently cost the
+    /// list its navigation -- clicking a finished row would dismiss it instead
+    /// of opening it -- and claiming a movement would do it for hover too.
+    @Test @MainActor
+    func theSecondaryClickCatcherClaimsOnlyTheSecondaryPress() {
+        let claimed: [NSEvent.EventType] = [.rightMouseDown, .rightMouseUp]
+        let passedThrough: [NSEvent.EventType] = [
+            .leftMouseDown,
+            .leftMouseUp,
+            .leftMouseDragged,
+            .mouseMoved,
+            .mouseEntered,
+            .mouseExited,
+            .otherMouseDown,
+            .scrollWheel,
+            .keyDown
+        ]
+
+        for eventType in claimed {
+            #expect(SecondaryClickView.claims(eventType))
+        }
+        for eventType in passedThrough {
+            #expect(!SecondaryClickView.claims(eventType))
+        }
+        // AppKit also asks about geometry with no event in flight at all.
+        #expect(!SecondaryClickView.claims(nil))
+        #expect(SecondaryClickView().hitTest(.zero) == nil)
+    }
+
+    /// SwiftUI puts the catcher over the whole row, and the press it takes
+    /// calls through.
+    ///
+    /// ``theSecondaryClickCatcherClaimsOnlyTheSecondaryPress()`` pins what the
+    /// view answers when AppKit asks. This pins the other half: that there is a
+    /// real view for AppKit to ask, covering the area the row occupies rather
+    /// than collapsed to nothing by the overlay. Dispatching a synthetic mouse
+    /// event to check the two halves together was tried and rejected -- it
+    /// takes the test host down with it, which fails a dozen unrelated tests
+    /// running beside it.
+    @Test @MainActor
+    func theSecondaryClickCatcherCoversTheRowAndCallsThrough() {
+        final class Count { var value = 0 }
+        let pressed = Count()
+        let rowSize = CGSize(width: 120, height: PanelMetrics.sessionRowHeight)
+
+        let hosting = NSHostingView(
+            rootView: Color.clear
+                .frame(width: rowSize.width, height: rowSize.height)
+                .overlay { SecondaryClickCatcher { pressed.value += 1 } }
+        )
+        hosting.frame = NSRect(origin: .zero, size: rowSize)
+        hosting.layoutSubtreeIfNeeded()
+
+        func catchers(in view: NSView) -> [SecondaryClickView] {
+            (view as? SecondaryClickView).map { [$0] } ?? view.subviews.flatMap(catchers(in:))
+        }
+        let catcher = catchers(in: hosting).first
+        #expect(catcher != nil)
+        #expect(catcher?.frame.size == rowSize)
+
+        catcher?.rightMouseDown(
+            with: NSEvent.mouseEvent(
+                with: .rightMouseDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )!
+        )
+        #expect(pressed.value == 1)
     }
 
     @Test @MainActor

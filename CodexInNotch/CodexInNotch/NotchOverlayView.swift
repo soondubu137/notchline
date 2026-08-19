@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 
@@ -510,9 +511,29 @@ private struct SessionRow: View {
         .buttonStyle(SessionRowButtonStyle())
         .frame(maxWidth: .infinity)
         .frame(height: PanelMetrics.sessionRowHeight)
+        // Only a finished row. The catcher is not installed at all on the
+        // others, so a secondary press on a running Turn lands on nothing
+        // rather than on a handler that decides to do nothing -- which is also
+        // what keeps the primary click's own behaviour identical either way.
+        .overlay {
+            if isDismissable {
+                SecondaryClickCatcher { store.dismiss(session) }
+            }
+        }
         .onHover { isHovered = $0 }
         .accessibilityLabel(accessibilityText)
+        // A secondary click is not something a keyboard or VoiceOver can
+        // produce, so the same intent is offered as an action rather than left
+        // reachable only by mouse.
+        .accessibilityActions {
+            if isDismissable {
+                Button("移除这一行") { store.dismiss(session) }
+            }
+        }
     }
+
+    /// Finished rows only -- see ``MonitorStore/dismiss(_:)`` for why.
+    private var isDismissable: Bool { session.status == .completed }
 
     private var accessibilityText: String {
         let preview = store.showsContentPreviews
@@ -718,6 +739,72 @@ private struct SessionRowCaption: View {
             return NotchPalette.label
         }
         return NotchPalette.ink(for: session.agent).on
+    }
+}
+
+/// Turns a secondary click on the view it covers into one call, and leaves
+/// every other event alone.
+///
+/// **Why AppKit.** SwiftUI has no secondary-click gesture. What it has is
+/// `contextMenu`, which is a menu -- a second click to make a one-item choice,
+/// on a panel that hides itself as soon as the pointer leaves it. The press
+/// itself is the whole interaction here, so the press is what this reads.
+///
+/// **How it stays out of the way.** The view sits above the row and would
+/// otherwise swallow the primary click the row is built around. `hitTest`
+/// answers only while the event being dispatched is a secondary press;
+/// everything else -- the primary click, the hover that expands the panel,
+/// cursor tracking -- gets `nil` and finds the SwiftUI button underneath, as if
+/// this were not here.
+struct SecondaryClickCatcher: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> SecondaryClickView {
+        let view = SecondaryClickView()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ nsView: SecondaryClickView, context: Context) {
+        // Re-assigned rather than captured once: the closure holds the row this
+        // view was made for, and SwiftUI reuses the view when the list reorders.
+        nsView.action = action
+    }
+}
+
+final class SecondaryClickView: NSView {
+    var action: (() -> Void)?
+
+    /// Whether an event of this type is one this view is entitled to take.
+    ///
+    /// Split out from ``hitTest(_:)`` because it is the one thing here that can
+    /// be asserted without a running event loop, and the one thing that must
+    /// not drift: widen it and the row underneath stops opening, because its
+    /// primary click never reaches the button.
+    static func claims(_ eventType: NSEvent.EventType?) -> Bool {
+        eventType == .rightMouseDown || eventType == .rightMouseUp
+    }
+
+    /// Claimed only for the secondary press. See ``SecondaryClickCatcher``.
+    ///
+    /// `nil` is also the answer when there is no current event at all, which is
+    /// how AppKit asks about geometry rather than about a click.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard Self.claims(NSApp.currentEvent?.type) else { return nil }
+        return super.hitTest(point)
+    }
+
+    /// The overlay is not activating and never becomes key, so the panel is
+    /// clicked while another application holds the front every time. Without
+    /// this the first press on it would be spent bringing this app forward,
+    /// which it does not even do.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// On the press, not the release, which is when a secondary click acts
+    /// everywhere else on this system -- a menu opens under the pointer the
+    /// moment the button goes down.
+    override func rightMouseDown(with event: NSEvent) {
+        action?()
     }
 }
 

@@ -115,7 +115,7 @@ Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次�
    **后两条都是实测逼出来的，不是补强。** 2026-08-19 实机：用户切走、等轮次跑完、切回同一个会话读完，整个 `~/Library/Application Support/Claude` 树在 6 分钟内 **0 个文件**被修改；同日复查确认 `~/Library/Logs/Claude/main.log` 里的 `setFocusedSession` 只是 `lastFocusedAt` 盖章时刻的子集（只在切换会话时出现，「Window focused」之后 0 条 visibility 写入），且安装包里根本没有已读字段（`lastReadAt`/`hasUnread`/`seenAt`/`viewedAt` 0 命中）。产品语义、被推翻的两条既有规则与代价见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
    激活信号来自公开的 `NSWorkspace.didActivateApplicationNotification`（`DesktopActivationWatcher`），按 bundle identifier 过滤，只记录**跃迁**的时刻、从不记录「此刻是否在前台」，且只知道本应用启动之后发生的激活。
    阅读手势来自 `DesktopReadingWatcher`：同一个公开通知维护「那个应用此刻是否持有前台」，加上公开的 `CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType:)` 取 `.keyDown` 与 `.scrollWheel` 两者的较小值。该调用只回答「上一次这类事件离现在多久」，不回答键码、字符、位置或窗口；它不是 event tap，不需要 entitlement，实测不弹授权。**持有前台从不单独作数**——手势必须晚于 `boundary`，所以把窗口留在前台然后离开座位的用户产生不了任何东西。鼠标移动被排除（投递给指针下面的东西，多屏下可以完全不是那个窗口），点击也被排除（本应用自己的浮层能在前台不变的情况下吃掉一次）。
-5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**unknown 的行根本不进 gate**，因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动清空。
+5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**unknown 的行根本不进 gate**，因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动移除（在该行上右键，或清空整张列表）。
 6. 边沿有两个：Claude Desktop 写记录，以及它回到前台。后者直接来自激活通知，因此「切回去读」这个手势与行离开 notch 是同一件事，不需要等 gate 的 1 秒复查。**阅读手势没有边沿，也不该有**——要被告知一次按键就得盯着整台机器的每一次按键——它在 gate 已经为等待中的行预约的 1 秒复查上采样，那个 1 秒同时是它的上界；没有行在等的时候不产生任何采样。前者来自 `PathSetChangeWatcher`——一个可以随时替换被监听路径集合的 watcher，`ClaudeCodeSessionRecordWatcher` 与本适配器共用它。适配器监听状态根目录加每个发现到的账户目录；账户目录在第一次读取时才被发现，新账户由根目录的边沿或心跳发现。
 7. 失败一律 fail closed：树不存在（纯终端用户的常态）是 `unavailable` 且**不产生诊断**；单份记录读不出只让那个会话答 unknown；**全部记录都读不出**才判定为 schema 不兼容，发出诊断并保留 last-known-good，此时不做任何新的隐藏。
 
@@ -593,7 +593,7 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - `Display`：立即将组件移动到所选显示器；目标临时不可用时回退，并在重新连接后恢复用户偏好。
 - `Recheck`：重新运行只读能力检查，不静默改配置。
 - `Codex integration` 总开关：On 安装或修复六种必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。窗口里它是 `Products` 卡片中 Codex 那一行的 switch；Claude Code 那一行按 ADR 0010 给的是 `Set Up…` 而不是开关（`figma-design.md` §8.1）。
-- `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。
+- `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。单行的对应动作是在终态行上右键（§17），两者共用同一个 `dismissedSessionIDs`。
 - `Quota reading transcripts`：报出本应用的额度读取在 Claude Code 自己的 project 目录里留下的 transcript 总大小，尾部 `Reveal in Finder` 打开那个目录（**只报大小**：个数那一半回答的是没人会问的问题，判断值不值得去清只看大小）；**只统计不删除**，理由见 `ClaudeCodeUsageTranscripts`。**这一行有三种读数，而不是「有数字」与「没有行」两种。** 目录靠一次已经发生的读取反查出来，因此第一次读取落地之前无从计数：那时写 `Calculating…` 并把按钮置灰；量到了写 `43.2 MB` 并恢复按钮；读取已经跑完却仍未找到目录时写 `Unavailable`。判据是「有没有跑完过一次读取」（`ClaudeCodeUsageReader.attemptedAt`）而不是失败次数——`session_id` 在 `read` 内部就已记下，所以一次跑完的读取找到的目录不会还被报成在路上；而机器上没有 `claude` 时那件「正在进行的工作」已经停了，再写 `Calculating…` 就是一句不再成立的进度声明。产品若根本不留文件（Codex）则整行不存在——把它和「还没量出来」用同一个 nil 表示，正是 CC-020 里卡片自己长出一行的成因。按钮的置灰由「有没有目录」这一个来源决定，不设第二个标志位，两者因此不可能互相矛盾。
 - `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。
 - `Show current content previews`：立即影响所有行；关闭时清空内存预览并重新生成安全标题。两个产品都停止收取，不只是停止显示。
@@ -615,6 +615,8 @@ protocol MonitorViewModelProtocol: ObservableObject {
 ```
 
 Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入口注入真实 repository。SwiftUI 不直接解析协议事件、不读取本地文件、不构造导航 URL。
+
+**终态行的右键移除也走这条边界**：视图只发出意图（`MonitorStore.dismiss(_:)`），由 store 把该行的 `MonitoredSession.id` 记进 `dismissedSessionIDs` 并**重新走一遍 merge 发布**——列表、顶部汇总和产品标记都是从「还在显示的行」推出来的，只改数组会留下一条看不见却仍在点亮产品标记的行。`dismiss` 自己拒绝非终态行，因此这条限制不依赖调用方。SwiftUI 没有次要点击手势，`contextMenu` 给的是一个只有一项的菜单，而这个面板在指针离开后就收起；因此行上盖一层 `SecondaryClickCatcher`（`NSViewRepresentable`），它的 `hitTest` 只在当前事件是 `rightMouseDown`/`rightMouseUp` 时认领，其余一律返回 `nil` 让左键、hover 和光标跟踪照常落到下面的按钮上——`SecondaryClickView.claims(_:)` 单独拿出来就是为了让这条能被断言。它只装在终态行上。
 
 几何继续由现有 AppKit overlay 负责：使用完整 `NSScreen.frame`，所有中间帧保持相同 `maxY`；顶部高度来自目标菜单栏。水平方向上展开态锁定 `midX`，带刘海的收起态改为锚定缺口右缘，窗口另在本体左右各留一个圆角半径的肩（见 `figma-design.md` §3.4）。三行会话展开总高为 `menuBarHeight + 280`（`240` viewport + `40` footer），空/全局状态为 `menuBarHeight + 88`（`48` body + `40` footer）。因此 `46 pt` 参考分别是 `326` 与 `134`，无刘海 `24 pt` 三行参考是 `304`。
 
