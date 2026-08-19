@@ -9232,17 +9232,21 @@ for line in sys.stdin:
         #expect(snapshot.sessions.count == 1)
     }
 
-    /// Reading it where it already stood takes the row off the notch.
+    /// A finished row goes on its own while the user sits and watches.
     ///
     /// The shape neither of the first two routes can reach, and the most
     /// ordinary one there is: the session was on screen before the Turn ended
     /// and the user never went anywhere. Claude Desktop writes nothing — it
     /// stamps a focus only when it *puts* a session on screen — and no
-    /// activation happens, because the window never lost the front. What is
-    /// left is the first thing a reader does: a keystroke or a scroll into that
-    /// window, after the Turn ended.
+    /// activation happens, because the window never lost the front.
+    ///
+    /// **This is the rule that can retire a row nobody read**, and it is
+    /// deliberate: at the instant the Turn ends, watching it finish and having
+    /// walked away with the window in front are indistinguishable, so the
+    /// product answers the narrower question — is the answer on a screen
+    /// somebody could be looking at — and accepts the second user's loss.
     @Test @MainActor
-    func aParkedReadersNextGestureRetiresTheRow() async throws {
+    func aWatchedRowRetiresWithoutTheUserDoingAnything() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
         try harness.registerHooks()
@@ -9251,29 +9255,23 @@ for line in sys.stdin:
         try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
         try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
         harness.live = [harness.session(id: "s-1", cwd: cwd)]
-        // On screen since before the Turn ran, and never re-stamped.
+        // On screen since before the Turn ran, and never re-stamped: no file
+        // route can fire, and the user has done nothing at all.
         try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
+        harness.desktopIsInFrontOfTheUser = true
 
-        // Watching it finish is not reading it: at this instant somebody
-        // sitting there and somebody who submitted and walked away have done
-        // exactly the same last thing.
-        let watching = await harness.service.fetchSnapshot(showsContentPreviews: false)
-        #expect(watching.sessions.count == 1)
-
-        harness.desktopReadingGestureAt = Date(timeIntervalSince1970: 102)
-        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
-        #expect(read.sessions.isEmpty)
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.isEmpty)
     }
 
-    /// Having typed into Claude Desktop before the Turn ended is not evidence
-    /// of having read what it said.
+    /// A window that is not in front of anybody keeps the row.
     ///
-    /// This is the whole safety argument for the route, and the reason it is a
-    /// gesture rather than "the window is in front": submitting the prompt is
-    /// itself a keystroke, so a rule that ignored the boundary would retire
-    /// every row the moment it appeared.
+    /// The other half of the rule above, and the half that decides whether it
+    /// is a rule at all: working in another application, another Space, a
+    /// locked screen and a sleeping display all report the same thing here, and
+    /// all of them keep the row.
     @Test @MainActor
-    func aGestureOlderThanTheTurnIsNotEvidenceOfReading() async throws {
+    func aRowStandsWhileClaudeDesktopIsNotInFrontOfAnybody() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
         try harness.registerHooks()
@@ -9283,19 +9281,18 @@ for line in sys.stdin:
         try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
         harness.live = [harness.session(id: "s-1", cwd: cwd)]
         try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
-        // The prompt was typed, and nothing has been touched since.
-        harness.desktopReadingGestureAt = Date(timeIntervalSince1970: 100)
+        harness.desktopIsInFrontOfTheUser = false
 
         let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
         #expect(snapshot.sessions.count == 1)
     }
 
-    /// A gesture speaks for one session: the one Desktop has on screen.
+    /// Being in front retires one session: the one Desktop has on screen.
     ///
-    /// Scrolling reaches whatever the window is showing. A second finished
-    /// session behind it was not read, and keeps its row.
+    /// The window shows one session at a time. A second finished session behind
+    /// it is not on any screen, and keeps its row.
     @Test @MainActor
-    func aGestureOnlyRetiresTheSessionDesktopHasOnScreen() async throws {
+    func beingInFrontOnlyRetiresTheSessionDesktopHasOnScreen() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
         try harness.registerHooks()
@@ -9321,19 +9318,20 @@ for line in sys.stdin:
         ]
         try harness.writeDesktopRecord(session: "front", lastFocusedAt: 99)
         try harness.writeDesktopRecord(session: "behind", lastFocusedAt: 98)
-        harness.desktopReadingGestureAt = Date(timeIntervalSince1970: 102)
+        harness.desktopIsInFrontOfTheUser = true
 
         let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
         #expect(snapshot.sessions.map(\.threadID) == ["behind"])
     }
 
-    /// A gesture cannot retire a row Claude Desktop knows nothing about.
+    /// Being in front cannot retire a row Claude Desktop knows nothing about.
     ///
-    /// A terminal session is never on Claude Desktop's screen, so typing into
-    /// that window says nothing about it. Without this the route would quietly
-    /// become "any Claude Code row disappears when you type in Claude Desktop".
+    /// A terminal session is never on Claude Desktop's screen, so that window
+    /// being in front says nothing about it. Without this the route would
+    /// quietly become "any Claude Code row disappears while Claude Desktop is
+    /// the active application".
     @Test @MainActor
-    func aGestureNeverRetiresATerminalSessionsRow() async throws {
+    func beingInFrontNeverRetiresATerminalSessionsRow() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
         try harness.registerHooks()
@@ -9342,7 +9340,7 @@ for line in sys.stdin:
         try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
         try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
         harness.live = [harness.session(id: "cli", cwd: cwd)]
-        harness.desktopReadingGestureAt = Date(timeIntervalSince1970: 102)
+        harness.desktopIsInFrontOfTheUser = true
 
         let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
         #expect(snapshot.sessions.count == 1)
@@ -9437,26 +9435,30 @@ for line in sys.stdin:
         #expect(finished.sessions.count == 1)
     }
 
-    /// The reading watcher hears the workspace, and answers only while its own
-    /// application holds the front.
+    /// The reading watcher answers only while its own application holds the
+    /// front, and only on a screen that is showing something.
     ///
-    /// Worth its own test for the same reason the activation watcher's is:
-    /// everything above it is stubbed, and getting the notification name, the
-    /// `userInfo` key or the front-holding test wrong fails silently — the row
-    /// would simply never leave.
+    /// Worth its own test because everything above it is stubbed, and this is
+    /// the one rule in the product that retires a row without a gesture: an
+    /// unheard notification or a guard read the wrong way round would retire
+    /// rows through a locked screen, which is precisely what the guards exist
+    /// to stop.
     @Test @MainActor
     func desktopReadingWatcherAnswersOnlyWhileItsOwnApplicationIsInFront() async throws {
         let current = try #require(NSRunningApplication.current.bundleIdentifier)
-        let clock = TestClock()
         let mine = DesktopReadingWatcher(
             bundleIdentifier: current,
-            clock: clock,
-            secondsSinceLastGesture: { 5 }
+            screenIsAvailable: { true }
         )
         let somebodyElse = DesktopReadingWatcher(
             bundleIdentifier: "com.example.not-this-one",
-            clock: clock,
-            secondsSinceLastGesture: { 5 }
+            screenIsAvailable: { true }
+        )
+        // The same application in front, but nothing on the screen to see: a
+        // sleeping display, a locked screen or another user switched in.
+        let darkened = DesktopReadingWatcher(
+            bundleIdentifier: current,
+            screenIsAvailable: { false }
         )
 
         NSWorkspace.shared.notificationCenter.post(
@@ -9467,10 +9469,37 @@ for line in sys.stdin:
         // Delivered on the main queue, so let it drain.
         try await Task.sleep(nanoseconds: 200_000_000)
 
-        #expect(await mine.lastReadingGesture() == clock.now().addingTimeInterval(-5))
-        // Somebody else's application holds the front, so the same keystroke
-        // says nothing about reading a Claude Code answer.
-        #expect(await somebodyElse.lastReadingGesture() == nil)
+        #expect(await mine.isInFrontOfTheUser())
+        #expect(await somebodyElse.isInFrontOfTheUser() == false)
+        #expect(await darkened.isInFrontOfTheUser() == false)
+
+        // A screensaver over the top of the front application says the same
+        // thing a locked screen does.
+        DistributedNotificationCenter.default().post(
+            name: Notification.Name("com.apple.screensaver.didstart"),
+            object: nil
+        )
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(await mine.isInFrontOfTheUser() == false)
+
+        DistributedNotificationCenter.default().post(
+            name: Notification.Name("com.apple.screensaver.didstop"),
+            object: nil
+        )
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(await mine.isInFrontOfTheUser())
+    }
+
+    /// The live screen reading answers something on this machine, and answers
+    /// it without a permission prompt.
+    ///
+    /// It cannot assert *which* answer — the suite runs on whatever state the
+    /// machine is in — but a reading that threw, or one that needed an
+    /// entitlement the app does not have, would fail here rather than silently
+    /// retiring every row.
+    @Test
+    func theLiveScreenReadingIsAnswerableWithoutPermission() {
+        _ = DesktopReadingWatcher.systemScreenIsAvailable()
     }
 
     /// A session started from a terminal keeps its finished row, and books no
@@ -12420,12 +12449,11 @@ private final class ClaudeCodeHarness {
         set { activationStub.lastActivatedAt = newValue }
     }
 
-    /// When the user last typed or scrolled into Claude Desktop. `nil` is both
-    /// "that application is not in front" and "nobody has touched anything",
-    /// which are one answer as far as the rule is concerned.
-    var desktopReadingGestureAt: Date? {
-        get { readingStub.lastGestureAt }
-        set { readingStub.lastGestureAt = newValue }
+    /// Whether Claude Desktop is in front of the user, as this harness's
+    /// service sees it. `false` is the state a freshly launched app is in.
+    var desktopIsInFrontOfTheUser: Bool {
+        get { readingStub.isInFront }
+        set { readingStub.isInFront = newValue }
     }
 
     private static let portLock = NSLock()
@@ -12532,9 +12560,9 @@ private final class ClaudeCodeHarness {
             ),
             activations: activationStub,
             // Injected for the same reason as the two above: the real one reads
-            // whether Claude Desktop is in front on the developer's machine and
-            // how long ago they last touched the keyboard, so a test left with
-            // it would pass or fail depending on where the mouse was.
+            // whether Claude Desktop is in front on the developer's machine, so
+            // a test left with it would pass or fail depending on which window
+            // happened to be active while the suite ran.
             reading: readingStub,
             sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true)
         )
@@ -12696,11 +12724,11 @@ private final class StubDesktopActivation: DesktopActivationReporting, @unchecke
 }
 
 private final class StubDesktopReading: DesktopReadingReporting, @unchecked Sendable {
-    /// nil is both "Claude Desktop does not hold the front" and "nobody has
-    /// touched the keyboard", which are the same answer to the only question
-    /// asked of it.
-    var lastGestureAt: Date?
-    func lastReadingGesture() async -> Date? { lastGestureAt }
+    /// `false` covers every way the answer can fail to be in front of somebody:
+    /// another application holds the front, the display is asleep, the screen
+    /// is locked, a screensaver is running, or another user is switched in.
+    var isInFront = false
+    func isInFrontOfTheUser() async -> Bool { isInFront }
 }
 
 private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sendable {

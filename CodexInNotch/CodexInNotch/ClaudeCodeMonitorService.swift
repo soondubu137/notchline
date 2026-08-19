@@ -79,12 +79,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// 2026-08-19 across the whole application-support tree, zero files touched
     /// -- so the file alone can never see that reading happen.
     private let activations: any DesktopActivationReporting
-    /// When the user last typed or scrolled into Claude Desktop.
+    /// Whether Claude Desktop is in front of the user right now.
     ///
     /// The third route, and the one that covers a session that was *already* on
     /// screen when its Turn ended. Neither of the first two can: nothing is
     /// written when a window regains focus over the session already showing,
     /// and no activation happens when the application never lost the front.
+    /// It is also the only route that asks a state instead of watching for a
+    /// gesture, and therefore the only one that can retire a row nobody read --
+    /// see ``DesktopReadingWatcher`` for why that is the accepted trade and
+    /// what it excludes.
     private let reading: any DesktopReadingReporting
     /// The sessions this app has seen on Claude Desktop's screen while their
     /// Turn was already finished.
@@ -195,15 +199,15 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             clock: clock
         )
         self.activations = resolvedActivations
-        // No change stream of its own, deliberately. A keystroke is not
-        // something this app can be told about without watching every keystroke
-        // on the machine, and it does not need to be: a finished row waiting on
+        // No change stream of its own, deliberately. Waking a display and
+        // unlocking a screen do have notifications, but the front, the lock and
+        // the display are three states that have to agree, and a row waiting on
         // the user already books a re-check every
-        // ``MonitorTiming/terminalUnreadRecheckInterval``, which is the cadence
-        // this reading is sampled at and the bound on how late the row leaves.
+        // ``MonitorTiming/terminalUnreadRecheckInterval``. That second is the
+        // cadence this reading is sampled at and the bound on how late the row
+        // leaves; nothing listed means nothing sampled.
         self.reading = reading ?? DesktopReadingWatcher(
-            bundleIdentifier: Self.desktopBundleIdentifier,
-            clock: clock
+            bundleIdentifier: Self.desktopBundleIdentifier
         )
         self.terminalReadMembershipGate = TerminalUnreadMembershipGate(
             settlingInterval: timing.terminalReadSettlingInterval,
@@ -520,18 +524,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     ///
     /// - **came back to it** -- the application returned to the front after the
     ///   Turn ended, showing this session (the user was somewhere else);
-    /// - **read it where it stood** -- the user typed or scrolled into the
-    ///   application after the Turn ended, with this session on its screen (the
-    ///   user never went anywhere);
+    /// - **it is in front of them** -- the application holds the front, on a
+    ///   waking, unlocked screen, with this session on it (the user never went
+    ///   anywhere);
     /// - **moved on from it** -- this session was seen on screen with its Turn
     ///   already over, and Claude Desktop has since put a different one there.
     ///
-    /// Together they are one claim in three shapes: *the user made a move only
-    /// a person makes, while the answer was in front of them*. What none of
-    /// them can do is retire the row at the instant the Turn ends -- at that
-    /// instant somebody watching it finish and somebody who submitted and
-    /// walked away have done exactly the same last thing, so the row waits for
-    /// whichever of these comes first.
+    /// Two of them are the same claim in two shapes -- *the user made a move
+    /// only a person makes, while the answer was in front of them*. The middle
+    /// one is not, and it is the one that decides how this product fails: at
+    /// the instant a Turn ends, somebody watching it finish and somebody who
+    /// submitted and walked away have done exactly the same last thing, so no
+    /// move separates them. Rather than keep every such row, the product
+    /// retires it and accepts losing the row for the second user.
     ///
     /// **Only a session Claude Desktop knows about is ever judged.** A session
     /// started from a terminal has no read state anywhere -- see
@@ -553,7 +558,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     ) async -> (rows: [MonitoredSession], diagnostic: String?) {
         let readState = await readState.snapshot()
         let activatedAt = await activations.lastActivation()
-        let readingGestureAt = await reading.lastReadingGesture()
+        let desktopIsInFrontOfTheUser = await reading.isInFrontOfTheUser()
         var unreadThreadIDs: Set<String> = []
         var judged: [(row: MonitoredSession, boundary: Date)] = []
         var shown: [MonitoredSession] = []
@@ -575,26 +580,26 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             return activatedAt >= boundary
         }
 
-        /// Whether the user read it where it already stood.
+        /// Whether the finished answer is in front of the user right now.
         ///
         /// The case neither route above can reach: the session was on screen
         /// before the Turn ended and nobody left, so Claude Desktop wrote
-        /// nothing and never came back to the front. Two facts again, and the
-        /// second is what makes it evidence: Desktop's record says this session
-        /// is the one on its screen, and the user typed or scrolled into
-        /// Desktop *after* the Turn ended. Reading a long answer is scrolling
-        /// it; typing the next prompt retires the row through the hook anyway.
+        /// nothing and never came back to the front.
         ///
-        /// Requiring the gesture to fall after the boundary is the whole safety
-        /// argument, the same one the activation carries: somebody who leaves
-        /// the window in front and walks away makes no gesture at all, so their
-        /// row keeps standing.
-        func readItWhereItStood(_ sessionID: String, since boundary: Date) -> Bool {
-            guard sessionID == readState.mostRecentlyDisplayedSessionID,
-                  let readingGestureAt else {
-                return false
-            }
-            return readingGestureAt >= boundary
+        /// **The one rule here that asks a state rather than watching for a
+        /// gesture, and the one that can retire a row nobody read.** That is a
+        /// decision rather than a slip: at the instant a Turn ends, somebody
+        /// watching it finish and somebody who submitted and walked away have
+        /// done exactly the same last thing, so no gesture separates them and
+        /// no amount of waiting will produce one. The product chooses to answer
+        /// the narrower question -- is that answer on a screen somebody could
+        /// be looking at -- and to accept losing the row for a user who stepped
+        /// away with the window in front. ``DesktopReadingWatcher`` carries
+        /// what "could be looking at" excludes; the row is dismissible by hand
+        /// either way, and a row retired early cannot be brought back.
+        func isInFrontOfThem(_ sessionID: String) -> Bool {
+            sessionID == readState.mostRecentlyDisplayedSessionID
+                && desktopIsInFrontOfTheUser
         }
 
         /// Whether the user moved on from it inside Claude Desktop.
@@ -645,7 +650,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
                 shown.append(row)
             case .unread:
                 if comingBackShowedIt(row.threadID, since: boundary)
-                    || readItWhereItStood(row.threadID, since: boundary)
+                    || isInFrontOfThem(row.threadID)
                     || movedOnFrom(row.threadID) {
                     judged.append((row, boundary))
                 } else {
@@ -709,9 +714,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// one of these.
     ///
     /// One of the routes to "read" does turn that floor into a sampling
-    /// cadence, and only for as long as a row is standing: a keystroke or a
-    /// scroll arrives on no watcher, so `readItWhereItStood` can only be asked
-    /// at a re-check. It still costs nothing when nothing is listed, and it is
+    /// cadence, and only for as long as a row is standing: `isInFrontOfThem`
+    /// reads three states that have to agree, so it can only be asked at a
+    /// re-check. It still costs nothing when nothing is listed, and it is
     /// bounded by the same second.
     func nextRefreshDeadline() async -> Date? {
         [

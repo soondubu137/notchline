@@ -198,7 +198,7 @@ sequenceDiagram
 
 **`nextRefreshDeadline()` 只能报出"这次刷新真的能推进的到期时刻"。** 存储侧在该时刻醒来并刷新；如果刷新之后它仍在过去，同一个唤醒会立刻再次触发——失效方向不是"迟到的唤醒"，而是忙等。因此每一项到期都必须镜像其调度器自身的判定条件：元数据到期只按**会被重读的那些线程**（Hook 追踪的）计算，而不是整个 `threadRecords` 缓存——缓存里的其余线程由成员关系读取按 30 秒刷新，用 10 秒的元数据窗口去量它，得到的是一个提前 20 秒到期、没有任何工作会去清除的时刻；退避标记是"下次尝试不得早于"的下限，而不是独立的唤醒理由。两处都曾各自成立过。
 
-终态行是这条规则唯一的例外，而且是刻意的。已读证据不会随时间到来，只会随 watcher 上的一次文件变化到来，而 watcher 按其自身文档只是"低延迟提示，永远不是真相来源"。据此**不报出任何到期**曾看起来是同一条规则的自然结论，实测下来却是把产品的核心交互整个押在一条边沿上：真机 trace 里，一行终态从列出到用户读取之间是**整整八秒零刷新**。因此这类行改为报出一个**从当前时刻向前量**的复查时刻（`terminalUnreadRecheckInterval`，1 秒）。ADR 0012 的第三条判定之后，这个 1 秒**同时**是一次真正的采样：一次按键或滚动不会到达任何 watcher，只能在复查时问一次「上一次离现在多久」。它没有把复查变成忙等——没有行在等的时候一次也不问，而问出来的答案要么让那一行消失，要么预约下一次。要区分的不是"报不报"，而是"报出的是不是陈旧值"——`terminalObservedAt + settlingInterval` 对未读行永远落在过去，被存储侧钳到 1 秒下限且没有任何刷新能推动它，那才是穿着到期外衣的忙等；从 `now` 向前量的复查按构造可清除：那一刻的刷新要么隐藏该行，要么预约下一次。watcher 正常情况下先一步到达，这个下限根本不会到期。
+终态行是这条规则唯一的例外，而且是刻意的。已读证据不会随时间到来，只会随 watcher 上的一次文件变化到来，而 watcher 按其自身文档只是"低延迟提示，永远不是真相来源"。据此**不报出任何到期**曾看起来是同一条规则的自然结论，实测下来却是把产品的核心交互整个押在一条边沿上：真机 trace 里，一行终态从列出到用户读取之间是**整整八秒零刷新**。因此这类行改为报出一个**从当前时刻向前量**的复查时刻（`terminalUnreadRecheckInterval`，1 秒）。ADR 0012 的第三条判定之后，这个 1 秒**同时**是一次真正的采样：它要前台、显示器与锁屏三个状态同时成立，只能在复查时读一次。它没有把复查变成忙等——没有行在等的时候一次也不问，而问出来的答案要么让那一行消失，要么预约下一次。要区分的不是"报不报"，而是"报出的是不是陈旧值"——`terminalObservedAt + settlingInterval` 对未读行永远落在过去，被存储侧钳到 1 秒下限且没有任何刷新能推动它，那才是穿着到期外衣的忙等；从 `now` 向前量的复查按构造可清除：那一刻的刷新要么隐藏该行，要么预约下一次。watcher 正常情况下先一步到达，这个下限根本不会到期。
 
 存储侧不校验服务报出的到期时刻，因此另设一条兜底：睡眠时长以 `minimumRefreshInterval`（1 秒）为**下界**，绝不向下取到 0。这把任何漏网的错误到期限制在取消轮询前的 1 Hz，而不是吃满一个核心——上一版缺少这个下界时实测 63% CPU，主线程停在 `NSRunningApplication` 的同步 LaunchServices 往返上。它同样不承担任何延迟指标。
 
@@ -379,7 +379,7 @@ flowchart LR
 | 私有未读边界 | `CodexDesktopUnreadStateRepository` | 只读 unread 集合、标记来源权威性、发出目录变化事件 | [`CodexDesktopUnreadState.swift`](../CodexInNotch/CodexInNotch/CodexDesktopUnreadState.swift) |
 | 私有已读边界（Claude Code） | `ClaudeCodeDesktopReadStateRepository` | 只读 Claude Desktop 的会话记录，按 `cliSessionId` 连接身份，只取 `lastFocusedAt` 与 `isArchived`；**没有记录就是 unknown 而不是未读**；发出账户目录变化事件（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)） | [`ClaudeCodeDesktopReadState.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeDesktopReadState.swift) |
 | 应用激活边界 | `DesktopActivationWatcher` | 用公开的 `NSWorkspace.didActivateApplicationNotification` 记录某个 bundle id 的应用**回到前台的时刻**（只记跃迁，从不回答「此刻是否在前台」），并把它作为一条边沿发出 | [`DesktopActivationWatcher.swift`](../CodexInNotch/CodexInNotch/DesktopActivationWatcher.swift) |
-| 阅读手势边界 | `DesktopReadingWatcher` | 同一个公开激活通知维护「那个应用此刻是否持有前台」，加上公开的 `CGEventSource.secondsSinceLastEventType`（只取 `.keyDown` 与 `.scrollWheel`，只问「多久以前」，不问键码、字符、位置或窗口）；**持有前台从不单独作数**，手势必须晚于该 Turn 的终止时刻（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)） | [`DesktopReadingWatcher.swift`](../CodexInNotch/CodexInNotch/DesktopReadingWatcher.swift) |
+| 在不在人眼前 | `DesktopReadingWatcher` | 同一个公开激活通知维护「那个应用此刻是否持有前台」，再减去三种持有前台但等于没有的状态：`CGDisplayIsAsleep`、`CGSessionCopyCurrentDictionary` 的锁屏与 console、屏保的公开分布式通知。**全应用唯一一条读状态而不是等跃迁的判定**，因而唯一可能撤掉没人读过的行；最小化、另一块显示器与另一个 Space 分辨不了（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)） | [`DesktopReadingWatcher.swift`](../CodexInNotch/CodexInNotch/DesktopReadingWatcher.swift) |
 | 路径集合监听 | `PathSetChangeWatcher` | 监听一个**运行期间会变化**的路径集合并合成单一事件流；`ClaudeCodeSessionRecordWatcher` 与私有已读边界共用它 | [`PathSetChangeWatcher.swift`](../CodexInNotch/CodexInNotch/PathSetChangeWatcher.swift) |
 | 领域模型 | `MonitorSnapshot`、`MonitoredSession`、`MonitorAggregation` | 定义 UI 唯一消费的数据契约与聚合优先级 | [`MonitorDomain.swift`](../CodexInNotch/CodexInNotch/MonitorDomain.swift) |
 | 精确导航 | `CodexDesktopNavigator` | 预检目标并使用官方 deep link 打开同一 Thread | [`CodexDesktopNavigator.swift`](../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift) |
@@ -465,7 +465,7 @@ flowchart LR
 2. **只有一个 Turn reducer**：Hook 事件只进入 `HookEventRepository`；历史回放、乱序、重复和精确身份规则不散落在视图层。第二个来源可以**退休**一个 Turn，但只能在这个 actor 里、带顺序护栏，并且不得携带 Turn 身份：Codex 侧的 `removeThreads(notIn:snapshotStartedAt:)` 与 Claude Code 侧的 `endTurnsForStoppedSessions(_:)` 是仅有的两处，后者见 [ADR 0011](adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md)。
 3. **只有一个 UI 数据契约**：上层只接收 `MonitorSnapshot`；availability、sessions、quota 与 diagnostic 来自同一快照输入。
 4. **私有依赖停在边界**：`.codex-global-state.json` 的 schema 只存在于两个只读 repository；领域层只看到 Project resolution 和带权威性标记的 unread 集合。
-5. **恢复逻辑不伪造业务状态**：timeout、探活、缓存和断开宽限只决定保留或重建连接，不用计时器猜测 Running、Approval、已读或 Project。（ADR 0012 的阅读手势不是这一条的例外：证据是**那一次按键**，时长只是把它换算回一个时刻去和 Turn 的终止时刻比。没人动键盘时，等多久都不会有任何一行消失。）
+5. **恢复逻辑不伪造业务状态**：timeout、探活、缓存和断开宽限只决定保留或重建连接，不用计时器猜测 Running、Approval、已读或 Project。（ADR 0012 的第三条判定不是这一条的例外：它读的是三个当下的状态——哪个应用持有前台、显示器醒着没有、屏幕锁着没有——没有一个是计时器，等待本身也不会让任何一行消失。它确实推翻了同一份 ADR 里「只用跃迁」的写法，理由与代价写在那里。）
 6. **UI 保持被动**：SwiftUI 只展示和发出用户意图；状态解析、导航预检、Hook 安装和文件读取都有独立边界。
 7. **历史事件没有业务语义**：历史文件只可证明 Hook 配置曾执行；当前会话列表只能来自当前运行时快照或本次进程启动后的实时事件。
 8. **「正在忙」不是丢弃请求的理由**：布尔看起来没问题，但它只在「一定会有别的东西再问一次」时才安全，而这个前提在边沿触发的信号上不成立。

@@ -2,8 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-/// When the user last did something to a product's own application that only
-/// somebody reading it does.
+/// Whether a product's own application is in front of the user right now.
 ///
 /// **Why this exists.** ``DesktopActivationReporting`` answers "the user came
 /// back to that application", and Claude Desktop's own record answers "that
@@ -13,135 +12,163 @@ import Foundation
 /// tree, zero -- and no activation happens, because the application never lost
 /// the front. See [ADR 0012](../../docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md).
 ///
-/// **What cannot be done, and why this is not it.** There is no way to retire
-/// the row at the instant the Turn ends. At that instant the user who is
-/// watching and the user who submitted and walked away are observationally
-/// identical -- the last thing either of them did was submit the prompt -- so a
-/// rule that fired there would retire the row for exactly the user this product
-/// exists for. What *is* available is the first thing a reader does afterwards.
+/// **This is a state, and that is a deliberate reversal.** Every other read
+/// signal in this app is a transition, precisely so that somebody who walks
+/// away cannot have a row retired for them. This one is not, and it cannot be:
+/// at the instant a Turn ends, the user watching it finish and the user who
+/// submitted and walked away have done exactly the same last thing, so no
+/// transition separates them. The product's answer is to stop trying to
+/// separate them and instead ask a narrower question honestly -- *is that
+/// answer on a screen somebody could be looking at* -- accepting that a user
+/// who stepped away with the window in front loses the row. The guards below
+/// are what keep "could be looking at" from meaning "the machine is on".
 nonisolated protocol DesktopReadingReporting: Sendable {
-    /// The last moment the user typed or scrolled into that application, or nil
-    /// when this app cannot say that they did.
-    func lastReadingGesture() async -> Date?
+    /// Whether that application holds the front, on a screen that is actually
+    /// showing something to somebody.
+    func isInFrontOfTheUser() async -> Bool
 }
 
-/// Keystrokes and scrolls delivered to one application, and nothing else about
-/// them.
+/// One application's hold on the front, minus the states where holding it means
+/// nothing.
 ///
-/// Two public facts, and the rule needs both:
+/// Holding the front comes from `NSWorkspace.didActivateApplicationNotification`
+/// -- the same public notification ``DesktopActivationWatcher`` uses, and the
+/// same bundle identifier. On its own it is a poor proxy for "somebody is
+/// looking", because an application goes on holding the front through a locked
+/// screen, a sleeping display, a screensaver and a switched-away login session.
+/// Three public readings take those back out:
 ///
-/// 1. **That application holds the front**, tracked through
-///    `NSWorkspace.didActivateApplicationNotification` -- the same public
-///    notification ``DesktopActivationWatcher`` uses, and the same bundle
-///    identifier.
-/// 2. **A keystroke or a scroll happened**, from
-///    `CGEventSource.secondsSinceLastEventType`. That call reports *how long
-///    ago* the last event of one type was and nothing else: no key, no
-///    character, no position, no window. It needs no entitlement and prompts
-///    for nothing -- it is not an event tap.
+/// - **The display is awake** (`CGDisplayIsAsleep`). A dark screen shows nobody
+///   anything, and this is where most walked-away time actually ends up.
+/// - **The login session is unlocked and on the console**
+///   (`CGSessionCopyCurrentDictionary`). Locked, or another user switched in,
+///   means that window is not on any screen the user can see.
+/// - **No screensaver is running** (the public `com.apple.screensaver.didstart`
+///   / `didstop` distributed notifications). Least load-bearing of the three:
+///   the default is to lock with the screensaver, which the reading above
+///   already catches, and unlike the other two this one is a notification that
+///   could be missed rather than a state that can be read. It is here for the
+///   configuration that runs a screensaver without locking.
 ///
-/// Holding the front is never load-bearing on its own. The rule that consumes
-/// this also requires the gesture to fall *after* the Turn ended, so a user who
-/// leaves the window in front and walks away produces nothing: their idle time
-/// only grows, and the row stays. That is ADR 0012's objection to
-/// "frontmost means read", answered rather than overridden.
+/// **What no reading covers.** The window can hold the front while being
+/// somewhere the user is not looking: on another display, on another Space, or
+/// minimised with the application still active. Answering those needs window
+/// geometry, and the bans on window inspection stand. A finished Turn in one of
+/// those states is retired unseen -- that is the accepted cost of the rule, not
+/// an oversight.
 ///
-/// **Mouse movement is deliberately not one of the gestures.** Keystrokes and
-/// scrolls are delivered to whichever application holds the front, so observing
-/// one while Claude Desktop holds it says the user typed or scrolled *into
-/// Claude Desktop*. Movement is delivered to whatever is under the pointer,
-/// which on a second display need not be that window at all -- counting it
-/// would let a nudge of the mouse somewhere else retire the row. Clicks are
-/// left out for a different reason: this app's own overlay can take one without
-/// the front changing, and ADR 0012 refuses to let a Notch interaction stand in
-/// for reading the answer in Claude Desktop.
+/// Hiding the application is deliberately *not* a fourth reading: hiding makes
+/// it resign the front, so `holdsTheFront` already covers it. Minimising does
+/// not, and nothing here can see that.
 final class DesktopReadingWatcher: DesktopReadingReporting, @unchecked Sendable {
-    /// The gestures that are delivered to the application holding the front.
-    nonisolated private static let gestures: [CGEventType] = [.keyDown, .scrollWheel]
+    nonisolated private static let screensaverDidStart = Notification.Name(
+        "com.apple.screensaver.didstart"
+    )
+    nonisolated private static let screensaverDidStop = Notification.Name(
+        "com.apple.screensaver.didstop"
+    )
 
     private let lock = NSLock()
     private let bundleIdentifier: String
-    private let clock: any MonitorClock
-    private let secondsSinceLastGesture: @Sendable () -> TimeInterval
+    private let screenIsAvailable: @Sendable () -> Bool
     nonisolated(unsafe) private var isFrontmost: Bool
-    nonisolated(unsafe) private var observer: NSObjectProtocol?
+    nonisolated(unsafe) private var isRunningScreensaver = false
+    nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
 
-    /// - Parameter secondsSinceLastGesture: How long ago the user last made one
-    ///   of the gestures. Injected so a test can place one either side of a
-    ///   Turn's last moment without synthesising HID events.
+    /// - Parameter screenIsAvailable: Whether the display is awake and the login
+    ///   session unlocked and on the console. Injected so a test can put the
+    ///   machine in each of those states without touching the real one.
     nonisolated init(
         bundleIdentifier: String,
-        clock: any MonitorClock = SystemMonitorClock(),
-        secondsSinceLastGesture: @escaping @Sendable () -> TimeInterval =
-            DesktopReadingWatcher.systemSecondsSinceLastGesture
+        screenIsAvailable: @escaping @Sendable () -> Bool =
+            DesktopReadingWatcher.systemScreenIsAvailable
     ) {
         self.bundleIdentifier = bundleIdentifier
-        self.clock = clock
-        self.secondsSinceLastGesture = secondsSinceLastGesture
-        // Read once, to know who holds the front before the first transition
-        // arrives. Without it the very first parked read after launch could
-        // never be seen: the user who is already in Claude Desktop when this app
-        // starts never generates an activation for it. This is not the
-        // "is it frontmost now" test ADR 0012 rejects -- on its own the flag
-        // retires nothing, because the gesture still has to land after the Turn
-        // ended.
+        self.screenIsAvailable = screenIsAvailable
+        // Read once, because the front is a state and this app has to know it
+        // before the first transition arrives -- a user already in Claude
+        // Desktop when this app starts never generates an activation for it.
         isFrontmost = NSWorkspace.shared.frontmostApplication?
             .bundleIdentifier == bundleIdentifier
-        observer = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let application = notification.userInfo?[
-                NSWorkspace.applicationUserInfoKey
-            ] as? NSRunningApplication else {
-                return
+        observers.append(
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let application = notification.userInfo?[
+                    NSWorkspace.applicationUserInfoKey
+                ] as? NSRunningApplication else {
+                    return
+                }
+                self?.set { $0.isFrontmost = application
+                    .bundleIdentifier == bundleIdentifier
+                }
             }
-            self?.frontChanged(
-                to: application.bundleIdentifier == bundleIdentifier
+        )
+        for (name, isRunning) in [
+            (Self.screensaverDidStart, true),
+            (Self.screensaverDidStop, false)
+        ] {
+            observers.append(
+                DistributedNotificationCenter.default().addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.set { $0.isRunningScreensaver = isRunning }
+                }
             )
         }
     }
 
     deinit {
-        if let observer {
+        for observer in observers {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            DistributedNotificationCenter.default().removeObserver(observer)
         }
     }
 
-    nonisolated func lastReadingGesture() async -> Date? {
-        guard holdsTheFront() else { return nil }
-
-        let seconds = secondsSinceLastGesture()
-        // A machine that has never seen one of these reports something enormous
-        // rather than an error, and an enormous reading is simply a gesture too
-        // old to clear anything.
-        guard seconds.isFinite, seconds >= 0 else { return nil }
-        return clock.now().addingTimeInterval(-seconds)
+    nonisolated func isInFrontOfTheUser() async -> Bool {
+        guard holdsTheFrontUnobscured() else { return false }
+        return screenIsAvailable()
     }
 
-    /// The smaller of the two idle readings: the user made *a* gesture that
-    /// recently, whichever kind it was.
-    nonisolated static func systemSecondsSinceLastGesture() -> TimeInterval {
-        gestures
-            .map {
-                CGEventSource.secondsSinceLastEventType(
-                    .combinedSessionState,
-                    eventType: $0
-                )
-            }
-            .min() ?? .infinity
+    /// The display is awake, and the login session is unlocked and on the
+    /// console.
+    ///
+    /// A session dictionary that cannot be read at all answers `false`: this
+    /// rule is the one place in the product that retires a row without a
+    /// gesture, so the reading that guards it fails towards keeping the row.
+    nonisolated static func systemScreenIsAvailable() -> Bool {
+        guard CGDisplayIsAsleep(CGMainDisplayID()) == 0,
+              let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+            return false
+        }
+        // Absent while unlocked, which is why this reads "not true" rather than
+        // requiring `false`.
+        if flag(session, "CGSSessionScreenIsLocked") == true { return false }
+        return flag(session, kCGSessionOnConsoleKey as String) == true
     }
 
-    nonisolated private func holdsTheFront() -> Bool {
+    /// The values in the session dictionary are `CFBoolean`, which bridges to
+    /// `NSNumber` rather than to `Bool`.
+    nonisolated private static func flag(
+        _ session: [String: Any],
+        _ key: String
+    ) -> Bool? {
+        (session[key] as? NSNumber)?.boolValue
+    }
+
+    nonisolated private func holdsTheFrontUnobscured() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return isFrontmost
+        return isFrontmost && !isRunningScreensaver
     }
 
-    nonisolated private func frontChanged(to isFrontmost: Bool) {
+    nonisolated private func set(_ change: (DesktopReadingWatcher) -> Void) {
         lock.lock()
-        self.isFrontmost = isFrontmost
+        change(self)
         lock.unlock()
     }
 }

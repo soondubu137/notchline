@@ -74,7 +74,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 - App Server、Hooks、通知、JSONL、SQLite、窗口焦点与 deep-link 回调都不表达“用户已阅读”。
 - 当前 Desktop 私有 Unix socket `~/.codex/ipc/ipc.sock` 会广播 `thread-read-state-changed` delta，但没有初始完整快照；连接者必须注册为内部 IPC client、参与 discovery，可能影响路由与超时。它的风险和版本耦合均高于纯只读文件，因此不采用。
-- Accessibility、AppleScript、标题匹配、定时移除或“Desktop 获得焦点即已读”均不准确并违反安全约束。（本条为 Codex 而写，Claude Code 一侧的例外经产品批准，见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)：那里没有别的来源，而「哪个会话在屏幕上」有记录可查，因此焦点与输入手势各自都不是单独成立的判据。Accessibility、AppleScript 与标题匹配在两侧都仍然禁止。）
+- Accessibility、AppleScript、标题匹配、定时移除或“Desktop 获得焦点即已读”均不准确并违反安全约束。（本条为 Codex 而写。Claude Code 一侧的例外经产品批准，见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)：那里没有别的来源，而「哪个会话在屏幕上」有记录可查，所以焦点说的是**那一个**会话而不是「所有 thread 都已读」。Accessibility、AppleScript、标题匹配与窗口几何在两侧都仍然禁止。）
 - 唯一公开且诚实的产品折中是把 Notch 点击定义为本应用自己的“已确认”，但它无法覆盖用户直接在 Desktop 阅读，不得称为 Desktop 已读同步；当前产品语义不采用。
 
 可替代本私有实现的最小公开能力仍是启动/重连可获取的 `hasUnreadTurn` 快照，以及携带 `threadId`、`hostId` 和新布尔值的 `thread/readState/changed` 通知，并具备 capability/version negotiation。
@@ -109,14 +109,15 @@ Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次�
 3. **按 `(size, mtime, inode)` 缓存解析结果**，每次读取只打开真正变化过的记录。本机 31 份记录（约 2 MB）实测首读 5 ms、全部命中缓存 1 ms。记录数超过 512 时按 mtime 取最新的 512 份——活着的会话必然是最近被显示或恢复过的那些，尾部答 unknown 并保留其行。
 4. 判定分两层。文件这一层在 provider 里：`readState(forSession:terminalBoundaryAt:)` 用 Turn 自己的终止时刻做比较左边（`HookTurnState.lastEventAt`），`lastFocusedAt >= boundary` 即已读，`isArchived` 同样为已读，**记录不存在则是 unknown 而不是未读**。跨来源的那一层在编排器里（`AGENTS.md` §6.1「决策跨数据源就属于编排中心」），文件说未读时还有三条，各自补一个文件里没有的事实：
    - **`comingBackShowedIt`**：该会话正是 `mostRecentlyDisplayedSessionID`，且 `DesktopActivationReporting.lastActivation()` 晚于 `boundary`。
-   - **`readItWhereItStood`**：该会话正是 `mostRecentlyDisplayedSessionID`，且 `DesktopReadingReporting.lastReadingGesture()` 晚于 `boundary`。
+   - **`isInFrontOfThem`**：该会话正是 `mostRecentlyDisplayedSessionID`，且 `DesktopReadingReporting.isInFrontOfTheUser()` 为真。**全应用唯一一条不比较任何时刻、也不要求用户做任何事的判定**，因而也是唯一一条可能撤掉没人读过的行的判定；权衡见 ADR 0012 第三条。
    - **`movedOnFrom`**：本应用曾在某次刷新看见该会话带着 `.completed` 的行**正是** `mostRecentlyDisplayedSessionID`，而现在屏幕上的是别的会话。这份成员关系记在 Turn 上不记在会话上——行一旦重新变成非 `.completed` 就清掉——并且随会话离开列表一起清掉。
 
    **后两条都是实测逼出来的，不是补强。** 2026-08-19 实机：用户切走、等轮次跑完、切回同一个会话读完，整个 `~/Library/Application Support/Claude` 树在 6 分钟内 **0 个文件**被修改；同日复查确认 `~/Library/Logs/Claude/main.log` 里的 `setFocusedSession` 只是 `lastFocusedAt` 盖章时刻的子集（只在切换会话时出现，「Window focused」之后 0 条 visibility 写入），且安装包里根本没有已读字段（`lastReadAt`/`hasUnread`/`seenAt`/`viewedAt` 0 命中）。产品语义、被推翻的两条既有规则与代价见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
    激活信号来自公开的 `NSWorkspace.didActivateApplicationNotification`（`DesktopActivationWatcher`），按 bundle identifier 过滤，只记录**跃迁**的时刻、从不记录「此刻是否在前台」，且只知道本应用启动之后发生的激活。
-   阅读手势来自 `DesktopReadingWatcher`：同一个公开通知维护「那个应用此刻是否持有前台」，加上公开的 `CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType:)` 取 `.keyDown` 与 `.scrollWheel` 两者的较小值。该调用只回答「上一次这类事件离现在多久」，不回答键码、字符、位置或窗口；它不是 event tap，不需要 entitlement，实测不弹授权。**持有前台从不单独作数**——手势必须晚于 `boundary`，所以把窗口留在前台然后离开座位的用户产生不了任何东西。鼠标移动被排除（投递给指针下面的东西，多屏下可以完全不是那个窗口），点击也被排除（本应用自己的浮层能在前台不变的情况下吃掉一次）。
+   「在不在人眼前」来自 `DesktopReadingWatcher`：同一个公开通知维护「那个应用此刻是否持有前台」（构造时从 `NSWorkspace.frontmostApplication` 读一次种子，之后只由通知驱动），再减去三种持有前台但等于没有的状态——`CGDisplayIsAsleep` 显示器休眠、`CGSessionCopyCurrentDictionary` 报告锁屏或不在 console、公开的 `com.apple.screensaver.didstart` / `didstop` 报告屏保在跑。三者全部公开、无需 entitlement、实测不弹授权；会话字典读不出来时答 `false`，即朝保留的方向倒。隐藏应用不单列（隐藏会交出前台）；**最小化、另一块显示器、另一个 Space 无法分辨**，落在这三种状态里的行会被没人看见地撤掉，这是被接受的代价而不是缺口。
+   曾经上线过一版用「一次按键或滚动」当证据的实现（`c1052bb`，`CGEventSource.secondsSinceLastEventType` 取 `.keyDown` 与 `.scrollWheel`），它更安全但答不了「坐着看完、什么都不做」，已被本条取代；细节与它的一处硬伤记在 ADR 0012 的拒绝清单里。
 5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**unknown 的行根本不进 gate**，因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动移除（在该行上右键，或清空整张列表）。
-6. 边沿有两个：Claude Desktop 写记录，以及它回到前台。后者直接来自激活通知，因此「切回去读」这个手势与行离开 notch 是同一件事，不需要等 gate 的 1 秒复查。**阅读手势没有边沿，也不该有**——要被告知一次按键就得盯着整台机器的每一次按键——它在 gate 已经为等待中的行预约的 1 秒复查上采样，那个 1 秒同时是它的上界；没有行在等的时候不产生任何采样。前者来自 `PathSetChangeWatcher`——一个可以随时替换被监听路径集合的 watcher，`ClaudeCodeSessionRecordWatcher` 与本适配器共用它。适配器监听状态根目录加每个发现到的账户目录；账户目录在第一次读取时才被发现，新账户由根目录的边沿或心跳发现。
+6. 边沿有两个：Claude Desktop 写记录，以及它回到前台。后者直接来自激活通知，因此「切回去读」这个手势与行离开 notch 是同一件事，不需要等 gate 的 1 秒复查。**`isInFrontOfThem` 没有边沿**：它要三个状态同时成立（前台、显示器、锁屏），因此在 gate 已经为等待中的行预约的 1 秒复查上采样，那个 1 秒同时是它的上界；没有行在等的时候不产生任何采样。用户点亮屏幕或解锁之后行的消失也走这一秒。前者来自 `PathSetChangeWatcher`——一个可以随时替换被监听路径集合的 watcher，`ClaudeCodeSessionRecordWatcher` 与本适配器共用它。适配器监听状态根目录加每个发现到的账户目录；账户目录在第一次读取时才被发现，新账户由根目录的边沿或心跳发现。
 7. 失败一律 fail closed：树不存在（纯终端用户的常态）是 `unavailable` 且**不产生诊断**；单份记录读不出只让那个会话答 unknown；**全部记录都读不出**才判定为 schema 不兼容，发出诊断并保留 last-known-good，此时不做任何新的隐藏。
 
 ## 2. 设计约束
@@ -261,7 +262,7 @@ struct TurnEvidence: Equatable {
 | Turn id | 当前活动或未读终态 Turn | 无 | Thread updatedAt |
 | 标题 | Desktop 当前显示标题 | 预览开启时使用本轮 prompt 安全截断；否则 `Untitled` | cwd、仓库名、Mock 标题 |
 | Project | Desktop 私有全局状态中的精确 thread assignment + Project id/name | `projectless-thread-ids` 明确命中时 `Chats`；否则失败显示 `Project unavailable` | `thread.section`、cwd basename、Git root |
-| 未读 | Desktop 未读真值；Claude Code 另加 ADR 0012 的三条编排层规则 | 无 | 「此刻在前台」单独作数、Notch 点击、固定保留时间、鼠标移动 |
+| 未读 | Desktop 未读真值；Claude Code 另加 ADR 0012 的三条编排层规则 | 无 | 「此刻在前台」不带 ADR 0012 的三条读数与会话身份限定、Notch 点击、固定保留时间、窗口标题或几何 |
 | 状态 | 受支持的 Turn/请求事件与校正快照 | 保留最后可信四态值 | 计时器或 UI 猜测 |
 | 处理时间 | Hook `UserPromptSubmit` 的 `received_at` | 起点未知时退回状态点，不显示数值 | Thread 时间、文件修改时间、累加计数器 |
 | 预览 | Codex 已向用户公开的内容 | 隐藏 | raw reasoning、工具参数、输出、diff |
