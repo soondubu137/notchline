@@ -706,9 +706,15 @@ struct CodexInNotchTests {
         #expect(contentBox == 496)
     }
 
-    /// Rows only say which product they are while there is something to tell apart.
+    /// Rows say which product they are for as long as both products are connected.
+    ///
+    /// This used to be keyed to the rows themselves — attribution appeared only
+    /// while two products each had one — and the mark then blinked out whenever
+    /// one product happened to have nothing running, with both still open. What
+    /// the user is telling apart is the pair of products, and that fact holds
+    /// still for as long as the pair is connected.
     @Test @MainActor
-    func rowsAreAttributedOnlyWhenBothProductsHaveThem() {
+    func rowsAreAttributedForAsLongAsBothProductsAreConnected() {
         let store = MonitorStore(services: [])
         func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
             MonitoredSession(
@@ -723,6 +729,14 @@ struct CodexInNotchTests {
         )
         #expect(!store.showsProductAttribution)
 
+        // Connected but with nothing running: still two products to tell apart,
+        // and the Codex rows on screen keep their mark rather than losing it
+        // until Claude Code's next turn happens to start.
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [])
+        )
+        #expect(store.showsProductAttribution)
+
         store.applyForTesting(
             makeAgentSnapshot(
                 .claudeCode,
@@ -732,11 +746,49 @@ struct CodexInNotchTests {
         )
         #expect(store.showsProductAttribution)
 
+        // Closed, so there is one product again and no second mark to explain.
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, availability: .ready, presence: .closed)
+        )
+        #expect(!store.showsProductAttribution)
+
         // The default is the only option that adds nothing to the panel.
         #expect(store.productAttribution == .nameAndColour)
         // And every option is reachable, because a preference the user cannot
         // find until a second product happens to be running is one they never find.
         #expect(ProductAttributionStyle.allCases.count == 4)
+    }
+
+    /// A closed product's rows still identify themselves while they are listed.
+    ///
+    /// Presence is the rule, but it is not the whole rule: a product can close
+    /// with its finished rows still on screen, and a list that is visibly mixed
+    /// has to say which row is whose no matter what presence now reports.
+    @Test @MainActor
+    func rowsLeftBehindByAClosedProductKeepTheirMark() {
+        let store = MonitorStore(services: [])
+        func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u", projectName: "p", title: "t",
+                preview: nil, status: .completed, startedAt: nil
+            )
+        }
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex, "a")])
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                sessions: [session(.claudeCode, "b")],
+                presence: .closed
+            )
+        )
+
+        #expect(store.connectedAgents == [.codex])
+        #expect(store.showsProductAttribution)
     }
 
     /// `Colour bar` takes the product off the caption entirely.

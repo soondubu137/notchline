@@ -273,10 +273,10 @@ struct AppSettingsView: View {
             }
         } footnote: {
             // Visible with one product too. A preference you cannot find until a
-            // second product happens to be running is one you never find.
+            // second product happens to be open is one you never find.
             SettingsFootnote(
-                "Only applies when both products are running — with one product there is "
-                    + "nothing to tell apart."
+                "Only applies while both products are connected — with one product there "
+                    + "is nothing to tell apart."
             )
         }
     }

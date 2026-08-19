@@ -712,8 +712,8 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var integrationSwitchIsOn = false
     @Published var isExpanded = false
     @Published var reduceMotion = false
-    /// How a row says which product it came from. Only drawn when both products
-    /// have rows; see ``showsProductAttribution``.
+    /// How a row says which product it came from. Only drawn while both
+    /// products are connected; see ``showsProductAttribution``.
     @Published var productAttribution: ProductAttributionStyle {
         didSet {
             preferences?.set(
@@ -848,9 +848,10 @@ final class MonitorStore: ObservableObject {
         // Through the injected store, not `.standard`. These three used to read
         // `.standard` directly while only the display preference was injected,
         // so a `MonitorStore` built in a test inherited whoever was running it:
-        // `rowsAreAttributedOnlyWhenBothProductsHaveThem` failed on any machine
-        // whose owner had chosen `Badge` in Settings, and passed on every other,
-        // which is a test reporting on the developer rather than on the code.
+        // `rowsAreAttributedForAsLongAsBothProductsAreConnected` failed on any
+        // machine whose owner had chosen `Badge` in Settings, and passed on
+        // every other, which is a test reporting on the developer rather than
+        // on the code.
         self.showsContentPreviews = preferences?.object(
             forKey: Self.contentPreviewDefaultsKey
         ) as? Bool ?? true
@@ -1093,12 +1094,29 @@ final class MonitorStore: ObservableObject {
 
     /// Whether rows say which product they belong to.
     ///
-    /// Only when both products actually have rows. Ordering is by urgency and
-    /// not by product, so a mixed list is interleaved and every row has to
-    /// identify itself — but a list that is all one product's has nothing to
-    /// disambiguate, and the prefix would cost caption width for no reason.
+    /// Only while there are two products to tell apart — but that is a fact
+    /// about what is **connected**, not about which product happens to have a
+    /// row this second. Ordering is by urgency and not by product, so the list
+    /// is interleaved and every row has to identify itself; with one product
+    /// connected there is nothing to disambiguate and the mark would cost
+    /// caption width for no reason.
+    ///
+    /// It used to read `Set(sessions.map(\.agent)).count > 1`, which made the
+    /// mark come and go while both products stayed open: Claude Code finishing
+    /// its last row silently un-marked every Codex row, and the mark returned
+    /// on the next Claude Code turn. That is motion the user cannot account
+    /// for, and it contradicts the surface's own presence rule — the collapsed
+    /// matrices and the footer rules are already drawn per *connected* product
+    /// (``footerRules``), so the rows were the one place answering a different
+    /// question. Keyed to presence, the answer holds still for as long as both
+    /// products are open, which is the span over which the user is actually
+    /// telling rows apart.
+    ///
+    /// The second clause covers the reverse case: a product that closed while
+    /// its rows are still listed. The list is visibly mixed, so it still has to
+    /// identify itself, whatever presence now says.
     var showsProductAttribution: Bool {
-        Set(sessions.map(\.agent)).count > 1
+        connectedAgents.count > 1 || Set(sessions.map(\.agent)).count > 1
     }
 
     /// One rule block per connected product, in display order.

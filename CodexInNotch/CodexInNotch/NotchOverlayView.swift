@@ -597,7 +597,7 @@ private struct SessionRowContent: View {
     }
 
     /// The rail is drawn on the same terms as every other attribution: only
-    /// while there are two products to tell apart.
+    /// while two products are connected and there is something to tell apart.
     private var drawsRail: Bool {
         store.showsProductAttribution && store.productAttribution == .colourBar
     }
@@ -663,8 +663,8 @@ private struct SessionStatusControl: View {
     }
 }
 
-/// The row's leading 11pt line: the Project, and — when two products have rows —
-/// which product this one is.
+/// The row's leading 11pt line: the Project, and — while two products are
+/// connected — which product this one is.
 ///
 /// The attribution costs horizontal space and what it costs comes out of the
 /// Project text: `Claude Code ·` takes about 73 of the caption's 394. That is

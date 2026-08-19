@@ -397,7 +397,7 @@ Input needed
 
 ### 8.2 Session list
 
-弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品同时运行时有效果；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
+弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品都已连接时有效果（不要求两个产品此刻都有会话，见 [`dual-agent-design.md`](dual-agent-design.md) §4）；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
 
 卡片里还有第二行 `Clear the session list`，尾部胶囊按钮 `Clear`，列表为空时 disabled。它在 v1 是 Codex 卡片里的一枚破坏性按钮；产品分组现在只讲产品，而这个动作的对象是会话列表，它属于这里。板上没有这一行，因为板只画了三个已确认的**设置**，而这是一个动作。
 
