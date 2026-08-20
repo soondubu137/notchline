@@ -13,7 +13,7 @@ protocol AgentMonitoring: Sendable {
     /// through a deadline, which is what lets a slow provider not hold up a
     /// fast one.
     nonisolated var stateChangeEvents: AsyncStream<Void> { get }
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot
+    func fetchSnapshot() async -> AgentSnapshot
     /// Earliest moment a refresh could produce different output.
     ///
     /// The store sleeps until this instead of sampling on a fixed cadence, so a
@@ -39,16 +39,6 @@ protocol AgentMonitoring: Sendable {
     func installHooks() async throws
     func removeHooks() async throws
     func clearSessions() async
-    /// Applies the preview switch before returning.
-    ///
-    /// Synchronous and `nonisolated` on purpose: this is a privacy control, so
-    /// the caller's last write has to be the one that takes effect. Routing it
-    /// through an unheld `Task` made it reorderable, and routing it to a file
-    /// made it failable -- see CR-012.
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool)
-    /// Redacts preview text already collected. Ordering-insensitive, unlike
-    /// ``setContentPreviewsEnabled``.
-    func discardCollectedPreviews() async
     func disconnect() async
 }
 
@@ -153,7 +143,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         self.desktopProcessIdentifierProvider = desktopProcessIdentifierProvider
     }
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+    func fetchSnapshot() async -> AgentSnapshot {
         let hookUpgradeDiagnostic: String?
         do {
             try await hookInstaller.upgradeManagedHookIfNeeded()
@@ -245,8 +235,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     from: hookState.turns,
                     threadRecords: threadRecords,
                     projectMetadata: projectSnapshot,
-                    unreadState: unreadSnapshot,
-                    showsContentPreviews: showsContentPreviews
+                    unreadState: unreadSnapshot
                 )
                 scheduleQuotaRefreshIfNeeded()
                 return remember(
@@ -513,14 +502,6 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         }
     }
 
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {
-        hookEvents.setContentPreviewsEnabled(isEnabled)
-    }
-
-    func discardCollectedPreviews() async {
-        await hookEvents.clearContentPreviews()
-    }
-
     nonisolated private func nanoseconds(_ seconds: TimeInterval) -> UInt64 {
         UInt64(max(0, seconds) * 1_000_000_000)
     }
@@ -622,8 +603,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         from states: [HookTurnState],
         threadRecords: [String: ThreadRecord],
         projectMetadata: DesktopProjectMetadataSnapshot,
-        unreadState: DesktopUnreadStateSnapshot,
-        showsContentPreviews: Bool
+        unreadState: DesktopUnreadStateSnapshot
     ) async -> [MonitoredSession] {
         var sessions: [MonitoredSession] = []
         // Keyed on what was actually evaluated, not on every Hook state. A
@@ -643,8 +623,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 thread: threadRecords[state.threadID]?.thread,
                 projectName: projectMetadata.resolution(
                     for: state.threadID
-                ).displayName,
-                showsContentPreviews: showsContentPreviews
+                ).displayName
             ) else {
                 continue
             }
@@ -1103,38 +1082,27 @@ enum CodexSnapshotParser {
     nonisolated static func session(
         from state: HookTurnState,
         thread: JSONValue?,
-        projectName: String,
-        showsContentPreviews: Bool = true
+        projectName: String
     ) -> MonitoredSession? {
         if let thread, !isEligibleRootThread(thread) {
             return nil
         }
 
-        let privacySafeTitle = normalizedTitle(thread?["name"]?.stringValue)
-            ?? "Untitled"
-        let threadPreview = showsContentPreviews
-            ? normalizedPreview(thread?["preview"]?.stringValue)
-            : nil
+        let threadPreview = normalizedPreview(thread?["preview"]?.stringValue)
         let title = normalizedTitle(thread?["name"]?.stringValue)
             ?? threadPreview
-            ?? (showsContentPreviews ? normalizedPreview(state.promptPreview) : nil)
+            ?? normalizedPreview(state.promptPreview)
             ?? "Untitled"
         let status = state.status
-        let preview: String?
-        if !showsContentPreviews {
-            preview = nil
-        } else if status == .completed {
-            preview = normalizedPreview(state.assistantPreview)
-        } else {
-            preview = normalizedPreview(state.promptPreview)
-        }
+        let preview = status == .completed
+            ? normalizedPreview(state.assistantPreview)
+            : normalizedPreview(state.promptPreview)
 
         return MonitoredSession(
             threadID: state.threadID,
             turnID: state.turnID,
             projectName: projectName,
             title: title,
-            privacySafeTitle: privacySafeTitle,
             preview: preview,
             status: status,
             startedAt: state.startedAt

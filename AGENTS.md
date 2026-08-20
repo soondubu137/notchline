@@ -52,7 +52,7 @@ Each document owns a specific scope. When a change lands in one of these scopes,
 | Document | Authoritative for |
 | --- | --- |
 | [`CONTEXT.md`](CONTEXT.md) | Terminology. Any naming disagreement is settled here |
-| [`docs/PRD.md`](docs/PRD.md) | Product contract: monitoring scope, state model, privacy, navigation, release gates, acceptance criteria |
+| [`docs/PRD.md`](docs/PRD.md) | Product contract: monitoring scope, state model, previews, navigation, release gates, acceptance criteria |
 | [`docs/figma-design.md`](docs/figma-design.md) | Visual and interaction spec, Figma file structure, legal component variants |
 | [`docs/system-architecture.md`](docs/system-architecture.md) | The structure of the implementation **as it actually is**: refresh timing, component responsibilities, rendering and performance boundaries |
 | [`docs/tech-design.md`](docs/tech-design.md) | Detailed design of interfaces, protocols, data flow, and failure recovery |

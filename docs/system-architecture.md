@@ -33,7 +33,7 @@ flowchart LR
         hooksConfig[("~/.codex/hooks.json")]
         hookHelper["codex_in_notch_hook.py"]
         hookEvents[("events/*.json 0600 仅身份与生命周期")]
-        previewChannel["HookPreviewChannel preview.sock 0600 正文只入内存"]
+        previewChannel["HookPreviewChannel preview.sock 0600 正文入内存"]
         observationMarker[("monitor-state.json 仅信任标记")]
         hookRepository["HookEventRepository actor 精确 Turn reducer"]
     end
@@ -155,7 +155,7 @@ sequenceDiagram
     participant reducer as Parser and membership gates
 
     loop 由 watcher 事件、到期唤醒或 60 秒心跳触发
-        store->>service: fetchSnapshot previews setting
+        store->>service: fetchSnapshot
         service->>hooks: consumeEvents
         hooks-->>service: post-launch exact Turn evidence and configuration trust
         service->>service: discard all pre-cutoff lifecycle events
@@ -371,8 +371,8 @@ flowchart LR
 | UI 状态 | `MonitorStore` | 拉取完整快照、合并刷新触发、发布 UI 状态、计算顶部汇总、按用户意图移除终态行（整张列表或单行，共用 `dismissedSessionIDs`） | [`MonitorStore.swift`](../CodexInNotch/CodexInNotch/MonitorStore.swift) |
 | 核心编排 | `LiveCodexMonitorService` | 协调 Hook、App Server、Project、未读、缓存、成员集合与降级 | [`LiveCodexMonitorService.swift`](../CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift) |
 | Turn reducer | `HookEventRepository` | 用精确身份消费事件、拒绝回放复活、维护内存 `HookTurnState` | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
-| 正文边界（Codex） | `HookPreviewChannel` | 经 Unix socket 收取 prompt/回答并只留在内存；持有预览开关这一进程内标志 | [`HookPreviewChannel.swift`](../CodexInNotch/CodexInNotch/HookPreviewChannel.swift) |
-| 正文边界（Claude Code） | `AgentHookListener` | loopback 收取生命周期事件并落成 0600 事件文件；**先应答再处理**，**`MessageDisplay` 在写队列之前转向内存**，只留每条消息头部 240 字符，另持有本侧预览开关这一进程内标志；正文只在**从没有到有**时报一个边沿（`onPreviewAppeared`），其余 delta 一律不进变更流 | [`AgentHookListener.swift`](../CodexInNotch/CodexInNotch/AgentHookListener.swift) |
+| 正文边界（Codex） | `HookPreviewChannel` | 经 Unix socket 收取 prompt/回答并留在内存。这条 socket 当初是为「正文不落盘」而建，那条承诺已随 PRD 第 7 节删除；它留着只是因为它在跑，改成由 helper 直接写事件文件同样可以 | [`HookPreviewChannel.swift`](../CodexInNotch/CodexInNotch/HookPreviewChannel.swift) |
+| 正文边界（Claude Code） | `AgentHookListener` | loopback 收取生命周期事件并落成 0600 事件文件；**先应答再处理**，**`MessageDisplay` 在写队列之前转向内存**，只留每条消息头部 240 字符；正文只在**从没有到有**时报一个边沿（`onPreviewAppeared`），其余 delta 一律不进变更流 | [`AgentHookListener.swift`](../CodexInNotch/CodexInNotch/AgentHookListener.swift) |
 | 会话身份（Claude Code） | `ClaudeCodeSessionRegistry` | 按节拍运行 `claude agents --json` 并对读取单飞；新鲜度从**上一次尝试**起算，失败保留上一次列表；**会话目录的变更可以把新鲜度窗口截断**（`invalidate()`，不低于 `edgeFloor`，读取途中到达的边沿不被该次读取消费）；在 stdout 里定位数组而不假定它独占该流；**排除本应用自己的额度读取会话**（见 `tech-design.md` §15.1） | [`ClaudeCodeSessionRegistry.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeSessionRegistry.swift) |
 | Hook 管理 | `CodexHookInstaller` | 安装、升级、校验和移除本应用管理的六类 Hook 定义 | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
 | 用户配置编辑 | `ManagedHooksConfiguration` | 在用户拥有的配置里严格增删本应用的定义；看不懂的结构一律不改，必须改才能继续时整体拒绝 | [`ManagedHooksConfiguration.swift`](../CodexInNotch/CodexInNotch/ManagedHooksConfiguration.swift) |
@@ -511,7 +511,7 @@ flowchart LR
 
    gate 的失败语义是刻意的：**失败的运行绝不自己重试**。让它继续看起来更周到，实际是一个没有退避的无限重试循环——最初就是这么写的，实测 1000 次不停；当时挡住它的判断在调用方，而取消路径正好从旁边绕过去了。失败只保留请求，何时重试由退避和 `nextRefreshDeadline` 决定。
 9. **编辑用户的文件时，解析而不是强转**：只改本应用管理的那几个 key，看不懂的结构原样保留；只有当「必须写的 key 已经是看不懂的结构」时才整体拒绝并报错。移除侧再加一次全文深扫，确认本应用的命令没有残留在任何改不动的形状里——残留就拒绝删除 helper，否则留下的是悬空引用。理由见 CR-013：把不认识的东西强转成空字典，等于把用户的文件换成我们自己的。
-10. **承诺不落盘的东西就不要落盘**：Codex 侧的 prompt 与回答正文只经 socket 进入内存，Claude Code 侧的 `MessageDisplay` 在写队列之前就转向内存，事件文件两侧都只携带身份与生命周期。这条现在**首先是性能约束**：正文一秒到三次，每次落一个文件就是每秒三次磁盘写加三次读删（正文不落盘这件事本身已按 PRD 第 7 节降级为不重要）。推论是隐私开关也不落盘——写盘的开关会失败、会乱序，那正是 CR-012 的 fail-open。凡是「用户以为已经关掉」的东西，都必须在调用返回前就已生效。
+10. **正文不落盘现在纯粹是一条性能约束**：`MessageDisplay` 一秒到三次，每次落一个文件就是每秒三次磁盘写加三次读删，所以它在写队列之前就转向内存。Codex 侧的 socket 是同一句话的历史版本，那时它兑现的是一条产品承诺——那条承诺已随 PRD 第 7 节删除，socket 留着只因为它在跑。**这条原则以后只回答「值不值得写」，不再回答「准不准写」**：正文放哪儿是工程判断，不是契约。
 11. **顺序敏感的状态不进 actor**：字节流分帧这类要求严格顺序的状态机必须留在已经串行化的队列上，只把自包含、顺序无关的单元交给 actor；反过来，CPU 密集的解码不留在 actor 上，避免它阻塞超时与连接管理。
 12. **重渲染由布局变化驱动，不由内容变化驱动**：叠层里的持续动效一律画在 CALayer 上，一秒一次的读数同样自绘图层；只有「保留宽度变了」才发布给 SwiftUI（见第 6 节）。理由是一次 SwiftUI 发布的代价是整块面板，而不是变化的那几个字符。
 

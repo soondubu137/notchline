@@ -163,7 +163,7 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 ## 6. 设置项
 
-设置窗口是单面板，没有侧边栏（见 [`figma-design.md`](figma-design.md) §8.0）。`Session list` 是其中第二个分组，位于 `Products` 与 `Privacy` 之间，只含一个弹出菜单：
+设置窗口是单面板，没有侧边栏（见 [`figma-design.md`](figma-design.md) §8.0）。`Session list` 是其中最后一个分组，排在 `Products` 与 `Display` 之后，只含一个弹出菜单：
 
 | 标签 | `Distinguish products` |
 | --- | --- |

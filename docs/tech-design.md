@@ -24,9 +24,9 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 从当前账户 primary rate-limit window 读取真实 `usedPercent`，转换为剩余百分比；不可用时显示灰色圆环。
 - 从 `account/usage/read.dailyUsageBuckets` 读取本地日历“今天”的 token bucket；Expanded footer 显示标准 Compact 数字、额度重置日期和 Settings 入口。今日 bucket 缺失但 bucket 数组有效时按 `0` 处理，接口不可用时只将今日用量显示为 `--`。
 - 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。Settings 使用一个 `Codex integration` 总开关，把六种必需 lifecycle event 定义作为一个产品能力启停；关闭后留在 Settings，不重置首次引导。
-- 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`（catch-all，reducer 内按 tool 名过滤）、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求与两种审批形态都必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除，且**只含身份与生命周期，不含任何正文**。
+- 使用 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`（catch-all，reducer 内按 tool 名过滤）、`PostToolUse` 和 `Stop` 建立 Turn 生命周期事件桥；所有状态事件必须携带精确 `session_id + turn_id`，输入请求与两种审批形态都必须用相同 `tool_use_id` 成对关闭。事件文件采用用户私有权限、消费后删除，目前只含身份与生命周期。
 - 标题使用 Thread 元数据，按成本分两层获取：Hook reducer 当前跟踪的 Thread 用 `thread/read`（`includeTurns: false`，实测约 1.2 KB/线程）按 id 读取，全量分页 `thread/list` 只负责低频成员关系对账（实测 33 个线程约 45 KB，且随历史线性增长）。`thread/list` 按契约**永远返回空 `turns`**（schema：`turns` 仅在 `thread/resume`、`thread/rollback`、`thread/fork` 和 `includeTurns: true` 的 `thread/read` 上填充），因此任何 Turn 级事实都只能来自 Hook reducer。Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。会话状态只包含 Running、Input needed、Approval needed、Completed；实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接收敛为 Completed，不再读取 Thread 详情区分结束原因。
-- Preview 设置默认开启；关闭后列表完全移除预览行，缺少 Desktop 标题时只显示 `Untitled`。prompt/回答片段**在任何情况下都不落盘**：它们经由 Unix socket 从 helper 直接交到运行中的进程内存，见第 11 节。
+- Preview 始终显示，没有开关；缺少 Desktop 标题时回退到本轮 prompt，仍取不到才显示 `Untitled`。Codex 侧的 prompt/回答片段经 Unix socket 从 helper 交到运行中的进程内存，见第 11 节。
 - `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔配置健康标记。应用重启时 reducer 从空集合开始，启动前积压的所有 Hook（包括 Stop 与 SessionEnd）一律不恢复或修改 Turn；只有本次进程启动后的 Hook 才是实时证据，也是四态状态的唯一来源。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
 - 会话行通过官方 `codex://threads/<thread-id>` deep link 打开同一 Codex Desktop 会话；打开前强制刷新全部未归档根 Thread，目标不存在时拒绝导航。URL 只定向交给 bundle id `com.openai.codex`，Launch Services 接受后才收起面板。
 
@@ -256,7 +256,7 @@ struct MonitoredThreadSnapshot: Identifiable, Equatable {
     let isArchived: Bool
     let isDeleted: Bool
     let isNavigable: Bool
-    let preview: String?           // memory only
+    let preview: String?           // 不随 Turn 持久化
     let observedAtMs: Int64
     let revision: UInt64
 }
@@ -281,10 +281,6 @@ struct QuotaSnapshot: Equatable {
     let remainingPercent: Int? // primary usedPercent 的反值
     let resetsAt: Date?
     let todayTokens: Int64?    // account/usage/read 的本地今日 bucket
-}
-
-struct PrivacySettings {
-    var showCurrentContentPreviews: Bool // default true
 }
 
 struct TurnKey: Hashable {
@@ -451,7 +447,7 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 
 ### 9.2 身份准入与请求配对
 
-- 所有会改变 Turn 状态的 Hook 必须包含非空 `session_id` 和 `turn_id`。不得回退到当前 Turn、`"unknown"`、时间邻近或 Thread 更新时间；缺少身份的事件只写脱敏诊断并消费隔离。
+- 所有会改变 Turn 状态的 Hook 必须包含非空 `session_id` 和 `turn_id`。不得回退到当前 Turn、`"unknown"`、时间邻近或 Thread 更新时间；缺少身份的事件只写诊断并消费隔离。
 - repository 没有该 Thread 时，受支持事件可以用自身的精确身份建立 Turn。已有当前 Turn 时，顺序更新且从未被该 Thread 淘汰过的 `UserPromptSubmit` 可以建立下一 Turn；Desktop 中断后继续执行时可能不再发送 `UserPromptSubmit`，因此更晚到达的实时 `PermissionRequest`、`PreToolUse`、`PostToolUse` 或 `Stop` 也可以用新的、未退休的精确 `turn_id` 接管同一 Thread。接管时旧 Turn id 立即进入 `retiredTurnIDs`，保留原始开始时间与 prompt preview，清空旧等待证据；事件本身再决定 Running、Input needed 或 Completed。任何退休 Turn 的迟到事件都不能复活旧身份。
 - `PreToolUse(request_user_input)` 只有在包含非空 `tool_use_id` 时才建立 Input pending；`PostToolUse` 只有 `turn_id` 和 `tool_use_id` 都与该 pending 完全相同时才能清除它。未匹配结果保持原状态。
 - `PermissionRequest` 没有自己的 `tool_use_id`，因此不能独立成为 Approval evidence；但它携带 `tool_name`，而被审批的调用已经由紧邻的 `PreToolUse` announce 过。reducer 因此为每个 Turn 记录"当前仍打开的工具调用"（`openToolUse`：`PreToolUse` 写入，同 `tool_use_id` 的 `PostToolUse` 清除），`PermissionRequest` 借用该 id 建立 Approval pending。没有打开的调用可配对，或 `tool_name` 与打开的调用不一致时，保持原状态——绝不建立无法关闭的等待。自动放行的请求在同一批事件内开合，不会滞留成假等待。`PostToolUse` 自身仍不得用来猜测审批状态。
@@ -474,7 +470,7 @@ repository 启动时记录 live cutoff。`received_at` 早于该 cutoff 的积�
 source + method + threadId + turnId + requestOrItemId + revision
 ```
 
-所有未知字段与枚举写入脱敏诊断，不让应用崩溃。诊断只保留方法名、版本和枚举标识，不包含正文、路径或凭据。
+所有未知字段与枚举写入诊断，不让应用崩溃。诊断只保留方法名、版本和枚举标识，不写入 loopback token 等凭据。
 
 ## 10. 汇总与排序
 
@@ -518,7 +514,7 @@ helper 那边 connect 和 write 通常紧挨着，所以这只在机器繁忙、
 
 不能改用 `thread.preview` 代替：实测它是**线程的首条用户消息**，不随轮次前进（17 轮的线程仍返回第 1 轮的文本），因此它满足不了 PRD 2.7 的「当前内容预览」。
 
-`showCurrentContentPreviews == false` 时，socket 收到的正文在到达瞬间即被丢弃，extractor 不产生正文，并禁止标题生成器访问 prompt fallback。该开关是一个进程内标志而非落盘设置：写盘的开关可能失败、可能乱序，也确实曾经 fail open（CR-012）。
+**这条 socket 已经没有契约撑着。** 它当初存在，是为了让「正文不落盘」这句承诺成立；那句承诺已在 PRD 第 7 节删除。它今天还在，只是因为它在跑、改它没有收益——Codex 侧一轮只来一次正文，走文件还是走 socket 在成本上分不出高下。哪天 helper 侧有别的理由要动，直接把正文写进事件文件即可，`preview.sock`、`event_id` 接合和上面那个 CC-023 的非阻塞坑一起消失。
 
 ### 正文如何到达本进程（Claude Code）
 
@@ -526,7 +522,7 @@ helper 那边 connect 和 write 通常紧挨着，所以这只在机器繁忙、
 
 来源是官方 Hook `MessageDisplay`（官方描述 "While assistant message text is displayed"，公开 payload 为 `turn_id, message_id, index, final, delta`）。它此前从未进入本仓库的事件表，Phase 0 的 30 事件清单里没有它——这正是「取不到正文」这个结论的由来。
 
-**先量再写。** 用 pty 驱动一个交互式会话，注册指向临时 `--settings` 文件里的独立监听器（**未改动 `~/.claude/settings.json`**），CLI 2.1.234 实测：一条 1561 字符的消息拆成 **11 个 delta**，间隔 **0.20–0.44 秒、均值 0.29 秒**，单个 payload 728–865 字节。这就是下面每一条的由来——三次每秒是这条路径唯一需要设计的东西，隐私不是（见 PRD 第 7 节，那条裁决已按不重要处理）。
+**先量再写。** 用 pty 驱动一个交互式会话，注册指向临时 `--settings` 文件里的独立监听器（**未改动 `~/.claude/settings.json`**），CLI 2.1.234 实测：一条 1561 字符的消息拆成 **11 个 delta**，间隔 **0.20–0.44 秒、均值 0.29 秒**，单个 payload 728–865 字节。这就是下面每一条的由来——三次每秒是这条路径唯一需要设计的东西。
 
 `AgentHookListener` 对它做四件事：
 
@@ -539,9 +535,7 @@ helper 那边 connect 和 write 通常紧挨着，所以这只在机器繁忙、
 
 **它也不进 `changeEvents()`，只有一个例外。** 不写文件的第二个后果：一个正在说话的轮次不会每秒把面板重画三次。正文由该轮次自身生命周期事件引起的刷新顺带取走，也就是面板本来的节奏——这条约束见 [`AGENTS.md`](../AGENTS.md) §7。
 
-例外是**从没有到有**这一个边沿：`onPreviewAppeared`，由 `ClaudeCodeMonitorService` 接到自己的 `stateChangeEvents` 上。上一段的理由只覆盖「行上已经有一句、它变旧了」，不覆盖「行上什么都没有」——后者要等的不是一次更整齐的重画，而是那个会话下一次做点别的，而一个说上一分钟才调一次工具的轮次期间什么生命周期事件都不发。用户把内容预览重新打开之后正落在这个格子里：收取立刻恢复，但那些行是在开关关着时画出来的，没有任何东西会再画它们一次。只报这一个边沿，因此代价是每个会话每一段「无话可说」一次唤醒，而不是每个 delta 一次；并且只为**上一次刷新列出过**的会话报（`retainPreviews` 收下的那个集合）——列表不带的会话，它的正文会被它自己求来的那次刷新裁掉，于是下一个 delta 又是一次「从没有到有」，那不是一次唤醒而是一个按 delta 速率跑的循环，何况那一行本来也不在屏幕上。
-
-开关是 `AgentHookListener.setAcceptsText(_:)`，与 Codex 侧同构：进程内标志、同步、关闭时连同已持有的正文一起丢弃。`ClaudeCodeMonitorService.setContentPreviewsEnabled` 因此从空实现变回真开关。行侧另有一道 `showsContentPreviews` 判断，两道都在：一道让开关在下一条消息前就生效，另一道保证已收的不再被画出来。
+例外是**从没有到有**这一个边沿：`onPreviewAppeared`，由 `ClaudeCodeMonitorService` 接到自己的 `stateChangeEvents` 上。上一段的理由只覆盖「行上已经有一句、它变旧了」，不覆盖「行上什么都没有」——后者要等的不是一次更整齐的重画，而是那个会话下一次做点别的，而一个说上一分钟才调一次工具的轮次期间什么生命周期事件都不发，于是那一行会一直空着。只报这一个边沿，因此代价是每个会话每一段「无话可说」一次唤醒，而不是每个 delta 一次；并且只为**上一次刷新列出过**的会话报（`retainPreviews` 收下的那个集合）——列表不带的会话，它的正文会被它自己求来的那次刷新裁掉，于是下一个 delta 又是一次「从没有到有」，那不是一次唤醒而是一个按 delta 速率跑的循环，何况那一行本来也不在屏幕上。
 
 预览按 live 会话集合裁剪（与标题缓存同一个集合），所以会话结束后它的正文不会比那一行活得更久。
 
@@ -702,7 +696,6 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 
 允许持久化：
 
-- `showCurrentContentPreviews`。
 - 用户选择的目标显示器稳定标识；显示器临时断开时不覆盖该偏好。
 - 集成安装状态与兼容性结果。
 - 已成功接收过合法 Hook 的布尔信任标记；不得包含 Thread、Turn 或内容。
@@ -724,7 +717,6 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。单行的对应动作是在终态行上右键（§17），两者共用同一个 `dismissedSessionIDs`。
 - `Quota reading transcripts`：报出本应用的额度读取在 Claude Code 自己的 project 目录里留下的 transcript 总大小，尾部 `Reveal in Finder` 打开那个目录（**只报大小**：个数那一半回答的是没人会问的问题，判断值不值得去清只看大小）；**只统计不删除**，理由见 `ClaudeCodeUsageTranscripts`。**这一行有三种读数，而不是「有数字」与「没有行」两种。** 目录靠一次已经发生的读取反查出来，因此第一次读取落地之前无从计数：那时写 `Calculating…` 并把按钮置灰；量到了写 `43.2 MB` 并恢复按钮；读取已经跑完却仍未找到目录时写 `Unavailable`。判据是「有没有跑完过一次读取」（`ClaudeCodeUsageReader.attemptedAt`）而不是失败次数——`session_id` 在 `read` 内部就已记下，所以一次跑完的读取找到的目录不会还被报成在路上；而机器上没有 `claude` 时那件「正在进行的工作」已经停了，再写 `Calculating…` 就是一句不再成立的进度声明。产品若根本不留文件（Codex）则整行不存在——把它和「还没量出来」用同一个 nil 表示，正是 CC-020 里卡片自己长出一行的成因。按钮的置灰由「有没有目录」这一个来源决定，不设第二个标志位，两者因此不可能互相矛盾。
 - `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。
-- `Show current content previews`：立即影响所有行，**两个方向都是**。关闭时清空内存预览并重新生成安全标题，两个产品都停止收取，不只是停止显示；打开时 setter 直接 `requestRefresh()`，因为屏幕上那些行是在关着时**构造**出来的，里面没有可以「取消隐藏」的东西，只有需要重新读一遍的标题与正文——而且没有任何监视器会为一次设置改动发边沿，会发边沿的都属于会话本身，一列终态行一个都不发。少了这一句，开关看起来是坏的：要等 60 秒心跳，而不会再说话的那些行连心跳也等不来。**关着时丢掉的正文不会回来**——那正是这个开关的承诺——回来的是各个会话接下来说的话；Claude Code 侧由 `onPreviewAppeared` 这个边沿即时画出（第 11 节），Codex 侧一个进行中的轮次要等到下一轮才重新有 prompt 正文。
 
 ## 17. SwiftUI 接入边界
 
@@ -737,7 +729,6 @@ protocol MonitorViewModelProtocol: ObservableObject {
     var aggregate: AggregateState { get }
     var quota: QuotaSnapshot { get }
     var sessions: [MonitoredThreadSnapshot] { get }
-    var privacy: PrivacySettings { get }
     func open(threadId: String) async
 }
 ```
@@ -782,7 +773,7 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 
 - 维护官方 `codex://threads/<thread-id>` 精确导航的版本兼容表与端到端样本。
 - 安装修复/移除、账户切换、睡眠/重连校正。
-- 签名、公证、性能、无障碍和隐私审计。
+- 签名、公证、性能与无障碍审计。
 
 ## 20. 测试策略
 
@@ -794,7 +785,7 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 - 启动前积压的 UserPrompt/Permission/Input/PostTool/Stop/SessionEnd 都不进入 Turn reducer；持久化文件只保留布尔配置健康标记，迁移旧 `turns` 后内存仍为空。
 - 监视成员集合的 active/unread/archive/delete 规则。
 - 四态合法流转、Completed 粘性与汇总优先级。
-- Project 无近似回退、标题隐私回退。
+- Project 无近似回退、标题回退。
 - Desktop Project 私有状态的 local/remote/Chats 精确解析、`thread.section` 隔离、主文件/backup/last-known-good 降级，以及缺失 assignment 显示 `Project unavailable`。
 - Running 状态名称与额度读数不受时间推进影响。
 - Compact token 数字边界、今天/明天/多日 reset 文案与本地时区日界线。
@@ -802,7 +793,6 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 - 并行业务超时只启动一个 `thread/loaded/list` 探活；探活成功或宽限期内收到晚到响应时不重启，探活也超时时才重建传输。
 - 有会话与无会话 footer 都为 `40 pt`，展开高度分别包含 `280`/`88 pt` 内容区。
 - Settings gear 的无障碍名称与现有 Settings scene 打开行为。
-- Settings 关闭预览后内存清空。
 
 ### 20.2 集成测试
 
@@ -814,10 +804,10 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 - Desktop 未运行、低版本、未知新版本与重连。
 - 点击每一行进入相同 Thread；不存在目标保持面板。
 
-### 20.3 隐私与安全测试
+### 20.3 集成边界测试
 
-- 扫描数据库、UserDefaults、日志、诊断包，确认无正文、路径、命令、diff、凭据和旧额度。
-- 确认不申请 Accessibility/Screen Recording。
+- 确认诊断与日志不写入 loopback token 等凭据。
+- 确认不申请 Accessibility/Screen Recording——这是一条安装摩擦的取舍，不是隐私承诺：这两项授权都要用户去系统设置里点，而本产品能做到的事不值这个价。
 - 确认 observer 不发送会改变 Thread/Turn 的方法。
 - 确认移除集成不会删除用户其他配置。
 - 确认总开关 On/Off 分别安装与移除完整六项集合；缺少、重复或 matcher/handler/timeout 被改写时进入 `repairRequired`，重新开启可修复且不删除用户其他 Hooks。
@@ -828,9 +818,9 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 | --- | --- |
 | `06 — Notch Core` / `118:120` | `520 × 326` 共享展开、顶部 `46`、底部 `40` footer |
 | `05 — Panel` / `327:305` | `496 × 40` Expanded footer、今日 tokens、reset 文案与 Settings gear |
-| `07 — Integration States` / `227:3` | 隐私关闭、额度局部降级、成员生命周期和 `520 × 134` 薄层状态 |
+| `07 — Integration States` / `227:3` | 额度局部降级、成员生命周期和 `520 × 134` 薄层状态 |
 | `08 — Onboarding` / `232:95` | 显式授权的三步首次安装 |
-| `09 — Settings` / `609:2` | macOS 26 单面板设置窗口：Products／Session list／Privacy 三组、两模式颜色；`233:3` 为 v1 参考 |
+| `09 — Settings` / `609:2` | macOS 26 单面板设置窗口：Products／Display／Session list 三组、两模式颜色；`233:3` 为 v1 参考 |
 
 ## 22. 参考
 

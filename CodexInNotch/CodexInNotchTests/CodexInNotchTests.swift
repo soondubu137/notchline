@@ -1866,56 +1866,6 @@ struct CodexInNotchTests {
         store.stopMonitoring()
     }
 
-    /// Turning content previews back on has to land as fast as turning them off.
-    ///
-    /// Off applies to the rows already on screen inside the setter. On cannot
-    /// be done the same way -- those rows were *built* with previews
-    /// suppressed, so there is nothing in them left to unhide, only titles and
-    /// text to read again -- and nothing was going to ask. No watcher fires for
-    /// a settings change, and the edges that do fire belong to the sessions, so
-    /// a list of finished rows produced none at all: the switch looked dead
-    /// until the 60-second heartbeat, and the rows that will never speak again
-    /// stayed blank past it.
-    @Test @MainActor
-    func turningPreviewsBackOnReReadsTheRowsAtOnce() async throws {
-        let service = PreviewMonitoringStub()
-        // Parked, so the only thing that can produce a second reading is
-        // something asking for one. On a real clock the heartbeat and the
-        // gates' own deadlines would eventually hide the bug this pins.
-        let store = MonitorStore(
-            services: [service],
-            initialSnapshot: AgentSnapshot(
-                availability: .connecting,
-                sessions: [],
-                quota: .unavailable,
-                diagnostic: nil,
-                setupStatus: .active
-            ),
-            clock: ParkedMonitorClock()
-        )
-        defer { store.stopMonitoring() }
-
-        for _ in 0 ..< 200 where store.sessions.first?.preview == nil {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
-        #expect(store.sessions.first?.preview == PreviewMonitoringStub.previewText)
-
-        store.showsContentPreviews = false
-        #expect(
-            store.sessions.first?.preview == nil,
-            "hiding is immediate, and stays that way"
-        )
-
-        store.showsContentPreviews = true
-        for _ in 0 ..< 200 where store.sessions.first?.preview == nil {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
-        #expect(
-            store.sessions.first?.preview == PreviewMonitoringStub.previewText,
-            "the row stayed hidden: nothing re-read it after the switch went back on"
-        )
-    }
-
     /// Flipping the switch faster than the work completes must still end where
     /// the user left it, and must not run two changes at once.
     @Test @MainActor
@@ -2317,11 +2267,6 @@ struct CodexInNotchTests {
 
         let ids = Set(AgentKind.allCases.map { session(agent: $0).id })
         #expect(ids.count == AgentKind.allCases.count)
-
-        // Hiding content must not silently re-home a row to another product.
-        let hidden = session(agent: .claudeCode).hidingContent()
-        #expect(hidden.agent == .claudeCode)
-        #expect(hidden.id == session(agent: .claudeCode).id)
     }
 
     /// Codex leads, always — the order is a product rule, not a sort result.
@@ -3403,70 +3348,6 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
-    func privacyModeNeverFallsBackToPromptOrKeepsPreviewText() {
-        let thread = JSONValue.object([
-            "id": .string("thread-private"),
-            "ephemeral": .bool(false),
-            "parentThreadId": .null,
-            "threadSource": .string("user"),
-            "preview": .string("private prompt fallback"),
-            "section": .object(["name": .string("Chats")]),
-            "status": .object([
-                "type": .string("active"),
-                "activeFlags": .array([])
-            ]),
-            "turns": .array([
-                .object([
-                    "id": .string("turn-private"),
-                    "status": .string("inProgress"),
-                    "items": .array([
-                        .object([
-                            "type": .string("agentMessage"),
-                            "text": .string("private progress")
-                        ])
-                    ])
-                ])
-            ])
-        ])
-
-        let state = HookTurnState(
-            threadID: "thread-private",
-            turnID: "turn-private",
-            sessionStatus: .running,
-            pendingInputToolUseID: nil,
-            pendingApproval: nil,
-            startedAt: Date(timeIntervalSince1970: 1_000),
-            lastEventAt: Date(timeIntervalSince1970: 1_000),
-            retiredTurnIDs: [],
-            promptPreview: "private prompt fallback",
-            assistantPreview: nil
-        )
-        let session = CodexSnapshotParser.session(
-            from: state,
-            thread: thread,
-            projectName: "Chats",
-            showsContentPreviews: false
-        )
-
-        #expect(session?.title == "Untitled")
-        #expect(session?.privacySafeTitle == "Untitled")
-        #expect(session?.preview == nil)
-
-        let redacted = MonitoredSession(
-            threadID: "thread",
-            turnID: "turn",
-            projectName: "Chats",
-            title: "private prompt fallback",
-            privacySafeTitle: "Untitled",
-            preview: "private progress",
-            status: .running,
-            startedAt: nil
-        ).hidingContent()
-        #expect(redacted.title == "Untitled")
-        #expect(redacted.preview == nil)
-    }
-
-    @Test @MainActor
     func emptyExpandedMonitorUsesThinStateHeight() {
         let display = makeDisplay(
             id: "notched",
@@ -3704,7 +3585,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await service.fetchSnapshot()
         await waitForThreadListRequests(
             client,
             atLeast: 1,
@@ -3729,7 +3610,7 @@ struct CodexInNotchTests {
         #expect(AgentSnapshotMerge.merge([snapshot]).status == .connected)
         #expect(upgradedScript.contains(#"payload.get("tool_use_id")"#))
         // The upgrade recognised a pre-marker install by its legacy settings
-        // file, replaced it with the marker, and carried no privacy state
+        // file, replaced it with the marker, and carried no configuration
         // across -- there is no longer any setting a helper could read.
         #expect(marker["managedBy"] as? String == "codex-in-notch")
         #expect(marker["showsContentPreviews"] == nil)
@@ -3804,7 +3685,7 @@ struct CodexInNotchTests {
             )
         )
 
-        let ready = await service.fetchSnapshot(showsContentPreviews: true)
+        let ready = await service.fetchSnapshot()
         let requestedMethods = await client.requestedMethods()
 
         // The listed thread advertises an active status and an in-progress turn,
@@ -3866,9 +3747,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let initial = await firstService.fetchSnapshot(
-            showsContentPreviews: false
-        )
+        let initial = await firstService.fetchSnapshot()
         await firstService.disconnect()
 
         #expect(initial.availability == .ready)
@@ -3884,9 +3763,7 @@ struct CodexInNotchTests {
             hookInstaller: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
-        let restored = await restoredService.fetchSnapshot(
-            showsContentPreviews: false
-        )
+        let restored = await restoredService.fetchSnapshot()
         await waitForThreadListRequests(
             restoredClient,
             atLeast: 1,
@@ -3937,7 +3814,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await service.fetchSnapshot()
 
         #expect(snapshot.availability == .disconnected)
         #expect(snapshot.sessions.isEmpty)
@@ -3968,7 +3845,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await service.fetchSnapshot()
 
         #expect(snapshot.availability == .connecting)
         #expect(snapshot.sessions.isEmpty)
@@ -4012,7 +3889,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let idle = await service.fetchSnapshot(showsContentPreviews: false)
+        let idle = await service.fetchSnapshot()
         await waitForThreadListRequests(client, atLeast: 1)
         #expect(idle.availability == .ready)
         #expect(idle.sessions.isEmpty)
@@ -4028,7 +3905,7 @@ struct CodexInNotchTests {
         )
 
         let startedAt = Date()
-        let running = await service.fetchSnapshot(showsContentPreviews: false)
+        let running = await service.fetchSnapshot()
         let elapsed = Date().timeIntervalSince(startedAt)
         let threadListRequests = await client.requestCount(method: "thread/list")
         await service.disconnect()
@@ -4246,7 +4123,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let initial = await service.fetchSnapshot(showsContentPreviews: false)
+        let initial = await service.fetchSnapshot()
         #expect(initial.sessions.first?.status == .running)
         await waitForThreadListRequests(
             client,
@@ -4267,9 +4144,7 @@ struct CodexInNotchTests {
             to: paths.eventsDirectory.appendingPathComponent("1.json")
         )
         let startedAt = Date()
-        let approvalSnapshot = await service.fetchSnapshot(
-            showsContentPreviews: false
-        )
+        let approvalSnapshot = await service.fetchSnapshot()
         let elapsed = Date().timeIntervalSince(startedAt)
 
         let input = try JSONSerialization.data(withJSONObject: [
@@ -4283,9 +4158,7 @@ struct CodexInNotchTests {
         try input.write(
             to: paths.eventsDirectory.appendingPathComponent("2.json")
         )
-        let inputSnapshot = await service.fetchSnapshot(
-            showsContentPreviews: false
-        )
+        let inputSnapshot = await service.fetchSnapshot()
         let threadListRequests = await client.requestCount(method: "thread/list")
         await service.disconnect()
 
@@ -4338,14 +4211,14 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let first = await service.fetchSnapshot(showsContentPreviews: false)
+        let first = await service.fetchSnapshot()
         await waitForThreadListRequests(
             client,
             atLeast: 1,
             completed: true
         )
-        let second = await service.fetchSnapshot(showsContentPreviews: false)
-        let third = await service.fetchSnapshot(showsContentPreviews: false)
+        let second = await service.fetchSnapshot()
+        let third = await service.fetchSnapshot()
         let methods = await client.requestedMethods()
         await service.disconnect()
 
@@ -4422,7 +4295,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let initial = await service.fetchSnapshot(showsContentPreviews: false)
+        let initial = await service.fetchSnapshot()
         #expect(initial.sessions.first?.status == .running)
         await waitForThreadListRequests(
             client,
@@ -4442,9 +4315,7 @@ struct CodexInNotchTests {
 
         var observedStatuses: [SessionStatus] = []
         for _ in 0..<100 {
-            let snapshot = await service.fetchSnapshot(
-                showsContentPreviews: false
-            )
+            let snapshot = await service.fetchSnapshot()
             if let status = snapshot.sessions.first?.status {
                 observedStatuses.append(status)
             }
@@ -4459,7 +4330,7 @@ struct CodexInNotchTests {
                 source: .current
             )
         )
-        let afterRead = await service.fetchSnapshot(showsContentPreviews: false)
+        let afterRead = await service.fetchSnapshot()
         await service.disconnect()
 
         #expect(observedStatuses.first == .completed)
@@ -4530,7 +4401,7 @@ struct CodexInNotchTests {
         )
 
         let startedAt = Date()
-        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await service.fetchSnapshot()
         let elapsed = Date().timeIntervalSince(startedAt)
         for _ in 0..<200 {
             if await client.requestCount(method: "thread/list") > 0 {
@@ -4625,7 +4496,7 @@ struct CodexInNotchTests {
         )
 
         // The snapshot path is the single consumer, and it still sees the Turn.
-        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await service.fetchSnapshot()
         #expect(snapshot.sessions.first?.threadID == "thread-intact")
         #expect(snapshot.setupStatus == .active)
         await service.disconnect()
@@ -4716,7 +4587,7 @@ struct CodexInNotchTests {
             return false
         }
 
-        let first = await service.fetchSnapshot(showsContentPreviews: false)
+        let first = await service.fetchSnapshot()
         #expect(first.quota.remainingPercent == nil)
 
         // The store would otherwise be asleep until the metadata window, which
@@ -4737,7 +4608,7 @@ struct CodexInNotchTests {
         observer.cancel()
         #expect(signalled)
 
-        let second = await service.fetchSnapshot(showsContentPreviews: false)
+        let second = await service.fetchSnapshot()
         #expect(second.quota.remainingPercent == 70)
         await service.disconnect()
     }
@@ -4788,7 +4659,7 @@ struct CodexInNotchTests {
         // falls through to the heartbeat instead of sampling.
         #expect(await service.nextRefreshDeadline() == nil)
 
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await waitForThreadReads(client, atLeast: 1)
 
         // Once metadata is cached the next wake-up is its staleness boundary --
@@ -5255,13 +5126,13 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await waitForThreadListRequests(client, atLeast: 1, completed: true)
         await waitForThreadReads(client, atLeast: 1)
 
         // Past the per-thread metadata window, still inside the membership one.
         await clock.advance(by: timing.threadMetadataRefreshInterval + 1)
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await waitForThreadReads(client, atLeast: 2)
 
         let deadline = try #require(await service.nextRefreshDeadline())
@@ -5325,7 +5196,7 @@ struct CodexInNotchTests {
         )
 
         try emitHookActivity()
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await waitForThreadListRequests(client, atLeast: 1, completed: true)
         await waitForThreadReads(client, atLeast: 1)
         #expect(await client.requestCount(method: "thread/list") == 1)
@@ -5334,7 +5205,7 @@ struct CodexInNotchTests {
         // Just short of each window: plenty of Hook activity, no repeat reads.
         await clock.advance(by: timing.threadMetadataRefreshInterval - 1)
         try emitHookActivity()
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await clock.settle()
         #expect(await client.requestCount(method: "thread/read") == 1)
         #expect(await client.requestCount(method: "thread/list") == 1)
@@ -5343,14 +5214,14 @@ struct CodexInNotchTests {
         // membership pagination still does not.
         await clock.advance(by: 2)
         try emitHookActivity()
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await waitForThreadReads(client, atLeast: 2)
         #expect(await client.requestCount(method: "thread/list") == 1)
 
         // Past the membership window: the full list repeats exactly once.
         await clock.advance(by: timing.threadListRefreshInterval)
         try emitHookActivity()
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await waitForThreadListRequests(client, atLeast: 2, completed: true)
         #expect(await client.requestCount(method: "thread/list") == 2)
 
@@ -5405,7 +5276,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await waitForThreadListRequests(client, atLeast: 1, completed: true)
 
         // Drive many more Hook-consuming rounds. Membership was just
@@ -5422,11 +5293,11 @@ struct CodexInNotchTests {
             try event.write(
                 to: paths.eventsDirectory.appendingPathComponent("\(index).json")
             )
-            _ = await service.fetchSnapshot(showsContentPreviews: false)
+            _ = await service.fetchSnapshot()
             try await Task.sleep(nanoseconds: 20_000_000)
         }
 
-        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await service.fetchSnapshot()
         let threadListCount = await client.requestCount(method: "thread/list")
         let readParams = await client.recordedThreadReadParams()
         await service.disconnect()
@@ -5486,7 +5357,7 @@ struct CodexInNotchTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         await waitForThreadListRequests(client, atLeast: 1, completed: true)
 
         let event = try JSONSerialization.data(withJSONObject: [
@@ -5500,12 +5371,12 @@ struct CodexInNotchTests {
         try event.write(
             to: paths.eventsDirectory.appendingPathComponent("1.json")
         )
-        _ = await service.fetchSnapshot(showsContentPreviews: false)
+        _ = await service.fetchSnapshot()
         // A server without thread/read must keep getting whole-list metadata
         // rather than silently losing titles.
         await waitForThreadListRequests(client, atLeast: 2)
 
-        let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await service.fetchSnapshot()
         let readAttempts = await client.requestCount(method: "thread/read")
         await service.disconnect()
 
@@ -7828,65 +7699,6 @@ for line in sys.stdin:
         #expect(preview?.prompt == "written after the accept")
     }
 
-    /// The privacy switch, at the boundary where it used to fail open.
-    ///
-    /// It was a file the helper read, written through an unheld `Task` with the
-    /// error swallowed: two quick toggles could land out of order, and a single
-    /// failed write left the UI showing "off" while text kept being collected
-    /// (CR-012). It is now one in-memory flag, so "off" means the next message
-    /// is dropped on arrival, and the last caller always wins.
-    @Test
-    func disablingPreviewsDropsTextOnArrivalAndLastWriteWins() async throws {
-        let paths = makeTemporaryHookPaths()
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
-
-        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast,
-            previewChannel: channel
-        )
-        defer { channel.stop() }
-
-        repository.setContentPreviewsEnabled(false)
-        sendHookPreview(
-            to: paths.previewSocket,
-            eventID: "event-off",
-            prompt: "must not be retained"
-        )
-        // Nothing to wait for on the happy path, so give the reader a real
-        // chance to do the wrong thing before asserting that it did not.
-        try await Task.sleep(nanoseconds: 200_000_000)
-        #expect(channel.retainedPreviewCount == 0)
-
-        // Rapid toggling: the last call is the state, with no ordering window.
-        repository.setContentPreviewsEnabled(true)
-        repository.setContentPreviewsEnabled(false)
-        repository.setContentPreviewsEnabled(true)
-        sendHookPreview(
-            to: paths.previewSocket,
-            eventID: "event-on",
-            prompt: "may be retained"
-        )
-        await waitForRetainedPreviews(channel, count: 1)
-
-        // Turning it off also drops what was already collected.
-        repository.setContentPreviewsEnabled(false)
-        #expect(channel.retainedPreviewCount == 0)
-
-        let everythingOnDisk = allFileContents(under: paths.supportDirectory)
-        #expect(!everythingOnDisk.contains("must not be retained"))
-        #expect(!everythingOnDisk.contains("may be retained"))
-    }
-
     /// Unclaimed previews cannot grow without bound.
     ///
     /// They pile up only when the file that would claim them never arrives -- a
@@ -9284,7 +9096,7 @@ for line in sys.stdin:
         ]
 
         #expect(await harness.service
-            .fetchSnapshot(showsContentPreviews: true).sessions.isEmpty)
+            .fetchSnapshot().sessions.isEmpty)
 
         // A finished transcript is no different, and never was.
         try harness.writeTranscript(session: "older", cwd: cwd, records: [
@@ -9295,13 +9107,13 @@ for line in sys.stdin:
              "message": ["role": "assistant", "stop_reason": "end_turn"]]
         ])
         #expect(await harness.service
-            .fetchSnapshot(showsContentPreviews: true).sessions.isEmpty)
+            .fetchSnapshot().sessions.isEmpty)
 
         // The first real event is what opens the row, exactly as on the Codex
         // side -- and it opens one, rather than a second one beside a row that
         // was never there.
         try harness.queue(event: "UserPromptSubmit", session: "older", turn: "p-2", at: 300)
-        let live = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let live = await harness.service.fetchSnapshot()
         #expect(live.sessions.count == 1)
         #expect(try #require(live.sessions.first).turnID == "p-2")
         #expect(try #require(live.sessions.first).status == .running)
@@ -9331,7 +9143,7 @@ for line in sys.stdin:
             at: harness.sessionsDirectory,
             withIntermediateDirectories: true
         )
-        _ = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        _ = await harness.service.fetchSnapshot()
 
         let triggers = harness.service.stateChangeEvents
         let observer = Task {
@@ -9378,7 +9190,7 @@ for line in sys.stdin:
             harness.session(id: "s-1", cwd: "/Users/someone/Projects/thing")
         ]
         // Binds the listener, which is what makes the port below answer.
-        _ = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        _ = await harness.service.fetchSnapshot()
 
         // Counted rather than awaited once: this stream buffers, so starting up
         // may already have left an edge on it, and "an edge arrived" would then
@@ -9431,7 +9243,7 @@ for line in sys.stdin:
         try harness.queue(event: "UserPromptSubmit", session: "live", turn: "p-1", at: 100)
         harness.live = [harness.session(id: "live", cwd: cwd)]
 
-        let connected = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let connected = await harness.service.fetchSnapshot()
         #expect(connected.presence == .open)
         #expect(connected.sessions.count == 1)
         #expect(
@@ -9444,7 +9256,7 @@ for line in sys.stdin:
         // The list is unchanged and still handed back; only our evidence that
         // it still describes anything has expired.
         harness.presence = .unknown
-        let lost = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let lost = await harness.service.fetchSnapshot()
         #expect(lost.presence == .unknown)
         #expect(!lost.isConnected)
         #expect(lost.sessions.isEmpty)
@@ -9459,7 +9271,7 @@ for line in sys.stdin:
         // It comes straight back with the next answer, without waiting on a
         // hook: the rows were never thrown away, only withheld.
         harness.presence = nil
-        let regained = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let regained = await harness.service.fetchSnapshot()
         #expect(regained.presence == .open)
         #expect(regained.sessions.count == 1)
     }
@@ -9487,7 +9299,7 @@ for line in sys.stdin:
         harness.live = [harness.session(id: "s-1", cwd: cwd)]
 
         // Nothing has spoken for this session yet.
-        let unknown = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let unknown = await harness.service.fetchSnapshot()
         #expect(unknown.sessions.count == 1)
 
         // Desktop has a record, and it says the session was last on screen
@@ -9497,7 +9309,7 @@ for line in sys.stdin:
             lastFocusedAt: 100,
             desktopID: "d-1"
         )
-        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let unread = await harness.service.fetchSnapshot()
         #expect(unread.sessions.count == 1)
         #expect(try #require(unread.sessions.first).status == .completed)
 
@@ -9507,7 +9319,7 @@ for line in sys.stdin:
             lastFocusedAt: 102,
             desktopID: "d-1"
         )
-        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let read = await harness.service.fetchSnapshot()
         #expect(read.sessions.isEmpty)
     }
 
@@ -9568,11 +9380,11 @@ for line in sys.stdin:
         // exactly the file state the failing scenario leaves behind.
         try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
 
-        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let unread = await harness.service.fetchSnapshot()
         #expect(unread.sessions.count == 1)
 
         harness.desktopActivatedAt = Date(timeIntervalSince1970: 102)
-        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let read = await harness.service.fetchSnapshot()
         #expect(read.sessions.isEmpty)
     }
 
@@ -9593,7 +9405,7 @@ for line in sys.stdin:
         // left. Nothing has brought the window forward since.
         harness.desktopActivatedAt = Date(timeIntervalSince1970: 100)
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
     }
 
@@ -9630,7 +9442,7 @@ for line in sys.stdin:
         try harness.writeDesktopRecord(session: "behind", lastFocusedAt: 98)
         harness.desktopActivatedAt = Date(timeIntervalSince1970: 102)
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.map(\.threadID) == ["behind"])
     }
 
@@ -9652,7 +9464,7 @@ for line in sys.stdin:
         harness.live = [harness.session(id: "cli", cwd: cwd)]
         harness.desktopActivatedAt = Date(timeIntervalSince1970: 102)
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
     }
 
@@ -9684,7 +9496,7 @@ for line in sys.stdin:
         try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
         harness.desktopIsInFrontOfTheUser = true
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.isEmpty)
     }
 
@@ -9707,7 +9519,7 @@ for line in sys.stdin:
         try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
         harness.desktopIsInFrontOfTheUser = false
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
     }
 
@@ -9744,7 +9556,7 @@ for line in sys.stdin:
         try harness.writeDesktopRecord(session: "behind", lastFocusedAt: 98)
         harness.desktopIsInFrontOfTheUser = true
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.map(\.threadID) == ["behind"])
     }
 
@@ -9766,7 +9578,7 @@ for line in sys.stdin:
         harness.live = [harness.session(id: "cli", cwd: cwd)]
         harness.desktopIsInFrontOfTheUser = true
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
     }
 
@@ -9793,12 +9605,12 @@ for line in sys.stdin:
         // Seen on screen with its Turn already over. On its own this is not a
         // verdict: Claude Desktop leaves a session on screen whether anybody is
         // in front of it or not.
-        let onScreen = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let onScreen = await harness.service.fetchSnapshot()
         #expect(onScreen.sessions.count == 1)
 
         // Desktop puts a different session there.
         try harness.writeDesktopRecord(session: "s-2", lastFocusedAt: 103)
-        let movedOn = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let movedOn = await harness.service.fetchSnapshot()
         #expect(movedOn.sessions.isEmpty)
     }
 
@@ -9822,7 +9634,7 @@ for line in sys.stdin:
         // Something else has been on screen the whole time.
         try harness.writeDesktopRecord(session: "s-2", lastFocusedAt: 103)
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
     }
 
@@ -9844,18 +9656,18 @@ for line in sys.stdin:
         harness.live = [harness.session(id: "s-1", cwd: cwd)]
         try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
 
-        let first = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let first = await harness.service.fetchSnapshot()
         #expect(first.sessions.count == 1)
 
         // A second Turn starts and finishes, and while it runs the user is
         // taken to be somewhere else entirely.
         try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-2", at: 102)
-        let running = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let running = await harness.service.fetchSnapshot()
         #expect(running.sessions.first?.status == .running)
 
         try harness.queue(event: "Stop", session: "s-1", turn: "p-2", at: 103)
         try harness.writeDesktopRecord(session: "s-2", lastFocusedAt: 104)
-        let finished = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let finished = await harness.service.fetchSnapshot()
         #expect(finished.sessions.count == 1)
     }
 
@@ -9890,7 +9702,7 @@ for line in sys.stdin:
             desktopID: "d-1"
         )
         try harness.appendDesktopFocusStatement(desktopID: "d-1")
-        let running = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let running = await harness.service.fetchSnapshot()
         #expect(running.sessions.first?.status == .running)
 
         // The user opens the composer for a new session. There is no session to
@@ -9898,7 +9710,7 @@ for line in sys.stdin:
         // screen is not a session.
         try harness.appendDesktopFocusStatement(desktopID: nil)
         try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
-        let finished = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let finished = await harness.service.fetchSnapshot()
         #expect(finished.sessions.map(\.threadID) == ["s-1"])
         #expect(finished.sessions.first?.status == .completed)
 
@@ -9914,7 +9726,7 @@ for line in sys.stdin:
             desktopID: "d-2"
         )
         try harness.appendDesktopFocusStatement(desktopID: "d-2")
-        let started = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let started = await harness.service.fetchSnapshot()
         #expect(started.sessions.map(\.threadID) == ["s-1"])
     }
 
@@ -9943,14 +9755,14 @@ for line in sys.stdin:
         try harness.appendDesktopFocusStatement(desktopID: "d-1")
         try harness.appendDesktopFocusStatement(desktopID: nil)
 
-        let composing = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let composing = await harness.service.fetchSnapshot()
         #expect(composing.sessions.count == 1)
 
         // The user goes back to the session itself. Nothing else changed — the
         // record is not rewritten, because this is the route for a session that
         // was already on screen — so this is the veto lifting and nothing else.
         try harness.appendDesktopFocusStatement(desktopID: "d-1")
-        let back = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let back = await harness.service.fetchSnapshot()
         #expect(back.sessions.isEmpty)
     }
 
@@ -9978,12 +9790,12 @@ for line in sys.stdin:
         try harness.appendDesktopFocusStatement(desktopID: nil)
         harness.desktopActivatedAt = Date(timeIntervalSince1970: 102)
 
-        let cameBack = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let cameBack = await harness.service.fetchSnapshot()
         #expect(cameBack.sessions.count == 1)
 
         // The window they came back to was showing the session after all.
         try harness.appendDesktopFocusStatement(desktopID: "d-1")
-        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let read = await harness.service.fetchSnapshot()
         #expect(read.sessions.isEmpty)
     }
 
@@ -10014,13 +9826,13 @@ for line in sys.stdin:
         // follows is a statement this app watched arrive rather than one out of
         // history.
         try harness.append(toDesktopLog: "2026-08-19 21:00:00 [info] Starting app\n")
-        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let unread = await harness.service.fetchSnapshot()
         #expect(unread.sessions.count == 1)
 
         try harness.appendDesktopFocusStatement(desktopID: "d-1")
         harness.desktopIsInFrontOfTheUser = true
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
     }
 
@@ -10051,7 +9863,7 @@ for line in sys.stdin:
         )
         harness.desktopIsInFrontOfTheUser = true
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.isEmpty)
     }
 
@@ -10326,7 +10138,7 @@ for line in sys.stdin:
         // controlling terminal to ask.
         harness.live = [harness.session(id: "cli", cwd: cwd)]
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
         let deadline = await harness.service.nextRefreshDeadline()
         // Whatever the quota wants is minutes away; a gate re-check would be a
@@ -10336,7 +10148,7 @@ for line in sys.stdin:
         // The same session with a Desktop record that says unread *does* wait
         // on the user, and says so.
         try harness.writeDesktopRecord(session: "cli", lastFocusedAt: 100)
-        _ = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        _ = await harness.service.fetchSnapshot()
         let waiting = await harness.service.nextRefreshDeadline()
         #expect((waiting?.timeIntervalSinceNow ?? .infinity) <= 1.1)
     }
@@ -10367,7 +10179,7 @@ for line in sys.stdin:
         // Last touched when the prompt was submitted, which is before the Turn
         // ended: the user has not been back since it answered.
         harness.lastTerminalGestureByPID = [4_242: Date(timeIntervalSince1970: 100)]
-        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let unread = await harness.service.fetchSnapshot()
         #expect(unread.sessions.count == 1)
         #expect(try #require(unread.sessions.first).status == .completed)
         // And it is waiting on the user rather than on time, so it says so.
@@ -10375,7 +10187,7 @@ for line in sys.stdin:
         #expect((waiting?.timeIntervalSinceNow ?? .infinity) <= 1.1)
 
         harness.lastTerminalGestureByPID = [4_242: Date(timeIntervalSince1970: 102)]
-        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let read = await harness.service.fetchSnapshot()
         #expect(read.sessions.isEmpty)
     }
 
@@ -10413,12 +10225,12 @@ for line in sys.stdin:
         try harness.writeDesktopRecord(session: "s-1", lastFocusedAt: 99)
         harness.lastTerminalGestureByPID = [909: Date(timeIntervalSince1970: 100)]
 
-        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let unread = await harness.service.fetchSnapshot()
         #expect(unread.sessions.count == 1)
 
         // The user comes back to the terminal. Desktop's record does not move.
         harness.lastTerminalGestureByPID = [909: Date(timeIntervalSince1970: 102)]
-        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let read = await harness.service.fetchSnapshot()
         #expect(read.sessions.isEmpty)
     }
 
@@ -10452,7 +10264,7 @@ for line in sys.stdin:
             22: Date(timeIntervalSince1970: 100)
         ]
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.map(\.threadID) == ["cli-b"])
     }
 
@@ -10475,7 +10287,7 @@ for line in sys.stdin:
         ]
         harness.lastTerminalGestureByPID = [7: Date(timeIntervalSince1970: 200)]
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
         #expect(try #require(snapshot.sessions.first).status == .running)
     }
@@ -10575,7 +10387,7 @@ for line in sys.stdin:
             isArchived: true
         )
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.isEmpty)
     }
 
@@ -10602,7 +10414,7 @@ for line in sys.stdin:
         try harness.writeDesktopRecord(session: "read", lastFocusedAt: 102)
         try harness.writeUnreadableDesktopRecord()
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.map(\.threadID) == ["mute"])
         // A half-written neighbour is not a schema change, so it says nothing
         // to the user.
@@ -10645,7 +10457,7 @@ for line in sys.stdin:
             harness.session(id: "ask", cwd: cwd)
         ]
 
-        let before = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let before = await harness.service.fetchSnapshot()
         #expect(before.sessions.first { $0.threadID == "run" }?.status == .running)
         #expect(before.sessions.first { $0.threadID == "ask" }?.status == .approvalNeeded)
 
@@ -10661,7 +10473,7 @@ for line in sys.stdin:
         try Data("not json".utf8)
             .write(to: harness.paths.eventsDirectory.appendingPathComponent("999.json"))
 
-        let after = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let after = await harness.service.fetchSnapshot()
         #expect(after.sessions.first { $0.threadID == "run" }?.status == .completed)
         #expect(after.sessions.first { $0.threadID == "ask" }?.status == .completed)
         #expect(after.diagnostic != nil)
@@ -10699,7 +10511,7 @@ for line in sys.stdin:
         try harness.queue(event: "UserPromptSubmit", session: "quiet", turn: "p-q", at: 102)
         harness.live.append(harness.session(id: "quiet", cwd: cwd))
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.sessions.count == 3)
         #expect(snapshot.sessions.allSatisfy { $0.status == .running })
     }
@@ -10723,14 +10535,14 @@ for line in sys.stdin:
             harness.session(id: "s-1", cwd: cwd, activity: .idle, observedAt: 400)
         ]
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(try #require(snapshot.sessions.first).status == .running)
 
         // The next reading is newer than the event, and that one lands.
         harness.live = [
             harness.session(id: "s-1", cwd: cwd, activity: .idle, observedAt: 600)
         ]
-        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let ended = await harness.service.fetchSnapshot()
         #expect(try #require(ended.sessions.first).status == .completed)
     }
 
@@ -10769,7 +10581,7 @@ for line in sys.stdin:
 
         try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
         harness.live = [harness.session(id: "s-1", cwd: cwd, activity: .busy, observedAt: 200)]
-        let running = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let running = await harness.service.fetchSnapshot()
         #expect(try #require(running.sessions.first).status == .running)
         #expect(harness.watchedRecords == 1)
 
@@ -10783,7 +10595,7 @@ for line in sys.stdin:
         // The refresh that edge causes ends the turn -- and a turn that has
         // ended is not worth a descriptor or a `claude` launch any more.
         harness.live = [harness.session(id: "s-1", cwd: cwd, activity: .idle, observedAt: 300)]
-        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let ended = await harness.service.fetchSnapshot()
         #expect(try #require(ended.sessions.first).status == .completed)
         #expect(harness.watchedRecords == 0)
 
@@ -10822,7 +10634,7 @@ for line in sys.stdin:
         // No activity at all, which is every desktop-hosted session there is.
         harness.live = [harness.session(id: "s-1", cwd: cwd)]
 
-        let asking = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let asking = await harness.service.fetchSnapshot()
         #expect(try #require(asking.sessions.first).status == .approvalNeeded)
 
         // The user presses stop while that dialog is open. Nothing is fired and
@@ -10831,7 +10643,7 @@ for line in sys.stdin:
             harness.interruptRecord(turn: "p-1", at: 200)
         ])
 
-        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let ended = await harness.service.fetchSnapshot()
         #expect(try #require(ended.sessions.first).status == .completed)
     }
 
@@ -10857,20 +10669,20 @@ for line in sys.stdin:
         try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
             harness.interruptRecord(turn: "p-1", at: 400)
         ])
-        let other = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let other = await harness.service.fetchSnapshot()
         #expect(try #require(other.sessions.first).status == .running)
 
         // The right turn, but written before the event this app already has.
         try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
             harness.interruptRecord(turn: "p-2", at: 400)
         ])
-        let older = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let older = await harness.service.fetchSnapshot()
         #expect(try #require(older.sessions.first).status == .running)
 
         try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
             harness.interruptRecord(turn: "p-2", at: 600)
         ])
-        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let ended = await harness.service.fetchSnapshot()
         #expect(try #require(ended.sessions.first).status == .completed)
     }
 
@@ -10931,7 +10743,7 @@ for line in sys.stdin:
             ]
         ])
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(try #require(snapshot.sessions.first).status == .running)
     }
 
@@ -10978,7 +10790,7 @@ for line in sys.stdin:
             ["type": "ai-title", "aiTitle": "Something else"]
         ])
 
-        let running = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let running = await harness.service.fetchSnapshot()
         #expect(running.sessions.allSatisfy { $0.status == .running })
         #expect(harness.watchedTranscripts == 1)
 
@@ -11006,7 +10818,7 @@ for line in sys.stdin:
 
         // The refresh that edge causes ends the turn, and a turn that has ended
         // is not worth a descriptor.
-        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        let ended = await harness.service.fetchSnapshot()
         #expect(ended.sessions.first { $0.threadID == "s-1" }?.status == .completed)
         #expect(harness.watchedTranscripts == 0)
     }
@@ -11082,37 +10894,13 @@ for line in sys.stdin:
         )
     }
 
-    /// A title is content, so previews-off hides it like any other.
-    @Test @MainActor
-    func aRowShowsUntitledWhilePreviewsAreOff() async throws {
-        let harness = try ClaudeCodeHarness()
-        defer { harness.tearDown() }
-        try harness.registerHooks()
-        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "t1", at: 100)
-        harness.live = [harness.session(id: "s-1", cwd: "/Users/someone/Projects/thing")]
-        try harness.writeTranscript(session: "s-1", cwd: "/Users/someone/Projects/thing",
-                                    title: "Something private")
-
-        let shown = await harness.service.fetchSnapshot(showsContentPreviews: true)
-        #expect(shown.sessions.first?.title == "Something private")
-
-        let hidden = await harness.service.fetchSnapshot(showsContentPreviews: false)
-        #expect(hidden.sessions.first?.title == "Untitled")
-        #expect(hidden.sessions.first?.privacySafeTitle == "Untitled")
-    }
-
-    /// A Claude Code row has a third line, and the switch governs it (CC-015).
+    /// A Claude Code row has a third line (CC-015).
     ///
     /// It did not until `MessageDisplay` was registered. The event was missing
     /// from the exploration document's table, so the first read of this product
     /// concluded the text was unreachable without a channel equivalent to the
     /// Codex side's `HookPreviewChannel`; it needs no such thing, because the
     /// payload is already inside this process when it lands.
-    ///
-    /// Previews-off is checked as well as previews-on. Two things implement it
-    /// — collection stops at the listener, and the row is built without one —
-    /// and only the second is exercised by turning the setting off after the
-    /// text has already been collected.
     @Test @MainActor
     func aClaudeCodeRowShowsWhatTheSessionIsSaying() async throws {
         let harness = try ClaudeCodeHarness()
@@ -11122,7 +10910,7 @@ for line in sys.stdin:
         harness.live = [harness.session(id: "s-1", cwd: "/Users/someone/Projects/thing")]
 
         // Binds the port the registration names; nothing can post before this.
-        _ = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        _ = await harness.service.fetchSnapshot()
         try await post(port: harness.port, token: "harness-token", body: [
             "hook_event_name": "MessageDisplay", "session_id": "s-1",
             "message_id": "m-1", "index": 0, "final": false,
@@ -11134,15 +10922,12 @@ for line in sys.stdin:
             "delta": "touching anything."
         ])
 
-        let shown = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let shown = await harness.service.fetchSnapshot()
         let row = try #require(shown.sessions.first)
         #expect(row.preview == "Checking the event order before touching anything.")
         // The line is drawn from the same field the Codex rows use, so both
         // products' rows are now the same three lines.
         #expect(row.status == .running)
-
-        let hidden = await harness.service.fetchSnapshot(showsContentPreviews: false)
-        #expect(hidden.sessions.first?.preview == nil)
     }
 
     /// A turn whose session has gone is gone with it.
@@ -11162,7 +10947,7 @@ for line in sys.stdin:
         harness.live = [
             harness.session(id: "alive", cwd: "/Users/someone/Projects/notch")
         ]
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let snapshot = await harness.service.fetchSnapshot()
 
         #expect(snapshot.availability == .ready)
         #expect(snapshot.sessions.map(\.threadID) == ["alive"])
@@ -11191,7 +10976,7 @@ for line in sys.stdin:
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.availability == .setupRequired)
         #expect(snapshot.setupStatus == .notInstalled)
         #expect(snapshot.sessions.isEmpty)
@@ -11300,7 +11085,7 @@ for line in sys.stdin:
             .write(to: harness.paths.hooksConfiguration)
 
         #expect(await harness.setup.status() == .repairRequired)
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.availability == .setupRequired)
         #expect(snapshot.diagnostic != nil)
     }
@@ -11360,7 +11145,7 @@ for line in sys.stdin:
             return [stale]
         }
         #expect(await harness.setup.status() == .repairRequired)
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        let snapshot = await harness.service.fetchSnapshot()
         #expect(snapshot.availability == .setupRequired)
         #expect(snapshot.diagnostic != nil)
 
@@ -12419,55 +12204,6 @@ for line in sys.stdin:
         #expect(listener.preview(forSession: "s-1") == capped)
     }
 
-    /// The privacy switch is real again on this side, and it is not a setting.
-    ///
-    /// It was an empty implementation for as long as this product collected
-    /// nothing, and that emptiness was the claim. Registering `MessageDisplay`
-    /// spends it: "never received" becomes "not retained while this is off",
-    /// which is the claim the Codex side has always made. An in-memory flag,
-    /// for the reasons in CR-012 — a switch written to a file can fail, and did.
-    @Test @MainActor
-    func turningPreviewsOffDropsHeldTextAndRefusesMore() async throws {
-        let root = URL(fileURLWithPath: "/tmp")
-            .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let listener = AgentHookListener(
-            eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
-            token: "t"
-        )
-        defer { listener.stop() }
-        let port = try #require(listener.start())
-
-        func display(_ delta: String, message: String) async throws {
-            try await post(port: port, token: "t", body: [
-                "hook_event_name": "MessageDisplay", "session_id": "s-1",
-                "message_id": message, "delta": delta
-            ])
-        }
-
-        try await display("Something said out loud.", message: "m-1")
-        #expect(listener.preview(forSession: "s-1") != nil)
-
-        listener.setAcceptsText(false)
-        #expect(
-            listener.preview(forSession: "s-1") == nil,
-            "text already held is dropped, not merely hidden"
-        )
-        try await display("Said while the switch is off.", message: "m-2")
-        #expect(listener.preview(forSession: "s-1") == nil)
-
-        listener.setAcceptsText(true)
-        try await display("Said after it is back on.", message: "m-3")
-        #expect(listener.preview(forSession: "s-1") == "Said after it is back on.")
-
-        // Discarding is the ordering-insensitive half: it clears what is held
-        // without deciding whether more is accepted.
-        listener.discardPreviews()
-        #expect(listener.preview(forSession: "s-1") == nil)
-        try await display("And after a discard.", message: "m-4")
-        #expect(listener.preview(forSession: "s-1") == "And after a discard.")
-    }
-
     /// Text does not outlive the row that showed it.
     ///
     /// Pruned against the same live-session set the transcript titles are, so a
@@ -12504,10 +12240,9 @@ for line in sys.stdin:
     /// second, which is not a redraw rate -- and the text is picked up by
     /// whatever refresh the session's own lifecycle causes. That works while a
     /// row already shows the previous message and only goes stale. It does not
-    /// work when the row shows *nothing*: after the user turns content previews
-    /// back on, collection resumes at once but the rows were drawn while it was
-    /// off, and a turn that talks for a minute between tool calls fires no
-    /// lifecycle event to redraw them with.
+    /// work when the row shows *nothing*: a turn that talks for a minute
+    /// between tool calls fires no lifecycle event to redraw its row with, so
+    /// a row that has yet to receive a line would keep showing none.
     ///
     /// So only the absent-to-present edge is reported: once per session per
     /// spell of having nothing to say, not once per delta.
@@ -12556,15 +12291,12 @@ for line in sys.stdin:
             "a row that already has a line does not ask to be drawn per delta"
         )
 
-        listener.setAcceptsText(false)
-        try await display("Said while the switch is off.", message: "m-2")
-        #expect(
-            try await settled(at: 1) == 1,
-            "nothing was retained, so there is nothing to draw"
-        )
-
-        listener.setAcceptsText(true)
-        try await display("Said once it is back on.", message: "m-3")
+        // Back to blank the way it happens for real: the session drops off a
+        // refresh's list, taking its text, and is listed again before it has
+        // said anything new.
+        listener.retainPreviews(forSessions: [])
+        listener.retainPreviews(forSessions: ["s-1"])
+        try await display("Said after coming back.", message: "m-2")
         #expect(
             try await settled(at: 2) == 2,
             "the row was left blank with no edge that would ever redraw it"
@@ -12574,7 +12306,7 @@ for line in sys.stdin:
         // nothing: the refresh it would ask for is the one that prunes it, so
         // reporting it would be a loop at the rate the deltas arrive.
         listener.retainPreviews(forSessions: [])
-        try await display("Said by a session nothing lists.", message: "m-4")
+        try await display("Said by a session nothing lists.", message: "m-3")
         #expect(try await settled(at: 2) == 2)
     }
 
@@ -13651,7 +13383,7 @@ private actor StuckDeadlineMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { deadline }
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+    func fetchSnapshot() async -> AgentSnapshot {
         snapshots += 1
         return AgentSnapshot(
             availability: .ready,
@@ -13667,8 +13399,6 @@ private actor StuckDeadlineMonitoringStub: AgentMonitoring {
     func installHooks() async throws {}
     func removeHooks() async throws {}
     func clearSessions() async {}
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
-    func discardCollectedPreviews() async {}
     func disconnect() async {}
 }
 
@@ -13709,43 +13439,6 @@ private final class PreviewWakeUpCounter: @unchecked Sendable {
     }
 }
 
-private actor PreviewMonitoringStub: AgentMonitoring {
-    nonisolated let agent = AgentKind.codex
-    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
-    nonisolated static let previewText = "Reading the settings window."
-
-    func manualSetup() async -> AgentManualSetup? { nil }
-    func nextRefreshDeadline() async -> Date? { nil }
-
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
-        AgentSnapshot(
-            availability: .ready,
-            sessions: [
-                MonitoredSession(
-                    threadID: "thread-1",
-                    turnID: "turn-1",
-                    projectName: "codex-in-notch",
-                    title: "Fix the previews switch",
-                    preview: showsContentPreviews ? Self.previewText : nil,
-                    status: .running,
-                    startedAt: Date(timeIntervalSince1970: 1_000)
-                )
-            ],
-            quota: .unavailable,
-            diagnostic: nil,
-            setupStatus: .active
-        )
-    }
-
-    func hookSetupStatus() async -> HookSetupStatus { .active }
-    func installHooks() async throws {}
-    func removeHooks() async throws {}
-    func clearSessions() async {}
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
-    func discardCollectedPreviews() async {}
-    func disconnect() async {}
-}
-
 private actor GatedMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
@@ -13762,7 +13455,7 @@ private actor GatedMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { nil }
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+    func fetchSnapshot() async -> AgentSnapshot {
         observedSnapshots += 1
         if holdsSnapshots {
             await withCheckedContinuation { waiters.append($0) }
@@ -13808,8 +13501,6 @@ private actor GatedMonitoringStub: AgentMonitoring {
     }
 
     func clearSessions() async {}
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
-    func discardCollectedPreviews() async {}
     func disconnect() async {}
 
     func setStatus(_ status: HookSetupStatus) { self.status = status }
@@ -13837,7 +13528,7 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
     private var installRequests = 0
     private var removeRequests = 0
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+    func fetchSnapshot() async -> AgentSnapshot {
         AgentSnapshot(
             availability: setupStatus.isIntegrationEnabled
                 ? .connecting
@@ -13864,9 +13555,6 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
 
     func clearSessions() async {}
 
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
-
-    func discardCollectedPreviews() async {}
 
     func disconnect() async {}
 
@@ -14639,7 +14327,7 @@ private actor DiskFootprintMonitoringStub: AgentMonitoring {
         self.report = report
     }
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+    func fetchSnapshot() async -> AgentSnapshot {
         AgentSnapshot(
             agent: .claudeCode,
             availability: .ready,
@@ -14658,8 +14346,6 @@ private actor DiskFootprintMonitoringStub: AgentMonitoring {
     func installHooks() async throws {}
     func removeHooks() async throws {}
     func clearSessions() async {}
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
-    func discardCollectedPreviews() async {}
     func disconnect() async {}
 }
 
@@ -14734,7 +14420,7 @@ private actor HoldableMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { deadline }
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+    func fetchSnapshot() async -> AgentSnapshot {
         if isHeld {
             await withCheckedContinuation { waiters.append($0) }
         }
@@ -14745,8 +14431,6 @@ private actor HoldableMonitoringStub: AgentMonitoring {
     func installHooks() async throws {}
     func removeHooks() async throws {}
     func clearSessions() async {}
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
-    func discardCollectedPreviews() async {}
     func disconnect() async {}
 }
 
@@ -15088,14 +14772,14 @@ extension CodexInNotchTests {
 
         // First pass: no metadata yet, so the Completed row renders and the
         // gate starts its settling window.
-        let first = await service.fetchSnapshot(showsContentPreviews: false)
+        let first = await service.fetchSnapshot()
         #expect(first.sessions.count == 1, "the row renders before metadata lands")
         await waitForThreadListRequests(client, atLeast: 1, completed: true)
 
         // Second pass, past the settling window but well inside every other
         // window, so the only deadline that could be stale is the gate's.
         await clock.advance(by: 10)
-        let second = await service.fetchSnapshot(showsContentPreviews: false)
+        let second = await service.fetchSnapshot()
         #expect(second.sessions.isEmpty, "a sub-agent thread renders no row")
 
         let deadline = await service.nextRefreshDeadline()

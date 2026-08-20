@@ -88,7 +88,6 @@ final class HookPreviewChannel: @unchecked Sendable {
     nonisolated(unsafe) private var acceptSource: DispatchSourceRead?
     nonisolated(unsafe) private var previewsByEventID: [String: Preview] = [:]
     nonisolated(unsafe) private var claimOrder: [String] = []
-    nonisolated(unsafe) private var acceptsText = true
     nonisolated(unsafe) private var listenDiagnostic: String?
 
     nonisolated init(socketURL: URL, maximumRetainedPreviews: Int = 256) {
@@ -199,22 +198,6 @@ final class HookPreviewChannel: @unchecked Sendable {
 
         source?.cancel()
         unlink(socketURL.path)
-    }
-
-    /// Whether received text is retained at all.
-    ///
-    /// This is the privacy switch. It is a single in-memory flag rather than a
-    /// setting written to the helper, which is what makes it ordered and
-    /// infallible: there is no write to lose, no revision to race, and no way
-    /// for the UI to show "off" while text is still being collected.
-    nonisolated func setAcceptsText(_ accepts: Bool) {
-        lock.lock()
-        acceptsText = accepts
-        if !accepts {
-            previewsByEventID.removeAll()
-            claimOrder.removeAll()
-        }
-        lock.unlock()
     }
 
     /// Removes and returns the preview for one event, if it arrived.
@@ -335,7 +318,6 @@ final class HookPreviewChannel: @unchecked Sendable {
     nonisolated private func store(_ preview: Preview, forEventID eventID: String) {
         lock.lock()
         defer { lock.unlock() }
-        guard acceptsText else { return }
 
         if previewsByEventID.updateValue(preview, forKey: eventID) == nil {
             claimOrder.append(eventID)

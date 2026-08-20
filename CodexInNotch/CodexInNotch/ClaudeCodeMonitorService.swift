@@ -357,7 +357,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
 
     // MARK: - AgentMonitoring
 
-    func fetchSnapshot(showsContentPreviews: Bool) async -> AgentSnapshot {
+    func fetchSnapshot() async -> AgentSnapshot {
         let status = await setup.status()
         guard status == .active else {
             // Nothing is being monitored, so nothing is worth an edge. Left
@@ -504,23 +504,15 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         listener.retainPreviews(forSessions: Set(liveByID.keys))
 
         func title(for session: ClaudeCodeSession) async -> String? {
-            // A title is content, so it is only read when previews are on.
-            guard showsContentPreviews else { return nil }
-            return await transcripts.title(
+            await transcripts.title(
                 forSession: session.sessionID,
                 workingDirectory: session.workingDirectory
             )
         }
 
         /// What the session is currently saying, from `MessageDisplay`.
-        ///
-        /// Two switches, not one, and both are load-bearing. Collection is off
-        /// at the listener when the setting is off, so nothing is held; this
-        /// one is the render-time half, and it is what makes the setting take
-        /// effect on the first refresh rather than on the next message.
         func preview(for session: ClaudeCodeSession) -> String? {
-            guard showsContentPreviews else { return nil }
-            return listener.preview(forSession: session.sessionID)
+            listener.preview(forSession: session.sessionID)
         }
 
         var rows: [MonitoredSession] = []
@@ -1077,26 +1069,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         await hookEvents.clearTurnsPreservingObservation()
     }
 
-    /// Stops the listener retaining assistant text, and drops what it holds.
-    ///
-    /// This was an empty implementation for as long as this side collected
-    /// nothing, and its emptiness was the privacy claim. Since CC-015 it is a
-    /// real switch again: `MessageDisplay` is registered, so text does arrive,
-    /// and "not received" has become "not retained while this is off". The
-    /// weaker claim is the honest one, and it is the same one the Codex side
-    /// has always made.
-    ///
-    /// Synchronous, `nonisolated`, and an in-memory flag, for the reasons on
-    /// the protocol: a control routed through an unheld `Task` is reorderable
-    /// and one routed to a file is failable — see CR-012.
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {
-        listener.setAcceptsText(isEnabled)
-    }
-
-    func discardCollectedPreviews() async {
-        listener.discardPreviews()
-    }
-
     func disconnect() async {
         listener.stop()
         boundPort = nil
@@ -1184,10 +1156,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             projectName: projectName(for: session),
             // `Untitled` is the contract's answer for a title that cannot be
             // obtained, and the folder name is never allowed to stand in for
-            // one. That is also what a row shows with previews off, since a
-            // title is as much the user's content as a prompt is.
+            // one.
             title: title ?? "Untitled",
-            privacySafeTitle: "Untitled",
             // The same text whatever the status, unlike Codex, which swaps
             // between the prompt and the answer. There is one source here and
             // it reads the same in every state: the beginning of the newest

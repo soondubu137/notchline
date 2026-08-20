@@ -191,15 +191,12 @@ final class AgentHookListener: @unchecked Sendable {
 
     /// Preview state, under a lock of its own rather than under ``queue``.
     ///
-    /// ``setAcceptsText(_:)`` is a privacy control and has to take effect on the
-    /// caller's thread, in order. `queue` also serves connections and writes
-    /// queue files, so putting the switch behind it would make an infallible
-    /// control wait on file I/O for no reason. Same shape, and same reasoning,
-    /// as ``HookPreviewChannel``.
+    /// `queue` also serves connections and writes queue files, so holding this
+    /// behind it would make a memory-only read wait on file I/O for no reason.
+    /// Same shape as ``HookPreviewChannel``.
     private let previewLock = NSLock()
     private var previewsBySessionID: [String: SessionPreview] = [:]
     private var previewOrder: [String] = []
-    private var acceptsText = true
     /// The sessions the last refresh listed, as handed to ``retainPreviews``.
     ///
     /// Held only to qualify the edge below.
@@ -210,9 +207,9 @@ final class AgentHookListener: @unchecked Sendable {
     /// second is not a redraw rate -- but a row holding *no* text is a
     /// different case: nothing on screen is stale, something is missing, and
     /// the next thing that would ask happens to be whatever the session does
-    /// next. That gap is what made turning content previews back on look
-    /// broken: collection resumes at once, but the row it belongs to was drawn
-    /// while previews were off and nobody was going to draw it again.
+    /// next. A turn that talks for a minute before it touches a tool sends no
+    /// lifecycle event in the meantime, so without this edge its row stays
+    /// blank for as long as it keeps talking.
     ///
     /// Only the absent-to-present edge, so the cost is one wake per session per
     /// spell of having nothing to show, not one per delta.
@@ -448,8 +445,8 @@ final class AgentHookListener: @unchecked Sendable {
         }
 
         // Assistant text turns back here. It goes to memory and the method
-        // returns: no queue file is written, which is both the privacy
-        // guarantee and the reason a 0.3s event does not become 0.3s of disk.
+        // returns: no queue file is written, which is why a 0.3s event does not
+        // become 0.3s of disk.
         //
         // Returning also keeps this event off ``HookEventRepository``'s change
         // stream, so a talking turn does not redraw the panel three times a
@@ -525,30 +522,6 @@ final class AgentHookListener: @unchecked Sendable {
         listedSessionIDs = sessionIDs
     }
 
-    /// Whether received text is retained at all.
-    ///
-    /// The privacy switch, and an in-memory flag for the same reason
-    /// ``HookPreviewChannel``'s is: there is no write to lose, no revision to
-    /// race, and no way for the settings to show "off" while text is still
-    /// being kept. Turning it off discards what is already held.
-    func setAcceptsText(_ accepts: Bool) {
-        previewLock.lock()
-        acceptsText = accepts
-        if !accepts {
-            previewsBySessionID.removeAll()
-            previewOrder.removeAll()
-        }
-        previewLock.unlock()
-    }
-
-    /// Discards collected text without changing whether more is accepted.
-    func discardPreviews() {
-        previewLock.lock()
-        previewsBySessionID.removeAll()
-        previewOrder.removeAll()
-        previewLock.unlock()
-    }
-
     /// Folds one `MessageDisplay` delta into the session's preview.
     ///
     /// Only the head of a message is ever held. Once it is full the delta is
@@ -557,10 +530,8 @@ final class AgentHookListener: @unchecked Sendable {
     /// past ``maximumPreviewCharacters`` no matter how much the model says.
     private func recordPreview(from body: Data, sessionID: String) {
         previewLock.lock()
-        let accepts = acceptsText
         let existing = previewsBySessionID[sessionID]
         previewLock.unlock()
-        guard accepts else { return }
 
         guard let payload = try? JSONDecoder().decode(
             MessageDisplayPayload.self,
@@ -580,13 +551,6 @@ final class AgentHookListener: @unchecked Sendable {
         guard !text.isEmpty else { return }
 
         previewLock.lock()
-        // Re-checked under the lock: the switch may have been turned off while
-        // this delta was being decoded, and a privacy control that loses a race
-        // is not one.
-        guard acceptsText else {
-            previewLock.unlock()
-            return
-        }
         let isFirstSinceEmpty = previewsBySessionID[sessionID] == nil
         if isFirstSinceEmpty {
             previewOrder.append(sessionID)
@@ -609,8 +573,7 @@ final class AgentHookListener: @unchecked Sendable {
         previewLock.unlock()
 
         // Outside the lock. Whoever is told asks this listener what it holds
-        // straight back, and a privacy switch that can deadlock behind a redraw
-        // is not one either.
+        // straight back, so calling it under the lock would deadlock.
         appeared?()
     }
 

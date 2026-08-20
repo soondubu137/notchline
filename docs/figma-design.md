@@ -27,9 +27,9 @@
 | `04 — Session Row` | 会话行、列表和状态名称胶囊 | `112:28`, `140:201`, `198:72` |
 | `05 — Panel` | 收起与展开 Panel 变体 | `115:82`, `300:253`, `300:263` |
 | `06 — Notch Core` | 核心产品状态与不同菜单栏高度参考 | `118:73`, `185:292`, `304:630`, `304:641` |
-| `07 — Integration States` | 隐私、局部降级；薄层状态已退休或并入两个系统状态，见 §6.6 | `227:3`, `307:30` |
+| `07 — Integration States` | 局部降级；预览隐藏与薄层状态已退休或并入两个系统状态，见 §6.6 | `227:3`, `307:30` |
 | `08 — Onboarding` | 首次安装三步流程 | `232:95` |
-| `09 — Settings` | macOS 26 设置窗口（浅色／深色）、集成管理、预览隐私与 `Session list` 分组 | `609:2`（现行）；`233:3`、`591:2`（v1 参考） |
+| `09 — Settings` | macOS 26 设置窗口（浅色／深色）、集成管理与 `Session list` 分组 | `609:2`（现行）；`233:3`、`591:2`（v1 参考） |
 | `10 — Double Apps` | 双产品（Codex + Claude Code）设计；`08 — Presence` 定义收起态的在场规则 | `540:2`、`624:1560` |
 
 本文描述单产品契约。同时监视 Codex 与 Claude Code 时的设计见 [`dual-agent-design.md`](dual-agent-design.md)，其中两处已取代本文：设置齿轮的位置（见 4.5，现为展开态顶栏右上角，单产品同样生效）与双产品页脚的额度构成（见 4.3）。其余部分不受影响。
@@ -147,7 +147,6 @@ Figma `Usage Ring` 组件集（`108:18`）包含 `100`、`72`、`50`、`32`、`1
 - 非 Running 默认显示圆点，Hover 显示状态名称 Badge。
 - 左侧文字接近尾部控件时 Alpha 渐隐，不换行、不显示省略号。
 - 最多三行可见；更多行使用垂直滚动。
-- 隐私关闭时移除预览文字，但保持 `80` 行高和 Panel 几何；标题与 Project 仍保留。
 
 ### 4.5 Panel
 
@@ -202,17 +201,15 @@ Input needed
 | Running | 最新公开进度，回退到本轮输入 |
 | Completed | final answer 开头；没有时保留最后公开进度 |
 
-禁止 raw reasoning、工具参数、命令输出、diff、敏感路径和批准理由。
+这四行取的都是产品已经显示给用户的那一份。raw reasoning、工具参数、命令输出和 diff 不在其中，不是因为不许取，而是因为这条路径没有去取它们——要显示得先加一次读取，那是一个按价值判断的新功能（见 [`PRD.md`](PRD.md) 第 7 节）。
 
 ## 6. Integration States
 
 `07 — Integration States`（`227:3`）包含：
 
-### 6.1 Content previews hidden
+### 6.1 Content previews hidden（已退休）
 
-- 保留 Project、Desktop 标题与状态。
-- 未生成 Desktop 标题的会话显示 `Untitled`。
-- 不显示正文预览，不改变行高。
+板上这一格画的是预览开关关闭后的行。该开关连同它兑现的隐私承诺已经删除（[`PRD.md`](PRD.md) 第 7 节），预览始终显示，因此这一格不再对应任何可达状态。板上保留，不再是验收项。
 
 ### 6.2 Quota unavailable
 
@@ -376,7 +373,7 @@ Input needed
 | Switch | `38 × 22`，滑块 `18` |
 | 按钮与弹出菜单 | 胶囊圆角；弹出菜单尾部是强调色 `18 × 18` 双箭头 chip |
 
-三个分组自上而下是 `Products`、`Session list`、`Privacy`。每个分组的形状都是「小标题 + 一张圆角卡片 + 卡片下方的脚注文字」。脚注取代了 v1 的蓝色提示条——macOS 用脚注而不是色块陈述后果，色块在原生窗口里只会读作一个没人点得动的控件。
+板上三个分组自上而下是 `Products`、`Session list`、`Privacy`；实现现在是 `Products`、`Display`、`Session list` —— `Privacy` 已删除（§8.3），`Display` 板上没有（§8.4）。每个分组的形状都是「小标题 + 一张圆角卡片 + 卡片下方的脚注文字」。脚注取代了 v1 的蓝色提示条——macOS 用脚注而不是色块陈述后果，色块在原生窗口里只会读作一个没人点得动的控件。
 
 窗口最后一行是 `closing note`：左边是那句只读声明，右边是胶囊按钮 `Quit Codex in Notch`。它与 `Recheck` 同形不是巧合——两者都是「说明文字尾部挂一个它所说的那个动作」。退出不属于任何一个分组：它不是一项设置，而它要收走的那个组件也没有自己的窗口可关，Settings 是唯一能承载它的界面。这一行不加内缩（分组脚注的 `2 pt` 左内缩只属于分组），因此它与三个组标题落在同一条竖线上。
 
@@ -406,12 +403,9 @@ Input needed
 
 卡片里还有第二行 `Clear the session list`，尾部胶囊按钮 `Clear`，列表为空时 disabled。它在 v1 是 Codex 卡片里的一枚破坏性按钮；产品分组现在只讲产品，而这个动作的对象是会话列表，它属于这里。板上没有这一行，因为板只画了三个已确认的**设置**，而这是一个动作。
 
-### 8.3 Privacy
+### 8.3 Privacy（已删除）
 
-- `Show current content previews` 默认 On，说明行写明它覆盖哪些片段。
-- On 的脚注写明预览不落盘。
-- Off 的脚注写明 Project、标题与状态仍然显示，且 prompt fallback 被禁用、缺失标题为 `Untitled`。
-- 只有开关本身改变：行高、行几何与说明行都不动，这一点由两个局部切片直接对照。
+板上有这一组，实现里没有。`Show current content previews` 唯一的用途是兑现一条已经作废的隐私承诺（[`PRD.md`](PRD.md) 第 7 节），开关、`PrivacySettings` 与 `privacySafeTitle` 回退一并删除，窗口因此少一组。板上保留为历史形态。
 
 ### 8.4 Display
 
@@ -458,7 +452,6 @@ Input needed
 
 - 所有状态必须有文字或可访问名称，不能只依赖颜色。
 - 系统级状态与四个会话级状态使用不同文案与语义。
-- 隐私关闭后旁白不读取已隐藏正文。
 - 长状态名称在带刘海 Expanded 几何中必须完整可读。
 - Reduce Motion 不影响状态可理解性。
 
@@ -476,7 +469,6 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] header 固定参考 `46`，只横向扩张。
 - [x] 三行 `508 × 80` 视口与滚动契约。
 - [x] SF Pro 文件级字体统一。
-- [x] 隐私关闭场景。
 - [x] Quota unavailable 局部降级。
 - [x] ~~No active turns、Connecting、Disconnected、Update、unsupported、setup 薄层。~~ 收敛为 `Disconnected` 与 `Connected` 两个系统状态，见 §6.4 与 §6.6。
 - [x] 收起态在场规则与开合序列（§6.4，`624:1560`）：矩阵随智能体打开与关闭出现和离开，第一个产品接管灰槽。**画法已随 [#35](https://github.com/soondubu137/codex-in-notch/issues/35) 落地**：每个已连接产品一个矩阵，各自跑自己的曲线；无产品时一个灰色静息标记；有刘海形态静息时整条前导翼消失。
@@ -493,7 +485,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] Claude Code 在场的第二条校正：为陈旧缓存设上限（`90` 秒 = 三次连续失败），超过后在场为未知并落到 `Disconnected`。`freshness` 与 `trustCeiling` 现在是两个参数。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
-- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift)），四处与板不一致均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、多一个 `Display` 分组与一行 `Clear the session list`（§8.4、§8.2）。
+- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift)），五处与板不一致均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、多一个 `Display` 分组与一行 `Clear the session list`（§8.4、§8.2）、少一个 `Privacy` 分组（§8.3）。
 - [ ] 在装有 SF Pro 的 Figma 桌面端打开 `609:2`，确认字形正常渲染、多行脚注的换行落位与预期一致。
 - [ ] 同一次打开时，把 `closing note` 的四条 Inter 文字（`665:3`、`665:5`、`667:3`、`667:5`）重新键入为 SF Pro Regular，原因见 §3.1。
 - [x] 会话行已同步 Running／等待人工／Completed 三种计时表现，一行只有一个标记。

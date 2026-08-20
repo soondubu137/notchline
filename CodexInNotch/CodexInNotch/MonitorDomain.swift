@@ -404,7 +404,6 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     let turnID: String
     let projectName: String
     let title: String
-    let privacySafeTitle: String
     let preview: String?
     let status: SessionStatus
     let startedAt: Date?
@@ -415,7 +414,6 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         turnID: String,
         projectName: String,
         title: String,
-        privacySafeTitle: String? = nil,
         preview: String?,
         status: SessionStatus,
         startedAt: Date?
@@ -425,7 +423,6 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.turnID = turnID
         self.projectName = projectName
         self.title = title
-        self.privacySafeTitle = privacySafeTitle ?? title
         self.preview = preview
         self.status = status
         self.startedAt = startedAt
@@ -440,20 +437,6 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// would silently make one row dismiss, hide or re-render the other.
     nonisolated var id: String {
         "\(agent.rawValue):\(threadID):\(turnID)"
-    }
-
-    func hidingContent() -> MonitoredSession {
-        MonitoredSession(
-            agent: agent,
-            threadID: threadID,
-            turnID: turnID,
-            projectName: projectName,
-            title: privacySafeTitle,
-            privacySafeTitle: privacySafeTitle,
-            preview: nil,
-            status: status,
-            startedAt: startedAt
-        )
     }
 }
 

@@ -751,44 +751,12 @@ final class MonitorStore: ObservableObject {
             preferences?.set(isQuotaFolded, forKey: Self.quotaFoldedDefaultsKey)
         }
     }
-    @Published var showsContentPreviews: Bool {
-        didSet {
-            preferences?.set(
-                showsContentPreviews,
-                forKey: Self.contentPreviewDefaultsKey
-            )
-            // Applied before this setter returns, so the switch cannot land out
-            // of order and cannot fail. Everything below is cleanup of text
-            // already collected, which is idempotent and may run late.
-            services.forEach { $0.setContentPreviewsEnabled(showsContentPreviews) }
-            guard !showsContentPreviews else {
-                // The other direction has to be just as immediate, and it
-                // cannot be done here: the rows on screen were *built* with
-                // previews suppressed, so there is nothing in them to unhide --
-                // the titles and text have to be read again. Nothing else would
-                // ask soon. No watcher fires for a settings change, and the
-                // events that do fire belong to the sessions; a list of
-                // finished rows produces none at all, so the switch appeared to
-                // do nothing until the 60-second heartbeat came round, and the
-                // rows that will never speak again stayed blank past it.
-                requestRefresh()
-                return
-            }
-            sessions = sessions.map { $0.hidingContent() }
-            Task { [services] in
-                for service in services {
-                    await service.discardCollectedPreviews()
-                }
-            }
-        }
-    }
     @Published private(set) var lastIntegrationMessage: String
     @Published private(set) var isInstallingIntegration = false
     @Published private(set) var isRemovingIntegration = false
     @Published private(set) var isClearingSessions = false
     @Published private(set) var hasCompletedOnboarding: Bool
 
-    private static let contentPreviewDefaultsKey = "showsContentPreviews"
     private static let productAttributionDefaultsKey = "productAttribution"
     private static let quotaFoldedDefaultsKey = "quotaFolded"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
@@ -874,16 +842,13 @@ final class MonitorStore: ObservableObject {
         self.statusAgent = merged.availabilityAgent
         self.connectedAgents = merged.connectedAgents
         self.presenceMarks = merged.presenceMarks
-        // Through the injected store, not `.standard`. These three used to read
+        // Through the injected store, not `.standard`. These used to read
         // `.standard` directly while only the display preference was injected,
         // so a `MonitorStore` built in a test inherited whoever was running it:
         // `rowsAreAttributedForAsLongAsBothProductsAreConnected` failed on any
         // machine whose owner had chosen `Badge` in Settings, and passed on
         // every other, which is a test reporting on the developer rather than
         // on the code.
-        self.showsContentPreviews = preferences?.object(
-            forKey: Self.contentPreviewDefaultsKey
-        ) as? Bool ?? true
         self.productAttribution = preferences?.string(
             forKey: Self.productAttributionDefaultsKey
         ).flatMap(ProductAttributionStyle.init(rawValue:)) ?? .nameAndColour
@@ -894,15 +859,6 @@ final class MonitorStore: ObservableObject {
             forKey: Self.onboardingDefaultsKey
         ) ?? false
         self.lastIntegrationMessage = snapshot.diagnostic ?? "Waiting for Codex data"
-        if !showsContentPreviews {
-            self.sessions = snapshot.sessions.map { $0.hidingContent() }
-        }
-
-        // Reconcile the switch with what was persisted, rather than trusting
-        // the channel's default to match. Previously nothing did this, so a
-        // user who had turned previews off got a helper that came back up
-        // collecting text until they toggled it again.
-        services.forEach { $0.setContentPreviewsEnabled(showsContentPreviews) }
 
         if !services.isEmpty {
             startMonitoring()
@@ -1731,9 +1687,7 @@ final class MonitorStore: ObservableObject {
         let undismissedSessions = snapshot.sessions.filter {
             !dismissedSessionIDs.contains($0.id)
         }
-        let visibleSessions = showsContentPreviews
-            ? undismissedSessions
-            : undismissedSessions.map { $0.hidingContent() }
+        let visibleSessions = undismissedSessions
         // Re-aggregated rather than taken from the snapshot: a dismissed row
         // must stop counting towards the summary the moment it stops showing.
         let aggregateStatus = MonitorAggregation.status(
@@ -1970,9 +1924,7 @@ final class MonitorStore: ObservableObject {
             for service in services {
                 group.addTask { @MainActor [weak self] in
                     guard let self else { return }
-                    let snapshot = await service.fetchSnapshot(
-                        showsContentPreviews: self.showsContentPreviews
-                    )
+                    let snapshot = await service.fetchSnapshot()
                     guard !Task.isCancelled else { return }
                     // The snapshot already carries the health the same refresh
                     // observed; asking again would consume the Hook queue twice

@@ -258,7 +258,7 @@ codex app-server proxy
 | `item/tool/requestUserInput` | Input Needed | 必须绑定 request/tool item id |
 | `serverRequest/resolved` | 清除匹配的 pending request | 只清除相同 request id；若 Turn 未终止，回到 Running |
 | `turn/completed(status: completed)` | Completed | 当前 Turn 已结束 |
-| `turn/completed(status: failed)` | Completed | 产品不区分结束原因；错误正文仍遵守隐私约束 |
+| `turn/completed(status: failed)` | Completed | 产品不区分结束原因 |
 | `turn/completed(status: interrupted)` | Completed | 产品不区分结束原因 |
 | `thread/status/changed.activeFlags` | 辅助校正 | 不能创建 Turn、猜测 Turn id 或复活终态 Turn |
 | `item/started` / `item/completed` | 内容与阶段辅助证据 | 不得覆盖 `turn/completed` |
@@ -604,7 +604,7 @@ account/usage/read
 
 - Hooks 继续作为兼容与降级来源。
 - 共享事件流健康时，Hook 只能补充边界，不能覆盖权威 terminal/pending 结果。
-- 保留严格身份、live cutoff、retired Turn 和隐私处理。
+- 保留严格身份、live cutoff 和 retired Turn 处理。
 
 ### 10.4 `MonitorDomain.swift` / `MonitorStore.swift`
 
@@ -626,10 +626,10 @@ account/usage/read
 - daemon/proxy 断线、版本不兼容和 fallback 测试。
 - observer outbound allowlist 测试，证明无法发出控制或审批响应。
 
-## 11. 安全与隐私要求
+## 11. 安全要求
 
-- 不持久化原始 notification、prompt、assistant content、reasoning、命令、cwd 或文件 diff。
-- 测试日志只记录 method、状态、相对时间、连接 generation 和不可逆短哈希 id。
+本节曾经开头两条是隐私要求（不持久化正文、日志脱敏）。它们随 [`PRD.md`](../../PRD.md) 第 7 节一并删除：本产品没有网络出口，正文落不落盘换不来用户能察觉的任何东西。下面剩下的都是**本机其他进程**能不能借这条通道去控制 Codex 的问题，与隐私无关。
+
 - 不把 App Server socket 暴露到非 loopback 网络。
 - 不为方便调试关闭 socket 权限或复用认证材料。
 - 不让 Codex in Notch 成为 approval client。
@@ -681,7 +681,6 @@ Transport transient failure
 | daemon 成为共同故障点 | Desktop 和 Notch 同时断开 | 稳定性测试；Desktop 可回退；共享模式默认关闭 |
 | socket 权限过宽 | 本地其他进程可控制 Codex | 校验 owner/mode；不暴露网络 listener |
 | notification 丢失或重复 | 状态倒退/卡住 | baseline + 幂等 reducer + generation + 定期校正 |
-| 事件内容泄露 | 隐私风险 | method-only 脱敏日志；不持久化正文 |
 | App 更新改变协议 schema | 解析错误 | 生成/对照当前版本 schema；未知字段前向兼容 |
 | proxy 性能或崩溃 | 状态延迟/断开 | 采样 CPU/内存；有限重连；必要时再评估直接 socket |
 

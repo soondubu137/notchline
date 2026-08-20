@@ -556,9 +556,7 @@ private struct SessionRow: View {
     private var isDismissable: Bool { session.status == .completed }
 
     private var accessibilityText: String {
-        let preview = store.showsContentPreviews
-            ? session.preview.map { ", current content: \($0)" } ?? ""
-            : ", content preview hidden"
+        let preview = session.preview.map { ", current content: \($0)" } ?? ""
         // Spoken form, not the drawn "12:34" — VoiceOver reads that as a clock
         // time. The row draws the elapsed value, so the label must carry it too.
         let elapsed = store.spokenElapsedText(for: session).map { ", running for \($0)" }
@@ -596,7 +594,7 @@ private struct SessionRowContent: View {
                         lineHeight: 17
                     )
 
-                    if store.showsContentPreviews, let preview = session.preview {
+                    if let preview = session.preview {
                         SessionRowText(
                             text: preview,
                             font: .systemFont(ofSize: 13, weight: .light),

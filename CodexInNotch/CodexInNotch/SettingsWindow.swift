@@ -21,7 +21,6 @@ struct AppSettingsView: View {
             productsGroup
             displayGroup
             sessionListGroup
-            privacyGroup
 
             // The closing note, and the one action that ends the app.
             //
@@ -277,30 +276,6 @@ struct AppSettingsView: View {
             SettingsFootnote(
                 "Only applies while both products are connected — with one product there "
                     + "is nothing to tell apart."
-            )
-        }
-    }
-
-    // MARK: - Privacy
-
-    private var privacyGroup: some View {
-        SettingsGroup(header: "Privacy") {
-            SettingsRow(
-                title: "Show current content previews",
-                caption: "User-visible prompt, progress, error, and final-answer snippets."
-            ) {
-                Toggle("Show current content previews", isOn: $store.showsContentPreviews)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-            }
-        } footnote: {
-            // Only the switch moves. The row keeps its geometry either way, so
-            // the consequence is stated in the footnote and nowhere else.
-            SettingsFootnote(
-                store.showsContentPreviews
-                    ? "Previews are on. No preview text is written to disk by Codex in Notch."
-                    : "Previews are hidden. Project, title and status still show; a session "
-                        + "with no Desktop title reads as Untitled."
             )
         }
     }

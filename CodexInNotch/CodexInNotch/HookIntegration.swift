@@ -119,10 +119,10 @@ nonisolated struct HookIntegrationPaths: Sendable {
 
     /// The file the marker replaced.
     ///
-    /// It used to carry `showsContentPreviews` down to the helper. The helper
-    /// no longer handles text at all, so there is no setting left to send; the
-    /// path survives only so an existing install is still recognised as ours
-    /// and the stale file gets cleaned up.
+    /// It used to carry a setting down to the helper. The helper no longer
+    /// handles text at all, so there is nothing left to send; the path survives
+    /// only so an existing install is still recognised as ours and the stale
+    /// file gets cleaned up.
     var legacySettings: URL {
         agentDirectory.appendingPathComponent("hook-settings.json")
     }
@@ -690,9 +690,8 @@ actor CodexHookInstaller {
     ///
     /// Nothing in the marker is read back -- only its presence matters -- so it
     /// carries just enough to identify itself to a human looking at the folder.
-    /// It deliberately holds no privacy state: the preview switch is now an
-    /// in-memory flag on ``HookPreviewChannel``, because a switch that has to
-    /// be written to disk to take effect can fail open, and did.
+    /// It holds no configuration at all: the helper has nothing left to be
+    /// told.
     private func writeInstallMarker() throws {
         let data = try JSONSerialization.data(
             withJSONObject: ["managedBy": "codex-in-notch"],
@@ -1037,18 +1036,6 @@ actor HookEventRepository {
         eventsWatcher.events()
     }
 
-    /// Turns preview collection on or off.
-    ///
-    /// Deliberately `nonisolated` and synchronous. The previous design wrote
-    /// the switch to a settings file the helper read, through an unheld `Task`
-    /// whose write failure was swallowed -- so two quick toggles could land out
-    /// of order, and one failed write left the UI showing "off" while text kept
-    /// being collected. There is no write to lose any more: the caller's last
-    /// call is the state, and it takes effect before that call returns.
-    nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {
-        previewChannel.setAcceptsText(isEnabled)
-    }
-
     /// Rebinds the preview socket, for use once the support directory exists.
     ///
     /// The channel is constructed at launch, which on a first run is before
@@ -1304,20 +1291,6 @@ actor HookEventRepository {
             try? persist()
         }
         return snapshot()
-    }
-
-    /// Redacts text already reduced into Turn state.
-    ///
-    /// The switch itself is ``setContentPreviewsEnabled``, which must have run
-    /// first: this only cleans up what was collected while it was on.
-    func clearContentPreviews() {
-        turnsByThreadID = turnsByThreadID.mapValues { state in
-            var redacted = state
-            redacted.promptPreview = nil
-            redacted.assistantPreview = nil
-            return redacted
-        }
-        try? persist()
     }
 
     func clearTurnsPreservingObservation() {
