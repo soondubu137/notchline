@@ -182,6 +182,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         displayed: (any DesktopDisplayedSessionReporting)? = nil,
         terminalGestures: (any ControllingTerminalGestureReporting)? = nil,
         sessionsDirectory: URL? = nil,
+        /// Which entries of that directory belong to a `claude` this app
+        /// launched. Injected only so the rule can be tested without launching
+        /// one — see ``sessionsChanged(_:invalidating:in:ownedBy:)``.
+        ownsSessionRecord: (@Sendable (String) -> Bool)? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
     ) {
@@ -317,7 +321,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             repository.changeEvents(),
             Self.sessionsChanged(
                 sessionsWatcher.events(),
-                invalidating: resolvedSessions
+                invalidating: resolvedSessions,
+                in: watched,
+                ownedBy: ownsSessionRecord ?? ClaudeCommand.ownsSessionRecord(named:)
             ),
             // Two edges from one directory, answering two different questions.
             // The one above is a session appearing or going away, which is the
@@ -1151,20 +1157,63 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// edge is also how a row whose session died gets retired, and the
     /// consumer's own reasons for refreshing are none of this function's
     /// business.
+    ///
+    /// - Parameter directory: The sessions directory, when this edge is the
+    ///   directory's own. Given, the forwarder skips ``invalidate()`` for the
+    ///   one change that cannot mean anything: the appearance or removal of a
+    ///   record belonging to a `claude` **this app launched itself**. The quota
+    ///   reading is such a session, so every reading used to buy a `claude
+    ///   agents --json` -- a Node launch -- to be re-told about a session the
+    ///   registry filters out anyway. See ``ClaudeCommand/ownsSessionRecord(named:)``.
+    ///
+    ///   Narrow on purpose, and in the safe direction on every other input: an
+    ///   edge that changes no name at all, one that changes a name this app
+    ///   cannot claim, or a directory that cannot be listed all invalidate
+    ///   exactly as before. Only "every name that moved is one of ours" is
+    ///   quiet. Nil for the record-file edge, which watches sessions this app
+    ///   is drawing rows for and can therefore never be looking at its own.
     nonisolated private static func sessionsChanged(
         _ events: AsyncStream<Void>,
-        invalidating sessions: any ClaudeCodeSessionListing
+        invalidating sessions: any ClaudeCodeSessionListing,
+        in directory: URL? = nil,
+        ownedBy isOwnRecord: @escaping @Sendable (String) -> Bool =
+            ClaudeCommand.ownsSessionRecord(named:)
     ) -> AsyncStream<Void> {
         AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let forwarder = Task {
+                var known = directory.map(Self.entryNames(of:)) ?? []
                 for await _ in events {
-                    await sessions.invalidate()
+                    var isOursAlone = false
+                    if let directory {
+                        let current = Self.entryNames(of: directory)
+                        let moved = current.symmetricDifference(known)
+                        known = current
+                        isOursAlone = !moved.isEmpty && moved.allSatisfy(isOwnRecord)
+                    }
+                    if !isOursAlone {
+                        await sessions.invalidate()
+                    }
                     continuation.yield(())
                 }
                 continuation.finish()
             }
             continuation.onTermination = { _ in forwarder.cancel() }
         }
+    }
+
+    /// The names in a directory, and nothing else about it.
+    ///
+    /// Names, deliberately: a session record's *contents* are a private schema
+    /// this app does not read, and the rule that the directory is a change
+    /// signal rather than a source of truth still holds -- what sessions exist
+    /// still comes only from `claude agents --json`. A name is used here for
+    /// one question and it is a question about this app: "did the thing that
+    /// moved belong to a process I started?"
+    nonisolated private static func entryNames(of directory: URL) -> Set<String> {
+        let names = try? FileManager.default.contentsOfDirectory(
+            atPath: directory.path
+        )
+        return Set(names ?? [])
     }
 
     /// Ensures the helper exists and the socket is bound.

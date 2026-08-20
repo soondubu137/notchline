@@ -9223,6 +9223,50 @@ for line in sys.stdin:
         #expect(harness.invalidations >= 1)
     }
 
+    /// This app's own quota reading is a session, and its record is not news.
+    ///
+    /// `claude -p "/usage"` is a real Claude Code session for the second or two
+    /// it runs, so it writes `~/.claude/sessions/<pid>.json` on the way in and
+    /// removes it on the way out. Both looked to the sessions watcher exactly
+    /// like a user's session appearing and going away, and each therefore told
+    /// the registry its list was wrong — which is a `claude agents --json`, a
+    /// Node process and about 0.4 s of a core, to be re-told about a session
+    /// this app started and already filters out of the list. Measured on a
+    /// Release launch: one extra launch 3.5 s in, and one per reading after
+    /// that.
+    ///
+    /// The pid tells them apart, and this app knows it without reading a thing:
+    /// it launched the process. A record it cannot claim still reports the list
+    /// out of date, which is the half this must not lose — the case above.
+    @Test @MainActor
+    func aRecordLeftByThisAppsOwnReadingDoesNotReportTheListOutOfDate() async throws {
+        let harness = try ClaudeCodeHarness(ownedSessionRecords: ["4242.json"])
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        try FileManager.default.createDirectory(
+            at: harness.sessionsDirectory,
+            withIntermediateDirectories: true
+        )
+        _ = await harness.service.fetchSnapshot()
+
+        let own = harness.sessionsDirectory.appendingPathComponent("4242.json")
+        try Data("{}".utf8).write(to: own)
+        #expect(await harness.invalidationsRise(above: 0, within: 1) == false)
+
+        // And its removal is not news either, which is the edge that actually
+        // cost the launch a subprocess.
+        try FileManager.default.removeItem(at: own)
+        #expect(await harness.invalidationsRise(above: 0, within: 1) == false)
+
+        // A record this app cannot claim still reports the list out of date,
+        // from the same directory and through the same edge.
+        try Data("{}".utf8).write(
+            to: harness.sessionsDirectory.appendingPathComponent("99.json")
+        )
+        #expect(await harness.invalidationsRise(above: 0))
+    }
+
     /// Text arriving for a row that has none wakes the product on its own.
     ///
     /// Deltas are deliberately kept off this stream -- three a second is not a
@@ -14303,7 +14347,11 @@ private final class ClaudeCodeHarness {
         return invalidations > count
     }
 
-    init() throws {
+    /// - Parameter ownedSessionRecords: The entries of the sessions directory
+    ///   this harness's service should treat as belonging to a `claude` the app
+    ///   launched itself. Named rather than launched, because launching one in
+    ///   a test would run the user's real Claude Code.
+    init(ownedSessionRecords: Set<String> = []) throws {
         root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-svc-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -14365,7 +14413,8 @@ private final class ClaudeCodeHarness {
             // would be answering with whichever tty the developer last typed
             // into.
             terminalGestures: terminalStub,
-            sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true)
+            sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true),
+            ownsSessionRecord: { ownedSessionRecords.contains($0) }
         )
     }
 

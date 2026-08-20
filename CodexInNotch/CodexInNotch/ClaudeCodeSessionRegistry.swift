@@ -202,6 +202,65 @@ enum ClaudeCommand {
     /// How long after `SIGTERM` to stop being polite.
     private static let killGrace: TimeInterval = 2
 
+    /// How long a finished child's pid is still remembered as this app's own.
+    ///
+    /// The record is removed just *before* the child exits, and the edge that
+    /// reports the removal is debounced behind it, so forgetting the pid the
+    /// instant `waitUntilExit` returns would race the edge it exists to
+    /// explain. Seconds rather than minutes because the guarantee wanted is
+    /// the narrow one: a pid cannot be reused while its process is alive, so
+    /// the only window where this could mistake somebody else's session for
+    /// this app's is the grace itself.
+    private static let ownPIDGrace: TimeInterval = 5
+
+    /// The `claude` processes this app is running, and the ones it has just
+    /// finished running.
+    ///
+    /// Claude Code files every session as `~/.claude/sessions/<pid>.json`, and
+    /// this app's own quota reading is a session like any other. So the record
+    /// that reading leaves, and its removal a few seconds later, look to the
+    /// sessions watcher exactly like a user's session appearing and going
+    /// away -- and each of those edges told the registry its list was wrong,
+    /// which is a `claude` launch: a Node process and about 0.4 s of a core, to
+    /// re-read a list whose only change was a session this app started and
+    /// already filters out. Measured on a Release launch: one extra launch
+    /// 3.5 s in, and one per quota reading for as long as the app runs.
+    ///
+    /// The pid is what tells them apart and it costs nothing to know, because
+    /// it is the pid of a process this app launched itself. Nothing here reads
+    /// a session file; the only thing borrowed from Claude Code is that a
+    /// record is *named* after its pid, which this app already depends on to
+    /// watch those records at all.
+    nonisolated(unsafe) private static var ownPIDs: Set<Int32> = []
+    private static let ownPIDsLock = NSLock()
+
+    /// Whether an entry of the sessions directory belongs to a `claude` this
+    /// app launched.
+    ///
+    /// Takes the file name rather than a pid because both of the entries a
+    /// session leaves -- `<pid>.json` and `<pid>.<hash>.key` -- lead with it,
+    /// and a name that does not lead with a pid at all is somebody else's by
+    /// construction.
+    nonisolated static func ownsSessionRecord(named name: String) -> Bool {
+        guard let pid = Int32(name.prefix { $0 != "." }) else { return false }
+        ownPIDsLock.lock()
+        defer { ownPIDsLock.unlock() }
+        return ownPIDs.contains(pid)
+    }
+
+    nonisolated private static func noteOwn(pid: Int32) {
+        guard pid > 0 else { return }
+        ownPIDsLock.lock()
+        ownPIDs.insert(pid)
+        ownPIDsLock.unlock()
+    }
+
+    nonisolated private static func forgetOwn(pid: Int32) {
+        ownPIDsLock.lock()
+        ownPIDs.remove(pid)
+        ownPIDsLock.unlock()
+    }
+
     /// - Parameters:
     ///   - timeout: How long the child may take before it is killed. A killed
     ///     child reports failure, which is a thing every caller here already
@@ -256,6 +315,19 @@ enum ClaudeCommand {
         } catch {
             log.error("could not run claude \(arguments.first ?? ""): \(error.localizedDescription)")
             return nil
+        }
+
+        // Noted for every command rather than only the one that leaves a
+        // session record, because which commands leave one is Claude Code's
+        // business and not something to encode here. A pid that never appears
+        // in the sessions directory is simply never asked about, and is
+        // forgotten a few seconds after the child exits either way.
+        let launched = process.processIdentifier
+        noteOwn(pid: launched)
+        defer {
+            queue.asyncAfter(deadline: .now() + ownPIDGrace) {
+                forgetOwn(pid: launched)
+            }
         }
 
         // SIGTERM at the deadline, SIGKILL shortly after. Politeness alone is

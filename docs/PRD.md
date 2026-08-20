@@ -275,6 +275,8 @@ V1 设置窗口只包含已经确认的三组能力：
 
 设置只影响 Codex in Notch。`Update Codex`、`Codex version unsupported` 和 `Codex disconnected` 不提供操作；它们已退出收起态，只在展开面板与 Settings 的产品行中出现（见 6.3）。
 
+**设置窗口由用户打开，不在启动时自己出现。** 启动只画 notch 组件；设置走 macOS 自己那条路——应用菜单的 `Settings…`／`⌘,`。第 5 节的首次引导是唯一的例外，它必须不请自来。这条既是产品判断（本产品是常驻组件，不是一个每次启动都要看一眼的窗口），也是一条实测的启动代价：那个窗口的构建、布局与它引起的 tracking-area 一遍，占一次 Release 启动 CPU 的一半（`0.62 s → 0.32 s`，峰值 `%cpu 55 → 33`），详见 [`system-architecture.md` §6](system-architecture.md)。
+
 ## 12. 可靠性与降级
 
 - 应用启动时列表为空，收起态显示 `Disconnected`——此刻确实还没有连上任何东西。App Server 成功返回一次只读校验后进入 Ready；该产品此时若也处于打开状态，收起态转为 `Connected`。该校验只用于区分 Ready 与 Disconnected，**不得据此产出任何会话行**。

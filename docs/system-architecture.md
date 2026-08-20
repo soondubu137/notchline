@@ -496,6 +496,27 @@ flowchart LR
 
 同一条规则的另一半写在代码里：每行的 `"usage"` 判定用一个 `static let` 的 needle，而不是每行重新构造一个 `Data`。
 
+### 启动瞬间的 CPU（二）：一个没人要的窗口，和两个自找的子进程
+
+上一条修完之后启动仍然是一个尖峰。2026-08-20 重测（Release，`open -a` 之后按 0.2 s 采样 CPU 累计时间的差分，热点用 `xctrace` 的 Time Profiler 在 `--launch` 下抓）：**本进程 0.62 s，峰值约 55%–86%**；同一秒内它还拉起三个子进程——`codex app-server`（约 0.4 s）、`claude agents --json`（约 0.4 s）、`claude -p /usage`（约 0.9 s），整机峰值因此在 120% 上下。
+
+**本进程那 0.62 s 里没有一行是本应用的代码。** 533 个 1 ms 采样按自耗时归类：`vImage` 84、`libswiftCore` 67、`libobjc` 60、`CoreGraphics` 40……本应用的二进制合计 2。按调用树看，钱花在三处，而三处同源：
+
+| 位置 | 采样 | 是什么 |
+| --- | --- | --- |
+| `NSPersistentUIRestorer` → `AppWindowsController.makeMainWindow` | 73 | SwiftUI 在启动时**建出并布局那个设置窗口** |
+| `_NSTrackingAreaAKManager setCursorForMouseLocation:` → `NSCursor set` → `_AXFMouseCursorGenerator` | 89（主线程）+ 60（worker 上的 `vImage` 卷积） | 新窗口引起的 tracking-area 一遍，落在系统重新生成指针图像上。这一档只在**用户自定义过指针**时这么贵（`com.apple.universalaccess` 的 `cursorIsCustomized = 1`），但触发它的是本应用开了第二个窗口 |
+| `AG::Graph::UpdateStack::update` 等 | 31 | 该窗口那棵视图树的第一次求值 |
+
+也就是说：一个 notch 常驻组件，每次启动都把**整个设置窗口**摆上屏幕，并为此付掉一半的启动 CPU。没有任何东西要求它——同一个视图 `⌘,` 就在那里。
+
+改法与两处实测：
+
+- **`WindowGroup` 换成 `Window`，并 `defaultLaunchBehavior(.suppressed)`。** `WindowGroup` 每次启动必开一个窗口，且**首个 group 上的 `defaultLaunchBehavior(.suppressed)` 无效**（macOS 26.5 实测：`.suppressed`／`.presented` 硬编码在 `WindowGroup` 上都照常开窗，换成 `Window` 后两者都生效）。首次引导仍然要不请自来，所以 launch behavior 按 `hasCompletedOnboarding` 取值。结果：**0.62 s → 0.32 s，峰值 `%cpu` 55 → 33**，启动后屏幕上只剩 notch 组件那一个窗口。
+- **本应用自己的用量读数不再让会话列表作废。** `claude -p "/usage"` 是一个真会话，进出各写／删一次 `~/.claude/sessions/<pid>.json`；两条边沿都告诉注册表「列表错了」，于是每次读数买回一次 `claude agents --json`——一个 Node 进程、约 0.4 s。实测启动后 3.5 s 那一次就是它。现在目录边沿先比一遍**条目名**：进出的名字如果全部属于本应用自己启动的 `claude`（pid 是自己 `Process` 给的，不读任何文件），就不作废；其余情况——名字没动、名字不认得、目录读不出来——一律照旧作废。实测：启动后那次多余的 `claude` 消失。
+
+一处代价要写下来：主窗口从 `WindowGroup` 换成 `Window(id: "main")` 之后，AppKit 记住窗口位置的 key 跟着变，用户上一次摆的位置会丢一次。
+
 ## 7. 保持 clean and neat 的架构约束
 
 1. **只有一个编排中心**：跨数据源的决策集中在 `LiveCodexMonitorService`；UI、文件适配器和 transport 不互相拼状态。
