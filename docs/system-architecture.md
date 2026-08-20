@@ -438,6 +438,18 @@ flowchart LR
 
 需要重新评估的只有一种情况：动效不再是**固定循环 + 可动画的 layer 属性**，而是每帧依赖实时数据（流式进度、波形）、需要逐帧重绘（粒子、shader），或字形每帧都变。
 
+### 有限的过渡不算持续动效
+
+判断标准是「是否持续 tick」，所以一次**有始有终**的过渡不受这条约束限制：它跑完就消失，不会让叠层每帧重画到关机。状态名在展开／收起之间的交接就是这样一次过渡——旧读数留在新读数之上淡出，`CABasicAnimation` 一条，由 render server 求值，`SweepingLabelView` 自己不 tick，SwiftUI 也不重新求值面板。
+
+这次交接连带定死了三件事，都是「布局在动、内容也在换」时才会暴露的：
+
+1. **字形层按自己的光栅尺寸定框，永远不按 `bounds`。** `CALayer` 的 `contentsGravity` 默认是拉伸，而收起时 `bounds` 正在从 `Approval needed` 的宽度收到 `Approval` 的宽度——按 `bounds` 定框，短字形就会被拉到旧宽度、再随动画挤回自己。`ElapsedReadoutView` 与 `SessionRowTextView` 一直是按光栅定框的，只有状态名这一个没有，而它恰好是唯一一个宽度会被动画的标签。
+2. **曲线只声明一处。** `PanelMotion`（`NotchStatusMatrix.swift`）给出 `200 ms` / `cubic-bezier(0.22, 1, 0.36, 1)`（Reduce Motion 为 `80 ms` / ease-out）的 SwiftUI 与 Core Animation 两种形式。窗口（`OverlayPanelController`）、顶栏（`NotchOverlayView`）与标签的淡出原先各写各的，三处一致纯属人工维持；淡化必须与它下面正在收的宽度同时结束，所以这里不能有第二种意见。
+3. **扫光不再每次布局重装。** 过渡期间这个视图每帧都被 layout，而扫光的几何只跟字形尺寸有关——`SessionRowTextView` 早就按这条写了，状态名现在跟上。（未做新的性能实测，也不宣称一个数字：这里改的是每帧一次 `CATransaction` 提交的结构，不是已量过的稳态成本。）
+
+一个读数是另一个的前缀时（`Approval` / `Approval needed`），新读数**不淡入**：共有的字形是同一批像素、同一个位置，两层叠加只会让一个没动过的词暗下去一趟。只有真正不同的读数才双向交叉淡化。文案规则见 `figma-design.md` §9.1。
+
 ### 测试守不住的部分
 
 `NotchStatusMatrix` 与两个 layer-backed 标签有测试断言它们仍由 `CAAnimation` 驱动、遮罩仍然存在，把它们改回 SwiftUI 会编译失败。但**在面板别处新加一个持续动画，测试抓不到**——那一维只能靠本节和视图上的注释守住。

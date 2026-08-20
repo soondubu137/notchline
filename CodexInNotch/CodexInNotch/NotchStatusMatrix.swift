@@ -734,6 +734,40 @@ enum NotchTextRaster {
     }
 }
 
+/// The one curve this overlay opens, closes and hands text over on.
+///
+/// The window, the header and the labels inside it all move together, and a
+/// label that dissolves one reading into another has to be finished exactly as
+/// the width animating underneath it settles. `0.20` and `(0.22, 1, 0.36, 1)`
+/// used to be written out separately in each of those three places, which is
+/// how they were free to drift apart; this is the single declaration they read
+/// from, in the two forms the surface needs — SwiftUI lays out the header, and
+/// Core Animation drives the window and the layer-backed labels.
+enum PanelMotion {
+    static let duration: TimeInterval = 0.20
+    /// Reduce Motion shortens the hand-over rather than removing it. What that
+    /// setting asks to be spared is movement, and a dissolve is the thing you
+    /// replace movement *with* — a label that swaps instantly under a panel
+    /// that is still closing is not the calmer option.
+    static let reducedDuration: TimeInterval = 0.08
+
+    static func duration(reduceMotion: Bool) -> TimeInterval {
+        reduceMotion ? reducedDuration : duration
+    }
+
+    static func animation(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .easeOut(duration: reducedDuration)
+            : .timingCurve(0.22, 1, 0.36, 1, duration: duration)
+    }
+
+    static func timingFunction(reduceMotion: Bool) -> CAMediaTimingFunction {
+        reduceMotion
+            ? CAMediaTimingFunction(name: .easeOut)
+            : CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+    }
+}
+
 /// A single-line notch label: thin and dim, sweeping while work is in flight.
 ///
 /// This is the notch's own status readout, so it is on screen for as long as
@@ -753,10 +787,18 @@ struct SearchlightLabel: View {
     let text: String
     var font: NSFont = .systemFont(ofSize: 13, weight: .light)
     var isSweeping: Bool
+    /// Only the length of the hand-over between two readings. Whether the label
+    /// sweeps at all is the caller's decision and rides in `isSweeping`.
+    var reduceMotion = false
 
     var body: some View {
-        SweepingLabel(text: text, font: font, isSweeping: isSweeping)
-            .accessibilityHidden(true)
+        SweepingLabel(
+            text: text,
+            font: font,
+            isSweeping: isSweeping,
+            reduceMotion: reduceMotion
+        )
+        .accessibilityHidden(true)
     }
 }
 
@@ -764,13 +806,19 @@ private struct SweepingLabel: NSViewRepresentable {
     let text: String
     let font: NSFont
     let isSweeping: Bool
+    let reduceMotion: Bool
 
     func makeNSView(context: Context) -> SweepingLabelView {
         SweepingLabelView()
     }
 
     func updateNSView(_ view: SweepingLabelView, context: Context) {
-        view.apply(text: text, font: font, isSweeping: isSweeping)
+        view.apply(
+            text: text,
+            font: font,
+            isSweeping: isSweeping,
+            reduceMotion: reduceMotion
+        )
     }
 
     func sizeThatFits(
@@ -785,23 +833,55 @@ private struct SweepingLabel: NSViewRepresentable {
 final class SweepingLabelView: NSView {
     /// Loop length of one traverse.
     private static let sweepPeriod: TimeInterval = 2
+    static let dissolveAnimationKey = "notch.label.dissolve"
+    static let baseLayerName = "notch.label.base"
+    static let highlightLayerName = "notch.label.highlight"
+    static let outgoingLayerName = "notch.label.outgoing"
 
     private let baseLayer = CALayer()
     private let highlightLayer = CALayer()
+    /// The reading being replaced, held above the new one until it has
+    /// dissolved. It shows the raster that was already drawn — nothing is
+    /// re-rasterised to leave the screen.
+    private let outgoingLayer = CALayer()
     private let sweepMask = NotchTextRaster.makeSweepMask()
     private var appliedText = ""
     private var appliedFont = NSFont.systemFont(ofSize: 13, weight: .light)
     private var appliedIsSweeping = false
+    private var appliedReduceMotion = false
     private var renderedScale: CGFloat = 0
+    /// The size the current glyphs were rasterised at, which is what every
+    /// glyph layer is framed to. Never `bounds`: the layout animates `bounds`
+    /// across an expand or a collapse, and a layer framed to it stretches its
+    /// raster to fit every width on the way.
+    private var glyphSize: CGSize = .zero
+    private var outgoingGlyphSize: CGSize = .zero
+    /// Geometry the running sweep was built for, so an unchanged one is left
+    /// alone rather than torn down and rebuilt — this view is laid out on every
+    /// frame of a transition, and re-adding the animation there is a
+    /// `CATransaction` commit per frame for a band that would not have moved.
+    private var installedSweepSize: CGSize?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.masksToBounds = false
+        // The outgoing reading is wider than this view for the length of a
+        // collapse, and the panel edge closing over it is half of what makes
+        // the hand-over read as one movement. Unclipped, those glyphs would be
+        // drawn outside the black surface and over the desktop.
+        layer?.masksToBounds = true
+
+        baseLayer.name = Self.baseLayerName
+        highlightLayer.name = Self.highlightLayerName
+        outgoingLayer.name = Self.outgoingLayerName
+        // Resting state of a layer that is only ever seen mid-dissolve.
+        outgoingLayer.opacity = 0
 
         highlightLayer.mask = sweepMask
         layer?.addSublayer(baseLayer)
         layer?.addSublayer(highlightLayer)
+        // Above both copies: it is the reading being taken away.
+        layer?.addSublayer(outgoingLayer)
     }
 
     @available(*, unavailable)
@@ -811,18 +891,34 @@ final class SweepingLabelView: NSView {
         NotchTextRaster.textSize(appliedText, font: appliedFont)
     }
 
-    func apply(text: String, font: NSFont, isSweeping: Bool) {
+    func apply(text: String, font: NSFont, isSweeping: Bool, reduceMotion: Bool) {
         let textChanged = text != appliedText || font != appliedFont
-        guard textChanged || isSweeping != appliedIsSweeping else { return }
+        guard textChanged
+            || isSweeping != appliedIsSweeping
+            || reduceMotion != appliedReduceMotion
+        else { return }
+
+        let previousText = appliedText
+        let previousGlyphs = baseLayer.contents
+        let previousGlyphSize = glyphSize
+        let previousScale = baseLayer.contentsScale
 
         appliedText = text
         appliedFont = font
         appliedIsSweeping = isSweeping
+        appliedReduceMotion = reduceMotion
 
         if textChanged {
             invalidateIntrinsicContentSize()
             renderedScale = 0
             redrawGlyphs()
+            dissolve(
+                from: previousGlyphs,
+                text: previousText,
+                size: previousGlyphSize,
+                scale: previousScale
+            )
+            layoutGlyphLayers()
         }
         highlightLayer.isHidden = !isSweeping
         installSweep()
@@ -831,6 +927,7 @@ final class SweepingLabelView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         redrawGlyphs()
+        layoutGlyphLayers()
         installSweep()
     }
 
@@ -841,17 +938,109 @@ final class SweepingLabelView: NSView {
 
     override func layout() {
         super.layout()
-        baseLayer.frame = bounds
-        highlightLayer.frame = bounds
+        layoutGlyphLayers()
         installSweep()
+    }
+
+    /// Hand one reading over to the next without either of them jumping.
+    ///
+    /// Two things change at once when the panel opens or closes: the words, and
+    /// the width the layout gives them. The width is animated, so the words
+    /// have to be handed over on the same curve. Swapped outright at the start
+    /// of it — which is what this used to do, with the glyph layer framed to
+    /// `bounds` — the short raster was stretched across the long frame for the
+    /// whole transition: `Approval` arrived as wide as `Approval needed` and
+    /// then squeezed down into itself.
+    ///
+    /// The two readings are almost never unrelated. A compact form is the
+    /// expanded form with a word taken off it, so where one is the beginning of
+    /// the other the shared glyphs are the same pixels in the same place:
+    /// fading the new copy in over them would only dim a word that never moved,
+    /// once through 75% and back. The new copy is shown at full strength there
+    /// and the old one dissolves off it, which leaves exactly the dropped word
+    /// fading out under the closing edge. Only a genuinely different reading —
+    /// `Running` becoming `Approval` — is cross-faded both ways.
+    private func dissolve(
+        from previousGlyphs: Any?,
+        text previousText: String,
+        size previousGlyphSize: CGSize,
+        scale previousScale: CGFloat
+    ) {
+        guard let previousGlyphs,
+              !previousText.isEmpty,
+              !appliedText.isEmpty
+        else {
+            endDissolve()
+            return
+        }
+
+        let duration = PanelMotion.duration(reduceMotion: appliedReduceMotion)
+        let timing = PanelMotion.timingFunction(reduceMotion: appliedReduceMotion)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        outgoingLayer.contents = previousGlyphs
+        outgoingLayer.contentsScale = previousScale
+        outgoingGlyphSize = previousGlyphSize
+        outgoingLayer.frame = glyphFrame(for: previousGlyphSize)
+        CATransaction.commit()
+
+        outgoingLayer.add(
+            Self.fade(from: 1, to: 0, duration: duration, timing: timing),
+            forKey: Self.dissolveAnimationKey
+        )
+
+        // One reading is the beginning of the other: the shared glyphs are
+        // already on screen and stay exactly where they are.
+        guard !previousText.hasPrefix(appliedText),
+              !appliedText.hasPrefix(previousText)
+        else {
+            baseLayer.removeAnimation(forKey: Self.dissolveAnimationKey)
+            highlightLayer.removeAnimation(forKey: Self.dissolveAnimationKey)
+            return
+        }
+
+        let fadeIn = Self.fade(from: 0, to: 1, duration: duration, timing: timing)
+        baseLayer.add(fadeIn, forKey: Self.dissolveAnimationKey)
+        highlightLayer.add(fadeIn, forKey: Self.dissolveAnimationKey)
+    }
+
+    /// Drop whatever is mid-dissolve.
+    ///
+    /// The outgoing copy rests at zero opacity, so there is nothing to tear
+    /// down on a timer and nothing left drawn if the label is emptied halfway
+    /// through a hand-over.
+    private func endDissolve() {
+        outgoingLayer.removeAnimation(forKey: Self.dissolveAnimationKey)
+        baseLayer.removeAnimation(forKey: Self.dissolveAnimationKey)
+        highlightLayer.removeAnimation(forKey: Self.dissolveAnimationKey)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        outgoingLayer.contents = nil
+        outgoingGlyphSize = .zero
+        CATransaction.commit()
+    }
+
+    private static func fade(
+        from: Float,
+        to: Float,
+        duration: TimeInterval,
+        timing: CAMediaTimingFunction
+    ) -> CABasicAnimation {
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = from
+        animation.toValue = to
+        animation.duration = duration
+        animation.timingFunction = timing
+        return animation
     }
 
     private func redrawGlyphs() {
         let scale = window?.backingScaleFactor ?? 2
         // Replacing `contents` is an animatable change on a plain sublayer, so
-        // Core Animation would cross-fade it. Body text is replaced as a turn
-        // makes progress, and fades that outlive the gap between updates pile
-        // up into a smear; the text it replaced swapped instantly.
+        // Core Animation would cross-fade it — on its own schedule, not the
+        // panel's, and with no say in which of the two readings is on top. The
+        // hand-over above is that cross-fade, done deliberately.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -859,12 +1048,14 @@ final class SweepingLabelView: NSView {
         guard !appliedText.isEmpty else {
             baseLayer.contents = nil
             highlightLayer.contents = nil
+            glyphSize = .zero
             return
         }
+        let size = intrinsicContentSize
+        glyphSize = size
         guard scale != renderedScale else { return }
         renderedScale = scale
 
-        let size = intrinsicContentSize
         baseLayer.contentsScale = scale
         highlightLayer.contentsScale = scale
         baseLayer.contents = NotchTextRaster.glyphImage(
@@ -883,15 +1074,49 @@ final class SweepingLabelView: NSView {
         )
     }
 
+    /// The glyphs keep their own size and their own place; only the view around
+    /// them is animated.
+    private func layoutGlyphLayers() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let frame = glyphFrame(for: glyphSize)
+        baseLayer.frame = frame
+        highlightLayer.frame = frame
+        outgoingLayer.frame = glyphFrame(for: outgoingGlyphSize)
+        CATransaction.commit()
+    }
+
+    /// Leading edge, vertically centred: the matrix sits to this label's left
+    /// and the reading grows away from it, so the first glyph is the one that
+    /// must not move when the reading changes length.
+    private func glyphFrame(for size: CGSize) -> CGRect {
+        CGRect(
+            x: 0,
+            y: ((bounds.height - size.height) / 2).rounded(),
+            width: size.width,
+            height: size.height
+        )
+    }
+
     private func installSweep() {
         guard appliedIsSweeping else {
+            installedSweepSize = nil
             sweepMask.removeAnimation(forKey: NotchTextRaster.sweepAnimationKey)
             return
         }
+        // Across the glyphs, not across the frame the layout is animating — a
+        // band scaled to a width that is still closing would sweep at a
+        // different speed on every frame of the collapse.
+        guard glyphSize != installedSweepSize
+            || sweepMask.animation(
+                forKey: NotchTextRaster.sweepAnimationKey
+            ) == nil
+        else { return }
+        installedSweepSize = glyphSize
         NotchTextRaster.installSweep(
             on: sweepMask,
-            across: bounds.width,
-            height: bounds.height,
+            across: glyphSize.width,
+            height: glyphSize.height,
             period: Self.sweepPeriod
         )
     }

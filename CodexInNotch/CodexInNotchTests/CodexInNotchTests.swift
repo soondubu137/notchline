@@ -4794,7 +4794,7 @@ struct CodexInNotchTests {
         let font = NSFont.systemFont(ofSize: 13, weight: .light)
         let text = "Approval needed"
         let view = SweepingLabelView()
-        view.apply(text: text, font: font, isSweeping: true)
+        view.apply(text: text, font: font, isSweeping: true, reduceMotion: false)
 
         // The same metrics PanelMetrics reserves compact width with, so the
         // label cannot be wider than the panel drawn for it.
@@ -4804,10 +4804,30 @@ struct CodexInNotchTests {
         view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
         view.layout()
 
+        // Named rather than indexed: the reading on its way out is drawn above
+        // both copies, and asserting on positions makes adding it look like a
+        // regression. The order still matters and is asserted as an order.
         let sublayers = try #require(view.layer?.sublayers)
-        #expect(sublayers.count == 2)
-        let glyphs = try #require(sublayers.first)
-        let highlight = try #require(sublayers.last)
+        #expect(sublayers.count == 3)
+        let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)
+        let highlight = try Self.labelLayer(
+            named: SweepingLabelView.highlightLayerName,
+            in: view
+        )
+        let outgoing = try Self.labelLayer(
+            named: SweepingLabelView.outgoingLayerName,
+            in: view
+        )
+        #expect(sublayers.firstIndex(of: glyphs)! < sublayers.firstIndex(of: highlight)!)
+        #expect(sublayers.firstIndex(of: highlight)! < sublayers.firstIndex(of: outgoing)!)
+
+        // Nothing has been replaced yet, so nothing is mid-hand-over.
+        #expect(outgoing.contents == nil)
+        #expect(outgoing.opacity == 0)
+
+        // The glyphs are framed to their own raster and never to the view, so a
+        // frame the layout is still animating cannot stretch them.
+        #expect(glyphs.frame.width == ceil(measured.width))
 
         let contents = try #require(glyphs.contents)
         let image = unsafeDowncast(contents as AnyObject, to: CGImage.self)
@@ -4824,9 +4844,116 @@ struct CodexInNotchTests {
         let mask = try #require(highlight.mask)
         #expect(mask.animation(forKey: "notch.searchlight") != nil)
 
-        view.apply(text: text, font: font, isSweeping: false)
+        view.apply(text: text, font: font, isSweeping: false, reduceMotion: false)
         #expect(highlight.isHidden)
         #expect(mask.animation(forKey: "notch.searchlight") == nil)
+    }
+
+    private static func labelLayer(
+        named name: String,
+        in view: NSView
+    ) throws -> CALayer {
+        let sublayers = try #require(view.layer?.sublayers)
+        return try #require(sublayers.first { $0.name == name })
+    }
+
+    @Test @MainActor
+    func notchLabelHandsALongerReadingToAShorterOneWithoutStretchingIt() throws {
+        // Collapsing turns `Approval needed` into `Approval` while the width
+        // underneath the label is still animating down from the longer one. The
+        // glyph layer used to be framed to `bounds`, so the short raster was
+        // stretched across the long frame for the whole transition: the word
+        // arrived as wide as the one it replaced and then squeezed into itself.
+        //
+        // The glyphs are framed to their own raster now, and the word that was
+        // dropped dissolves out over the top of them instead.
+        let font = NSFont.systemFont(ofSize: 13, weight: .light)
+        let expanded = "Approval needed"
+        let compact = "Approval"
+        let view = SweepingLabelView()
+        view.apply(text: expanded, font: font, isSweeping: true, reduceMotion: false)
+        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
+        view.layout()
+
+        let expandedWidth = view.intrinsicContentSize.width
+        let compactWidth = ceil(
+            (compact as NSString).size(withAttributes: [.font: font]).width
+        )
+        #expect(compactWidth < expandedWidth)
+
+        // The reading changes first and the layout follows it, so this is the
+        // view exactly as it is drawn mid-collapse: new text, old frame.
+        view.apply(text: compact, font: font, isSweeping: true, reduceMotion: false)
+        view.layout()
+
+        let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)
+        #expect(glyphs.frame.width == compactWidth)
+        #expect(glyphs.frame.width < view.bounds.width)
+
+        // The reading being taken away is still drawn, at its own width, and on
+        // its way out on the same curve the panel is closing on.
+        let outgoing = try Self.labelLayer(
+            named: SweepingLabelView.outgoingLayerName,
+            in: view
+        )
+        #expect(outgoing.contents != nil)
+        #expect(outgoing.frame.width == expandedWidth)
+        let fadeOut = try #require(
+            outgoing.animation(forKey: SweepingLabelView.dissolveAnimationKey)
+                as? CABasicAnimation
+        )
+        #expect(fadeOut.duration == PanelMotion.duration)
+        #expect(fadeOut.toValue as? Float == 0)
+        // It rests invisible, so there is nothing to tear down on a timer.
+        #expect(outgoing.opacity == 0)
+
+        // `Approval` is the beginning of `Approval needed`: those glyphs are the
+        // same pixels in the same place, and fading a second copy in over them
+        // would only dim a word that never moved.
+        #expect(glyphs.animation(forKey: SweepingLabelView.dissolveAnimationKey) == nil)
+
+        // The tail is drawn past the view for as long as it is leaving, so the
+        // closing edge has to be what cuts it off -- otherwise those glyphs are
+        // outside the black surface and over the desktop.
+        #expect(view.layer?.masksToBounds == true)
+    }
+
+    @Test @MainActor
+    func notchLabelCrossFadesTwoUnrelatedReadings() throws {
+        // `Running` and `Approval` share nothing, so the new reading has to
+        // arrive as well as the old one leaving. Shown at full strength, as the
+        // shared-prefix case deliberately does, it would stamp itself over the
+        // copy still dissolving underneath it.
+        let font = NSFont.systemFont(ofSize: 13, weight: .light)
+        let view = SweepingLabelView()
+        view.apply(text: "Running", font: font, isSweeping: true, reduceMotion: false)
+        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
+        view.layout()
+
+        view.apply(text: "Approval", font: font, isSweeping: true, reduceMotion: false)
+        view.layout()
+
+        let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)
+        let fadeIn = try #require(
+            glyphs.animation(forKey: SweepingLabelView.dissolveAnimationKey)
+                as? CABasicAnimation
+        )
+        #expect(fadeIn.fromValue as? Float == 0)
+        #expect(fadeIn.toValue as? Float == 1)
+        #expect(fadeIn.duration == PanelMotion.duration)
+
+        // Reduce Motion shortens the hand-over rather than removing it: a
+        // dissolve is what that setting asks for in place of movement.
+        view.apply(text: "Running", font: font, isSweeping: true, reduceMotion: true)
+        let outgoing = try Self.labelLayer(
+            named: SweepingLabelView.outgoingLayerName,
+            in: view
+        )
+        let reduced = try #require(
+            outgoing.animation(forKey: SweepingLabelView.dissolveAnimationKey)
+                as? CABasicAnimation
+        )
+        #expect(reduced.duration == PanelMotion.reducedDuration)
     }
 
     private static func alphaExtremes(

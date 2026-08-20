@@ -170,10 +170,12 @@ final class OverlayPanelController {
         }
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = store.reduceMotion ? 0.08 : 0.20
-            context.timingFunction = store.reduceMotion
-                ? CAMediaTimingFunction(name: .easeOut)
-                : CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+            context.duration = PanelMotion.duration(
+                reduceMotion: store.reduceMotion
+            )
+            context.timingFunction = PanelMotion.timingFunction(
+                reduceMotion: store.reduceMotion
+            )
             context.allowsImplicitAnimation = true
             panel.animator().setFrame(targetFrame, display: true)
         } completionHandler: { [weak panel] in

@@ -53,9 +53,7 @@ struct NotchOverlayView: View {
     }
 
     private var contentAnimation: Animation {
-        store.reduceMotion
-            ? .easeOut(duration: 0.08)
-            : .timingCurve(0.22, 1, 0.36, 1, duration: 0.20)
+        PanelMotion.animation(reduceMotion: store.reduceMotion)
     }
 
     private var panelAccessibilityLabel: String {
@@ -203,9 +201,9 @@ private struct OverlayHeader: View {
     }
 
     private var headerAnimation: Animation {
-        store.reduceMotion
-            ? .easeOut(duration: 0.08)
-            : .timingCurve(0.22, 1, 0.36, 1, duration: 0.20)
+        // The same curve the window resizes on and the same one the status
+        // label hands its reading over on: the three are one movement.
+        PanelMotion.animation(reduceMotion: store.reduceMotion)
     }
 }
 
@@ -239,7 +237,8 @@ private struct StatusReadout: View {
             if showsText {
                 SearchlightLabel(
                     text: text,
-                    isSweeping: isActive && !reduceMotion
+                    isSweeping: isActive && !reduceMotion,
+                    reduceMotion: reduceMotion
                 )
             }
         }
