@@ -159,7 +159,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             try await hookInstaller.upgradeManagedHookIfNeeded()
             hookUpgradeDiagnostic = nil
         } catch {
-            hookUpgradeDiagnostic = "Codex Hook helper 更新失败；继续使用已安装版本：\(error.localizedDescription)"
+            hookUpgradeDiagnostic = "Could not update the Codex hook helper; carrying on with the installed version: \(error.localizedDescription)"
         }
         var hookState = await hookEvents.consumeEvents()
         let hookDiagnostic = hookState.diagnostic ?? hookUpgradeDiagnostic
@@ -313,7 +313,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                         availability: .disconnected,
                         sessions: [],
                         quota: .unavailable,
-                        diagnostic: "Codex App Server 未响应：\(error.localizedDescription)",
+                        diagnostic: "The Codex App Server is not responding: \(error.localizedDescription)",
                         presence: presence
                     )
                 }
@@ -874,7 +874,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             $0.projectName == DesktopProjectMetadataSnapshot.unavailableProjectName
         }.count
         let unresolvedDiagnostic = unavailableCount > 0
-            ? "\(unavailableCount) 个会话缺少可验证的 Desktop Project 映射；未回退为 Chats。"
+            ? "\(unavailableCount) sessions have no verifiable Desktop Project mapping; they were not fallen back to Chats."
             : nil
         return combinedDiagnostic(metadata.diagnostic, unresolvedDiagnostic)
     }
@@ -893,7 +893,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     private func snapshotPreservingTrustedState(
         after error: CodexAppServerError
     ) -> AgentSnapshot {
-        let diagnostic = "App Server 请求暂时失败，保留最近状态：\(error.localizedDescription)"
+        let diagnostic = "An App Server request failed for the moment; the most recent state has been kept: \(error.localizedDescription)"
         guard let lastTrustedSnapshot else {
             return AgentSnapshot(
                 availability: .connecting,

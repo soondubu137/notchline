@@ -242,17 +242,17 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
         var errorDescription: String? {
             switch self {
             case .incompatibleSchema:
-                "Desktop 未读状态 schema 不兼容。"
+                "The Desktop unread state schema is not compatible."
             case let .oversizedFile(size):
-                "Desktop 未读状态文件异常过大（\(size) bytes）。"
+                "The Desktop unread state file is implausibly large (\(size) bytes)."
             case .unsafeFile:
-                "Desktop 未读状态文件不是当前用户拥有的普通文件。"
+                "The Desktop unread state file is not a regular file owned by the current user."
             case .invalidHostIdentifier:
-                "Desktop 未读状态包含空 host 标识。"
+                "The Desktop unread state contains an empty host identifier."
             case .invalidThreadIdentifier:
-                "Desktop 未读状态包含空 thread 标识。"
+                "The Desktop unread state contains an empty thread identifier."
             case .duplicateThreadIdentifier:
-                "Desktop 未读状态包含重复 thread 标识。"
+                "The Desktop unread state contains a duplicate thread identifier."
             }
         }
     }
@@ -327,20 +327,20 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
                 let backup = try loadSnapshot(from: backupURL, source: .backup)
                     .retainingData(
                         source: .backup,
-                        diagnostic: "Desktop 未读主状态不可读，已使用备份但不会据此隐藏会话：\(primaryError.localizedDescription)"
+                        diagnostic: "The primary Desktop unread state is unreadable; the backup was used, but no session will be hidden on its say-so: \(primaryError.localizedDescription)"
                     )
                 lastKnownGood = backup
                 lastSuccessfulPrimaryRevision = nil
                 return backup
             } catch {
-                let diagnostic = "无法读取 Codex Desktop 未读状态：\(primaryError.localizedDescription)"
+                let diagnostic = "Could not read the Codex Desktop unread state: \(primaryError.localizedDescription)"
                 if let lastKnownGood {
                     return lastKnownGood.retainingData(
                         source: .lastKnownGood,
-                        diagnostic: diagnostic + " 已保留最近一次有效数据，且不会据此隐藏新会话。"
+                        diagnostic: diagnostic + " The last valid data has been kept, and no new session will be hidden on its say-so."
                     )
                 }
-                return .unavailable(diagnostic + " 已保守保留终态会话。")
+                return .unavailable(diagnostic + " Finished sessions have been kept, to be safe.")
             }
         }
     }

@@ -154,32 +154,6 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
-    func controlTitle(for agent: AgentKind?) -> String {
-        let product = agent?.displayName ?? "智能体"
-        switch self {
-        case .connected:
-            return "已连接"
-        case .setupRequired:
-            return "设置 \(product) 集成"
-        case .connecting:
-            return "正在连接"
-        case .running:
-            return "运行中"
-        case .inputNeeded:
-            return "需要输入"
-        case .approvalNeeded:
-            return "等待批准"
-        case .completed:
-            return "已完成"
-        case .updateAgent:
-            return "需要更新 \(product)"
-        case .unsupportedVersion:
-            return "\(product) 版本不受支持"
-        case .disconnected:
-            return "连接中断"
-        }
-    }
-
     var isRunning: Bool {
         self == .running
     }
@@ -219,19 +193,6 @@ enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
             "Approval needed"
         case .completed:
             "Completed"
-        }
-    }
-
-    var controlTitle: String {
-        switch self {
-        case .running:
-            "运行中"
-        case .inputNeeded:
-            "需要输入"
-        case .approvalNeeded:
-            "等待批准"
-        case .completed:
-            "已完成"
         }
     }
 
@@ -782,7 +743,7 @@ struct MonitorSnapshot: Equatable, Sendable {
         // or "disconnected" reads as a statement about the whole surface.
         guard agents.count > 1 else { return first.1 }
         return reported
-            .map { "\($0.0.displayName)：\($0.1)" }
+            .map { "\($0.0.displayName): \($0.1)" }
             .joined(separator: "\n")
     }
 
@@ -947,13 +908,13 @@ enum SessionElapsedFormatter {
         let (hours, minutes, remainder) = components(of: seconds)
         var parts: [String] = []
         if hours > 0 {
-            parts.append("\(hours) 小时")
+            parts.append("\(hours) \(hours == 1 ? "hour" : "hours")")
         }
         if minutes > 0 {
-            parts.append("\(minutes) 分")
+            parts.append("\(minutes) \(minutes == 1 ? "minute" : "minutes")")
         }
         if remainder > 0 || parts.isEmpty {
-            parts.append("\(remainder) 秒")
+            parts.append("\(remainder) \(remainder == 1 ? "second" : "seconds")")
         }
         return parts.joined(separator: " ")
     }

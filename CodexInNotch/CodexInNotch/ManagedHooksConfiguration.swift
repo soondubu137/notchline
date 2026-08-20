@@ -29,19 +29,19 @@ nonisolated enum ManagedHooksConfigurationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .rootIsNotObject:
-            "Hook 配置文件的根不是 JSON 对象，已停止写入以免覆盖既有内容。"
+            "The root of the hook configuration file is not a JSON object; the write was stopped rather than overwrite what is there."
         case .hooksIsNotObject:
-            "Hook 配置文件的 `hooks` 不是 JSON 对象，已停止写入以免覆盖既有内容。"
+            "`hooks` in the hook configuration file is not a JSON object; the write was stopped rather than overwrite what is there."
         case let .eventIsNotGroupArray(event):
-            "Hook 配置中 `\(event)` 的结构无法识别，已停止写入以免覆盖既有内容。"
+            "The shape of `\(event)` in the hook configuration is unrecognised; the write was stopped rather than overwrite what is there."
         case let .groupHooksAreNotHandlerArray(event):
-            "Hook 配置中 `\(event)` 的某个分组结构无法识别，已停止写入以免覆盖既有内容。"
+            "One of the groups under `\(event)` in the hook configuration has an unrecognised shape; the write was stopped rather than overwrite what is there."
         case .unremovableManagedCommand:
-            "Hook 配置中存在无法安全移除的本应用命令，已保留 helper 以免留下悬空引用。"
+            "The hook configuration holds a command of this app that cannot be removed safely; the helper was kept rather than leave a dangling reference."
         case .changedWhileEditing:
-            "Hook 配置在本次写入期间被其他程序修改，已放弃写入以免覆盖对方的改动；请重试。"
+            "Another program changed the hook configuration during this write; the write was abandoned rather than overwrite their edit. Please try again."
         case .verificationFailed:
-            "Hook 配置写入后校验未通过，请检查 ~/.codex/hooks.json。"
+            "The hook configuration failed verification after being written; please check ~/.codex/hooks.json."
         }
     }
 }

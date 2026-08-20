@@ -25,11 +25,11 @@ enum NavigationOutcome: Sendable, Equatable {
     func message(forTitle title: String) -> String {
         switch self {
         case let .openedThread(host):
-            "已在 \(host) 中打开：\(title)"
+            "Opened in \(host): \(title)"
         case let .raisedApplication(host):
-            "已唤起 \(host)，但无法定位到具体会话：\(title)"
+            "Raised \(host), but could not reach the session itself: \(title)"
         case let .focusedTerminal(host):
-            "已聚焦 \(host)：\(title)"
+            "Brought \(host) to the front: \(title)"
         }
     }
 }
@@ -46,7 +46,7 @@ enum AgentNavigationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .noNavigator(agent):
-            "\(agent.displayName) 会话暂时无法打开。"
+            "\(agent.displayName) sessions cannot be opened at the moment."
         }
     }
 }
@@ -83,15 +83,15 @@ enum CodexNavigationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidThreadID:
-            "会话标识无效。"
+            "The session identifier is not valid."
         case .targetUnavailable:
-            "该会话已被归档、删除或不再可用。"
+            "That session has been archived, deleted, or is no longer available."
         case .validationFailed:
-            "暂时无法确认该会话仍然存在，请稍后重试。"
+            "Could not confirm that the session still exists; please try again shortly."
         case .desktopUnavailable:
-            "未找到 Codex Desktop。"
+            "Codex Desktop was not found."
         case .openRejected:
-            "Codex Desktop 未能接受打开会话的请求。"
+            "Codex Desktop did not accept the request to open the session."
         }
     }
 }

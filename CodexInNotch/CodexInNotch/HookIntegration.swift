@@ -21,13 +21,13 @@ enum HookSetupStatus: Equatable, Sendable {
     var displayName: String {
         switch self {
         case .notInstalled:
-            "尚未安装"
+            "Not installed"
         case .repairRequired:
-            "安装不完整；请开启总开关以修复"
+            "Installation incomplete; turn the main switch on to repair it"
         case .reviewRequired:
-            "已安装；请在 Codex /hooks 中信任"
+            "Installed; trust it under /hooks in Codex"
         case .active:
-            "已连接"
+            "Connected"
         }
     }
 
@@ -1124,7 +1124,7 @@ actor HookEventRepository {
         for url in urls {
             guard let data = try? Data(contentsOf: url),
                   let event = try? JSONDecoder().decode(HookEvent.self, from: data) else {
-                diagnostic = "忽略了一个损坏的 Hook 事件文件。"
+                diagnostic = "Ignored a corrupted hook event file."
                 quarantineInvalidEvent(at: url)
                 continue
             }
@@ -1134,7 +1134,7 @@ actor HookEventRepository {
             // the managed hook has executed before, but no historical event type
             // is allowed to create or mutate a current Turn.
             guard event.receivedAt.isFinite else {
-                diagnostic = "忽略了一个缺少稳定身份或不受支持的 Hook 事件。"
+                diagnostic = "Ignored a hook event with no stable identity, or of an unsupported kind."
                 quarantineInvalidEvent(at: url)
                 continue
             }
@@ -1147,7 +1147,7 @@ actor HookEventRepository {
                 validURLs.append(url)
                 didConsumeLiveEvents = true
             } else {
-                diagnostic = "忽略了一个缺少稳定身份或不受支持的 Hook 事件。"
+                diagnostic = "Ignored a hook event with no stable identity, or of an unsupported kind."
                 quarantineInvalidEvent(at: url)
             }
         }
@@ -1169,7 +1169,7 @@ actor HookEventRepository {
             hasObservedEvent = previouslyObservedEvent
             hasObservedLiveEvent = previouslyObservedLiveEvent
             return snapshot(
-                diagnostic: "Hook 状态写入失败；事件已保留并会重试：\(error.localizedDescription)"
+                diagnostic: "Could not write the hook state; the events are kept and will be retried: \(error.localizedDescription)"
             )
         }
 
@@ -1665,7 +1665,7 @@ actor HookEventRepository {
         guard observedPreToolUseCount == 0, observedPostToolUseCount >= 3 else {
             return nil
         }
-        return "Codex 未执行 PreToolUse hook，等待输入与等待审批无法显示；请在 Codex 中运行 /hooks 重新信任该定义。"
+        return "Codex is not running the PreToolUse hook, so input needed and approval needed cannot be shown; run /hooks in Codex to trust the definition again."
     }
 
     private func snapshot(

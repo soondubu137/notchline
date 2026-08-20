@@ -114,17 +114,17 @@ enum CodexAppServerError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .executableNotFound:
-            "找不到 Codex Desktop 随附的 codex 可执行文件。"
+            "Could not find the codex executable shipped with Codex Desktop."
         case let .launchFailed(message):
-            "无法启动 Codex App Server：\(message)"
+            "Could not start the Codex App Server: \(message)"
         case .disconnected:
-            "Codex App Server 已断开。"
+            "The Codex App Server has disconnected."
         case let .timeout(method):
-            "Codex App Server 调用超时：\(method)"
+            "A Codex App Server call timed out: \(method)"
         case let .protocolViolation(message):
-            "Codex App Server 返回了无法识别的数据：\(message)"
+            "The Codex App Server returned data that could not be understood: \(message)"
         case let .remote(code, message):
-            "Codex App Server 错误 \(code)：\(message)"
+            "Codex App Server error \(code): \(message)"
         }
     }
 

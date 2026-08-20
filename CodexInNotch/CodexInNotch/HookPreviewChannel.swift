@@ -116,7 +116,7 @@ final class HookPreviewChannel: @unchecked Sendable {
         guard pathBytes.count < MemoryLayout<sockaddr_un>.size
             - MemoryLayout<UInt8>.size * 2 else {
             setListenDiagnostic(
-                "预览通道路径过长，无法创建；本次运行不显示会话正文预览。"
+                "The preview channel path is too long to create; session content previews are off for this run."
             )
             return false
         }
@@ -127,7 +127,7 @@ final class HookPreviewChannel: @unchecked Sendable {
 
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else {
-            setListenDiagnostic("预览通道创建失败；本次运行不显示会话正文预览。")
+            setListenDiagnostic("Could not create the preview channel; session content previews are off for this run.")
             return false
         }
 
@@ -148,7 +148,7 @@ final class HookPreviewChannel: @unchecked Sendable {
         }
         guard bound == 0 else {
             close(descriptor)
-            setListenDiagnostic("预览通道绑定失败；本次运行不显示会话正文预览。")
+            setListenDiagnostic("Could not bind the preview channel; session content previews are off for this run.")
             return false
         }
 
@@ -158,7 +158,7 @@ final class HookPreviewChannel: @unchecked Sendable {
         guard listen(descriptor, 16) == 0 else {
             close(descriptor)
             unlink(socketURL.path)
-            setListenDiagnostic("预览通道监听失败；本次运行不显示会话正文预览。")
+            setListenDiagnostic("Could not listen on the preview channel; session content previews are off for this run.")
             return false
         }
 

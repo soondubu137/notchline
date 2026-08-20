@@ -57,15 +57,15 @@ struct NotchOverlayView: View {
     }
 
     private var panelAccessibilityLabel: String {
-        let usage = store.tokenRemainingPercent.map { "剩余用量 \($0)%" }
-            ?? "剩余用量不可用"
+        let usage = store.tokenRemainingPercent.map { "\($0)% usage remaining" }
+            ?? "usage remaining unavailable"
         // Spoken, not the "12:34" the notch draws: VoiceOver reads that as a
         // time of day. The label names it as the longest of the running turns,
         // because a bare duration beside a summary status is unattributable.
-        let elapsed = store.spokenLongestElapsedText.map { "，最长已运行 \($0)" }
+        let elapsed = store.spokenLongestElapsedText.map { ", longest running for \($0)" }
             ?? ""
-        return "Codex，\(store.sessions.count) 个相关会话，状态 "
-            + "\(store.statusDisplayName)\(elapsed)，\(usage)"
+        return "Codex, \(store.sessions.count) related sessions, status "
+            + "\(store.statusDisplayName)\(elapsed), \(usage)"
     }
 }
 
@@ -526,7 +526,7 @@ private struct SessionRow: View {
         // reachable only by mouse.
         .accessibilityActions {
             if isDismissable {
-                Button("移除这一行") { store.dismiss(session) }
+                Button("Remove this row") { store.dismiss(session) }
             }
         }
     }
@@ -536,14 +536,14 @@ private struct SessionRow: View {
 
     private var accessibilityText: String {
         let preview = store.showsContentPreviews
-            ? session.preview.map { "，当前内容：\($0)" } ?? ""
-            : "，内容预览已隐藏"
+            ? session.preview.map { ", current content: \($0)" } ?? ""
+            : ", content preview hidden"
         // Spoken form, not the drawn "12:34" — VoiceOver reads that as a clock
         // time. The row draws the elapsed value, so the label must carry it too.
-        let elapsed = store.spokenElapsedText(for: session).map { "，已运行 \($0)" }
+        let elapsed = store.spokenElapsedText(for: session).map { ", running for \($0)" }
             ?? ""
-        return "\(session.projectName)，\(session.title)，"
-            + "\(session.status.controlTitle)\(elapsed)\(preview)"
+        return "\(session.projectName), \(session.title), "
+            + "\(session.status.displayName)\(elapsed)\(preview)"
     }
 }
 

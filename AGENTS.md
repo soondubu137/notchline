@@ -10,7 +10,7 @@ A macOS overlay that sits at the top of the screen. It summarizes, with minimal 
 
 **Terminology comes before code.** Words like *thread*, *turn*, *monitoring lifecycle*, *current activity projection*, *unread terminal state*, and *integration availability* have precise definitions in this project. Read [`CONTEXT.md`](CONTEXT.md) before writing code, docs, or a commit message. Do not fall back on "task", "session", "run", or "recent threads" — those are explicitly banned alternatives.
 
-The product surface and the docs are written in Chinese; commit messages and this file are in English. Match whatever you are editing.
+The product surface — every string a user can read, including accessibility labels, diagnostics and the Info.plist usage descriptions — is written in British English. The docs are written in Chinese; commit messages and this file are in English. Match whatever you are editing.
 
 ---
 

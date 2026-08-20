@@ -162,17 +162,17 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
         var errorDescription: String? {
             switch self {
             case .incompatibleSchema:
-                "Desktop Project 状态 schema 不兼容。"
+                "The Desktop Project state schema is not compatible."
             case let .oversizedFile(size):
-                "Desktop Project 状态文件异常过大（\(size) bytes）。"
+                "The Desktop Project state file is implausibly large (\(size) bytes)."
             case .unsafeFile:
-                "Desktop Project 状态文件不是当前用户拥有的普通文件。"
+                "The Desktop Project state file is not a regular file owned by the current user."
             case .invalidProjectName:
-                "Desktop Project 状态包含空名称。"
+                "The Desktop Project state contains an empty name."
             case .conflictingRemoteProjectID:
-                "Desktop Project 状态包含重复远程 Project。"
+                "The Desktop Project state contains a duplicate remote Project."
             case .conflictingThreadMembership:
-                "Desktop Project 状态同时把 thread 标记为 Project 与 Chats。"
+                "The Desktop Project state marks a thread as belonging to both a Project and Chats."
             }
         }
     }
@@ -231,17 +231,17 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
                 let backup = try loadSnapshot(from: backupURL, source: .backup)
                     .retainingData(
                         source: .backup,
-                        diagnostic: "Desktop Project 主状态不可读，已使用备份：\(primaryError.localizedDescription)"
+                        diagnostic: "The primary Desktop Project state is unreadable; the backup was used: \(primaryError.localizedDescription)"
                     )
                 lastKnownGood = backup
                 lastSuccessfulPrimaryRevision = nil
                 return backup
             } catch {
-                let diagnostic = "无法读取 Codex Desktop Project 映射：\(primaryError.localizedDescription)"
+                let diagnostic = "Could not read the Codex Desktop Project mapping: \(primaryError.localizedDescription)"
                 if let lastKnownGood {
                     return lastKnownGood.retainingData(
                         source: .lastKnownGood,
-                        diagnostic: diagnostic + " 已保留最近一次有效映射。"
+                        diagnostic: diagnostic + " The last valid mapping has been kept."
                     )
                 }
                 return .unavailable(diagnostic)

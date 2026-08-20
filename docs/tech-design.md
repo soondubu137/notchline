@@ -585,7 +585,7 @@ ADR 0004 的精确导航门槛只约束 Codex：目前没有任何受支持的�
 2. 用 `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID)` 的 `e_ppid` 与 `proc_pidpath` 向上走进程祖先链，**从父进程开始**：桌面端托管的 `claude` 自己就跑在一个 bundle 里（`~/Library/Application Support/Claude/claude-code/<version>/claude.app`，`com.anthropic.claude-code`），把会话进程本身算进去会让每个桌面端会话都"自己托管自己"。每个祖先取它最外层的 `.app`，helper 因此归到发它的应用名下。
 3. 祖先里出现 Claude Desktop（`com.anthropic.claudefordesktop`）即为桌面端托管，激活它。取该 bundle id 在链上**最高**的那个祖先，因为最近的那个是 `Claude.app/Contents/Helpers/disclaimer`，而 helper 不是窗口服务器认识的应用。
 4. 否则最近的那个 `.app` 就是宿主终端。取该会话的控制终端设备（与终端已读同一条 `sysctl` + `devname_r` 路径），交给终端**自己的公开脚本字典**选中那个标签页：Terminal.app 的 `tab` 有 `tty`，iTerm2 的 `session` 有 `tty`。报不出 tty 的终端只激活应用——Ghostty 有完整字典却整份里没有 tty，只有标题和工作目录，按之匹配正是 PRD 禁止的猜测。
-5. **Automation 授权不在点击里等人。** 未决时后台发出一次授权请求并当场降级为激活应用；被拒之后系统本身就不再弹窗，本应用也不再问，且不产生任何错误——用户看到的仍然是那句"已唤起 X"。脚本执行有 5 秒上限，卡住的终端不会把「同一时刻只有一次导航」的名额一直占着。
+5. **Automation 授权不在点击里等人。** 未决时后台发出一次授权请求并当场降级为激活应用；被拒之后系统本身就不再弹窗，本应用也不再问，且不产生任何错误——用户看到的仍然是那句 `Raised X`。脚本执行有 5 秒上限，卡住的终端不会把「同一时刻只有一次导航」的名额一直占着。
 
    2026-08-19 在 Terminal.app 里的真实会话上实测（`claude` pid 69273，`/dev/ttys015`）：
 
@@ -597,7 +597,7 @@ ADR 0004 的精确导航门槛只约束 Codex：目前没有任何受支持的�
 
    系统弹窗的原文（模板取自 `TCC.framework` 的 `REQUEST_ACCESS_SERVICE_kTCCServiceAppleEvents`，两个 `%@` 填入两侧应用名，末尾接本应用的 `NSAppleEventsUsageDescription`）：
 
-   > “CodexInNotch.app” wants access to control “Terminal.app”. Allowing control will provide access to documents and data in “Terminal.app”, and to perform actions within that app. 点击 Claude Code 会话行时，用它把该会话所在的终端标签页带到前台。
+   > “CodexInNotch.app” wants access to control “Terminal.app”. Allowing control will provide access to documents and data in “Terminal.app”, and to perform actions within that app. Codex in Notch uses this to bring the terminal tab running a Claude Code session to the front when you click its row.
 
    两点值得记下来。其一，**用途说明确实会显示**，所以那句话是用户看到的文案而不只是一个必填字段。其二，弹窗里的应用名是 **`CodexInNotch.app`**——带 `.app` 后缀、没有空格，因为它取自 bundle 的文件名而不是 `CFBundleName`；产品叫「Codex in Notch」，这句不好看。改它要动 `PRODUCT_NAME`，牵连 scheme、二进制名与 bundle 名，不在本次范围内。
 6. 不读 `~/.claude/sessions/<pid>.json`：它确实带 `entrypoint`，但那是私有 schema，而祖先链是内核公开的事实。该文件只作为二者不一致时的旁证。

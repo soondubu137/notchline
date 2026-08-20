@@ -548,11 +548,11 @@ enum ClaudeCodeNavigationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .sessionGone:
-            "该会话已经结束，无法再打开。"
+            "That session has ended and can no longer be opened."
         case .hostUnknown:
-            "无法确定该会话运行在哪个应用里。"
+            "Could not tell which app that session is running in."
         case let .activationFailed(host):
-            "未能唤起 \(host)。"
+            "Could not raise \(host)."
         }
     }
 }

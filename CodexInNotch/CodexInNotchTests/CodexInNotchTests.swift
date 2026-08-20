@@ -1247,13 +1247,13 @@ struct CodexInNotchTests {
             )
         }
 
-        #expect(spoken(0) == "0 秒")
-        #expect(spoken(7) == "7 秒")
-        #expect(spoken(83) == "1 分 23 秒")
-        // Empty units are dropped, never spoken as "0 分".
-        #expect(spoken(120) == "2 分")
-        #expect(spoken(3600) == "1 小时")
-        #expect(spoken(3723) == "1 小时 2 分 3 秒")
+        #expect(spoken(0) == "0 seconds")
+        #expect(spoken(7) == "7 seconds")
+        #expect(spoken(83) == "1 minute 23 seconds")
+        // Empty units are dropped, never spoken as "0 minutes".
+        #expect(spoken(120) == "2 minutes")
+        #expect(spoken(3600) == "1 hour")
+        #expect(spoken(3723) == "1 hour 2 minutes 3 seconds")
         #expect(SessionElapsedFormatter.spokenElapsed(since: nil, now: start) == nil)
         #expect(spoken(-5) == nil)
     }
@@ -1323,7 +1323,7 @@ struct CodexInNotchTests {
         await clock.settle()
 
         #expect(store.compactTimerText == "5:00")
-        #expect(store.spokenLongestElapsedText == "5 分")
+        #expect(store.spokenLongestElapsedText == "5 minutes")
     }
 
     @Test @MainActor
@@ -1730,7 +1730,7 @@ struct CodexInNotchTests {
         #expect(didClear)
         #expect(store.sessions.isEmpty)
         #expect(store.status == .connected)
-        #expect(store.lastIntegrationMessage.contains("Codex 会话未被删除"))
+        #expect(store.lastIntegrationMessage.contains("no Codex sessions were deleted"))
 
         store.applyForTesting(
             AgentSnapshot(
@@ -2475,15 +2475,15 @@ struct CodexInNotchTests {
     @Test @MainActor
     func aDiagnosticNamesItsProductOnlyWhenThereIsMoreThanOne() {
         let alone = AgentSnapshotMerge.merge([
-            makeAgentSnapshot(.codex, diagnostic: "App Server 无响应")
+            makeAgentSnapshot(.codex, diagnostic: "App Server not responding")
         ])
-        #expect(alone.diagnostic == "App Server 无响应")
+        #expect(alone.diagnostic == "App Server not responding")
 
         let together = AgentSnapshotMerge.merge([
-            makeAgentSnapshot(.codex, diagnostic: "App Server 无响应"),
+            makeAgentSnapshot(.codex, diagnostic: "App Server not responding"),
             makeAgentSnapshot(.claudeCode)
         ])
-        #expect(together.diagnostic == "Codex：App Server 无响应")
+        #expect(together.diagnostic == "Codex: App Server not responding")
     }
 
     @Test @MainActor
@@ -2516,7 +2516,7 @@ struct CodexInNotchTests {
 
         #expect(store.availability == .ready)
         #expect(store.sessions == [session])
-        #expect(store.lastIntegrationMessage.contains("正在重试"))
+        #expect(store.lastIntegrationMessage.contains("retrying"))
 
         store.applyForTesting(
             ready,
@@ -2857,7 +2857,7 @@ struct CodexInNotchTests {
         let retained = await repository.snapshot()
         #expect(retained.source == .lastKnownGood)
         #expect(retained.resolution(for: "thread-1") == .project("Project"))
-        #expect(retained.diagnostic?.contains("最近一次有效映射") == true)
+        #expect(retained.diagnostic?.contains("last valid mapping") == true)
     }
 
     @Test @MainActor
@@ -2953,7 +2953,7 @@ struct CodexInNotchTests {
         let retained = await repository.snapshot()
         #expect(retained.source == .lastKnownGood)
         #expect(retained.unreadThreadIDs == ["thread-1"])
-        #expect(retained.diagnostic?.contains("最近一次有效数据") == true)
+        #expect(retained.diagnostic?.contains("last valid data") == true)
     }
 
     @Test @MainActor
@@ -2978,8 +2978,8 @@ struct CodexInNotchTests {
 
         #expect(snapshot.source == .unavailable)
         #expect(snapshot.unreadThreadIDs.isEmpty)
-        #expect(snapshot.diagnostic?.contains("schema 不兼容") == true)
-        #expect(snapshot.diagnostic?.contains("保守保留终态会话") == true)
+        #expect(snapshot.diagnostic?.contains("schema is not compatible") == true)
+        #expect(snapshot.diagnostic?.contains("Finished sessions have been kept") == true)
     }
 
     @Test @MainActor
@@ -2999,7 +2999,7 @@ struct CodexInNotchTests {
         let missing = await missingRepository.snapshot()
         #expect(missing.source == .unavailable)
         #expect(missing.unreadThreadIDs.isEmpty)
-        #expect(missing.diagnostic?.contains("保守保留终态会话") == true)
+        #expect(missing.diagnostic?.contains("Finished sessions have been kept") == true)
 
         try Data("not-json".utf8).write(to: stateFile)
         let corruptRepository = CodexDesktopUnreadStateRepository(
@@ -3008,7 +3008,7 @@ struct CodexInNotchTests {
         let corrupt = await corruptRepository.snapshot()
         #expect(corrupt.source == .unavailable)
         #expect(corrupt.unreadThreadIDs.isEmpty)
-        #expect(corrupt.diagnostic?.contains("保守保留终态会话") == true)
+        #expect(corrupt.diagnostic?.contains("Finished sessions have been kept") == true)
     }
 
     /// Codex replaces its state file rather than rewriting it, so only the
@@ -3618,7 +3618,7 @@ struct CodexInNotchTests {
 
         #expect(!didOpenMissingTarget)
         #expect(failureStore.isExpanded)
-        #expect(failureStore.lastIntegrationMessage.contains("未能接受"))
+        #expect(failureStore.lastIntegrationMessage.contains("did not accept"))
     }
 
     @Test @MainActor
@@ -3925,7 +3925,7 @@ struct CodexInNotchTests {
 
         #expect(snapshot.availability == .disconnected)
         #expect(snapshot.sessions.isEmpty)
-        #expect(snapshot.diagnostic?.contains("未响应") == true)
+        #expect(snapshot.diagnostic?.contains("not responding") == true)
         #expect(await client.disconnectCount() == 1)
     }
 
@@ -3956,7 +3956,7 @@ struct CodexInNotchTests {
 
         #expect(snapshot.availability == .connecting)
         #expect(snapshot.sessions.isEmpty)
-        #expect(snapshot.diagnostic?.contains("保留最近状态") == true)
+        #expect(snapshot.diagnostic?.contains("most recent state has been kept") == true)
         #expect(await client.requestCount(method: "thread/list") == 1)
         #expect(await client.disconnectCount() == 0)
     }
@@ -7480,7 +7480,7 @@ for line in sys.stdin:
 
         #expect(!snapshot.hasObservedEvent)
         #expect(snapshot.turns.isEmpty)
-        #expect(snapshot.diagnostic?.contains("稳定身份") == true)
+        #expect(snapshot.diagnostic?.contains("no stable identity") == true)
         #expect(quarantinedFiles.map(\.pathExtension) == ["invalid"])
     }
 
@@ -12463,8 +12463,8 @@ for line in sys.stdin:
     ///
     /// A Claude Code row draws no mark for the fact that it cannot be reopened
     /// exactly — one mark per row, and the timer has it — so the message is the
-    /// only place the difference can be told. Reporting "已在 Codex Desktop 中
-    /// 打开" for a row that merely raised an app would be a lie in the one
+    /// only place the difference can be told. Reporting "Opened in Codex
+    /// Desktop" for a row that merely raised an app would be a lie in the one
     /// place left to tell the truth.
     @Test @MainActor
     func anImpreciseTargetReportsWhatItActuallyOpened() async {
@@ -12478,8 +12478,8 @@ for line in sys.stdin:
         )
 
         #expect(await store.openAndWait(session))
-        #expect(store.lastIntegrationMessage.contains("已唤起 Claude Desktop"))
-        #expect(store.lastIntegrationMessage.contains("无法定位到具体会话"))
+        #expect(store.lastIntegrationMessage.contains("Raised Claude Desktop"))
+        #expect(store.lastIntegrationMessage.contains("could not reach the session itself"))
         #expect(!store.lastIntegrationMessage.contains("Codex"))
     }
 
@@ -12504,7 +12504,7 @@ for line in sys.stdin:
         #expect(claudeOutcome != .openedThread(host: "Codex Desktop"))
         #expect(
             claudeOutcome.message(forTitle: "Task")
-                == "已聚焦 iTerm2：Task"
+                == "Brought iTerm2 to the front: Task"
         )
     }
 
@@ -12539,7 +12539,7 @@ for line in sys.stdin:
         #expect(activator.raised.map(\.processIdentifier) == [24_014])
         #expect(
             outcome.message(forTitle: "Fix the walk")
-                == "已唤起 Claude Desktop，但无法定位到具体会话：Fix the walk"
+                == "Raised Claude Desktop, but could not reach the session itself: Fix the walk"
         )
     }
 
@@ -12604,7 +12604,7 @@ for line in sys.stdin:
         #expect(activator.raised.map(\.processIdentifier) == [665])
         #expect(
             outcome.message(forTitle: "Fix the walk")
-                == "已唤起 Ghostty，但无法定位到具体会话：Fix the walk"
+                == "Raised Ghostty, but could not reach the session itself: Fix the walk"
         )
     }
 

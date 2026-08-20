@@ -11,9 +11,9 @@ enum DisplayGeometry: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .notched:
-            "Notch 屏"
+            "Notched display"
         case .noNotch:
-            "非 Notch 屏"
+            "Display without a notch"
         }
     }
 }
@@ -77,7 +77,7 @@ struct DisplayOption: Identifiable {
     }
 
     var configurationSummary: String {
-        "\(geometry.title) · 菜单栏 \(Int(menuBarHeight.rounded())) pt"
+        "\(geometry.title) · menu bar \(Int(menuBarHeight.rounded())) pt"
     }
 
     static func currentDisplays() -> [DisplayOption] {
@@ -880,7 +880,7 @@ final class MonitorStore: ObservableObject {
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
         ) ?? false
-        self.lastIntegrationMessage = snapshot.diagnostic ?? "等待 Codex 数据"
+        self.lastIntegrationMessage = snapshot.diagnostic ?? "Waiting for Codex data"
         if !showsContentPreviews {
             self.sessions = snapshot.sessions.map { $0.hidingContent() }
         }
@@ -1294,17 +1294,17 @@ final class MonitorStore: ObservableObject {
     var integrationSummary: String {
         switch availability {
         case .setupRequired:
-            "Codex 集成尚未设置"
+            "Codex integration not set up"
         case .connecting:
-            "正在连接 Codex App Server"
+            "Connecting to the Codex App Server"
         case .ready:
-            "Codex 实时监视已连接"
+            "Codex live monitoring connected"
         case .updateAgent:
-            "需要更新 Codex"
+            "Codex needs updating"
         case .unsupportedVersion:
-            "当前 Codex 版本不支持所需协议"
+            "This version of Codex does not support the required protocol"
         case .disconnected:
-            "Codex 实时监视未连接"
+            "Codex live monitoring not connected"
         }
     }
 
@@ -1368,7 +1368,7 @@ final class MonitorStore: ObservableObject {
     func openAndWait(_ session: MonitoredSession) async -> Bool {
         guard !isNavigationInFlight else { return false }
         guard let navigator else {
-            lastIntegrationMessage = "会话导航仅在真实 Codex 集成中可用。"
+            lastIntegrationMessage = "Session navigation is only available with a real Codex integration."
             return false
         }
 
@@ -1384,8 +1384,8 @@ final class MonitorStore: ObservableObject {
         } catch {
             await refreshAndWait()
             let reason = (error as? LocalizedError)?.errorDescription
-                ?? "发生未知错误。"
-            lastIntegrationMessage = "无法打开 \(session.title)：\(reason)"
+                ?? "An unknown error occurred."
+            lastIntegrationMessage = "Could not open \(session.title): \(reason)"
             return false
         }
     }
@@ -1455,7 +1455,7 @@ final class MonitorStore: ObservableObject {
             agents: Array(latestByAgent.values),
             sessions: []
         )
-        lastIntegrationMessage = "已清空 Codex in Notch 会话列表；Codex 会话未被删除。"
+        lastIntegrationMessage = "Cleared the Codex in Notch session list; no Codex sessions were deleted."
 
         for service in services {
             await service.clearSessions()
@@ -1565,10 +1565,10 @@ final class MonitorStore: ObservableObject {
             try await service.installHooks()
             hookSetupStatus = await service.hookSetupStatus()
             integrationSwitchIsOn = hookSetupStatus.isIntegrationEnabled
-            lastIntegrationMessage = "Hooks 已安装；请在 Codex 中打开 /hooks 并信任新增定义。"
+            lastIntegrationMessage = "Hooks installed; open /hooks in Codex and trust the new definitions."
             return true
         } catch {
-            lastIntegrationMessage = "Hooks 安装失败：\(error.localizedDescription)"
+            lastIntegrationMessage = "Could not install the hooks: \(error.localizedDescription)"
             return false
         }
     }
@@ -1595,10 +1595,10 @@ final class MonitorStore: ObservableObject {
             status = .setupRequired
             hookSetupStatus = .notInstalled
             integrationSwitchIsOn = false
-            lastIntegrationMessage = "Codex in Notch 管理的 Hooks 已移除。"
+            lastIntegrationMessage = "The hooks managed by Codex in Notch have been removed."
             return true
         } catch {
-            lastIntegrationMessage = "移除集成失败：\(error.localizedDescription)"
+            lastIntegrationMessage = "Could not remove the integration: \(error.localizedDescription)"
             return false
         }
     }
@@ -1725,7 +1725,7 @@ final class MonitorStore: ObservableObject {
             agents: snapshot.agents,
             sessions: undismissedSessions
         )
-        let integrationMessage = snapshot.diagnostic ?? "Codex 数据已刷新"
+        let integrationMessage = snapshot.diagnostic ?? "Codex data refreshed"
 
         if availability != snapshot.availability {
             availability = snapshot.availability
@@ -1779,8 +1779,8 @@ final class MonitorStore: ObservableObject {
         stabilityGates[agent] = gate
 
         guard shouldPublish else {
-            let reason = snapshot.diagnostic ?? "\(agent.displayName) 暂时没有响应。"
-            let retryMessage = "检测到瞬时连接异常，正在重试：\(reason)"
+            let reason = snapshot.diagnostic ?? "\(agent.displayName) is not responding at the moment."
+            let retryMessage = "Transient connection trouble detected; retrying: \(reason)"
             if lastIntegrationMessage != retryMessage {
                 lastIntegrationMessage = retryMessage
             }

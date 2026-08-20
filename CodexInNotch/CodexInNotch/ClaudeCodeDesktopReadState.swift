@@ -247,11 +247,11 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
         var errorDescription: String? {
             switch self {
             case .incompatibleSchema:
-                "Claude Desktop 会话状态 schema 不兼容。"
+                "The Claude Desktop session state schema is not compatible."
             case let .oversizedFile(size):
-                "Claude Desktop 会话状态文件异常过大（\(size) bytes）。"
+                "The Claude Desktop session state file is implausibly large (\(size) bytes)."
             case .unsafeFile:
-                "Claude Desktop 会话状态文件不是当前用户拥有的普通文件。"
+                "The Claude Desktop session state file is not a regular file owned by the current user."
             }
         }
     }
@@ -360,7 +360,7 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
         // session it belongs to answers `unknown` and keeps its row anyway.
         guard entries.isEmpty == false || failures == 0 else {
             let diagnostic = ReadStateError.incompatibleSchema.localizedDescription
-                + " 已保守保留已结束的 Claude Code 行。"
+                + " Finished Claude Code rows have been kept, to be safe."
             if let lastKnownGood {
                 return lastKnownGood.retainingData(
                     source: .lastKnownGood,

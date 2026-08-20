@@ -8,8 +8,9 @@ enum AgentSetupError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .manualRegistrationRequired(agent):
-            "\(agent.displayName) 的 Hook 注册需要你自己写入设置文件；"
-                + "本应用只显示要粘贴的内容，不修改该文件。"
+            "\(agent.displayName) hooks have to be registered by writing to the "
+                + "settings file yourself; this app only shows what to paste, and "
+                + "never edits that file."
         }
     }
 }
@@ -357,10 +358,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 sessions: [],
                 setupStatus: status,
                 diagnostic: status == .repairRequired
-                    ? "Claude Code 的 Hook 注册与本版本需要的不一致，请在设置里重新粘贴："
-                        + "缺少的事件不会报错，只会永远不到达；"
-                        + "形状过时的 handler（例如少了 `async`）会让会话等待本应用响应。"
-                    : "Claude Code 集成尚未注册。"
+                    ? "The Claude Code hook registration is not what this version "
+                        + "needs; paste it again from Settings. A missing event "
+                        + "raises no error, it simply never arrives, and a handler "
+                        + "of an outdated shape (one missing `async`, say) leaves "
+                        + "the session waiting on this app to answer."
+                    : "The Claude Code integration is not registered yet."
             )
         }
 
@@ -390,8 +393,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 availability: .disconnected,
                 sessions: [],
                 setupStatus: status,
-                diagnostic: "无法在设置文件指定的端口上监听；"
-                    + "请改用其他端口，或结束占用它的程序。"
+                diagnostic: "Cannot listen on the port named in the settings file; "
+                    + "choose another port, or quit whatever is holding it."
             )
         }
 
