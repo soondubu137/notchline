@@ -23,6 +23,24 @@ enum NotchPalette {
 
         var off: Color { Color(red: offRed, green: offGreen, blue: offBlue) }
         var on: Color { Color(red: onRed, green: onGreen, blue: onBlue) }
+        /// The spent end of a quota rule.
+        ///
+        /// A rule is 3pt tall where a matrix cell is a whole dot, and at that
+        /// thickness the unlit colour all but vanishes against the panel --
+        /// the spent share stops being readable as a share at all. So it sits
+        /// one step up the same ramp, a quarter of the lit colour rather than
+        /// the matrix's 15%: still plainly the dim end, still the product's
+        /// hue, but visible. Nothing else on the surface uses it, so the
+        /// matrix keeps the darkness it wants.
+        var spent: Color {
+            Color(
+                red: offRed + Self.spentLift * (onRed - offRed),
+                green: offGreen + Self.spentLift * (onGreen - offGreen),
+                blue: offBlue + Self.spentLift * (onBlue - offBlue)
+            )
+        }
+        /// How far ``spent`` travels from unlit towards lit.
+        private static let spentLift = 0.12
         var offLayerColor: CGColor {
             CGColor(srgbRed: offRed, green: offGreen, blue: offBlue, alpha: 1)
         }
@@ -298,7 +316,7 @@ struct UsageMeter: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(ink.off)
+                Capsule().fill(ink.spent)
 
                 if let fill {
                     Capsule()
