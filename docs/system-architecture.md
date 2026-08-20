@@ -479,6 +479,23 @@ flowchart LR
 
 倒数第二行是那条内存边界的直接验证：60 KB 的 delta 与 120 字节的 delta 同价，因为折叠函数只扫新 delta 且在头部写满时立刻停下——正文的长度不进入代价。最后一行是「不为 delta 写文件」这条设计的直接验证。
 
+### 启动瞬间的 CPU：今日 token 的第一遍扫描
+
+启动后头几秒 `%cpu` 冲到 100% 上下、随后归零，全部来自 `ClaudeCodeTokenCounter.scan` 的第一遍。进程刚起来时 `progress` 是空的，**当天被写过的每个 transcript 都要从第 0 字节读一遍**（实测机器 42 MB）；此后每 60 秒一次的复扫只读新追加的字节，不在这一档成本里。
+
+采样（`sample` 抓栈）指向的既不是读盘也不是 JSON 解码——解码只占 2821 个热点样本里的 32 个——而是找换行的那个循环。原实现是 `for index in 0 ..< count where bytes[index] == UInt8(ascii: "\n")`：对 `UnsafeRawBufferPointer` 的逐字节迭代只有在优化器把它特化掉之后才是免费的，未特化时每个字节都要走一次 `IndexingIterator.next()`、一个 `formIndex(after:)` 的 protocol witness 和一次泛型 metadata 查找。同一份 42 MB 数据、同一段代码，只换构建配置：
+
+| 构建 | 旧实现 | 换成 `memchr` 之后 |
+| --- | --- | --- |
+| `-Onone` | 3.08 s CPU | 0.08 s CPU |
+| `-O` | 0.12 s CPU | 0.08 s CPU |
+
+整机验证（Debug 构建，hook 端口空闲、集成为 active 的干净启动）：峰值 `%cpu` 68 → 99.8 → 84.8，12 秒累计 3.87 s；改后峰值 21%，累计 0.70 s，与 Release 同价。
+
+**这条记在这里，不是因为「Debug 也要快」**——性能结论一律以 Release 为准（见 `AGENTS.md` §2）——而是因为**一段热点代码的代价不该由构建配置决定**。逐字节的 Swift 循环把 26 倍的差价押在优化器身上，本地开发天天跑的那个构建于是背着一个 3 秒的启动尖峰，盖得住别的东西；`memchr` 两边同价，这一维就不必再靠「记得用 Release 量」来守。测法仍是本节「怎么测」那条：突发看累计 CPU 时间的差分，热点靠 `sample`。
+
+同一条规则的另一半写在代码里：每行的 `"usage"` 判定用一个 `static let` 的 needle，而不是每行重新构造一个 `Data`。
+
 ## 7. 保持 clean and neat 的架构约束
 
 1. **只有一个编排中心**：跨数据源的决策集中在 `LiveCodexMonitorService`；UI、文件适配器和 transport 不互相拼状态。

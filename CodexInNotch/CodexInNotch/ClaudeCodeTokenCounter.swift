@@ -25,6 +25,12 @@ actor ClaudeCodeTokenCounter {
     )
 
     private static let chunkBytes = 1 << 20
+    /// The marker a line must carry before it is worth decoding.
+    ///
+    /// Held rather than built, because it is built once per line otherwise --
+    /// an allocation and a copy per line of every transcript touched today, for
+    /// a value that never changes.
+    private static let usageMarker = Data("\"usage\"".utf8)
 
     private struct FileProgress {
         var scannedBytes: UInt64
@@ -199,8 +205,31 @@ actor ClaudeCodeTokenCounter {
             read += UInt64(count)
             var start = 0
             buffer.withUnsafeBytes { bytes in
-                for index in 0 ..< count where bytes[index] == UInt8(ascii: "\n") {
-                    let line = Data(bytes[start ..< index])
+                guard let base = bytes.baseAddress else { return }
+                // The newlines are found with `memchr`, not by looking at every
+                // byte from Swift. A megabyte of transcript is a megabyte of
+                // iterations, and an iteration over an `UnsafeRawBufferPointer`
+                // is only cheap once the optimiser has specialised it:
+                // unspecialised it goes through `IndexingIterator.next()`, a
+                // protocol witness for `formIndex(after:)` and a generic
+                // metadata lookup, per byte. Measured against this machine's
+                // 42 MB of same-day transcripts, that pass cost **2.8 seconds
+                // of a core** in a debug build -- the whole of the launch spike
+                // this file was blamed for -- against 0.1 s for the identical
+                // pass optimised. `memchr` costs the same in both builds, so
+                // the spike stops depending on which configuration is running.
+                // The work per *line* is unchanged.
+                while start < count,
+                      let newline = memchr(
+                          base + start,
+                          Int32(UInt8(ascii: "\n")),
+                          count - start
+                      ) {
+                    let index = UnsafeRawPointer(newline) - base
+                    // Copied by `memcpy` rather than element by element, for
+                    // the reason above: `Data(someRawBufferSlice)` is a generic
+                    // sequence copy, and there is one per line.
+                    let line = Data(bytes: base + start, count: index - start)
                     tokens += Self.tokens(
                         inLine: pending.isEmpty ? line : pending + line,
                         today: today
@@ -208,7 +237,9 @@ actor ClaudeCodeTokenCounter {
                     if !pending.isEmpty { pending = Data() }
                     start = index + 1
                 }
-                if start < count { pending.append(contentsOf: bytes[start ..< count]) }
+                if start < count {
+                    pending.append(Data(bytes: base + start, count: count - start))
+                }
             }
         }
         // Everything up to the last newline seen. What is still pending is the
@@ -250,7 +281,7 @@ actor ClaudeCodeTokenCounter {
     /// find the assistant ones is the difference between a scan that costs
     /// nothing and one that shows up in a CPU measurement.
     nonisolated private static func tokens(inLine line: Data, today: String) -> Int64 {
-        guard line.range(of: Data("\"usage\"".utf8)) != nil,
+        guard line.range(of: Self.usageMarker) != nil,
               let record = try? JSONDecoder().decode(UsageRecord.self, from: line),
               record.type == "assistant",
               let usage = record.message?.usage,
