@@ -9843,6 +9843,202 @@ for line in sys.stdin:
         #expect(finished.sessions.count == 1)
     }
 
+    /// Starting a new session does not retire the row of the one it was
+    /// composed in front of.
+    ///
+    /// The bug this fixes, in the order it happens: the user leaves a running
+    /// session for the composer of a new one, that session finishes behind the
+    /// composer, and the moment the new session starts the old row disappears
+    /// unread. Every step of it looks legitimate from the records alone —
+    /// Claude Desktop stamps a session being *put* on screen and writes nothing
+    /// when it is taken away, so the session left behind goes on being the
+    /// newest stamp, is credited with being on screen when its Turn ended, and
+    /// is then "moved on from" by the new session's first stamp.
+    ///
+    /// What separates this from
+    /// ``movingOnToAnotherSessionRetiresTheOneLeftBehind()`` is one line in
+    /// Claude Desktop's own log: `sessionId=null`, which it writes when what is
+    /// on screen is not a session.
+    @Test @MainActor
+    func startingANewSessionDoesNotRetireTheRowItWasComposedInFrontOf() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 99,
+            desktopID: "d-1"
+        )
+        try harness.appendDesktopFocusStatement(desktopID: "d-1")
+        let running = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(running.sessions.first?.status == .running)
+
+        // The user opens the composer for a new session. There is no session to
+        // stamp yet, so the records say nothing at all; the log says what is on
+        // screen is not a session.
+        try harness.appendDesktopFocusStatement(desktopID: nil)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        let finished = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(finished.sessions.map(\.threadID) == ["s-1"])
+        #expect(finished.sessions.first?.status == .completed)
+
+        // The new session starts: Desktop writes its record and puts it on
+        // screen. The old row has still not been read by anybody.
+        harness.live = [
+            harness.session(id: "s-1", cwd: cwd),
+            harness.session(id: "s-2", cwd: cwd)
+        ]
+        try harness.writeDesktopRecord(
+            session: "s-2",
+            lastFocusedAt: 103,
+            desktopID: "d-2"
+        )
+        try harness.appendDesktopFocusStatement(desktopID: "d-2")
+        let started = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(started.sessions.map(\.threadID) == ["s-1"])
+    }
+
+    /// A composer in front of the user is not the answer behind it.
+    ///
+    /// The same stale claim reaches the route that needs no gesture at all:
+    /// Claude Desktop holds the front while the user types into a new
+    /// session's composer, and the finished row behind it used to be retired
+    /// about two seconds after it appeared.
+    @Test @MainActor
+    func beingInFrontOfAComposerDoesNotRetireTheRowBehindIt() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 99,
+            desktopID: "d-1"
+        )
+        harness.desktopIsInFrontOfTheUser = true
+        try harness.appendDesktopFocusStatement(desktopID: "d-1")
+        try harness.appendDesktopFocusStatement(desktopID: nil)
+
+        let composing = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(composing.sessions.count == 1)
+
+        // The user goes back to the session itself. Nothing else changed — the
+        // record is not rewritten, because this is the route for a session that
+        // was already on screen — so this is the veto lifting and nothing else.
+        try harness.appendDesktopFocusStatement(desktopID: "d-1")
+        let back = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(back.sessions.isEmpty)
+    }
+
+    /// Coming back to Claude Desktop to send a composed prompt is not reading
+    /// what is behind it.
+    ///
+    /// The third way the same stale claim retires an unread row: the user
+    /// composes, goes elsewhere, the Turn finishes, and their return to the
+    /// window is credited to the session the records last stamped.
+    @Test @MainActor
+    func comingBackToAComposerDoesNotRetireTheRowBehindIt() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 99,
+            desktopID: "d-1"
+        )
+        try harness.appendDesktopFocusStatement(desktopID: nil)
+        harness.desktopActivatedAt = Date(timeIntervalSince1970: 102)
+
+        let cameBack = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(cameBack.sessions.count == 1)
+
+        // The window they came back to was showing the session after all.
+        try harness.appendDesktopFocusStatement(desktopID: "d-1")
+        let read = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(read.sessions.isEmpty)
+    }
+
+    /// A session the log names but the records cannot identify keeps its row.
+    ///
+    /// The log says `local_<uuid>` and the hooks say something else entirely;
+    /// the record is what joins them. A record that has stopped carrying its
+    /// own id breaks that join, and an unjoinable name on screen has to read as
+    /// "not this session" — the alternative is retiring a row on a name nothing
+    /// verified.
+    @Test @MainActor
+    func aSessionTheRecordsCannotIdentifyIsNeverTheOneOnScreen() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 99,
+            desktopID: "d-1",
+            namesItself: false
+        )
+        // A log with no statement in it yet, and one refresh over it, so what
+        // follows is a statement this app watched arrive rather than one out of
+        // history.
+        try harness.append(toDesktopLog: "2026-08-19 21:00:00 [info] Starting app\n")
+        let unread = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(unread.sessions.count == 1)
+
+        try harness.appendDesktopFocusStatement(desktopID: "d-1")
+        harness.desktopIsInFrontOfTheUser = true
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.count == 1)
+    }
+
+    /// A log this app cannot make sense of changes no verdict.
+    ///
+    /// The whole point of reading Desktop's log as a veto rather than as a
+    /// source: a line shape a future Desktop no longer writes leaves every rule
+    /// exactly as it was before the log existed. The failure it must never have
+    /// is the other one — a row retired early because a parser went wrong.
+    @Test @MainActor
+    func aLogWithNoStatementsInItLeavesTheRulesAsTheyWere() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 99,
+            desktopID: "d-1"
+        )
+        try harness.append(
+            toDesktopLog: "2026-08-19 21:04:18 [info] [CCD] LocalSessions"
+                + ".whateverItIsCalledNow: sessionId=local_d-1\n"
+        )
+        harness.desktopIsInFrontOfTheUser = true
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(snapshot.sessions.isEmpty)
+    }
+
     /// The reading watcher answers only while its own application holds the
     /// front, and only on a screen that is showing something.
     ///
@@ -9896,6 +10092,187 @@ for line in sys.stdin:
         )
         try await Task.sleep(nanoseconds: 300_000_000)
         #expect(await mine.isInFrontOfTheUser())
+    }
+
+    /// One line of Claude Desktop's log, in the shape `1.32885.1` writes it.
+    ///
+    /// - Parameter identifier: Desktop's own id for what it put on screen, or
+    ///   the literal `null` it writes when that is not a session.
+    private func focusStatement(for identifier: String) -> String {
+        "2026-08-19 21:04:18 [info] "
+            + "[CCD] LocalSessions.setFocusedSession: sessionId=\(identifier)\n"
+    }
+
+    /// Appends to a file the way a log is written: opened, sought to the end,
+    /// left where it was.
+    private func append(_ text: String, to url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(text.utf8))
+    }
+
+    /// Claude Desktop's log is read forwards, and history may only ever say
+    /// that nothing is on screen.
+    ///
+    /// Both halves matter and they pull in opposite directions. `AGENTS.md`
+    /// §6.2 says business state comes from a current snapshot or from events
+    /// observed since this process started, so a session named in a line
+    /// written before the app launched must not be taken as being on screen
+    /// now. A `null` from the same history can only ever *keep* a row listed,
+    /// which is a cost the product already pays everywhere else, so it is
+    /// taken.
+    @Test
+    func theDesktopFocusLogIsReadForwardsAndSeedsOnlyTheNegative() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-log-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("main.log")
+
+        // No log at all — a machine without Claude Desktop, and the answer that
+        // leaves every rule as it was.
+        let missing = ClaudeDesktopFocusLogReader(logURL: url)
+        #expect(await missing.displayedSession() == .unknown)
+
+        // A session named before this app ever looked is history, not a claim
+        // about now.
+        try Data(focusStatement(for: "local_d-1").utf8).write(to: url)
+        let history = ClaudeDesktopFocusLogReader(logURL: url)
+        #expect(await history.displayedSession() == .unknown)
+
+        // The same history saying nothing is on screen is believed, because
+        // believing it can only keep a row.
+        try Data(focusStatement(for: "null").utf8).write(to: url)
+        let negative = ClaudeDesktopFocusLogReader(logURL: url)
+        #expect(await negative.displayedSession() == .nothing)
+    }
+
+    /// Statements appended while the app is watching are what it goes on, and
+    /// the last one wins.
+    @Test
+    func theDesktopFocusLogFollowsWhatIsAppendedWhileItWatches() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-log-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("main.log")
+        try Data("2026-08-19 21:00:00 [info] Starting app\n".utf8).write(to: url)
+
+        let reader = ClaudeDesktopFocusLogReader(logURL: url)
+        #expect(await reader.displayedSession() == .unknown)
+
+        try append(focusStatement(for: "local_d-1"), to: url)
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "local_d-1")
+        )
+
+        // Two navigations in one chunk: Desktop writes a `null` on its way to
+        // whatever comes next, and only the destination is a state.
+        try append(focusStatement(for: "null"), to: url)
+        try append(focusStatement(for: "local_d-2"), to: url)
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "local_d-2")
+        )
+
+        // A cloud session is carried verbatim: it is something on screen that
+        // none of these rows belong to, which is not the same as nothing.
+        try append(focusStatement(for: "session_01ABC"), to: url)
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "session_01ABC")
+        )
+
+        // Nothing new to read leaves the last statement standing.
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "session_01ABC")
+        )
+    }
+
+    /// A line still being written is not a statement.
+    ///
+    /// Half a line carries half an id, and an id read short would name a
+    /// session that does not exist — which is exactly the reading that lets
+    /// "something else is on screen" retire a row. Only complete lines are
+    /// parsed, and the reading resumes at the start of the incomplete one.
+    @Test
+    func theDesktopFocusLogWaitsForALineToBeFinished() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-log-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("main.log")
+        try Data("2026-08-19 21:00:00 [info] Starting app\n".utf8).write(to: url)
+        let reader = ClaudeDesktopFocusLogReader(logURL: url)
+        _ = await reader.displayedSession()
+
+        try append(focusStatement(for: "null"), to: url)
+        #expect(await reader.displayedSession() == .nothing)
+
+        // Desktop is part-way through writing the next one.
+        let whole = focusStatement(for: "local_d-2")
+        try append(String(whole.dropLast(6)), to: url)
+        #expect(await reader.displayedSession() == .nothing)
+
+        // And finishes it.
+        try append(String(whole.suffix(6)), to: url)
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "local_d-2")
+        )
+    }
+
+    /// A log that was rotated underneath the reader is history again.
+    ///
+    /// The offset it was reading from belongs to a file that is no longer
+    /// there, so nothing in the replacement was observed being appended. It
+    /// goes back through the same door history came in by: the negative is
+    /// taken, a session named is not.
+    @Test
+    func theDesktopFocusLogTreatsAReplacedFileAsHistory() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-log-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("main.log")
+        try Data("2026-08-19 21:00:00 [info] Starting app\n".utf8).write(to: url)
+        let reader = ClaudeDesktopFocusLogReader(logURL: url)
+        _ = await reader.displayedSession()
+        try append(focusStatement(for: "local_d-1"), to: url)
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "local_d-1")
+        )
+
+        // Rolled over, and the new file names a session.
+        try FileManager.default.removeItem(at: url)
+        try Data(focusStatement(for: "local_d-2").utf8).write(to: url)
+        #expect(await reader.displayedSession() == .unknown)
+
+        // Rolled over again, and the new file says nothing is on screen.
+        try FileManager.default.removeItem(at: url)
+        try Data(focusStatement(for: "null").utf8).write(to: url)
+        #expect(await reader.displayedSession() == .nothing)
+    }
+
+    /// A log that goes away does not unsay what it said.
+    ///
+    /// Claude Desktop making no further statement is not Claude Desktop
+    /// withdrawing the last one, and the last one is the conservative half
+    /// here: reverting to `unknown` on a failed read would hand the verdict
+    /// back to the records, which are the half that cannot see a composer.
+    @Test
+    func theDesktopFocusLogKeepsItsLastStatementWhenTheFileGoesAway() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-log-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("main.log")
+        try Data("2026-08-19 21:00:00 [info] Starting app\n".utf8).write(to: url)
+        let reader = ClaudeDesktopFocusLogReader(logURL: url)
+        _ = await reader.displayedSession()
+        try append(focusStatement(for: "null"), to: url)
+        #expect(await reader.displayedSession() == .nothing)
+
+        try FileManager.default.removeItem(at: url)
+        #expect(await reader.displayedSession() == .nothing)
     }
 
     /// The live screen reading answers something on this machine, and answers
@@ -13831,6 +14208,16 @@ private final class ClaudeCodeHarness {
         root.appendingPathComponent("sessions", isDirectory: true)
     }
 
+    /// Claude Desktop's own log, where it states what it has put on screen.
+    /// Not created here: a machine without Claude Desktop has no such file, and
+    /// that answers `unknown` — the behaviour every rule here had before the
+    /// log was consulted at all.
+    nonisolated static func desktopLogURL(in root: URL) -> URL {
+        root.appendingPathComponent("desktop-main.log")
+    }
+
+    var desktopLogURL: URL { ClaudeCodeHarness.desktopLogURL(in: root) }
+
     /// Claude Desktop's account folder, where it records what it has shown the
     /// user. Not created here either: a user who has never opened Claude
     /// Desktop has no tree at all, and that has to keep working.
@@ -13912,6 +14299,16 @@ private final class ClaudeCodeHarness {
             // a test left with it would pass or fail depending on which window
             // happened to be active while the suite ran.
             reading: readingStub,
+            // The real reader, pointed at this harness's own log — the same
+            // arrangement as the read state above, and injected for the same
+            // reason with an extra edge to it: left with the default, every
+            // test here would be answering with whatever Claude Desktop
+            // happened to have on the developer's screen while the suite ran.
+            // The file does not exist until a test writes a statement into it,
+            // which is the state a machine without Claude Desktop is in.
+            displayed: ClaudeDesktopFocusLogReader(
+                logURL: ClaudeCodeHarness.desktopLogURL(in: root)
+            ),
             // And again for the same reason: the real reader would resolve
             // each session's controlling terminal on this machine, so a test
             // would be answering with whichever tty the developer last typed
@@ -13930,14 +14327,14 @@ private final class ClaudeCodeHarness {
         session: String,
         lastFocusedAt: Double?,
         isArchived: Bool = false,
-        desktopID: String = UUID().uuidString
+        desktopID: String = UUID().uuidString,
+        namesItself: Bool = true
     ) throws {
         try FileManager.default.createDirectory(
             at: desktopAccountDirectory,
             withIntermediateDirectories: true
         )
         var record: [String: Any] = [
-            "sessionId": "local_\(desktopID)",
             "cliSessionId": session,
             "cwd": "/Users/someone/Projects/thing",
             "title": "Something the user typed",
@@ -13946,11 +14343,45 @@ private final class ClaudeCodeHarness {
         if let lastFocusedAt {
             record["lastFocusedAt"] = lastFocusedAt * 1_000
         }
+        // Desktop's own id for the session, which is what its log names on
+        // screen. `namesItself: false` is a record that has stopped carrying
+        // it: everything else still answers, and the log can no longer be
+        // joined to this session.
+        if namesItself {
+            record["sessionId"] = "local_\(desktopID)"
+        }
         try JSONSerialization.data(withJSONObject: record).write(
             to: desktopAccountDirectory
                 .appendingPathComponent("local_\(desktopID).json"),
             options: .atomic
         )
+    }
+
+    /// Appends the line Claude Desktop writes when it puts something on screen.
+    ///
+    /// - Parameter desktopID: Desktop's own id for the session it displayed,
+    ///   without the `local_` prefix — the same one ``writeDesktopRecord`` puts
+    ///   in the record. `nil` writes `sessionId=null`, which is what Desktop
+    ///   writes when what is on screen is not a session at all: the composer
+    ///   for a new one, or the home view.
+    func appendDesktopFocusStatement(desktopID: String?) throws {
+        let identifier = desktopID.map { "local_\($0)" } ?? "null"
+        let line = "2026-08-19 21:04:18 [info] "
+            + "[CCD] LocalSessions.setFocusedSession: sessionId=\(identifier)\n"
+        try append(toDesktopLog: line)
+    }
+
+    /// Appends something else Claude Desktop logs, or a shape it no longer
+    /// writes.
+    func append(toDesktopLog text: String) throws {
+        let data = Data(text.utf8)
+        guard let handle = try? FileHandle(forWritingTo: desktopLogURL) else {
+            try data.write(to: desktopLogURL)
+            return
+        }
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: data)
     }
 
     /// Writes a file where a record should be, carrying something else.

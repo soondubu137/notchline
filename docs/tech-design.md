@@ -106,20 +106,56 @@ Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次�
 生产实现：
 
 1. `ClaudeCodeDesktopReadStateRepository` 默认读 `~/Library/Application Support/Claude/claude-code-sessions`，可用 `CODEX_IN_NOTCH_CLAUDE_DESKTOP_HOME` 覆盖 Claude Desktop 的 application-support 根目录。目录结构按 `<org>/<account>` 恰好两级枚举，不做递归搜索。
-2. 每条记录只解码三个字段：`cliSessionId`、`lastFocusedAt`、`isArchived`。同一文件里的标题、`cwd` 与 MCP 配置一律不解码。读取器拒绝 symlink、非当前用户普通文件与超过 4 MiB 的文件。
+2. 每条记录只解码四个字段：`cliSessionId`、`sessionId`（Desktop 自己的 `local_<uuid>`，即它的日志在屏幕上点名的那个 id，用来把日志接回 hook 的身份）、`lastFocusedAt`、`isArchived`。同一文件里的标题、`cwd` 与 MCP 配置一律不解码。读取器拒绝 symlink、非当前用户普通文件与超过 4 MiB 的文件。
 3. **按 `(size, mtime, inode)` 缓存解析结果**，每次读取只打开真正变化过的记录。本机 31 份记录（约 2 MB）实测首读 5 ms、全部命中缓存 1 ms。记录数超过 512 时按 mtime 取最新的 512 份——活着的会话必然是最近被显示或恢复过的那些，尾部答 unknown 并保留其行。
 4. 判定分两层。文件这一层在 provider 里：`readState(forSession:terminalBoundaryAt:)` 用 Turn 自己的终止时刻做比较左边（`HookTurnState.lastEventAt`），`lastFocusedAt >= boundary` 即已读，`isArchived` 同样为已读，**记录不存在则是 unknown 而不是未读**。跨来源的那一层在编排器里（`AGENTS.md` §6.1「决策跨数据源就属于编排中心」），文件说未读时还有三条，各自补一个文件里没有的事实：
-   - **`comingBackShowedIt`**：该会话正是 `mostRecentlyDisplayedSessionID`，且 `DesktopActivationReporting.lastActivation()` 晚于 `boundary`。
-   - **`isInFrontOfThem`**：该会话正是 `mostRecentlyDisplayedSessionID`，且 `DesktopReadingReporting.isInFrontOfTheUser()` 为真。**全应用唯一一条不比较任何时刻、也不要求用户做任何事的判定**，因而也是唯一一条可能撤掉没人读过的行的判定；权衡见 ADR 0012 第三条。
-   - **`movedOnFrom`**：本应用曾在某次刷新看见该会话带着 `.completed` 的行**正是** `mostRecentlyDisplayedSessionID`，而现在屏幕上的是别的会话。这份成员关系记在 Turn 上不记在会话上——行一旦重新变成非 `.completed` 就清掉——并且随会话离开列表一起清掉。
+   - **`comingBackShowedIt`**：`isOnScreen(该会话)`，且 `DesktopActivationReporting.lastActivation()` 晚于 `boundary`。
+   - **`isInFrontOfThem`**：`isOnScreen(该会话)`，且 `DesktopReadingReporting.isInFrontOfTheUser()` 为真。**全应用唯一一条不比较任何时刻、也不要求用户做任何事的判定**，因而也是唯一一条可能撤掉没人读过的行的判定；权衡见 ADR 0012 第三条。
+   - **`movedOnFrom`**：本应用曾在某次刷新看见该会话带着 `.completed` 的行在 Claude Desktop 的屏幕上，而 Desktop 此后把**另一个会话**放了上去（`hasReplacedItOnScreen`）。这份成员关系记在 Turn 上不记在会话上——行一旦重新变成非 `.completed` 就清掉——并且随会话离开列表一起清掉。
 
-   **后两条都是实测逼出来的，不是补强。** 2026-08-19 实机：用户切走、等轮次跑完、切回同一个会话读完，整个 `~/Library/Application Support/Claude` 树在 6 分钟内 **0 个文件**被修改；同日复查确认 `~/Library/Logs/Claude/main.log` 里的 `setFocusedSession` 只是 `lastFocusedAt` 盖章时刻的子集（只在切换会话时出现，「Window focused」之后 0 条 visibility 写入），且安装包里根本没有已读字段（`lastReadAt`/`hasUnread`/`seenAt`/`viewedAt` 0 命中）。产品语义、被推翻的两条既有规则与代价见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
+   **三条问的是同一个问题——「屏幕上的是不是它」——而这个问题有两个来源，见 §1.5.2。** 记录只答得出一半：`setSessionVisibility` 只在会话**被放上屏幕**时盖章，会话被拿下来时什么都不写，所以用户切到一个**新会话的输入框**之后，最后被盖章的那个会话会继续冒充「在屏幕上」。`isOnScreen` 因此是记录与 Desktop 日志两个来源的**取交**，`hasReplacedItOnScreen` 还要求顶替它的是一个**会话**——输入框不是会话，为它腾地方不等于有人读完走开。
+
+   **后两条都是实测逼出来的，不是补强。** 2026-08-19 实机：用户切走、等轮次跑完、切回同一个会话读完，整个 `~/Library/Application Support/Claude` 树在 6 分钟内 **0 个文件**被修改；同日复查确认安装包里根本没有已读字段（`lastReadAt`/`hasUnread`/`seenAt`/`viewedAt` 0 命中）。（同一次复查还写下过一句「`main.log` 里的 `setFocusedSession` 只是 `lastFocusedAt` 盖章时刻的子集」——**那句话是错的，2026-08-19 晚上被一条丢行的实测推翻**：它在**关键的那一个方向上是超集**，因为它还会写 `sessionId=null`，而那正是记录写不下来的一半。见 §1.5.2。）产品语义、被推翻的两条既有规则与代价见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
    激活信号来自公开的 `NSWorkspace.didActivateApplicationNotification`（`DesktopActivationWatcher`），按 bundle identifier 过滤，只记录**跃迁**的时刻、从不记录「此刻是否在前台」，且只知道本应用启动之后发生的激活。
    「在不在人眼前」来自 `DesktopReadingWatcher`：同一个公开通知维护「那个应用此刻是否持有前台」（构造时从 `NSWorkspace.frontmostApplication` 读一次种子，之后只由通知驱动），再减去三种持有前台但等于没有的状态——`CGDisplayIsAsleep` 显示器休眠、`CGSessionCopyCurrentDictionary` 报告锁屏或不在 console、公开的 `com.apple.screensaver.didstart` / `didstop` 报告屏保在跑。三者全部公开、无需 entitlement、实测不弹授权；会话字典读不出来时答 `false`，即朝保留的方向倒。隐藏应用不单列（隐藏会交出前台）；**最小化、另一块显示器、另一个 Space 无法分辨**，落在这三种状态里的行会被没人看见地撤掉，这是被接受的代价而不是缺口。
    曾经上线过一版用「一次按键或滚动」当证据的实现（`c1052bb`，`CGEventSource.secondsSinceLastEventType` 取 `.keyDown` 与 `.scrollWheel`），它更安全但答不了「坐着看完、什么都不做」，已被本条取代；细节与它的一处硬伤记在 ADR 0012 的拒绝清单里。
 5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**问不出来的行根本不进 gate**（既无 Desktop 记录、也无控制终端），因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动移除（在该行上右键，或清空整张列表）。**gate 收到的未读快照按行分成两份**：Desktop 判出来的那些带 Desktop 读数的 source（`unavailable` 时不得隐藏任何行），终端判出来的那些带 `.current`。这一分不是修饰——从没开过 Claude Desktop 的用户整棵树都不存在，读数恒为 `unavailable`，让终端结论借用它就等于在最需要这条路径的机器上把它整个关掉。它同时是诚实的：Desktop 的 source 存在是因为读数可能落后一个 generation（解析失败后保留的快照带着旧的 focus 时刻），而设备访问时间不可能落后——它在用到它的那一次刷新里现读，读失败答 `nil` 并把该行**移出** gate，而不是带着陈旧结论进去。
 6. 边沿有两个：Claude Desktop 写记录，以及它回到前台。后者直接来自激活通知，因此「切回去读」这个手势与行离开 notch 是同一件事，不需要等 gate 的 1 秒复查。**`isInFrontOfThem` 没有边沿**：它要三个状态同时成立（前台、显示器、锁屏），因此在 gate 已经为等待中的行预约的 1 秒复查上采样，那个 1 秒同时是它的上界；没有行在等的时候不产生任何采样。用户点亮屏幕或解锁之后行的消失也走这一秒。前者来自 `PathSetChangeWatcher`——一个可以随时替换被监听路径集合的 watcher，`ClaudeCodeSessionRecordWatcher` 与本适配器共用它。适配器监听状态根目录加每个发现到的账户目录；账户目录在第一次读取时才被发现，新账户由根目录的边沿或心跳发现。
 7. 失败一律 fail closed：树不存在（纯终端用户的常态）是 `unavailable` 且**不产生诊断**；单份记录读不出只让那个会话答 unknown；**全部记录都读不出**才判定为 schema 不兼容，发出诊断并保留 last-known-good，此时不做任何新的隐藏。
+
+#### 1.5.2 屏幕上是哪个会话：记录之外还要问 Desktop 的日志（已实现）
+
+上面三条都建立在一句话上：**这个会话正是 Claude Desktop 摆在屏幕上的那个**。记录只能答一半，而缺的那一半会丢行。
+
+实测（2026-08-19 晚，Claude Desktop `1.32885.1`，用户没有读过那一行）：
+
+| 时刻 | 用户做了什么 | 记录里写了什么 |
+| --- | --- | --- |
+| 21:02:30 | 切到会话 A | `lastFocusedAt` ← now |
+| 21:03:30 | 打开一个**新会话的输入框** | **什么都没有** |
+| 21:03:58 | A 的 Turn 结束 | 行变成 Completed；本应用仍以为 A 在屏幕上，于是把「结束时在屏幕上」记给了它 |
+| 21:04:18 | 发出新会话的第一条消息 | 新会话被显示 → `movedOnFrom(A)` 成立 → **行被当作读过而移除** |
+
+同一份陈旧判断也会更早地经 `isInFrontOfThem` 丢行（Claude Desktop 在用户敲输入框时持有前台），以及经 `comingBackShowedIt` 丢行（用户回到窗口来发送）。
+
+**Claude Desktop 自己把这件事说出来了**，在它自己的日志里，而且两个方向都说：
+
+```js
+setFocusedSession(e){ log.info(`[CCD] LocalSessions.setFocusedSession: sessionId=${e ?? `null`}`), … }
+```
+
+每次导航都调用一次，`info` 无条件写出，`null` 正是记录写不下来的那一半（输入框、Home、设置页）。实测每次导航写成 `null` 后紧跟着目的地（另一个会话则再写一行 id，仍是 `null` 则表示屏幕上不是会话）。
+
+`ClaudeDesktopFocusLogReader` 因此读 `~/Library/Logs/Claude/main.log`（可用 `CODEX_IN_NOTCH_CLAUDE_DESKTOP_LOG` 覆盖），答 `.session(desktopSessionID:)` / `.nothing` / `.unknown` 三种：
+
+1. **只认本应用看着被追加进来的那些行。** `AGENTS.md` §6.2：业务状态只能来自当前快照或本进程启动之后观察到的事件。启动时（以及日志被轮转、被截断之后）那份历史只读一次，并且**只允许它说一件事：`.nothing`**——那个方向只会让行多留一会儿，是产品本来就愿意付的代价；历史里点名的会话一律答 `.unknown`。
+2. 每次读取 `stat` 一次，按 (inode, size) 决定是续读还是重来，单次最多读 256 KiB（本机日志约 800 KiB/天），**只解析到最后一个换行为止**——正在被写的半行会带着半截 id，而半截 id 恰好会被读成「屏幕上是别的会话」。
+3. 只匹配上面那一种行、只取 `sessionId=` 后面那一段；其余每一行都不解析。拒绝非当前用户的普通文件之外的一切；不写入。
+4. 文件消失或读不出来时**保留最后一次陈述**（Desktop 不再说话不等于它收回了上一句），只忘掉读到哪里。
+
+**它在编排器里是一个否决权，不是第五个来源**（`ClaudeCodeMonitorService.isOnScreen` / `hasReplacedItOnScreen`）：只能拦下记录声称的那个会话，不能提名记录没声称的会话，`.unknown` 就是没有这份日志之前的原样行为。因此日志缺失、被轮转、或某个未来版本改了行的形状，最坏只是退回旧行为，不会提前撤掉任何一行。`local_<uuid>` 到 hook 身份的连接来自记录里的 `sessionId`（§1.5 第 2 条）；接不上的 id 一律读成「不是这个会话」。
+
+**它没有自己的边沿。** 只有它能看见的那个跃迁（会话让位给输入框）只会保留行，而列在通知栏里的终态行本来每秒复查一次；能撤掉行的跃迁都伴随 Desktop 写记录或 hook 到达，那些边沿已经存在。为它单独挂 watcher 等于为 Claude Desktop 记的每一行 oauth 与 git diff 计时买一次唤醒。
 
 #### 1.5.1 终端会话：控制终端的访问时间（已实现）
 

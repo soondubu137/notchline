@@ -118,6 +118,17 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// see ``DesktopReadingWatcher`` for why that is the accepted trade and
     /// what it excludes.
     private let reading: any DesktopReadingReporting
+    /// What Claude Desktop says it has on screen, including nothing.
+    ///
+    /// Not a fifth route: a veto over the three above. All three ask whether a
+    /// session is on Desktop's screen, and the records they ask can only ever
+    /// say a session was *put* there -- so a user who navigates to the composer
+    /// for a new session leaves the last-stamped session named as if it were
+    /// still in front of them, and its finished row is retired unread the
+    /// moment that new session starts. This is where Desktop says otherwise;
+    /// see ``DesktopDisplayedSessionReporting`` for the measurement and for why
+    /// it may only ever keep a row.
+    private let displayed: any DesktopDisplayedSessionReporting
     /// When the user was last at a session's own terminal.
     ///
     /// The answer for the half of this product Claude Desktop cannot speak for
@@ -169,6 +180,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         readState: (any ClaudeCodeReadStateProviding)? = nil,
         activations: (any DesktopActivationReporting)? = nil,
         reading: (any DesktopReadingReporting)? = nil,
+        displayed: (any DesktopDisplayedSessionReporting)? = nil,
         terminalGestures: (any ControllingTerminalGestureReporting)? = nil,
         sessionsDirectory: URL? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
@@ -261,6 +273,14 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         self.reading = reading ?? DesktopReadingWatcher(
             bundleIdentifier: Self.desktopBundleIdentifier
         )
+        // No change stream of its own either, and for its own reason: the
+        // transition only this reader can see -- a session leaving the screen
+        // for a composer -- can only ever *keep* a row, and a listed row books
+        // a re-check every second anyway. Every transition that can retire one
+        // arrives on an edge that already exists, because Desktop writes the
+        // record of whatever it put on screen instead. See
+        // ``ClaudeDesktopFocusLogReader``.
+        self.displayed = displayed ?? ClaudeDesktopFocusLogReader()
         // No change stream of its own either, and for a sharper reason than
         // the reading above: a device's access time moves in the kernel and
         // leaves nothing a file-system watcher can attach to. It is sampled at
@@ -684,6 +704,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// back to `unknown` and the row returns. Deleting a session in Claude
     /// Desktop is the only way to reach it, and that also ends the session, so
     /// the row leaves on the next refresh anyway.
+    ///
+    /// **The first three all ask one question, and it now has two sources.**
+    /// *Is this session the one on Claude Desktop's screen?* The records answer
+    /// only half of it -- they record a session being put on screen and never
+    /// one being taken away -- so a user who leaves a session for the composer
+    /// of a new one leaves it named as if it were still there, and the row is
+    /// retired unread the moment the new session starts. Desktop's own log says
+    /// the other half; ``isOnScreen(_:)`` reads it as a veto over the records,
+    /// which is what keeps a log this app cannot parse from changing any
+    /// verdict at all.
     private func rowsStillWorthShowing(
         _ rows: [MonitoredSession],
         boundaryByRowID: [String: Date],
@@ -692,6 +722,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         let readState = await readState.snapshot()
         let activatedAt = await activations.lastActivation()
         let desktopIsInFrontOfTheUser = await reading.isInFrontOfTheUser()
+        let displayedSession = await displayed.displayedSession()
         var unreadThreadIDs: Set<String> = []
         /// A judged row, and whether the terminal reading is what decides it.
         ///
@@ -704,6 +735,59 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         )] = []
         var shown: [MonitoredSession] = []
 
+        /// Whether Claude Desktop has this session on screen right now.
+        ///
+        /// **Two sources, and the row stays unless they agree.** The records
+        /// answer "which session was last *put* on screen", which is all they
+        /// can: Claude Desktop stamps a session being displayed and writes
+        /// nothing when it is taken away, so the newest stamp goes on naming a
+        /// session the user has since navigated away from. Desktop's own log
+        /// says the other half, `sessionId=null` included, and it is read as a
+        /// veto rather than as a source: it can withhold a session the stamps
+        /// claim, never nominate one they do not.
+        ///
+        /// That asymmetry is what makes a log this app cannot read harmless.
+        /// ``DesktopDisplayedSession/unknown`` -- no log, an unreadable one, a
+        /// line shape some future Desktop no longer writes -- is exactly the
+        /// behaviour the three rules below had before the log was consulted at
+        /// all.
+        func isOnScreen(_ sessionID: String) -> Bool {
+            guard sessionID == readState.mostRecentlyDisplayedSessionID else {
+                return false
+            }
+            switch displayedSession {
+            case .unknown:
+                return true
+            case .nothing:
+                return false
+            case let .session(desktopSessionID):
+                return readState.cliSessionID(forDesktopSessionID: desktopSessionID)
+                    == sessionID
+            }
+        }
+
+        /// Whether Claude Desktop has put a *different session* on screen.
+        ///
+        /// Not the negation of the above, and the difference is the whole
+        /// point: a composer is not a session, so navigating to one displaces a
+        /// session without anybody having moved on from reading it. Only both
+        /// sources naming something else counts.
+        func hasReplacedItOnScreen(_ sessionID: String) -> Bool {
+            guard let stamped = readState.mostRecentlyDisplayedSessionID,
+                  stamped != sessionID else {
+                return false
+            }
+            switch displayedSession {
+            case .unknown:
+                return true
+            case .nothing:
+                return false
+            case let .session(desktopSessionID):
+                return readState.cliSessionID(forDesktopSessionID: desktopSessionID)
+                    != sessionID
+            }
+        }
+
         /// Whether coming back to Claude Desktop showed the user this session.
         ///
         /// Two facts, and neither is a guess on its own: Claude Desktop's own
@@ -714,10 +798,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         /// all, rather than "is frontmost now", is what stops a user who walked
         /// away with the window in front from having the row retired for them.
         func comingBackShowedIt(_ sessionID: String, since boundary: Date) -> Bool {
-            guard sessionID == readState.mostRecentlyDisplayedSessionID,
-                  let activatedAt else {
-                return false
-            }
+            guard isOnScreen(sessionID), let activatedAt else { return false }
             return activatedAt >= boundary
         }
 
@@ -739,8 +820,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         /// what "could be looking at" excludes; the row is dismissible by hand
         /// either way, and a row retired early cannot be brought back.
         func isInFrontOfThem(_ sessionID: String) -> Bool {
-            sessionID == readState.mostRecentlyDisplayedSessionID
-                && desktopIsInFrontOfTheUser
+            isOnScreen(sessionID) && desktopIsInFrontOfTheUser
         }
 
         /// Whether the user moved on from it inside Claude Desktop.
@@ -757,12 +837,17 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         /// happened afterwards. It is also what keeps Claude Desktop's own
         /// bookkeeping out of the verdict -- waking from sleep re-stamps the
         /// session already on screen, never a different one.
+        ///
+        /// **What displaced it has to be another session.** Starting a new one
+        /// displaces the last-stamped session too, and used to retire its row
+        /// on that alone -- the user had been typing into a composer since
+        /// before the Turn ended, so the answer they were credited with reading
+        /// had not been on screen for any of it. That is now the difference
+        /// between "something else is displayed" and
+        /// ``hasReplacedItOnScreen(_:)``.
         func movedOnFrom(_ sessionID: String) -> Bool {
-            guard sessionsSeenOnScreenSinceTheirTurnEnded.contains(sessionID),
-                  let displayed = readState.mostRecentlyDisplayedSessionID else {
-                return false
-            }
-            return displayed != sessionID
+            sessionsSeenOnScreenSinceTheirTurnEnded.contains(sessionID)
+                && hasReplacedItOnScreen(sessionID)
         }
 
         /// When the user was last at this session's own terminal.
@@ -821,9 +906,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // Claude Desktop has on screen, and whether this row's Turn is over.
             // A row that is running again drops its membership -- it belongs to
             // the finished Turn that was on screen, not to the session, and a
-            // new Turn has to earn it again.
-            if row.status == .completed,
-               row.threadID == readState.mostRecentlyDisplayedSessionID {
+            // new Turn has to earn it again. And it is earned against what
+            // Desktop says is on screen, not against the newest stamp: a Turn
+            // that ended behind the composer for a new session was never on
+            // screen for the user to move on from.
+            if row.status == .completed, isOnScreen(row.threadID) {
                 sessionsSeenOnScreenSinceTheirTurnEnded.insert(row.threadID)
             } else if row.status != .completed {
                 sessionsSeenOnScreenSinceTheirTurnEnded.remove(row.threadID)

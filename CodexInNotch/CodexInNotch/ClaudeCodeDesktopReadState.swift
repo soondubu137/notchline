@@ -68,27 +68,39 @@ struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
     }
 
     private let entries: [String: Entry]
+    /// The CLI session id filed under each of Claude Desktop's own ids.
+    ///
+    /// The records are keyed by `cliSessionId` because that is the id the hooks
+    /// carry, and this is the same join pointed the other way -- for the one
+    /// caller that starts from Desktop's id instead: Desktop's log, which names
+    /// what it has on screen as `local_<uuid>` (see
+    /// ``DesktopDisplayedSessionReporting``). An id that is missing here joins
+    /// to nothing, and a session that joins to nothing is not one of these
+    /// rows.
+    private let cliSessionIDsByDesktopID: [String: String]
     let source: Source
     let diagnostic: String?
     /// The session Claude Desktop most recently put on screen, if it has
     /// recorded putting any there.
     ///
-    /// **This is the closest thing to "which session is on screen right now",
-    /// and it is not the same claim.** Desktop stamps the instant a session is
-    /// *shown* and never records it being hidden, so the newest stamp is the
-    /// last thing it displayed — which is still on screen unless the user
-    /// closed that window. It is used for exactly one thing: deciding which
-    /// session an app activation could have shown the user, and being wrong
-    /// about it can only retire a row whose window was closed, which is a
-    /// window the user was looking at not long ago.
+    /// **This is not "which session is on screen right now", and the gap is
+    /// load-bearing.** Desktop stamps the instant a session is *shown* and
+    /// never records it being hidden, so the newest stamp is the last thing it
+    /// displayed — which the user may since have left for something that is not
+    /// a session at all, most often the composer for a new one. Nothing in
+    /// these records can see that happen; ``DesktopDisplayedSessionReporting``
+    /// is where Desktop says it, and ``ClaudeCodeMonitorService`` requires the
+    /// two to agree before it treats a session as being on screen.
     let mostRecentlyDisplayedSessionID: String?
 
     nonisolated init(
         entries: [String: Entry],
         source: Source,
-        diagnostic: String? = nil
+        diagnostic: String? = nil,
+        cliSessionIDsByDesktopID: [String: String] = [:]
     ) {
         self.entries = entries
+        self.cliSessionIDsByDesktopID = cliSessionIDsByDesktopID
         self.source = source
         self.diagnostic = diagnostic
         // Ties broken by id so the answer cannot flap between two records that
@@ -115,11 +127,22 @@ struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
         source: Source,
         diagnostic: String
     ) -> Self {
-        Self(entries: entries, source: source, diagnostic: diagnostic)
+        Self(
+            entries: entries,
+            source: source,
+            diagnostic: diagnostic,
+            cliSessionIDsByDesktopID: cliSessionIDsByDesktopID
+        )
     }
 
     nonisolated func entry(forSession sessionID: String) -> Entry? {
         entries[sessionID]
+    }
+
+    /// Which session the hooks would call the one Claude Desktop files under
+    /// `desktopSessionID`, when the records can say.
+    nonisolated func cliSessionID(forDesktopSessionID desktopSessionID: String) -> String? {
+        cliSessionIDsByDesktopID[desktopSessionID]
     }
 
     /// Whether the user has read what ended at `terminalBoundaryAt`.
@@ -155,11 +178,12 @@ struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
 /// a turn and moved on kept the row forever.
 ///
 /// **What is read.** `~/Library/Application Support/Claude/claude-code-sessions/
-/// <org>/<account>/local_<uuid>.json`, and out of it three fields:
+/// <org>/<account>/local_<uuid>.json`, and out of it four fields:
 /// `cliSessionId` (the id the hooks carry, so no id has to be guessed),
-/// `lastFocusedAt`, and `isArchived`. Nothing else in those files is decoded --
-/// they also hold the session's title, its working directory and its MCP
-/// configuration, none of which this app takes from here.
+/// `sessionId` (Desktop's own id for the same session, which is what its log
+/// names on screen), `lastFocusedAt`, and `isArchived`. Nothing else in those
+/// files is decoded -- they also hold the session's title, its working
+/// directory and its MCP configuration, none of which this app takes from here.
 ///
 /// `lastFocusedAt` is stamped by Claude Desktop when it puts a session on
 /// screen, and the record is written immediately afterwards, by atomic replace
@@ -210,11 +234,19 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
 
     private struct Record: Decodable {
         let cliSessionID: String
+        /// Claude Desktop's own id for this session, `local_<uuid>`, which is
+        /// also this file's name and the id its log names on screen. Optional
+        /// because a record that has stopped carrying it can still answer
+        /// everything else; what it loses is the join in
+        /// ``ClaudeCodeReadStateSnapshot/cliSessionID(forDesktopSessionID:)``,
+        /// and a session that cannot be joined keeps its row.
+        let desktopSessionID: String?
         let lastFocusedAt: Date?
         let isArchived: Bool
 
         private enum CodingKeys: String, CodingKey {
             case cliSessionID = "cliSessionId"
+            case desktopSessionID = "sessionId"
             case lastFocusedAt
             case isArchived
         }
@@ -229,6 +261,10 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
                 throw ReadStateError.incompatibleSchema
             }
             cliSessionID = sessionID
+            desktopSessionID = try container
+                .decodeIfPresent(String.self, forKey: .desktopSessionID)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : $0 }
             // Milliseconds since the epoch, the way every timestamp in these
             // files is written.
             lastFocusedAt = try container
@@ -322,6 +358,9 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
 
         let recordURLs = recordURLs(in: accountDirectories)
         var entries: [String: ClaudeCodeReadStateSnapshot.Entry] = [:]
+        var cliSessionIDsByDesktopID: [String: String] = [:]
+        /// Desktop ids two records disagree about, which nothing may join.
+        var ambiguousDesktopIDs: Set<String> = []
         var refreshed: [URL: (revision: FileRevision, record: Record?)] = [:]
         var failures = 0
 
@@ -351,6 +390,20 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
                     isArchived: record.isArchived
                 )
             )
+            // Two accounts holding one Desktop id would make the join a guess,
+            // and a guess here would let Desktop's log name the wrong session
+            // on screen. Neither answer is taken: the id joins to nothing, and
+            // both rows stay listed.
+            if let desktopID = record.desktopSessionID {
+                if let existing = cliSessionIDsByDesktopID[desktopID],
+                   existing != record.cliSessionID {
+                    ambiguousDesktopIDs.insert(desktopID)
+                }
+                cliSessionIDsByDesktopID[desktopID] = record.cliSessionID
+            }
+        }
+        for desktopID in ambiguousDesktopIDs {
+            cliSessionIDsByDesktopID.removeValue(forKey: desktopID)
         }
         cachedRecords = refreshed
 
@@ -372,7 +425,8 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
 
         let snapshot = ClaudeCodeReadStateSnapshot(
             entries: entries,
-            source: .current
+            source: .current,
+            cliSessionIDsByDesktopID: cliSessionIDsByDesktopID
         )
         lastKnownGood = snapshot
         return snapshot
