@@ -3011,6 +3011,17 @@ struct CodexInNotchTests {
         #expect(corrupt.diagnostic?.contains("保守保留终态会话") == true)
     }
 
+    /// Codex replaces its state file rather than rewriting it, so only the
+    /// containing directory keeps reporting -- which is the whole reason the
+    /// unread path is not on a timer.
+    ///
+    /// The wait goes through ``receivesChange(_:within:whileRepeating:)`` like
+    /// every other watcher test. It used to inline a budget of its own -- the
+    /// tightest in the suite at one second -- and replace the file exactly
+    /// once. On a freshly built tree it failed twice in a full-suite run and
+    /// passed on the immediate re-run of the same tree, which is the shape of a
+    /// source that was not armed yet rather than of a signal that was late
+    /// (CC-023).
     @Test @MainActor
     func desktopUnreadStateDirectoryWatcherObservesAtomicReplacement() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -3032,29 +3043,14 @@ struct CodexInNotchTests {
             changeDebounceInterval: 0.01
         )
         let events = repository.changeEvents()
-        let eventTask = Task {
-            for await _ in events {
-                return true
-            }
-            return false
-        }
 
         let updated = try JSONSerialization.data(withJSONObject: [
             "electron-persisted-atom-state": [
                 "unread-thread-ids-by-host-v1": ["local": ["thread-2"]]
             ]
         ])
-        try updated.write(to: stateFile, options: .atomic)
-        let observed = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await eventTask.value }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            eventTask.cancel()
-            return result
+        let observed = await receivesChange(events) {
+            try updated.write(to: stateFile, options: .atomic)
         }
         let snapshot = await repository.snapshot()
 
@@ -3258,26 +3254,14 @@ struct CodexInNotchTests {
         _ = await repository.snapshot()
 
         let events = repository.changeEvents()
-        let eventTask = Task {
-            for await _ in events { return true }
-            return false
-        }
-        try await Task.sleep(nanoseconds: 100_000_000)
-        try JSONSerialization.data(withJSONObject: [
+        let replaced = try JSONSerialization.data(withJSONObject: [
             "cliSessionId": "s-1",
             "lastFocusedAt": 2_000_000
-        ]).write(to: record, options: .atomic)
-
-        let observed = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await eventTask.value }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            eventTask.cancel()
-            return result
+        ])
+        // Repeated rather than preceded by a sleep long enough to hope the
+        // source is armed -- see ``receivesChange(_:within:whileRepeating:)``.
+        let observed = await receivesChange(events) {
+            try replaced.write(to: record, options: .atomic)
         }
         let snapshot = await repository.snapshot()
 
@@ -3705,7 +3689,7 @@ struct CodexInNotchTests {
         )
 
         let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadListRequests(
+        await waitForThreadListRequests(
             client,
             atLeast: 1,
             completed: true
@@ -3887,7 +3871,7 @@ struct CodexInNotchTests {
         let restored = await restoredService.fetchSnapshot(
             showsContentPreviews: false
         )
-        try await waitForThreadListRequests(
+        await waitForThreadListRequests(
             restoredClient,
             atLeast: 1,
             completed: true
@@ -4013,7 +3997,7 @@ struct CodexInNotchTests {
         )
 
         let idle = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadListRequests(client, atLeast: 1)
+        await waitForThreadListRequests(client, atLeast: 1)
         #expect(idle.availability == .ready)
         #expect(idle.sessions.isEmpty)
 
@@ -4248,7 +4232,7 @@ struct CodexInNotchTests {
 
         let initial = await service.fetchSnapshot(showsContentPreviews: false)
         #expect(initial.sessions.first?.status == .running)
-        try await waitForThreadListRequests(
+        await waitForThreadListRequests(
             client,
             atLeast: 1,
             completed: true
@@ -4339,7 +4323,7 @@ struct CodexInNotchTests {
         )
 
         let first = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadListRequests(
+        await waitForThreadListRequests(
             client,
             atLeast: 1,
             completed: true
@@ -4424,7 +4408,7 @@ struct CodexInNotchTests {
 
         let initial = await service.fetchSnapshot(showsContentPreviews: false)
         #expect(initial.sessions.first?.status == .running)
-        try await waitForThreadListRequests(
+        await waitForThreadListRequests(
             client,
             atLeast: 1,
             completed: true
@@ -4572,32 +4556,15 @@ struct CodexInNotchTests {
             liveEventCutoff: .distantPast
         )
         let events = repository.changeEvents()
-        let observer = Task {
-            for await _ in events {
-                return true
-            }
-            return false
-        }
-
-        try JSONSerialization.data(withJSONObject: [
+        let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-watch",
             "turn_id": "turn-watch"
-        ]).write(to: paths.eventsDirectory.appendingPathComponent("0.json"))
+        ])
+        let queued = paths.eventsDirectory.appendingPathComponent("0.json")
 
-        let observed = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await observer.value }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
-        observer.cancel()
-        #expect(observed)
+        #expect(await receivesChange(events) { try event.write(to: queued) })
     }
 
     @Test @MainActor
@@ -4806,7 +4773,7 @@ struct CodexInNotchTests {
         #expect(await service.nextRefreshDeadline() == nil)
 
         _ = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadReads(client, atLeast: 1)
+        await waitForThreadReads(client, atLeast: 1)
 
         // Once metadata is cached the next wake-up is its staleness boundary --
         // sooner than the membership window, and far sooner than the heartbeat.
@@ -5146,13 +5113,13 @@ struct CodexInNotchTests {
         )
 
         _ = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
-        try await waitForThreadReads(client, atLeast: 1)
+        await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        await waitForThreadReads(client, atLeast: 1)
 
         // Past the per-thread metadata window, still inside the membership one.
         await clock.advance(by: timing.threadMetadataRefreshInterval + 1)
         _ = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadReads(client, atLeast: 2)
+        await waitForThreadReads(client, atLeast: 2)
 
         let deadline = try #require(await service.nextRefreshDeadline())
         #expect(deadline >= clock.now())
@@ -5216,8 +5183,8 @@ struct CodexInNotchTests {
 
         try emitHookActivity()
         _ = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
-        try await waitForThreadReads(client, atLeast: 1)
+        await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        await waitForThreadReads(client, atLeast: 1)
         #expect(await client.requestCount(method: "thread/list") == 1)
         #expect(await client.requestCount(method: "thread/read") == 1)
 
@@ -5234,14 +5201,14 @@ struct CodexInNotchTests {
         await clock.advance(by: 2)
         try emitHookActivity()
         _ = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadReads(client, atLeast: 2)
+        await waitForThreadReads(client, atLeast: 2)
         #expect(await client.requestCount(method: "thread/list") == 1)
 
         // Past the membership window: the full list repeats exactly once.
         await clock.advance(by: timing.threadListRefreshInterval)
         try emitHookActivity()
         _ = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadListRequests(client, atLeast: 2, completed: true)
+        await waitForThreadListRequests(client, atLeast: 2, completed: true)
         #expect(await client.requestCount(method: "thread/list") == 2)
 
         await service.disconnect()
@@ -5296,7 +5263,7 @@ struct CodexInNotchTests {
         )
 
         _ = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        await waitForThreadListRequests(client, atLeast: 1, completed: true)
 
         // Drive many more Hook-consuming rounds. Membership was just
         // reconciled, so none of them may re-paginate the full list.
@@ -5377,7 +5344,7 @@ struct CodexInNotchTests {
         )
 
         _ = await service.fetchSnapshot(showsContentPreviews: false)
-        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        await waitForThreadListRequests(client, atLeast: 1, completed: true)
 
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -5393,7 +5360,7 @@ struct CodexInNotchTests {
         _ = await service.fetchSnapshot(showsContentPreviews: false)
         // A server without thread/read must keep getting whole-list metadata
         // rather than silently losing titles.
-        try await waitForThreadListRequests(client, atLeast: 2)
+        await waitForThreadListRequests(client, atLeast: 2)
 
         let snapshot = await service.fetchSnapshot(showsContentPreviews: false)
         let readAttempts = await client.requestCount(method: "thread/read")
@@ -6013,8 +5980,12 @@ for line in sys.stdin:
         #expect(watcher.attachIfNeeded())
         #expect(watcher.isAttached)
 
-        try Data("{}".utf8).write(to: directory.appendingPathComponent("a.json"))
-        #expect(await receivesChange(stream))
+        let created = directory.appendingPathComponent("a.json")
+        #expect(
+            await receivesChange(stream) {
+                try Data("{}".utf8).write(to: created)
+            }
+        )
     }
 
     /// A session record is watched as a file, and the set is reconciled.
@@ -6047,15 +6018,23 @@ for line in sys.stdin:
 
         // In place: same path, same inode, no rename -- the write a directory
         // watcher is blind to.
+        //
+        // Written once rather than through ``receivesChange(_:whileRepeating:)``,
+        // and this is the one place where that matters: these three stages
+        // share a watcher, and the trailing debounce a repeated write leaves
+        // behind lands on whichever stream exists when it fires -- so repeating
+        // here would let an echo of `second` answer the silence assertion below
+        // about `first`.
         try Data(#"{"status":"idle"}"#.utf8).write(to: second)
         #expect(await receivesChange(watcher.events()))
 
-        // Dropped from the set, and then silent.
+        // Dropped from the set, and then silent. The budget is short because
+        // the whole of it is spent on every green run.
         watcher.watch(processIdentifiers: [2])
         #expect(watcher.watchedCount == 1)
         let afterDrop = watcher.events()
         try Data(#"{"status":"idle"}"#.utf8).write(to: first)
-        #expect(await receivesChange(afterDrop, within: 1) == false)
+        #expect(await receivesChange(afterDrop, within: .seconds(1)) == false)
 
         // The one still asked for goes on reporting.
         try Data(#"{"status":"busy"}"#.utf8).write(to: second)
@@ -6082,8 +6061,12 @@ for line in sys.stdin:
         )
         #expect(watcher.isAttached)
         let stream = watcher.events()
-        try Data("{}".utf8).write(to: directory.appendingPathComponent("a.json"))
-        #expect(await receivesChange(stream))
+        let beforeUninstall = directory.appendingPathComponent("a.json")
+        #expect(
+            await receivesChange(stream) {
+                try Data("{}".utf8).write(to: beforeUninstall)
+            }
+        )
 
         // Uninstall removes the directory. The descriptor now refers to an
         // inode nothing will ever write to again.
@@ -6098,8 +6081,12 @@ for line in sys.stdin:
         #expect(watcher.attachIfNeeded())
 
         let secondStream = watcher.events()
-        try Data("{}".utf8).write(to: directory.appendingPathComponent("b.json"))
-        #expect(await receivesChange(secondStream))
+        let afterReinstall = directory.appendingPathComponent("b.json")
+        #expect(
+            await receivesChange(secondStream) {
+                try Data("{}".utf8).write(to: afterReinstall)
+            }
+        )
     }
 
     /// The end-to-end first run: repository at launch, install, then a hook.
@@ -6131,10 +6118,12 @@ for line in sys.stdin:
 
         // The very next hook must arrive on the watcher rather than waiting out
         // a refresh deadline.
-        try Data(#"{"received_at": 1}"#.utf8).write(
-            to: paths.eventsDirectory.appendingPathComponent("1.json")
+        let firstHook = paths.eventsDirectory.appendingPathComponent("1.json")
+        #expect(
+            await receivesChange(stream) {
+                try Data(#"{"received_at": 1}"#.utf8).write(to: firstHook)
+            }
         )
-        #expect(await receivesChange(stream))
     }
 
     /// A refresh re-attaches on its own, so the explicit nudge is a latency
@@ -7112,7 +7101,7 @@ for line in sys.stdin:
             eventID: "event-prompt",
             prompt: "private prompt"
         )
-        try await waitForRetainedPreviews(channel, count: 1)
+        await waitForRetainedPreviews(channel, count: 1)
 
         for (index, event) in events.enumerated() {
             let data = try JSONSerialization.data(withJSONObject: event)
@@ -7129,7 +7118,7 @@ for line in sys.stdin:
             eventID: "event-stop",
             assistantMessage: "private answer"
         )
-        try await waitForRetainedPreviews(channel, count: 1)
+        await waitForRetainedPreviews(channel, count: 1)
 
         let stop = try JSONSerialization.data(withJSONObject: [
             "event_id": "event-stop",
@@ -7233,7 +7222,7 @@ for line in sys.stdin:
             eventID: "event-prompt",
             prompt: "continue this task"
         )
-        try await waitForRetainedPreviews(channel, count: 1)
+        await waitForRetainedPreviews(channel, count: 1)
 
         try write([
             "event_id": "event-prompt",
@@ -7605,11 +7594,12 @@ for line in sys.stdin:
         // has been written to the socket but not yet read off it -- and because
         // consuming deletes the event, the preview is then gone for good.
         // Waiting for it to land tests the pairing rather than the scheduling.
-        var attempts = 0
-        while channel.retainedPreviewCount == 0, attempts < 200 {
-            try await Task.sleep(for: .milliseconds(10))
-            attempts += 1
-        }
+        //
+        // This wait is where CC-023's second sighting surfaced. It was two
+        // seconds inline, and it running out read as a budget set too tight;
+        // the channel had in fact dropped the message, and no budget would have
+        // helped. See ``aPreviewSentAfterTheConnectionIsAcceptedStillArrives``.
+        await waitForRetainedPreviews(channel, count: 1)
 
         let snapshot = await repository.consumeEvents()
         let everythingOnDisk = allFileContents(under: paths.supportDirectory)
@@ -7628,6 +7618,71 @@ for line in sys.stdin:
         #expect(rawEvent["prompt"] == nil)
         #expect(!rawEventText.contains("script preview"))
         #expect(!everythingOnDisk.contains("script preview"))
+    }
+
+    /// Connecting and writing are two steps, and the app may accept between
+    /// them.
+    ///
+    /// The listening socket is non-blocking so the accept handler can drain its
+    /// backlog rather than park on the next connection, and on Darwin `accept`
+    /// hands that flag to the connection it returns. The receive loop then read
+    /// `EAGAIN` from a client that had connected but not yet written, could not
+    /// tell it from the end of a message, and dropped the preview for good: a
+    /// Turn whose text never appeared and never would, on exactly the busy
+    /// machine that pulls the two steps apart (CC-023). The receive timeout was
+    /// meant to cover this and could not -- it bounds nothing on a non-blocking
+    /// descriptor.
+    ///
+    /// Repeated rather than sent once, because the pause it needs is racing a
+    /// real product bound: the channel abandons a client that has stopped
+    /// making progress after 250 ms, and on a loaded machine one wall-clock
+    /// pause of 100 ms can overshoot that -- which is the channel behaving
+    /// correctly, not the defect. What may never happen is every attempt being
+    /// dropped, which is what the defect does.
+    ///
+    /// An accept that loses the race leaves the message already buffered, and
+    /// the attempt proves nothing. This cannot report a failure it has not
+    /// seen; against the defect it failed on every attempt.
+    @Test
+    func aPreviewSentAfterTheConnectionIsAcceptedStillArrives() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        // The socket lives beside the event queue, not at the top of the
+        // support directory; binding needs that directory to exist.
+        try FileManager.default.createDirectory(
+            at: paths.eventsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
+        defer { channel.stop() }
+        #expect(channel.start())
+
+        var preview: HookPreviewChannel.Preview?
+        var attempt = 0
+        while preview == nil, attempt < 5 {
+            let eventID = "event-late-\(attempt)"
+            #expect(
+                sendHookPreview(
+                    to: paths.previewSocket,
+                    eventID: eventID,
+                    prompt: "written after the accept",
+                    writingAfter: 0.1
+                )
+            )
+            // Claiming is the wait, so it is this attempt's preview that is
+            // waited for rather than any preview at all.
+            _ = await holds(within: .seconds(1)) {
+                preview = channel.claimPreview(forEventID: eventID)
+                return preview != nil
+            }
+            attempt += 1
+        }
+        #expect(preview?.prompt == "written after the accept")
     }
 
     /// The privacy switch, at the boundary where it used to fail open.
@@ -7678,7 +7733,7 @@ for line in sys.stdin:
             eventID: "event-on",
             prompt: "may be retained"
         )
-        try await waitForRetainedPreviews(channel, count: 1)
+        await waitForRetainedPreviews(channel, count: 1)
 
         // Turning it off also drops what was already collected.
         repository.setContentPreviewsEnabled(false)
@@ -7720,7 +7775,7 @@ for line in sys.stdin:
                 prompt: "prompt \(index)"
             )
         }
-        try await waitForRetainedPreviews(channel, count: 4)
+        await waitForRetainedPreviews(channel, count: 4)
         try await Task.sleep(nanoseconds: 100_000_000)
 
         #expect(channel.retainedPreviewCount == 4)
@@ -7819,6 +7874,30 @@ for line in sys.stdin:
         )
     }
 
+    /// How long a wait for something already on its way may run before the
+    /// suite calls it a failure.
+    ///
+    /// One number for the whole suite, and set far past any healthy timing on
+    /// purpose. Every wait below returns the moment its condition holds, so
+    /// this budget is only ever spent by a run that was going to fail anyway --
+    /// it costs a green run nothing. A budget trimmed to an idle machine costs
+    /// something real instead: there is no CI here, so the local suite is the
+    /// only gate, and a gate that fails once in a while teaches you to re-run
+    /// it rather than read it (CC-023).
+    ///
+    /// Waits that assert *silence* are the exception and pass a much shorter
+    /// budget of their own -- there the whole budget is spent on every green
+    /// run.
+    private static let waitBudget: Duration = .seconds(10)
+
+    /// The gap between polls of a condition nothing signals.
+    private static let pollInterval: Duration = .milliseconds(10)
+
+    /// How often a repeated mutation is re-applied while waiting for it to be
+    /// reported. Comfortably above every watcher debounce in these tests, so
+    /// attempts are seen as separate edges rather than coalesced into one.
+    private static let mutationRetryInterval: Duration = .milliseconds(50)
+
     /// Whether a change stream delivers at least one signal in time.
     ///
     /// Bounded so a regression reports as a failure rather than hanging the
@@ -7827,7 +7906,7 @@ for line in sys.stdin:
     /// signal that arrives first is buffered rather than lost.
     private func receivesChange(
         _ stream: AsyncStream<Void>,
-        within seconds: Double = 3
+        within budget: Duration = CodexInNotchTests.waitBudget
     ) async -> Bool {
         await withTaskGroup(of: Bool.self) { group in
             group.addTask {
@@ -7835,14 +7914,69 @@ for line in sys.stdin:
                 return false
             }
             group.addTask {
-                try? await Task.sleep(
-                    nanoseconds: UInt64(seconds * 1_000_000_000)
-                )
+                try? await Task.sleep(for: budget)
                 return false
             }
             let result = await group.next() ?? false
             group.cancelAll()
             return result
+        }
+    }
+
+    /// The same, for a change the test itself has to make -- and which it keeps
+    /// making until the stream reports one.
+    ///
+    /// Subscribing is safe to do late, but *arming* is not. A
+    /// `DispatchSourceFileSystemObject` is registered with the kernel
+    /// asynchronously when it is resumed, so between `attachIfNeeded()`
+    /// returning true and the source actually watching there is a window in
+    /// which a mutation is not reported at all -- and no waiting budget
+    /// recovers a signal that was never sent. Repeating the mutation closes
+    /// that window without guessing at how long it is: whichever attempt lands
+    /// after the source is armed is the one that reports. Every mutation passed
+    /// here is idempotent, so the state the test then asserts on is the same
+    /// whether it took one attempt or ten.
+    private func receivesChange(
+        _ stream: AsyncStream<Void>,
+        within budget: Duration = CodexInNotchTests.waitBudget,
+        whileRepeating mutation: @escaping @Sendable () throws -> Void
+    ) async -> Bool {
+        let repeater = Task {
+            while !Task.isCancelled {
+                do {
+                    try mutation()
+                } catch {
+                    Issue.record(
+                        "the change under test could not be made: \(error)"
+                    )
+                    return
+                }
+                try? await Task.sleep(for: Self.mutationRetryInterval)
+            }
+        }
+        let observed = await receivesChange(stream, within: budget)
+        repeater.cancel()
+        _ = await repeater.result
+        return observed
+    }
+
+    /// Whether `condition` comes to hold in time, polled because nothing
+    /// signals it.
+    ///
+    /// Reports rather than throws, so a caller that must not carry on without
+    /// its condition can say what it was waiting for. Running out quietly and
+    /// proceeding anyway is the failure mode this exists to prevent: it
+    /// surfaces as whatever the next assertion happens to check, which is how a
+    /// timing budget gets read as a broken feature (CC-023).
+    private func holds(
+        within budget: Duration = CodexInNotchTests.waitBudget,
+        _ condition: () async -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: budget)
+        while true {
+            if await condition() { return true }
+            if ContinuousClock.now >= deadline { return false }
+            try? await Task.sleep(for: Self.pollInterval)
         }
     }
 
@@ -7861,7 +7995,8 @@ for line in sys.stdin:
         to socketURL: URL,
         eventID: String,
         prompt: String? = nil,
-        assistantMessage: String? = nil
+        assistantMessage: String? = nil,
+        writingAfter connectedPause: TimeInterval = 0
     ) -> Bool {
         var payload: [String: Any] = ["event_id": eventID]
         if let prompt { payload["prompt"] = prompt }
@@ -7890,21 +8025,35 @@ for line in sys.stdin:
         }
         guard connected == 0 else { return false }
 
+        // Holding the line open before writing is what a client descheduled
+        // between connecting and sending looks like, and it is the case the
+        // channel used to drop -- see
+        // ``aPreviewSentAfterTheConnectionIsAcceptedStillArrives``.
+        if connectedPause > 0 {
+            Thread.sleep(forTimeInterval: connectedPause)
+        }
+
         return data.withUnsafeBytes { buffer in
             write(descriptor, buffer.baseAddress, buffer.count)
         } == data.count
     }
 
     /// Waits for the channel's background reader to take delivery.
+    ///
+    /// Reported as well as recorded, because claiming a preview is destructive:
+    /// a caller that gives up here and consumes anyway deletes the event it was
+    /// waiting for, and then fails on a missing preview rather than on the wait
+    /// that ran out (CC-023).
+    @discardableResult
     private func waitForRetainedPreviews(
         _ channel: HookPreviewChannel,
         count: Int
-    ) async throws {
-        for _ in 0 ..< 200 {
-            if channel.retainedPreviewCount >= count { return }
-            try await Task.sleep(nanoseconds: 5_000_000)
+    ) async -> Bool {
+        let arrived = await holds { channel.retainedPreviewCount >= count }
+        if !arrived {
+            Issue.record("preview channel never received \(count) message(s)")
         }
-        Issue.record("preview channel never received \(count) message(s)")
+        return arrived
     }
 
     /// Every regular file under a directory, for "is the text anywhere" checks.
@@ -11327,7 +11476,7 @@ for line in sys.stdin:
             ]
         )
 
-        let queued = try await waitForQueuedEvents(in: events, count: 1)
+        let queued = await waitForQueuedEvents(in: events, count: 1)
         let queuedEvent = try #require(queued.first)
         let raw = try Data(contentsOf: queuedEvent)
         let decoded = try #require(
@@ -11402,7 +11551,7 @@ for line in sys.stdin:
             "prompt_id": "p", "cwd": "/Users/someone/Projects/thing"
         ])
 
-        let queued = try await waitForQueuedEvents(in: events, count: 1)
+        let queued = await waitForQueuedEvents(in: events, count: 1)
         let queuedEvent = try #require(queued.first)
         let decoded = try #require(
             try JSONSerialization.jsonObject(with: Data(contentsOf: queuedEvent))
@@ -11446,7 +11595,7 @@ for line in sys.stdin:
             "hook_event_name": "Stop", "session_id": "s-1", "prompt_id": "p-1"
         ])
 
-        let queued = try await waitForQueuedEvents(in: events, count: 1)
+        let queued = await waitForQueuedEvents(in: events, count: 1)
         #expect(queued.count == 1, "MessageDisplay must not add a file of its own")
         let raw = try Data(contentsOf: try #require(queued.first))
         #expect(!String(decoding: raw, as: UTF8.self).contains("Reading the listener"))
@@ -11716,16 +11865,24 @@ for line in sys.stdin:
         _ = try await postStatus(port: port, token: token, body: body)
     }
 
-    private func waitForQueuedEvents(in directory: URL, count: Int) async throws -> [URL] {
-        for _ in 0 ..< 200 {
-            let files = (try? FileManager.default.contentsOfDirectory(
+    private func waitForQueuedEvents(in directory: URL, count: Int) async -> [URL] {
+        var files: [URL] = []
+        let queued = await holds {
+            files = (try? FileManager.default.contentsOfDirectory(
                 at: directory,
                 includingPropertiesForKeys: nil
             )) ?? []
-            if files.count >= count { return files.sorted { $0.path < $1.path } }
-            try await Task.sleep(nanoseconds: 10_000_000)
+            return files.count >= count
         }
-        return []
+        if !queued {
+            Issue.record(
+                """
+                the event queue never held \(count) event(s); \
+                it held \(files.count)
+                """
+            )
+        }
+        return files.sorted { $0.path < $1.path }
     }
 
     /// Claude Code's spelling of the same lifecycle.
@@ -12210,33 +12367,31 @@ for line in sys.stdin:
     private func waitForThreadReads(
         _ client: CodexAppServerStub,
         atLeast expectedCount: Int
-    ) async throws {
-        for _ in 0..<200 {
-            if await client.requestCount(method: "thread/read") >= expectedCount {
-                return
-            }
-            try await Task.sleep(nanoseconds: 5_000_000)
+    ) async {
+        let arrived = await holds {
+            await client.requestCount(method: "thread/read") >= expectedCount
         }
-        Issue.record("Expected at least \(expectedCount) thread/read requests")
+        if !arrived {
+            Issue.record("Expected at least \(expectedCount) thread/read requests")
+        }
     }
 
     private func waitForThreadListRequests(
         _ client: CodexAppServerStub,
         atLeast expectedCount: Int,
         completed: Bool = false
-    ) async throws {
-        for _ in 0..<200 {
+    ) async {
+        let arrived = await holds {
             let count = completed
                 ? await client.completedThreadListRequestCount()
                 : await client.requestCount(method: "thread/list")
-            if count >= expectedCount {
-                return
-            }
-            try await Task.sleep(nanoseconds: 5_000_000)
+            return count >= expectedCount
         }
-        Issue.record(
-            "Expected at least \(expectedCount) \(completed ? "completed " : "")thread/list requests"
-        )
+        if !arrived {
+            Issue.record(
+                "Expected at least \(expectedCount) \(completed ? "completed " : "")thread/list requests"
+            )
+        }
     }
 
     private var legacyManagedHookScript: String {
@@ -13596,7 +13751,7 @@ extension CodexInNotchTests {
         // gate starts its settling window.
         let first = await service.fetchSnapshot(showsContentPreviews: false)
         #expect(first.sessions.count == 1, "the row renders before metadata lands")
-        try await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        await waitForThreadListRequests(client, atLeast: 1, completed: true)
 
         // Second pass, past the settling window but well inside every other
         // window, so the only deadline that could be stale is the gate's.

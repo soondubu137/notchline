@@ -62,6 +62,9 @@ final class HookPreviewChannel: @unchecked Sendable {
     /// The helper connects, writes once and closes, so anything slower is a
     /// client that has stopped making progress. It must be well inside the
     /// hook's own 3s budget on the other side.
+    ///
+    /// This only bounds anything on a *blocking* descriptor -- see
+    /// ``receiveMessage(on:)``, which is where that is made true.
     nonisolated private static let receiveTimeoutMicroseconds: Int32 = 250_000
 
     /// How many unclaimed previews are held before the oldest is dropped.
@@ -260,6 +263,24 @@ final class HookPreviewChannel: @unchecked Sendable {
 
     nonisolated private func receiveMessage(on descriptor: Int32) {
         defer { close(descriptor) }
+
+        // Darwin hands `accept` a descriptor that inherits the listening
+        // socket's file status flags, and the listening socket is `O_NONBLOCK`
+        // so the accept handler can drain its backlog rather than park on the
+        // next connection. Inherited here that is a silent data loss: a client
+        // that has connected but whose write has not landed yet makes `read`
+        // fail with `EAGAIN`, which the loop below cannot tell from the end of
+        // a message, so the preview is dropped for good instead of waited for.
+        //
+        // The helper connects and writes in one breath, so the two are normally
+        // already separated by the time this runs -- which is why this only
+        // ever showed up on a loaded machine, as a Turn whose preview never
+        // appeared and never would (CC-023). Clearing the flag is what makes
+        // the receive timeout below the thing that bounds this.
+        let flags = fcntl(descriptor, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(descriptor, F_SETFL, flags & ~O_NONBLOCK)
+        }
 
         var timeout = timeval(
             tv_sec: 0,
