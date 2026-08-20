@@ -631,7 +631,9 @@ ADR 0004 的精确导航门槛只约束 Codex：目前没有任何受支持的�
    | 用户点 Allow | 之后每次点击 0.06–0.14s 返回 `focusedTerminal(host: "Terminal")`；Terminal 拿到前台，且 `/dev/ttys015` 的访问时间在那一刻前进——**被选中的是那一个标签页，不只是那个应用** |
    | 用户点 Don't Allow | 同一进程内后两次点击 0.03s / 0.09s 返回 `raisedApplication`；再起两个全新进程各点三次，六次全部 0.01–0.02s 返回 `raisedApplication`，**不弹第二次窗、不报错**，Terminal 仍被带到前台 |
 
-   系统弹窗的原文（模板取自 `TCC.framework` 的 `REQUEST_ACCESS_SERVICE_kTCCServiceAppleEvents`，两个 `%@` 填入两侧应用名，末尾接本应用的 `NSAppleEventsUsageDescription`）：
+   桌面端那一半单独验过（`claude` pid 94822）：祖先链答 `desktop(com.anthropic.claudefordesktop, pid 24014)`——拿到的是应用本身而不是 `disclaimer` helper，即上面第 3 条那个「取最高的那个祖先」在真机上成立。两次点击都在 0.00s 返回 `raisedApplication(host: "Claude Desktop")`，前台应用从 Chrome 变成 Claude Desktop，`NSRunningApplication.activate()` 这一步没有退到 Launch Services 兜底。
+
+   系统弹窗的原文（模板取自 `TCC.framework` 的 `REQUEST_ACCESS_SERVICE_kTCCServiceAppleEvents`，两个 `%@` 填入两侧应用名，末尾接本应用的 `NSAppleEventsUsageDescription`）。**前半句是实测抄下来的原文；末尾那句按下面这版用途说明重排过**——实测当天用的还是中文那版，此后随全局英文化改写，模板部分一字未动：
 
    > “CodexInNotch.app” wants access to control “Terminal.app”. Allowing control will provide access to documents and data in “Terminal.app”, and to perform actions within that app. Codex in Notch uses this to bring the terminal tab running a Claude Code session to the front when you click its row.
 
