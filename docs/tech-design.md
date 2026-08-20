@@ -598,7 +598,7 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 
 **在场与行必须出自同一份证据。** 上一段的「行不随在场一起退休」有个前提，写在同一处：由界面通过转入 `Disconnected` 来退役它们。界面此前没有履行这一半——`MonitorAggregation.status` 先看行、后看在场，于是一个标记已经从刘海上撤掉的产品（在场为未知，矩阵不画），行里仍然写着 `Running`。用户看到的正是 Claude Code「掉线并消失、但仍在跑」。`ClaudeCodeMonitorService` 因此在 `presence` 不为 `open` 时不上报任何行；列表本身没有被丢弃，只是被扣住，下一次成功读取立刻恢复，不必等任何 Hook。
 
-**本应用自己的额度读取不算用户的会话。** `claude -p "/usage"` 在运行的那一两秒里是一个真实的 Claude Code 会话，`claude agents --json` 报的 `kind` 就是 `interactive`——和人开的会话一字不差（实测 2.1.234，2026-08-18），唯一能区分两者的是它运行在哪个目录。这带来两个后果。它的 transcript 里有两条 `user` 记录而**一条 `assistant` 记录都没有**（斜杠命令根本不到模型，`num_turns: 0`），因此永远不会出现结束一个轮次所需的 `stop_reason`，`ClaudeCodeTranscriptReader.currentTurn` 会把它重建成 *Running*：一行以本应用自己的文件夹命名的、状态为运行中的行，而且它活的时间不是子进程的一两秒，而是会话列表缓存的一整个新鲜度窗口。更要紧的是它**回答在场**——一个根本没开 Claude Code 的用户，会因为本应用刚刚自己跑了一次 `claude`，每五分钟看到该产品在刘海里亮起来一次。
+**本应用自己的额度读取不算用户的会话。** `claude -p "/usage"` 在运行的那一两秒里是一个真实的 Claude Code 会话，`claude agents --json` 报的 `kind` 就是 `interactive`——和人开的会话一字不差（实测 2.1.234，2026-08-18），唯一能区分两者的是它运行在哪个目录。要紧的是它**回答在场**——一个根本没开 Claude Code 的用户，会因为本应用刚刚自己跑了一次 `claude`，每五分钟看到该产品在刘海里亮起来一次。（它曾经还多花一行：那份 transcript 里有两条 `user` 记录而**一条 `assistant` 记录都没有**（斜杠命令根本不到模型，`num_turns: 0`），因此永远不会出现结束一个轮次所需的 `stop_reason`，当时的启动前重建会把它读成一行以本应用自己的文件夹命名的 *Running*，且活满一整个新鲜度窗口。重建已移除，这条过滤如今只为在场服务。）
 
 因此该目录由 `HookIntegrationPaths.quotaWorkingDirectory` 统一命名，交给三个协作者：额度读取钉在它上面、会话注册表把它排除、Hook listener 丢弃带着它的事件。排除放在注册表而不是界面，因为在场是在注册表里决定的：事后再丢掉那一行，产品仍然已经被报告为「打开」。listener 那一半今天是冗余——`-p` 的斜杠命令实测不触发任何 hook——但仍然接上：「不触发 hook」是别人那条命令的性质，不是对本应用的承诺。
 

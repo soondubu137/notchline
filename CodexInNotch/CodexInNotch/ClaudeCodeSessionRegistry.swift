@@ -91,12 +91,9 @@ nonisolated struct ClaudeCodeActivity: Sendable, Equatable {
 /// Even so it is not turn state. It names no turn, so it can only ever end the
 /// one the reducer is already holding -- see ``ClaudeCodeActivity``.
 ///
-/// It matters more here than the equivalent would on the Codex side, for two
-/// reasons. It is the only way a row whose session died can be retired, because
-/// `SessionEnd` is deliberately not registered — see
-/// ``ClaudeCodeHookVocabulary``. And it is what makes cold start possible at
-/// all: Codex has no supported way to ask what is happening right now, so the
-/// product shows nothing from before launch; Claude Code does.
+/// It matters more here than the equivalent would on the Codex side: it is the
+/// only way a row whose session died can be retired, because `SessionEnd` is
+/// deliberately not registered — see ``ClaudeCodeHookVocabulary``.
 ///
 /// **The question is which sessions the *user* has, not which exist.** This
 /// app's own quota reading is a Claude Code session too, and the command
@@ -385,17 +382,19 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     ///
     ///   `claude -p "/usage"` is a real Claude Code session for the second or so
     ///   it runs, and `claude agents --json` reports it as `kind: "interactive"`,
-    ///   exactly as it reports a human's (measured on 2.1.234, 2026-08-18).
-    ///   Two things followed. Its transcript carries two `user` records and
-    ///   **no `assistant` record at all** — a slash command never reaches the
-    ///   model, `num_turns: 0` — so nothing ever supplies the `stop_reason`
-    ///   that ends a turn, and
-    ///   ``ClaudeCodeTranscriptReader/currentTurn(forSession:workingDirectory:)``
-    ///   reconstructs it as *Running*: a row named after this app's own folder,
-    ///   held for as long as the list is cached rather than for as long as the
-    ///   subprocess lives. And it answers presence, so a user with no Claude
-    ///   Code open at all had the product light up in the notch every five
-    ///   minutes because this app had just run `claude` itself.
+    ///   exactly as it reports a human's (measured on 2.1.234, 2026-08-18). It
+    ///   therefore **answers presence** — a user with no Claude Code open at all
+    ///   had the product light up in the notch every five minutes because this
+    ///   app had just run `claude` itself.
+    ///
+    ///   It used to cost a row as well. Its transcript carries two `user`
+    ///   records and **no `assistant` record at all** — a slash command never
+    ///   reaches the model, `num_turns: 0` — so nothing ever supplied the
+    ///   `stop_reason` that ends a turn, and the cold-start reconstruction read
+    ///   that as a *Running* turn named after this app's own folder, held for a
+    ///   whole freshness window against a subprocess that lived a second or
+    ///   two. That reconstruction has been removed, so this filter now answers
+    ///   presence alone.
     ///
     ///   Filtered here rather than at the surface because presence is decided
     ///   here: a consumer that dropped the row afterwards would still have been

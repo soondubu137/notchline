@@ -348,11 +348,11 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 
 ### 6.3 会话发现：事件驱动，不轮询
 
-- 启动时执行一次 `claude agents --json`，建立已有会话集合。**这就直接解决了 Codex 侧的冷启动能力边界**——不需要等待下一个生命周期事件。
+- 启动时执行一次 `claude agents --json`，建立已有会话集合。~~**这就直接解决了 Codex 侧的冷启动能力边界**——不需要等待下一个生命周期事件。~~ **这一条已被实现否决（2026-08-19）。** 会话列表只答「有哪些会话」，轮次状态要靠 transcript 补；而等待用户期间 transcript 不写入任何东西，重建出的轮次因此只可能是 *Running*，启动瞬间停在权限请求上的会话被画成正在干活。启动前一律不显示如今是两个产品共同的规则，见 [`PRD.md`](../../PRD.md) 第 3 节与 [`system-architecture.md` §2.1](../../system-architecture.md#21-启动边界不做现状同步)。
 - 用 `DispatchSourceFileSystemObject` 监听 `~/.claude/sessions/` 目录 + 250 ms debounce（该模式在 [`CodexDesktopUnreadState.swift`](../../../CodexInNotch/CodexInNotch/CodexDesktopUnreadState.swift) 已有实现），变化时再执行一次 `claude agents --json` 复核。
 - 目录内容格式**不解析**，只当作“该复核了”的信号。权威数据永远来自官方命令。这样即使私有文件 schema 变化，最坏结果是复核触发变迟钝，退化到启动时的一次快照，而不是错误状态。
 
-启动时会话的状态未知，可以按 [`CONTEXT.md`](../../../CONTEXT.md) 已定义的**未知（Unknown）**发布，等第一个 Hook 事件收敛为四态之一。这比 Codex 侧“启动前会话一律不显示”严格更好。
+启动时会话的状态未知，可以按 [`CONTEXT.md`](../../../CONTEXT.md) 已定义的**未知（Unknown）**发布，等第一个 Hook 事件收敛为四态之一。这比 Codex 侧“启动前会话一律不显示”严格更好。**——同样已被否决（2026-08-19）：一行状态未知的会话回答不了「谁在等我」，而这正是本产品存在的理由；两侧现在都是「启动前一律不显示」。**
 
 ### 6.4 被否决的路线
 

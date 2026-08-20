@@ -8958,15 +8958,19 @@ for line in sys.stdin:
         }
     }
 
-    /// A session running before the app was is visible immediately.
+    /// A session already running when the app started shows no row.
     ///
-    /// This is the asymmetry with Codex, and it is deliberate: Codex has no
-    /// supported way to ask what is happening right now, so the product shows
-    /// nothing from before launch. Claude Code writes it down, and the product
-    /// exists to answer "what wants me *now*" — an answer of "I don't know
-    /// yet" for the first minute after launch is the wrong one.
+    /// This used to be the one asymmetry with Codex, and it was deliberate:
+    /// Claude Code writes its turn down, so the transcript could name a turn in
+    /// flight and the product drew it as *Running*. That is what was wrong with
+    /// it. Nothing is written while a turn sits waiting on the user, so a
+    /// session parked on a permission prompt when the app launched read exactly
+    /// like one doing work -- and "who wants me now" is the question the whole
+    /// product answers. The reconstruction was removed rather than narrowed:
+    /// the file cannot tell the two apart at all, so there is no narrower
+    /// version of it to keep, and both products now share one startup rule.
     @Test @MainActor
-    func aTurnRunningBeforeLaunchIsReconstructedAsRunning() async throws {
+    func aTurnRunningBeforeLaunchIsNotShown() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
         try harness.registerHooks()
@@ -8981,21 +8985,34 @@ for line in sys.stdin:
             ["type": "assistant",
              "message": ["role": "assistant", "stop_reason": "tool_use"]]
         ])
-        harness.live = [harness.session(id: "older", cwd: cwd)]
+        // Reporting `busy`, which is as close as anything gets to proving the
+        // turn is real -- and still not enough, because it names no turn.
+        harness.live = [
+            harness.session(id: "older", cwd: cwd, activity: .busy, observedAt: 200)
+        ]
 
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
-        let row = try #require(snapshot.sessions.first)
-        #expect(row.threadID == "older")
-        // The same id the hooks use, so the first real event addresses this
-        // turn rather than opening a second one beside it.
-        #expect(row.turnID == "p-1")
-        // Only ever Running: nothing is written while a turn waits on the user,
-        // so a reconstruction cannot tell a wait from work.
-        #expect(row.status == .running)
-        // The true submit moment, which is more than the Codex side can
-        // recover for a turn it did not watch start.
-        #expect(row.startedAt == ISO8601DateFormatter().date(from: "2026-08-16T10:00:00Z"))
-        #expect(row.title == "Doing the thing")
+        #expect(await harness.service
+            .fetchSnapshot(showsContentPreviews: true).sessions.isEmpty)
+
+        // A finished transcript is no different, and never was.
+        try harness.writeTranscript(session: "older", cwd: cwd, records: [
+            ["type": "user", "promptId": "p-1",
+             "timestamp": "2026-08-16T10:00:00.000Z",
+             "message": ["role": "user", "content": "do the thing"]],
+            ["type": "assistant",
+             "message": ["role": "assistant", "stop_reason": "end_turn"]]
+        ])
+        #expect(await harness.service
+            .fetchSnapshot(showsContentPreviews: true).sessions.isEmpty)
+
+        // The first real event is what opens the row, exactly as on the Codex
+        // side -- and it opens one, rather than a second one beside a row that
+        // was never there.
+        try harness.queue(event: "UserPromptSubmit", session: "older", turn: "p-2", at: 300)
+        let live = await harness.service.fetchSnapshot(showsContentPreviews: true)
+        #expect(live.sessions.count == 1)
+        #expect(try #require(live.sessions.first).turnID == "p-2")
+        #expect(try #require(live.sessions.first).status == .running)
     }
 
     /// A session coming or going wakes the product and tells the list.
@@ -9098,27 +9115,6 @@ for line in sys.stdin:
         )
     }
 
-    /// A finished turn from before launch stays invisible.
-    @Test @MainActor
-    func aTurnThatEndedBeforeLaunchIsNotReconstructed() async throws {
-        let harness = try ClaudeCodeHarness()
-        defer { harness.tearDown() }
-        try harness.registerHooks()
-
-        let cwd = "/Users/someone/Projects/thing"
-        try harness.writeTranscript(session: "done", cwd: cwd, records: [
-            ["type": "user", "promptId": "p-1",
-             "timestamp": "2026-08-16T10:00:00.000Z",
-             "message": ["role": "user", "content": "do the thing"]],
-            ["type": "assistant",
-             "message": ["role": "assistant", "stop_reason": "end_turn"]]
-        ])
-        harness.live = [harness.session(id: "done", cwd: cwd)]
-
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
-        #expect(snapshot.sessions.isEmpty)
-    }
-
     /// A product that is no longer known to be open shows no rows either.
     ///
     /// The two channels have to agree, and they did not. The registry goes on
@@ -9140,13 +9136,7 @@ for line in sys.stdin:
         try harness.registerHooks()
 
         let cwd = "/Users/someone/Projects/thing"
-        try harness.writeTranscript(session: "live", cwd: cwd, records: [
-            ["type": "user", "promptId": "p-1",
-             "timestamp": "2026-08-16T10:00:00.000Z",
-             "message": ["role": "user", "content": "do the thing"]],
-            ["type": "assistant",
-             "message": ["role": "assistant", "stop_reason": "tool_use"]]
-        ])
+        try harness.queue(event: "UserPromptSubmit", session: "live", turn: "p-1", at: 100)
         harness.live = [harness.session(id: "live", cwd: cwd)]
 
         let connected = await harness.service.fetchSnapshot(showsContentPreviews: true)
@@ -9180,33 +9170,6 @@ for line in sys.stdin:
         let regained = await harness.service.fetchSnapshot(showsContentPreviews: true)
         #expect(regained.presence == .open)
         #expect(regained.sessions.count == 1)
-    }
-
-    /// A real event always outranks a reconstruction, including when it says
-    /// the turn is over.
-    @Test @MainActor
-    func aReducerTurnOverridesWhatTheTranscriptWouldHaveSaid() async throws {
-        let harness = try ClaudeCodeHarness()
-        defer { harness.tearDown() }
-        try harness.registerHooks()
-
-        let cwd = "/Users/someone/Projects/thing"
-        // The transcript still looks mid-turn...
-        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
-            ["type": "user", "promptId": "p-1",
-             "timestamp": "2026-08-16T10:00:00.000Z",
-             "message": ["role": "user", "content": "go"]],
-            ["type": "assistant",
-             "message": ["role": "assistant", "stop_reason": "tool_use"]]
-        ])
-        // ...but events say that turn started and then stopped.
-        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
-        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
-        harness.live = [harness.session(id: "s-1", cwd: cwd)]
-
-        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: true)
-        #expect(snapshot.sessions.count == 1)
-        #expect(try #require(snapshot.sessions.first).status == .completed)
     }
 
     /// Reading the answer in Claude Desktop takes the row off the notch.
@@ -10100,57 +10063,6 @@ for line in sys.stdin:
         ]
         let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
         #expect(try #require(ended.sessions.first).status == .completed)
-    }
-
-    /// A session interrupted before this app launched reconstructs as nothing.
-    ///
-    /// The cold-start reader answers *which* turn and *when* it started, and it
-    /// reads a turn as unfinished whenever a `user` record is the last thing in
-    /// the file. An interrupt is written as exactly that -- an ordinary `user`
-    /// record carrying the interrupted turn's prompt id -- so the transcript on
-    /// its own reconstructs a turn nobody is running (CC-019). The session says
-    /// otherwise, and it is the half the file cannot honestly give.
-    @Test @MainActor
-    func aTurnInterruptedBeforeLaunchIsNotReconstructed() async throws {
-        let harness = try ClaudeCodeHarness()
-        defer { harness.tearDown() }
-        try harness.registerHooks()
-
-        let cwd = "/Users/someone/Projects/thing"
-        let records: [[String: Any]] = [
-            ["type": "user", "promptId": "p-1",
-             "timestamp": "2026-08-16T10:00:00.000Z",
-             "message": ["role": "user", "content": "do the thing"]],
-            ["type": "assistant",
-             "message": ["role": "assistant", "stop_reason": "tool_use"]],
-            // What the CLI writes for an interrupt: same prompt id, no marker
-            // this app is allowed to read, and the reader has to call it
-            // unfinished.
-            ["type": "user", "promptId": "p-1",
-             "timestamp": "2026-08-16T10:00:09.000Z",
-             "message": ["role": "user",
-                         "content": [["type": "text", "text": "[Request interrupted by user]"]]]]
-        ]
-        try harness.writeTranscript(session: "older", cwd: cwd, records: records)
-
-        harness.live = [
-            harness.session(id: "older", cwd: cwd, activity: .idle, observedAt: 200)
-        ]
-        #expect(await harness.service.fetchSnapshot(showsContentPreviews: true).sessions.isEmpty)
-
-        // Still working, so the reconstruction is exactly what it always was.
-        harness.live = [
-            harness.session(id: "older", cwd: cwd, activity: .busy, observedAt: 200)
-        ]
-        let running = await harness.service.fetchSnapshot(showsContentPreviews: true)
-        #expect(try #require(running.sessions.first).turnID == "p-1")
-        #expect(try #require(running.sessions.first).status == .running)
-
-        // And a session that reports nothing reconstructs as it did before any
-        // of this existed -- the desktop case (#41).
-        harness.live = [harness.session(id: "older", cwd: cwd)]
-        let quiet = await harness.service.fetchSnapshot(showsContentPreviews: true)
-        #expect(try #require(quiet.sessions.first).status == .running)
     }
 
     /// A record rewritten in place wakes the product, and only while it matters.
@@ -11176,14 +11088,11 @@ for line in sys.stdin:
     /// word it uses for a human's, so the working directory is the only thing
     /// that separates them (measured on 2.1.234, 2026-08-18).
     ///
-    /// Both halves matter. Left in the list it becomes a row named after this
-    /// app's own folder — see
-    /// `theQuotaReadingsOwnTranscriptLooksLikeARunningTurn` for why that row
-    /// says *Running* — and it answers presence, so a user with no Claude Code
-    /// open at all had the product light up in the notch every five minutes
-    /// because this app had just run `claude` itself. The second is why the
-    /// filter belongs here and not at the surface: dropping the row later would
-    /// still leave the product reported as open.
+    /// It answers presence, which is the half that bites: a user with no Claude
+    /// Code open at all had the product light up in the notch every five
+    /// minutes because this app had just run `claude` itself. That is also why
+    /// the filter belongs here and not at the surface — dropping the row later
+    /// would still leave the product reported as open.
     @Test @MainActor
     func theAppsOwnQuotaReadingIsNotCountedAsASessionOrAsPresence() async {
         let quota = URL(fileURLWithPath: "/Users/someone/Library/Application Support/CodexInNotch/agents/claudeCode/usage")
@@ -11221,63 +11130,6 @@ for line in sys.stdin:
         """.utf8)])
         let unfiltered = ClaudeCodeSessionRegistry(read: { await responses.next() })
         #expect(await unfiltered.liveSessions().count == 1)
-    }
-
-    /// The quota reading's own transcript never stops looking mid-turn.
-    ///
-    /// This is why excluding it from the session list is not tidiness. A
-    /// slash command reaches no model — `num_turns: 0` — so the transcript it
-    /// leaves carries `user` records and **no `assistant` record at all**, and
-    /// nothing ever supplies the `stop_reason` that ends a turn. The
-    /// reconstruction that exists to show a session running since before
-    /// launch therefore reports this one as running, for as long as the
-    /// session list still holds it — up to a full freshness window, against a
-    /// subprocess that lived a second or two.
-    ///
-    /// Records captured from a real reading on 2.1.234, 2026-08-18.
-    @Test @MainActor
-    func theQuotaReadingsOwnTranscriptLooksLikeARunningTurn() async throws {
-        let root = URL(fileURLWithPath: "/tmp")
-            .appendingPathComponent("cin-quota-\(UUID().uuidString.prefix(8))")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let projects = root.appendingPathComponent("projects", isDirectory: true)
-        let cwd = "/Users/someone/Library/Application Support"
-            + "/CodexInNotch/agents/claudeCode/usage"
-        let project = projects.appendingPathComponent(
-            cwd.replacingOccurrences(of: "/", with: "-"),
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(
-            at: project,
-            withIntermediateDirectories: true
-        )
-
-        let records: [[String: Any]] = [
-            ["type": "queue-operation", "timestamp": "2026-08-19T03:15:11.893Z"],
-            ["type": "user", "promptId": "q-1",
-             "timestamp": "2026-08-19T03:15:12.115Z",
-             "message": ["role": "user", "content": "/usage"]],
-            ["type": "user", "promptId": "q-1",
-             "timestamp": "2026-08-19T03:15:11.902Z",
-             "message": ["role": "user", "content": "/usage"]],
-            ["type": "system", "timestamp": "2026-08-19T03:15:12.114Z"],
-            ["type": "last-prompt"]
-        ]
-        let lines = try records.map {
-            String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self)
-        }
-        try Data((lines.joined(separator: "\n") + "\n").utf8)
-            .write(to: project.appendingPathComponent("q.jsonl"))
-
-        let reader = ClaudeCodeTranscriptReader(projectsDirectory: projects)
-        let turn = await reader.currentTurn(
-            forSession: "q",
-            workingDirectory: URL(fileURLWithPath: cwd)
-        )
-
-        let reconstructed = try #require(turn)
-        #expect(reconstructed.turnID == "q-1")
-        #expect(reconstructed.isUnfinished)
     }
 
     /// Somebody else's log line does not cost the whole session list.

@@ -244,6 +244,8 @@ flowchart LR
 
 **启动不做现状同步。** 会话只能由本次启动之后收到的 Hook 创建；启动前正在运行、已完成未读或等待审批的会话一律无视，直到它们产生下一个 lifecycle 事件。这是能力边界而非取舍：实测（CLI `0.148.0-alpha.9`，真实运行中的 Turn）表明独立 App Server 的 `thread/loaded/list` 为空、Thread 恒为 `notLoaded`、`thread/list` 契约上不返回 `turns`、`thread/read` 也从不出现 `inProgress`，因此不存在任何受支持的读取能回答“Desktop 此刻在做什么”。
 
+**Claude Code 侧同一条规则，理由不同。** 那一侧读得出来：`claude agents --json` 给出存在哪些会话，transcript 尾部给出其中哪些仍在轮次中，产品也一度据此重建启动前的行（`ClaudeCodeTranscriptReader.currentTurn`，2026-08-19 移除）。移除的理由不是成本，而是这份答案在最要紧的地方是错的：**等待用户期间 transcript 一个字都不写**，因此重建出的轮次只可能是 *Running*，启动瞬间正停在权限请求上的会话被画成正在干活。文件分不开「在等」与「在做」，猜哪一边都是伪造状态（§7 第 5、6 条），也就不存在一个更窄的版本可留。代价是那些会话要等下一个 lifecycle 事件才出现，与 Codex 侧相同；换回来的是启动边界在两个产品上是同一句话，而不是一侧的例外。
+
 独立 App Server 与 Desktop 不共享进程内事件流，也没有任何受支持的读取能观察 Desktop 当前运行时，因此启动不产生会话；启动后的 Hook 是会话的唯一来源。完整共享运行时仍属于 [`technical-explorations/shared-app-server/README.md`](technical-explorations/shared-app-server/README.md) 中的后续探索——只有在那类拓扑成立后才值得重新讨论启动同步，且不能建立在 `status` 或 `inProgress` 之上。在任何拓扑下都不得用启动 cutoff 之前的事件补齐当前状态。
 
 ## 3. 单会话状态收敛

@@ -16,16 +16,24 @@ enum AgentSetupError: LocalizedError, Equatable {
 
 /// Watches Claude Code, and is one of the products the notch summarises.
 ///
-/// Deliberately much smaller than the Codex service. Three of the things that
-/// one has to do are simply absent here: there is no app-server subprocess to
-/// run and keep alive, because session identity comes from a documented command;
-/// there is no helper script to install and upgrade, because the product posts
-/// to this app directly; and there is no cold-start blindness to work around,
-/// because Claude Code can be asked what exists right now.
+/// Deliberately much smaller than the Codex service. Two of the things that one
+/// has to do are simply absent here: there is no app-server subprocess to run
+/// and keep alive, because session identity comes from a documented command;
+/// and there is no helper script to install and upgrade, because the product
+/// posts to this app directly.
 ///
-/// What replaces them is one thing the Codex side never has to think about:
+/// What replaces the two is one thing the Codex side never has to think about:
 /// this product's registration belongs to the user. The app reads it, reports
 /// on it, and cannot repair it — see ADR 0010.
+///
+/// The startup boundary, though, is the same on both sides: nothing that
+/// happened before this app launched is ever shown. Claude Code's transcript
+/// can name a turn already in flight and this service used to read it, which
+/// was the one place the two products genuinely differed in what they could
+/// know. It was removed. A turn waiting on the user writes nothing at all, so
+/// the reconstruction could only ever say Running -- a session parked on a
+/// permission prompt when the app started was drawn as working, and telling a
+/// wait from work is precisely what the product is for.
 actor ClaudeCodeMonitorService: AgentMonitoring {
     nonisolated let agent = AgentKind.claudeCode
     nonisolated let stateChangeEvents: AsyncStream<Void>
@@ -423,7 +431,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         }
 
         var rows: [MonitoredSession] = []
-        var accountedFor: Set<String> = []
         // Each row's last moment, keyed the way the rows are. Only a finished
         // row uses it, and for that row it is the instant the Turn ended -- the
         // event that ended it, or the reading that found the session no longer
@@ -434,7 +441,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // A turn whose session is gone is gone. This is the whole reason
             // the session list is load-bearing rather than a convenience.
             guard let session = liveByID[turn.threadID] else { continue }
-            accountedFor.insert(turn.threadID)
             let built = row(
                 for: turn,
                 in: session,
@@ -445,55 +451,21 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             rows.append(built)
         }
 
-        // Sessions the reducer has never heard of: either they were running
-        // before this app was, or their hooks were registered after they
-        // started. Codex has no way to ask about those and shows nothing; here
-        // the transcript can be read, which is the one place the two products
-        // genuinely differ in what they can know.
+        // A session the reducer has never heard of contributes no row --
+        // whether it was already running when this app started, or its hooks
+        // were registered after it began. The transcript can name the turn such
+        // a session is part-way through, and for a while the product read it;
+        // that reconstruction was removed rather than extended.
         //
-        // The reducer always wins where it has an opinion, including when that
-        // opinion is Completed — a real event outranks a reconstruction.
-        for session in liveByID.values where !accountedFor.contains(session.sessionID) {
-            // A session that says it has stopped working is not mid-turn,
-            // whatever its transcript looks like -- and after an interrupt the
-            // transcript looks exactly like a turn still in flight, because the
-            // record the CLI writes for one is an ordinary `user` record
-            // carrying the interrupted turn's prompt id (CC-019). The
-            // transcript answers *which* turn and *when* it started; the
-            // session answers whether it is still going, which is the half the
-            // file cannot honestly give.
-            //
-            // Fail-closed on silence: a session reporting no activity at all --
-            // every desktop-hosted one (#41), and any older CLI -- is
-            // reconstructed exactly as it was before.
-            guard session.activity?.isWorking != false else { continue }
-            guard let reconstructed = await transcripts.currentTurn(
-                forSession: session.sessionID,
-                workingDirectory: session.workingDirectory
-            ) else { continue }
-            rows.append(
-                MonitoredSession(
-                    agent: .claudeCode,
-                    threadID: session.sessionID,
-                    // The same id the hooks use, so the first real event
-                    // addresses this turn rather than opening a second one.
-                    turnID: reconstructed.turnID,
-                    projectName: projectName(for: session),
-                    title: await title(for: session) ?? "Untitled",
-                    privacySafeTitle: "Untitled",
-                    // A reconstructed turn started before this app did, so the
-                    // deltas that would have described it were never sent. It
-                    // gets a preview from the first message printed after we
-                    // began listening, and nothing before then.
-                    preview: preview(for: session),
-                    // Only ever Running. Nothing is written while a turn waits
-                    // on the user, so a reconstruction cannot tell a wait from
-                    // work -- and guessing which would be inventing a state.
-                    status: .running,
-                    startedAt: reconstructed.startedAt
-                )
-            )
-        }
+        // Nothing is written to the transcript while a turn waits on the user,
+        // so a reconstructed row could only ever be Running -- and a session
+        // that was in fact sitting on a permission prompt when this app
+        // launched was therefore shown as working, which is the one answer the
+        // product exists to get right. The alternative was to guess between
+        // waiting and working, which §6.2 forbids outright. So "anything from
+        // before launch is invisible" is now one sentence covering both
+        // products, rather than a capability one of them happens to have.
+
         rows.sort(by: MonitorAggregation.rowOrder)
         let read = await rowsStillWorthShowing(
             rows,
@@ -739,10 +711,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         }
 
         for row in rows {
-            // Every hook-driven row carries one. The fallback is for a
-            // reconstructed row, which is only ever Running and therefore only
-            // ever clears a gate entry -- the value it clears with is not read.
-            let boundary = boundaryByRowID[row.id] ?? row.startedAt ?? clock.now()
+            // Every row carries one: rows come only from the reducer, and
+            // the reducer stamps every turn with its last event. The fallback
+            // is a fail-closed default rather than a case -- an unknown
+            // boundary is read as "ended just now", so nothing can be judged
+            // already read on a boundary nobody supplied.
+            let boundary = boundaryByRowID[row.id] ?? clock.now()
             let state = readState.readState(
                 forSession: row.threadID,
                 terminalBoundaryAt: boundary
