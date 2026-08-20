@@ -32,6 +32,16 @@ nonisolated struct ManagedHooksFileEditor: Sendable {
     // MARK: - Install
 
     func install() throws {
+        // Already exactly right, so there is nothing to write. Writing anyway
+        // would reformat a file this app does not own, and it would renumber
+        // the groups under every event it touches: Codex keys hook trust by
+        // `<path>:<event>:<group index>:<handler index>` — measured on
+        // 2026-08-20 — so a rewrite that moves a group moves the *user's* own
+        // definitions out from under their trust. `remove()` has had this guard
+        // for the same reason; `install()` did not, so turning the integration
+        // switch on over a correct configuration rewrote it.
+        if isInstalled() { return }
+
         try fileManager.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true

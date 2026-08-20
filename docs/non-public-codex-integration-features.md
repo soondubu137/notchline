@@ -6,6 +6,8 @@
 
 “官方公开支持”包括官方文档和公开 schema 中定义的 App Server、Codex Hooks、CLI/SDK 接口、Desktop deep link，以及实现中使用的 macOS 公共 API。仅仅没有通过 App Server 实现，不构成登记理由。官方 [Codex Hooks](https://learn.chatgpt.com/docs/hooks) 明确公开 lifecycle 事件、`hooks.json` 配置位置和信任流程；官方 [Commands](https://learn.chatgpt.com/docs/reference/commands#deep-links) 公开 Desktop deep link，这些能力不列入本表。
 
+**一条明确不登记的观察，写在这里以免以后重新推导。** 2026-08-20 实测 `config.toml` 中信任记录的 key 形状为 `<hooks.json 路径>:<snake_case 事件名>:<group 下标>:<handler 下标>`，第三、四段都是数组下标。这属于私有细节，但**没有任何 feature 读它**：本应用的两条合并规则（只在尾部追加、已经正确的安装不写文件）在这条观察成立与否时都正确，只是知道它之后能说清楚它们为什么是对用户自己的定义有承载作用的（见 [ADR 0014](adr/0014-the-codex-hook-definition-is-never-rewritten.md)）。按 `AGENTS.md` §8.1「不因为没走 App Server 就登记」，也按同一条的「必须是 feature 依赖了私有细节」，这里没有可登记的行。真要精确报告每条定义的信任状态就得去读这个 key，那是一个 ADR 级别的决定，并且会在本表新增一行。
+
 ## Codex Feature 清单
 
 | Feature | 这个 feature 是什么 | 为什么官方公开支持的接口无法实现 | 实现方法 | 依赖级别与失效信号 | 代码定位 |

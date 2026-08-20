@@ -84,16 +84,7 @@ actor ClaudeCodeHookSetup {
     /// every event prints the one thing this whole transport exists to avoid.
     @discardableResult
     func prepareHelper() -> Bool {
-        // Our own leaving, from when there was something to remember. The
-        // marker held the minted port and token so the instructions would not
-        // change every time the panel was opened; the helper's path is derived
-        // rather than minted, so nothing on this side has anything to remember
-        // any more. Removing it also takes a stale token off the disk. This
-        // app's own file, in this app's own directory -- the Codex installer
-        // still writes its own under `agents/codex/`, which this cannot reach.
-        try? fileManager.removeItem(at: paths.installMarker)
-
-        let desired = Self.helperScript(socketPath: paths.hookSocket.path)
+        let desired = AgentHookHelper.script(socketPath: paths.hookSocket.path)
         if let installed = try? String(contentsOf: paths.hookHelper, encoding: .utf8),
            installed == desired,
            fileManager.isExecutableFile(atPath: paths.hookHelper.path) {
@@ -110,74 +101,34 @@ actor ClaudeCodeHookSetup {
                 [.posixPermissions: 0o700],
                 ofItemAtPath: paths.hookHelper.path
             )
+            // Whatever the queue-era install left in this folder. Nothing here
+            // is read or branched on -- it is a delete list, so an upgraded
+            // install does not keep an events directory and two state files
+            // nothing will ever open again.
+            for url in paths.retiredArtifacts
+            where fileManager.fileExists(atPath: url.path) {
+                try? fileManager.removeItem(at: url)
+            }
             return true
         } catch {
             return false
         }
     }
 
-    /// The helper, with its socket baked in.
-    ///
-    /// Deliberately the smallest thing that can carry one payload:
-    ///
-    /// - **It never speaks.** `exec >/dev/null 2>&1` covers the whole script,
-    ///   including the shell's own "not found" if `nc` is ever absent. Claude
-    ///   Code parses a hook's stdout for directives and prints its stderr, so
-    ///   silence on both streams is not tidiness — a helper that reported "the
-    ///   app is not running" would be exactly the noise this transport removes.
-    /// - **It always succeeds.** A non-zero exit is rendered as
-    ///   `<event> hook error` in an interactive session, so the `exit 0` is
-    ///   load-bearing on every path: no socket (the app is closed), a stale
-    ///   socket file, a refused connection, a missing `nc`.
-    /// - **It cannot hang.** `-w 1` bounds the case where this app has accepted
-    ///   the connection but wedged before reading it; without it `nc` waits for
-    ///   the peer indefinitely and the CLI's own `timeout` is all that ends it.
-    ///   Measured: 6.3 ms when the app is listening, 17 ms when it is not,
-    ///   1 s in the wedged case.
-    ///
-    /// `nc -U` rather than a compiled helper of our own because it is already
-    /// on every macOS and needs no target, no signing and no upgrade path. The
-    /// cost of the extra process is the difference between 6.3 ms and the
-    /// 4.1 ms a compiled equivalent measured — nothing, next to what it saves.
-    nonisolated static func helperScript(socketPath: String) -> String {
-        """
-        #!/bin/sh
-        # Codex in Notch — hands one Claude Code hook payload to the running app.
-        #
-        # Says nothing on any stream and always exits 0. Both are required: the
-        # CLI prints a line in the user's session for every hook that fails or
-        # writes to stderr, and no setting suppresses it.
-        exec >/dev/null 2>&1
-        /usr/bin/nc -U -w 1 \(Self.singleQuoted(socketPath))
-        exit 0
-
-        """
-    }
-
-    /// Wraps a path for `sh`, including one with a quote in it.
-    ///
-    /// A home directory is a user-chosen string and this one is pasted into a
-    /// script, so the escape is not decoration: `O'Brien` would otherwise end
-    /// the quoting and leave the rest of the path as shell words.
-    nonisolated static func singleQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     // MARK: - Reading what the user has done
 
     /// How complete the registration is, read-only.
+    ///
+    /// The same reading the Codex registrar makes of its own file, projected
+    /// through the same two facts. This product has no delivery evidence to
+    /// project against -- it cannot write the user's file (ADR 0010), so
+    /// "registered but never trusted" is not a state it can reach -- and a
+    /// complete registration is reported as connected directly.
     func status() -> HookSetupStatus {
-        guard let root = readSettings() else { return .notInstalled }
-        if configuration.isFullyInstalled(in: root) { return .active }
-        // Some of ours is there and some is not: a partial paste, a version of
-        // this app that registered a different set of events, or — for anyone
-        // who installed before this change — the `http` handler that named a
-        // port. Either way the user has to be told, because the missing events
-        // fail silently: no error, just a state the notch never learns about.
-        if ManagedHooksConfiguration.containsAnyMarker(of: configuration, in: root) {
-            return .repairRequired
-        }
-        return .notInstalled
+        HookSetupStatus.card(
+            registration: configuration.registration(in: readSettings()),
+            hasObservedEvent: true
+        )
     }
 
     // MARK: - Telling the user what to add
@@ -231,15 +182,8 @@ extension HookIntegrationPaths {
     nonisolated static func liveClaudeCode(
         fileManager: FileManager = .default
     ) -> HookIntegrationPaths {
-        let support = fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first?.appendingPathComponent("CodexInNotch", isDirectory: true)
-            ?? fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/CodexInNotch")
-
-        return HookIntegrationPaths(
-            supportDirectory: support,
+        HookIntegrationPaths(
+            supportDirectory: supportDirectory(fileManager: fileManager),
             hooksConfiguration: fileManager.homeDirectoryForCurrentUser
                 .appendingPathComponent(".claude/settings.json"),
             agent: .claudeCode

@@ -183,7 +183,7 @@ Disconnected 是全局集成健康问题，不能用于单会话。进入 Discon
 
 理由是这两句从头到尾没有对象。本产品整个跑在用户自己的机器上，**没有任何网络出口**——代码里一个 `URLSession` 都没有，仅有的 socket 是两个产品各自的 Unix domain socket，App Server 是本机子进程。它读到的每一个字节，在它读到之前就已经躺在这台机器上、属于这台机器的主人。把「正文有没有经过磁盘」抬成产品契约，换不来这位主人能察觉的任何东西，只换来对实现的限制：第一句的代价是 [#34](https://github.com/soondubu137/codex-in-notch/issues/34) 长期悬而未决，理由是「改动比看上去大」而不是任何用户能察觉的问题。
 
-**正文放在哪里、走哪条路，从此是纯粹的工程问题**，按性能与简单性决定，不得再以隐私为由否决方案。现存的相关约束一条不剩地属于性能：上一段的 240 字符头部、`MessageDisplay` 不为每个 delta 写队列文件、先应答后处理，见 `tech-design.md` 第 11 节。Codex 侧的 `preview.sock` 也不再有契约撑着——它今天还在，是因为它在跑，不是因为有什么东西要求它在。
+**正文放在哪里、走哪条路，从此是纯粹的工程问题**，按性能与简单性决定，不得再以隐私为由否决方案。现存的相关约束一条不剩地属于性能：上一段的 240 字符头部、`MessageDisplay` 不进 reducer 也不唤醒面板、交接完成才关闭连接，见 `tech-design.md` 第 11 节。Codex 侧那条只送正文的 `preview.sock` 已经删除——它当初存在只为让那句作废的承诺成立，现在正文和它所属的事件走同一条连接一起到（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。
 
 **没有预览开关。** `Show current content previews` 连同 `PrivacySettings`、Settings 的 `Privacy` 分组、`MonitoredSession.privacySafeTitle` 与两侧监听器的 `setAcceptsText` 一并删除：它唯一的用途是履行上面那条已经作废的承诺。预览始终显示。
 

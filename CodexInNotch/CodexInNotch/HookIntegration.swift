@@ -1,10 +1,53 @@
 import Foundation
 
+/// How complete this app's registration is, read from the product's own hooks
+/// file and from nothing else.
+///
+/// One of the two facts behind the settings card. It answers "are our
+/// definitions in their file, in the shape this build writes them", which is
+/// the only question a file read can answer. Whether Codex actually *runs* them
+/// is the other fact, and it has a different source — see ``HookSetupStatus``.
+nonisolated enum HookRegistration: Sendable, Equatable {
+    /// Nothing of this app's is registered.
+    case absent
+    /// Something of this app's is registered, but not what this build needs.
+    ///
+    /// A partial paste, a set from an older version, or the Python-era
+    /// registration this design replaced. The user is asked to repair rather
+    /// than told nothing is installed, because the latter invites a second
+    /// registration beside the first.
+    case mismatched
+    /// Exactly one current definition per managed event, and nothing else.
+    case complete
+}
+
+/// What the settings card says, projected from the two independent facts.
+///
+/// This is a *display* type. It used to be the model as well, which is what
+/// made `status(hasObservedEvent:)` take the second fact as a parameter and
+/// forced every caller to thread one fact through the other. Registration comes
+/// from a file this app can read; delivery comes from events arriving. They are
+/// projected here and nowhere else.
 enum HookSetupStatus: Equatable, Sendable {
     case notInstalled
     case repairRequired
     case reviewRequired
     case active
+
+    /// The four cards, from the two facts that produce them.
+    nonisolated static func card(
+        registration: HookRegistration,
+        hasObservedEvent: Bool
+    ) -> HookSetupStatus {
+        switch registration {
+        case .absent:
+            .notInstalled
+        case .mismatched:
+            .repairRequired
+        case .complete:
+            hasObservedEvent ? .active : .reviewRequired
+        }
+    }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
@@ -64,12 +107,11 @@ nonisolated struct HookIntegrationPaths: Sendable {
     ///
     /// Every file below used to sit directly in the shared directory, which is
     /// only safe while there is one product. With two, one product's uninstall
-    /// deletes the other's event queue and preview socket, and one product's
-    /// files make the other report an install footprint it does not have —
-    /// which turns its integration switch off by itself.
+    /// deletes the other's socket, and one product's files make the other
+    /// report an install footprint it does not have.
     ///
-    /// Kept short deliberately: the preview socket lives in here and a Unix
-    /// domain socket path may not exceed 104 bytes.
+    /// Kept short deliberately: a Unix domain socket path may not exceed
+    /// 104 bytes.
     var agentDirectory: URL {
         supportDirectory
             .appendingPathComponent("agents", isDirectory: true)
@@ -80,93 +122,64 @@ nonisolated struct HookIntegrationPaths: Sendable {
     ///
     /// Named here rather than spelled out at each use because three
     /// collaborators have to agree on it exactly: the reading is pinned to it,
-    /// the session registry excludes it, and the hook listener drops events
+    /// the session registry excludes it, and the hook store drops payloads
     /// carrying it. Spelling it out separately is how two of those three came
     /// to have it and the third did not.
     var quotaWorkingDirectory: URL {
         agentDirectory.appendingPathComponent("usage", isDirectory: true)
     }
 
-    var script: URL {
-        agentDirectory.appendingPathComponent("codex_in_notch_hook.py")
-    }
-
-    /// The helper Claude Code runs once per event.
+    /// The helper the product runs once per event.
     ///
     /// A file of this app's own, in this app's own directory, and therefore
-    /// nothing ADR 0010 speaks to -- that decision is about `settings.json`,
-    /// which still belongs to the user and is still never written. What the
-    /// user pastes is a path to this script; what the script does is pipe one
-    /// payload into ``hookSocket``.
+    /// nothing ADR 0010 speaks to — that decision is about `settings.json`,
+    /// which still belongs to the user and is still never written. Both
+    /// products run the same four lines; only the socket path differs.
     var hookHelper: URL {
         agentDirectory.appendingPathComponent("hook.sh")
     }
 
     /// Where that helper hands one payload to a running app.
-    ///
-    /// Shorter than ``previewSocket`` on purpose: both share the 104-byte
-    /// `sun_path` budget, and this one is the transport rather than a
-    /// side channel, so it is the one that must not be the first to overflow.
     var hookSocket: URL {
         agentDirectory.appendingPathComponent("hook.sock")
     }
 
-    var eventsDirectory: URL {
-        agentDirectory.appendingPathComponent("events", isDirectory: true)
-    }
-
-    var state: URL {
-        agentDirectory.appendingPathComponent("monitor-state.json")
-    }
-
-    /// Where the helper hands preview text to a running app.
+    /// The one file this integration keeps on disk.
     ///
-    /// See ``HookPreviewChannel``: the text goes over this socket instead of
-    /// into an event file, so nothing the product promises not to persist is
-    /// ever written.
-    var previewSocket: URL {
-        agentDirectory.appendingPathComponent("preview.sock")
+    /// It replaces `managed-install.json`, `hook-settings.json` and
+    /// `monitor-state.json`. Only ``HookInstallRecord/lastEventAt`` is ever read
+    /// back, and it exists for exactly one reason: after a restart, before
+    /// Codex has done anything, the card must not tell a user who trusted the
+    /// hooks last week to go and trust them again.
+    var installState: URL {
+        agentDirectory.appendingPathComponent("install.json")
     }
 
-    /// Proof that this app, rather than something else, put a helper here.
+    /// What an install made before this design left behind.
     ///
-    /// It only has to exist. ``CodexHookInstaller`` uses it to tell "our own
-    /// older helper, which should be upgraded" from "a file this app never
-    /// installed, which must not be silently replaced".
-    var installMarker: URL {
-        agentDirectory.appendingPathComponent("managed-install.json")
-    }
-
-    /// The file the marker replaced.
-    ///
-    /// It used to carry a setting down to the helper. The helper no longer
-    /// handles text at all, so there is nothing left to send; the path survives
-    /// only so an existing install is still recognised as ours and the stale
-    /// file gets cleaned up.
-    var legacySettings: URL {
-        agentDirectory.appendingPathComponent("hook-settings.json")
-    }
-
-    /// The flat layout every file used before products were namespaced.
-    ///
-    /// Installing rewrites the hooks configuration with the new script path, so
-    /// the old registration stops matching and the old helper stops being
-    /// referenced. These are the files it would otherwise leave behind — all of
-    /// them paths this app has always owned exclusively.
-    /// Where the helper lived before this app's files were namespaced.
-    var legacyScript: URL {
-        supportDirectory.appendingPathComponent("codex_in_notch_hook.py")
-    }
-
-    var legacyFlatLayout: [URL] {
+    /// Not legacy *handling* — nothing here is read, recognised or branched on.
+    /// It is a delete list, applied by the repair that replaces the old
+    /// registration and again by uninstall, so the folder does not keep a
+    /// Python helper, an event queue and three state files nothing will ever
+    /// open again. The flat names are from before this app's files were
+    /// namespaced per product.
+    var retiredArtifacts: [URL] {
         [
             "codex_in_notch_hook.py",
+            "events",
             "monitor-state.json",
-            "preview.sock",
             "managed-install.json",
             "hook-settings.json",
-            "events"
-        ].map { supportDirectory.appendingPathComponent($0) }
+            "preview.sock"
+        ].map { agentDirectory.appendingPathComponent($0) }
+            + [
+                "codex_in_notch_hook.py",
+                "events",
+                "monitor-state.json",
+                "managed-install.json",
+                "hook-settings.json",
+                "preview.sock"
+            ].map { supportDirectory.appendingPathComponent($0) }
     }
 
     var hooksBackup: URL {
@@ -177,19 +190,74 @@ nonisolated struct HookIntegrationPaths: Sendable {
         agent: AgentKind = .codex,
         fileManager: FileManager = .default
     ) -> HookIntegrationPaths {
-        let support = fileManager.urls(
+        HookIntegrationPaths(
+            supportDirectory: supportDirectory(fileManager: fileManager),
+            hooksConfiguration: fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent(".codex/hooks.json"),
+            agent: agent
+        )
+    }
+
+    nonisolated static func supportDirectory(fileManager: FileManager) -> URL {
+        fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first?.appendingPathComponent("CodexInNotch", isDirectory: true)
             ?? fileManager.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/CodexInNotch")
+    }
+}
 
-        return HookIntegrationPaths(
-            supportDirectory: support,
-            hooksConfiguration: fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent(".codex/hooks.json"),
-            agent: agent
-        )
+/// The four lines both products run once per event.
+///
+/// Deliberately the smallest thing that can carry one payload:
+///
+/// - **It never speaks.** `exec >/dev/null 2>&1` covers the whole script,
+///   including the shell's own "not found" if `nc` is ever absent. Both
+///   products parse a hook's stdout for directives and print its stderr, so
+///   silence on both streams is not tidiness — a helper that reported "the app
+///   is not running" would be exactly the noise this transport removes
+///   (ADR 0013).
+/// - **It always succeeds.** A non-zero exit is rendered as `<event> hook
+///   error` in an interactive session, so the `exit 0` is load-bearing on every
+///   path: no socket (the app is closed), a stale socket file, a refused
+///   connection, a missing `nc`.
+/// - **It cannot hang.** `-w 1` bounds the case where this app has accepted the
+///   connection but wedged before reading it. Measured: 6.3 ms when the app is
+///   listening, 17 ms when it is not, 1 s in the wedged case.
+/// - **It forwards the payload unfiltered.** Field selection, truncation and
+///   event naming are Swift, where they are testable, rather than a string
+///   literal only one integration test ever executes.
+///
+/// `nc -U` rather than a compiled helper of our own because it is already on
+/// every macOS and needs no target, no signing and no upgrade path. The cost of
+/// the extra process is the difference between 6.3 ms and the 4.1 ms a compiled
+/// equivalent measured — nothing, next to what it saves. Against the Python
+/// helper it replaces on the Codex side it is 6.3 ms against 30 ms, which at
+/// ~17 events per turn is 107 ms against 510 ms of CPU per turn (ADR 0013).
+nonisolated enum AgentHookHelper {
+    nonisolated static func script(socketPath: String) -> String {
+        """
+        #!/bin/sh
+        # Codex in Notch — hands one hook payload to the running app.
+        #
+        # Says nothing on any stream and always exits 0. Both are required: the
+        # agent prints a line in the user's session for every hook that fails or
+        # writes to stderr, and no setting suppresses it.
+        exec >/dev/null 2>&1
+        /usr/bin/nc -U -w 1 \(singleQuoted(socketPath))
+        exit 0
+
+        """
+    }
+
+    /// Wraps a path for `sh`, including one with a quote in it.
+    ///
+    /// A home directory is a user-chosen string and this one is pasted into a
+    /// script, so the escape is not decoration: `O'Brien` would otherwise end
+    /// the quoting and leave the rest of the path as shell words.
+    nonisolated static func singleQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 
@@ -201,8 +269,8 @@ nonisolated struct HookIntegrationPaths: Sendable {
 /// so the names move out here and the reducer keeps every rule it had.
 ///
 /// The absence of a signal is a third answer, and a load-bearing one: a
-/// vocabulary returning `nil` means "this event is not ours", which quarantines
-/// the file and raises a diagnostic. ``inert`` means "ours, and deliberately
+/// vocabulary returning `nil` means "this event is not ours", which drops the
+/// payload and raises a diagnostic. ``inert`` means "ours, and deliberately
 /// without effect". Collapsing the two would turn every ordinary event a
 /// product emits and we ignore into a corruption report.
 nonisolated enum HookSignal: Sendable, Equatable {
@@ -221,8 +289,6 @@ nonisolated enum HookSignal: Sendable, Equatable {
     case toolCallClosed
     /// The turn reached its terminal.
     case turnEnded
-    /// The session itself went away.
-    case sessionEnded
     /// Recognised and consumed, with nothing to say about turn state.
     case inert
 }
@@ -236,7 +302,7 @@ protocol AgentHookVocabulary: Sendable {
     nonisolated var agent: AgentKind { get }
     /// The definitions this product must register. Every one of them has to map
     /// to a signal, or the integration would install a hook whose events it then
-    /// quarantines — a test pins that.
+    /// discards — a test pins that.
     nonisolated var managedDefinitions: [ManagedHookDefinition] { get }
     /// Whether a refused approval is reported as an event of its own.
     ///
@@ -247,20 +313,28 @@ protocol AgentHookVocabulary: Sendable {
     ///
     /// That inference is only safe while events arrive in the order they were
     /// fired. A product that reports its own denials needs none of it, and must
-    /// not have it: Claude Code's hooks are delivered fire-and-forget over
-    /// loopback, and a `Stop` was measured arriving ahead of its own subagent's
-    /// `PermissionRequest` under the same `prompt_id` (2026-08-16). Unrelated
-    /// activity arriving early would close a wait the human is still looking at.
+    /// not have it: Claude Code's `Stop` was measured arriving ahead of its own
+    /// subagent's `PermissionRequest` under the same `prompt_id` (2026-08-16).
+    /// Unrelated activity arriving early would close a wait the human is still
+    /// looking at.
     nonisolated var reportsApprovalDenials: Bool { get }
-    /// Whether this product hands preview text over a side channel.
+    /// Whether a lifecycle payload carries the row's text itself.
     ///
-    /// Codex's helper does, because a hook there is a shell command and text
-    /// must not go through a file. Claude Code posts its whole payload to this
-    /// app, whose decoder simply has no field for the text -- so there is
-    /// nothing for a channel to carry, and binding a socket to receive text
-    /// this product never collects would contradict the claim.
-    nonisolated var usesPreviewChannel: Bool { get }
-    /// `nil` means "not recognised": quarantine rather than consume.
+    /// Codex's `UserPromptSubmit` carries `prompt` and its `Stop` carries
+    /// `last_assistant_message`, which is exactly the row's two lines and
+    /// arrives with the event that changes the row anyway. Claude Code's
+    /// payloads carry a prompt too, and it is deliberately not read: PRD §7
+    /// gives that product one source for all four states, and it is the
+    /// assistant text being printed, not the question that started the turn.
+    nonisolated var carriesTurnText: Bool { get }
+    /// The event that streams assistant text as it is displayed, if any.
+    ///
+    /// Folded into a per-session preview rather than reduced, and deliberately
+    /// off the change stream except on its absent-to-present edge: measured
+    /// against CLI 2.1.234, one 1561-character message arrived as eleven
+    /// deltas, mean 0.29 s apart. Three a second is not a redraw rate.
+    nonisolated var messageDeltaEventName: String? { get }
+    /// `nil` means "not recognised": drop it and say so.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
 }
 
@@ -268,20 +342,33 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated let agent: AgentKind = .codex
     /// A refusal produces no event whatsoever, so it has to be inferred.
     nonisolated let reportsApprovalDenials = false
-    nonisolated let usesPreviewChannel = true
+    nonisolated let carriesTurnText = true
+    nonisolated let messageDeltaEventName: String? = nil
 
+    /// Five definitions, and this exact set is the contract §4.2 freezes.
+    ///
+    /// `SessionEnd` is deliberately absent, and it was registered until this
+    /// design. It cost one process launch per session end and a sixth
+    /// definition for the user to trust, and it bought nothing: it reduced to
+    /// exactly what an unrecognised-but-ours event reduces to, which is
+    /// nothing. A thread whose session is gone is already retired by App Server
+    /// membership reconciliation.
     nonisolated var managedDefinitions: [ManagedHookDefinition] {
         [
             ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
             ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
             // Deliberately unmatched. Registering an exact tool-name regex here
             // means a naming detail decides whether a wait is ever observed, and
-            // a miss is silent. PostToolUse is already catch-all, so the
-            // dispatch cost is the same order; the reducer does the filtering.
+            // a miss is silent. It would cut ~90% of the event volume and it
+            // still does not work: ordinary-tool approval arrives as a
+            // `PermissionRequest` carrying `tool_name` and no `tool_use_id`, so
+            // the wait can only be pinned to the id a catch-all `PreToolUse`
+            // announced moments earlier, and the denial inference needs to see
+            // activity on *other* calls. The answer to the volume is the
+            // cheaper helper, not a matcher.
             ManagedHookDefinition(event: "PreToolUse", matcher: nil),
             ManagedHookDefinition(event: "PostToolUse", matcher: nil),
-            ManagedHookDefinition(event: "Stop", matcher: nil),
-            ManagedHookDefinition(event: "SessionEnd", matcher: nil)
+            ManagedHookDefinition(event: "Stop", matcher: nil)
         ]
     }
 
@@ -309,7 +396,12 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
         case ("Stop", _):
             .turnEnded
         case ("SessionEnd", _):
-            .sessionEnded
+            // Not registered by this build, and consumed rather than reported
+            // so that a user who has not yet repaired an older registration
+            // does not collect a diagnostic once per session end. Registering
+            // it again would need a reason this case does not supply: it has
+            // none of its own to give.
+            .inert
         default:
             nil
         }
@@ -327,19 +419,19 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// better than Codex, and it is what lets the reducer drop an inference
     /// that unordered delivery would otherwise be able to fool.
     nonisolated let reportsApprovalDenials = true
-    /// No side channel, and none needed — which is not the same as no preview.
-    ///
-    /// Both products now reach this app through a helper and a Unix domain
-    /// socket, but Codex needs *two* channels and this one needs one. There a
-    /// hook's payload has to become an event file, and the text must not go
-    /// into it, so the text takes a socket of its own. Here the helper pipes
-    /// the whole payload down a single socket and ``AgentHookListener`` decides
-    /// what becomes a file: `MessageDisplay` is diverted in `record(_:)` and
-    /// never reaches the queue. A second socket would move nothing.
-    nonisolated let usesPreviewChannel = false
+    /// PRD §7: one source for all four states, and it is not the prompt.
+    nonisolated let carriesTurnText = false
+    nonisolated let messageDeltaEventName: String? = Self.messageDisplayEventName
 
     /// The tool Claude Code uses to put a question to the user.
     static let inputToolName = "AskUserQuestion"
+
+    /// The event that carries assistant text, and the only one that does.
+    ///
+    /// Officially described as "While assistant message text is displayed".
+    /// It is absent from the exploration document's table of events, which is
+    /// why the first pass at this product concluded no such thing existed.
+    static let messageDisplayEventName = "MessageDisplay"
 
     nonisolated var managedDefinitions: [ManagedHookDefinition] {
         [
@@ -356,33 +448,18 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             // message text is displayed", and absent from the exploration
             // document's table of events — which is why the first pass at this
             // product concluded the text was unreachable without a new
-            // transport. It is the one registered event whose payload is
-            // consumed entirely inside the listener; see below.
+            // transport.
             ManagedHookDefinition(event: "MessageDisplay", matcher: nil),
             ManagedHookDefinition(event: "Stop", matcher: nil),
             ManagedHookDefinition(event: "StopFailure", matcher: nil)
-            // SessionEnd is deliberately absent. The reason it was first
-            // excluded is gone; it stays out on a different one, and both are
-            // worth writing down because the obvious reading of this list is
-            // that somebody forgot.
-            //
-            // It was excluded because it is the only event whose failure is
-            // written to the CLI's *own* stderr rather than drawn by the TUI --
-            // `SessionEnd hook [...] failed:` comes straight out of the
-            // executor -- so with nothing listening it followed `claude -p`
-            // into scripts, pipelines and CI where nothing is watching a notch.
-            // The helper cannot fail that way: it exits 0 and writes to neither
-            // stream whether or not this app is running (ADR 0013).
-            //
-            // So it was re-examined on its merits, and it does not have any.
-            // The case for it was that it would retire a dead session's row
-            // sooner than the sessions-directory watcher notices. Measured
-            // against 2.1.237, interactive session under a pty, sampling
+            // SessionEnd is deliberately absent, and for a measured reason
+            // rather than the one it was first excluded on. The case for it was
+            // that it would retire a dead session's row sooner than the
+            // sessions-directory watcher notices. Measured against 2.1.237,
+            // interactive session under a pty, sampling
             // `~/.claude/sessions/<pid>.json` at 20 ms: the file is removed at
             // +15.09s and +15.08s over two runs, and `SessionEnd` arrives at
-            // +15.41s in both. **The watcher's signal lands ~330 ms first**, so
-            // registering this could only ever add a second, later answer to a
-            // question already answered.
+            // +15.41s in both. **The watcher's signal lands ~330 ms first.**
             //
             // `/clear` looked like the exception and is not. It leaves the
             // process alive, so no file changes and the watcher never fires --
@@ -390,15 +467,13 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             // `cd9d3d18…` under the same pid, with `SessionEnd(reason: clear)`
             // carrying the old one. The old id is therefore out of
             // `claude agents --json` immediately, and row construction gates on
-            // exactly that (`ClaudeCodeMonitorService`, "a turn whose session is
-            // gone is gone"). `resume` is the same shape.
+            // exactly that. `resume` is the same shape.
             //
             // Worth knowing if this is ever reopened: the payload carries a
             // `reason`, and the group's `matcher` is matched against it, so a
             // registration can select reasons. The vocabulary is `clear`,
             // `resume`, `logout`, `prompt_input_exit`, `other` -- and only some
-            // of them mean the session went away, which is a second reason the
-            // event is not the simple signal its name suggests.
+            // of them mean the session went away.
         ]
     }
 
@@ -436,14 +511,11 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             // event that carries an id, and a notification carries none --
             // opening a wait nothing can close would be worse than ignoring it.
             .inert
-        case ("MessageDisplay", _):
-            // Never actually reaches the reducer: ``AgentHookListener`` takes
-            // the text into memory and returns without queueing a file, so
-            // there is nothing here to reduce. The case exists because the
-            // registration list and this table must agree — an event that is
-            // registered and produces no signal would be quarantined as
-            // corruption if one ever did arrive, which is exactly what a queue
-            // file left by an older build would do.
+        case (Self.messageDisplayEventName, _):
+            // Folded into the session preview before the reducer is reached;
+            // see ``messageDeltaEventName``. The case exists because the
+            // registration list and this table must agree — a registered event
+            // with no signal would be reported as an unrecognised payload.
             .inert
         case ("Stop", _), ("StopFailure", _):
             // One terminal. A failure is recorded as the reason a turn ended,
@@ -457,120 +529,303 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     }
 }
 
-actor CodexHookInstaller {
-    private enum ManagedInstallationState {
-        case missing
-        case repairRequired
-        case current
-        case upgradeable
+/// The one file this integration keeps.
+///
+/// There is no install marker any more. The old one only had to exist, to tell
+/// "our own older helper, which should be upgraded" from "a file this app never
+/// installed, which must not be silently replaced" — and that distinction is
+/// not worth a file, because the response to both is the same: write the
+/// current script. It never provided tamper resistance either; the code's own
+/// comment conceded that anything able to rewrite the script can rewrite the
+/// marker beside it.
+///
+/// There is no `definitionsVersion` either, and §4.2 of the design proposed
+/// one. It would be a second, weaker copy of a fact `hooks.json` already
+/// carries: a changed definition set makes `isFullyInstalled` fail, which is
+/// `mismatched`, which is the announcement. A version field could only ever
+/// agree with that or be wrong about it.
+nonisolated struct HookInstallRecord: Codable, Sendable, Equatable {
+    var installedAt: Date?
+    /// When an event was last seen, at whatever resolution one write per launch
+    /// gives. Only its presence is read: it is what stops the card telling a
+    /// user who trusted the hooks last week to go and trust them again.
+    var lastEventAt: Date?
+}
+
+/// Reads and updates ``HookInstallRecord`` under one process-wide lock.
+///
+/// Two actors write this file — the registrar stamps `installedAt`, the store
+/// stamps `lastEventAt` — so the read-modify-write needs serialising. One lock
+/// for every path in the process is enough and costs nothing: an install is
+/// user-driven and a `lastEventAt` write happens once per launch.
+nonisolated enum HookInstallStateFile {
+    private static let lock = NSLock()
+
+    nonisolated static func read(at url: URL) -> HookInstallRecord {
+        lock.lock()
+        defer { lock.unlock() }
+        return readLocked(at: url)
     }
 
-    private enum ManagedRegistrationState {
-        case absent
-        case partial
-        case complete
+    @discardableResult
+    nonisolated static func update(
+        at url: URL,
+        fileManager: FileManager = .default,
+        _ mutation: (inout HookInstallRecord) -> Void
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var record = readLocked(at: url)
+        mutation(&record)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(record) else { return false }
+        do {
+            try fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try data.write(to: url, options: .atomic)
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: url.path
+            )
+            return true
+        } catch {
+            return false
+        }
     }
 
+    nonisolated private static func readLocked(at url: URL) -> HookInstallRecord {
+        guard let data = try? Data(contentsOf: url) else { return HookInstallRecord() }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(HookInstallRecord.self, from: data))
+            ?? HookInstallRecord()
+    }
+}
+
+/// Registers this app's definitions in `~/.codex/hooks.json`, and installs the
+/// helper they name.
+///
+/// **The definition is never rewritten after it is first installed**, and that
+/// is the load-bearing decision in this whole integration. Codex stores trust
+/// in `config.toml` under
+/// `[hooks.state."<hooks.json path>:<event>:<group>:<handler>"]`, keyed by the
+/// definition's content hash. Change a definition and Codex **silently stops
+/// executing that one** until the user re-trusts it in `/hooks`, while every
+/// untouched definition keeps firing normally. Nothing in the app can see it:
+/// the delivery evidence is satisfied by the definitions that still work, and
+/// the card goes on saying Connected. On 2026-08-15 this was measured with
+/// `PreToolUse` dead for two consecutive turns and no indication anywhere.
+///
+/// So versioning lives entirely in the *script*, which is not hashed. The
+/// definition names a stable path and carries nothing else — no version, no
+/// port, no token, no argument that could ever need to change.
+///
+/// Measured on this machine, 2026-08-20: the key's third component is a
+/// **numeric index**, not a matcher or a stable identifier —
+/// `[hooks.state."/Users/…/.codex/hooks.json:pre_tool_use:0:0"]`, with the
+/// event spelled in snake case and a fourth component indexing the handler
+/// inside the group. That is what makes the append-at-the-tail rule in
+/// ``ManagedHooksConfiguration`` load-bearing for the *user's own* definitions
+/// rather than merely tidy: removing a group from the middle renumbers every
+/// group after it and silently drops their trust.
+actor CodexHookRegistrar {
     /// Registered from the vocabulary rather than listed again here.
     ///
-    /// The installer's list and the reducer's list used to be two hand-synced
+    /// The registrar's list and the reducer's list used to be two hand-synced
     /// literals, which is a standing invitation to register a hook whose events
-    /// are then quarantined as unrecognised — silently, since a quarantine looks
-    /// like a corrupt file rather than a missing case.
+    /// are then discarded — silently, since a drop looks like a corrupt payload
+    /// rather than a missing case.
     nonisolated private static let managedDefinitions =
         CodexHookVocabulary().managedDefinitions
 
+    /// The Python helper this design replaced, as a single legacy identity
+    /// marker.
+    ///
+    /// Its only job is to make an existing install read as `mismatched` rather
+    /// than `absent`, so the user is asked to repair rather than told nothing
+    /// is installed — which would invite a second registration beside the
+    /// first. Matched by containment, so it recognises both the namespaced path
+    /// and the flat one that preceded it.
+    nonisolated static let legacyHelperMarker = "codex_in_notch_hook.py"
+
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
-    private let clock: any MonitorClock
-    private let timing: MonitorTiming
-    private var cachedInstallationState: (state: ManagedInstallationState, readAt: Date)?
+    nonisolated private let configurationWatcher: DirectoryChangeWatcher
+    private var cachedRegistration: HookRegistration?
+    private var watcherTask: Task<Void, Never>?
 
     init(
         paths: HookIntegrationPaths = .live(),
         fileManager: FileManager = .default,
-        clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
     ) {
         self.paths = paths
         self.fileManager = fileManager
-        self.clock = clock
-        self.timing = timing
+        // Registration health changes when we write this file, when the user
+        // edits it, and at no other time. It used to be re-derived on a
+        // 60-second cadence against three file reads; it is now read once and
+        // re-read on the edge that can invalidate it.
+        self.configurationWatcher = DirectoryChangeWatcher(
+            directoryURL: paths.hooksConfiguration,
+            debounceInterval: timing.unreadStateDebounceInterval
+        )
     }
 
-    /// Drops the cached scan so the next read hits disk.
+    deinit {
+        watcherTask?.cancel()
+    }
+
+    nonisolated var socketURL: URL {
+        paths.hookSocket
+    }
+
+    /// The edge that says the registration may have changed underneath us.
+    nonisolated func changeEvents() -> AsyncStream<Void> {
+        configurationWatcher.events()
+    }
+
+    /// How complete the registration is, read from `hooks.json` and nothing
+    /// else.
     ///
-    /// Called after this app writes the configuration and whenever the user
-    /// asks for a recheck -- the moments installation health can actually
-    /// change by our own doing.
-    func invalidateInstallationCache() {
-        cachedInstallationState = nil
+    /// Cached, and the cache is invalidated by our own writes and by the file
+    /// watcher above — never by a timer. That is the whole of what replaced
+    /// `installationRevalidationInterval`, the cached scan and
+    /// `hasManagedSupportFootprint`.
+    func registration() -> HookRegistration {
+        startWatchingIfNeeded()
+        // On a first run `hooks.json` does not exist yet, so the attach made in
+        // `init` necessarily failed and nothing else would think to ask again.
+        // One failed `open` per ask is cheaper than a timer -- the same trade
+        // ``DirectoryChangeWatcher/attachIfNeeded()`` exists for.
+        configurationWatcher.attachIfNeeded()
+        if let cachedRegistration { return cachedRegistration }
+        let scanned = managedConfiguration.registration(
+            in: readConfigurationRoot()
+        )
+        cachedRegistration = scanned
+        return scanned
     }
 
-    func status(hasObservedEvent: Bool) -> HookSetupStatus {
-        switch installationState {
-        case .missing:
-            return .notInstalled
-        case .repairRequired:
-            return .repairRequired
-        case .current, .upgradeable:
-            return hasObservedEvent ? .active : .reviewRequired
+    func invalidateRegistration() {
+        cachedRegistration = nil
+    }
+
+    /// Whether the helper the definitions name is there and runnable.
+    ///
+    /// A `stat`, not a read. It is the one question about the helper that a
+    /// refresh may still ask, because the answer can change without this app
+    /// doing anything -- a user emptying the support folder -- and getting it
+    /// wrong is loud: `/bin/sh` on a missing path writes to stderr, which Codex
+    /// renders as a hook error in the user's session (ADR 0013).
+    var isHelperInstalled: Bool {
+        fileManager.isExecutableFile(atPath: paths.hookHelper.path)
+    }
+
+    /// Writes the helper if what is on disk is not what this build ships.
+    ///
+    /// Called at launch, on install, and when ``isHelperInstalled`` says the
+    /// file has gone — never once per refresh. The question it answers can
+    /// otherwise only change when the app itself is upgraded, and asking it per
+    /// refresh cost a read and a string compare on the one path where a user is
+    /// watching for a row to change.
+    @discardableResult
+    func prepareHelper() -> Bool {
+        let desired = AgentHookHelper.script(socketPath: paths.hookSocket.path)
+        if let installed = try? String(contentsOf: paths.hookHelper, encoding: .utf8),
+           installed == desired,
+           fileManager.isExecutableFile(atPath: paths.hookHelper.path) {
+            return true
+        }
+        do {
+            try fileManager.createDirectory(
+                at: paths.agentDirectory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try desired.write(to: paths.hookHelper, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: paths.hookHelper.path
+            )
+            return true
+        } catch {
+            return false
         }
     }
 
-    @discardableResult
-    func upgradeManagedHookIfNeeded() throws -> Bool {
-        guard installationState == .upgradeable else { return false }
-
-        try writeCurrentHookScript()
-        try writeInstallMarker()
-        invalidateInstallationCache()
-        return true
-    }
-
     func install() throws {
+        // A no-op install writes nothing. Turning the switch on over an already
+        // correct configuration used to rewrite — and reformat — a file this
+        // app does not own, and with the trust key's group component measured
+        // to be an array index, a rewrite is not free of consequences for the
+        // user's own definitions either.
+        guard registration() != .complete else { return }
+
         try fileManager.createDirectory(
             at: paths.agentDirectory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        try fileManager.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        removeLegacyFlatLayout()
-
-        try writeCurrentHookScript()
-        try writeInstallMarker()
-        try mergeHooksConfiguration()
-        invalidateInstallationCache()
+        guard prepareHelper() else {
+            throw ManagedHooksConfigurationError.verificationFailed
+        }
+        try configurationEditor.install()
+        removeRetiredArtifacts()
+        HookInstallStateFile.update(at: paths.installState, fileManager: fileManager) {
+            $0.installedAt = Date()
+        }
+        cachedRegistration = nil
     }
 
     func uninstall() throws {
-        invalidateInstallationCache()
-        try removeManagedHooksConfiguration()
+        cachedRegistration = nil
+        try configurationEditor.remove()
 
-        for url in [
-            paths.script,
-            paths.installMarker,
-            paths.legacySettings,
-            paths.state,
-            paths.previewSocket
-        ] {
+        for url in [paths.hookHelper, paths.installState, paths.hookSocket] {
             if fileManager.fileExists(atPath: url.path) {
-                try fileManager.removeItem(at: url)
+                try? fileManager.removeItem(at: url)
             }
         }
-        if fileManager.fileExists(atPath: paths.eventsDirectory.path) {
-            try fileManager.removeItem(at: paths.eventsDirectory)
-        }
-        removeLegacyFlatLayout()
+        removeRetiredArtifacts()
         // Only ever this product's own directory, and then the shared ones if
         // nothing else is left in them. Another product's files keep both.
         removeDirectoryIfEmpty(paths.agentDirectory)
         removeDirectoryIfEmpty(paths.agentDirectory.deletingLastPathComponent())
         removeDirectoryIfEmpty(paths.supportDirectory)
+    }
+
+    // MARK: - Internals
+
+    private func startWatchingIfNeeded() {
+        guard watcherTask == nil else { return }
+        let stream = configurationWatcher.events()
+        watcherTask = Task { [weak self] in
+            for await _ in stream {
+                await self?.invalidateRegistration()
+            }
+        }
+    }
+
+    private func readConfigurationRoot() -> [String: Any]? {
+        guard let data = try? Data(contentsOf: paths.hooksConfiguration),
+              !data.isEmpty,
+              let decoded = try? JSONSerialization.jsonObject(with: data) else {
+            return nil
+        }
+        return decoded as? [String: Any]
+    }
+
+    private func removeRetiredArtifacts() {
+        for url in paths.retiredArtifacts
+        where fileManager.fileExists(atPath: url.path) {
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     private func removeDirectoryIfEmpty(_ url: URL) {
@@ -581,183 +836,24 @@ actor CodexHookInstaller {
         try? fileManager.removeItem(at: url)
     }
 
-    private func removeLegacyFlatLayout() {
-        for url in paths.legacyFlatLayout
-        where fileManager.fileExists(atPath: url.path) {
-            try? fileManager.removeItem(at: url)
-        }
-    }
-
-    private var command: String {
-        Self.command(forScript: paths.script)
-    }
-
-    nonisolated static func command(forScript script: URL) -> String {
-        "/usr/bin/python3 \"\(script.path)\""
-    }
-
-    /// Cached because it is three file reads answering a question that changes
-    /// only when someone rewrites the configuration. Re-deriving it on every
-    /// refresh was both wasteful and misleading: it cannot observe Codex's own
-    /// per-definition trust, so a passing scan never meant the hooks would run.
-    private var installationState: ManagedInstallationState {
-        if let cached = cachedInstallationState,
-           clock.now().timeIntervalSince(cached.readAt)
-               < timing.installationRevalidationInterval {
-            return cached.state
-        }
-        let scanned = scanInstallationState()
-        cachedInstallationState = (scanned, clock.now())
-        return scanned
-    }
-
-    private func scanInstallationState() -> ManagedInstallationState {
-        let registrationState = managedRegistrationState
-        guard registrationState == .complete else {
-            return registrationState == .partial || hasManagedSupportFootprint
-                ? .repairRequired
-                : .missing
-        }
-
-        guard fileManager.isExecutableFile(atPath: paths.script.path),
-              let installedScript = try? String(
-                  contentsOf: paths.script,
-                  encoding: .utf8
-              ) else {
-            return .repairRequired
-        }
-
-        // The bundled script is available in process, so a direct comparison
-        // answers "is this exactly what this build installs" without hashing.
-        if installedScript == Self.hookScript {
-            return .current
-        }
-
-        // A different script sits at a path this app manages exclusively. The
-        // marker is written only by install(), so its presence is what
-        // distinguishes "our own older helper" from a file this app never put
-        // there. Recording a content hash next to the script would not add
-        // tamper resistance: both live in the same directory with the same
-        // ownership, so anything that can rewrite one can rewrite the other.
-        //
-        // The legacy settings file counts as a marker too, so an install made
-        // before the marker existed upgrades instead of demanding a repair.
-        return hasManagedInstallMarker ? .upgradeable : .repairRequired
-    }
-
-    private var hasManagedInstallMarker: Bool {
-        fileManager.fileExists(atPath: paths.installMarker.path)
-            || fileManager.fileExists(atPath: paths.legacySettings.path)
-    }
-
-    private var managedRegistrationState: ManagedRegistrationState {
-        guard let data = try? Data(contentsOf: paths.hooksConfiguration),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let hooks = root["hooks"] as? [String: Any] else {
-            return .absent
-        }
-
-        let configuration = managedConfiguration
-        let managedOccurrenceCount = hooks.values.reduce(into: 0) { count, value in
-            guard let groups = value as? [[String: Any]] else { return }
-            for group in groups {
-                let handlers = group["hooks"] as? [[String: Any]] ?? []
-                count += handlers.filter(configuration.isManagedHandler).count
-            }
-        }
-
-        guard managedOccurrenceCount > 0 else { return .absent }
-        guard managedOccurrenceCount == Self.managedDefinitions.count else {
-            return .partial
-        }
-
-        let hasEveryExactDefinition = Self.managedDefinitions.allSatisfy { definition in
-            guard let groups = hooks[definition.event] as? [[String: Any]] else {
-                return false
-            }
-            let exactMatches = groups.reduce(into: 0) { count, group in
-                guard matcher(in: group, matches: definition.matcher) else {
-                    return
-                }
-                let handlers = group["hooks"] as? [[String: Any]] ?? []
-                count += handlers.filter(isCurrentManagedHandler).count
-            }
-            return exactMatches == 1
-        }
-
-        return hasEveryExactDefinition ? .complete : .partial
-    }
-
-    private var hasManagedSupportFootprint: Bool {
-        fileManager.fileExists(atPath: paths.agentDirectory.path)
-            || fileManager.fileExists(atPath: paths.script.path)
-            || hasManagedInstallMarker
-            || fileManager.fileExists(atPath: paths.state.path)
-            || fileManager.fileExists(atPath: paths.eventsDirectory.path)
-    }
-
-    private func matcher(
-        in group: [String: Any],
-        matches expectedMatcher: String?
-    ) -> Bool {
-        if let expectedMatcher {
-            return (group["matcher"] as? String) == expectedMatcher
-        }
-        return group["matcher"] == nil
-    }
-
-    /// Kept as a name rather than inlined: this reads as one of the three
-    /// conditions `managedRegistrationState` weighs, and the definition of
-    /// "current" belongs to the configuration that writes the handler, not
-    /// here. It used to spell out the key count and the `timeout` by hand,
-    /// which was a copy of the handler literal a few lines away in another
-    /// file, and would have missed any field added to it since.
-    private func isCurrentManagedHandler(_ handler: [String: Any]) -> Bool {
-        managedConfiguration.isCurrentManagedHandler(handler)
-    }
-
-    private func writeCurrentHookScript() throws {
-        try Self.hookScript.write(
-            to: paths.script,
-            atomically: true,
-            encoding: .utf8
-        )
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: paths.script.path
-        )
-    }
-
-    /// Writes the marker, and retires the settings file it replaced.
+    /// The one string this app registers, and never rewrites.
     ///
-    /// Nothing in the marker is read back -- only its presence matters -- so it
-    /// carries just enough to identify itself to a human looking at the folder.
-    /// It holds no configuration at all: the helper has nothing left to be
-    /// told.
-    private func writeInstallMarker() throws {
-        let data = try JSONSerialization.data(
-            withJSONObject: ["managedBy": "codex-in-notch"],
-            options: [.prettyPrinted, .sortedKeys]
-        )
-        try data.write(to: paths.installMarker, options: .atomic)
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: paths.installMarker.path
-        )
-
-        if fileManager.fileExists(atPath: paths.legacySettings.path) {
-            try? fileManager.removeItem(at: paths.legacySettings)
-        }
+    /// Codex parses `command` with a shell and has no `args` key, so the helper
+    /// is named through `/bin/sh` with its path quoted. Inlining the whole
+    /// helper here instead was considered and narrowly rejected: it would
+    /// remove a file to write, upgrade and verify, and show a user reviewing
+    /// `/hooks` exactly what will run — but the script file is the one
+    /// indirection that lets behaviour change without touching the definition,
+    /// and that is the entire reason this shape exists.
+    nonisolated static func command(forHelper helper: URL) -> String {
+        "/bin/sh \(AgentHookHelper.singleQuoted(helper.path))"
     }
 
     /// The strict editor for this build's definitions.
     private var managedConfiguration: ManagedHooksConfiguration {
         .command(
-            command,
-            // What this app registered before its files were namespaced per
-            // product. Without it an upgrade would leave that handler in place,
-            // pointing at a helper the upgrade itself deleted.
-            legacyCommands: [Self.command(forScript: paths.legacyScript)],
+            Self.command(forHelper: paths.hookHelper),
+            legacyCommands: [Self.legacyHelperMarker],
             definitions: Self.managedDefinitions,
             descriptionForNewFiles: "User-level Codex lifecycle hooks."
         )
@@ -772,103 +868,6 @@ actor CodexHookInstaller {
             fileManager: fileManager
         )
     }
-
-    private func mergeHooksConfiguration() throws {
-        try configurationEditor.install()
-    }
-
-    private func removeManagedHooksConfiguration() throws {
-        try configurationEditor.remove()
-    }
-
-    private static let hookScript = #"""
-#!/usr/bin/python3
-import json
-import os
-import socket
-import sys
-import time
-import uuid
-
-SUPPORT = os.path.dirname(os.path.abspath(__file__))
-EVENTS = os.path.join(SUPPORT, "events")
-PREVIEW_SOCKET = os.path.join(SUPPORT, "preview.sock")
-
-# Codex gives this hook 3 seconds. Handing the preview over must cost a small
-# fraction of that even when nothing is listening, so the whole exchange is
-# bounded well below the budget and every failure is silent: a missing preview
-# is a cosmetic loss, a late hook is not.
-PREVIEW_TIMEOUT_SECONDS = 0.25
-
-def send_preview(event_id, payload):
-    """Hand prompt/answer text to a running app over a local socket.
-
-    This text is deliberately never written to disk. If the app is not running
-    there is nothing to hand it to and the text is dropped -- which is correct,
-    because an event written while the app is down is discarded on its next
-    launch anyway.
-    """
-    prompt = payload.get("prompt")
-    assistant = payload.get("last_assistant_message")
-    preview = {"event_id": event_id}
-    if isinstance(prompt, str):
-        preview["prompt"] = prompt[:240]
-    if isinstance(assistant, str):
-        preview["last_assistant_message"] = assistant[:240]
-    if len(preview) == 1:
-        return
-
-    connection = None
-    try:
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(PREVIEW_TIMEOUT_SECONDS)
-        connection.connect(PREVIEW_SOCKET)
-        connection.sendall(
-            json.dumps(preview, separators=(",", ":")).encode("utf-8") + b"\n"
-        )
-    except Exception:
-        pass
-    finally:
-        if connection is not None:
-            try:
-                connection.close()
-            except Exception:
-                pass
-
-try:
-    payload = json.load(sys.stdin)
-    event_id = str(uuid.uuid4())
-    event = {
-        "event_id": event_id,
-        "received_at": time.time(),
-        "hook_event_name": payload.get("hook_event_name"),
-        "session_id": payload.get("session_id"),
-        "turn_id": payload.get("turn_id"),
-        "tool_name": payload.get("tool_name"),
-        "tool_use_id": payload.get("tool_use_id"),
-        "permission_mode": payload.get("permission_mode"),
-    }
-
-    # Send before writing the file, never after. The file appearing is what
-    # wakes the app, so the text has to already be in its hands by then or the
-    # reducer would claim an id whose preview is still in flight.
-    send_preview(event_id, payload)
-
-    os.makedirs(EVENTS, mode=0o700, exist_ok=True)
-    filename = "%020d-%s.json" % (time.time_ns(), event_id)
-    target = os.path.join(EVENTS, filename)
-    temporary = target + ".tmp"
-    with open(temporary, "x", encoding="utf-8") as handle:
-        os.chmod(temporary, 0o600)
-        json.dump(event, handle, separators=(",", ":"))
-    os.replace(temporary, target)
-except Exception:
-    pass
-
-# Stop hooks require JSON on stdout. An empty object is a no-op for every
-# configured event and never changes Codex behavior.
-print("{}")
-"""#
 }
 
 /// An approval the turn is blocked on, and how it can end.
@@ -895,8 +894,9 @@ nonisolated struct PendingApproval: Sendable, Equatable {
 /// A tool call that has been announced and not yet closed.
 struct OpenToolUse: Sendable, Equatable {
     let id: String
-    /// `tool_name` as Codex reported it, used to check that a `PermissionRequest`
-    /// is asking about this call and not some other one still in flight.
+    /// `tool_name` as the product reported it, used to check that a
+    /// `PermissionRequest` is asking about this call and not some other one
+    /// still in flight.
     let name: String?
 }
 
@@ -918,6 +918,15 @@ struct HookTurnState: Sendable {
     var openToolUse: OpenToolUse?
     var startedAt: Date
     var lastEventAt: Date
+    /// Turns this thread has already moved past.
+    ///
+    /// The redesign proposed deleting this, on the argument that arrival stamps
+    /// taken on one serial read queue are monotonic so a late event from a
+    /// retired turn cannot exist. That holds for the transport and not for the
+    /// executor: ADR 0013 records Claude Code delivering a `Stop` ahead of its
+    /// own subagent's `PermissionRequest` under the same `prompt_id`, and the
+    /// reducer is shared. The Codex half of the claim is also unmeasured. So it
+    /// stays, and it costs one `Set` per tracked thread.
     var retiredTurnIDs: Set<String>
     var promptPreview: String?
     var assistantPreview: String?
@@ -963,253 +972,529 @@ struct HookStateSnapshot: Sendable {
     }
 }
 
-actor HookEventRepository {
-    private struct LegacyPersistedTurn: Codable {}
+/// One hook payload, as either product sends it.
+///
+/// The helper forwards stdin unchanged, so field selection happens here rather
+/// than in a Python string literal inside a Swift file. Both spellings of the
+/// turn identity are accepted: Codex calls it `turn_id`, Claude Code calls it
+/// `prompt_id` and documents it as "a UUID correlating a user prompt with all
+/// subsequent events until the next prompt".
+nonisolated struct HookPayload: Sendable, Decodable {
+    let hookEventName: String?
+    let sessionID: String?
+    let turnID: String?
+    let toolName: String?
+    let toolUseID: String?
+    let permissionMode: String?
+    let workingDirectory: String?
+    let prompt: String?
+    let lastAssistantMessage: String?
+    let messageID: String?
+    let delta: String?
 
-    private struct PersistedState: Codable {
-        var hasObservedEvent: Bool?
-        var turns: [LegacyPersistedTurn]?
+    enum CodingKeys: String, CodingKey {
+        case hookEventName = "hook_event_name"
+        case sessionID = "session_id"
+        case turnID = "turn_id"
+        case promptID = "prompt_id"
+        case toolName = "tool_name"
+        case toolUseID = "tool_use_id"
+        case permissionMode = "permission_mode"
+        case workingDirectory = "cwd"
+        case prompt
+        case lastAssistantMessage = "last_assistant_message"
+        case messageID = "message_id"
+        case delta
     }
 
-    /// One lifecycle event as the helper wrote it.
-    ///
-    /// It deliberately carries no prompt or answer text: those arrive over
-    /// ``HookPreviewChannel`` and are matched back to this by `eventID`.
-    private struct HookEvent: Decodable {
-        let eventID: String?
-        let receivedAt: Double
-        let hookEventName: String?
-        let sessionID: String?
-        let turnID: String?
-        let toolName: String?
-        let toolUseID: String?
-        let permissionMode: String?
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hookEventName = try container.decodeIfPresent(String.self, forKey: .hookEventName)
+        sessionID = try container.decodeIfPresent(String.self, forKey: .sessionID)
+        turnID = try container.decodeIfPresent(String.self, forKey: .turnID)
+            ?? container.decodeIfPresent(String.self, forKey: .promptID)
+        toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+        toolUseID = try container.decodeIfPresent(String.self, forKey: .toolUseID)
+        permissionMode = try container.decodeIfPresent(String.self, forKey: .permissionMode)
+        workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
+        prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
+        lastAssistantMessage = try container.decodeIfPresent(
+            String.self,
+            forKey: .lastAssistantMessage
+        )
+        messageID = try container.decodeIfPresent(String.self, forKey: .messageID)
+        delta = try container.decodeIfPresent(String.self, forKey: .delta)
+    }
+}
 
-        enum CodingKeys: String, CodingKey {
-            case eventID = "event_id"
-            case receivedAt = "received_at"
-            case hookEventName = "hook_event_name"
-            case sessionID = "session_id"
-            case turnID = "turn_id"
-            case toolName = "tool_name"
-            case toolUseID = "tool_use_id"
-            case permissionMode = "permission_mode"
+/// One payload with the moment it landed.
+nonisolated struct DeliveredHookEvent: Sendable {
+    let payload: HookPayload
+    let receivedAt: Date
+}
+
+/// The assistant text one session is currently printing.
+///
+/// Lock-protected rather than actor-isolated, and deliberately: deltas are
+/// folded on the listener's serial read queue at up to 3.4 a second, and an
+/// actor hop there would put the reducer's mailbox on a product's critical
+/// path for text that changes no state. Same shape as the transport beside it
+/// (`AGENTS.md` §6.3).
+nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
+    /// How much of one message is kept.
+    ///
+    /// Also the memory bound: once the head is full every further delta is
+    /// dropped without being stored, so the bytes held per session are decided
+    /// by a constant rather than by how much the model said.
+    nonisolated static let maximumCharacters = 240
+
+    /// How many sessions' previews are held before the oldest is dropped.
+    ///
+    /// Previews are pruned to the live session list on every refresh, so this
+    /// is a leak stop for text belonging to a session that never appears there
+    /// — not a working set.
+    nonisolated static let maximumRetained = 64
+
+    private struct SessionPreview {
+        /// Whichever assistant message is currently being printed. When this
+        /// changes the text starts again — the newest message is the progress,
+        /// and its head is what the row reports.
+        let messageID: String?
+        var text: String
+    }
+
+    private let lock = NSLock()
+    nonisolated(unsafe) private var previewsBySessionID: [String: SessionPreview] = [:]
+    nonisolated(unsafe) private var order: [String] = []
+    /// The sessions the last refresh listed.
+    ///
+    /// Held only to qualify the edge in ``fold(delta:messageID:sessionID:)``.
+    nonisolated(unsafe) private var listedSessionIDs: Set<String> = []
+
+    nonisolated init() {}
+
+    /// The text this session is currently printing, if any was collected.
+    ///
+    /// Read, not consumed. A preview stands until the message it came from is
+    /// replaced or the session leaves the live list, because a turn spends most
+    /// of its life between events and a row that blanked itself after one
+    /// refresh would flicker rather than report.
+    nonisolated func preview(forSession sessionID: String) -> String? {
+        lock.lock()
+        let text = previewsBySessionID[sessionID]?.text
+        lock.unlock()
+        // The stored form keeps its trailing space so the next delta can join
+        // onto it; a row never shows one.
+        guard let trimmed = text?.trimmingCharacters(in: .whitespaces),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    /// Drops previews for sessions that are no longer live.
+    nonisolated func retain(forSessions sessionIDs: Set<String>) {
+        lock.lock()
+        defer { lock.unlock() }
+        previewsBySessionID = previewsBySessionID.filter { sessionIDs.contains($0.key) }
+        order.removeAll { !sessionIDs.contains($0) }
+        listedSessionIDs = sessionIDs
+    }
+
+    nonisolated func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        previewsBySessionID.removeAll()
+        order.removeAll()
+        listedSessionIDs.removeAll()
+    }
+
+    /// Folds one delta into the session's preview.
+    ///
+    /// Returns whether this session went from having no text to having some
+    /// *and* the last refresh listed it, which is the only edge the change
+    /// stream carries. The deltas themselves are deliberately off it — three a
+    /// second is not a redraw rate — but a row holding *no* text is a different
+    /// case: nothing on screen is stale, something is missing, and a turn that
+    /// talks for a minute before it touches a tool sends no lifecycle event in
+    /// the meantime.
+    ///
+    /// Without the listed test this is a 3 Hz loop rather than one wake: text
+    /// from a session the list does not carry is pruned by the very refresh it
+    /// asks for, which makes the next delta an absent-to-present edge again —
+    /// and the row it would draw is not on screen either way.
+    @discardableResult
+    nonisolated func fold(
+        delta: String,
+        messageID: String?,
+        sessionID: String
+    ) -> Bool {
+        lock.lock()
+        let existing = previewsBySessionID[sessionID]
+        lock.unlock()
+
+        guard !delta.isEmpty else { return false }
+        // A new message replaces the old one rather than extending it: the row
+        // shows the message being printed now, not the whole turn concatenated.
+        let carried = existing?.messageID == messageID ? (existing?.text ?? "") : ""
+        let carriedLength = carried.count
+        guard carriedLength < Self.maximumCharacters else { return false }
+        let text = Self.normalized(
+            appending: delta,
+            to: carried,
+            carriedLength: carriedLength
+        )
+        guard !text.isEmpty else { return false }
+
+        lock.lock()
+        let isFirstSinceEmpty = previewsBySessionID[sessionID] == nil
+        if isFirstSinceEmpty {
+            order.append(sessionID)
+        }
+        previewsBySessionID[sessionID] = SessionPreview(messageID: messageID, text: text)
+        while order.count > Self.maximumRetained {
+            previewsBySessionID.removeValue(forKey: order.removeFirst())
+        }
+        let appeared = isFirstSinceEmpty && listedSessionIDs.contains(sessionID)
+        lock.unlock()
+        return appeared
+    }
+
+    /// One line, collapsed and cut.
+    ///
+    /// Control characters dropped, runs of whitespace collapsed to one space,
+    /// no leading space, and never longer than ``maximumCharacters``.
+    ///
+    /// `carried` is seeded rather than rescanned, and the running length is
+    /// carried as an `Int`. Both matter: `String.count` walks grapheme breaks,
+    /// so rebuilding `carried + delta` and testing `.count` after every
+    /// character would be quadratic in the cap and additionally copy the whole
+    /// delta. The scan touches only the new delta and stops the moment the head
+    /// is full, so a 60 KB delta costs the same as a 120-byte one — measured.
+    ///
+    /// A single trailing space **is** kept, and the seed relies on it: measured
+    /// on CLI 2.1.234, every non-final delta ends on a line break, which
+    /// collapses to that trailing space — so the next delta joins onto it and
+    /// no separator is invented. Trimming the tail here instead would weld the
+    /// last word of one delta onto the first word of the next; the caller trims
+    /// it when the text is read.
+    nonisolated static func normalized(
+        appending delta: String,
+        to carried: String,
+        carriedLength: Int
+    ) -> String {
+        var normalized = carried
+        normalized.reserveCapacity(maximumCharacters)
+        var length = carriedLength
+        var pendingSpace = !normalized.isEmpty && !normalized.hasSuffix(" ")
+
+        for character in delta {
+            if character.isWhitespace {
+                // Never leading: a message that opens with a newline should not
+                // spend its first character on it.
+                pendingSpace = !normalized.isEmpty
+                continue
+            }
+            guard !character.unicodeScalars.contains(
+                where: CharacterSet.controlCharacters.contains
+            ) else { continue }
+
+            if pendingSpace {
+                normalized.append(" ")
+                pendingSpace = false
+                length += 1
+                if length >= maximumCharacters { return normalized }
+            }
+            normalized.append(character)
+            length += 1
+            if length >= maximumCharacters { return normalized }
+        }
+
+        if pendingSpace { normalized.append(" ") }
+        return normalized
+    }
+
+    /// One string, collapsed and cut the same way, for text that arrives whole.
+    nonisolated static func normalized(_ text: String?) -> String? {
+        guard let text else { return nil }
+        let folded = normalized(appending: text, to: "", carriedLength: 0)
+            .trimmingCharacters(in: .whitespaces)
+        return folded.isEmpty ? nil : folded
+    }
+}
+
+/// Fans one change signal out to every subscriber.
+///
+/// Same shape as ``DirectoryChangeWatcher``'s, and for the same reason: a
+/// consumer subscribes once at launch and goes on receiving edges, and more
+/// than one may. A single stored `AsyncStream` would have exactly one
+/// consumer -- fine for the service that merges it, and a trap for anything
+/// that asks a second time.
+nonisolated final class HookChangeBroadcast: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var continuations: [UUID: AsyncStream<Void>.Continuation] = [:]
+
+    nonisolated init() {}
+
+    nonisolated func events() -> AsyncStream<Void> {
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let identifier = UUID()
+            lock.lock()
+            continuations[identifier] = continuation
+            lock.unlock()
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                lock.lock()
+                continuations.removeValue(forKey: identifier)
+                lock.unlock()
+            }
         }
     }
 
+    nonisolated func signal() {
+        lock.lock()
+        let current = Array(continuations.values)
+        lock.unlock()
+        for continuation in current {
+            continuation.yield(())
+        }
+    }
+}
+
+/// Payloads waiting to be reduced, in the order they landed.
+///
+/// The reducer is an actor and the transport is a serial GCD queue, so the
+/// hand-off cannot be an `await` without giving up the ordering the read queue
+/// exists to provide: two `Task`s spawned in order are not two `Task`s that run
+/// in order. Appends happen on the read queue, in order; a drain swaps the
+/// whole array out at once, so whichever drain runs first sees a prefix and
+/// every payload is reduced exactly once, in arrival order.
+nonisolated final class HookDeliveryInbox: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var pending: [DeliveredHookEvent] = []
+
+    nonisolated init() {}
+
+    nonisolated func append(_ event: DeliveredHookEvent) {
+        lock.lock()
+        pending.append(event)
+        lock.unlock()
+    }
+
+    nonisolated func take() -> [DeliveredHookEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        let taken = pending
+        pending.removeAll(keepingCapacity: true)
+        return taken
+    }
+
+    nonisolated func removeAll() {
+        lock.lock()
+        pending.removeAll()
+        lock.unlock()
+    }
+}
+
+/// The Turn reducer, the row's text, and the evidence that the hooks are live.
+///
+/// **There is no backlog and no cutoff.** An event that arrives is live by
+/// construction: it came down a socket into this process, from a helper that
+/// ran a moment ago. `AGENTS.md` §6.2 — "historical events carry no business
+/// semantics" — stops being a check on a timestamp and becomes a property of
+/// the architecture, because nothing is written down for a later launch to find.
+/// The file queue that made the check necessary is gone, and with it the atomic
+/// temp-and-rename writes, the `time_ns` filenames, the corrupt-file
+/// quarantine, the delete-after-consume, the rollback when a marker failed to
+/// persist, the directory watcher and its 100 ms debounce.
+///
+/// **It signals a change only when the rendered projection changes.** A
+/// 17-event turn is not 17 wake-ups. `AGENTS.md` §7 asks that redraw count
+/// follow what is drawn; this is that rule enforced at the source rather than
+/// by a debounce downstream.
+actor HookEventRepository {
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
     private let clock: any MonitorClock
     private let timing: MonitorTiming
-    /// How this repository's events are spelled. The rules below are the same
-    /// for every product; only the names arriving on disk differ.
-    private let vocabulary: any AgentHookVocabulary
-    nonisolated private let eventsWatcher: DirectoryChangeWatcher
-    nonisolated private let previewChannel: HookPreviewChannel
-    private let liveEventCutoff: Date
+    /// How this store's events are spelled. The rules below are the same for
+    /// every product; only the names arriving on the socket differ.
+    nonisolated private let vocabulary: any AgentHookVocabulary
+    /// Payloads whose working directory is this one are dropped.
+    ///
+    /// The quota reading runs `claude -p "/usage"`, which is a real session and
+    /// fires real hooks. `UserPromptSubmit` would have separated it from a
+    /// human's prompt by its `source` field, except that field was measured
+    /// absent from every event including a human's — so the poll is pinned to a
+    /// directory of its own and recognised by that instead.
+    nonisolated private let ignoredWorkingDirectory: URL?
+    nonisolated private let inbox = HookDeliveryInbox()
+    nonisolated private let previews = HookSessionPreviewStore()
+    nonisolated private let changes = HookChangeBroadcast()
+
     private var hasObservedEvent: Bool
-    private var hasObservedLiveEvent: Bool
+    private var hasObservedLiveEvent = false
+    private var didRecordEventThisLaunch = false
     // Codex trusts each hook definition by content hash, so rewriting one stops
     // Codex executing it until the user re-trusts -- silently, while the other
     // definitions keep firing. Every PostToolUse is preceded by a PreToolUse for
     // the same call, so closes without opens are direct evidence of that state.
     private var observedPreToolUseCount = 0
     private var observedPostToolUseCount = 0
-    private var turnsByThreadID: [String: HookTurnState]
+    private var turnsByThreadID: [String: HookTurnState] = [:]
+    /// What the last signal described, so a payload that changes nothing
+    /// rendered does not wake the panel.
+    private var signalledProjection: [String] = []
+    /// Whether anything has been reduced since the refresh path last looked.
+    ///
+    /// Sticky rather than per-call, because reduction no longer happens on the
+    /// refresh: a payload lands on the transport and is reduced by whichever
+    /// `Task` picks the inbox up first, which may well be before the caller
+    /// asks. The caller's question is "has anything moved since I last asked",
+    /// and it uses the answer to decide whether the Desktop process it can see
+    /// is the one those events came from -- so an answer consumed by a
+    /// background drain would silently cost a whole refresh of freshness.
+    private var didReduceSinceLastReport = false
+    /// A payload this store could not make sense of, held for the same reason.
+    private var pendingDiagnostic: String?
 
     init(
         paths: HookIntegrationPaths = .live(),
         fileManager: FileManager = .default,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
-        liveEventCutoff: Date? = nil,
-        previewChannel: HookPreviewChannel? = nil,
-        vocabulary: any AgentHookVocabulary = CodexHookVocabulary()
+        vocabulary: any AgentHookVocabulary = CodexHookVocabulary(),
+        ignoredWorkingDirectory: URL? = nil
     ) {
         self.paths = paths
         self.fileManager = fileManager
         self.clock = clock
         self.timing = timing
         self.vocabulary = vocabulary
-        // The helper writes one file per lifecycle event, so watching the queue
-        // directory turns a Hook into an immediate refresh instead of one that
-        // waits out the poll interval.
-        self.eventsWatcher = DirectoryChangeWatcher(
-            directoryURL: paths.eventsDirectory,
-            debounceInterval: timing.hookEventDebounceInterval
-        )
-        self.previewChannel = previewChannel
-            ?? HookPreviewChannel(socketURL: paths.previewSocket)
-        // Binding fails harmlessly before the support directory exists; the
-        // installer asks again once it has created it. A product that hands
-        // over no text is never bound at all.
-        if vocabulary.usesPreviewChannel {
-            self.previewChannel.start()
-        }
-        self.liveEventCutoff = liveEventCutoff ?? clock.now()
-
-        if let data = try? Data(contentsOf: paths.state),
-           let persisted = try? JSONDecoder().decode(PersistedState.self, from: data) {
-            // A valid event proves only that the installed hook was trusted at
-            // least once. This persisted marker is configuration health evidence;
-            // it is never restored as current Desktop runtime evidence.
-            self.hasObservedEvent = persisted.hasObservedEvent
-                ?? !(persisted.turns ?? []).isEmpty
-            self.hasObservedLiveEvent = false
-            // A persisted Turn is historical by definition. Restoring it would
-            // turn the last observed Running/Input/Approval into a false claim
-            // about the current Desktop runtime.
-            self.turnsByThreadID = [:]
-            if persisted.turns != nil {
-                try? Self.writeObservationMarker(
-                    hasObservedEvent: self.hasObservedEvent,
-                    paths: paths,
-                    fileManager: fileManager
-                )
-            }
-        } else {
-            self.hasObservedEvent = false
-            self.hasObservedLiveEvent = false
-            self.turnsByThreadID = [:]
-        }
+        self.ignoredWorkingDirectory = ignoredWorkingDirectory
+        // A recorded event proves only that the installed definitions were
+        // trusted at least once. It is configuration health evidence and never
+        // current runtime evidence, which is why the turns it once accompanied
+        // are not restored and never were.
+        self.hasObservedEvent = HookInstallStateFile.read(
+            at: paths.installState
+        ).lastEventAt != nil
     }
 
     nonisolated func changeEvents() -> AsyncStream<Void> {
-        eventsWatcher.events()
+        changes.events()
     }
 
-    /// Rebinds the preview socket, for use once the support directory exists.
+    // MARK: - Delivery
+
+    /// Takes one payload off the transport, in arrival order.
     ///
-    /// The channel is constructed at launch, which on a first run is before
-    /// anything has created the directory it binds in.
+    /// Runs on the listener's serial read queue, so everything here has to be
+    /// bounded: one decode, and for a delta a scan that stops at the head's
+    /// cap. Reduction itself happens on the actor, from a snapshot of the inbox
+    /// that preserves this order.
+    nonisolated func deliver(_ body: Data, at receivedAt: Date) {
+        guard let payload = try? JSONDecoder().decode(HookPayload.self, from: body),
+              let eventName = payload.hookEventName,
+              payload.sessionID != nil else {
+            return
+        }
+        // Our own quota reading is a real session firing real hooks.
+        // Compared as paths rather than URLs: a URL built from a payload string
+        // is not marked as a directory, and URL equality counts that, so two
+        // spellings of the same folder would not match.
+        if let ignoredWorkingDirectory, let cwd = payload.workingDirectory,
+           URL(fileURLWithPath: cwd).standardizedFileURL.path
+            == ignoredWorkingDirectory.standardizedFileURL.path {
+            return
+        }
+
+        // Assistant text stops here. Folding it costs one bounded scan and
+        // reaches the reducer's mailbox not at all, which is why a talking turn
+        // does not wake the panel three times a second.
+        if let deltaEvent = vocabulary.messageDeltaEventName, eventName == deltaEvent {
+            guard let delta = payload.delta, let sessionID = payload.sessionID else {
+                return
+            }
+            if previews.fold(
+                delta: delta,
+                messageID: payload.messageID,
+                sessionID: sessionID
+            ) {
+                changes.signal()
+            }
+            return
+        }
+
+        inbox.append(DeliveredHookEvent(payload: payload, receivedAt: receivedAt))
+        Task { await self.reduceWhatHasLanded() }
+    }
+
+    /// Reduces everything the transport has handed over, in arrival order.
+    ///
+    /// Called by the delivery kick and again on the refresh path, so nothing
+    /// can be left waiting for a `Task` that has not run yet. Taking the inbox
+    /// is atomic, so the two callers cannot reduce the same payload twice or
+    /// reorder each other.
     @discardableResult
-    nonisolated func startPreviewChannel() -> Bool {
-        // A product that hands over no text has no channel to bind.
-        guard vocabulary.usesPreviewChannel else { return false }
-        return previewChannel.start()
+    func drainDeliveredEvents() -> HookStateSnapshot {
+        drainInbox()
+        let reported = snapshot(didConsumeEvents: didReduceSinceLastReport)
+        didReduceSinceLastReport = false
+        pendingDiagnostic = nil
+        return reported
     }
 
-    /// Attaches the event-queue watcher, for the same reason.
-    ///
-    /// Called the moment the installer creates the directory, so the first turn
-    /// after setup is delivered immediately rather than waiting out a refresh
-    /// deadline. ``consumeEvents`` also retries, as a backstop.
-    @discardableResult
-    nonisolated func attachEventWatcher() -> Bool {
-        eventsWatcher.attachIfNeeded()
-    }
-
-    nonisolated var isEventWatcherAttached: Bool {
-        eventsWatcher.isAttached
-    }
-
-    nonisolated func stopPreviewChannel() {
-        previewChannel.stop()
-    }
-
-    nonisolated var previewChannelDiagnostic: String? {
-        previewChannel.diagnostic
-    }
-
-    private func claimedPreview(for event: HookEvent) -> HookPreviewChannel.Preview? {
-        guard let eventID = stableIdentifier(event.eventID) else { return nil }
-        return previewChannel.claimPreview(forEventID: eventID)
-    }
-
-    /// The reducer's current view, without touching the event queue.
-    ///
-    /// `consumeEvents` deletes files and advances Turn state, so it must happen
-    /// exactly once per refresh. Callers that only need the trust marker or the
-    /// current Turns use this instead.
+    /// The reducer's current view, without draining and without consuming what
+    /// the refresh path is entitled to be told.
     func observedState() -> HookStateSnapshot {
         snapshot()
     }
 
-    func consumeEvents() -> HookStateSnapshot {
-        // Every refresh is a chance to pick the low-latency path back up. On a
-        // first run the directory does not exist until the installer creates
-        // it, so the attach attempted at launch necessarily failed; piggybacking
-        // on the refresh that was happening anyway costs one `open` and needs no
-        // timer of its own.
-        eventsWatcher.attachIfNeeded()
+    private func drainInbox() {
+        let delivered = inbox.take()
+        guard !delivered.isEmpty else { return }
 
-        let urls = (try? fileManager.contentsOfDirectory(
-            at: paths.eventsDirectory,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ))?.filter { $0.pathExtension == "json" }.sorted {
-            $0.lastPathComponent < $1.lastPathComponent
-        } ?? []
-
-        guard !urls.isEmpty else {
-            return snapshot()
-        }
-
-        var candidateTurns = turnsByThreadID
-        var validURLs: [URL] = []
-        var didConsumeLiveEvents = false
-        var diagnostic: String?
-
-        for url in urls {
-            guard let data = try? Data(contentsOf: url),
-                  let event = try? JSONDecoder().decode(HookEvent.self, from: data) else {
-                diagnostic = "Ignored a corrupted hook event file."
-                quarantineInvalidEvent(at: url)
-                continue
-            }
-
-            // Files left behind before this repository was created are backlog,
-            // not a snapshot of the current Desktop runtime. They may prove that
-            // the managed hook has executed before, but no historical event type
-            // is allowed to create or mutate a current Turn.
-            guard event.receivedAt.isFinite else {
-                diagnostic = "Ignored a hook event with no stable identity, or of an unsupported kind."
-                quarantineInvalidEvent(at: url)
-                continue
-            }
-            guard Date(timeIntervalSince1970: event.receivedAt) >= liveEventCutoff else {
-                validURLs.append(url)
-                continue
-            }
-
-            if reduce(event, into: &candidateTurns) {
-                validURLs.append(url)
-                didConsumeLiveEvents = true
+        var didReduce = false
+        for event in delivered {
+            if reduce(event) {
+                didReduce = true
             } else {
-                diagnostic = "Ignored a hook event with no stable identity, or of an unsupported kind."
-                quarantineInvalidEvent(at: url)
+                pendingDiagnostic = "Ignored a hook payload with no stable identity, or of an unsupported kind."
             }
         }
 
-        guard !validURLs.isEmpty else {
-            return snapshot(diagnostic: diagnostic)
+        if didReduce {
+            hasObservedEvent = true
+            hasObservedLiveEvent = true
+            didReduceSinceLastReport = true
+            recordFirstEventOfThisLaunch()
         }
-
-        let previousTurns = turnsByThreadID
-        let previouslyObservedEvent = hasObservedEvent
-        let previouslyObservedLiveEvent = hasObservedLiveEvent
-        turnsByThreadID = candidateTurns
-        hasObservedEvent = true
-        hasObservedLiveEvent = hasObservedLiveEvent || didConsumeLiveEvents
-        do {
-            try persist()
-        } catch {
-            turnsByThreadID = previousTurns
-            hasObservedEvent = previouslyObservedEvent
-            hasObservedLiveEvent = previouslyObservedLiveEvent
-            return snapshot(
-                diagnostic: "Could not write the hook state; the events are kept and will be retried: \(error.localizedDescription)"
-            )
-        }
-
-        for url in validURLs {
-            try? fileManager.removeItem(at: url)
-        }
-        return snapshot(
-            didConsumeEvents: didConsumeLiveEvents,
-            diagnostic: diagnostic
-        )
+        signalIfProjectionChanged()
     }
+
+    /// Stamps `lastEventAt`, once per launch and never per event.
+    ///
+    /// The card only ever asks whether an event has *ever* arrived, so a write
+    /// per event would be file I/O buying a resolution nothing reads. One write
+    /// per run keeps the value genuinely recent and costs one write per run.
+    private func recordFirstEventOfThisLaunch() {
+        guard !didRecordEventThisLaunch else { return }
+        didRecordEventThisLaunch = true
+        HookInstallStateFile.update(at: paths.installState, fileManager: fileManager) {
+            $0.lastEventAt = self.clock.now()
+        }
+    }
+
+    // MARK: - Previews
+
+    nonisolated func preview(forSession sessionID: String) -> String? {
+        previews.preview(forSession: sessionID)
+    }
+
+    nonisolated func retainPreviews(forSessions sessionIDs: Set<String>) {
+        previews.retain(forSessions: sessionIDs)
+    }
+
+    // MARK: - Evidence that is not a hook event
 
     /// Ends the turns of sessions that report they have stopped working.
     ///
@@ -1227,9 +1512,7 @@ actor HookEventRepository {
     /// The reducer stays the only thing that computes turn state. This does not
     /// hand the caller a turn to edit; it takes a fact about a *session* and
     /// applies the same rules any event gets, which is why it lives here and
-    /// not in the service that reads the list. ``removeThreads(notIn:snapshotStartedAt:)``
-    /// is the same shape for the same reason: a second source is allowed to
-    /// retire something, under an ordering guard, inside this actor.
+    /// not in the service that reads the list.
     ///
     /// - Parameter observations: Session id to the moment its reading *began*.
     ///   A reading that started before the turn's last event proves nothing
@@ -1237,18 +1520,13 @@ actor HookEventRepository {
     ///   so it is ignored. That guard is what makes a cached list safe to act
     ///   on: an answer read half a minute ago cannot retire a turn that has
     ///   moved since.
-    ///
-    /// A turn ended this way is `completed` like any other. The product exposes
-    /// one terminal, and an interrupted turn is a turn that is over.
     func endTurnsForStoppedSessions(
         _ observations: [String: Date]
     ) -> HookStateSnapshot {
         for (threadID, observedAt) in observations {
             endOpenTurn(ofThread: threadID, named: nil, at: observedAt)
         }
-        // Nothing to persist: turn state is deliberately memory-only, and the
-        // observation marker this file does write is about hook trust, which
-        // has not changed.
+        signalIfProjectionChanged()
         return snapshot()
     }
 
@@ -1258,7 +1536,7 @@ actor HookEventRepository {
     /// that half cannot reach. A session the Claude Code desktop app hosts
     /// publishes no working status at all -- the terminal interface writes that
     /// field and the desktop app runs the CLI without one -- so "the session
-    /// stopped saying it was busy" is a sentence those sessions never say -- so
+    /// stopped saying it was busy" is a sentence those sessions never say, and
     /// their rows went on freezing after the CLI's had stopped (CC-022, #41).
     /// What they do leave is a record in their own transcript, written at the
     /// moment of the abort.
@@ -1270,10 +1548,6 @@ actor HookEventRepository {
     /// held to it: an observation naming a turn the reducer is not holding does
     /// nothing rather than ending whatever happens to be open. Neither may open,
     /// name or describe a turn; both may only end one.
-    ///
-    /// The ordering guard is the same and stricter in practice: the moment
-    /// compared here is when the interrupt was *written*, not when this app got
-    /// around to reading it.
     func endInterruptedTurns(_ interruptions: [TurnInterruption]) -> HookStateSnapshot {
         for interruption in interruptions {
             endOpenTurn(
@@ -1282,6 +1556,7 @@ actor HookEventRepository {
                 at: interruption.endedAt
             )
         }
+        signalIfProjectionChanged()
         return snapshot()
     }
 
@@ -1313,7 +1588,6 @@ actor HookEventRepository {
         notIn unarchivedThreadIDs: Set<String>,
         snapshotStartedAt: Date
     ) -> HookStateSnapshot {
-        let originalCount = turnsByThreadID.count
         let now = clock.now()
         turnsByThreadID = turnsByThreadID.filter {
             if unarchivedThreadIDs.contains($0.key) {
@@ -1329,33 +1603,35 @@ actor HookEventRepository {
             return now.timeIntervalSince($0.value.startedAt)
                 < timing.newTurnReconciliationGrace
         }
-        if turnsByThreadID.count != originalCount {
-            try? persist()
-        }
+        signalIfProjectionChanged()
         return snapshot()
     }
 
     func clearTurnsPreservingObservation() {
         turnsByThreadID.removeAll()
-        try? persist()
+        signalIfProjectionChanged()
     }
 
     func resetIntegrationObservation(clearTurns: Bool) {
         hasObservedEvent = false
         hasObservedLiveEvent = false
+        didRecordEventThisLaunch = false
+        didReduceSinceLastReport = false
+        pendingDiagnostic = nil
+        inbox.removeAll()
+        previews.removeAll()
         if clearTurns {
             turnsByThreadID.removeAll()
         }
-        try? persist()
+        signalledProjection = renderedProjection()
     }
 
-    private func reduce(
-        _ event: HookEvent,
-        into turns: inout [String: HookTurnState]
-    ) -> Bool {
+    // MARK: - The reducer
+
+    private func reduce(_ delivered: DeliveredHookEvent) -> Bool {
+        let event = delivered.payload
         guard let eventName = stableIdentifier(event.hookEventName),
-              let threadID = stableIdentifier(event.sessionID),
-              event.receivedAt.isFinite else {
+              let threadID = stableIdentifier(event.sessionID) else {
             return false
         }
 
@@ -1363,33 +1639,34 @@ actor HookEventRepository {
             forEvent: eventName,
             toolName: event.toolName
         ) else {
-            // Not this product's event at all. Quarantine rather than consume,
-            // so an unrecognised shape is reported instead of disappearing.
+            // Not this product's event at all. Reported rather than swallowed,
+            // so an unrecognised shape is visible instead of disappearing.
             return false
         }
 
-        switch signal {
-        case .sessionEnded, .inert:
-            // Recognised and consumed. Neither needs a turn to address, so both
-            // answer before the identity gate below.
+        if signal == .inert {
+            // Recognised and consumed. It needs no turn to address, so it
+            // answers before the identity gate below.
             return true
-        default:
-            break
         }
 
         guard let turnID = stableIdentifier(event.turnID) else {
             return false
         }
 
-        let receivedAt = Date(timeIntervalSince1970: event.receivedAt)
+        let receivedAt = delivered.receivedAt
         // Only products that stay silent on a refusal need a wait closed by
         // unrelated activity; see `reportsApprovalDenials`.
         let infersDenials = !vocabulary.reportsApprovalDenials
+        // Text arrives in the payload that changes the row, for a product that
+        // sends it at all. There is no second socket and no `event_id` to
+        // correlate: one connection carried the whole thing.
+        let carriesText = vocabulary.carriesTurnText
 
         switch signal {
         case .turnStarted:
             var retiredTurnIDs = Set<String>()
-            if let current = turns[threadID] {
+            if let current = turnsByThreadID[threadID] {
                 if current.turnID == turnID {
                     guard receivedAt >= current.lastEventAt else { return true }
                     retiredTurnIDs = current.retiredTurnIDs
@@ -1402,7 +1679,7 @@ actor HookEventRepository {
                     retiredTurnIDs.insert(current.turnID)
                 }
             }
-            turns[threadID] = HookTurnState(
+            turnsByThreadID[threadID] = HookTurnState(
                 threadID: threadID,
                 turnID: turnID,
                 sessionStatus: .running,
@@ -1412,7 +1689,9 @@ actor HookEventRepository {
                 startedAt: receivedAt,
                 lastEventAt: receivedAt,
                 retiredTurnIDs: retiredTurnIDs,
-                promptPreview: claimedPreview(for: event)?.prompt,
+                promptPreview: carriesText
+                    ? HookSessionPreviewStore.normalized(event.prompt)
+                    : nil,
                 assistantPreview: nil
             )
         case .approvalWaitInferred:
@@ -1421,8 +1700,7 @@ actor HookEventRepository {
                 turnID: turnID,
                 at: receivedAt,
                 createWith: .running,
-                adoptContinuationWith: .running,
-                turns: &turns
+                adoptContinuationWith: .running
             ) { state in
                 // Codex asks about an ordinary tool -- a shell command, say -- by
                 // announcing the call in `PreToolUse` and then firing this event
@@ -1460,8 +1738,7 @@ actor HookEventRepository {
                 turnID: turnID,
                 at: receivedAt,
                 createWith: .running,
-                adoptContinuationWith: .running,
-                turns: &turns
+                adoptContinuationWith: .running
             ) {
                 Self.resolveInferredApproval(
                     &$0, activityOn: toolUseID, whenInferring: infersDenials
@@ -1480,8 +1757,7 @@ actor HookEventRepository {
                 turnID: turnID,
                 at: receivedAt,
                 createWith: .running,
-                adoptContinuationWith: .running,
-                turns: &turns
+                adoptContinuationWith: .running
             ) {
                 Self.resolveInferredApproval(
                     &$0, activityOn: toolUseID, whenInferring: infersDenials
@@ -1508,8 +1784,7 @@ actor HookEventRepository {
                 // An ordinary tool call is not evidence a turn began, so it
                 // never creates one -- it only annotates a turn already known.
                 createWith: nil,
-                adoptContinuationWith: .running,
-                turns: &turns
+                adoptContinuationWith: .running
             ) {
                 Self.resolveInferredApproval(
                     &$0, activityOn: toolUseID, whenInferring: infersDenials
@@ -1529,8 +1804,7 @@ actor HookEventRepository {
                 turnID: turnID,
                 at: receivedAt,
                 createWith: nil,
-                adoptContinuationWith: .running,
-                turns: &turns
+                adoptContinuationWith: .running
             ) {
                 if $0.pendingInputToolUseID == toolUseID {
                     $0.pendingInputToolUseID = nil
@@ -1558,16 +1832,15 @@ actor HookEventRepository {
                 }
             }
         case .turnEnded:
-            // Claimed before the mutation so the text is taken exactly once,
-            // whether or not this event turns out to address a live turn.
-            let assistantPreview = claimedPreview(for: event)?.assistantMessage
+            let assistantPreview = carriesText
+                ? HookSessionPreviewStore.normalized(event.lastAssistantMessage)
+                : nil
             mutateExactTurn(
                 threadID: threadID,
                 turnID: turnID,
                 at: receivedAt,
                 createWith: .completed,
-                adoptContinuationWith: .completed,
-                turns: &turns
+                adoptContinuationWith: .completed
             ) {
                 // The product intentionally exposes one terminal state. Stop,
                 // completed, failed, and interrupted all converge to Completed.
@@ -1576,8 +1849,8 @@ actor HookEventRepository {
                 $0.pendingApproval = nil
                 $0.assistantPreview = assistantPreview
             }
-        case .sessionEnded, .inert:
-            // Both answered above, before the turn identity gate.
+        case .inert:
+            // Answered above, before the turn identity gate.
             break
         }
         return true
@@ -1616,11 +1889,10 @@ actor HookEventRepository {
         at date: Date,
         createWith sessionStatus: SessionStatus?,
         adoptContinuationWith continuationStatus: SessionStatus?,
-        turns: inout [String: HookTurnState],
         mutation: (inout HookTurnState) -> Void
     ) {
         var state: HookTurnState
-        if let current = turns[threadID] {
+        if let current = turnsByThreadID[threadID] {
             if current.turnID == turnID {
                 guard date >= current.lastEventAt else { return }
                 state = current
@@ -1664,7 +1936,7 @@ actor HookEventRepository {
         }
         mutation(&state)
         state.lastEventAt = max(state.lastEventAt, date)
-        turns[threadID] = state
+        turnsByThreadID[threadID] = state
     }
 
     private func stableIdentifier(_ value: String?) -> String? {
@@ -1673,9 +1945,49 @@ actor HookEventRepository {
         return normalized.isEmpty ? nil : normalized
     }
 
+    // MARK: - What is drawn, and when it is worth saying so
+
+    /// Everything a row draws that this store is the source of.
+    ///
+    /// Turns only. A streamed delta is not here and is not meant to be: a row's
+    /// text updates on whatever refresh the turn's own lifecycle events cause,
+    /// and the alternative is a redraw 3.4 times a second for a line the user is
+    /// already reading (`AGENTS.md` §7, and the measurement in
+    /// `system-architecture.md` §6). The one case that does need an edge — a row
+    /// with *nothing* to show — carries its own, qualified by whether the
+    /// session is listed at all; see ``HookSessionPreviewStore/fold``.
+    private func renderedProjection() -> [String] {
+        turnsByThreadID.values
+            .map { turn in
+                [
+                    turn.threadID,
+                    turn.turnID,
+                    String(describing: turn.sessionStatus),
+                    turn.promptPreview ?? "",
+                    turn.assistantPreview ?? ""
+                ].joined(separator: "\u{1}")
+            }
+            .sorted()
+    }
+
+    private func signalIfProjectionChanged() {
+        let current = renderedProjection()
+        guard current != signalledProjection else { return }
+        signalledProjection = current
+        changes.signal()
+    }
+
     /// Set once enough tool calls have closed without a single one opening.
     ///
-    /// Three is past coincidence and still reached within one short turn.
+    /// Three is past coincidence and still reached within one short turn. It is
+    /// the only runtime evidence that a definition has lost trust, and it is
+    /// kept even though the frozen definition closes most of the hole it covers
+    /// — a user editing `config.toml`, or a Codex update that rehashes, can
+    /// still reach the state.
+    ///
+    /// Only implications where absence is genuinely evidence belong here.
+    /// `PermissionRequest` fires only when a human is asked, so its silence
+    /// proves nothing and it must never be probed.
     private var undeliveredPreToolUseDiagnostic: String? {
         guard observedPreToolUseCount == 0, observedPostToolUseCount >= 3 else {
             return nil
@@ -1683,55 +1995,18 @@ actor HookEventRepository {
         return "Codex is not running the PreToolUse hook, so input needed and approval needed cannot be shown; run /hooks in Codex to trust the definition again."
     }
 
-    private func snapshot(
-        didConsumeEvents: Bool = false,
-        diagnostic: String? = nil
-    ) -> HookStateSnapshot {
+    /// The drain the transport kicks, which reports to nobody.
+    private func reduceWhatHasLanded() {
+        drainInbox()
+    }
+
+    private func snapshot(didConsumeEvents: Bool = false) -> HookStateSnapshot {
         HookStateSnapshot(
             hasObservedEvent: hasObservedEvent,
             hasObservedLiveEvent: hasObservedLiveEvent,
             turns: turnsByThreadID.values.sorted { $0.startedAt > $1.startedAt },
             didConsumeEvents: didConsumeEvents,
-            diagnostic: diagnostic ?? undeliveredPreToolUseDiagnostic
-        )
-    }
-
-    private func quarantineInvalidEvent(at url: URL) {
-        let quarantine = url.deletingPathExtension().appendingPathExtension("invalid")
-        try? fileManager.moveItem(at: url, to: quarantine)
-    }
-
-    private func persist() throws {
-        try Self.writeObservationMarker(
-            hasObservedEvent: hasObservedEvent,
-            paths: paths,
-            fileManager: fileManager
-        )
-    }
-
-    private static func writeObservationMarker(
-        hasObservedEvent: Bool,
-        paths: HookIntegrationPaths,
-        fileManager: FileManager
-    ) throws {
-        try fileManager.createDirectory(
-            at: paths.agentDirectory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-
-        // Runtime Turn identity and evidence are intentionally memory-only. A
-        // successful event proves hook trust, but never proves restart liveness.
-        let data = try JSONEncoder().encode(
-            PersistedState(
-                hasObservedEvent: hasObservedEvent,
-                turns: nil
-            )
-        )
-        try data.write(to: paths.state, options: .atomic)
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: paths.state.path
+            diagnostic: pendingDiagnostic ?? undeliveredPreToolUseDiagnostic
         )
     }
 }

@@ -71,12 +71,6 @@ nonisolated struct MonitorTiming: Sendable {
     /// It is a backstop, not a cadence: a service reporting honest deadlines
     /// never reaches it. Nothing may depend on it for latency.
     var minimumRefreshInterval: TimeInterval = 1
-    /// How long a cached installation scan is trusted without re-reading disk.
-    ///
-    /// Installation health changes only when this app writes the configuration,
-    /// when the user repairs it, or when something outside edits it. The first
-    /// two invalidate the cache directly; this bounds the third.
-    var installationRevalidationInterval: TimeInterval = 60
     /// How long a full membership reconciliation stays fresh.
     var threadListRefreshInterval: TimeInterval = 30
     /// How long one thread's cached metadata stays fresh.
@@ -119,8 +113,6 @@ nonisolated struct MonitorTiming: Sendable {
     var unreadStateDebounceInterval: TimeInterval = 0.05
     /// How long `disconnected` must persist before it replaces a trusted state.
     var disconnectGracePeriod: TimeInterval = 3
-    /// Trailing debounce on the Hook event queue directory.
-    var hookEventDebounceInterval: TimeInterval = 0.1
     /// Pointer dwell before the panel expands.
     var hoverExpandDelay: TimeInterval = 0.15
     /// Pointer dwell before the panel collapses.

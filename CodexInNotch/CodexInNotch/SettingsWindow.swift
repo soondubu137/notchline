@@ -74,7 +74,7 @@ struct AppSettingsView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .disabled(store.isInstallingIntegration || store.isRemovingIntegration)
-                    .help("Installs or removes the six Codex lifecycle definitions together.")
+                    .help("Installs or removes the five Codex lifecycle definitions together.")
             }
 
             if let setup = store.manualSetups[.claudeCode] {
@@ -107,7 +107,7 @@ struct AppSettingsView: View {
             }
         } footnote: {
             SettingsFootnote(
-                "The switch installs only the six lifecycle events Codex in Notch needs, "
+                "The switch installs only the five lifecycle events Codex in Notch needs, "
                     + "and removes them again when it is off. Claude Code is registered by "
                     + "hand — this app reads that file and never writes it."
             ) {

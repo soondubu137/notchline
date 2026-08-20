@@ -400,15 +400,32 @@ struct TurnEvidence: Equatable {
 
 安装器必须记录自己管理的最小配置片段，不能覆盖用户其他配置。
 
-**改写任何一条定义都会使它失去信任。** Codex 在 `config.toml` 的 `[hooks.state."<hooks.json 路径>:<event>:<group>:<handler>"]` 下按定义内容哈希记录信任；定义内容一变，Codex 就**静默停止执行该定义**，直到用户重新 `/hooks` 信任。其余未改动的定义哈希不变，继续正常触发，因此应用侧看不出任何异常——`hasObservedEvent` 会被它们满足，UI 照常显示已连接。2026-08-15 实测中 `PreToolUse` 因此连续两轮完全不触发而无任何提示。据此：任何改动 managed 定义的版本升级，都必须在 Settings 与 Onboarding 明确要求重新信任；reducer 另外用「只见 `PostToolUse` 不见 `PreToolUse`」作为该状态的运行时探测并输出诊断。移除时只移除本应用管理的片段。安装健康度要求 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse(^(request_user_input|request_permissions)$)`、`PostToolUse`、`Stop`、`SessionEnd` 六种定义各有且只有一个当前 handler，且 command、matcher 与 `timeout = 3` 精确匹配；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `repairRequired`，不能显示 Ready。用户重新开启总开关后，安装器先移除所有本应用 command 的残缺/重复注册，再写回完整集合，同时保留其他 command。
+**改写任何一条定义都会使它失去信任，因此定义写下之后不再改写**（[ADR 0014](adr/0014-the-codex-hook-definition-is-never-rewritten.md)）。Codex 在 `config.toml` 的 `[hooks.state."<hooks.json 路径>:<event>:<group>:<handler>"]` 下按定义内容哈希记录信任；定义内容一变，Codex 就**静默停止执行该定义**，直到用户重新 `/hooks` 信任。其余未改动的定义哈希不变，继续正常触发，因此应用侧看不出任何异常——投递证据会被它们满足，UI 照常显示已连接。2026-08-15 实测中 `PreToolUse` 因此连续两轮完全不触发而无任何提示。
+
+据此，版本化整个搬进**脚本**（不参与哈希），定义只写一个稳定路径：
+
+```json
+{"type": "command", "command": "/bin/sh '<support>/agents/codex/hook.sh'", "timeout": 3}
+```
+
+注册的是 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`Stop` **五**条，全部不带 matcher。`SessionEnd` 不再注册：它 reduce 之后什么也不做，代价是每次会话结束一次进程启动和一条要用户信任的定义；会话没了的行由 App Server 成员关系校正退休。`PreToolUse`/`PostToolUse` 保持 catch-all——把它们收窄到 `^(request_user_input|request_permissions)$` 会砍掉约 90% 的事件量，但普通工具的审批是一条带 `tool_name` 而不带 `tool_use_id` 的 `PermissionRequest`，只能挂到 catch-all `PreToolUse` 刚刚宣告的那个 id 上，而拒绝推断还需要看见**其他**调用上的活动。事件量的答案是更便宜的 helper，不是 matcher。
+
+安装健康度要求这五条定义各有且只有一个当前 handler，且 command 与 `timeout = 3` 精确匹配、group 不带 matcher；只存在任意子集、重复定义或字段被改变时必须 fail closed 为 `mismatched`（卡片显示 `repairRequired`），不能显示 Ready。
+
+两条合并规则，理由都在实测的信任 key 形状上——2026-08-20 本机读到 `[hooks.state."…/hooks.json:pre_tool_use:0:0"]`，第三段是 group 在数组里的**下标**：
+
+1. **只在尾部追加，只从尾部移除。** 从中间移除一个 group 会让它后面所有 group 重新编号，于是**用户自己的**定义静默失去信任。
+2. **已经正确的安装不写文件。** `install()` 在 `complete` 时直接返回，不重写、也不重排一份本来就正确的文件。
+
+reducer 另外用「只见 `PostToolUse` 不见 `PreToolUse`」作为失信状态的运行时探测并输出诊断。定义冻结之后本应用自己已经到不了那个状态，探测留给它造不出的情况：用户手改 `config.toml`，或 Codex 更新重新哈希。移除时只移除本应用管理的片段。
 
 ### 7.2 启动与重连
 
 ```text
 launch
-→ load Hook trust marker only; initialize an empty in-memory reducer
-→ detect installation/version
-→ atomically upgrade the app-managed Hook helper whenever this app recorded installing it
+→ bind hook.sock; write hook.sh if its bytes differ from the bundled one
+→ read install.json (lastEventAt only); initialize an empty in-memory reducer
+→ compute registration once from ~/.codex/hooks.json
 → Connecting (≤ 5s)
 → capability handshake
 → reconcile active + unread terminal membership
@@ -418,11 +435,15 @@ launch
 
 五秒内连接成功则不显示中间错误；超时后根据原因进入 Update required、Version unsupported 或 Disconnected。Codex 未运行时不自动启动。
 
-Hook helper 的源码发生版本变化不等于集成未安装。安装器直接把磁盘上的 helper 与本版本内置的定义做内容比较：相同即 `current`；不同且本应用的安装标记存在（`managed-install.json` 只由 `install()` 写入，等于本应用确实安装过；早于该标记的安装以遗留的 `hook-settings.json` 为准）时，只原子升级本应用管理的 helper 文件，不改写 `hooks.json`、不重新要求信任。标记本身不携带任何设置——预览开关已不再落盘。
+**helper 的升级只发生在启动与安装两处，不在刷新路径上。** 安装器把磁盘上的 helper 与本版本内置的字符串直接比较，不同就覆写；`hooks.json` 一个字节都不动，用户不需要重新信任（[ADR 0014](adr/0014-the-codex-hook-definition-is-never-rewritten.md)）。**没有安装标记**：它当初只用来区分「本应用装的旧 helper，该升级」与「本应用从没装过的文件，不该悄悄替换」，而这个区分不值一个文件——两边的处置是同一个，写下当前脚本。它也从来没有提供防篡改能力，旧代码自己的注释已经承认：能改脚本的东西也能改它旁边的标记。
+
+这条此前挂在**每一次刷新**上（`upgradeManagedHookIfNeeded()` 读约 4 KB 脚本做字符串比较），去回答一个只有本应用自己升级时才会变的问题。
+
+**注册完整度也不按节拍重算。** 它只在三个时刻改变：本应用写了 `hooks.json`、用户主动要求重新检查、或该文件在我们脚下被改动（FSEvents 边沿）。前两者直接失效缓存，第三者由 `CodexHookRegistrar` 自己订阅。`installationRevalidationInterval`、缓存扫描与 `hasManagedSupportFootprint` 随之删除。
 
 安装与移除都对用户的 `hooks.json` **fail closed**，由 [`ManagedHooksConfiguration`](../CodexInNotch/CodexInNotch/ManagedHooksConfiguration.swift) 执行，规则只有三条：
 
-1. **只改本应用管理的六个 event key**，其余 key、未知字段、分组内的自定义键一律原样保留。
+1. **只改本应用管理的五个 event key**，其余 key、未知字段、分组内的自定义键一律原样保留。
 2. **看不懂的结构不改**。只有当「必须写入的那个 key 已经是看不懂的结构」时才整体拒绝并返回可见错误——因为写进去就等于覆盖用户的内容。不相关的 event 即使结构奇怪也只是跳过，不构成错误，否则用户将永远无法干净卸载。
 3. **移除侧额外做一次全文深扫**，确认本应用的命令没有残留在任何改不动的形状里。有残留就拒绝，并且**不删除 helper**——删了就是在用户配置里留下悬空引用。
 
@@ -459,7 +480,7 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 - `removed`：立即从 repository 删除。
 - `thread/closed`：只表示运行时关闭，不直接映射 removed。
 
-重启时不读取本应用旧列表或旧 reducer Turn；从空集合执行同一校正。启动前已写入事件目录的历史事件只可建立 Hook 配置健康信任，任何事件类型都不得恢复终态边界、创建 Turn 或修改当前状态。
+重启时不读取本应用旧列表或旧 reducer Turn；从空集合执行同一校正。这条不再需要靠一次检查守住：Hook 事件不落盘，所以下一次启动没有任何东西可以恢复终态边界、创建 Turn 或修改当前状态（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。磁盘上只剩 `install.json` 的 `lastEventAt`，它只建立 Hook 配置健康信任。
 
 ## 9. 状态 reducer
 
@@ -476,7 +497,7 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 
 ### 9.2 身份准入与请求配对
 
-- 所有会改变 Turn 状态的 Hook 必须包含非空 `session_id` 和 `turn_id`。不得回退到当前 Turn、`"unknown"`、时间邻近或 Thread 更新时间；缺少身份的事件只写诊断并消费隔离。
+- 所有会改变 Turn 状态的 Hook 必须包含非空 `session_id` 和 `turn_id`（Claude Code 把后者拼作 `prompt_id`，字段选择在 `HookPayload` 里合流）。不得回退到当前 Turn、`"unknown"`、时间邻近或 Thread 更新时间；缺少身份的 payload 只写诊断并丢弃——没有可以被隔离到的地方，这也是 `.invalid` 文件不再堆积的原因（本机曾累计 155 个）。
 - repository 没有该 Thread 时，受支持事件可以用自身的精确身份建立 Turn。已有当前 Turn 时，顺序更新且从未被该 Thread 淘汰过的 `UserPromptSubmit` 可以建立下一 Turn；Desktop 中断后继续执行时可能不再发送 `UserPromptSubmit`，因此更晚到达的实时 `PermissionRequest`、`PreToolUse`、`PostToolUse` 或 `Stop` 也可以用新的、未退休的精确 `turn_id` 接管同一 Thread。接管时旧 Turn id 立即进入 `retiredTurnIDs`，保留原始开始时间与 prompt preview，清空旧等待证据；事件本身再决定 Running、Input needed 或 Completed。任何退休 Turn 的迟到事件都不能复活旧身份。
 - `PreToolUse(request_user_input)` 只有在包含非空 `tool_use_id` 时才建立 Input pending；`PostToolUse` 只有 `turn_id` 和 `tool_use_id` 都与该 pending 完全相同时才能清除它。未匹配结果保持原状态。
 - `PermissionRequest` 没有自己的 `tool_use_id`，因此不能独立成为 Approval evidence；但它携带 `tool_name`，而被审批的调用已经由紧邻的 `PreToolUse` announce 过。reducer 因此为每个 Turn 记录"当前仍打开的工具调用"（`openToolUse`：`PreToolUse` 写入，同 `tool_use_id` 的 `PostToolUse` 清除），`PermissionRequest` 借用该 id 建立 Approval pending。没有打开的调用可配对，或 `tool_name` 与打开的调用不一致时，保持原状态——绝不建立无法关闭的等待。自动放行的请求在同一批事件内开合，不会滞留成假等待。`PostToolUse` 自身仍不得用来猜测审批状态。
@@ -489,15 +510,13 @@ Hook 是四态状态的唯一来源；App Server 只提供展示用元数据。H
 
 独立 App Server 不共享 Desktop 当前运行时，因此它不是 Hooks 的替代品，也不参与状态纠偏。元数据读取遇到缺失字段、超时或协议错误时保留最后可信内存状态，绝不因此改变四态值。
 
-### 9.4 历史回放与事件去重
+### 9.4 到达顺序与迟到事件
 
-repository 启动时记录 live cutoff。`received_at` 早于该 cutoff 的积压事件属于历史回放：文件可用于确认 Hook helper 曾经成功执行，随后删除，但事件业务语义不进入 reducer。UserPrompt、Permission、Input、PostTool、Stop 与 SessionEnd 使用同一条规则，没有终态例外。这样应用崩溃或退出期间遗留的任何 lifecycle 信号都不会在下次启动时伪装成当前状态。
+**没有历史回放，因此没有 live cutoff。** 一份 payload 顺着 socket 进到这个进程，来自片刻之前跑过的 helper，所以到达的事件按构造就是当前的；应用崩溃或退出期间的 lifecycle 信号根本没有被写在任何地方，下次启动无从伪装（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。
 
-优先使用服务端 event/revision 标识；否则构造稳定去重键：
+**到达顺序由 transport 的串行读取队列保证，不由注册保证。** 连接按到达顺序 accept、交给同一条串行队列，`deliver` 因此按 payload 落地的顺序被调用。交给 actor 时不能用 `await`——按顺序 spawn 的两个 `Task` 不是按顺序运行的两个 `Task`——所以 payload 先按顺序进一个锁保护的 inbox，drain 一次把整个数组取走。
 
-```text
-source + method + threadId + turnId + requestOrItemId + revision
-```
+**`retiredTurnIDs` 保留。** 提案曾主张删掉它，理由是「串行队列上的到达戳单调，所以退休轮次的迟到事件不可能存在」。这对 transport 成立，对 executor 不成立：ADR 0013 记录了 Claude Code 在同一个 `prompt_id` 下把 `Stop` 排在自己 subagent 的 `PermissionRequest` 前面交付，而 reducer 是两个产品共用的；Codex 那一半也没有实测。迟到与乱序仍然只靠 `mutateExactTurn` 的时刻比较与 `retiredTurnIDs` 两条挡下。
 
 所有未知字段与枚举写入诊断，不让应用崩溃。诊断只保留方法名、版本和枚举标识。
 
@@ -529,25 +548,19 @@ Input needed
 
 ### 正文如何到达本进程（Codex）
 
-**正文永远不写文件。** helper 在写事件文件之前，先通过 support 目录下权限 `0600` 的 Unix domain socket（`preview.sock`）把 `{event_id, prompt?, last_assistant_message?}` 交给正在运行的应用，随后才写那份不含正文的事件文件。应用按 `event_id` 把两者接上。
+**正文和它所属的那个事件一起到达，走同一条连接。** helper 把 stdin 原样转发进 `hook.sock`，不做任何过滤；字段选择、截断和事件命名都在 Swift 里（`HookPayload` 与 `HookSessionPreviewStore.normalized`），而不是一个只有一条集成测试跑得到的 Python 字符串字面量。`UserPromptSubmit` 带 `prompt`，`Stop` 带 `last_assistant_message`，两者都是 reducer 已经要处理的那个事件。
 
-顺序不可颠倒：事件文件的出现正是唤醒应用的信号，因此正文必须在文件落地之前就已在手。
+**没有第二条 socket，也没有 `event_id` 接合。** `preview.sock`、`claimPreview` 与未认领预览的保留上限全部只因为「正文不许进事件文件」而存在；一条 socket 带整份 payload 就没有这个拆分（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。
 
-没有监听者时 helper 直接放弃，正文丢失。这是**正确的降级**，因为早于本次启动 cutoff 的事件本来就会被整份丢弃（见 `system-architecture.md` §2.1）——把正文写进队列换不来任何产品价值，只换来一份没有 TTL 的敏感文本积压。丢失的结果是「没有预览」，而不是「过时的预览」。
+正文仍然不落盘，但这现在是构造使然而不是一条要守的规则：整条路径上没有文件。没有监听者时 helper 直接丢掉，结果是「没有预览」而不是「过时的预览」。
 
-实测 helper 成本（3 秒 hook 预算）：无监听者 30 ms、正常监听 33 ms、监听者绑定但完全不 accept 最坏 57 ms；纯解释器启动本身就要 30 ms，所以 socket 只占预算的 1%–2%。
-
-**connect 与 write 之间，应用可能已经 accept。** 监听 socket 是非阻塞的，好让 accept handler 一次排空 backlog 而不是停在下一个连接上；Darwin 的 `accept` 会把这个标志一并交给它返回的连接。接收循环于是从「已连接、但写还没落地」的客户端读到 `EAGAIN`，而它无法把 `EAGAIN` 与消息结束区分开——正文被永久丢弃，而不是等一下再读。应用侧那个 250 ms 接收超时本来正是为这一步设的，但它在非阻塞描述符上不约束任何东西，所以「从未触发」并不是余量充足的证据。`receiveMessage` 现在先清掉该标志，超时才真正生效（CC-023）。
-
-helper 那边 connect 和 write 通常紧挨着，所以这只在机器繁忙、两步被拉开时出现：一个预览永远没有出现、也永远不会出现的 Turn。
+**connect 与 write 之间，应用可能已经 accept。** 监听 socket 是非阻塞的，好让 accept handler 一次排空 backlog 而不是停在下一个连接上；Darwin 的 `accept` 会把这个标志一并交给它返回的连接。接收循环于是从「已连接、但写还没落地」的客户端读到 `EAGAIN`，而它无法把 `EAGAIN` 与消息结束区分开——payload 被永久丢弃，而不是等一下再读。250 ms 接收超时本来正是为这一步设的，但它在非阻塞描述符上不约束任何东西，所以「从未触发」并不是余量充足的证据。`receivePayload` 先清掉该标志，超时才真正生效（CC-023/CC-024）。这个坑最初是在 `preview.sock` 上发现的；它是 accept 的性质，所以跟着搬进了两个产品现在共用的那条 transport。
 
 不能改用 `thread.preview` 代替：实测它是**线程的首条用户消息**，不随轮次前进（17 轮的线程仍返回第 1 轮的文本），因此它满足不了 PRD 2.7 的「当前内容预览」。
 
-**这条 socket 已经没有契约撑着。** 它当初存在，是为了让「正文不落盘」这句承诺成立；那句承诺已在 PRD 第 7 节删除。它今天还在，只是因为它在跑、改它没有收益——Codex 侧一轮只来一次正文，走文件还是走 socket 在成本上分不出高下。哪天 helper 侧有别的理由要动，直接把正文写进事件文件即可，`preview.sock`、`event_id` 接合和上面那个 CC-023 的非阻塞坑一起消失。
-
 ### 正文如何到达本进程（Claude Code）
 
-**两个产品现在都走 helper 加 Unix domain socket，但 Codex 要两条通道、这边只要一条。** Codex 那边一条 hook 必须变成一个事件文件，而正文不进那个文件，于是正文自带一条 socket。这边 helper 把**整份 payload** 顺着同一条 socket 送进来，由 `AgentHookListener` 决定什么变成文件——`MessageDisplay` 在 `record(_:)` 里转向内存，根本不到队列。再绑一条 socket 什么也搬不动（这曾经是 #34 认定的前提，它是错的）。
+**两个产品现在是同一条形状：一个 helper、一条 socket、一个 store。** 这边和 Codex 的差别只剩正文的来源——那边一轮两次、跟着生命周期事件到；这边是 `MessageDisplay`，一个正在说话的轮次每秒 3.4 次。所以这边多一条规则：`MessageDisplay` 在 `HookEventRepository.deliver` 里就停下，折进一个锁保护的 preview store，**不进 reducer 的 mailbox**。折叠留在 listener 的串行读取队列上，而不是走一次 actor hop——那条路径每秒 3.4 次，一次 hop 会把它放上产品的关键路径（`AGENTS.md` §6.3）。
 
 **这条通道此前是 `type: "http"`，指向 `127.0.0.1:51741`；换成 helper 的理由与正文无关，见 [ADR 0013](adr/0013-claude-code-hooks-run-a-helper-not-a-port.md)。** 一句话：端口在本应用没开时不属于任何人，于是 CLI 每个事件都往用户会话里打一行 `connect ECONNREFUSED`，而且关不掉；这两件事都不是注册能修的。
 
@@ -557,7 +570,7 @@ helper 那边 connect 和 write 通常紧挨着，所以这只在机器繁忙、
 
 `AgentHookListener` 对它做四件事：
 
-1. **在写队列之前转向。** 事件队列是一个文件目录。三次每秒写一个文件、再由 reducer 读一个删一个，是这条路径最贵的做法；`record(_:)` 认出 `MessageDisplay` 后交给内存并直接返回，**不产生任何文件**。这同时也是「正文不落盘」这句话的实现。
+1. **在进 reducer 之前转向。** `deliver` 认出 `MessageDisplay` 后折进内存并直接返回：不排队、不 reduce、不唤醒面板。此前它还要避开一个文件目录——三次每秒写一个文件、再由 reducer 读一个删一个，是这条路径最贵的做法；那个目录已经不存在了。
 2. **一条串行读取队列，保序而不是抢快。** 连接按到达顺序 accept，交给同一条串行队列，所以 `record(_:)` 看到的顺序就是 payload 落地的顺序。这一条现在要单独说，因为 `command` schema **有** `async` 这个键（`http` schema 没有，2026-08-18 读 schema 证实，此前本文档以为写得进去的 `async: true` 会被 settings 解析器直接丢掉）。实测 2.1.237：`async: true` 会让同一个 `tool_use_id` 的 `PreToolUse` 与 `PostToolUse` 互相超车，并且在 `-p` 下**整个丢掉 `Stop`**——进程在后台 hook 跑完之前就退出了。所以注册是同步的，代价是每个事件 6.3 ms 落在会话上（对照：Codex 那边的 Python helper 一直是 30 ms）。
 3. **只留每条消息的头部 240 字符。** 内存由常数决定，而不是由模型说了多少决定：头写满之后，后续 delta 在被扫描进任何保留结构之前就停下。
 4. **一趟扫完，只扫新 delta。** 折叠函数以已规范化的头部为种子往下写，长度用 `Int` 随行。此前的写法是重建 `carried + delta` 再在每个字符后取 `.count`——`String.count` 要走一遍字素边界，于是相对截断长度是平方级，还额外整份拷贝了 delta（上限 `maximumBodyBytes`，1 MB）。现在超长 delta 与普通 delta 同价。
@@ -566,7 +579,7 @@ helper 那边 connect 和 write 通常紧挨着，所以这只在机器繁忙、
 
 **它也不进 `changeEvents()`，只有一个例外。** 不写文件的第二个后果：一个正在说话的轮次不会每秒把面板重画三次。正文由该轮次自身生命周期事件引起的刷新顺带取走，也就是面板本来的节奏——这条约束见 [`AGENTS.md`](../AGENTS.md) §7。
 
-例外是**从没有到有**这一个边沿：`onPreviewAppeared`，由 `ClaudeCodeMonitorService` 接到自己的 `stateChangeEvents` 上。上一段的理由只覆盖「行上已经有一句、它变旧了」，不覆盖「行上什么都没有」——后者要等的不是一次更整齐的重画，而是那个会话下一次做点别的，而一个说上一分钟才调一次工具的轮次期间什么生命周期事件都不发，于是那一行会一直空着。只报这一个边沿，因此代价是每个会话每一段「无话可说」一次唤醒，而不是每个 delta 一次；并且只为**上一次刷新列出过**的会话报（`retainPreviews` 收下的那个集合）——列表不带的会话，它的正文会被它自己求来的那次刷新裁掉，于是下一个 delta 又是一次「从没有到有」，那不是一次唤醒而是一个按 delta 速率跑的循环，何况那一行本来也不在屏幕上。
+例外是**从没有到有**这一个边沿，由 store 自己的 `changeEvents()` 报出——它不再需要一条自己的流，因为 store 本来就只在渲染投影变化时发信号。上一段的理由只覆盖「行上已经有一句、它变旧了」，不覆盖「行上什么都没有」——后者要等的不是一次更整齐的重画，而是那个会话下一次做点别的，而一个说上一分钟才调一次工具的轮次期间什么生命周期事件都不发，于是那一行会一直空着。只报这一个边沿，因此代价是每个会话每一段「无话可说」一次唤醒，而不是每个 delta 一次；并且只为**上一次刷新列出过**的会话报（`retainPreviews` 收下的那个集合）——列表不带的会话，它的正文会被它自己求来的那次刷新裁掉，于是下一个 delta 又是一次「从没有到有」，那不是一次唤醒而是一个按 delta 速率跑的循环，何况那一行本来也不在屏幕上。
 
 预览按 live 会话集合裁剪（与标题缓存同一个集合），所以会话结束后它的正文不会比那一行活得更久。
 
@@ -729,13 +742,13 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 
 - 用户选择的目标显示器稳定标识；显示器临时断开时不覆盖该偏好。
 - 集成安装状态与兼容性结果。
-- 已成功接收过合法 Hook 的布尔信任标记；不得包含 Thread、Turn 或内容。
+- 已成功接收过合法 Hook 的证据；不得包含 Thread、Turn 或内容。它现在是 `install.json` 里的一行 `lastEventAt`，每次运行只写一次——卡片只问「有没有到达过」，为它每个事件写一次盘就是在买一个没人读的精度。
 - 非敏感应用版本/迁移标记。
 
 禁止持久化：
 
 - 会话列表快照、thread 标题缓存、Project 缓存、未读状态。
-- Hook reducer 的 Turn 身份、lifecycle、pending input/approval evidence；旧版本持久化的 `turns` 只用于迁移信任标记，解码后立即丢弃。
+- Hook reducer 的 Turn 身份、lifecycle、pending input/approval evidence。这条现在由架构保证而不是由规则守住：整条路径上没有文件。
 - prompt、progress、final answer、raw reasoning。
 - 完整路径、命令、diff、工具参数、凭据、额度旧值。
 
@@ -744,7 +757,7 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - Expanded footer 齿轮：调用系统 `openSettings` 打开现有 Settings scene；不安装集成、不修改偏好，也不在 panel 中创建第二份设置 UI。
 - `Display`：立即将组件移动到所选显示器；目标临时不可用时回退，并在重新连接后恢复用户偏好。
 - `Recheck`：重新运行只读能力检查，不静默改配置。
-- `Codex integration` 总开关：On 安装或修复六种必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。窗口里它是 `Products` 卡片中 Codex 那一行的 switch；Claude Code 那一行按 ADR 0010 给的是 `Set Up…` 而不是开关（`figma-design.md` §8.1）。
+- `Codex integration` 总开关：On 安装或修复五条必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。窗口里它是 `Products` 卡片中 Codex 那一行的 switch；Claude Code 那一行按 ADR 0010 给的是 `Set Up…` 而不是开关（`figma-design.md` §8.1）。
 - `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。单行的对应动作是在终态行上右键（§17），两者共用同一个 `dismissedSessionIDs`。
 - `Quota reading transcripts`：报出本应用的额度读取在 Claude Code 自己的 project 目录里留下的 transcript 总大小，尾部 `Reveal in Finder` 打开那个目录（**只报大小**：个数那一半回答的是没人会问的问题，判断值不值得去清只看大小）；**只统计不删除**，理由见 `ClaudeCodeUsageTranscripts`。**这一行有三种读数，而不是「有数字」与「没有行」两种。** 目录靠一次已经发生的读取反查出来，因此第一次读取落地之前无从计数：那时写 `Calculating…` 并把按钮置灰；量到了写 `43.2 MB` 并恢复按钮；读取已经跑完却仍未找到目录时写 `Unavailable`。判据是「有没有跑完过一次读取」（`ClaudeCodeUsageReader.attemptedAt`）而不是失败次数——`session_id` 在 `read` 内部就已记下，所以一次跑完的读取找到的目录不会还被报成在路上；而机器上没有 `claude` 时那件「正在进行的工作」已经停了，再写 `Calculating…` 就是一句不再成立的进度声明。产品若根本不留文件（Codex）则整行不存在——把它和「还没量出来」用同一个 nil 表示，正是 CC-020 里卡片自己长出一行的成因。按钮的置灰由「有没有目录」这一个来源决定，不设第二个标志位，两者因此不可能互相矛盾。
 - `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。

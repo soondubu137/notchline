@@ -67,7 +67,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     private let timing: MonitorTiming
     private let client: any CodexAppServerCommunicating
     private let hookEvents: HookEventRepository
-    private let hookInstaller: CodexHookInstaller
+    private let hookRegistrar: CodexHookRegistrar
+    nonisolated private let hookListener: AgentHookListener
     private let projectMetadata: any DesktopProjectMetadataProviding
     private let unreadState: any DesktopUnreadStateProviding
     nonisolated let stateChangeEvents: AsyncStream<Void>
@@ -100,12 +101,15 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     private var quotaRefreshTask: Task<Void, Never>?
     private var quotaRetryAfter: Date?
     private var lastTrustedSnapshot: AgentSnapshot?
+    /// Whether this run has already compared the installed helper's bytes.
+    private var didCompareHelperThisLaunch = false
     private var terminalUnreadMembershipGate: TerminalUnreadMembershipGate
 
     init(
         client: any CodexAppServerCommunicating = CodexAppServerClient(),
         hookEvents: HookEventRepository = HookEventRepository(),
-        hookInstaller: CodexHookInstaller = CodexHookInstaller(),
+        hookRegistrar: CodexHookRegistrar = CodexHookRegistrar(),
+        hookListener: AgentHookListener? = nil,
         projectMetadata: any DesktopProjectMetadataProviding =
             CodexDesktopProjectMetadataRepository(),
         unreadState: any DesktopUnreadStateProviding =
@@ -120,7 +124,15 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         self.timing = timing
         self.client = client
         self.hookEvents = hookEvents
-        self.hookInstaller = hookInstaller
+        self.hookRegistrar = hookRegistrar
+        // The transport belongs to this service rather than to the store, so
+        // the store stays a reducer with an inbox and nothing that binds. One
+        // connection carries one payload; the closure below is called on the
+        // listener's serial read queue, which is what keeps arrival order.
+        self.hookListener = hookListener ?? AgentHookListener(clock: clock) {
+            [hookEvents] body, receivedAt in
+            hookEvents.deliver(body, at: receivedAt)
+        }
         self.projectMetadata = projectMetadata
         self.unreadState = unreadState
         // Background reads land after the snapshot that started them has already
@@ -132,7 +144,17 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         )
         self.snapshotInvalidations = invalidationContinuation
         self.stateChangeEvents = DirectoryChangeWatcher.merged([
+            // The store signals only when what a row draws has changed, so a
+            // 17-event turn is one wake-up rather than seventeen. There is no
+            // debounce in front of it any more: the 100 ms the queue watcher
+            // added landed on the one path where a user is watching for a row
+            // to change, and it was there to collapse a burst of files that no
+            // longer exists.
             hookEvents.changeEvents(),
+            // The registration changing underneath us -- the user running
+            // `/hooks`, or editing the file. It is what replaced re-deriving
+            // installation health on a 60-second cadence.
+            hookRegistrar.changeEvents(),
             unreadState.changeEvents(),
             invalidations
         ])
@@ -144,15 +166,13 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     }
 
     func fetchSnapshot() async -> AgentSnapshot {
-        let hookUpgradeDiagnostic: String?
-        do {
-            try await hookInstaller.upgradeManagedHookIfNeeded()
-            hookUpgradeDiagnostic = nil
-        } catch {
-            hookUpgradeDiagnostic = "Could not update the Codex hook helper; carrying on with the installed version: \(error.localizedDescription)"
-        }
-        var hookState = await hookEvents.consumeEvents()
-        let hookDiagnostic = hookState.diagnostic ?? hookUpgradeDiagnostic
+        // The transport, before the status gate. A trusted definition can fire
+        // before this app decides the registration is complete -- a Codex that
+        // was already running has them loaded -- so the socket has to be bound
+        // by then, not after.
+        await prepareTransport()
+        var hookState = await hookEvents.drainDeliveredEvents()
+        let hookDiagnostic = hookState.diagnostic
         let desktopProcessIdentifier = await desktopProcessIdentifierProvider()
         if hookState.didConsumeEvents {
             observedDesktopProcessIdentifier = desktopProcessIdentifier
@@ -170,7 +190,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             hookState: hookState,
             desktopProcessIdentifier: desktopProcessIdentifier
         )
-        let setupStatus = await hookInstaller.status(
+        let setupStatus = HookSetupStatus.card(
+            registration: await hookRegistrar.registration(),
             hasObservedEvent: hookState.hasObservedEvent
         )
         guard setupStatus.isIntegrationEnabled else {
@@ -448,32 +469,37 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         }
     }
 
-    /// Reads integration health without touching the event queue.
+    /// Reads integration health without draining the store.
     ///
-    /// Consuming here would delete files the snapshot path is about to reduce,
-    /// costing a full refresh cycle of latency for whatever it swallowed.
+    /// Draining here would reduce payloads the snapshot path is about to look
+    /// at, costing a full refresh cycle of latency for whatever it swallowed.
+    ///
+    /// The user asking for a re-check is one of the two moments registration
+    /// health can change without this app having caused it, so the cached
+    /// reading is dropped here. The other is the file changing underneath us,
+    /// which the registrar watches for itself.
     func hookSetupStatus() async -> HookSetupStatus {
-        await hookInstaller.invalidateInstallationCache()
-        return await hookInstaller.status(
+        await hookRegistrar.invalidateRegistration()
+        return HookSetupStatus.card(
+            registration: await hookRegistrar.registration(),
             hasObservedEvent: await hookEvents.observedState().hasObservedEvent
         )
     }
 
     func installHooks() async throws {
-        try await hookInstaller.install()
-        // The support directory exists now. On a first run neither the preview
-        // socket nor the event-queue watcher could bind at launch, because
-        // there was nowhere to bind them; this is the moment it becomes
-        // possible, and doing it here is what keeps the first turn after setup
-        // from waiting out a refresh deadline.
-        hookEvents.startPreviewChannel()
-        hookEvents.attachEventWatcher()
+        try await hookRegistrar.install()
+        didCompareHelperThisLaunch = true
+        // The support directory exists now. On a first run the socket could not
+        // bind at launch because there was nowhere to bind it; this is the
+        // moment it becomes possible, and doing it here is what keeps the first
+        // turn after setup from waiting out a refresh deadline.
+        await prepareTransport()
     }
 
     func removeHooks() async throws {
         await hookEvents.resetIntegrationObservation(clearTurns: true)
-        hookEvents.stopPreviewChannel()
-        try await hookInstaller.uninstall()
+        hookListener.stop()
+        try await hookRegistrar.uninstall()
         observedDesktopProcessIdentifier = nil
         hookTrackedThreadIDs = []
         threadListRefreshTask?.cancel()
@@ -500,6 +526,27 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 diagnostic: snapshot.diagnostic
             )
         }
+    }
+
+    /// Binds the socket, and writes the helper on the two occasions it can be
+    /// wrong.
+    ///
+    /// The bind returns immediately once the descriptor is held, so repeating
+    /// it costs nothing. The helper is a different matter: comparing its bytes
+    /// used to sit on the refresh path as `upgradeManagedHookIfNeeded()`,
+    /// reading a file to answer a question that can only change when the app
+    /// itself is upgraded. So the comparison happens once per launch, and again
+    /// only if a `stat` says the file has gone -- which a user emptying the
+    /// support folder can cause, and which is loud when it happens: `/bin/sh`
+    /// on a missing path writes to stderr, and Codex renders that as a hook
+    /// error in the user's session (ADR 0013).
+    private func prepareTransport() async {
+        let helperIsInstalled = await hookRegistrar.isHelperInstalled
+        if !didCompareHelperThisLaunch || !helperIsInstalled {
+            didCompareHelperThisLaunch = true
+            await hookRegistrar.prepareHelper()
+        }
+        hookListener.start(socketURL: hookRegistrar.socketURL)
     }
 
     nonisolated private func nanoseconds(_ seconds: TimeInterval) -> UInt64 {

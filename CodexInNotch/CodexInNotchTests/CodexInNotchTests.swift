@@ -3481,7 +3481,7 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
-    func startupWithHistoricalHookTrustBecomesIdleAfterSnapshot() async throws {
+    func recordedDeliveryOutlivesARestartWithoutRestoringATurn() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
             try? FileManager.default.removeItem(
@@ -3489,52 +3489,25 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
-        try await installer.install()
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        #expect(await registrar.registration() == .complete)
 
-        // Recreate an installation from an older build: a different helper
-        // script this app installed itself, still executable and registered.
-        try legacyManagedHookScript.write(
-            to: paths.script,
-            atomically: true,
-            encoding: .utf8
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: paths.script.path
-        )
-        // An install from before the marker existed: its provenance is the
-        // settings file, which is what the upgrade path still has to accept.
-        try? FileManager.default.removeItem(at: paths.installMarker)
-        try JSONSerialization.data(
-            withJSONObject: ["showsContentPreviews": false],
-            options: [.prettyPrinted, .sortedKeys]
-        ).write(to: paths.legacySettings, options: .atomic)
+        // A previous run saw an event. That is the whole of what survives a
+        // restart: it proves the definitions were trusted at least once, and it
+        // is why the card does not tell a user who trusted the hooks last week
+        // to go and trust them again.
+        HookInstallStateFile.update(at: paths.installState) {
+            $0.lastEventAt = Date(timeIntervalSince1970: 1_700_000_000)
+        }
 
-        // The scan is cached, so these external edits are only visible after
-        // revalidation -- which the app does on its own within the window, and
-        // immediately whenever the user asks for a recheck.
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: true) == .active)
-
-        // Persist trust without creating a live Turn, then simulate a fresh app
-        // launch while Codex Desktop is still running.
-        let terminalEvent = try JSONSerialization.data(withJSONObject: [
-            "received_at": Date().timeIntervalSince1970,
-            "hook_event_name": "SessionEnd",
-            "session_id": "thread-finished"
-        ])
-        try terminalEvent.write(
-            to: paths.eventsDirectory.appendingPathComponent("trusted.json")
-        )
-        let seedRepository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
-        let seededState = await seedRepository.consumeEvents()
-        #expect(seededState.hasObservedEvent)
-        #expect(seededState.hasObservedLiveEvent)
-        #expect(seededState.turns.isEmpty)
+        let restored = HookEventRepository(paths: paths)
+        let state = await restored.drainDeliveredEvents()
+        #expect(state.hasObservedEvent)
+        // ...and no more than that. Nothing about the current runtime comes
+        // back: no turn, and no claim to have seen anything this launch.
+        #expect(!state.hasObservedLiveEvent)
+        #expect(state.turns.isEmpty)
 
         let client = CodexAppServerStub(
             listedThreads: [],
@@ -3542,8 +3515,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(paths: paths),
-            hookInstaller: installer,
+            hookEvents: restored,
+            hookRegistrar: registrar,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -3554,32 +3527,12 @@ struct CodexInNotchTests {
             completed: true
         )
         let methods = await client.requestedMethods()
-        let upgradedScript = try String(
-            contentsOf: paths.script,
-            encoding: .utf8
-        )
-        let markerData = try Data(contentsOf: paths.installMarker)
-        let marker = try #require(
-            JSONSerialization.jsonObject(with: markerData) as? [String: Any]
-        )
-        let retiredLegacySettings = !FileManager.default.fileExists(
-            atPath: paths.legacySettings.path
-        )
         await service.disconnect()
 
+        #expect(snapshot.setupStatus == .active)
         #expect(snapshot.availability == .ready)
         #expect(snapshot.sessions.isEmpty)
         #expect(AgentSnapshotMerge.merge([snapshot]).status == .connected)
-        #expect(upgradedScript.contains(#"payload.get("tool_use_id")"#))
-        // The upgrade recognised a pre-marker install by its legacy settings
-        // file, replaced it with the marker, and carried no configuration
-        // across -- there is no longer any setting a helper could read.
-        #expect(marker["managedBy"] as? String == "codex-in-notch")
-        #expect(marker["showsContentPreviews"] == nil)
-        #expect(retiredLegacySettings)
-        // Provenance is the marker's existence, so no hash or version is kept.
-        #expect(marker["managedHookSHA256"] == nil)
-        #expect(marker["managedHookVersion"] == nil)
         #expect(methods.contains("thread/list"))
         #expect(!methods.contains("thread/loaded/list"))
         #expect(!methods.contains("thread/read"))
@@ -3594,7 +3547,7 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
         try await installer.install()
 
         let projectStateFile = paths.supportDirectory
@@ -3638,10 +3591,9 @@ struct CodexInNotchTests {
         let service = LiveCodexMonitorService(
             client: client,
             hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
+                paths: paths
             ),
-            hookInstaller: installer,
+            hookRegistrar: installer,
             projectMetadata: CodexDesktopProjectMetadataRepository(
                 stateFileURL: projectStateFile
             )
@@ -3675,7 +3627,10 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(
+            paths: paths
+        )
         try await installer.install()
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -3683,9 +3638,7 @@ struct CodexInNotchTests {
             "session_id": "thread-1",
             "turn_id": "turn-1"
         ])
-        try event.write(
-            to: paths.eventsDirectory.appendingPathComponent("trusted.json")
-        )
+        event.deliver(to: repository)
 
         let listedThread = JSONValue.object([
             "id": .string("thread-1"),
@@ -3701,11 +3654,8 @@ struct CodexInNotchTests {
         )
         let firstService = LiveCodexMonitorService(
             client: firstClient,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -3721,8 +3671,8 @@ struct CodexInNotchTests {
         )
         let restoredService = LiveCodexMonitorService(
             client: restoredClient,
-            hookEvents: HookEventRepository(paths: paths),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
         let restored = await restoredService.fetchSnapshot()
@@ -3750,16 +3700,15 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
         try await installer.install()
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "SessionEnd",
             "session_id": "thread-finished"
         ])
-        try event.write(
-            to: paths.eventsDirectory.appendingPathComponent("trusted.json")
-        )
+        event.deliver(to: repository)
 
         let client = CodexAppServerStub(
             listedThreads: [],
@@ -3768,11 +3717,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -3793,7 +3739,7 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
         try await installer.install()
         let client = CodexAppServerStub(
             listedThreads: [],
@@ -3803,7 +3749,7 @@ struct CodexInNotchTests {
         let service = LiveCodexMonitorService(
             client: client,
             hookEvents: HookEventRepository(paths: paths),
-            hookInstaller: installer,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -3825,16 +3771,15 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
         try await installer.install()
         let trusted = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "SessionEnd",
             "session_id": "thread-finished"
         ])
-        try trusted.write(
-            to: paths.eventsDirectory.appendingPathComponent("0.json")
-        )
+        trusted.deliver(to: repository)
 
         let client = CodexAppServerStub(
             listedThreads: [],
@@ -3843,11 +3788,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -3862,9 +3804,7 @@ struct CodexInNotchTests {
             "session_id": "thread-1",
             "turn_id": "turn-1"
         ])
-        try prompt.write(
-            to: paths.eventsDirectory.appendingPathComponent("1.json")
-        )
+        prompt.deliver(to: repository)
 
         let startedAt = Date()
         let running = await service.fetchSnapshot()
@@ -3888,14 +3828,9 @@ struct CodexInNotchTests {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
 
         let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
+            paths: paths
         )
         var clock = 3_000.0
         func emit(_ index: Int, _ event: [String: Any]) throws {
@@ -3904,9 +3839,7 @@ struct CodexInNotchTests {
             payload["received_at"] = clock
             payload["session_id"] = "thread-untrusted"
             payload["turn_id"] = "turn-untrusted"
-            try JSONSerialization.data(withJSONObject: payload).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
         }
 
         try emit(0, ["hook_event_name": "UserPromptSubmit"])
@@ -3918,14 +3851,14 @@ struct CodexInNotchTests {
             ])
         }
         // Two closes is still short of the threshold.
-        #expect(await repository.consumeEvents().diagnostic == nil)
+        #expect(await repository.drainDeliveredEvents().diagnostic == nil)
 
         try emit(3, [
             "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
             "tool_use_id": "exec-3"
         ])
-        let warned = await repository.consumeEvents().diagnostic
+        let warned = await repository.drainDeliveredEvents().diagnostic
         #expect(warned?.contains("/hooks") == true)
         #expect(warned?.contains("PreToolUse") == true)
     }
@@ -3938,14 +3871,9 @@ struct CodexInNotchTests {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
 
         let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
+            paths: paths
         )
         var clock = 4_000.0
         func emit(_ index: Int, _ event: [String: Any]) throws {
@@ -3954,9 +3882,7 @@ struct CodexInNotchTests {
             payload["received_at"] = clock
             payload["session_id"] = "thread-ok"
             payload["turn_id"] = "turn-ok"
-            try JSONSerialization.data(withJSONObject: payload).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
         }
 
         try emit(0, ["hook_event_name": "UserPromptSubmit"])
@@ -3974,7 +3900,7 @@ struct CodexInNotchTests {
                 "tool_use_id": "exec-\(index)"
             ])
         }
-        #expect(await repository.consumeEvents().diagnostic == nil)
+        #expect(await repository.drainDeliveredEvents().diagnostic == nil)
     }
 
     @Test
@@ -3988,14 +3914,9 @@ struct CodexInNotchTests {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
 
         let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
+            paths: paths
         )
         var clock = 1_000.0
         func emit(_ index: Int, _ event: [String: Any]) throws {
@@ -4004,13 +3925,11 @@ struct CodexInNotchTests {
             payload["received_at"] = clock
             payload["session_id"] = "thread-approval"
             payload["turn_id"] = "turn-approval"
-            try JSONSerialization.data(withJSONObject: payload).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
         }
 
         try emit(0, ["hook_event_name": "UserPromptSubmit"])
-        #expect(await repository.consumeEvents().turns.first?.status == .running)
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .running)
 
         // The approval tool call opens; the human has not answered yet.
         try emit(1, [
@@ -4018,7 +3937,7 @@ struct CodexInNotchTests {
             "tool_name": "request_permissions",
             "tool_use_id": "exec-approval-1"
         ])
-        #expect(await repository.consumeEvents().turns.first?.status == .approvalNeeded)
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .approvalNeeded)
 
         // An unrelated tool finishing must not clear the pending approval.
         try emit(2, [
@@ -4026,7 +3945,7 @@ struct CodexInNotchTests {
             "tool_name": "Bash",
             "tool_use_id": "exec-unrelated"
         ])
-        #expect(await repository.consumeEvents().turns.first?.status == .approvalNeeded)
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .approvalNeeded)
 
         // Answering it closes the matching tool call and resumes Running.
         try emit(3, [
@@ -4034,10 +3953,10 @@ struct CodexInNotchTests {
             "tool_name": "request_permissions",
             "tool_use_id": "exec-approval-1"
         ])
-        #expect(await repository.consumeEvents().turns.first?.status == .running)
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .running)
 
         try emit(4, ["hook_event_name": "Stop"])
-        #expect(await repository.consumeEvents().turns.first?.status == .completed)
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .completed)
     }
 
     @Test @MainActor
@@ -4049,7 +3968,8 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
         try await installer.install()
         let timestamp = Date().timeIntervalSince1970
         let prompt = try JSONSerialization.data(withJSONObject: [
@@ -4058,9 +3978,7 @@ struct CodexInNotchTests {
             "session_id": "thread-1",
             "turn_id": "turn-1"
         ])
-        try prompt.write(
-            to: paths.eventsDirectory.appendingPathComponent("0.json")
-        )
+        prompt.deliver(to: repository)
 
         let listedThread = JSONValue.object([
             "id": .string("thread-1"),
@@ -4077,11 +3995,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -4102,9 +4017,7 @@ struct CodexInNotchTests {
             "session_id": "thread-1",
             "turn_id": "turn-1"
         ])
-        try approval.write(
-            to: paths.eventsDirectory.appendingPathComponent("1.json")
-        )
+        approval.deliver(to: repository)
         let startedAt = Date()
         let approvalSnapshot = await service.fetchSnapshot()
         let elapsed = Date().timeIntervalSince(startedAt)
@@ -4117,9 +4030,7 @@ struct CodexInNotchTests {
             "tool_name": "request_user_input",
             "tool_use_id": "tool-1"
         ])
-        try input.write(
-            to: paths.eventsDirectory.appendingPathComponent("2.json")
-        )
+        input.deliver(to: repository)
         let inputSnapshot = await service.fetchSnapshot()
         let threadListRequests = await client.requestCount(method: "thread/list")
         await service.disconnect()
@@ -4141,7 +4052,8 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
         try await installer.install()
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -4149,9 +4061,7 @@ struct CodexInNotchTests {
             "session_id": "thread-stop",
             "turn_id": "turn-stop"
         ])
-        try event.write(
-            to: paths.eventsDirectory.appendingPathComponent("stop.json")
-        )
+        event.deliver(to: repository)
 
         let client = CodexAppServerStub(
             listedThreads: [.object([
@@ -4165,11 +4075,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -4208,7 +4115,8 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
         try await installer.install()
         let prompt = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -4216,9 +4124,7 @@ struct CodexInNotchTests {
             "session_id": "thread-terminal",
             "turn_id": "turn-terminal"
         ])
-        try prompt.write(
-            to: paths.eventsDirectory.appendingPathComponent("0.json")
-        )
+        prompt.deliver(to: repository)
 
         let listedThread = JSONValue.object([
             "id": .string("thread-terminal"),
@@ -4248,11 +4154,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             unreadState: unreadState,
             desktopProcessIdentifierProvider: { 4_242 }
         )
@@ -4271,9 +4174,7 @@ struct CodexInNotchTests {
             "session_id": "thread-terminal",
             "turn_id": "turn-terminal"
         ])
-        try stop.write(
-            to: paths.eventsDirectory.appendingPathComponent("1.json")
-        )
+        stop.deliver(to: repository)
 
         var observedStatuses: [SessionStatus] = []
         for _ in 0..<100 {
@@ -4341,7 +4242,8 @@ struct CodexInNotchTests {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
         try await installer.install()
         let event = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -4349,17 +4251,12 @@ struct CodexInNotchTests {
             "session_id": "live-probe-thread",
             "turn_id": "live-probe-turn"
         ])
-        try event.write(
-            to: paths.eventsDirectory.appendingPathComponent("live-probe.json")
-        )
+        event.deliver(to: repository)
         let client = RecordingAppServerClient(base: CodexAppServerClient())
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer
+            hookEvents: repository,
+            hookRegistrar: installer
         )
 
         let startedAt = Date()
@@ -4382,105 +4279,128 @@ struct CodexInNotchTests {
     }
 
     @Test
-    func hookEventQueueSignalsWithoutWaitingForThePoll() async throws {
-        // The queue directory is the only place a Hook lands, so watching it is
-        // what turns a lifecycle event into an immediate refresh instead of one
-        // that waits out the poll interval.
+    func theStoreSignalsWhatIsDrawnAndNothingElse() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
             try? FileManager.default.removeItem(
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
 
-        var timing = MonitorTiming.standard
-        timing.hookEventDebounceInterval = 0.01
-        let repository = HookEventRepository(
-            paths: paths,
-            timing: timing,
-            liveEventCutoff: .distantPast
-        )
-        let events = repository.changeEvents()
-        let event = try JSONSerialization.data(withJSONObject: [
-            "received_at": Date().timeIntervalSince1970,
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "thread-watch",
-            "turn_id": "turn-watch"
-        ])
-        let queued = paths.eventsDirectory.appendingPathComponent("0.json")
+        let repository = HookEventRepository(paths: paths)
+        let moment = Date().timeIntervalSince1970
 
-        #expect(await receivesChange(events) { try event.write(to: queued) })
+        // A turn opening changes the row, so the panel is asked to redraw --
+        // and it is asked directly, with no directory to watch and no 100 ms
+        // debounce in front of it.
+        #expect(
+            await receivesChange(repository.changeEvents()) {
+                deliverHook([
+                    "received_at": moment,
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "thread-watch",
+                    "turn_id": "turn-watch"
+                ], to: repository)
+            }
+        )
+        _ = await repository.drainDeliveredEvents()
+
+        // An ordinary tool call opening and closing inside a running turn draws
+        // nothing different, so it wakes nobody. This is the whole of what
+        // replaced the debounce: a 17-event turn is one wake-up, not seventeen.
+        let quiet = await receivesChange(
+            repository.changeEvents(),
+            within: .milliseconds(400)
+        ) {
+            for (index, name) in ["PreToolUse", "PostToolUse"].enumerated() {
+                deliverHook([
+                    "received_at": moment + 1 + Double(index),
+                    "hook_event_name": name,
+                    "session_id": "thread-watch",
+                    "turn_id": "turn-watch",
+                    "tool_name": "Bash",
+                    "tool_use_id": "bash-1"
+                ], to: repository)
+            }
+        }
+        #expect(!quiet)
+        #expect(await repository.observedState().turns.first?.status == .running)
+
+        // The turn ending does change the row.
+        #expect(
+            await receivesChange(repository.changeEvents()) {
+                deliverHook([
+                    "received_at": moment + 5,
+                    "hook_event_name": "Stop",
+                    "session_id": "thread-watch",
+                    "turn_id": "turn-watch"
+                ], to: repository)
+            }
+        )
     }
 
     @Test @MainActor
-    func readingSetupStatusNeverConsumesTheHookQueue() async throws {
-        // hookSetupStatus used to consume events, so a refresh drained the queue
-        // twice and whatever the second call swallowed surfaced a cycle late.
+    func readingSetupStatusNeverConsumesWhatTheRefreshIsOwed() async throws {
+        // hookSetupStatus used to consume events, so a refresh drained the
+        // queue twice and whatever the second call swallowed surfaced a cycle
+        // late. It reads the store now, and reading must not take delivery.
         let paths = makeTemporaryHookPaths()
         defer {
             try? FileManager.default.removeItem(
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
         try await installer.install()
-        try JSONSerialization.data(withJSONObject: [
+        let repository = HookEventRepository(paths: paths)
+        deliverHook([
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-intact",
             "turn_id": "turn-intact"
-        ]).write(to: paths.eventsDirectory.appendingPathComponent("0.json"))
+        ], to: repository)
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
         let service = LiveCodexMonitorService(
             client: CodexAppServerStub(listedThreads: [], loadedListResults: []),
             hookEvents: repository,
-            hookInstaller: installer,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        // Querying health repeatedly must leave the queued event untouched.
+        // Querying health repeatedly must leave the refresh's own answer alone.
         for _ in 0 ..< 3 {
             _ = await service.hookSetupStatus()
         }
-        #expect(
-            FileManager.default.fileExists(
-                atPath: paths.eventsDirectory
-                    .appendingPathComponent("0.json").path
-            )
-        )
+        #expect(await repository.observedState().hasObservedLiveEvent)
 
-        // The snapshot path is the single consumer, and it still sees the Turn.
+        // The snapshot path is the single consumer, and it still sees the Turn
+        // as one that arrived since it last looked.
         let snapshot = await service.fetchSnapshot()
         #expect(snapshot.sessions.first?.threadID == "thread-intact")
         #expect(snapshot.setupStatus == .active)
         await service.disconnect()
     }
 
+    /// Registration health is recomputed when it can change, not on a cadence.
+    ///
+    /// It used to be a cached scan of three files behind a 60-second
+    /// revalidation window, which meant an outside edit was invisible for up to
+    /// a minute and the app paid for the question on a timer. There are two
+    /// moments it can change now and the reading is dropped on both: this app
+    /// writing the file, and the user asking for a recheck. The third -- the
+    /// file changing underneath us -- is an FSEvents edge the registrar
+    /// subscribes to itself.
     @Test @MainActor
-    func installationHealthIsScannedOnDemandRatherThanOnACadence() async throws {
+    func registrationHealthIsRecomputedWhenItCanChangeRatherThanOnACadence() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
             try? FileManager.default.removeItem(
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        let clock = TestClock()
-        let timing = MonitorTiming.standard
-        let installer = CodexHookInstaller(
-            paths: paths,
-            clock: clock,
-            timing: timing
-        )
-        try await installer.install()
-        #expect(await installer.status(hasObservedEvent: true) == .active)
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        #expect(await registrar.registration() == .complete)
 
         // Something outside this app removes a managed definition.
         var configuration = try #require(
@@ -4494,14 +4414,15 @@ struct CodexInNotchTests {
         try JSONSerialization.data(withJSONObject: configuration)
             .write(to: paths.hooksConfiguration)
 
-        // Within the window the cached answer stands: this app did not make the
-        // change, so nothing invalidated it.
-        await clock.advance(by: timing.installationRevalidationInterval - 1)
-        #expect(await installer.status(hasObservedEvent: true) == .active)
+        // The recheck the user can ask for reads the file again, and reports
+        // the damage as something to repair rather than as nothing installed --
+        // the rest of the registration is still ours.
+        await registrar.invalidateRegistration()
+        #expect(await registrar.registration() == .mismatched)
 
-        // Past it, one scan picks the damage up without any polling in between.
-        await clock.advance(by: 2)
-        #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
+        // Repairing it writes the file, which drops the reading by itself.
+        try await registrar.install()
+        #expect(await registrar.registration() == .complete)
     }
 
     @Test @MainActor
@@ -4515,7 +4436,7 @@ struct CodexInNotchTests {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
         try await installer.install()
 
         let clock = TestClock()
@@ -4533,10 +4454,9 @@ struct CodexInNotchTests {
             hookEvents: HookEventRepository(
                 paths: paths,
                 clock: clock,
-                timing: timing,
-                liveEventCutoff: .distantPast
+                timing: timing
             ),
-            hookInstaller: installer,
+            hookRegistrar: installer,
             clock: clock,
             timing: timing
         )
@@ -4583,17 +4503,22 @@ struct CodexInNotchTests {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let repository = HookEventRepository(
+            paths: paths,
+            clock: clock,
+            timing: timing
+        )
         try await installer.install()
         try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-deadline",
             "turn_id": "turn-deadline"
-        ]).write(to: paths.eventsDirectory.appendingPathComponent("0.json"))
+        ]).deliver(to: repository)
 
-        let clock = TestClock()
-        let timing = MonitorTiming.standard
         let client = CodexAppServerStub(
             listedThreads: [.object([
                 "id": .string("thread-deadline"),
@@ -4605,13 +4530,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                clock: clock,
-                timing: timing,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             clock: clock,
             timing: timing,
             desktopProcessIdentifierProvider: { 4_242 }
@@ -5044,17 +4964,22 @@ struct CodexInNotchTests {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let repository = HookEventRepository(
+            paths: paths,
+            clock: clock,
+            timing: timing
+        )
         try await installer.install()
         try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-hooked",
             "turn_id": "turn-hooked"
-        ]).write(to: paths.eventsDirectory.appendingPathComponent("0.json"))
+        ]).deliver(to: repository)
 
-        let clock = TestClock()
-        let timing = MonitorTiming.standard
         // Only `thread-hooked` is driven by a Hook. `thread-idle` is an ordinary
         // unarchived thread -- the state of every real account.
         let client = CodexAppServerStub(
@@ -5076,13 +5001,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                clock: clock,
-                timing: timing,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             clock: clock,
             timing: timing,
             desktopProcessIdentifierProvider: { 4_242 }
@@ -5113,11 +5033,16 @@ struct CodexInNotchTests {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        let installer = CodexHookInstaller(paths: paths)
-        try await installer.install()
-
+        let installer = CodexHookRegistrar(paths: paths)
         let clock = TestClock()
         let timing = MonitorTiming.standard
+        let repository = HookEventRepository(
+            paths: paths,
+            clock: clock,
+            timing: timing
+        )
+        try await installer.install()
+
         var eventIndex = 0
         func emitHookActivity() throws {
             eventIndex += 1
@@ -5129,9 +5054,7 @@ struct CodexInNotchTests {
                 "tool_name": "Bash",
                 "tool_use_id": "exec-\(eventIndex)"
             ]
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(eventIndex).json")
-            )
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
         let client = CodexAppServerStub(
@@ -5145,13 +5068,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                clock: clock,
-                timing: timing,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             clock: clock,
             timing: timing,
             desktopProcessIdentifierProvider: { 4_242 }
@@ -5199,7 +5117,8 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
         try await installer.install()
         let prompt = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -5207,9 +5126,7 @@ struct CodexInNotchTests {
             "session_id": "thread-active",
             "turn_id": "turn-active"
         ])
-        try prompt.write(
-            to: paths.eventsDirectory.appendingPathComponent("0.json")
-        )
+        prompt.deliver(to: repository)
 
         // One thread is in the Hook reducer; the rest are only history.
         let listedThreads = (0 ..< 40).map { index -> JSONValue in
@@ -5230,11 +5147,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -5252,9 +5166,7 @@ struct CodexInNotchTests {
                 "tool_name": "shell",
                 "tool_use_id": "tool-\(index)"
             ])
-            try event.write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+            event.deliver(to: repository)
             _ = await service.fetchSnapshot()
             try await Task.sleep(nanoseconds: 20_000_000)
         }
@@ -5283,7 +5195,8 @@ struct CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
         try await installer.install()
         let prompt = try JSONSerialization.data(withJSONObject: [
             "received_at": Date().timeIntervalSince1970,
@@ -5291,9 +5204,7 @@ struct CodexInNotchTests {
             "session_id": "thread-active",
             "turn_id": "turn-active"
         ])
-        try prompt.write(
-            to: paths.eventsDirectory.appendingPathComponent("0.json")
-        )
+        prompt.deliver(to: repository)
 
         let client = CodexAppServerStub(
             listedThreads: [.object([
@@ -5311,11 +5222,8 @@ struct CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
@@ -5330,9 +5238,7 @@ struct CodexInNotchTests {
             "tool_name": "shell",
             "tool_use_id": "tool-1"
         ])
-        try event.write(
-            to: paths.eventsDirectory.appendingPathComponent("1.json")
-        )
+        event.deliver(to: repository)
         _ = await service.fetchSnapshot()
         // A server without thread/read must keep getting whole-list metadata
         // rather than silently losing titles.
@@ -6065,9 +5971,16 @@ for line in sys.stdin:
         )
     }
 
-    /// The end-to-end first run: repository at launch, install, then a hook.
-    @Test
-    func hookEventsReachTheLowLatencyPathOnAFirstRunInstall() async throws {
+    /// The end-to-end first run: store at launch, install, then a real hook.
+    ///
+    /// This replaces a pair of tests about re-attaching a directory watcher.
+    /// There is no directory and no watcher: the store is handed payloads by
+    /// the transport, so what has to be proved is that the transport is live
+    /// the moment onboarding creates the folder it binds in — which on a first
+    /// run is minutes after launch, and used to leave every turn waiting out a
+    /// refresh deadline instead (CR-025).
+    @Test @MainActor
+    func hookEventsReachTheStoreOnAFirstRunInstall() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
             try? FileManager.default.removeItem(
@@ -6075,57 +5988,40 @@ for line in sys.stdin:
             )
         }
         #expect(
-            !FileManager.default.fileExists(atPath: paths.eventsDirectory.path),
+            !FileManager.default.fileExists(atPath: paths.agentDirectory.path),
             "the support directory must not exist yet for this to be a first run"
         )
 
         // Constructed at launch, before onboarding has installed anything.
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
+        let repository = HookEventRepository(paths: paths)
+        let service = LiveCodexMonitorService(
+            client: CodexAppServerStub(listedThreads: [], loadedListResults: []),
+            hookEvents: repository,
+            hookRegistrar: CodexHookRegistrar(paths: paths),
+            desktopProcessIdentifierProvider: { 4_242 }
         )
-        #expect(!repository.isEventWatcherAttached)
+        defer { Task { await service.disconnect() } }
+
+        // Onboarding installs, which is what creates the directory the socket
+        // lives in and writes the helper the definitions name.
+        try await service.installHooks()
+        #expect(FileManager.default.isExecutableFile(atPath: paths.hookHelper.path))
+
+        // The very next hook goes through the installed helper, over the real
+        // socket, and reaches the reducer.
         let stream = repository.changeEvents()
-
-        // Onboarding installs, which is what creates the event directory.
-        try await CodexHookInstaller(paths: paths).install()
-        #expect(repository.attachEventWatcher())
-        #expect(repository.isEventWatcherAttached)
-
-        // The very next hook must arrive on the watcher rather than waiting out
-        // a refresh deadline.
-        let firstHook = paths.eventsDirectory.appendingPathComponent("1.json")
-        #expect(
-            await receivesChange(stream) {
-                try Data(#"{"received_at": 1}"#.utf8).write(to: firstHook)
-            }
-        )
-    }
-
-    /// A refresh re-attaches on its own, so the explicit nudge is a latency
-    /// optimisation rather than the only route back.
-    @Test
-    func consumingEventsReattachesAWatcherThatCouldNotBindAtLaunch() async throws {
-        let paths = makeTemporaryHookPaths()
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-first-run",
+            "turn_id": "turn-first-run"
+        ])
+        let helper = paths.hookHelper
+        let signalled = await receivesChange(stream) {
+            _ = try self.runHelper(at: helper, stdin: payload)
         }
-
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
-        #expect(!repository.isEventWatcherAttached)
-
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
-        // No explicit attach: just the refresh the store performs anyway.
-        _ = await repository.consumeEvents()
-        #expect(repository.isEventWatcherAttached)
+        #expect(signalled)
+        let turns = await waitForReducedTurns(repository, count: 1)
+        #expect(turns.first?.threadID == "thread-first-run")
     }
 
     /// Configurations this app must refuse to edit rather than guess at.
@@ -6186,7 +6082,7 @@ for line in sys.stdin:
             let originalBytes = Data(hostile.json.utf8)
             try originalBytes.write(to: paths.hooksConfiguration)
 
-            let installer = CodexHookInstaller(paths: paths)
+            let installer = CodexHookRegistrar(paths: paths)
             var refused = false
             do {
                 try await installer.install()
@@ -6227,14 +6123,13 @@ for line in sys.stdin:
             )
 
             // A completed install, so there is a helper to strand.
-            let installer = CodexHookInstaller(paths: paths)
+            let installer = CodexHookRegistrar(paths: paths)
             try await installer.install()
-            #expect(FileManager.default.isExecutableFile(atPath: paths.script.path))
+            #expect(FileManager.default.isExecutableFile(atPath: paths.hookHelper.path))
 
             // Then the configuration turns into something unreadable.
             let originalBytes = Data(hostile.json.utf8)
             try originalBytes.write(to: paths.hooksConfiguration)
-            let managedCommand = "/usr/bin/python3 \"\(paths.script.path)\""
 
             var refused = false
             do {
@@ -6250,7 +6145,7 @@ for line in sys.stdin:
             )
             if refused {
                 #expect(
-                    FileManager.default.fileExists(atPath: paths.script.path),
+                    FileManager.default.fileExists(atPath: paths.hookHelper.path),
                     "uninstall refused but still deleted the helper when \(hostile.name)"
                 )
             } else {
@@ -6259,7 +6154,7 @@ for line in sys.stdin:
                     String(data: afterBytes, encoding: .utf8)
                 )
                 #expect(
-                    !remaining.contains(paths.script.path),
+                    !remaining.contains(paths.hookHelper.path),
                     "uninstall deleted a helper the file still references when \(hostile.name)"
                 )
             }
@@ -6286,7 +6181,7 @@ for line in sys.stdin:
                 at: paths.hooksConfiguration.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            let installer = CodexHookInstaller(paths: paths)
+            let installer = CodexHookRegistrar(paths: paths)
             try await installer.install()
             try Data(json.utf8).write(to: paths.hooksConfiguration)
 
@@ -6297,7 +6192,7 @@ for line in sys.stdin:
                 refused = true
             }
             #expect(refused, "uninstall should refuse: \(json)")
-            #expect(FileManager.default.fileExists(atPath: paths.script.path))
+            #expect(FileManager.default.fileExists(atPath: paths.hookHelper.path))
             #expect(try Data(contentsOf: paths.hooksConfiguration) == Data(json.utf8))
         }
     }
@@ -6320,9 +6215,9 @@ for line in sys.stdin:
             withIntermediateDirectories: true
         )
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
         try await installer.install()
-        let managedCommand = "/usr/bin/python3 \"\(paths.script.path)\""
+        let managedCommand = CodexHookRegistrar.command(forHelper: paths.hookHelper)
 
         // A hand-written copy of our command in a group shape the editor
         // deliberately refuses to rewrite: an unrelated event whose handler
@@ -6349,7 +6244,7 @@ for line in sys.stdin:
 
         #expect(refused)
         #expect(try Data(contentsOf: paths.hooksConfiguration) == beforeBytes)
-        #expect(FileManager.default.fileExists(atPath: paths.script.path))
+        #expect(FileManager.default.fileExists(atPath: paths.hookHelper.path))
     }
 
     /// Everything outside the six managed definitions survives a round trip.
@@ -6394,7 +6289,7 @@ for line in sys.stdin:
         try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
             .write(to: paths.hooksConfiguration)
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
         try await installer.install()
 
         let installedRoot = try #require(
@@ -6453,7 +6348,7 @@ for line in sys.stdin:
         #expect(commands("Stop", in: finalHooks) == ["/usr/bin/true"])
         #expect(commands("UserPromptSubmit", in: finalHooks) == ["/usr/bin/false"])
         // Nothing of this app's may remain anywhere in the document.
-        let managedCommand = "/usr/bin/python3 \"\(paths.script.path)\""
+        let managedCommand = CodexHookRegistrar.command(forHelper: paths.hookHelper)
         #expect(
             !ManagedHooksConfiguration.contains(marker: managedCommand, in: finalRoot)
         )
@@ -6473,7 +6368,7 @@ for line in sys.stdin:
                 at: created.supportDirectory.deletingLastPathComponent()
             )
         }
-        try await CodexHookInstaller(paths: created).install()
+        try await CodexHookRegistrar(paths: created).install()
         let createdRoot = try #require(
             JSONSerialization.jsonObject(
                 with: try Data(contentsOf: created.hooksConfiguration)
@@ -6492,7 +6387,7 @@ for line in sys.stdin:
             withIntermediateDirectories: true
         )
         try Data(#"{"hooks": {}}"#.utf8).write(to: adopted.hooksConfiguration)
-        try await CodexHookInstaller(paths: adopted).install()
+        try await CodexHookRegistrar(paths: adopted).install()
         let adoptedRoot = try #require(
             JSONSerialization.jsonObject(
                 with: try Data(contentsOf: adopted.hooksConfiguration)
@@ -6501,8 +6396,201 @@ for line in sys.stdin:
         #expect(adoptedRoot["description"] == nil)
     }
 
+    /// The definition never changes, and this is the pin that says so.
+    ///
+    /// Codex stores trust in `config.toml` under
+    /// `[hooks.state."<hooks.json path>:<event>:<group>:<handler>"]`, keyed by
+    /// the definition's content hash. Change a definition and Codex **silently
+    /// stops executing that one** until the user re-trusts it in `/hooks`,
+    /// while every untouched definition keeps firing normally — so nothing in
+    /// the app can see it. Measured on 2026-08-15 with `PreToolUse` dead for
+    /// two consecutive turns and no indication anywhere.
+    ///
+    /// So the handler names a stable path and carries nothing else: no version,
+    /// no port, no token, no argument that could ever need to change.
+    /// Versioning lives in the script, which is not hashed. This test fails the
+    /// build rather than the user's trust when somebody edits either.
     @Test @MainActor
-    func hookInstallerMergesExistingConfigurationAndIsIdempotent() async throws {
+    func theRegisteredDefinitionCarriesNothingThatCouldEverNeedToChange() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
+
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+
+        let root = try #require(
+            JSONSerialization.jsonObject(
+                with: try Data(contentsOf: paths.hooksConfiguration)
+            ) as? [String: Any]
+        )
+        let hooks = try #require(root["hooks"] as? [String: Any])
+        let expected: [String: Any] = [
+            "type": "command",
+            "command": "/bin/sh '\(paths.hookHelper.path)'",
+            "timeout": 3
+        ]
+
+        for definition in CodexHookVocabulary().managedDefinitions {
+            let groups = try #require(hooks[definition.event] as? [[String: Any]])
+            let group = try #require(groups.last)
+            // Unmatched, every one of them. A matcher would put a naming detail
+            // in charge of whether a wait is ever observed, and a miss is
+            // silent.
+            #expect(group["matcher"] == nil)
+            let handlers = try #require(group["hooks"] as? [[String: Any]])
+            #expect(handlers.count == 1)
+            #expect((handlers[0] as NSDictionary) == (expected as NSDictionary))
+        }
+
+        // Rewriting the helper -- the whole of how this app ships a change --
+        // leaves the registration byte-identical, which is the property the
+        // frozen definition exists to provide.
+        let before = try Data(contentsOf: paths.hooksConfiguration)
+        try Data("#!/bin/sh\n# something else entirely\n".utf8)
+            .write(to: paths.hookHelper)
+        #expect(await registrar.prepareHelper())
+        #expect(try Data(contentsOf: paths.hooksConfiguration) == before)
+    }
+
+    /// Two facts with two sources, and the four cards they make.
+    ///
+    /// `HookSetupStatus` used to be the model as well as the display, which is
+    /// what made the reading take the second fact as a parameter and forced
+    /// every caller to thread one through the other.
+    @Test @MainActor
+    func registrationAndDeliveryProjectToTheFourCards() async throws {
+        #expect(
+            HookSetupStatus.card(registration: .absent, hasObservedEvent: false)
+                == .notInstalled
+        )
+        #expect(
+            HookSetupStatus.card(registration: .absent, hasObservedEvent: true)
+                == .notInstalled
+        )
+        // Mismatched says the same thing whatever has been delivered: some of
+        // ours is firing, which is exactly why the rest failing is invisible.
+        #expect(
+            HookSetupStatus.card(registration: .mismatched, hasObservedEvent: false)
+                == .repairRequired
+        )
+        #expect(
+            HookSetupStatus.card(registration: .mismatched, hasObservedEvent: true)
+                == .repairRequired
+        )
+        #expect(
+            HookSetupStatus.card(registration: .complete, hasObservedEvent: false)
+                == .reviewRequired
+        )
+        #expect(
+            HookSetupStatus.card(registration: .complete, hasObservedEvent: true)
+                == .active
+        )
+        // Registered is enough to monitor; only the two unregistered states
+        // turn the integration off.
+        #expect(HookSetupStatus.reviewRequired.isIntegrationEnabled)
+        #expect(HookSetupStatus.active.isIntegrationEnabled)
+        #expect(!HookSetupStatus.repairRequired.isIntegrationEnabled)
+        #expect(!HookSetupStatus.notInstalled.isIntegrationEnabled)
+
+        // And end to end: a user who trusted the hooks last week is not asked
+        // to do it again after a restart.
+        let paths = makeTemporaryHookPaths()
+        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
+        let registrar = CodexHookRegistrar(paths: paths)
+        #expect(await registrar.registration() == .absent)
+        try await registrar.install()
+
+        let fresh = HookEventRepository(paths: paths)
+        #expect(HookSetupStatus.card(
+            registration: await registrar.registration(),
+            hasObservedEvent: await fresh.observedState().hasObservedEvent
+        ) == .reviewRequired)
+
+        deliverHook([
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "t", "turn_id": "u"
+        ], to: fresh)
+        _ = await fresh.drainDeliveredEvents()
+
+        let restarted = HookEventRepository(paths: paths)
+        #expect(HookSetupStatus.card(
+            registration: await registrar.registration(),
+            hasObservedEvent: await restarted.observedState().hasObservedEvent
+        ) == .active)
+    }
+
+    /// Payloads are reduced in the order they landed, over the real socket.
+    ///
+    /// The transport's whole claim: connections are accepted in arrival order
+    /// and handed to one serial read queue, so the reducer sees what the agent
+    /// fired in the order it fired. Nothing in the registration provides this —
+    /// Claude Code's `command` schema has an `async` key, and using it was
+    /// measured to reorder a `PreToolUse` against its own `PostToolUse`
+    /// (ADR 0013). The hand-off to the store is where it would be lost again:
+    /// two `Task`s spawned in order are not two `Task`s that run in order, so
+    /// the inbox is taken whole rather than one payload at a time.
+    @Test @MainActor
+    func payloadsAreReducedInTheOrderTheyLanded() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-order-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")
+        )
+        let repository = HookEventRepository(paths: paths)
+        let listener = AgentHookListener { body, receivedAt in
+            repository.deliver(body, at: receivedAt)
+        }
+        defer { listener.stop() }
+        #expect(listener.start(socketURL: paths.hookSocket))
+
+        // A whole turn, one connection each, in the order Codex fires them.
+        // The approval borrows the open call's id, so a reordering anywhere in
+        // here produces a different final state rather than the same one late.
+        for body in [
+            ["hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "t"],
+            [
+                "hook_event_name": "PreToolUse", "session_id": "s", "turn_id": "t",
+                "tool_name": "Bash", "tool_use_id": "call-1"
+            ],
+            [
+                "hook_event_name": "PermissionRequest", "session_id": "s",
+                "turn_id": "t", "tool_name": "Bash"
+            ]
+        ] as [[String: Any]] {
+            try send(to: paths.hookSocket, body: body)
+        }
+
+        var turns = await waitForReducedTurns(repository, count: 1)
+        // All three, in order: the wait only opens if the `PreToolUse` that
+        // announced the call was reduced before the approval that borrows its
+        // id. A reordering leaves the turn Running for good.
+        let paired = await holds {
+            turns = await repository.drainDeliveredEvents().turns
+            return turns.first?.status == .approvalNeeded
+        }
+        #expect(paired)
+        #expect(turns.first?.pendingApproval?.toolUseID == "call-1")
+        #expect(turns.first?.pendingApproval?.isInferred == true)
+
+        // An arrival that is older than what the turn already holds changes
+        // nothing, so a late one cannot reopen what a later one closed.
+        repository.deliver(
+            try JSONSerialization.data(withJSONObject: [
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "s", "turn_id": "t-earlier"
+            ]),
+            at: Date(timeIntervalSince1970: 1)
+        )
+        turns = (await repository.drainDeliveredEvents()).turns
+        #expect(turns.first?.turnID == "t")
+        #expect(turns.first?.status == .approvalNeeded)
+    }
+
+    @Test @MainActor
+    func registrationMergesAtTheTailAndAnAlreadyCorrectInstallWritesNothing() async throws {
         let paths = makeTemporaryHookPaths()
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
 
@@ -6510,7 +6598,7 @@ for line in sys.stdin:
             at: paths.hooksConfiguration.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let managedCommand = "/usr/bin/python3 \"\(paths.script.path)\""
+        let managedCommand = CodexHookRegistrar.command(forHelper: paths.hookHelper)
         let existing: [String: Any] = [
             "hooks": [
                 "Stop": [[
@@ -6529,14 +6617,20 @@ for line in sys.stdin:
             options: [.prettyPrinted]
         ).write(to: paths.hooksConfiguration)
 
-        let installer = CodexHookInstaller(paths: paths)
-        try await installer.install()
-        try await installer.install()
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let afterFirstInstall = try Data(contentsOf: paths.hooksConfiguration)
 
-        let status = await installer.status(hasObservedEvent: false)
-        let data = try Data(contentsOf: paths.hooksConfiguration)
+        // Installing over a configuration that is already exactly right writes
+        // nothing at all. This is not tidiness: Codex keys hook trust by
+        // `<path>:<event>:<group index>:<handler index>` -- measured on this
+        // machine, 2026-08-20 -- so every rewrite is a chance to renumber a
+        // group and silently drop the trust on the *user's* own definitions.
+        try await registrar.install()
+        #expect(try Data(contentsOf: paths.hooksConfiguration) == afterFirstInstall)
+
         let root = try #require(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
+            JSONSerialization.jsonObject(with: afterFirstInstall) as? [String: Any]
         )
         let hooks = try #require(root["hooks"] as? [String: Any])
         let stopGroups = try #require(hooks["Stop"] as? [[String: Any]])
@@ -6546,52 +6640,52 @@ for line in sys.stdin:
             }
         }
 
-        #expect(status == .reviewRequired)
+        #expect(HookSetupStatus.card(
+            registration: await registrar.registration(),
+            hasObservedEvent: false
+        ) == .reviewRequired)
         #expect(commands.contains("/usr/bin/true"))
-        #expect(commands.filter { $0.contains("codex_in_notch_hook.py") }.count == 1)
-        #expect(hooks.keys.contains("UserPromptSubmit"))
-        #expect(hooks.keys.contains("PermissionRequest"))
-        #expect(hooks.keys.contains("PreToolUse"))
-        #expect(hooks.keys.contains("PostToolUse"))
-        #expect(hooks.keys.contains("SessionEnd"))
+        #expect(commands.filter { $0 == managedCommand }.count == 1)
+
+        // Ours goes last, for the same trust-key reason: appending cannot
+        // renumber a group that is already there.
+        let lastGroupCommands = (stopGroups.last?["hooks"] as? [[String: Any]] ?? [])
+            .compactMap { $0["command"] as? String }
+        #expect(lastGroupCommands == [managedCommand])
+
+        // Five definitions, and `SessionEnd` is not one of them. It was
+        // registered until this design and reduced to nothing: one process
+        // launch per session end, and a sixth definition for the user to trust.
+        #expect(
+            Set(hooks.keys) == [
+                "UserPromptSubmit", "PermissionRequest",
+                "PreToolUse", "PostToolUse", "Stop"
+            ]
+        )
 
         // A helper this app did not write, at a path it manages exclusively.
-        // repairRequired would NOT deregister it from hooks.json, so Codex would
-        // keep executing it until the user noticed. Self-healing is the safer
-        // response: the next refresh restores the bundled helper.
-        try "#!/usr/bin/python3\nprint('{}')\n".write(
-            to: paths.script,
+        // There is no marker asking whether it was ours: the answer to both
+        // "our own older helper" and "a file we never installed" is the same
+        // one, so the launch path simply writes the current script.
+        try "#!/bin/sh\nexit 0\n".write(
+            to: paths.hookHelper,
             atomically: true,
             encoding: .utf8
         )
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: true) == .active)
-        #expect(try await installer.upgradeManagedHookIfNeeded())
-        let healedScript = try String(contentsOf: paths.script, encoding: .utf8)
-        #expect(healedScript.contains(#"payload.get("tool_use_id")"#))
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: true) == .active)
-
-        // With no marker this app never recorded installing anything, so an
-        // unaccounted-for helper is flagged instead of overwritten. Both the
-        // marker and the legacy settings file count, so both have to go.
-        try FileManager.default.removeItem(at: paths.installMarker)
-        try? FileManager.default.removeItem(at: paths.legacySettings)
-        try "#!/usr/bin/python3\nprint('{}')\n".write(
-            to: paths.script,
-            atomically: true,
-            encoding: .utf8
+        #expect(await registrar.prepareHelper())
+        #expect(
+            try String(contentsOf: paths.hookHelper, encoding: .utf8)
+                == AgentHookHelper.script(socketPath: paths.hookSocket.path)
         )
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
-        try await installer.install()
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: true) == .active)
+        // And it did not touch the registration to do it, which is the whole
+        // point of putting the version in the script rather than the definition.
+        #expect(try Data(contentsOf: paths.hooksConfiguration) == afterFirstInstall)
 
-        try await installer.uninstall()
-        let uninstalledData = try Data(contentsOf: paths.hooksConfiguration)
+        try await registrar.uninstall()
         let uninstalledRoot = try #require(
-            JSONSerialization.jsonObject(with: uninstalledData) as? [String: Any]
+            JSONSerialization.jsonObject(
+                with: try Data(contentsOf: paths.hooksConfiguration)
+            ) as? [String: Any]
         )
         let uninstalledHooks = try #require(uninstalledRoot["hooks"] as? [String: Any])
         let remainingCommands = (uninstalledHooks["Stop"] as? [[String: Any]] ?? [])
@@ -6612,7 +6706,7 @@ for line in sys.stdin:
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
         try await installer.install()
 
         let installedData = try Data(contentsOf: paths.hooksConfiguration)
@@ -6620,20 +6714,20 @@ for line in sys.stdin:
             JSONSerialization.jsonObject(with: installedData) as? [String: Any]
         )
         var hooks = try #require(root["hooks"] as? [String: Any])
-        hooks.removeValue(forKey: "SessionEnd")
+        hooks.removeValue(forKey: "Stop")
         root["hooks"] = hooks
         try JSONSerialization.data(
             withJSONObject: root,
             options: [.prettyPrinted, .sortedKeys]
         ).write(to: paths.hooksConfiguration, options: .atomic)
 
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
+        await installer.invalidateRegistration()
+        #expect(HookSetupStatus.card(registration: await installer.registration(), hasObservedEvent: true) == .repairRequired)
 
         try await installer.install()
 
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
+        await installer.invalidateRegistration()
+        #expect(HookSetupStatus.card(registration: await installer.registration(), hasObservedEvent: false) == .reviewRequired)
         let repairedData = try Data(contentsOf: paths.hooksConfiguration)
         let repairedRoot = try #require(
             JSONSerialization.jsonObject(with: repairedData) as? [String: Any]
@@ -6641,7 +6735,6 @@ for line in sys.stdin:
         let repairedHooks = try #require(
             repairedRoot["hooks"] as? [String: Any]
         )
-        #expect(repairedHooks.keys.contains("SessionEnd"))
         #expect(repairedHooks.keys.contains("UserPromptSubmit"))
         #expect(repairedHooks.keys.contains("PermissionRequest"))
         #expect(repairedHooks.keys.contains("PreToolUse"))
@@ -6670,8 +6763,8 @@ for line in sys.stdin:
             options: [.prettyPrinted, .sortedKeys]
         ).write(to: paths.hooksConfiguration, options: .atomic)
 
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: true) == .repairRequired)
+        await installer.invalidateRegistration()
+        #expect(HookSetupStatus.card(registration: await installer.registration(), hasObservedEvent: true) == .repairRequired)
 
         try await installer.install()
 
@@ -6693,8 +6786,8 @@ for line in sys.stdin:
         // whether a wait is observed.
         #expect(exactGroup["matcher"] == nil)
         #expect(exactHandler["timeout"] as? Int == 3)
-        await installer.invalidateInstallationCache()
-        #expect(await installer.status(hasObservedEvent: false) == .reviewRequired)
+        await installer.invalidateRegistration()
+        #expect(HookSetupStatus.card(registration: await installer.registration(), hasObservedEvent: false) == .reviewRequired)
     }
 
     /// Captured from a real Desktop approval on 2026-08-15: asking to run a
@@ -6710,21 +6803,14 @@ for line in sys.stdin:
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
 
         let timestamp = Date().timeIntervalSince1970
         let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
+            paths: paths
         )
 
         func write(_ event: [String: Any], _ index: Int) throws {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
         try write([
@@ -6742,7 +6828,7 @@ for line in sys.stdin:
             "tool_use_id": "exec-1"
         ], 1)
         // Announced but not asked about yet: an open tool call is not a wait.
-        var status = await repository.consumeEvents().turns.first?.status
+        var status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .running)
 
         try write([
@@ -6752,7 +6838,7 @@ for line in sys.stdin:
             "turn_id": "turn-1",
             "tool_name": "Bash"
         ], 2)
-        status = await repository.consumeEvents().turns.first?.status
+        status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .approvalNeeded)
 
         try write([
@@ -6763,7 +6849,7 @@ for line in sys.stdin:
             "tool_name": "Bash",
             "tool_use_id": "exec-1"
         ], 3)
-        status = await repository.consumeEvents().turns.first?.status
+        status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .running)
 
         try write([
@@ -6772,7 +6858,7 @@ for line in sys.stdin:
             "session_id": "thread-1",
             "turn_id": "turn-1"
         ], 4)
-        status = await repository.consumeEvents().turns.first?.status
+        status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .completed)
     }
 
@@ -6787,21 +6873,14 @@ for line in sys.stdin:
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
 
         let timestamp = Date().timeIntervalSince1970
         let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
+            paths: paths
         )
 
         func write(_ event: [String: Any], _ index: Int) throws {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
         try write([
@@ -6825,7 +6904,7 @@ for line in sys.stdin:
             "turn_id": "turn-1",
             "tool_name": "Bash"
         ], 2)
-        var status = await repository.consumeEvents().turns.first?.status
+        var status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .approvalNeeded)
 
         // Denied: `exec-1` is never mentioned again.
@@ -6835,7 +6914,7 @@ for line in sys.stdin:
             "session_id": "thread-1",
             "turn_id": "turn-1"
         ], 3)
-        status = await repository.consumeEvents().turns.first?.status
+        status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .completed)
     }
 
@@ -6851,21 +6930,14 @@ for line in sys.stdin:
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
 
         let timestamp = Date().timeIntervalSince1970
         let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
+            paths: paths
         )
 
         func write(_ event: [String: Any], _ index: Int) throws {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
         try write([
@@ -6889,7 +6961,7 @@ for line in sys.stdin:
             "turn_id": "turn-1",
             "tool_name": "Bash"
         ], 2)
-        var status = await repository.consumeEvents().turns.first?.status
+        var status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .approvalNeeded)
 
         // Denied, and the agent tries a different approach.
@@ -6901,7 +6973,7 @@ for line in sys.stdin:
             "tool_name": "Read",
             "tool_use_id": "read-1"
         ], 3)
-        status = await repository.consumeEvents().turns.first?.status
+        status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .running)
 
         // The new call closing must not resurrect the abandoned approval.
@@ -6913,7 +6985,7 @@ for line in sys.stdin:
             "tool_name": "Read",
             "tool_use_id": "read-1"
         ], 4)
-        status = await repository.consumeEvents().turns.first?.status
+        status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .running)
     }
 
@@ -6927,10 +6999,7 @@ for line in sys.stdin:
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
+        let repository = HookEventRepository(paths: paths)
 
         let timestamp = Date().timeIntervalSince1970
         let events: [[String: Any]] = [
@@ -6957,17 +7026,11 @@ for line in sys.stdin:
                 "tool_use_id": "read-1"
             ]
         ]
-        for (index, event) in events.enumerated() {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+        for event in events {
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
-        let status = await repository.consumeEvents().turns.first?.status
+        let status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .approvalNeeded)
     }
 
@@ -6981,10 +7044,7 @@ for line in sys.stdin:
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
+        let repository = HookEventRepository(paths: paths)
 
         let timestamp = Date().timeIntervalSince1970
         let events: [[String: Any]] = [
@@ -7010,56 +7070,40 @@ for line in sys.stdin:
                 "tool_name": "WebFetch"
             ]
         ]
-        for (index, event) in events.enumerated() {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+        for event in events {
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
-        let status = await repository.consumeEvents().turns.first?.status
+        let status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .running)
     }
 
     @Test @MainActor
-    func hookReducerTracksTurnLifecycleAndDoesNotPersistPreviewText() async throws {
+    func hookReducerTracksTurnLifecycleAndKeepsItsTextInMemory() async throws {
         let paths = makeTemporaryHookPaths()
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
 
-        // The repository binds the socket, so it has to exist before any
-        // helper would hand text to it.
-        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast,
-            previewChannel: channel
-        )
+        let repository = HookEventRepository(paths: paths)
 
+        // The text rides in the payload that changes the row. There is no
+        // second socket and no `event_id` to correlate any more: one connection
+        // carried the whole thing, and field selection happens in Swift.
         let timestamp = Date().timeIntervalSince1970
-        let events: [[String: Any]] = [
+        for event in [
             [
-                "event_id": "event-prompt",
                 "received_at": timestamp,
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "thread-1",
-                "turn_id": "turn-1"
+                "turn_id": "turn-1",
+                "prompt": "private prompt"
             ],
             [
-                "event_id": "event-permission",
                 "received_at": timestamp + 1,
                 "hook_event_name": "PermissionRequest",
                 "session_id": "thread-1",
                 "turn_id": "turn-1"
             ],
             [
-                "event_id": "event-post",
                 "received_at": timestamp + 2,
                 "hook_event_name": "PostToolUse",
                 "session_id": "thread-1",
@@ -7067,57 +7111,24 @@ for line in sys.stdin:
                 "tool_name": "Bash",
                 "tool_use_id": "bash-1"
             ]
-        ]
-
-        // Text arrives over the socket, never in the file -- which is the whole
-        // point of CR-011. The helper sends before writing its file for exactly
-        // this reason: the preview must already be in hand when the file lands.
-        sendHookPreview(
-            to: paths.previewSocket,
-            eventID: "event-prompt",
-            prompt: "private prompt"
-        )
-        await waitForRetainedPreviews(channel, count: 1)
-
-        for (index, event) in events.enumerated() {
-            let data = try JSONSerialization.data(withJSONObject: event)
-            try data.write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+        ] as [[String: Any]] {
+            deliverHook(event, to: repository)
         }
 
-        let waitingSnapshot = await repository.consumeEvents()
+        let waitingSnapshot = await repository.drainDeliveredEvents()
         #expect(waitingSnapshot.turns.first?.status == .running)
 
-        sendHookPreview(
-            to: paths.previewSocket,
-            eventID: "event-stop",
-            assistantMessage: "private answer"
-        )
-        await waitForRetainedPreviews(channel, count: 1)
-
-        let stop = try JSONSerialization.data(withJSONObject: [
-            "event_id": "event-stop",
+        deliverHook([
             "received_at": timestamp + 3,
             "hook_event_name": "Stop",
             "session_id": "thread-1",
-            "turn_id": "turn-1"
-        ])
-        try stop.write(
-            to: paths.eventsDirectory.appendingPathComponent("3.json")
-        )
+            "turn_id": "turn-1",
+            "last_assistant_message": "private answer"
+        ], to: repository)
 
-        let snapshot = await repository.consumeEvents()
+        let snapshot = await repository.drainDeliveredEvents()
         let turn = try #require(snapshot.turns.first)
-        let persistedText = try String(contentsOf: paths.state, encoding: .utf8)
         let everythingOnDisk = allFileContents(under: paths.supportDirectory)
-        channel.stop()
-
-        // The claim in onboarding and Settings is absolute -- "No prompt or
-        // answer is persisted" -- so assert it against every file this app
-        // owns, not just the state file.
-        #expect(!everythingOnDisk.contains("private prompt"))
-        #expect(!everythingOnDisk.contains("private answer"))
 
         #expect(snapshot.hasObservedEvent)
         #expect(turn.threadID == "thread-1")
@@ -7126,42 +7137,32 @@ for line in sys.stdin:
         #expect(turn.status == .completed)
         #expect(turn.promptPreview == "private prompt")
         #expect(turn.assistantPreview == "private answer")
-        #expect(!persistedText.contains("private prompt"))
-        #expect(!persistedText.contains("private answer"))
-        #expect(!persistedText.contains("thread-1"))
-        #expect(!persistedText.contains("turn-1"))
-        #expect(!persistedText.contains("turns"))
-        #expect(
-            try FileManager.default.contentsOfDirectory(
-                at: paths.eventsDirectory,
-                includingPropertiesForKeys: nil
-            ).isEmpty
-        )
 
-        let legacyState: [String: Any] = [
-            "turns": [[
-                "threadID": "legacy-thread",
-                "turnID": "legacy-turn",
-                "status": "running",
-                "startedAt": timestamp
-            ]]
-        ]
-        try JSONSerialization.data(withJSONObject: legacyState).write(
-            to: paths.state,
-            options: .atomic
-        )
+        // Nothing at all is written except the one install record, so this is
+        // now a property of the architecture rather than a rule kept by hand:
+        // there is no queue file for text to be left out of.
+        #expect(!everythingOnDisk.contains("private prompt"))
+        #expect(!everythingOnDisk.contains("private answer"))
+        #expect(!everythingOnDisk.contains("thread-1"))
+        #expect(!everythingOnDisk.contains("turn-1"))
+        let onDisk = try FileManager.default.contentsOfDirectory(
+            at: paths.agentDirectory,
+            includingPropertiesForKeys: nil
+        ).map(\.lastPathComponent).sorted()
+        #expect(onDisk == ["install.json"])
 
-        let restoredRepository = HookEventRepository(paths: paths)
-        let restoredSnapshot = await restoredRepository.consumeEvents()
+        // A restart keeps the evidence that the hooks were trusted, and keeps
+        // nothing else. A persisted turn would turn the last observed
+        // Running/Input/Approval into a claim about the current runtime.
+        let restored = HookEventRepository(paths: paths)
+        let restoredSnapshot = await restored.drainDeliveredEvents()
         #expect(restoredSnapshot.hasObservedEvent)
+        #expect(!restoredSnapshot.hasObservedLiveEvent)
         #expect(restoredSnapshot.turns.isEmpty)
-        let migratedText = try String(contentsOf: paths.state, encoding: .utf8)
-        #expect(!migratedText.contains("legacy-thread"))
-        #expect(!migratedText.contains("turns"))
 
-        await restoredRepository.clearTurnsPreservingObservation()
-        let clearedRepository = HookEventRepository(paths: paths)
-        let clearedSnapshot = await clearedRepository.consumeEvents()
+        await restored.clearTurnsPreservingObservation()
+        let cleared = HookEventRepository(paths: paths)
+        let clearedSnapshot = await cleared.drainDeliveredEvents()
         #expect(clearedSnapshot.hasObservedEvent)
         #expect(clearedSnapshot.turns.isEmpty)
     }
@@ -7174,41 +7175,21 @@ for line in sys.stdin:
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
+        let repository = HookEventRepository(paths: paths)
 
         func write(_ event: [String: Any], named name: String) throws {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent(name)
-            )
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
-        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast,
-            previewChannel: channel
-        )
-        defer { channel.stop() }
-
-        sendHookPreview(
-            to: paths.previewSocket,
-            eventID: "event-prompt",
-            prompt: "continue this task"
-        )
-        await waitForRetainedPreviews(channel, count: 1)
-
         try write([
-            "event_id": "event-prompt",
             "received_at": 100.0,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-1",
-            "turn_id": "turn-before-pause"
+            "turn_id": "turn-before-pause",
+            "prompt": "continue this task"
         ], named: "0.json")
 
-        let beforePause = await repository.consumeEvents()
+        let beforePause = await repository.drainDeliveredEvents()
         #expect(beforePause.turns.first?.turnID == "turn-before-pause")
         #expect(beforePause.turns.first?.status == .running)
 
@@ -7223,7 +7204,7 @@ for line in sys.stdin:
             "tool_name": "Bash",
             "tool_use_id": "tool-after-resume"
         ], named: "1.json")
-        let resumed = await repository.consumeEvents()
+        let resumed = await repository.drainDeliveredEvents()
         let resumedTurn = try #require(resumed.turns.first)
         #expect(resumedTurn.turnID == "turn-after-resume")
         #expect(resumedTurn.status == .running)
@@ -7236,7 +7217,7 @@ for line in sys.stdin:
             "session_id": "thread-1",
             "turn_id": "turn-before-pause"
         ], named: "2.json")
-        let staleStop = await repository.consumeEvents()
+        let staleStop = await repository.drainDeliveredEvents()
         #expect(staleStop.turns.first?.turnID == "turn-after-resume")
         #expect(staleStop.turns.first?.status == .running)
 
@@ -7246,7 +7227,7 @@ for line in sys.stdin:
             "session_id": "thread-1",
             "turn_id": "turn-after-resume"
         ], named: "3.json")
-        let completed = await repository.consumeEvents()
+        let completed = await repository.drainDeliveredEvents()
         #expect(completed.turns.first?.turnID == "turn-after-resume")
         #expect(completed.turns.first?.status == .completed)
     }
@@ -7259,10 +7240,7 @@ for line in sys.stdin:
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
+        let repository = HookEventRepository(paths: paths)
 
         let prompt = try JSONSerialization.data(withJSONObject: [
             "received_at": 100.0,
@@ -7270,15 +7248,9 @@ for line in sys.stdin:
             "session_id": "thread-1",
             "turn_id": "turn-before-pause"
         ])
-        try prompt.write(
-            to: paths.eventsDirectory.appendingPathComponent("0.json")
-        )
+        prompt.deliver(to: repository)
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
-        #expect(await repository.consumeEvents().turns.first?.status == .running)
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .running)
 
         let stop = try JSONSerialization.data(withJSONObject: [
             "received_at": 101.0,
@@ -7286,11 +7258,9 @@ for line in sys.stdin:
             "session_id": "thread-1",
             "turn_id": "turn-after-resume"
         ])
-        try stop.write(
-            to: paths.eventsDirectory.appendingPathComponent("1.json")
-        )
+        stop.deliver(to: repository)
 
-        let completed = await repository.consumeEvents()
+        let completed = await repository.drainDeliveredEvents()
         #expect(completed.turns.first?.turnID == "turn-after-resume")
         #expect(completed.turns.first?.status == .completed)
         #expect(
@@ -7303,49 +7273,34 @@ for line in sys.stdin:
     func hookReducerRequiresStableTurnIdentity() async throws {
         let paths = makeTemporaryHookPaths()
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
+        let repository = HookEventRepository(paths: paths)
 
         let invalidEvent = try JSONSerialization.data(withJSONObject: [
             "received_at": 101.0,
             "hook_event_name": "PermissionRequest",
             "session_id": "thread-1"
         ])
-        try invalidEvent.write(
-            to: paths.eventsDirectory.appendingPathComponent("missing-turn.json")
-        )
+        invalidEvent.deliver(to: repository)
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: Date(timeIntervalSince1970: 100)
-        )
-        let snapshot = await repository.consumeEvents()
-        let quarantinedFiles = try FileManager.default.contentsOfDirectory(
-            at: paths.eventsDirectory,
-            includingPropertiesForKeys: nil
-        )
+        let snapshot = await repository.drainDeliveredEvents()
 
         #expect(!snapshot.hasObservedEvent)
         #expect(snapshot.turns.isEmpty)
         #expect(snapshot.diagnostic?.contains("no stable identity") == true)
-        #expect(quarantinedFiles.map(\.pathExtension) == ["invalid"])
+        // Reported and dropped, rather than renamed to `.invalid` and left in a
+        // directory that only ever grew: on this machine one such folder had
+        // accumulated 155 of them, none of which anything would ever read.
+        #expect(!FileManager.default.fileExists(atPath: paths.agentDirectory.path))
     }
 
     @Test @MainActor
     func hookReducerPairsInputResultsAndIgnoresOldTurnEvents() async throws {
         let paths = makeTemporaryHookPaths()
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
+        let repository = HookEventRepository(paths: paths)
 
         func write(_ event: [String: Any], named name: String) throws {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent(name)
-            )
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
         let firstBatch: [[String: Any]] = [
@@ -7399,11 +7354,7 @@ for line in sys.stdin:
             try write(event, named: "\(index).json")
         }
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
-        let waiting = await repository.consumeEvents()
+        let waiting = await repository.drainDeliveredEvents()
         #expect(waiting.turns.first?.turnID == "turn-2")
         #expect(waiting.turns.first?.status == .inputNeeded)
 
@@ -7414,7 +7365,7 @@ for line in sys.stdin:
             "turn_id": "turn-2",
             "tool_use_id": "input-2"
         ], named: "7.json")
-        let resumed = await repository.consumeEvents()
+        let resumed = await repository.drainDeliveredEvents()
         #expect(resumed.turns.first?.status == .running)
 
         try write([
@@ -7430,29 +7381,30 @@ for line in sys.stdin:
             "turn_id": "turn-2",
             "tool_use_id": "bash-2"
         ], named: "9.json")
-        let permissionRequest = await repository.consumeEvents()
+        let permissionRequest = await repository.drainDeliveredEvents()
         #expect(permissionRequest.turns.first?.status == .running)
     }
 
+    /// There is no backlog to classify, because nothing is written down.
+    ///
+    /// This replaces a test that fed the reducer events stamped before its
+    /// launch cutoff and asserted none of them created a turn. The cutoff is
+    /// gone with the file queue that made it necessary: an event that arrives
+    /// came down a socket into this process, from a helper that ran a moment
+    /// ago, so it is live by construction. `AGENTS.md` §6.2 — historical events
+    /// carry no business semantics — stops being a check on a timestamp and
+    /// becomes a property, and this is the property.
     @Test @MainActor
-    func startupBacklogDoesNotRestoreAnyTurn() async throws {
+    func nothingAThirdPartyCouldReplayIsEverWrittenDown() async throws {
         let paths = makeTemporaryHookPaths()
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
+        let repository = HookEventRepository(paths: paths)
 
-        let backlog: [[String: Any]] = [
+        // A whole turn, through every state it can reach.
+        for event in [
             [
                 "received_at": 90.0,
                 "hook_event_name": "UserPromptSubmit",
-                "session_id": "thread-1",
-                "turn_id": "turn-1"
-            ],
-            [
-                "received_at": 91.0,
-                "hook_event_name": "PermissionRequest",
                 "session_id": "thread-1",
                 "turn_id": "turn-1"
             ],
@@ -7469,75 +7421,68 @@ for line in sys.stdin:
                 "hook_event_name": "Stop",
                 "session_id": "thread-1",
                 "turn_id": "turn-1"
-            ],
-            [
-                "received_at": 94.0,
-                "hook_event_name": "SessionEnd",
-                "session_id": "thread-1"
             ]
-        ]
-        for (index, event) in backlog.enumerated() {
-            let data = try JSONSerialization.data(withJSONObject: event)
-            try data.write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+        ] as [[String: Any]] {
+            deliverHook(event, to: repository)
         }
+        let lived = await repository.drainDeliveredEvents()
+        #expect(lived.turns.first?.turnID == "turn-1")
+        #expect(lived.hasObservedLiveEvent)
+        #expect(lived.didConsumeEvents)
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: Date(timeIntervalSince1970: 100)
-        )
-        let historical = await repository.consumeEvents()
-        #expect(historical.hasObservedEvent)
-        #expect(!historical.hasObservedLiveEvent)
-        #expect(!historical.didConsumeEvents)
-        #expect(historical.turns.isEmpty)
+        // Everything this integration keeps, in full: one record saying the
+        // definitions have been trusted at least once. There is no queue file,
+        // no quarantine, no turn state -- so a later launch has nothing it
+        // could mistake for the current runtime.
+        let kept = try FileManager.default.contentsOfDirectory(
+            at: paths.agentDirectory,
+            includingPropertiesForKeys: nil
+        ).map(\.lastPathComponent).sorted()
+        #expect(kept == ["install.json"])
 
-        let livePrompt = try JSONSerialization.data(withJSONObject: [
+        let restarted = HookEventRepository(paths: paths)
+        let afterRestart = await restarted.drainDeliveredEvents()
+        #expect(afterRestart.hasObservedEvent)
+        #expect(!afterRestart.hasObservedLiveEvent)
+        #expect(!afterRestart.didConsumeEvents)
+        #expect(afterRestart.turns.isEmpty)
+
+        // And the first live event after the restart is exactly that: live.
+        deliverHook([
             "received_at": 101.0,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-1",
             "turn_id": "turn-2"
-        ])
-        try livePrompt.write(
-            to: paths.eventsDirectory.appendingPathComponent("3.json")
-        )
-        let live = await repository.consumeEvents()
+        ], to: restarted)
+        let live = await restarted.drainDeliveredEvents()
         #expect(live.hasObservedLiveEvent)
         #expect(live.didConsumeEvents)
         #expect(live.turns.first?.turnID == "turn-2")
         #expect(live.turns.first?.status == .running)
     }
 
+    /// The helper this build installs, run for real, end to end.
+    ///
+    /// It replaces a test that read the event file the Python helper wrote.
+    /// There is no file: what has to hold now is that the four lines of `sh`
+    /// hand the payload -- text and all -- straight into the reducer, say
+    /// nothing on either stream, and exit 0.
     @Test @MainActor
-    func installedHookScriptWritesAConsumablePrivateEvent() async throws {
+    func theInstalledHelperCarriesAWholePayloadIntoTheReducer() async throws {
         let paths = makeTemporaryHookPaths()
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
 
-        let installer = CodexHookInstaller(paths: paths)
-        try await installer.install()
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
 
-        // Listening before the helper runs, the way the app does: the helper
-        // sends its preview and then writes the file that wakes the reducer.
-        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast,
-            previewChannel: channel
-        )
-
-        let input = Pipe()
-        let output = Pipe()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = [paths.script.path]
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        try process.run()
+        let repository = HookEventRepository(paths: paths)
+        let listener = AgentHookListener { body, receivedAt in
+            repository.deliver(body, at: receivedAt)
+        }
+        defer { listener.stop() }
+        #expect(listener.start(socketURL: paths.hookSocket))
 
         let payload = try JSONSerialization.data(withJSONObject: [
-            "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-script",
             "turn_id": "turn-script",
@@ -7546,54 +7491,23 @@ for line in sys.stdin:
             "tool_use_id": "tool-script",
             "prompt": "script preview"
         ])
-        try input.fileHandleForWriting.write(contentsOf: payload)
-        try input.fileHandleForWriting.close()
-        process.waitUntilExit()
+        let result = try runHelper(at: paths.hookHelper, stdin: payload)
 
-        let stdout = output.fileHandleForReading.readDataToEndOfFile()
-        let eventURL = try #require(
-            FileManager.default.contentsOfDirectory(
-                at: paths.eventsDirectory,
-                includingPropertiesForKeys: nil
-            ).first
-        )
-        let rawEventText = try String(contentsOf: eventURL, encoding: .utf8)
-        let rawEvent = try #require(
-            JSONSerialization.jsonObject(
-                with: Data(contentsOf: eventURL)
-            ) as? [String: Any]
-        )
-        // The helper sends its preview over the socket and *then* writes the
-        // event file, so in the app the reducer's debounce always sits between
-        // the two. This test consumes the moment the helper exits, which can
-        // outrun the channel's receive thread and claim an event whose preview
-        // has been written to the socket but not yet read off it -- and because
-        // consuming deletes the event, the preview is then gone for good.
-        // Waiting for it to land tests the pairing rather than the scheduling.
-        //
-        // This wait is where CC-023's second sighting surfaced. It was two
-        // seconds inline, and it running out read as a budget set too tight;
-        // the channel had in fact dropped the message, and no budget would have
-        // helped. See ``aPreviewSentAfterTheConnectionIsAcceptedStillArrives``.
-        await waitForRetainedPreviews(channel, count: 1)
+        // Silent on both streams and successful, whatever happens on the other
+        // end: an agent prints a line in the user's session for every hook that
+        // fails or writes to stderr, and no setting suppresses it (ADR 0013).
+        #expect(result.status == 0)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.isEmpty)
 
-        let snapshot = await repository.consumeEvents()
-        let everythingOnDisk = allFileContents(under: paths.supportDirectory)
-        channel.stop()
-
-        #expect(process.terminationStatus == 0)
-        #expect(String(data: stdout, encoding: .utf8) == "{}\n")
-        #expect(rawEvent["tool_use_id"] as? String == "tool-script")
-        #expect(rawEvent["cwd"] == nil)
-        #expect(rawEvent["reason"] == nil)
-        #expect(snapshot.turns.first?.threadID == "thread-script")
-
-        // The real helper handed the preview over the socket, so the reducer
-        // has it and no file this app owns ever contained it.
-        #expect(snapshot.turns.first?.promptPreview == "script preview")
-        #expect(rawEvent["prompt"] == nil)
-        #expect(!rawEventText.contains("script preview"))
-        #expect(!everythingOnDisk.contains("script preview"))
+        let turns = await waitForReducedTurns(repository, count: 1)
+        let turn = try #require(turns.first)
+        #expect(turn.threadID == "thread-script")
+        #expect(turn.turnID == "turn-script")
+        // Field selection is Swift now, so the text arrives with the event that
+        // changes the row and the fields nobody reads simply never appear.
+        #expect(turn.promptPreview == "script preview")
+        #expect(!allFileContents(under: paths.supportDirectory).contains("script preview"))
     }
 
     /// Connecting and writing are two steps, and the app may accept between
@@ -7603,105 +7517,55 @@ for line in sys.stdin:
     /// backlog rather than park on the next connection, and on Darwin `accept`
     /// hands that flag to the connection it returns. The receive loop then read
     /// `EAGAIN` from a client that had connected but not yet written, could not
-    /// tell it from the end of a message, and dropped the preview for good: a
-    /// Turn whose text never appeared and never would, on exactly the busy
-    /// machine that pulls the two steps apart (CC-024). The receive timeout was
-    /// meant to cover this and could not -- it bounds nothing on a non-blocking
-    /// descriptor.
+    /// tell it from the end of a message, and dropped the payload for good: a
+    /// Turn whose state never moved and never would, on exactly the busy
+    /// machine that pulls the two steps apart (CC-023, CC-024). The receive
+    /// timeout was meant to cover this and could not -- it bounds nothing on a
+    /// non-blocking descriptor.
+    ///
+    /// It was first found on the preview channel, which is gone; the trap is a
+    /// property of the accept, so it survived into the one transport both
+    /// products now share and the test moved with it.
     ///
     /// Repeated rather than sent once, because the pause it needs is racing a
-    /// real product bound: the channel abandons a client that has stopped
+    /// real product bound: the listener abandons a client that has stopped
     /// making progress after 250 ms, and on a loaded machine one wall-clock
-    /// pause of 100 ms can overshoot that -- which is the channel behaving
+    /// pause of 100 ms can overshoot that -- which is the listener behaving
     /// correctly, not the defect. What may never happen is every attempt being
     /// dropped, which is what the defect does.
-    ///
-    /// An accept that loses the race leaves the message already buffered, and
-    /// the attempt proves nothing. This cannot report a failure it has not
-    /// seen; against the defect it failed on every attempt.
     @Test
-    func aPreviewSentAfterTheConnectionIsAcceptedStillArrives() async throws {
-        let paths = makeTemporaryHookPaths()
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        // The socket lives beside the event queue, not at the top of the
-        // support directory; binding needs that directory to exist.
+    func aPayloadWrittenAfterTheConnectionIsAcceptedStillArrives() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-late-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
+            at: root,
             withIntermediateDirectories: true
         )
+        defer { try? FileManager.default.removeItem(at: root) }
 
-        let channel = HookPreviewChannel(socketURL: paths.previewSocket)
-        defer { channel.stop() }
-        #expect(channel.start())
+        let recorder = RecordedHookDelivery()
+        let listener = AgentHookListener(deliver: recorder.deliver)
+        defer { listener.stop() }
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
 
-        var preview: HookPreviewChannel.Preview?
+        var arrived = false
         var attempt = 0
-        while preview == nil, attempt < 5 {
-            let eventID = "event-late-\(attempt)"
-            #expect(
-                sendHookPreview(
-                    to: paths.previewSocket,
-                    eventID: eventID,
-                    prompt: "written after the accept",
-                    writingAfter: 0.1
-                )
+        while !arrived, attempt < 5 {
+            try sendRaw(
+                to: socket,
+                bytes: try JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": "Stop",
+                    "session_id": "late-\(attempt)"
+                ]),
+                writingAfter: 0.1
             )
-            // Claiming is the wait, so it is this attempt's preview that is
-            // waited for rather than any preview at all.
-            _ = await holds(within: .seconds(1)) {
-                preview = channel.claimPreview(forEventID: eventID)
-                return preview != nil
+            arrived = await holds(within: .seconds(1)) {
+                recorder.sessions.contains("late-\(attempt)")
             }
             attempt += 1
         }
-        #expect(preview?.prompt == "written after the accept")
-    }
-
-    /// Unclaimed previews cannot grow without bound.
-    ///
-    /// They pile up only when the file that would claim them never arrives -- a
-    /// quarantined event, or a helper that sent text and then failed to write.
-    @Test
-    func unclaimedPreviewsAreBoundedByTheRetentionCap() async throws {
-        let paths = makeTemporaryHookPaths()
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        try FileManager.default.createDirectory(
-            at: paths.agentDirectory,
-            withIntermediateDirectories: true
-        )
-
-        let channel = HookPreviewChannel(
-            socketURL: paths.previewSocket,
-            maximumRetainedPreviews: 4
-        )
-        #expect(channel.start())
-        defer { channel.stop() }
-
-        for index in 0 ..< 12 {
-            sendHookPreview(
-                to: paths.previewSocket,
-                eventID: "event-\(index)",
-                prompt: "prompt \(index)"
-            )
-        }
-        await waitForRetainedPreviews(channel, count: 4)
-        try await Task.sleep(nanoseconds: 100_000_000)
-
-        #expect(channel.retainedPreviewCount == 4)
-        // The cap evicts oldest-first, so the newest survivor is still there
-        // and the oldest is long gone.
-        #expect(channel.claimPreview(forEventID: "event-11")?.prompt == "prompt 11")
-        #expect(channel.claimPreview(forEventID: "event-0") == nil)
-        // A claim consumes, so the same text can never be served twice.
-        #expect(channel.claimPreview(forEventID: "event-11") == nil)
+        #expect(arrived)
     }
 
     /// A store holding nothing, so a timing assertion starts from a clock with
@@ -7897,80 +7761,56 @@ for line in sys.stdin:
         }
     }
 
+    /// Hands one payload to the store the way the transport does.
+    ///
+    /// The event queue is gone, so a test that used to write a JSON file into a
+    /// directory now hands the same dictionary to the store. `received_at` is
+    /// read out of it and used as the arrival stamp: the helper no longer
+    /// writes one — the transport stamps arrival — and the ordering rules these
+    /// tests pin need to choose the instant.
+    private func deliverHook(
+        _ event: [String: Any],
+        to repository: HookEventRepository
+    ) {
+        let stamp = (event["received_at"] as? Double)
+            .map(Date.init(timeIntervalSince1970:)) ?? Date()
+        var payload = event
+        payload.removeValue(forKey: "received_at")
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+            Issue.record("could not encode a hook payload")
+            return
+        }
+        repository.deliver(data, at: stamp)
+    }
+
+    /// Waits for the store to have reduced everything handed to it.
+    ///
+    /// Delivery kicks a drain of its own, so a test that hands over a payload
+    /// and then asks is not waiting on anything -- but a test driving the real
+    /// socket is, because the transport's read queue runs on its own thread.
+    @discardableResult
+    private func waitForReducedTurns(
+        _ repository: HookEventRepository,
+        count: Int
+    ) async -> [HookTurnState] {
+        var turns: [HookTurnState] = []
+        let arrived = await holds {
+            // Drained rather than observed: delivery kicks a drain of its own,
+            // but a test driving the real socket is racing that `Task`, and a
+            // reading that happened to land between the two would report a turn
+            // half-way through its own events.
+            turns = await repository.drainDeliveredEvents().turns
+            return turns.count >= count
+        }
+        if !arrived {
+            Issue.record("the store never held \(count) turn(s); it held \(turns.count)")
+        }
+        return turns
+    }
+
     private func makeTemporaryWatchRoot() -> URL {
         URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent("cin-w-\(UUID().uuidString.prefix(8))")
-    }
-
-    /// Hands preview text to a listening ``HookPreviewChannel``.
-    ///
-    /// Speaks the same wire format the installed Python helper does -- one line
-    /// of JSON on a Unix socket -- so these tests exercise the real path rather
-    /// than a Swift-side shortcut around it.
-    @discardableResult
-    private func sendHookPreview(
-        to socketURL: URL,
-        eventID: String,
-        prompt: String? = nil,
-        assistantMessage: String? = nil,
-        writingAfter connectedPause: TimeInterval = 0
-    ) -> Bool {
-        var payload: [String: Any] = ["event_id": eventID]
-        if let prompt { payload["prompt"] = prompt }
-        if let assistantMessage { payload["last_assistant_message"] = assistantMessage }
-        guard var data = try? JSONSerialization.data(withJSONObject: payload) else {
-            return false
-        }
-        data.append(0x0A)
-
-        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { return false }
-        defer { close(descriptor) }
-
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(socketURL.path.utf8)
-        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
-            return false
-        }
-        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
-
-        let connected = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        guard connected == 0 else { return false }
-
-        // Holding the line open before writing is what a client descheduled
-        // between connecting and sending looks like, and it is the case the
-        // channel used to drop -- see
-        // ``aPreviewSentAfterTheConnectionIsAcceptedStillArrives``.
-        if connectedPause > 0 {
-            Thread.sleep(forTimeInterval: connectedPause)
-        }
-
-        return data.withUnsafeBytes { buffer in
-            write(descriptor, buffer.baseAddress, buffer.count)
-        } == data.count
-    }
-
-    /// Waits for the channel's background reader to take delivery.
-    ///
-    /// Reported as well as recorded, because claiming a preview is destructive:
-    /// a caller that gives up here and consumes anyway deletes the event it was
-    /// waiting for, and then fails on a missing preview rather than on the wait
-    /// that ran out (CC-024).
-    @discardableResult
-    private func waitForRetainedPreviews(
-        _ channel: HookPreviewChannel,
-        count: Int
-    ) async -> Bool {
-        let arrived = await holds { channel.retainedPreviewCount >= count }
-        if !arrived {
-            Issue.record("preview channel never received \(count) message(s)")
-        }
-        return arrived
     }
 
     /// Every regular file under a directory, for "is the text anywhere" checks.
@@ -8059,10 +7899,19 @@ for line in sys.stdin:
             withIntermediateDirectories: true
         )
 
-        // The previous version's world: a helper in the flat layout, and a
-        // registration naming it.
-        try Data("# old helper".utf8).write(to: paths.legacyScript)
-        let legacyCommand = CodexHookInstaller.command(forScript: paths.legacyScript)
+        // The previous version's world: the Python helper, and a registration
+        // naming it. This is the one migration this design keeps, and it is
+        // carried by a single legacy identity marker -- the helper's file name
+        // -- so both the namespaced path and the flat one that preceded it are
+        // recognised by the same string.
+        let legacyHelper = paths.agentDirectory
+            .appendingPathComponent("codex_in_notch_hook.py")
+        try FileManager.default.createDirectory(
+            at: paths.agentDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data("# old helper".utf8).write(to: legacyHelper)
+        let legacyCommand = "/usr/bin/python3 \"\(legacyHelper.path)\""
         let legacyHandler: [String: Any] = [
             "type": "command", "command": legacyCommand, "timeout": 3
         ]
@@ -8073,7 +7922,12 @@ for line in sys.stdin:
             ]
         ]).write(to: paths.hooksConfiguration)
 
-        try await CodexHookInstaller(paths: paths).install()
+        // Recognised as ours and out of date, so the user is asked to repair
+        // rather than told nothing is installed -- which would leave them with
+        // two registrations firing.
+        let registrar = CodexHookRegistrar(paths: paths)
+        #expect(await registrar.registration() == .mismatched)
+        try await registrar.install()
 
         // Read as written, not re-serialised: the editor writes paths
         // unescaped, and re-encoding would escape every slash and quietly turn
@@ -8085,10 +7939,10 @@ for line in sys.stdin:
         )
         // Nothing of the old registration survives...
         #expect(!text.contains(legacyCommand))
-        #expect(!FileManager.default.fileExists(atPath: paths.legacyScript.path))
+        #expect(!FileManager.default.fileExists(atPath: legacyHelper.path))
         // ...the new one is there, in its own place...
-        #expect(text.contains(paths.script.path))
-        #expect(FileManager.default.fileExists(atPath: paths.script.path))
+        #expect(text.contains(paths.hookHelper.path))
+        #expect(FileManager.default.fileExists(atPath: paths.hookHelper.path))
         // ...and the user's own hook is untouched.
         #expect(text.contains("theirs"))
         let stop = try #require(
@@ -10780,10 +10634,10 @@ for line in sys.stdin:
             harness.session(id: "ask", cwd: cwd, activity: .idle, observedAt: 200)
         ]
         // And something the same refresh has to keep saying: ending these turns
-        // reads the reducer a second time, and that second reading knows
-        // nothing about the files this refresh found.
-        try Data("not json".utf8)
-            .write(to: harness.paths.eventsDirectory.appendingPathComponent("999.json"))
+        // reads the store a second time, and a diagnostic raised by the drain
+        // has to survive that reading rather than be consumed by it.
+        Data(#"{"hook_event_name": "Stop", "session_id": "run"}"#.utf8)
+            .deliver(to: harness.repository)
 
         let after = await harness.service.fetchSnapshot()
         #expect(after.sessions.first { $0.threadID == "run" }?.status == .completed)
@@ -12293,63 +12147,68 @@ for line in sys.stdin:
         #expect(theirs.count == 1)
     }
 
-    /// The listener queues an event, and refuses to have seen the text in it.
+    /// One connection, one payload, handed over whole.
     ///
-    /// A hook payload carries shell command lines, file paths, diffs and whole
-    /// answers. The decoder has no field for any of them, so this asserts what
-    /// the product promises: none of it reaches the queue, and the queued file
-    /// is byte-searchable proof.
+    /// The listener used to select fields and write a JSON file; it selects
+    /// nothing now. Field selection is the store's, in Swift, where it is
+    /// testable — which is also why the payload arrives here with everything
+    /// the agent sent still in it.
     @Test @MainActor
-    func theListenerQueuesEventsAndNeverWritesTheirText() async throws {
+    func theListenerHandsOverOnePayloadPerConnection() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let events = root.appendingPathComponent("events", isDirectory: true)
 
         let clock = TestClock(now: Date(timeIntervalSince1970: 1_700))
-        let listener = AgentHookListener(
-            eventsDirectory: events,
-            clock: clock
-        )
+        let recorder = RecordedHookDelivery()
+        let listener = AgentHookListener(clock: clock, deliver: recorder.deliver)
         defer { listener.stop() }
         let socket = root.appendingPathComponent("hook.sock")
         #expect(listener.start(socketURL: socket))
 
-        let secret = "rm -rf /Users/someone/private"
         try send(
             to: socket,
             body: [
-                "hook_event_name": "PreToolUse",
+                "hook_event_name": "UserPromptSubmit",
                 "session_id": "session-1",
                 "prompt_id": "prompt-1",
-                "tool_name": "Bash",
-                "tool_use_id": "call-1",
                 "permission_mode": "auto",
-                "tool_input": ["command": secret],
-                "prompt": "please delete everything"
+                "prompt": "what the user asked"
             ]
         )
 
-        let queued = await waitForQueuedEvents(in: events, count: 1)
-        let queuedEvent = try #require(queued.first)
-        let raw = try Data(contentsOf: queuedEvent)
-        let decoded = try #require(
-            try JSONSerialization.jsonObject(with: raw) as? [String: Any]
+        let received = try #require(recorder.payloads.first)
+        #expect(recorder.count == 1)
+        #expect(received["hook_event_name"] as? String == "UserPromptSubmit")
+        #expect(received["session_id"] as? String == "session-1")
+
+        // What the store makes of it, which is where the field names are
+        // reconciled: `prompt_id` is this product's turn id, and the arrival
+        // stamp comes from the transport because the payload carries no
+        // timestamp of any kind.
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
         )
-
-        #expect(decoded["hook_event_name"] as? String == "PreToolUse")
-        #expect(decoded["session_id"] as? String == "session-1")
-        // prompt_id is this product's turn id.
-        #expect(decoded["turn_id"] as? String == "prompt-1")
-        #expect(decoded["tool_use_id"] as? String == "call-1")
-        // Stamped here, because the payload carries no timestamp at all.
-        #expect(decoded["received_at"] as? Double == 1_700)
-
-        let text = String(decoding: raw, as: UTF8.self)
-        #expect(!text.contains(secret))
-        #expect(!text.contains("please delete everything"))
-        #expect(decoded["tool_input"] == nil)
-        #expect(decoded["prompt"] == nil)
+        let repository = HookEventRepository(
+            paths: paths,
+            clock: clock,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        repository.deliver(
+            try JSONSerialization.data(withJSONObject: received),
+            at: clock.now()
+        )
+        let turns = await waitForReducedTurns(repository, count: 1)
+        let turn = try #require(turns.first)
+        #expect(turn.threadID == "session-1")
+        #expect(turn.turnID == "prompt-1")
+        #expect(turn.lastEventAt == Date(timeIntervalSince1970: 1_700))
+        // PRD §7: this product's row text has one source, and the prompt is not
+        // it. The payload carries one and the vocabulary declines to read it.
+        #expect(turn.promptPreview == nil)
     }
 
     /// The socket is this user's alone, and rubbish on it is dropped.
@@ -12366,9 +12225,20 @@ for line in sys.stdin:
     func theSocketIsPrivateToThisUserAndDropsWhatItCannotRead() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let events = root.appendingPathComponent("events", isDirectory: true)
-        let listener = AgentHookListener(eventsDirectory: events)
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
+        )
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let listener = AgentHookListener { body, receivedAt in
+            repository.deliver(body, at: receivedAt)
+        }
         defer { listener.stop() }
         let socket = root.appendingPathComponent("hook.sock")
         #expect(listener.start(socketURL: socket))
@@ -12381,20 +12251,20 @@ for line in sys.stdin:
         )
         #expect(mode.int16Value & 0o077 == 0)
 
-        // Not JSON, and JSON without the two fields the reducer needs to place
-        // an event. Neither becomes a queue file, and neither takes the
-        // listener down with it.
+        // Not JSON, and JSON without the fields the reducer needs to place an
+        // event. None becomes a turn, and none takes the listener down with it.
         try sendRaw(to: socket, bytes: Data("{ not json at all".utf8))
         try send(to: socket, body: ["hook_event_name": "Stop"])
         try send(to: socket, body: ["session_id": "s"])
 
-        // Proven against something that does queue, so this is not just
+        // Proven against something that does reduce, so this is not just
         // "nothing has been processed yet".
         try send(to: socket, body: [
             "hook_event_name": "Stop", "session_id": "s", "prompt_id": "p"
         ])
-        let queued = await waitForQueuedEvents(in: events, count: 1)
-        #expect(queued.count == 1)
+        let turns = await waitForReducedTurns(repository, count: 1)
+        #expect(turns.count == 1)
+        #expect(turns.first?.threadID == "s")
     }
 
     /// The helper delivers when the app is up, and says nothing when it is not.
@@ -12424,18 +12294,21 @@ for line in sys.stdin:
         )
         let setup = ClaudeCodeHookSetup(paths: paths)
 
-        // A marker left by the version that minted a port and a token. It has
-        // nothing to say any more, and it is holding that token on the disk.
+        // An events directory left by the version that wrote one file per
+        // event. Nothing reads it any more, so preparing the helper takes it
+        // out rather than leaving a folder that only ever grew.
         try FileManager.default.createDirectory(
-            at: paths.agentDirectory,
+            at: paths.agentDirectory.appendingPathComponent("events", isDirectory: true),
             withIntermediateDirectories: true
         )
-        try Data("{\"port\":51741,\"token\":\"deadbeef\"}".utf8)
-            .write(to: paths.installMarker)
 
         #expect(await setup.prepareHelper())
         #expect(FileManager.default.isExecutableFile(atPath: paths.hookHelper.path))
-        #expect(!FileManager.default.fileExists(atPath: paths.installMarker.path))
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: paths.agentDirectory.appendingPathComponent("events").path
+            )
+        )
 
         let payload = try JSONSerialization.data(withJSONObject: [
             "hook_event_name": "PreToolUse",
@@ -12454,29 +12327,22 @@ for line in sys.stdin:
         #expect(closed.stderr.isEmpty)
 
         // 2. The app is running. The same helper, unchanged, delivers.
-        let listener = AgentHookListener(eventsDirectory: paths.eventsDirectory)
+        let recorder = RecordedHookDelivery()
+        let listener = AgentHookListener(deliver: recorder.deliver)
         defer { listener.stop() }
         #expect(listener.start(socketURL: paths.hookSocket))
 
         let open = try runHelper(at: paths.hookHelper, stdin: payload)
         #expect(open.status == 0)
+        // Stdout is not merely empty by luck: Claude Code parses it for
+        // directives, so anything the helper printed would be read as one.
         #expect(open.stdout.isEmpty)
         #expect(open.stderr.isEmpty)
 
-        let queued = await waitForQueuedEvents(in: paths.eventsDirectory, count: 1)
-        let queuedEvent = try #require(queued.first)
-        let decoded = try #require(
-            try JSONSerialization.jsonObject(with: Data(contentsOf: queuedEvent))
-                as? [String: Any]
-        )
-        #expect(decoded["hook_event_name"] as? String == "PreToolUse")
-        #expect(decoded["session_id"] as? String == "session-1")
-        #expect(decoded["turn_id"] as? String == "prompt-1")
-        #expect(decoded["tool_use_id"] as? String == "call-1")
-
-        // Stdout is not merely empty by luck: Claude Code parses it for
-        // directives, so anything the helper printed would be read as one.
-        #expect(queued.count == 1)
+        let delivered = try #require(recorder.payloads.first)
+        #expect(recorder.count == 1)
+        #expect(delivered["session_id"] as? String == "session-1")
+        #expect(delivered["tool_use_id"] as? String == "call-1")
     }
 
     /// A path with a quote in it is still one word to the shell.
@@ -12489,9 +12355,9 @@ for line in sys.stdin:
     @Test @MainActor
     func theHelperQuotesASocketPathThatCarriesAQuote() throws {
         let awkward = "/tmp/cin O'Brien/hook.sock"
-        let script = ClaudeCodeHookSetup.helperScript(socketPath: awkward)
+        let script = AgentHookHelper.script(socketPath: awkward)
         #expect(script.contains("'/tmp/cin O'\\''Brien/hook.sock'"))
-        #expect(ClaudeCodeHookSetup.singleQuoted("plain") == "'plain'")
+        #expect(AgentHookHelper.singleQuoted("plain") == "'plain'")
     }
 
     /// Our own quota reading is a real session firing real hooks.
@@ -12499,83 +12365,84 @@ for line in sys.stdin:
     /// `UserPromptSubmit` would have separated it from a human's prompt by its
     /// `source` field, except that field was measured absent from every event —
     /// including a human's, in an interactive session. Pinning the poll to a
-    /// directory of its own is what is left.
+    /// directory of its own is what is left. The test moved with the check:
+    /// the transport carries payloads unfiltered now, so the one place that can
+    /// tell our own session from the user's is the store.
     @Test @MainActor
-    func theListenerDropsEventsFromItsOwnQuotaWorkingDirectory() async throws {
+    func theStoreDropsEventsFromItsOwnQuotaWorkingDirectory() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
-        let events = root.appendingPathComponent("events", isDirectory: true)
-        let ours = root.appendingPathComponent("quota", isDirectory: true)
-
-        let listener = AgentHookListener(
-            eventsDirectory: events,
-            ignoredWorkingDirectory: ours
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
         )
-        defer { listener.stop() }
-        let socket = root.appendingPathComponent("hook.sock")
-        #expect(listener.start(socketURL: socket))
-
-        try send(to: socket, body: [
-            "hook_event_name": "UserPromptSubmit", "session_id": "poll",
-            "prompt_id": "p", "cwd": ours.path
-        ])
-        try send(to: socket, body: [
-            "hook_event_name": "UserPromptSubmit", "session_id": "real",
-            "prompt_id": "p", "cwd": "/Users/someone/Projects/thing"
-        ])
-
-        let queued = await waitForQueuedEvents(in: events, count: 1)
-        let queuedEvent = try #require(queued.first)
-        let decoded = try #require(
-            try JSONSerialization.jsonObject(with: Data(contentsOf: queuedEvent))
-                as? [String: Any]
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary(),
+            ignoredWorkingDirectory: paths.quotaWorkingDirectory
         )
-        #expect(decoded["session_id"] as? String == "real")
+
+        for (session, cwd) in [
+            ("poll", paths.quotaWorkingDirectory.path),
+            ("real", "/Users/someone/Projects/thing")
+        ] {
+            repository.deliver(
+                try JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": "UserPromptSubmit", "session_id": session,
+                    "prompt_id": "p", "cwd": cwd
+                ]),
+                at: Date()
+            )
+        }
+
+        let turns = await waitForReducedTurns(repository, count: 1)
+        #expect(turns.count == 1)
+        #expect(turns.first?.threadID == "real")
     }
 
-    /// The one text-bearing payload this product reads, and it never lands.
+    /// The one text-bearing payload this product reads, and it reduces nothing.
     ///
     /// `MessageDisplay` — officially "While assistant message text is
     /// displayed" — is what gives a Claude Code row its third line (CC-015).
-    /// The event is registered, so the text does arrive; diverting it inside
-    /// the listener is what keeps "no preview text is written to disk" true
-    /// anyway. The events directory is a directory of files, so an event that
-    /// reached it would be text on disk.
-    ///
-    /// The directory is checked *after* an event that does queue has landed.
-    /// Asserting on an empty directory straight after the post would pass
-    /// while proving only that nothing had been processed yet.
+    /// It arrives at up to 3.4 a second, so it stops at the preview store: no
+    /// turn is touched, the reducer's mailbox is never reached, and the panel
+    /// is not woken.
     @Test @MainActor
-    func messageDisplayTextIsHeldInMemoryAndNeverQueued() async throws {
+    func messageDisplayTextIsHeldInMemoryAndReducesNothing() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
-        let events = root.appendingPathComponent("events", isDirectory: true)
-
-        let listener = AgentHookListener(eventsDirectory: events)
-        defer { listener.stop() }
-        let socket = root.appendingPathComponent("hook.sock")
-        #expect(listener.start(socketURL: socket))
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
+        )
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
 
         let said = "Reading the listener before changing it."
-        try send(to: socket, body: [
+        repository.deliver(try JSONSerialization.data(withJSONObject: [
             "hook_event_name": "MessageDisplay",
             "session_id": "s-1", "message_id": "m-1", "index": 0,
             "delta": said, "final": false
-        ])
-        // Queues, so its arrival proves the one before it was processed too:
-        // both are recorded on the listener's own serial queue.
-        try send(to: socket, body: [
+        ]), at: Date())
+        // Reduces, so its arrival proves the one before it was handled too:
+        // both go through the same hand-off, in order.
+        repository.deliver(try JSONSerialization.data(withJSONObject: [
             "hook_event_name": "Stop", "session_id": "s-1", "prompt_id": "p-1"
-        ])
+        ]), at: Date())
 
-        let queued = await waitForQueuedEvents(in: events, count: 1)
-        #expect(queued.count == 1, "MessageDisplay must not add a file of its own")
-        let raw = try Data(contentsOf: try #require(queued.first))
-        #expect(!String(decoding: raw, as: UTF8.self).contains("Reading the listener"))
-
-        #expect(listener.preview(forSession: "s-1") == said)
+        let turns = await waitForReducedTurns(repository, count: 1)
+        #expect(turns.count == 1, "MessageDisplay must not open a turn of its own")
+        #expect(repository.preview(forSession: "s-1") == said)
+        // The text belongs to the session, not to the turn: PRD §7 gives this
+        // product one source for all four states and it is not the prompt.
+        #expect(turns.first?.promptPreview == nil)
+        #expect(turns.first?.assistantPreview == nil)
     }
 
     /// Deltas join into one line, and stop at the head of the message.
@@ -12590,44 +12457,47 @@ for line in sys.stdin:
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
-        let listener = AgentHookListener(
-            eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
         )
-        defer { listener.stop() }
-        let socket = root.appendingPathComponent("hook.sock")
-        #expect(listener.start(socketURL: socket))
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
 
-        func display(_ delta: String, message: String, session: String = "s-1") async throws {
-            try send(to: socket, body: [
+        func display(_ delta: String, message: String, session: String = "s-1") throws {
+            repository.deliver(try JSONSerialization.data(withJSONObject: [
                 "hook_event_name": "MessageDisplay", "session_id": session,
                 "message_id": message, "delta": delta
-            ])
+            ]), at: Date())
         }
 
         // The boundary case: delta one ends on the space that separates them.
-        try await display("Reading the ", message: "m-1")
-        try await display("listener", message: "m-1")
-        #expect(listener.preview(forSession: "s-1") == "Reading the listener")
+        try display("Reading the ", message: "m-1")
+        try display("listener", message: "m-1")
+        #expect(repository.preview(forSession: "s-1") == "Reading the listener")
 
         // And the other boundary case. A delta is published as "the newly
         // completed lines", so two deltas are two lines and neither carries the
         // separator: concatenating them directly would produce `listenerthen`.
-        try await display("then", message: "m-1")
-        #expect(listener.preview(forSession: "s-1") == "Reading the listener then")
+        try display("then", message: "m-1")
+        #expect(repository.preview(forSession: "s-1") == "Reading the listener then")
 
         // One line: newlines and runs of whitespace collapse to single spaces.
         // A multi-line delta is the measured shape under `-p` — the whole
         // message arrives at once with its newlines intact.
-        try await display("\n\nfirst,\tthen  writing.", message: "m-1")
+        try display("\n\nfirst,\tthen  writing.", message: "m-1")
         #expect(
-            listener.preview(forSession: "s-1")
+            repository.preview(forSession: "s-1")
                 == "Reading the listener then first, then writing."
         )
 
         // A new message replaces rather than extends: the row shows what is
         // being said now, not the whole turn concatenated.
-        try await display("A second thing.", message: "m-2")
-        #expect(listener.preview(forSession: "s-1") == "A second thing.")
+        try display("A second thing.", message: "m-2")
+        #expect(repository.preview(forSession: "s-1") == "A second thing.")
 
         // The measured shape, which none of the cases above is: driving an
         // interactive session under a pty against a listener registered through
@@ -12636,23 +12506,24 @@ for line in sys.stdin:
         // starting where the last stopped -- incremental, never cumulative.
         // Appending is only correct because of that; a cumulative `delta` would
         // repeat the message on every chunk.
-        try await display("1. Lava is molten rock.\n", message: "m-lines")
-        try await display("2. Magma is the same rock underground.\n", message: "m-lines")
-        try await display("3. Ash travels furthest.", message: "m-lines")
+        try display("1. Lava is molten rock.\n", message: "m-lines")
+        try display("2. Magma is the same rock underground.\n", message: "m-lines")
+        try display("3. Ash travels furthest.", message: "m-lines")
         #expect(
-            listener.preview(forSession: "s-1")
+            repository.preview(forSession: "s-1")
                 == "1. Lava is molten rock. 2. Magma is the same rock underground."
                 + " 3. Ash travels furthest."
         )
 
-        // And a long answer is cut at the same 240 the Codex helper cuts at.
-        try await display(String(repeating: "a", count: 400), message: "m-3")
-        let capped = try #require(listener.preview(forSession: "s-1"))
-        #expect(capped.count == AgentHookListener.maximumPreviewCharacters)
+        // And a long answer is cut at the same 240 both products' rows are cut
+        // at, which is now one constant rather than two.
+        try display(String(repeating: "a", count: 400), message: "m-3")
+        let capped = try #require(repository.preview(forSession: "s-1"))
+        #expect(capped.count == HookSessionPreviewStore.maximumCharacters)
         // Every later delta of the same message is dropped, not appended and
         // re-cut — otherwise the cap would bound the row and not the memory.
-        try await display("ignored", message: "m-3")
-        #expect(listener.preview(forSession: "s-1") == capped)
+        try display("ignored", message: "m-3")
+        #expect(repository.preview(forSession: "s-1") == capped)
     }
 
     /// Text does not outlive the row that showed it.
@@ -12665,24 +12536,27 @@ for line in sys.stdin:
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
-        let listener = AgentHookListener(
-            eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
         )
-        defer { listener.stop() }
-        let socket = root.appendingPathComponent("hook.sock")
-        #expect(listener.start(socketURL: socket))
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
 
         for session in ["alive", "ghost"] {
-            try send(to: socket, body: [
+            repository.deliver(try JSONSerialization.data(withJSONObject: [
                 "hook_event_name": "MessageDisplay", "session_id": session,
                 "message_id": "m-1", "delta": "Words from \(session)."
-            ])
+            ]), at: Date())
         }
-        #expect(listener.preview(forSession: "ghost") != nil)
+        #expect(repository.preview(forSession: "ghost") != nil)
 
-        listener.retainPreviews(forSessions: ["alive"])
-        #expect(listener.preview(forSession: "alive") == "Words from alive.")
-        #expect(listener.preview(forSession: "ghost") == nil)
+        repository.retainPreviews(forSessions: ["alive"])
+        #expect(repository.preview(forSession: "alive") == "Words from alive.")
+        #expect(repository.preview(forSession: "ghost") == nil)
     }
 
     /// A row with nothing to show is redrawn as soon as there is something.
@@ -12702,63 +12576,67 @@ for line in sys.stdin:
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
-        let wakeUps = PreviewWakeUpCounter()
-        let listener = AgentHookListener(
-            eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
         )
-        listener.setOnPreviewAppeared { wakeUps.record() }
-        defer { listener.stop() }
-        let socket = root.appendingPathComponent("hook.sock")
-        #expect(listener.start(socketURL: socket))
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
 
-        func display(_ delta: String, message: String) async throws {
-            try send(to: socket, body: [
+        let display: @Sendable (String, String) throws -> Void = { delta, message in
+            repository.deliver(try JSONSerialization.data(withJSONObject: [
                 "hook_event_name": "MessageDisplay", "session_id": "s-1",
                 "message_id": message, "delta": delta
-            ])
-        }
-
-        /// The callback lands on the listener's own queue, after the response
-        /// this awaited has already gone out, so every count is waited for
-        /// rather than read on the assumption that it is in yet.
-        func settled(at expected: Int) async throws -> Int {
-            for _ in 0 ..< 200 where wakeUps.count < expected {
-                try await Task.sleep(nanoseconds: 5_000_000)
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
-            return wakeUps.count
+            ]), at: Date())
         }
 
         // What a refresh does, and what qualifies the edge: text from a session
         // no list carries is pruned by the refresh it would ask for.
-        listener.retainPreviews(forSessions: ["s-1"])
+        repository.retainPreviews(forSessions: ["s-1"])
 
-        try await display("First words.", message: "m-1")
-        #expect(try await settled(at: 1) == 1)
-
-        try await display(" and more of the same message.", message: "m-1")
         #expect(
-            try await settled(at: 1) == 1,
+            await receivesChange(repository.changeEvents()) {
+                try display("First words.", "m-1")
+            }
+        )
+
+        #expect(
+            !(await receivesChange(
+                repository.changeEvents(),
+                within: .milliseconds(400)
+            ) {
+                try display(" and more of the same message.", "m-1")
+            }),
             "a row that already has a line does not ask to be drawn per delta"
         )
 
         // Back to blank the way it happens for real: the session drops off a
         // refresh's list, taking its text, and is listed again before it has
         // said anything new.
-        listener.retainPreviews(forSessions: [])
-        listener.retainPreviews(forSessions: ["s-1"])
-        try await display("Said after coming back.", message: "m-2")
+        repository.retainPreviews(forSessions: [])
+        repository.retainPreviews(forSessions: ["s-1"])
         #expect(
-            try await settled(at: 2) == 2,
+            await receivesChange(repository.changeEvents()) {
+                try display("Said after coming back.", "m-2")
+            },
             "the row was left blank with no edge that would ever redraw it"
         )
 
         // A session the list has dropped keeps its text collected and asks for
         // nothing: the refresh it would ask for is the one that prunes it, so
         // reporting it would be a loop at the rate the deltas arrive.
-        listener.retainPreviews(forSessions: [])
-        try await display("Said by a session nothing lists.", message: "m-3")
-        #expect(try await settled(at: 2) == 2)
+        repository.retainPreviews(forSessions: [])
+        #expect(
+            !(await receivesChange(
+                repository.changeEvents(),
+                within: .milliseconds(400)
+            ) {
+                try display("Said by a session nothing lists.", "m-3")
+            })
+        )
     }
 
     @discardableResult
@@ -12795,7 +12673,11 @@ for line in sys.stdin:
         )
     }
 
-    private func sendRaw(to socketURL: URL, bytes: Data) throws {
+    private func sendRaw(
+        to socketURL: URL,
+        bytes: Data,
+        writingAfter connectedPause: TimeInterval = 0
+    ) throws {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         try #require(descriptor >= 0)
         defer { close(descriptor) }
@@ -12815,6 +12697,13 @@ for line in sys.stdin:
             }
         }
         try #require(connected == 0)
+        // Holding the line open before writing is what a client descheduled
+        // between connecting and sending looks like, and it is the case the
+        // accept used to drop -- see
+        // ``aPayloadWrittenAfterTheConnectionIsAcceptedStillArrives``.
+        if connectedPause > 0 {
+            Thread.sleep(forTimeInterval: connectedPause)
+        }
         _ = bytes.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
         shutdown(descriptor, SHUT_WR)
 
@@ -12893,14 +12782,31 @@ for line in sys.stdin:
     /// whole transport, and disqualifying on its own. Nothing needs it: a
     /// session going away is visible through the official session list.
     @Test @MainActor
-    func claudeCodeDoesNotRegisterSessionEnd() {
-        let registered = Set(
-            ClaudeCodeHookVocabulary().managedDefinitions.map(\.event)
+    func neitherProductRegistersSessionEnd() {
+        for vocabulary in [
+            ClaudeCodeHookVocabulary() as any AgentHookVocabulary,
+            CodexHookVocabulary()
+        ] {
+            let registered = Set(vocabulary.managedDefinitions.map(\.event))
+            #expect(!registered.contains("SessionEnd"))
+            #expect(registered.contains("Stop"))
+        }
+        // Codex registered it until this design, so a user who has not yet
+        // repaired keeps firing it. Recognised and consumed, rather than
+        // reported once per session end as a payload we cannot place.
+        #expect(
+            CodexHookVocabulary().signal(forEvent: "SessionEnd", toolName: nil)
+                == .inert
         )
-        #expect(!registered.contains("SessionEnd"))
-        #expect(registered.contains("Stop"))
-        #expect(Set(CodexHookVocabulary().managedDefinitions.map(\.event))
-            .contains("SessionEnd"))
+        // Claude Code never registered it, so there is nothing to be kind to.
+        #expect(
+            ClaudeCodeHookVocabulary().signal(forEvent: "SessionEnd", toolName: nil)
+                == nil
+        )
+        // Five, and this exact set is what the frozen-definition contract
+        // pins: change it and Codex stops running the changed definition until
+        // the user re-trusts it, silently.
+        #expect(CodexHookVocabulary().managedDefinitions.count == 5)
     }
 
     /// A product that reports its refusals does not get the inference, and
@@ -12928,9 +12834,9 @@ for line in sys.stdin:
                     at: paths.supportDirectory.deletingLastPathComponent()
                 )
             }
-            try FileManager.default.createDirectory(
-                at: paths.eventsDirectory,
-                withIntermediateDirectories: true
+            let repository = HookEventRepository(
+                paths: paths,
+                vocabulary: vocabulary
             )
             let events: [[String: Any]] = [
                 [
@@ -12948,17 +12854,10 @@ for line in sys.stdin:
                 ],
                 trailingEvent
             ]
-            for (index, event) in events.enumerated() {
-                try JSONSerialization.data(withJSONObject: event).write(
-                    to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-                )
+            for event in events {
+                try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
             }
-            let repository = HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast,
-                vocabulary: vocabulary
-            )
-            return await repository.consumeEvents().turns.first?.status
+            return await repository.drainDeliveredEvents().turns.first?.status
         }
 
         // An unrelated call finishing while the human is still being asked.
@@ -13009,15 +12908,10 @@ for line in sys.stdin:
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
+        let repository = HookEventRepository(paths: paths)
 
         func write(_ event: [String: Any], named name: String) throws {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent(name)
-            )
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
         // Recognised, and deliberately without effect. It carries no turn id,
@@ -13034,23 +12928,19 @@ for line in sys.stdin:
             "turn_id": "turn-1"
         ], named: "unknown.json")
 
-        let repository = HookEventRepository(
-            paths: paths,
-            liveEventCutoff: .distantPast
-        )
-        let snapshot = await repository.consumeEvents()
+        let snapshot = await repository.drainDeliveredEvents()
         #expect(snapshot.turns.isEmpty)
 
-        func exists(_ name: String) -> Bool {
-            FileManager.default.fileExists(
-                atPath: paths.eventsDirectory.appendingPathComponent(name).path
-            )
-        }
-
-        #expect(!exists("inert.json"))
-        #expect(!exists("inert.invalid"))
-        #expect(!exists("unknown.json"))
-        #expect(exists("unknown.invalid"))
+        // The recognised-but-inert one is consumed in silence; the unrecognised
+        // one is reported. Neither leaves an event behind, because there is
+        // nowhere for one to be left: the only file here is the install record.
+        #expect(snapshot.diagnostic?.contains("unsupported kind") == true)
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                at: paths.agentDirectory,
+                includingPropertiesForKeys: nil
+            ).map(\.lastPathComponent) == ["install.json"]
+        )
     }
 
     /// Each row goes to its own product's navigator.
@@ -13725,40 +13615,33 @@ for line in sys.stdin:
 
         // No two files belonging to different products share a path.
         #expect(codexPaths.agentDirectory != claudePaths.agentDirectory)
-        #expect(codexPaths.eventsDirectory != claudePaths.eventsDirectory)
-        #expect(codexPaths.previewSocket != claudePaths.previewSocket)
-        #expect(codexPaths.installMarker != claudePaths.installMarker)
+        #expect(codexPaths.hookSocket != claudePaths.hookSocket)
+        #expect(codexPaths.hookHelper != claudePaths.hookHelper)
+        #expect(codexPaths.installState != claudePaths.installState)
 
         // Stand up both products the way install() lays them out.
         let manager = FileManager.default
         for paths in [codexPaths, claudePaths] {
             try manager.createDirectory(
-                at: paths.eventsDirectory,
+                at: paths.agentDirectory,
                 withIntermediateDirectories: true
             )
-            try Data("marker".utf8).write(to: paths.installMarker)
-            try Data("event".utf8).write(
-                to: paths.eventsDirectory.appendingPathComponent("1.json")
-            )
+            try Data("{}".utf8).write(to: paths.installState)
+            try Data("#!/bin/sh\n".utf8).write(to: paths.hookHelper)
         }
 
-        let installer = CodexHookInstaller(paths: codexPaths)
+        let installer = CodexHookRegistrar(paths: codexPaths)
         try await installer.uninstall()
 
         #expect(!manager.fileExists(atPath: codexPaths.agentDirectory.path))
-        #expect(manager.fileExists(atPath: claudePaths.installMarker.path))
-        #expect(
-            manager.fileExists(
-                atPath: claudePaths.eventsDirectory
-                    .appendingPathComponent("1.json").path
-            )
-        )
+        #expect(manager.fileExists(atPath: claudePaths.installState.path))
+        #expect(manager.fileExists(atPath: claudePaths.hookHelper.path))
         // The shared directory survives precisely because the other product is
         // still living in it.
         #expect(manager.fileExists(atPath: codexPaths.supportDirectory.path))
 
         // And with the other product gone too, nothing of ours is left behind.
-        try await CodexHookInstaller(paths: claudePaths).uninstall()
+        try await CodexHookRegistrar(paths: claudePaths).uninstall()
         #expect(!manager.fileExists(atPath: codexPaths.supportDirectory.path))
     }
 
@@ -13806,62 +13689,6 @@ for line in sys.stdin:
         }
     }
 
-    private var legacyManagedHookScript: String {
-        #"""
-#!/usr/bin/python3
-import json
-import os
-import sys
-import time
-import uuid
-
-SUPPORT = os.path.dirname(os.path.abspath(__file__))
-EVENTS = os.path.join(SUPPORT, "events")
-SETTINGS = os.path.join(SUPPORT, "hook-settings.json")
-
-def previews_enabled():
-    try:
-        with open(SETTINGS, "r", encoding="utf-8") as handle:
-            return bool(json.load(handle).get("showsContentPreviews", True))
-    except Exception:
-        return False
-
-try:
-    payload = json.load(sys.stdin)
-    event = {
-        "event_id": str(uuid.uuid4()),
-        "received_at": time.time(),
-        "hook_event_name": payload.get("hook_event_name"),
-        "session_id": payload.get("session_id"),
-        "turn_id": payload.get("turn_id"),
-        "cwd": payload.get("cwd"),
-        "tool_name": payload.get("tool_name"),
-        "reason": payload.get("reason"),
-    }
-    if previews_enabled():
-        prompt = payload.get("prompt")
-        assistant = payload.get("last_assistant_message")
-        if isinstance(prompt, str):
-            event["prompt"] = prompt[:240]
-        if isinstance(assistant, str):
-            event["last_assistant_message"] = assistant[:240]
-
-    os.makedirs(EVENTS, mode=0o700, exist_ok=True)
-    filename = "%020d-%s.json" % (time.time_ns(), event["event_id"])
-    target = os.path.join(EVENTS, filename)
-    temporary = target + ".tmp"
-    with open(temporary, "x", encoding="utf-8") as handle:
-        os.chmod(temporary, 0o600)
-        json.dump(event, handle, separators=(",", ":"))
-    os.replace(temporary, target)
-except Exception:
-    pass
-
-# Stop hooks require JSON on stdout. An empty object is a no-op for every
-# configured event and never changes Codex behavior.
-print("{}")
-"""#
-    }
 }
 
 /// A service whose deadline is permanently overdue, however often it is asked.
@@ -14351,6 +14178,10 @@ private final class ClaudeCodeHarness {
     /// Every harness now has its own support directory and therefore its own
     /// socket, so the whole class of problem is gone rather than avoided.
     private let listener: AgentHookListener
+    /// The store the service reduces into, so a test can hand it a payload the
+    /// way the transport does rather than write a file into a queue that no
+    /// longer exists.
+    let repository: HookEventRepository
     private let listing = StubSessionListing()
     private let activationStub = StubDesktopActivation()
     private let readingStub = StubDesktopReading()
@@ -14486,15 +14317,18 @@ private final class ClaudeCodeHarness {
             agent: .claudeCode
         )
         setup = ClaudeCodeHookSetup(paths: paths)
-        listener = AgentHookListener(eventsDirectory: paths.eventsDirectory)
+        let store = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        repository = store
+        listener = AgentHookListener { body, receivedAt in
+            store.deliver(body, at: receivedAt)
+        }
         service = ClaudeCodeMonitorService(
             paths: paths,
             setup: setup,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                liveEventCutoff: .distantPast,
-                vocabulary: ClaudeCodeHookVocabulary()
-            ),
+            hookEvents: store,
             sessions: listing,
             listener: listener,
             transcripts: ClaudeCodeTranscriptReader(
@@ -14672,10 +14506,6 @@ private final class ClaudeCodeHarness {
         toolName: String? = nil,
         toolUseID: String? = nil
     ) throws {
-        try FileManager.default.createDirectory(
-            at: paths.eventsDirectory,
-            withIntermediateDirectories: true
-        )
         var payload: [String: Any] = [
             "event_id": UUID().uuidString,
             "received_at": received,
@@ -14686,7 +14516,7 @@ private final class ClaudeCodeHarness {
         if let toolName { payload["tool_name"] = toolName }
         if let toolUseID { payload["tool_use_id"] = toolUseID }
         try JSONSerialization.data(withJSONObject: payload)
-            .write(to: paths.eventsDirectory.appendingPathComponent("\(received).json"))
+            .deliver(to: repository)
     }
 
     /// A moment as a transcript record writes it: RFC 3339, UTC, fractional
@@ -15317,13 +15147,17 @@ extension CodexInNotchTests {
             )
         }
 
-        let installer = CodexHookInstaller(paths: paths)
+        let installer = CodexHookRegistrar(paths: paths)
+        let clock = TestClock()
+        let repository = HookEventRepository(
+            paths: paths,
+            clock: clock
+        )
         try await installer.install()
         // Hook timestamps have to sit on the test clock's timeline, or the
         // settling window is measured against a boundary years away.
-        let clock = TestClock()
         let base = clock.now().timeIntervalSince1970
-        for (index, event) in [
+        for event in [
             [
                 "received_at": base,
                 "hook_event_name": "UserPromptSubmit",
@@ -15336,10 +15170,8 @@ extension CodexInNotchTests {
                 "session_id": "thread-sub",
                 "turn_id": "turn-1"
             ]
-        ].enumerated() {
-            try JSONSerialization.data(withJSONObject: event).write(
-                to: paths.eventsDirectory.appendingPathComponent("\(index).json")
-            )
+        ] {
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
         // The list reveals this thread is a sub-agent, so from the next pass on
@@ -15358,12 +15190,8 @@ extension CodexInNotchTests {
         )
         let service = LiveCodexMonitorService(
             client: client,
-            hookEvents: HookEventRepository(
-                paths: paths,
-                clock: clock,
-                liveEventCutoff: .distantPast
-            ),
-            hookInstaller: installer,
+            hookEvents: repository,
+            hookRegistrar: installer,
             unreadState: DesktopUnreadStateStub(
                 DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
             ),
@@ -15445,5 +15273,57 @@ extension CodexInNotchTests {
         )
         #expect(recovered)
         #expect(gate.nextPublishDeadline == nil, "a recovery must cancel the wake-up")
+    }
+}
+
+extension Data {
+    /// Hands this encoded payload to the store the way the transport does.
+    ///
+    /// The queue is gone, so a test that used to write this into a directory
+    /// hands it over instead. `received_at` is read back out and used as the
+    /// arrival stamp: the transport stamps arrival now, and the ordering rules
+    /// these tests pin need to choose the instant.
+    func deliver(to repository: HookEventRepository) {
+        let object = (try? JSONSerialization.jsonObject(with: self)) as? [String: Any]
+        let stamp = (object?["received_at"] as? Double)
+            .map(Date.init(timeIntervalSince1970:)) ?? Date()
+        repository.deliver(self, at: stamp)
+    }
+}
+
+/// Records what the transport handed over, without reducing any of it.
+///
+/// The listener's whole job is now "one connection, one payload, in arrival
+/// order", so a transport test asserts against what arrived rather than against
+/// a directory the store no longer keeps.
+private final class RecordedHookDelivery: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bodies: [Data] = []
+
+    var deliver: @Sendable (Data, Date) -> Void {
+        { [self] body, _ in
+            lock.lock()
+            bodies.append(body)
+            lock.unlock()
+        }
+    }
+
+    var payloads: [[String: Any]] {
+        lock.lock()
+        let received = bodies
+        lock.unlock()
+        return received.compactMap {
+            (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any]
+        }
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return bodies.count
+    }
+
+    var sessions: [String] {
+        payloads.compactMap { $0["session_id"] as? String }
     }
 }

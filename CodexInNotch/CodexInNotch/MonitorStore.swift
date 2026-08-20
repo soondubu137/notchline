@@ -1893,8 +1893,9 @@ final class MonitorStore: ObservableObject {
                     let snapshot = await service.fetchSnapshot()
                     guard !Task.isCancelled else { return }
                     // The snapshot already carries the health the same refresh
-                    // observed; asking again would consume the Hook queue twice
-                    // a cycle.
+                    // observed; asking again would drain the store twice a
+                    // cycle, and the second reading would take delivery of what
+                    // the first was owed.
                     self.record(snapshot, observedAt: self.clock.now())
                 }
             }

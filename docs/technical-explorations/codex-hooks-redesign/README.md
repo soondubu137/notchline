@@ -2,7 +2,7 @@
 
 | Field | Content |
 | --- | --- |
-| Document status | Open research. Not a decision, and no production code has been changed |
+| Document status | Research that was adopted. Implemented on 2026-08-20; §17 lists where the implementation departs from it. The design decisions now live in ADR 0014 and ADR 0015 |
 | First recorded | 2026-08-20 |
 | Question | If the Codex hook integration did not exist yet, what would it look like built once, deliberately |
 | Audience | Whoever decides whether to rebuild it, and whoever implements it afterwards |
@@ -252,17 +252,30 @@ This would answer per-definition trust exactly instead of inferring it from sile
 
 The queue is the only place an event can survive a crash between arrival and reduction. That window is not worth anything: in-memory turn state dies in the same crash, and the design already discards everything written before launch. Accepted loss, recorded in §15.
 
-## 13. What must be measured before implementing
+## 13. What had to be measured before implementing
 
-Both are single measurements, and both gate a specific deletion.
+Both were single measurements, and both gated a specific deletion. Answered below on 2026-08-20, at implementation time.
 
-### 13.1 Is the `group` component of the trust key an array index?
+### 13.1 Is the `group` component of the trust key an array index? — **Yes**
 
-If it is, §4.3's append-only rule is load-bearing for the *user's* own definitions, not just ours, and repairing our install must never renumber a group ahead of theirs. If it is a matcher or a stable identifier, the rule is merely tidy. Either way the rule is cheap; the measurement decides how loudly it needs to be documented.
+Read straight out of `~/.codex/config.toml` on the maintainer's machine, 2026-08-20:
 
-### 13.2 Does Codex serialise hook execution per session?
+```toml
+[hooks.state."/Users/…/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:e304ee0feab09051d537f35e02e7a8f3eaac2371c2b082e08d4f02631b382ccb"
+```
 
-The reducer's ordering rules — and the removal of `retiredTurnIDs` — assume events arrive in the order they fired. Two things point that way: hooks are synchronous with a 3-second budget, and `system-architecture.md` §3 records `PermissionRequest` arriving ~30 ms after the `PreToolUse` that announced the same call. But ADR 0013 records the other product reordering a `PreToolUse` against its own `PostToolUse` when the handler was made asynchronous, which is a reminder that this is a property of the executor, not of hooks in general. Measure it; if ordering does not hold, keep `retiredTurnIDs` and nothing else in this design changes.
+Three things it settles. The event is spelled in **snake case**, not as it appears in `hooks.json`. The third component is the group's **index in that event's array**. And there is a fourth, indexing the handler inside the group.
+
+So §4.3's append-only rule is load-bearing for the *user's own* definitions, not merely tidy: removing a group from the middle renumbers every group after it and silently drops their trust. Recorded in ADR 0014 and in `tech-design.md` §7.1.
+
+Note what this does **not** license. Nothing in the implementation reads this key — the two merge rules are conservative and correct whether or not the observation holds — so it is not a private dependency and gets no row in the registry (§8 of `AGENTS.md`).
+
+### 13.2 Does Codex serialise hook execution per session? — **Not measured, and it stopped mattering**
+
+It needs a live Codex turn to answer and it was not answered. It does not have to be: `retiredTurnIDs` is kept regardless, because the reducer is shared and the *other* product demonstrably reorders. ADR 0013 records Claude Code delivering a `Stop` ahead of its own subagent's `PermissionRequest` under one `prompt_id`. The deletion this measurement gated is therefore off the table for a reason that does not depend on Codex at all, and §6's third bullet was implemented as "keep it".
+
+If it is ever measured and holds, the deletion is still not available while one store serves both products.
 
 ## 14. Migration
 
@@ -300,4 +313,14 @@ Written as invariants rather than as a checklist of methods, because several of 
 
 ## 17. Status
 
-Proposal. Nothing here is implemented, and `HookIntegration.swift` is unchanged. The two measurements in §13 are the next step; §4.2 and §6 are the parts that need ADRs if this is adopted.
+**Implemented, 2026-08-20**, with three declared departures. This document is left as written — it is a record of the reasoning, not a description of the code — and the differences are listed here rather than edited into the sections above.
+
+| Section | Departure | Why |
+| --- | --- | --- |
+| §6, §10 | **`retiredTurnIDs` is kept.** | §13.2 above. The claim is about the transport; the failure is in the executor, and the reducer is shared with a product that measurably reorders. |
+| §8 | **`definitionsVersion` is not written.** `install.json` holds `installedAt` and `lastEventAt`. | It would be a second, weaker copy of a fact `hooks.json` already carries. A changed definition set makes `isFullyInstalled` fail, which *is* `mismatched`, which is the announcement §4.2 asks for. A version field could only agree with that or be wrong about it. |
+| §6, §7 | **`HookSetupStatus` survives as the projection.** Registration (`HookRegistration`) and delivery are modelled separately as §7 asks, and the four cards in §7's table are exactly its four cases, so it stays as the display type both products already publish. | §7's own table is the projection. Replacing the type as well would have churned `MonitorStore`, `SettingsWindow` and the Claude Code path for no change in behaviour. |
+
+One thing the implementation found that this document did not anticipate: the `.invalid` quarantine had accumulated **155 files** in `agents/claudeCode/events/` on the maintainer's machine, none of which anything would ever read or remove. Dropping the queue drops the quarantine with it — an unrecognised payload is now reported once and discarded.
+
+The decisions in §4.2 and §6 have ADRs: [0014](../../adr/0014-the-codex-hook-definition-is-never-rewritten.md) and [0015](../../adr/0015-hook-events-go-straight-into-the-reducer.md).

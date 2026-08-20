@@ -29,13 +29,13 @@ flowchart LR
     end
 
     subgraph hookBoundary ["Hook 边界"]
-        hookInstaller["CodexHookInstaller actor"]
+        hookRegistrar["CodexHookRegistrar actor 五条冻结定义"]
         hooksConfig[("~/.codex/hooks.json")]
-        hookHelper["codex_in_notch_hook.py"]
-        hookEvents[("events/*.json 0600 仅身份与生命周期")]
-        previewChannel["HookPreviewChannel preview.sock 0600 正文入内存"]
-        observationMarker[("monitor-state.json 仅信任标记")]
-        hookRepository["HookEventRepository actor 精确 Turn reducer"]
+        hookHelper["hook.sh sh 加 nc -U 退出码恒为 0"]
+        hookSocket(["hook.sock 0600 一次连接一条 payload"])
+        hookListener["AgentHookListener 串行读取队列 盖到达戳"]
+        installState[("install.json 仅 installedAt 与 lastEventAt")]
+        hookRepository["HookEventRepository actor 精确 Turn reducer 与会话正文"]
     end
 
     subgraph appServerBoundary ["公开 App Server 只读边界"]
@@ -77,15 +77,16 @@ flowchart LR
     end
 
     desktopHooks -->|"执行受信 handler"| hookHelper
-    hookHelper -->|"原子写入脱敏事件"| hookEvents
-    hookEvents -->|"按启动 cutoff 分类后删除或隔离"| hookRepository
-    hookEvents -.->|"目录 watcher 100ms debounce"| hookRepository
+    hookHelper -->|"整份 payload 不做过滤"| hookSocket
+    hookSocket --> hookListener
+    hookListener -->|"按到达顺序交出"| hookRepository
     hookRepository -->|"HookStateSnapshot"| liveService
-    hookRepository -->|"仅持久化 Hook 配置信任"| observationMarker
+    hookRepository -->|"仅持久化 Hook 配置信任"| installState
 
-    hookInstaller -->|"增量安装六类定义"| hooksConfig
+    hookRegistrar -->|"尾部追加五条定义 写下之后不再改写"| hooksConfig
     hooksConfig -.->|"官方 Hooks 配置"| desktopHooks
-    hookInstaller -->|"安装或升级"| hookHelper
+    hooksConfig -.->|"FSEvents 变更 重算注册完整度"| hookRegistrar
+    hookRegistrar -->|"字节不同才覆写"| hookHelper
 
     executableLocator -->|"定位可执行 URL"| codexBinary
     executableLocator -->|"注入 executableURL"| appServerClient
@@ -106,7 +107,7 @@ flowchart LR
     unreadRepository -->|"权威性标记加未读集合"| liveService
     desktopProcess -->|"当前 PID"| desktopPidGate
     desktopPidGate -->|"绑定 Hook 信任到当前进程"| liveService
-    hookInstaller <-->|"status install remove settings"| liveService
+    hookRegistrar <-->|"registration install remove"| liveService
 
     liveService -->|"构造行状态"| snapshotParser
     liveService <-->|"30 秒列表与 60 秒用量刷新"| serviceState
@@ -118,7 +119,7 @@ flowchart LR
     monitorSnapshot -->|"ready 时聚合 sessions"| aggregation
     stabilityGate -->|"允许发布或暂存重试"| monitorStore
     aggregation -->|"顶部 MonitorStatus"| monitorStore
-    hookRepository -.->|"changeEvents"| monitorStore
+    hookRepository -.->|"changeEvents 仅当渲染投影变化"| monitorStore
     unreadRepository -.->|"changeEvents"| monitorStore
 
     monitorStore -->|"Published 状态"| panelController
@@ -138,7 +139,7 @@ flowchart LR
 | --- | --- | --- |
 | 官方公开 | Hooks lifecycle、App Server 协议与六个只读方法（`thread/read` 恒带 `includeTurns: false`）、`codex://threads/{threadId}` | 作为主集成契约使用 |
 | 已登记的非公开依赖 | Desktop Project/unread schema、Desktop bundle 内可执行路径、Desktop bundle identifier | 只读或只用于发现；失败时 fail closed；同步维护非公开 feature 清单 |
-| 应用内部 | Hook helper、事件目录、信任标记、reducer、缓存、snapshot、UI store | 信任标记只回答“Hook 是否曾成功执行”，不能证明当前运行时；Turn 状态、会话身份、预览和缓存仅存在于内存或待消费事件中 |
+| 应用内部 | Hook helper、socket、`install.json`、reducer、缓存、snapshot、UI store | `install.json` 的 `lastEventAt` 只回答“Hook 是否曾成功执行”，不能证明当前运行时；Turn 状态、会话身份、预览和缓存**只**存在于内存中——没有事件队列，因此没有待消费的事件（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)） |
 
 ## 2. 核心刷新时序
 
@@ -194,7 +195,7 @@ sequenceDiagram
 
 两个目录 watcher 都能重新挂载：目录不存在或被替换不是终局状态，`rename`／`delete` 会触发重开，刷新路径也会顺手重试。它们没有自己的重试定时器，因此「挂不上」的成本是每次刷新一个失败的 `open`，而不是新增一个唤醒源。
 
-刷新不再按固定节拍采样。驱动它的有四个来源，合并成同一条 `changeEvents` 流或睡眠时长：两个目录 watcher（Hook 事件队列与 Desktop 状态文件）、**服务自身在后台读取落地后发出的失效信号**、服务通过 `nextRefreshDeadline()` 报出的下一个到期时刻（终态 settling 到期、元数据/成员关系/额度缓存过期），以及一个 60 秒心跳。
+刷新不再按固定节拍采样。驱动它的有四个来源，合并成同一条 `changeEvents` 流或睡眠时长：store 在渲染投影变化时发出的信号、`hooks.json` 与 Desktop 状态文件的目录 watcher、**服务自身在后台读取落地后发出的失效信号**、服务通过 `nextRefreshDeadline()` 报出的下一个到期时刻（终态 settling 到期、元数据/成员关系/额度缓存过期），以及一个 60 秒心跳。
 
 第二项是必需的而非优化：额度、成员关系与线程元数据都在后台读取，结果落地时启动它的那次快照早已发布。取消轮询之前，这些结果靠下一个轮询周期（1 秒内）被顺带带出；取消之后，如果它们不自己发出信号，就要一直等到某个不相关的到期唤醒——实测表现为启动后额度环空白约 10 秒。因此**每个后台读取都必须以一次失效信号结束**。`isRefreshInFlight` 把它们合并为一条刷新，不产生第二套状态管线。
 
@@ -214,7 +215,9 @@ sequenceDiagram
 
 产品能力被严格限定为“本次启动之后开始同步会话列表”。启动前的一切——正在运行的会话、已完成未读的会话、正在等待审批的会话——统统无视，直到它们产生下一个 lifecycle 事件。
 
-启动前的 Hook 文件是事件日志，不是当前状态快照。无论类型是 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`Stop` 还是 `SessionEnd`，只要早于本次 repository 的 cutoff，就只能更新“Hook 曾工作过”的配置健康标记，不能创建、终止或修改任何当前 Turn。
+**这条现在是架构性质，不再是一次检查。** Hook 事件不再落盘（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）：一份 payload 顺着 socket 进到这个进程，来自片刻之前跑过的 helper，所以**到达的事件按构造就是当前的**。没有 backlog 可分类，因为什么都没有被写下来——`liveEventCutoff` 与 backlog 分类随事件队列一起删除。启动之后收到的第一个事件是本次运行的第一个事件，仅此而已。
+
+磁盘上留下的只有 `install.json` 里的一行 `lastEventAt`，它只回答「这套定义是否曾经被信任过」，永远不作为当前运行时证据恢复：重启后 `hasObservedEvent` 为真而 `hasObservedLiveEvent` 为假，轮次一个都不恢复。
 
 App Server 一侧同样不产生会话：它只提供成员关系与元数据，为已由实时 Hook 建立身份的会话补充标题与 Project，永远不能独立创建一行。
 
@@ -226,9 +229,9 @@ flowchart LR
 
     subgraph notchRuntime ["Codex in Notch 当前实现"]
         notch["LiveCodexMonitorService"] <--> notchServer["App Server B\n独立只读子进程"]
-        backlog[("启动前 Hook backlog")] --> cutoff{"received_at >= launch cutoff"}
-        cutoff -->|"否"| discard["删除文件\n不进入 Turn reducer"]
-        cutoff -->|"是"| liveReducer["当前进程内 HookTurnState"]
+        helper["hook.sh\nsh + nc -U"] --> socket(["hook.sock 0600"])
+        socket --> listener["AgentHookListener\n串行读取队列，盖到达戳"]
+        listener --> liveReducer["HookEventRepository\n进程内 HookTurnState"]
         liveReducer --> notch
     end
 
@@ -370,11 +373,10 @@ flowchart LR
 | --- | --- | --- | --- |
 | UI 状态 | `MonitorStore` | 拉取完整快照、合并刷新触发、发布 UI 状态、计算顶部汇总、按用户意图移除终态行（整张列表或单行，共用 `dismissedSessionIDs`） | [`MonitorStore.swift`](../CodexInNotch/CodexInNotch/MonitorStore.swift) |
 | 核心编排 | `LiveCodexMonitorService` | 协调 Hook、App Server、Project、未读、缓存、成员集合与降级 | [`LiveCodexMonitorService.swift`](../CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift) |
-| Turn reducer | `HookEventRepository` | 用精确身份消费事件、拒绝回放复活、维护内存 `HookTurnState` | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
-| 正文边界（Codex） | `HookPreviewChannel` | 经 Unix socket 收取 prompt/回答并留在内存。这条 socket 当初是为「正文不落盘」而建，那条承诺已随 PRD 第 7 节删除；它留着只是因为它在跑，改成由 helper 直接写事件文件同样可以 | [`HookPreviewChannel.swift`](../CodexInNotch/CodexInNotch/HookPreviewChannel.swift) |
-| 正文边界（Claude Code） | `AgentHookListener` | 从 0600 Unix domain socket 收取生命周期事件并落成 0600 事件文件（一次连接一条 payload，写方关闭即帧尾）；**串行读取队列保序**，**`MessageDisplay` 在写队列之前转向内存**，只留每条消息头部 240 字符；正文只在**从没有到有**时报一个边沿（`onPreviewAppeared`），其余 delta 一律不进变更流 | [`AgentHookListener.swift`](../CodexInNotch/CodexInNotch/AgentHookListener.swift) |
+| Turn reducer 与正文 | `HookEventRepository` | 两个产品共用的唯一 store：用精确身份消费 payload、拒绝回放复活、维护内存 `HookTurnState`，并持有每个会话的流式正文（头部 240 字符）与投递证据。**只在渲染投影变化时**发变更信号——状态、轮次身份、或行上那句正文——而不是每个事件一次；delta 只在**从没有到有**且该会话被上次刷新列出时报一个边沿（见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)） | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
+| Hook transport（两个产品） | `AgentHookListener` | 只做传输：绑定 0600 Unix domain socket、accept、读一份 payload、盖到达戳交给 store。一次连接一条 payload，写方关闭即帧尾；**串行读取队列保序**，交接完成后才关闭连接（唯一的背压）。不做字段选择、不写任何文件 | [`AgentHookListener.swift`](../CodexInNotch/CodexInNotch/AgentHookListener.swift) |
 | 会话身份（Claude Code） | `ClaudeCodeSessionRegistry` | 按节拍运行 `claude agents --json` 并对读取单飞；新鲜度从**上一次尝试**起算，失败保留上一次列表；**会话目录的变更可以把新鲜度窗口截断**（`invalidate()`，不低于 `edgeFloor`，读取途中到达的边沿不被该次读取消费）；在 stdout 里定位数组而不假定它独占该流；**排除本应用自己的额度读取会话**（见 `tech-design.md` §15.1） | [`ClaudeCodeSessionRegistry.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeSessionRegistry.swift) |
-| Hook 管理 | `CodexHookInstaller` | 安装、升级、校验和移除本应用管理的六类 Hook 定义 | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
+| Hook 注册（Codex） | `CodexHookRegistrar` | 写 `hook.sh`、在用户的 `hooks.json` 里增删本应用管理的**五**条定义，并回答注册完整度（`absent` / `mismatched` / `complete`）。**定义写下之后不再改写**（[ADR 0014](adr/0014-the-codex-hook-definition-is-never-rewritten.md)）；注册健康度由自己写文件与 FSEvents 边沿触发重算，不按节拍轮询 | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
 | 用户配置编辑 | `ManagedHooksConfiguration` | 在用户拥有的配置里严格增删本应用的定义；看不懂的结构一律不改，必须改才能继续时整体拒绝 | [`ManagedHooksConfiguration.swift`](../CodexInNotch/CodexInNotch/ManagedHooksConfiguration.swift) |
 | 公开协议边界 | `CodexAppServerClient` | 子进程、stdio JSON-RPC、握手、请求关联、超时、探活与传输重建 | [`CodexAppServerClient.swift`](../CodexInNotch/CodexInNotch/CodexAppServerClient.swift) |
 | 传输分帧 | `AppServerStreamPump` | 在串行 readability queue 内把 stdout 切成有序完整帧，并对单帧上限 fail closed | [`CodexAppServerClient.swift`](../CodexInNotch/CodexInNotch/CodexAppServerClient.swift) |

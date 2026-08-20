@@ -191,44 +191,37 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     ) {
         let resolvedSetup = setup ?? ClaudeCodeHookSetup(paths: paths)
         self.setup = resolvedSetup
-        let repository = hookEvents ?? HookEventRepository(
-            paths: paths,
-            clock: clock,
-            timing: timing,
-            vocabulary: ClaudeCodeHookVocabulary()
-        )
-        self.hookEvents = repository
         // The one folder this app's own quota reading runs in, named once and
         // given to everything that has to be able to tell that reading apart
         // from a session the user started. It reaches the app by two routes and
         // both of them need it: the reading is listed by `claude agents --json`
         // like any other session, and it is a session that could fire hooks.
         // Before this the directory was only ever spelled out where the reading
-        // was pinned to it -- the listener was handed nothing, and the registry
+        // was pinned to it -- the store was handed nothing, and the registry
         // had no notion that such a session existed.
         let quotaDirectory = paths.quotaWorkingDirectory
+        let repository = hookEvents ?? HookEventRepository(
+            paths: paths,
+            clock: clock,
+            timing: timing,
+            vocabulary: ClaudeCodeHookVocabulary(),
+            ignoredWorkingDirectory: quotaDirectory
+        )
+        self.hookEvents = repository
         let resolvedSessions = sessions ?? ClaudeCodeSessionRegistry(
             clock: clock,
             ignoringWorkingDirectory: quotaDirectory
         )
         self.sessions = resolvedSessions
-        // A row's third line arriving where there was none. Assistant deltas
-        // are kept off this stream on purpose -- see ``AgentHookListener`` --
-        // but a session that has *nothing* to show is not a stale row waiting
-        // for a tidier moment, and the moments that would otherwise carry it
-        // belong to the session rather than to this app: a turn that talks for
-        // a minute between tool calls fires nothing at all. Without this, text
-        // collected after the user turned content previews back on sat unread
-        // until some unrelated edge or the 60-second heartbeat.
-        let (previewsAppeared, previewLanded) = AsyncStream<Void>.makeStream(
-            bufferingPolicy: .bufferingNewest(1)
-        )
-        let resolvedListener = listener ?? AgentHookListener(
-            eventsDirectory: paths.eventsDirectory,
-            ignoredWorkingDirectory: quotaDirectory,
-            clock: clock
-        )
-        resolvedListener.setOnPreviewAppeared { previewLanded.yield() }
+        // A row's third line arriving where there was none used to need a
+        // stream of its own. It does not any more: the store signals when what
+        // a row draws has changed, and "this session has text where it had
+        // none" is part of that projection -- while the deltas themselves stay
+        // off it, because three a second is not a redraw rate.
+        let resolvedListener = listener ?? AgentHookListener(clock: clock) {
+            [repository] body, receivedAt in
+            repository.deliver(body, at: receivedAt)
+        }
         self.listener = resolvedListener
         self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
         // The quota's own edge. Nothing waits for the reading any more, so the
@@ -353,8 +346,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // to be read should leave on the gesture that reads it, not on the
             // next re-check after it.
             resolvedActivations.changeEvents(),
-            quotaUpdates,
-            previewsAppeared
+            quotaUpdates
         ])
     }
 
@@ -429,7 +421,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             )
         }
 
-        let consumed = await hookEvents.consumeEvents()
+        let consumed = await hookEvents.drainDeliveredEvents()
         // Presence first, and once. It is asked before the list rather than
         // after it so both come from the same reading: asked afterwards, the
         // two calls could land either side of a refresh and describe different
@@ -512,7 +504,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         await transcripts.retain(sessionIDs: Set(liveByID.keys))
         // Text belonging to a session that has ended does not outlive the row
         // that showed it. Pruned against the same set as the titles.
-        listener.retainPreviews(forSessions: Set(liveByID.keys))
+        hookEvents.retainPreviews(forSessions: Set(liveByID.keys))
 
         func title(for session: ClaudeCodeSession) async -> String? {
             await transcripts.title(
@@ -523,7 +515,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
 
         /// What the session is currently saying, from `MessageDisplay`.
         func preview(for session: ClaudeCodeSession) -> String? {
-            listener.preview(forSession: session.sessionID)
+            hookEvents.preview(forSession: session.sessionID)
         }
 
         var rows: [MonitoredSession] = []
@@ -1244,7 +1236,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// same reason the sessions watcher re-attaches here.
     private func prepareTransport() async -> Bool {
         guard await setup.prepareHelper() else { return false }
-        return listener.start(socketURL: await setup.socketURL)
+        return listener.start(socketURL: setup.socketURL)
     }
 
     private func row(

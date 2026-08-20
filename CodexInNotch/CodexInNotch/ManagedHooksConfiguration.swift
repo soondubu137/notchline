@@ -286,6 +286,26 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         !Self.containsAnyMarker(of: self, in: root)
     }
 
+    /// How complete this app's registration is in a configuration document.
+    ///
+    /// The single reading behind both products' settings cards. It answers only
+    /// what a file read can answer — Codex's own per-definition trust lives in
+    /// `config.toml` and is not consulted here (see ``CodexHookRegistrar``).
+    ///
+    /// The middle case is the one that earns its keep. Some of ours is there
+    /// and some is not: a partial paste, a set from a version of this app that
+    /// registered different events, or a handler whose shape this build no
+    /// longer writes. The user has to be told, because the missing events fail
+    /// silently — no error, just a state the notch never learns about — and
+    /// reporting `absent` instead would invite a second registration beside the
+    /// first.
+    nonisolated func registration(in root: [String: Any]?) -> HookRegistration {
+        guard let root else { return .absent }
+        if isFullyInstalled(in: root) { return .complete }
+        if Self.containsAnyMarker(of: self, in: root) { return .mismatched }
+        return .absent
+    }
+
     /// Whether this handler is one of ours, including one an earlier version
     /// of this app installed.
     ///
