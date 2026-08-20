@@ -9119,6 +9119,57 @@ for line in sys.stdin:
         #expect(try #require(live.sessions.first).status == .running)
     }
 
+    /// A row goes when its session leaves the list, and `/clear` is that too.
+    ///
+    /// This is the mechanism that makes `SessionEnd` unnecessary, so it is
+    /// pinned here rather than left to one line and a comment. Registering that
+    /// event was reconsidered once the helper made it free to register (ADR
+    /// 0013) and rejected on measurement: `~/.claude/sessions/<pid>.json` is
+    /// removed at +15.09s and +15.08s over two runs against 2.1.237, and
+    /// `SessionEnd` arrives at +15.41s in both — the watcher's signal is
+    /// ~330 ms ahead, so the event could only ever answer late.
+    ///
+    /// The second half is the case that looks like an exception. `/clear`
+    /// leaves the process alive, so no file changes and no watcher fires — but
+    /// it mints a **new session id under the same pid** (measured
+    /// `bf10d6dc…` → `cd9d3d18…`, with `SessionEnd(reason: clear)` carrying the
+    /// old one). So the old id leaves the list like any other, and the row goes
+    /// with it. If that ever stops being true, this test fails and the case for
+    /// registering the event reopens.
+    @Test @MainActor
+    func aRowGoesWhenItsSessionLeavesTheListIncludingAfterClear() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        let cwd = "/Users/someone/Projects/thing"
+        harness.live = [harness.session(id: "s-old", cwd: cwd, pid: 4_242)]
+        try harness.queue(event: "UserPromptSubmit", session: "s-old", turn: "p-1", at: 300)
+        try harness.queue(event: "Stop", session: "s-old", turn: "p-1", at: 400)
+
+        let showing = await harness.service.fetchSnapshot()
+        #expect(showing.sessions.count == 1)
+        #expect(try #require(showing.sessions.first).threadID == "s-old")
+
+        // `/clear`: same process, same working directory, new identity. The
+        // reducer is still holding the turn under the old id and must not draw
+        // it -- nothing else in this refresh says the old session ended.
+        harness.live = [harness.session(id: "s-new", cwd: cwd, pid: 4_242)]
+        #expect(await harness.service.fetchSnapshot().sessions.isEmpty)
+
+        // And the new identity is an ordinary session: its first event opens a
+        // row of its own rather than reviving the one that just went.
+        try harness.queue(event: "UserPromptSubmit", session: "s-new", turn: "p-2", at: 500)
+        let after = await harness.service.fetchSnapshot()
+        #expect(after.sessions.count == 1)
+        #expect(try #require(after.sessions.first).threadID == "s-new")
+        #expect(try #require(after.sessions.first).turnID == "p-2")
+
+        // The process exiting is the same gate, reached by the other route.
+        harness.live = []
+        #expect(await harness.service.fetchSnapshot().sessions.isEmpty)
+    }
+
     /// A session coming or going wakes the product and tells the list.
     ///
     /// Two failures met here, and either one alone was enough to lose a whole

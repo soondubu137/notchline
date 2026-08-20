@@ -361,27 +361,44 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             ManagedHookDefinition(event: "MessageDisplay", matcher: nil),
             ManagedHookDefinition(event: "Stop", matcher: nil),
             ManagedHookDefinition(event: "StopFailure", matcher: nil)
-            // SessionEnd is deliberately absent, and the reason it was
-            // absent has just been retired -- so this is a note about what to
-            // do next, not a justification.
+            // SessionEnd is deliberately absent. The reason it was first
+            // excluded is gone; it stays out on a different one, and both are
+            // worth writing down because the obvious reading of this list is
+            // that somebody forgot.
             //
             // It was excluded because it is the only event whose failure is
-            // written to the CLI's *own* stderr rather than drawn by the TUI,
-            // so with nothing listening it followed `claude -p` into scripts,
-            // pipelines and CI where nothing is watching a notch. Measured
-            // 2026-08-16, re-measured against 2.1.235 on 2026-08-18.
+            // written to the CLI's *own* stderr rather than drawn by the TUI --
+            // `SessionEnd hook [...] failed:` comes straight out of the
+            // executor -- so with nothing listening it followed `claude -p`
+            // into scripts, pipelines and CI where nothing is watching a notch.
+            // The helper cannot fail that way: it exits 0 and writes to neither
+            // stream whether or not this app is running (ADR 0013).
             //
-            // The helper cannot fail that way. It exits 0 and writes to
-            // neither stream whether or not this app is running, so no
-            // registered event can put a line anywhere -- which is the whole
-            // of CC-021 -- and this one costs exactly what the others do.
+            // So it was re-examined on its merits, and it does not have any.
+            // The case for it was that it would retire a dead session's row
+            // sooner than the sessions-directory watcher notices. Measured
+            // against 2.1.237, interactive session under a pty, sampling
+            // `~/.claude/sessions/<pid>.json` at 20 ms: the file is removed at
+            // +15.09s and +15.08s over two runs, and `SessionEnd` arrives at
+            // +15.41s in both. **The watcher's signal lands ~330 ms first**, so
+            // registering this could only ever add a second, later answer to a
+            // question already answered.
             //
-            // Registering it is still a change of its own and is left out of
-            // this one: it needs a `signal(forEvent:toolName:)` case, and the
-            // reducer decision behind that case is whether a dead session's
-            // row should retire on the event or go on waiting for the sessions
-            // directory watcher, which is the only thing that can do it today
-            // (`ClaudeCodeSessionRegistry.swift`, `ClaudeCodeMonitorService`).
+            // `/clear` looked like the exception and is not. It leaves the
+            // process alive, so no file changes and the watcher never fires --
+            // but it *changes the session id*: measured `bf10d6dc…` becoming
+            // `cd9d3d18…` under the same pid, with `SessionEnd(reason: clear)`
+            // carrying the old one. The old id is therefore out of
+            // `claude agents --json` immediately, and row construction gates on
+            // exactly that (`ClaudeCodeMonitorService`, "a turn whose session is
+            // gone is gone"). `resume` is the same shape.
+            //
+            // Worth knowing if this is ever reopened: the payload carries a
+            // `reason`, and the group's `matcher` is matched against it, so a
+            // registration can select reasons. The vocabulary is `clear`,
+            // `resume`, `logout`, `prompt_input_exit`, `other` -- and only some
+            // of them mean the session went away, which is a second reason the
+            // event is not the simple signal its name suggests.
         ]
     }
 

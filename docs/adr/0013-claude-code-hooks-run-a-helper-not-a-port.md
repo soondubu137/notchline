@@ -48,10 +48,16 @@ helper 两个毛病都没有：它无论本应用开没开都 `exit 0` 且两条
 
 ## 连带
 
-**`SessionEnd` 排除的理由没有了。** 它当初被单独排除，是因为它是唯一一个失败会写进 CLI **自己的 stderr**、因而会跟着 `claude -p` 进入脚本、管道和 CI 的事件。helper 不会那样失败。是否注册它现在是一个纯粹的产品问题（要不要让一个死掉的会话的行直接退休，而不是等 sessions 目录 watcher 发现），单独处理。
+**`SessionEnd` 排除的理由没有了，但它仍然不注册——换了一个理由。** 它当初被单独排除，是因为它是唯一一个失败会写进 CLI **自己的 stderr**、因而会跟着 `claude -p` 进入脚本、管道和 CI 的事件；helper 不会那样失败，所以那条理由确实作废了。于是重新按它自身的价值考察了一遍，结论是**没有价值**：
+
+- 支持它的理由是「能比 sessions 目录 watcher 更早退休一个死掉会话的行」。**实测反过来。** 2.1.237，pty 交互式会话，按 20 ms 采样 `~/.claude/sessions/<pid>.json`：文件在 **+15.09s / +15.08s**（两次）被删除，`SessionEnd` 两次都在 **+15.41s** 到达——**watcher 的信号早约 330 ms**。注册它只会给一个已经答完的问题补一个更晚的答案。
+- 看起来像例外的是 `/clear`：进程还活着，没有文件变化，watcher 不响。但它**在同一个 pid 下换掉了 session id**（实测 `bf10d6dc…` → `cd9d3d18…`，而 `SessionEnd(reason: clear)` 带的是旧的那个），于是旧 id 立刻离开 `claude agents --json`，行照常消失。`resume` 同形。
+- 顺带记下，如果以后重开这个问题：payload 带 `reason`，而 group 的 `matcher` 正是拿它匹配的，所以注册可以挑 reason。词表是 `clear`、`resume`、`logout`、`prompt_input_exit`、`other`——其中只有一部分意味着「会话没了」，这是它并不像名字那样是个简单信号的第二个原因。
+
+行消失靠的一直是「turn 的会话不在实时列表里就不画」这一条（`ClaudeCodeMonitorService`）。这条机制此前只由一行代码和一句注释扛着，现在由 `aRowGoesWhenItsSessionLeavesTheListIncludingAfterClear` 钉住，包括 `/clear` 那一形。
 
 **CC-014 一并消失。** 「固定端口冲突无法自愈」的前提是有个固定端口。
 
 ## 状态
 
-已实施。`ClaudeCodeHookSetup` 写 helper 并渲染要粘贴的块，`AgentHookListener` 绑 socket，`ClaudeCodeMonitorService.prepareTransport()` 每次刷新确认两者都在。测试：`theHelperDeliversWhenTheAppIsUpAndIsSilentWhenItIsNot`（拿真脚本按 CLI 的 exec form 跑，两种状态都要 `exit 0` 且两条流为空）、`theSocketIsPrivateToThisUserAndDropsWhatItCannotRead`、`theHandlerThisBuildReplacedStaysRecognisableSoAnUpgradeReplacesIt`、`anHTTPEraRegistrationAsksToBeRepairedRatherThanReadingAsAbsent`、`theHelperQuotesASocketPathThatCarriesAQuote`。
+已实施。`ClaudeCodeHookSetup` 写 helper 并渲染要粘贴的块，`AgentHookListener` 绑 socket，`ClaudeCodeMonitorService.prepareTransport()` 每次刷新确认两者都在。测试：`theHelperDeliversWhenTheAppIsUpAndIsSilentWhenItIsNot`（拿真脚本按 CLI 的 exec form 跑，两种状态都要 `exit 0` 且两条流为空）、`theSocketIsPrivateToThisUserAndDropsWhatItCannotRead`、`theHandlerThisBuildReplacedStaysRecognisableSoAnUpgradeReplacesIt`、`anHTTPEraRegistrationAsksToBeRepairedRatherThanReadingAsAbsent`、`theHelperQuotesASocketPathThatCarriesAQuote`、`aRowGoesWhenItsSessionLeavesTheListIncludingAfterClear`。

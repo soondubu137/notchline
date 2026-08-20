@@ -694,3 +694,18 @@ slave=/dev/ttys004
 | 8 | **交接没有安全做法。** `SO_REUSEPORT` 下两个进程可同时持有同一端口，投递 6/6 给后 bind 的那个；但普通 bind 与 `SO_REUSEPORT` 互不兼容（两个方向都实测 `EADDRINUSE`），所以开启它等于允许任何本地进程后 bind 接管投递——**包括本应用正在运行时**。把「关着时有窗口」换成「一直开着」 | 本机 socket 实测 |
 | 9 | **job 拉不起来时，失败形态比原病更重。** 程序不存在时 `connect()` **1 ms 成功**、`recv()` 永不返回（10 s 无响应，`last exit code = 78: EX_CONFIG`），于是每个事件都等满自己的 `timeout`；而本应用改不了用户文件里的 `timeout` | 同上 |
 | 10 | **端口被占时 bootstrap 静默成功**：`rc 0`、job 注册上、`launchctl print` 与健康时**逐字节相同**（都报 `sockets = { 16 (no bytes to read) }`），抢占者照常收 POST。今天 `bind()` 失败是个干脆的信号，这个方案把它弄丢 | 同上 |
+
+### 2026-08-20（同日续）— `SessionEnd` 重新考察后仍不注册：它比 watcher 晚
+
+[ADR 0013](../../adr/0013-claude-code-hooks-run-a-helper-not-a-port.md) 让 `SessionEnd` 的排除理由作废（helper 不会往 stderr 写东西），于是按它自身的价值重测了一遍。基线 CLI `2.1.237`，pty 交互式会话，注册通过临时 `--settings`，**未改动 `~/.claude/settings.json`**。
+
+| # | 结果 | 依据 | 影响 |
+| --- | --- | --- | --- |
+| 1 | **`SessionEnd` 比 sessions 目录 watcher 晚约 330 ms。** `~/.claude/sessions/<pid>.json` 在 **+15.09s / +15.08s** 被删除，`SessionEnd` 两次都在 **+15.41s** 到达 | 20 ms 采样文件是否存在，两次独立运行，退出动作为时间原点 | 支持注册它的唯一理由（「比 watcher 更早退休行」）不成立，方向还是反的 |
+| 2 | **`/clear` 在同一个 pid 下换掉 session id**：`bf10d6dc…` → `cd9d3d18…`，进程与会话文件都不变；`SessionEnd(reason: "clear")` 带的是**旧** id，紧接着退出时还会再来一条 `reason: "other"` 带**新** id | 对照 `claude agents --json` 在 `/clear` 前后的输出 | 唯一看起来 watcher 够不着的场景其实够得着：旧 id 立刻离开列表，行照常消失。`resume` 同形 |
+| 3 | `SessionEnd` 的 payload 是 `cwd, hook_event_name, prompt_id, reason, session_id, transcript_path`；**reason 词表为 `clear` / `resume` / `logout` / `prompt_input_exit` / `other`**，而 group 的 `matcher` 匹配的就是 reason | 从 2.1.237 读出事件构造与词表，并实测到 `clear` 与 `other` | 注册可以按 reason 挑，但只有一部分 reason 意味着「会话没了」——它不是名字暗示的那种简单信号 |
+| 4 | 退出时 `SessionEnd` 的失败确实走 CLI 自己的 stderr（`SessionEnd hook [...] failed:` 直接 `process.stderr.write`），这一点与 2026-08-16 的记录一致 | 二进制里的 `executeSessionEndHooks` | 旧理由本身没有错，只是被 helper 消掉了 |
+
+**结论：不注册。** 行消失靠的一直是「turn 的会话不在实时列表里就不画」，该机制现由 `aRowGoesWhenItsSessionLeavesTheListIncludingAfterClear` 钉住（含 `/clear` 一形）。
+
+顺带查清一件本来担心的事：Claude Code 侧的 reducer 从不调用 `removeThreads`，`turnsByThreadID` 里死会话的条目会一直留到进程结束。**这不是泄漏，不必修**——turn 状态是纯内存的（`persist()` 只写 observation marker，`LegacyPersistedTurn` 是空结构，启动时 `turnsByThreadID = [:]` 从不恢复），正文早已按实时集合裁剪（`retainPreviews`），残留的只是每个见过的 session id 一条小结构。
