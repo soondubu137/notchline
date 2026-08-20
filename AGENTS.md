@@ -83,7 +83,8 @@ Design conclusions, measured boundaries, and architectural constraints still liv
 ### 5.1 Branches and commits
 
 - **Commit directly on `master`.** Do not create a feature branch unless explicitly asked. History here is linear and this is a solo project.
-- **Only commit when asked, and only push when asked.** Those are two separate authorizations.
+- **Commit a significant change as soon as it is finished, without being asked.** An issue fixed, a feature implemented, a document rewritten — commit it once it builds and the tests pass, rather than leaving the work sitting in the tree. Trivial edits in passing can wait for the change they belong to.
+- **Pushing is a separate authorization and still has to be asked for.** Committing is not.
 - One reviewed, complete change per commit. Do not bundle unrelated edits.
 - Commit messages are in English:
   - The subject is imperative and describes the **outcome**, not the mechanism — `Stop the refresh loop spinning on a deadline it cannot clear`, not `Fix bug in refresh loop`.
@@ -99,7 +100,17 @@ Two conditions:
 1. **State the conflict and the reasoning explicitly.** The judgment call should be visible, not silent.
 2. **Prefer rewriting a test so it pins the real invariant** over deleting it. For example, "never calls `thread/read`" was rewritten as "never requests Turn detail" (`includeTurns: false`, no `thread/items/list`) — which is stronger than the proxy it replaced.
 
-### 5.3 Before changing code
+### 5.3 Leave nothing behind
+
+A task is not finished while its scaffolding is still on the machine. When the work is done, remove what was only there to do it:
+
+- Probe scripts, captured output and throwaway tests written to measure something. Keep the *conclusion* — in a commit body, a document, or a test that stays — and delete the apparatus.
+- Transcripts and session folders left in `~/.claude/projects/` by any `claude` this task started. Those are this app's own probe leavings, not the user's work.
+- Temporary trees under the session scratchpad.
+
+Anything that belongs to the user rather than to the task is not covered by this: ask before removing it.
+
+### 5.4 Before changing code
 
 Read the existing implementation and the existing tests before proposing anything. Nearly every simplification-shaped thing in this repository is held in place by a measurement or an edge case — §6 of `docs/system-architecture.md` contains an entire passage overturning an earlier conclusion in that same document.
 
