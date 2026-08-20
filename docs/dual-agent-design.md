@@ -217,7 +217,9 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 **成因后来查清了**：`updateAgent` 这个状态对 Claude Code **根本不可达**——它存在是因为 Codex Desktop 可能版本过旧，而 Claude Code 是用户自己装的 CLI，没有版本门槛。宽度折叠不区分「哪个产品能到哪个状态」，于是为一个画不出来的标签预留了位置。见 [#29](https://github.com/soondubu137/codex-in-notch/issues/29)。
 
-**这条已被在场制吸收。** `Update Claude Code` 随 `Update Codex`、`Unsupported Version` 一起退出收起态（[`figma-design.md`](figma-design.md) §6.6），不再参与定宽；同时单产品工作集合改为共用固定宽度 `220`（§6.4），而 `Update Claude Code` 本机实测 `124.77`，撑到 `24 + 16.62 + 12 + 124.77 + 24 = 201.4`，本来就在 `220` 之内。也就是说即便日后它回到收起态，也不会再改变任何宽度。`PanelMetrics.fixedCompactWidth` 的按产品折叠因此**整个去掉了**：工作集合里已经没有任何一条紧凑标签会指名产品，加宽的理由从「第二个产品的词汇更长」变成「多画了一个矩阵」。它现在按 `(status, matrixCount)` 取值，`configuredAgents` 只留给展开态——展开面板仍然会说 `Update Claude Code` 这类指名产品的整句。
+**这条已被在场制吸收。** `Update Claude Code` 随 `Update Codex`、`Unsupported Version` 一起退出收起态（[`figma-design.md`](figma-design.md) §6.6），不再参与定宽；同时单产品工作集合改为共用固定宽度 `220`（§6.4），而 `Update Claude Code` 本机实测 `124.77`，撑到 `24 + 16.62 + 12 + 124.77 + 24 = 201.4`，本来就在 `220` 之内。也就是说即便日后它回到收起态，也不会再改变任何宽度。`PanelMetrics.fixedCompactWidth` 的按产品折叠因此**整个去掉了**：工作集合里已经没有任何一条紧凑标签会指名产品，加宽的理由从「第二个产品的词汇更长」变成「多画了一个矩阵」。它现在按 `(status, matrixCount)` 取值。
+
+**后续：展开态也不再指名产品，`configuredAgents` 因此整个消失。** 上一段留给展开面板的那条尾巴——「展开面板仍然会说 `Update Claude Code` 这类指名产品的整句」——已经收掉了。四条指名产品的整句（`Connecting to [产品]`、`Update [产品]`、`[产品] version unsupported`、`[产品] disconnected`）一律改回不指名的通用说法：`Connecting`、`Update required`、`Version unsupported`、`Disconnected`。理由是这四句提供的信息并非必需——**哪个**产品不健康，设置窗口的产品行本来就逐个列着，而刘海不是读这件事的地方。代价是一次点击，收益是展开面板的定宽折叠随之消失：最宽的整句从 `Claude Code version unsupported`（`204.43`）变成 `Version unsupported`（`124.88`），单侧从 `253.03` 收到 `173.48`，装了 Claude Code 的用户每一次展开都少占 `79` 点。`PanelMetrics.expandedWidth` 因此只剩 `centerOcclusionWidth` 一个参数，`MonitorStore.configuredAgents` 与快照上的 `availabilityAgent`、`statusAgent` 一并删除——它们存在的唯一理由就是让标签说出产品名。
 
 ## 6.1 Claude Code 集成卡片（新增面）
 

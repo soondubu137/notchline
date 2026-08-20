@@ -203,12 +203,12 @@ private struct OverlayHeader: View {
     }
 
     private var statusText: String {
-        // The resting pill keeps the short, unattributed word even when it is
-        // widened. Nothing is connected, so naming one product ("Codex
-        // disconnected") would single out a product for a state that is about
-        // all of them — and it would overflow a pill sized for the short form.
+        // The resting pill keeps the short word even when it is widened: its
+        // width is composed from the compact label, so drawing the panel's
+        // longer sentence ("Set up integration" where "Set up" was reserved)
+        // would overflow a pill sized for the short form.
         if store.expandsToPillOnly {
-            return store.status.compactDisplayName(for: nil)
+            return store.status.compactDisplayName
         }
         return store.isExpanded ? store.statusDisplayName : store.compactStatusReadoutText
     }

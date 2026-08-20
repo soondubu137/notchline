@@ -34,7 +34,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 尚未满足、因此仍阻塞 V1 发布：
 
-- 独立 App Server 不共享 Codex Desktop 的进程内事件流，且实测无法回答 Turn 级问题（见下），因此启动不做现状同步：只要 App Server 完成握手并成功返回一次 `thread/list`，即发布 Ready 并以空集合发布。在场此时已经可知（Codex Desktop 是否在运行），所以收起态可以诚实地显示 `Connected` 而对轮次一无所知——这处不对称是刻意保留的：在场在本应用启动的瞬间就可知，轮次不可知。只有 App Server 没有响应或连接失败才显示 `Codex disconnected`；校验请求尚未完成时保持 Connecting。跨 Codex in Notch 重启持久化的 Hook 标记只用于配置健康判断，不得恢复任何会话状态。
+- 独立 App Server 不共享 Codex Desktop 的进程内事件流，且实测无法回答 Turn 级问题（见下），因此启动不做现状同步：只要 App Server 完成握手并成功返回一次 `thread/list`，即发布 Ready 并以空集合发布。在场此时已经可知（Codex Desktop 是否在运行），所以收起态可以诚实地显示 `Connected` 而对轮次一无所知——这处不对称是刻意保留的：在场在本应用启动的瞬间就可知，轮次不可知。只有 App Server 没有响应或连接失败才显示 `Disconnected`；校验请求尚未完成时保持 Connecting。跨 Codex in Notch 重启持久化的 Hook 标记只用于配置健康判断，不得恢复任何会话状态。
 - **实测边界（Codex CLI `0.148.0-alpha.9`，在一个真实运行中的 Turn 上采样）**：独立 App Server 的 `thread/loaded/list` 返回空；所有 Thread 的 `status.type` 恒为 `notLoaded`；`thread/list` 契约上永不返回 `turns`；`thread/read` 即使带 `includeTurns: true` 也从不出现 `inProgress`——正在运行的 Turn 被记为 `interrupted` 且 `completedAt` 为 null。直接后果：依赖 `status.type == "active"` 的 `activeFlags` 校正在当前拓扑下**永远不成立**。该机制（`activeEvidence`、`terminalStatus`、`reconcileActiveStatus`、`markCompleted` 与 `hasLiveBoundary`）已整体删除，因为保留空转代码会让后续设计误以为存在这条能力。若将来出现共享运行时拓扑，应基于当时验证过的字段重新设计，而不是复活这段代码。
 - 当前公开协议仍没有 Desktop 蓝点对应的已读字段；生产实现依赖第 1.3 节登记的 Desktop 私有只读 schema。Desktop 升级后的真实 read/unread 版本矩阵仍是发布验证项，任何不兼容都必须保守保留终态行。
 - Hooks 可以可靠覆盖开始、两种审批形态、`request_user_input` 和终态边界；Approval needed 一律由某个工具调用的开合区间证明（专用审批工具自成区间，普通工具由 `PermissionRequest` 指名并借用其仍打开的调用 id），孤立的 `PermissionRequest` 不证明仍需人工批准。App Server 的 `completed`、`failed`、`interrupted` 都映射为 Completed，仍需真实 Desktop 样本矩阵验证端到端覆盖。
@@ -409,14 +409,14 @@ launch
 → load Hook trust marker only; initialize an empty in-memory reducer
 → detect installation/version
 → atomically upgrade the app-managed Hook helper whenever this app recorded installing it
-→ Connecting to Codex (≤ 5s)
+→ Connecting (≤ 5s)
 → capability handshake
 → reconcile active + unread terminal membership
 → subscribe events
 → ready
 ```
 
-五秒内连接成功则不显示中间错误；超时后根据原因进入 Update Codex、unsupported 或 disconnected。Codex 未运行时不自动启动。
+五秒内连接成功则不显示中间错误；超时后根据原因进入 Update required、Version unsupported 或 Disconnected。Codex 未运行时不自动启动。
 
 Hook helper 的源码发生版本变化不等于集成未安装。安装器直接把磁盘上的 helper 与本版本内置的定义做内容比较：相同即 `current`；不同且本应用的安装标记存在（`managed-install.json` 只由 `install()` 写入，等于本应用确实安装过；早于该标记的安装以遗留的 `hook-settings.json` 为准）时，只原子升级本应用管理的 helper 文件，不改写 `hooks.json`、不重新要求信任。标记本身不携带任何设置——预览开关已不再落盘。
 
@@ -674,11 +674,11 @@ ADR 0004 的精确导航门槛只约束 Codex：目前没有任何受支持的�
 | 故障 | 收起态 | 展开面板 |
 | --- | --- | --- |
 | 无活动或未读终态，且产品已打开 | `Connected` | 薄层 `No active turns` |
-| App Server 已开始连接、会话快照尚未返回 | `Disconnected` | 薄层 `Connecting to Codex`，≤ 5s |
+| App Server 已开始连接、会话快照尚未返回 | `Disconnected` | 薄层 `Connecting`，≤ 5s |
 | 尚未注册集成（产品可能已打开） | `Disconnected` | 薄层 `Set up integration` |
-| 版本过旧 | `Disconnected` | 清空列表，薄层 `Update Codex` |
-| 版本未知/未经验证 | `Disconnected` | 清空列表，薄层 `Codex version unsupported` |
-| App Server 无响应、启动失败或连接断开 | `Disconnected` | 清空列表，薄层 `Codex disconnected` |
+| 版本过旧 | `Disconnected` | 清空列表，薄层 `Update required` |
+| 版本未知/未经验证 | `Disconnected` | 清空列表，薄层 `Version unsupported` |
+| App Server 无响应、启动失败或连接断开 | `Disconnected` | 清空列表，薄层 `Disconnected` |
 | Desktop 未读主状态缺失、损坏或不兼容 | 不变 | 保留尚未隐藏的终态行并显示诊断；不得把 backup/LKG 的空集合作为已读证据 |
 | 额度失败 | 不变 | 灰色圆环；列表不变 |
 | 某行预览失败 | 不变 | 隐藏该预览；其他字段不变 |

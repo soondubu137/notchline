@@ -150,11 +150,11 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 | 场景 | 列表 | 展开文案 | 是否提供操作 |
 | --- | --- | --- | --- |
 | 首次尚未集成 | 空 | `Set up integration` | 引导流程中处理 |
-| Codex 版本过旧 | 空 | `Update Codex` | 否 |
-| Codex 版本未经验证 | 空 | `Codex version unsupported` | 否 |
-| App Server 无响应、启动失败或连接断开 | 清空 | `Codex disconnected` | 否 |
+| Codex 版本过旧 | 空 | `Update required` | 否 |
+| Codex 版本未经验证 | 空 | `Version unsupported` | 否 |
+| App Server 无响应、启动失败或连接断开 | 清空 | `Disconnected` | 否 |
 
-`Connecting to Codex` 被删除而不是搬家：在场由系统 API 直接回答，没有需要向用户解释的等待。`No active turns` 并入 `Connected`；这次改名值得——`Idle` 描述的是我们看到的空列表，用户无从核对，`Connected` 描述的是用户瞄一眼自己的 Dock 就能核对的事实。
+上表的文案都不指名产品：**哪个**产品不健康由 Settings 的产品行逐条列出，展开面板只说发生了什么（见 [`figma-design.md`](figma-design.md) §6.6）。`Connecting to Codex` 被删除而不是搬家：在场由系统 API 直接回答，没有需要向用户解释的等待。`No active turns` 并入 `Connected`；这次改名值得——`Idle` 描述的是我们看到的空列表，用户无从核对，`Connected` 描述的是用户瞄一眼自己的 Dock 就能核对的事实。
 
 Disconnected 是全局集成健康问题，不能用于单会话。进入 Disconnected 时必须清空列表，不显示最后一次可信快照。应用不自动启动 Codex；用户在 Codex 或系统中自行完成相应操作。
 
@@ -273,7 +273,7 @@ V1 设置窗口只包含已经确认的三组能力：
 2. **Codex integration**：显示连接与兼容状态，提供一个总开关同时启停全部六种必需 lifecycle event 定义；提供重新检测。关闭只移除本应用管理的定义并保留用户其他 Hooks；重新开启会安装或修复完整集合。
 3. **Session list**：`Distinguish products` 选择器，三选一——`Name and colour`（默认）、`Name only`、`Badge`。控件始终可见，即使标记只在两个产品都已连接时才绘制：一个要等到第二个产品恰好打开才找得到的偏好，用户永远找不到。
 
-设置只影响 Codex in Notch。`Update Codex`、`Codex version unsupported` 和 `Codex disconnected` 不提供操作；它们已退出收起态，只在展开面板与 Settings 的产品行中出现（见 6.3）。
+设置只影响 Codex in Notch。`Update required`、`Version unsupported` 和 `Disconnected` 不提供操作；它们已退出收起态，只在展开面板与 Settings 的产品行中出现（见 6.3）。
 
 **设置窗口由用户打开，不在启动时自己出现。** 启动只画 notch 组件；设置走 macOS 自己那条路——应用菜单的 `Settings…`／`⌘,`。第 5 节的首次引导是唯一的例外，它必须不请自来。这条既是产品判断（本产品是常驻组件，不是一个每次启动都要看一眼的窗口），也是一条实测的启动代价：那个窗口的构建、布局与它引起的 tracking-area 一遍，占一次 Release 启动 CPU 的一半（`0.62 s → 0.32 s`，峰值 `%cpu 55 → 33`），详见 [`system-architecture.md` §6](system-architecture.md)。
 

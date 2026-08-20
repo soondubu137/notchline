@@ -70,23 +70,21 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
 
     /// The panel's full sentence for this state.
     ///
-    /// Four of these name a product, so they are told which one rather than
-    /// spelling Codex into the enum. Adding a case per product would have been
-    /// the other way to do it, and it is the wrong way: every panel width is
-    /// derived by folding over `allCases`, so a `.updateClaudeCode` case would
-    /// widen the pill for a user who has never installed Claude Code.
-    ///
-    /// A `nil` product means no single one owns the state — either nothing is
-    /// wrong, or more than one product is unhealthy and naming just one of them
-    /// would be a lie.
-    func displayName(for agent: AgentKind?) -> String {
+    /// No product argument. Four of these used to name the product they were
+    /// about — `Connecting to Codex`, `Claude Code disconnected` — and none of
+    /// them do any more: which product is unhealthy is not what the notch is
+    /// for, and Settings already lists every product with its own state beside
+    /// it. Dropping the names costs the user nothing they cannot see one click
+    /// away, and it buys back the width the longest of them reserved on every
+    /// panel, connected or not.
+    var displayName: String {
         switch self {
         case .connected:
             "Connected"
         case .setupRequired:
             "Set up integration"
         case .connecting:
-            agent.map { "Connecting to \($0.displayName)" } ?? "Connecting"
+            "Connecting"
         case .running:
             "Running"
         case .inputNeeded:
@@ -96,12 +94,11 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         case .completed:
             "Completed"
         case .updateAgent:
-            agent.map { "Update \($0.displayName)" } ?? "Update required"
+            "Update required"
         case .unsupportedVersion:
-            agent.map { "\($0.displayName) version unsupported" }
-                ?? "Version unsupported"
+            "Version unsupported"
         case .disconnected:
-            agent.map { "\($0.displayName) disconnected" } ?? "Disconnected"
+            "Disconnected"
         }
     }
 
@@ -113,10 +110,11 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     /// still shows the full sentence, so this is a shorter form, not less
     /// information.
     ///
-    /// Only one of these names a product, and it is the one that sets the
-    /// widest compact label — so the product a panel is configured for is what
-    /// decides how wide that panel is.
-    func compactDisplayName(for agent: AgentKind?) -> String {
+    /// Nothing here names a product either, for the same reason ``displayName``
+    /// does not — and the collapsed surface had the stronger case: its width is
+    /// already computed from the unattributed names, so an `Update Codex` drawn
+    /// where `Update` was reserved was a label wider than its own pill.
+    var compactDisplayName: String {
         switch self {
         case .connected:
             "Connected"
@@ -133,7 +131,7 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         case .completed:
             "Completed"
         case .updateAgent:
-            agent.map { "Update \($0.displayName)" } ?? "Update"
+            "Update"
         case .unsupportedVersion:
             "Unsupported"
         case .disconnected:
@@ -300,7 +298,7 @@ enum MonitorAvailability: Equatable, Sendable {
         }
     }
 
-    func emptyListMessage(for agent: AgentKind?) -> String {
+    var emptyListMessage: String {
         switch self {
         case .setupRequired:
             "Set up integration"
@@ -308,7 +306,7 @@ enum MonitorAvailability: Equatable, Sendable {
             "No active turns"
         case .connecting, .updateAgent, .unsupportedVersion, .disconnected:
             // The same sentence the panel header shows, so the two cannot drift.
-            status.displayName(for: agent)
+            status.displayName
         }
     }
 }
@@ -675,20 +673,6 @@ struct MonitorSnapshot: Equatable, Sendable {
     /// and then it is the most actionable of them.
     nonisolated var availability: MonitorAvailability {
         MonitorAggregation.availability(agents: agents)
-    }
-
-    /// Whose problem the summary is describing, or `nil` when it is nobody's.
-    ///
-    /// The status label has to name a product to say "Codex disconnected", and
-    /// it has to *not* name one when two products are equally unhealthy —
-    /// naming just one of them would be a lie about the other.
-    nonisolated var availabilityAgent: AgentKind? {
-        let availability = self.availability
-        guard availability != .ready else { return nil }
-        let owners = agents
-            .filter { $0.availability == availability }
-            .map(\.agent)
-        return owners.count == 1 ? owners.first : nil
     }
 
     /// The products that are open and reachable, in display order.

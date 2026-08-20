@@ -25,7 +25,7 @@ struct CodexInNotchTests {
                             let size = PanelMetrics.size(
                                 geometry: .noNotch,
                                 isExpanded: false,
-                                statusReadoutText: status.compactDisplayName(for: agent),
+                                statusReadoutText: status.compactDisplayName,
                                 timerText: timerText,
                                 centerOcclusionWidth: 0,
                                 compactHeight: barHeight,
@@ -172,57 +172,40 @@ struct CodexInNotchTests {
         )
     }
 
-    /// The retired states did not lose their words, only their place.
+    /// The retired states did not lose their words, only their place — and
+    /// then their product names.
     ///
-    /// They still have to read correctly wherever they do appear — the expanded
-    /// panel and the Settings product rows — so the sentences stay pinned even
-    /// though nothing beside the notch says them any more.
+    /// Four of these used to be told which product they were about, so the
+    /// panel could say `Codex disconnected`. None of them are any more: which
+    /// product is unhealthy is Settings' job, where every product is listed
+    /// with its own state beside it. The sentences stay pinned in their
+    /// generic form because the expanded panel and the empty-list message
+    /// still say them.
     @Test @MainActor
-    func theRetiredThinStatesStillReadCorrectlyWhereTheyStillAppear() {
-        #expect(MonitorStatus.connecting.displayName(for: .codex) == "Connecting to Codex")
-        #expect(MonitorStatus.updateAgent.displayName(for: .codex) == "Update Codex")
-        #expect(
-            MonitorStatus.unsupportedVersion.displayName(for: .codex)
-                == "Codex version unsupported"
-        )
-        #expect(MonitorStatus.disconnected.displayName(for: .codex) == "Codex disconnected")
-        #expect(MonitorStatus.updateAgent.compactDisplayName(for: .codex) == "Update Codex")
-        #expect(
-            MonitorAvailability.disconnected.emptyListMessage(for: .codex)
-                == "Codex disconnected"
-        )
-
-        // The expanded panel still folds over every state and both products, so
-        // a product-naming label still has to be able to widen it. This is the
-        // fold the compact width used to share, and the reason #29 existed.
-        for occlusion in [CGFloat(0), 200, 320] {
-            #expect(
-                PanelMetrics.expandedWidth(
-                    centerOcclusionWidth: occlusion,
-                    configuredAgents: Set(AgentKind.allCases)
-                )
-                    >= PanelMetrics.expandedWidth(
-                        centerOcclusionWidth: occlusion,
-                        configuredAgents: [.codex]
-                    )
-            )
-        }
+    func theRetiredThinStatesReadGenericallyWhereTheyStillAppear() {
+        #expect(MonitorStatus.connecting.displayName == "Connecting")
+        #expect(MonitorStatus.updateAgent.displayName == "Update required")
+        #expect(MonitorStatus.unsupportedVersion.displayName == "Version unsupported")
+        #expect(MonitorStatus.disconnected.displayName == "Disconnected")
+        #expect(MonitorStatus.updateAgent.compactDisplayName == "Update")
+        #expect(MonitorAvailability.disconnected.emptyListMessage == "Disconnected")
     }
 
-    /// No compact label in the working set names a product.
+    /// No label names a product, in either form, in any state.
     ///
-    /// This is what let the compact width stop folding over configured
-    /// products. `Update Claude Code` was the widest compact label and it set
-    /// the two-product pill width for a state Claude Code cannot reach (issue
-    /// #29); with the working set free of product names, what widens the pill
-    /// is a second matrix and nothing else.
+    /// This is what let both widths stop folding over configured products.
+    /// `Update Claude Code` was the widest compact label and it set the
+    /// two-product pill width for a state Claude Code cannot reach (issue #29);
+    /// `Claude Code version unsupported` was doing the same to the expanded
+    /// panel, ~79pt of it, on every panel a Claude Code user ever opened. With
+    /// no label naming a product, what widens either surface is a second matrix
+    /// and the cut-out, and nothing else.
     @Test @MainActor
-    func noWorkingCompactLabelNamesAProduct() {
-        for status in PanelMetrics.workingStatuses {
-            let unattributed = status.compactDisplayName(for: nil)
+    func noStatusLabelNamesAProduct() {
+        for status in MonitorStatus.allCases {
             for agent in AgentKind.allCases {
-                #expect(status.compactDisplayName(for: agent) == unattributed)
-                #expect(!unattributed.contains(agent.displayName))
+                #expect(!status.displayName.contains(agent.displayName))
+                #expect(!status.compactDisplayName.contains(agent.displayName))
             }
         }
     }
@@ -883,19 +866,14 @@ struct CodexInNotchTests {
     /// it already says a turn wants the user.
     @Test @MainActor
     func compactLabelsAreShorterThanTheirFullForm() {
-        #expect(MonitorStatus.inputNeeded.compactDisplayName(for: .codex) == "Input")
-        #expect(MonitorStatus.approvalNeeded.compactDisplayName(for: .codex) == "Approval")
-        #expect(MonitorStatus.inputNeeded.displayName(for: .codex) == "Input needed")
-        #expect(MonitorStatus.approvalNeeded.displayName(for: .codex) == "Approval needed")
+        #expect(MonitorStatus.inputNeeded.compactDisplayName == "Input")
+        #expect(MonitorStatus.approvalNeeded.compactDisplayName == "Approval")
+        #expect(MonitorStatus.inputNeeded.displayName == "Input needed")
+        #expect(MonitorStatus.approvalNeeded.displayName == "Approval needed")
 
         for status in MonitorStatus.allCases {
-            for agent in AgentKind.allCases {
-                #expect(
-                    status.compactDisplayName(for: agent).count
-                        <= status.displayName(for: agent).count
-                )
-                #expect(!status.compactDisplayName(for: agent).isEmpty)
-            }
+            #expect(status.compactDisplayName.count <= status.displayName.count)
+            #expect(!status.compactDisplayName.isEmpty)
         }
     }
 
@@ -1122,29 +1100,23 @@ struct CodexInNotchTests {
         #expect(notchedSize.height == 38 + PanelMetrics.expandedContentHeight)
     }
 
+    /// Every state's sentence clears a wide cut-out — and the width that
+    /// clears them no longer depends on which products are set up.
     @Test
-    func expandedWidthKeepsEveryStatusNameClearOfWideNotchForEveryConfiguredAgent() {
+    func expandedWidthKeepsEveryStatusNameClearOfWideNotch() {
         let centerOcclusionWidth: CGFloat = 220
-        for configured in [Set([AgentKind.codex]), Set(AgentKind.allCases)] {
-            let width = PanelMetrics.expandedWidth(
-                centerOcclusionWidth: centerOcclusionWidth,
-                configuredAgents: configured
-            )
-            let availableSideWidth = (width - centerOcclusionWidth) / 2
+        let width = PanelMetrics.expandedWidth(
+            centerOcclusionWidth: centerOcclusionWidth
+        )
+        let availableSideWidth = (width - centerOcclusionWidth) / 2
 
-            // Only the status readout flanks the notch now; usage moved to the
-            // footer.
-            for status in MonitorStatus.allCases {
-                for agent in configured {
-                    let requiredWidth = PanelMetrics.expandedHorizontalPadding
-                        + PanelMetrics.expandedStatusReadoutWidth(
-                            status: status,
-                            agent: agent
-                        )
-                        + PanelMetrics.expandedNotchClearance
-                    #expect(requiredWidth <= availableSideWidth)
-                }
-            }
+        // Only the status readout flanks the notch now; usage moved to the
+        // footer.
+        for status in MonitorStatus.allCases {
+            let requiredWidth = PanelMetrics.expandedHorizontalPadding
+                + PanelMetrics.expandedStatusReadoutWidth(status: status)
+                + PanelMetrics.expandedNotchClearance
+            #expect(requiredWidth <= availableSideWidth)
         }
     }
 
@@ -1984,25 +1956,14 @@ struct CodexInNotchTests {
                 ]
         )
 
-        // A system state that names a product is told which one; the shared
-        // ones never take a name at all.
-        #expect(MonitorStatus.setupRequired.displayName(for: .codex) == "Set up integration")
-        #expect(MonitorStatus.inputNeeded.displayName(for: .codex) == "Input needed")
-        #expect(MonitorStatus.approvalNeeded.displayName(for: .codex) == "Approval needed")
-        #expect(MonitorStatus.inputNeeded.displayName(for: .claudeCode) == "Input needed")
-        #expect(MonitorStatus.connecting.displayName(for: .codex) == "Connecting to Codex")
-        #expect(
-            MonitorStatus.connecting.displayName(for: .claudeCode)
-                == "Connecting to Claude Code"
-        )
-        #expect(
-            MonitorStatus.unsupportedVersion.displayName(for: .codex)
-                == "Codex version unsupported"
-        )
-        #expect(MonitorStatus.disconnected.displayName(for: .codex) == "Codex disconnected")
-        // Nobody's problem in particular: two unhealthy products must not be
-        // reported as one of them.
-        #expect(MonitorStatus.disconnected.displayName(for: nil) == "Disconnected")
+        // No state names a product, system or shared. A system state is still
+        // about one product's health, but saying which one is Settings' job.
+        #expect(MonitorStatus.setupRequired.displayName == "Set up integration")
+        #expect(MonitorStatus.inputNeeded.displayName == "Input needed")
+        #expect(MonitorStatus.approvalNeeded.displayName == "Approval needed")
+        #expect(MonitorStatus.connecting.displayName == "Connecting")
+        #expect(MonitorStatus.unsupportedVersion.displayName == "Version unsupported")
+        #expect(MonitorStatus.disconnected.displayName == "Disconnected")
     }
 
     @Test
@@ -2305,6 +2266,7 @@ struct CodexInNotchTests {
         // unready product lands on Disconnected, because not one of them is
         // connected — that is the whole convergence, and the states that had
         // something for the user to do moved to where there is room to say it.
+        var reasons: Set<String> = []
         for availability in unready {
             let merged = AgentSnapshotMerge.merge([
                 makeAgentSnapshot(.codex, availability: availability)
@@ -2313,11 +2275,11 @@ struct CodexInNotchTests {
             // The reason did not vanish with the state: the expanded panel
             // still names it, which is the channel it moved to.
             #expect(merged.availability == availability)
-            #expect(
-                merged.availability.emptyListMessage(for: .codex)
-                    == availability.emptyListMessage(for: .codex)
-            )
+            reasons.insert(merged.availability.emptyListMessage)
         }
+        // Five states collapsed onto one collapsed-surface word, and the panel
+        // still tells them apart — which is the point of moving them there.
+        #expect(reasons.count == unready.count)
 
         #expect(
             AgentSnapshotMerge.merge([
@@ -8197,9 +8159,9 @@ for line in sys.stdin:
         )
         #expect(store.connectedAgents == [.codex])
         #expect(compactWidth() == codexOnlyWidth)
-        // The expanded panel still sizes itself off what is *configured*, so
-        // that fact has to survive a product going quiet.
-        #expect(store.configuredAgents == Set(AgentKind.allCases))
+        // Nothing to check about the expanded panel here any more: it used to
+        // size itself off what was *configured*, and now that no status label
+        // names a product it sizes itself off the cut-out alone.
     }
 
     /// The settings card only exists for a product the app will not set up.

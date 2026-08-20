@@ -34,7 +34,7 @@ extension MonitorClock {
 /// They were previously spread across four files, which hid the fact that they
 /// compose into user-visible latencies no single constant explains:
 ///
-/// - **Codex Desktop dies → `Codex disconnected` appears.**
+/// - **Codex Desktop dies → `Disconnected` appears.**
 ///   `backgroundThreadListTimeout` (15s) + the transport's liveness grace (3s)
 ///   and probe timeout (5s) + `disconnectGracePeriod` (3s) ≈ 26s worst case.
 /// - **A finished turn is read in Desktop → its row disappears.**

@@ -89,7 +89,7 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 
 **会话行比面板其余部分宽两个 `6`。** 行块从面板边缘缩进 `6` 而不是 `12`，好让 hover 的填充不撞到边；行自己再补回 `6`，于是行内文字仍然落在 `12`——与 header 里的状态矩阵、页脚里的额度规则同一条边距上。两个数因此是互相定义的（`PanelMetrics.sessionRowGutter` 与 `sessionRowPadding = expandedHorizontalPadding − sessionRowGutter`），不是两个各写死的 `6`；`aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` 锁定这条关系。行块 `520 − 6 − 6 = 508`，内容盒 `520 − 12 − 12 = 496`。
 
-目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。例如无刘海 `24` 高菜单栏的展开参考尺寸为 `520 × 280`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed`、`Codex version unsupported` 等最长状态名完整位于可显示区域。
+目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。例如无刘海 `24` 高菜单栏的展开参考尺寸为 `520 × 280`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed`、`Version unsupported` 等最长状态名完整位于可显示区域。状态名不再指名产品（§6.6），因此这条加宽只取决于遮挡宽度，与用户装了哪些产品无关：单侧为 `12 + 16.6 + 12 + 124.88 + 8 = 173.48`，`520` 的基线要到遮挡超过 `173` 才被顶开。
 
 Panel 外轮廓有**两个**圆角，因为刘海本身有两个：侧边与屏幕上沿相接处是一段向外的小凹弧，下面两角是它的两倍。两者都不是常数，而是菜单栏高度的固定比例：
 
@@ -118,11 +118,11 @@ bottomCornerRadius = max(0, menuBarHeight) / 4  // 下圆角
 
 ### 4.1 Status Dot
 
-`Status Dot` 包含两类互不混用的状态：会话级 Running、Input Needed、Approval Needed、Completed，以及系统级 Idle、Connecting、Disconnected、Update Codex、Unsupported Version、Setup Required。
+`Status Dot` 包含两类互不混用的状态：会话级 Running、Input Needed、Approval Needed、Completed，以及系统级 Idle、Connecting、Disconnected、Update Required、Unsupported Version、Setup Required。
 
 - Idle（旧名）只用于健康空集合的汇总，现已并入 `Connected`；变体保留见下一条。
 - Disconnected 不用于会话行。
-- **系统级取值收敛为两个**：`Disconnected` 与 `Connected`（§6.4）。`Idle` 并入 `Connected`，`Connecting`、`Update Codex`、`Unsupported Version`、`Setup Required` 退出收起态（§6.6），只在展开面板与设置中出现，组件变体因此保留。
+- **系统级取值收敛为两个**：`Disconnected` 与 `Connected`（§6.4）。`Idle` 并入 `Connected`，`Connecting`、`Update Required`、`Unsupported Version`、`Setup Required` 退出收起态（§6.6），只在展开面板与设置中出现，组件变体因此保留。
 
 ### 4.2 Status Readout
 
@@ -283,7 +283,7 @@ Input needed
 
 计时在预留空间内**右对齐**且使用等宽数字，因此轮次跨过一小时时数字只向左长进本来就空着的位置，药丸不动，菜单栏里它左边的图标也不动。
 
-这同时了结了 [`dual-agent-design.md`](dual-agent-design.md) §8 里登记的那条：`Update Claude Code` 曾把双产品药丸从 `189` 顶到 `202`。它退出收起态后不再参与定宽；即便日后回来也仍然装得下——`12 + 16.62 + 12 + 124.77 + 12 = 177.4`，在 `196` 之内。（`Update Claude Code` 本机实测 `124.77`，与 §8 已记录的 `124.8` 一致，这是上表其余数字可信的依据。）
+这同时了结了 [`dual-agent-design.md`](dual-agent-design.md) §8 里登记的那条：`Update Claude Code` 曾把双产品药丸从 `189` 顶到 `202`。它退出收起态后不再参与定宽；即便日后回来也仍然装得下——`12 + 16.62 + 12 + 124.77 + 12 = 177.4`，在 `196` 之内。（`Update Claude Code` 本机实测 `124.77`，与 §8 已记录的 `124.8` 一致，这是上表其余数字可信的依据。）这一整段现在只剩历史意义：`Update Claude Code` 这个标签本身已经不存在，`updateAgent` 无论收起还是展开都说不指名产品的 `Update` / `Update required`，见 §6.6。
 
 ### 6.5 openness 如何判定
 
@@ -316,11 +316,13 @@ Input needed
 | 静息的熄灭产品矩阵 | 直接删除。灰槽不指认任何产品 |
 | `Idle` / `No active turns` | 并入 `Connected`（§6.4） |
 | `Connecting to Codex` | 删除。在场由系统 API 直接回答，没有需要向用户解释的等待 |
-| `Update Codex` | 设置里的产品行，以及用户打开时的展开面板 |
+| `Update Codex` | 设置里的产品行，以及用户打开时的展开面板；名字里的产品已去掉，见下 |
 | `Codex version unsupported` | 同上 |
 | `Set up integration` | 引导流程，以及设置里的开关 |
 
 `Codex disconnected` 不退休，而是被重新定义为 `Disconnected`，见 §6.7。薄层 `520 × 94` 只保留给展开面板。
+
+**去处保留，但去到那里的句子不再指名产品。** `Connecting to [产品]`、`Update [产品]`、`[产品] version unsupported`、`[产品] disconnected` 四句一律改为 `Connecting`、`Update required`、`Version unsupported`、`Disconnected`：**哪个**产品不健康是设置窗口的事，那里逐行列着每个产品和它自己的状态，刘海不必替它说。这条同时了结了展开面板的按产品定宽（§3.3）——最宽的整句从 `Claude Code version unsupported` 变成 `Version unsupported`，单侧收窄 `79.55`。
 
 ### 6.7 `Disconnected` 的定义
 
@@ -430,7 +432,7 @@ Input needed
 
 #### 状态名在两种形态之间的交接
 
-收起时状态名同时换字与换宽：`Approval needed` → `Approval`、`Input needed` → `Input`、`Update Codex` → `Update`。两件事必须走同一条曲线。字先换、宽后收，短字形就会被拉伸到旧读数的宽度再挤回自己——字形层原先按 `bounds` 定框，而 `CALayer` 的 `contentsGravity` 默认就是拉伸。
+收起时状态名同时换字与换宽：`Approval needed` → `Approval`、`Input needed` → `Input`、`Update required` → `Update`。两件事必须走同一条曲线。字先换、宽后收，短字形就会被拉伸到旧读数的宽度再挤回自己——字形层原先按 `bounds` 定框，而 `CALayer` 的 `contentsGravity` 默认就是拉伸。
 
 约定：
 
