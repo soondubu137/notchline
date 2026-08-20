@@ -152,7 +152,7 @@ final class OverlayPanelController {
         let targetFrame = OverlayPanelLayout.frame(
             on: selectedDisplay.frame,
             panelSize: size,
-            surfaceShoulder: store.surfaceCornerRadius,
+            surfaceShoulder: store.surfaceShoulderRadius,
             trailingAnchor: store.currentPanelTrailingAnchor
         )
 
@@ -218,8 +218,8 @@ enum OverlayPanelLayout {
     /// Two things separate the window from the panel it carries.
     ///
     /// `surfaceShoulder` is the concave shoulder `PanelContour` draws on each
-    /// side of the body — one corner radius wide (see
-    /// `PanelMetrics.surfaceCornerRadius`). The window is that much wider so
+    /// side of the body — one upper fillet wide (see
+    /// `PanelMetrics.surfaceShoulderRadius`). The window is that much wider so
     /// the shoulders have somewhere to live and the body's own edges land where
     /// they were asked to.
     ///

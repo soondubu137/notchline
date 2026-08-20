@@ -114,8 +114,16 @@ struct DisplayOption: Identifiable {
 
 enum PanelMetrics {
     static let referenceCompactHeight: CGFloat = 46
-    static let nativeNotchMenuBarHeight: CGFloat = 38
-    static let maximumSurfaceCornerRadius: CGFloat = 10
+    /// The cut-out's upper fillet, as a share of its height.
+    ///
+    /// The notch does not end on a corner where its sides meet the top of the
+    /// display: the glass curves back out into the screen. That curve is half
+    /// the lower one, and drawing it at the lower radius is what makes an
+    /// imitation read as a black box parked under the bezel instead of as the
+    /// cut-out carrying on sideways.
+    static let notchUpperRadiusRatio: CGFloat = 1.0 / 8
+    /// The cut-out's lower corners, as a share of its height.
+    static let notchLowerRadiusRatio: CGFloat = 1.0 / 4
     static let expandedBaselineWidth: CGFloat = 520
     static let sessionRowHeight: CGFloat = 80
     static let maximumVisibleSessionCount = 3
@@ -315,29 +323,34 @@ enum PanelMetrics {
             + expandedNotchClearance
     }
 
-    /// The contour's corner radius — and, because of the shape it draws, the
+    /// The contour's upper fillet — and, because of the shape it draws, the
     /// width of the shoulder it needs on each side of the panel.
     ///
     /// `PanelContour` spans its rect only along the very top edge and then
-    /// curves inward: its straight sides sit one radius in. So every width in
+    /// curves inward: its straight sides sit one shoulder in. So every width in
     /// this type describes the **body** — the black surface, the thing that has
-    /// to line up with the cut-out — and the window is one radius wider on each
-    /// side to leave the shoulders somewhere to be drawn. Sizing the window to
-    /// the body instead was the bug: the compact panel's right edge landed a
-    /// radius inside the cut-out, and its bottom-right corner curve took another
-    /// radius off that, which read as a bite out of the notch.
-    static func surfaceCornerRadius(
-        geometry: DisplayGeometry,
-        menuBarHeight: CGFloat
-    ) -> CGFloat {
-        guard geometry == .noNotch else {
-            return maximumSurfaceCornerRadius
-        }
+    /// to line up with the cut-out — and the window is one shoulder wider on
+    /// each side to leave them somewhere to be drawn. Sizing the window to the
+    /// body instead was the bug: the compact panel's right edge landed a
+    /// shoulder inside the cut-out, and its bottom-right corner curve took
+    /// another radius off that, which read as a bite out of the notch.
+    ///
+    /// Both radii are shares of the menu bar height rather than constants,
+    /// because that is how the hardware behaves. The cut-out is a fixed shape
+    /// in millimetres; the menu bar on a notched display is exactly as tall as
+    /// it, and both shrink together in points as the display scaling coarsens —
+    /// `220 × 38` at *More Space* down to `127 × 22` at *Larger Text*. A pinned
+    /// radius is therefore right at one scaling and too round at every other
+    /// one, which is what a fixed `10` was doing on notched displays.
+    static func surfaceShoulderRadius(menuBarHeight: CGFloat) -> CGFloat {
+        max(0, menuBarHeight) * notchUpperRadiusRatio
+    }
 
-        let proportionalRadius = maximumSurfaceCornerRadius
-            * max(0, menuBarHeight)
-            / nativeNotchMenuBarHeight
-        return min(maximumSurfaceCornerRadius, proportionalRadius)
+    /// The contour's lower corners, which are the ones the eye compares with
+    /// the cut-out: the notch's own bottom corners sit under the panel, so this
+    /// curve is the only place the shape is checkable against the hardware.
+    static func surfaceBottomCornerRadius(menuBarHeight: CGFloat) -> CGFloat {
+        max(0, menuBarHeight) * notchLowerRadiusRatio
     }
 
     static func size(
@@ -1282,13 +1295,15 @@ final class MonitorStore: ObservableObject {
             + PanelMetrics.compactTrailingWingWidth(timerText: compactTimerText)
     }
 
-    /// The contour's corner radius on the selected display, which is also the
+    /// The contour's upper fillet on the selected display, which is also the
     /// shoulder the window has to leave outside the body on each side.
-    var surfaceCornerRadius: CGFloat {
-        PanelMetrics.surfaceCornerRadius(
-            geometry: geometry,
-            menuBarHeight: compactHeight
-        )
+    var surfaceShoulderRadius: CGFloat {
+        PanelMetrics.surfaceShoulderRadius(menuBarHeight: compactHeight)
+    }
+
+    /// The contour's lower corners on the selected display.
+    var surfaceBottomCornerRadius: CGFloat {
+        PanelMetrics.surfaceBottomCornerRadius(menuBarHeight: compactHeight)
     }
 
     var integrationSummary: String {

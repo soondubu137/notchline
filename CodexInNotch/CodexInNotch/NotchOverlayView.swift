@@ -8,7 +8,10 @@ struct NotchOverlayView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .top) {
-                PanelSurface(cornerRadius: store.surfaceCornerRadius)
+                PanelSurface(
+                    shoulderRadius: store.surfaceShoulderRadius,
+                    bottomRadius: store.surfaceBottomCornerRadius
+                )
 
                 VStack(spacing: 0) {
                     OverlayHeader()
@@ -32,7 +35,7 @@ struct NotchOverlayView: View {
                 // to the pointer, which leaves the shoulders passing clicks
                 // through to the menu bar items they overhang.
                 .frame(
-                    width: max(0, proxy.size.width - store.surfaceCornerRadius * 2),
+                    width: max(0, proxy.size.width - store.surfaceShoulderRadius * 2),
                     height: proxy.size.height,
                     alignment: .top
                 )
@@ -70,68 +73,86 @@ struct NotchOverlayView: View {
 }
 
 private struct PanelSurface: View {
-    let cornerRadius: CGFloat
+    let shoulderRadius: CGFloat
+    let bottomRadius: CGFloat
 
     var body: some View {
-        PanelContour(cornerRadius: cornerRadius)
+        PanelContour(shoulderRadius: shoulderRadius, bottomRadius: bottomRadius)
             .fill(.black)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
+/// The cut-out's outline, stretched to whatever rect the panel occupies.
+///
+/// Two radii, not one, because the notch has two: a small concave fillet where
+/// its sides meet the top of the display, and lower corners twice as round. The
+/// arcs are circular — a quarter circle each, hence the `0.5523` handle — which
+/// is what the hardware edge is and what makes the panel read as the same
+/// object as the cut-out it grows out of rather than as a rounded rectangle
+/// pinned beneath it.
 private struct PanelContour: Shape {
-    let cornerRadius: CGFloat
+    let shoulderRadius: CGFloat
+    let bottomRadius: CGFloat
 
     func path(in rect: CGRect) -> Path {
-        let radius = min(
-            max(0, cornerRadius),
-            min(rect.height / 2, rect.width / 4)
-        )
-        let controlOffset = radius * 0.552_284_749_8
+        // Each side of the shape spends one shoulder plus one lower corner, so
+        // that sum is what has to fit — down the side, and twice across the
+        // width. Clamping the pair together keeps their ratio, which is the
+        // part of the shape that carries the resemblance.
+        let requested = max(0, shoulderRadius) + max(0, bottomRadius)
+        let available = min(rect.height, rect.width / 2)
+        let fit = requested > available && requested > 0
+            ? available / requested
+            : 1
+        let shoulder = max(0, shoulderRadius) * fit
+        let bottom = max(0, bottomRadius) * fit
+        let shoulderControl = shoulder * 0.552_284_749_8
+        let bottomControl = bottom * 0.552_284_749_8
 
         var path = Path()
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
         path.addCurve(
-            to: CGPoint(x: rect.maxX - radius, y: rect.minY + radius),
-            control1: CGPoint(x: rect.maxX - controlOffset, y: rect.minY),
+            to: CGPoint(x: rect.maxX - shoulder, y: rect.minY + shoulder),
+            control1: CGPoint(x: rect.maxX - shoulderControl, y: rect.minY),
             control2: CGPoint(
-                x: rect.maxX - radius,
-                y: rect.minY + radius - controlOffset
+                x: rect.maxX - shoulder,
+                y: rect.minY + shoulder - shoulderControl
             )
         )
-        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius))
+        path.addLine(to: CGPoint(x: rect.maxX - shoulder, y: rect.maxY - bottom))
         path.addCurve(
-            to: CGPoint(x: rect.maxX - 2 * radius, y: rect.maxY),
+            to: CGPoint(x: rect.maxX - shoulder - bottom, y: rect.maxY),
             control1: CGPoint(
-                x: rect.maxX - radius,
-                y: rect.maxY - radius + controlOffset
+                x: rect.maxX - shoulder,
+                y: rect.maxY - bottom + bottomControl
             ),
             control2: CGPoint(
-                x: rect.maxX - 2 * radius + controlOffset,
+                x: rect.maxX - shoulder - bottom + bottomControl,
                 y: rect.maxY
             )
         )
-        path.addLine(to: CGPoint(x: rect.minX + 2 * radius, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + shoulder + bottom, y: rect.maxY))
         path.addCurve(
-            to: CGPoint(x: rect.minX + radius, y: rect.maxY - radius),
+            to: CGPoint(x: rect.minX + shoulder, y: rect.maxY - bottom),
             control1: CGPoint(
-                x: rect.minX + 2 * radius - controlOffset,
+                x: rect.minX + shoulder + bottom - bottomControl,
                 y: rect.maxY
             ),
             control2: CGPoint(
-                x: rect.minX + radius,
-                y: rect.maxY - radius + controlOffset
+                x: rect.minX + shoulder,
+                y: rect.maxY - bottom + bottomControl
             )
         )
-        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.minY + radius))
+        path.addLine(to: CGPoint(x: rect.minX + shoulder, y: rect.minY + shoulder))
         path.addCurve(
             to: CGPoint(x: rect.minX, y: rect.minY),
             control1: CGPoint(
-                x: rect.minX + radius,
-                y: rect.minY + radius - controlOffset
+                x: rect.minX + shoulder,
+                y: rect.minY + shoulder - shoulderControl
             ),
-            control2: CGPoint(x: rect.minX + controlOffset, y: rect.minY)
+            control2: CGPoint(x: rect.minX + shoulderControl, y: rect.minY)
         )
         path.closeSubpath()
         return path

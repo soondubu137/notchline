@@ -957,7 +957,7 @@ struct CodexInNotchTests {
                 )
         )
 
-        let shoulder = store.surfaceCornerRadius
+        let shoulder = store.surfaceShoulderRadius
         #expect(shoulder > 0)
         let frame = OverlayPanelLayout.frame(
             on: display.frame,
@@ -1043,42 +1043,58 @@ struct CodexInNotchTests {
         #expect(abs(PanelMetrics.statusMatrixSize - 13 * (92.0 / 72.0)) < 0.02)
     }
 
+    /// The cut-out is a fixed shape in millimetres, so its radii are fixed
+    /// *shares* of its height and every point value moves with the display
+    /// scaling that sets the menu bar height. Pinning either one is right at one
+    /// scaling and too round at every other, so both are asserted as ratios.
     @Test
-    func noNotchCornerRadiusScalesBelowNativeNotchHeight() {
-        #expect(
-            PanelMetrics.surfaceCornerRadius(
-                geometry: .noNotch,
-                menuBarHeight: 46
-            ) == 10
-        )
-        #expect(
-            PanelMetrics.surfaceCornerRadius(
-                geometry: .noNotch,
-                menuBarHeight: 38
-            ) == 10
-        )
-        #expect(
-            PanelMetrics.surfaceCornerRadius(
-                geometry: .noNotch,
-                menuBarHeight: 19
-            ) == 5
-        )
+    func surfaceRadiiTrackTheMenuBarHeightLikeTheCutOutDoes() {
+        // The four notch heights a MacBook reports across its scalings, from
+        // More Space down to Larger Text.
+        for menuBarHeight in [38.0, 32, 28, 22] as [CGFloat] {
+            #expect(
+                abs(
+                    PanelMetrics.surfaceShoulderRadius(menuBarHeight: menuBarHeight)
+                        - menuBarHeight / 8
+                ) < 0.001
+            )
+            #expect(
+                abs(
+                    PanelMetrics.surfaceBottomCornerRadius(
+                        menuBarHeight: menuBarHeight
+                    ) - menuBarHeight / 4
+                ) < 0.001
+            )
+        }
 
-        let standardExternalDisplayRadius = PanelMetrics.surfaceCornerRadius(
-            geometry: .noNotch,
-            menuBarHeight: 24
-        )
-        #expect(abs(standardExternalDisplayRadius - 6.316) < 0.001)
+        // The default 185 × 32 cut-out, which is where the two radii were
+        // measured: 4 up top and 8 below.
+        #expect(PanelMetrics.surfaceShoulderRadius(menuBarHeight: 32) == 4)
+        #expect(PanelMetrics.surfaceBottomCornerRadius(menuBarHeight: 32) == 8)
+    }
+
+    /// The lower corners are twice the upper ones. Drawing them equal — as one
+    /// `10` did on every notched display — reads as a rounded rectangle parked
+    /// under the bezel rather than as the notch carrying on sideways.
+    @Test
+    func theShoulderIsHalfTheLowerCorner() {
+        for menuBarHeight in [38.0, 24, 19] as [CGFloat] {
+            #expect(
+                abs(
+                    PanelMetrics.surfaceBottomCornerRadius(
+                        menuBarHeight: menuBarHeight
+                    ) - PanelMetrics.surfaceShoulderRadius(
+                        menuBarHeight: menuBarHeight
+                    ) * 2
+                ) < 0.001
+            )
+        }
     }
 
     @Test
-    func notchedSurfaceKeepsCurrentCornerRadius() {
-        #expect(
-            PanelMetrics.surfaceCornerRadius(
-                geometry: .notched,
-                menuBarHeight: 24
-            ) == 10
-        )
+    func surfaceRadiiNeverGoNegative() {
+        #expect(PanelMetrics.surfaceShoulderRadius(menuBarHeight: -10) == 0)
+        #expect(PanelMetrics.surfaceBottomCornerRadius(menuBarHeight: -10) == 0)
     }
 
     @Test @MainActor
