@@ -289,6 +289,18 @@ struct TurnEvidence: Equatable {
 - **读数必须整段晚于该轮次最后一个事件**，比较用命令**开始**运行的时刻而不是它答复的时刻。列表最长可缓存 30 秒，手里那份答案通常比之后到达的事件旧；用答复时刻比较，则一次跨越提交瞬间的读取会把它没看见的那个轮次报成空闲。
 - **结束就是 Completed。** 产品只有一个终态，被中断的轮次是已经结束的轮次。
 
+**桌面端托管的会话不说这句话，它写在别处。** Claude Code 桌面端把 CLI 当作 `stream-json` 的子进程来跑，没有终端界面，而 `status` 正是终端界面写出来的——所以那种会话的记录里从头到尾没有这个字段，上面第一条按「沉默不是空闲」什么也不做，行就一直停在 *Running* 或 *Approval needed*（CC-022 / #41）。它留下的是另一样东西：Claude Code 中止一轮时会往 transcript 里写一条 `user` 记录，而那条记录**指名了它中止的那个轮次**。
+
+规则写在 `ClaudeCodeTranscriptReader.interruption(forSession:workingDirectory:turnID:after:)`，应用写在 `HookEventRepository.endInterruptedTurns(_:)`：
+
+- **规则是结构，不是正文。** 一条 `user` 记录，`message.content` 恰好是一个 `text` 块，没有 `promptSource`，没有 `isMeta`。2026-08-19 在本机全部 transcript 上实测——205 个文件、7,438 条 `user` 记录——命中 15 条中断记录中的 15 条，**其余一条不中**。CC-019 当时否决这条路，理由是「要么读正文，要么用一条分不开中断记录与斜杠命令记录的结构规则」；分得开的那条规则是多问一句 `content` 的形状：把两者分开的 202 条斜杠命令与 `<local-command-stdout>` 记录都把 content 写成**一个字符串**而不是块数组。这句话是必需的而不是保险——那 202 条里有 23 条后面还有模型在同一个 `promptId` 上继续工作，少问这一句就会把还在跑的轮次退休掉，而那正是唯一不允许错的方向。
+- **它指名轮次，因此被钉在那个轮次上。** 记录里的 `promptId` 就是 hook 的 `prompt_id`，也就是 reducer 的轮次身份（2.1.237 实测：`UserPromptSubmit` 与中断记录带同一个 id）。指到一个 reducer 没在持有的轮次就什么也不做。这也让「中断记录与真正的提示只差一个 `promptSource`」变得安全：提示开启的是一个**新**的轮次 id，即使某个版本不再写 `promptSource`，它也结束不了它自己刚开启的那一轮。
+- **顺序护栏与上面同源，而且更准。** 比较用的是这条记录被**写下**的时刻（记录自带 RFC 3339 时间戳），不是本应用读到它的时刻。
+- **不读一个字正文。** 解码结构里没有 text 字段，与 `AgentHookListener` 的解码器同理；只读 transcript 末尾 64 KiB，按 `(size, mtime)` 缓存，会话消失即丢弃。
+- **只问该问的会话。** 只有「不报告任何状态」且此刻还持有未结束轮次的会话会被问——会自己报告的会话由它自己的回答负责，而没人在等的文件读取不值得做。
+
+那条边沿同样要自己建：中断不会改写 `~/.claude/sessions/<pid>.json`（那份记录里根本没有状态可翻），于是 `ClaudeCodeSessionRecordWatcher` 看不到它。`ClaudeCodeMonitorService.transcriptWatcher` 因此按文件监听这些会话的 transcript（`PathSetChangeWatcher`，与记录 watcher 同一套理由：追加写不会触发目录级事件）。它**不**把会话列表标记为过期——那是与记录边沿的唯一区别：这条边沿说的是「本应用自己读的一个文件变了」，答案来自一次 64 KiB 的尾部读取而不是一次 `claude` 启动。
+
 `TurnEvidence` 是内存中的 reducer 真值，不直接持久化。当前 Turn 从 Running 开始；Input needed 与 Approval needed 都只是在同一活动 Turn 上暂时覆盖 Running，等待恢复信号回到 Running；任何可信执行结束信号进入不可逆的 Completed。缺失、超时或未知信号不创建第五种状态，只保留最后可信值。
 
 ## 5. 数据真值与禁止回退

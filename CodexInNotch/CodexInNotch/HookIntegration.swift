@@ -886,6 +886,20 @@ struct HookTurnState: Sendable {
     }
 }
 
+/// One Turn the product recorded as interrupted, and when.
+///
+/// Produced by ``ClaudeCodeTranscriptReader`` and consumed by
+/// ``HookEventRepository/endInterruptedTurns(_:)``. It carries a turn identity
+/// because the evidence behind it does -- which is the whole difference between
+/// this and the session reading beside it, and the reason it can be held to the
+/// turn it names.
+struct TurnInterruption: Sendable, Equatable {
+    let threadID: String
+    let turnID: String
+    /// When the interrupt was written, as the product stamped it.
+    let endedAt: Date
+}
+
 struct HookStateSnapshot: Sendable {
     let hasObservedEvent: Bool
     let hasObservedLiveEvent: Bool
@@ -1201,26 +1215,69 @@ actor HookEventRepository {
         _ observations: [String: Date]
     ) -> HookStateSnapshot {
         for (threadID, observedAt) in observations {
-            guard var turn = turnsByThreadID[threadID],
-                  turn.sessionStatus != .completed,
-                  observedAt > turn.lastEventAt else {
-                continue
-            }
-            turn.sessionStatus = turn.sessionStatus.transitioned(on: .completed)
-            turn.pendingInputToolUseID = nil
-            turn.pendingApproval = nil
-            turn.openToolUse = nil
-            // Counted as the turn's last moment, so an event that really is
-            // older than this reading cannot reopen what it ended -- the same
-            // monotonic rule ``mutateExactTurn(threadID:turnID:at:createWith:adoptContinuationWith:turns:mutation:)``
-            // applies to everything else.
-            turn.lastEventAt = observedAt
-            turnsByThreadID[threadID] = turn
+            endOpenTurn(ofThread: threadID, named: nil, at: observedAt)
         }
         // Nothing to persist: turn state is deliberately memory-only, and the
         // observation marker this file does write is about hook trust, which
         // has not changed.
         return snapshot()
+    }
+
+    /// Ends the turns the product itself recorded as interrupted.
+    ///
+    /// The other half of ``endTurnsForStoppedSessions(_:)``, for the sessions
+    /// that half cannot reach. A session the Claude Code desktop app hosts
+    /// publishes no working status at all -- the terminal interface writes that
+    /// field and the desktop app runs the CLI without one -- so "the session
+    /// stopped saying it was busy" is a sentence those sessions never say -- so
+    /// their rows went on freezing after the CLI's had stopped (CC-022, #41).
+    /// What they do leave is a record in their own transcript, written at the
+    /// moment of the abort.
+    ///
+    /// **This one names the turn, and that changes what it is allowed to do.**
+    /// The session-status reading above carries no turn identity anywhere, so it
+    /// may only speak about whichever turn is open. This carries the interrupted
+    /// turn's `prompt_id`, which is this reducer's own turn identity, so it is
+    /// held to it: an observation naming a turn the reducer is not holding does
+    /// nothing rather than ending whatever happens to be open. Neither may open,
+    /// name or describe a turn; both may only end one.
+    ///
+    /// The ordering guard is the same and stricter in practice: the moment
+    /// compared here is when the interrupt was *written*, not when this app got
+    /// around to reading it.
+    func endInterruptedTurns(_ interruptions: [TurnInterruption]) -> HookStateSnapshot {
+        for interruption in interruptions {
+            endOpenTurn(
+                ofThread: interruption.threadID,
+                named: interruption.turnID,
+                at: interruption.endedAt
+            )
+        }
+        return snapshot()
+    }
+
+    /// Ends one open turn on evidence that is not a hook event.
+    ///
+    /// - Parameter named: The turn the evidence names, when it names one. Nil is
+    ///   evidence that names none -- it applies to whichever turn the thread has
+    ///   open, which is all a reading of a *session* can ever justify.
+    private func endOpenTurn(ofThread threadID: String, named turnID: String?, at moment: Date) {
+        guard var turn = turnsByThreadID[threadID],
+              turnID == nil || turn.turnID == turnID,
+              turn.sessionStatus != .completed,
+              moment > turn.lastEventAt else {
+            return
+        }
+        turn.sessionStatus = turn.sessionStatus.transitioned(on: .completed)
+        turn.pendingInputToolUseID = nil
+        turn.pendingApproval = nil
+        turn.openToolUse = nil
+        // Counted as the turn's last moment, so an event that really is older
+        // than this evidence cannot reopen what it ended -- the same monotonic
+        // rule ``mutateExactTurn(threadID:turnID:at:createWith:adoptContinuationWith:turns:mutation:)``
+        // applies to everything else.
+        turn.lastEventAt = moment
+        turnsByThreadID[threadID] = turn
     }
 
     func removeThreads(

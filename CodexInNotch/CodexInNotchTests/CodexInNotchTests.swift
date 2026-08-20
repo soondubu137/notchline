@@ -10399,6 +10399,225 @@ for line in sys.stdin:
         #expect(await harness.invalidationsRise(above: beforeQuiet, within: 1) == false)
     }
 
+    /// A session that reports no status still ends its interrupted turn.
+    ///
+    /// The half of CC-019 the session list cannot reach (CC-022, #41). A
+    /// desktop-hosted session drives the CLI with no terminal interface, and the
+    /// terminal interface is what publishes `status` -- so `idle` never arrives
+    /// for it, however long ago the user pressed stop, and the row went on
+    /// saying *Running* with the elapsed time still counting. What it does leave
+    /// is the record Claude Code writes at the moment it aborts.
+    ///
+    /// The record here carries the real text, and nothing reads it: the rule is
+    /// the shape of the record, and the turn it names.
+    @Test @MainActor
+    func aSessionThatReportsNoStatusEndsTheTurnItsTranscriptSaysWasInterrupted() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(
+            event: "PreToolUse", session: "s-1", turn: "p-1", at: 101,
+            toolName: "Bash", toolUseID: "call-1"
+        )
+        try harness.queue(
+            event: "PermissionRequest", session: "s-1", turn: "p-1", at: 102,
+            toolName: "Bash"
+        )
+        // No activity at all, which is every desktop-hosted session there is.
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+
+        let asking = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(asking.sessions.first).status == .approvalNeeded)
+
+        // The user presses stop while that dialog is open. Nothing is fired and
+        // nothing about the session changes; a record appears in its transcript.
+        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
+            harness.interruptRecord(turn: "p-1", at: 200)
+        ])
+
+        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(ended.sessions.first).status == .completed)
+    }
+
+    /// The record has to name the turn the reducer is holding, and follow it.
+    ///
+    /// This is what the session-status route cannot do: that reading names no
+    /// turn at all, so it may only speak about whichever one is open. This one
+    /// carries the interrupted turn's `prompt_id` — the reducer's own identity
+    /// for it — so an interrupt belonging to an earlier turn of the same session
+    /// ends nothing, and neither does one written before the turn's last event.
+    @Test @MainActor
+    func anInterruptRecordEndsOnlyTheTurnItNamesAndOnlyIfItFollowsIt() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-2", at: 500)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+
+        // The turn before this one was interrupted, and its record is still in
+        // the tail.
+        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
+            harness.interruptRecord(turn: "p-1", at: 400)
+        ])
+        let other = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(other.sessions.first).status == .running)
+
+        // The right turn, but written before the event this app already has.
+        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
+            harness.interruptRecord(turn: "p-2", at: 400)
+        ])
+        let older = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(older.sessions.first).status == .running)
+
+        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
+            harness.interruptRecord(turn: "p-2", at: 600)
+        ])
+        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(ended.sessions.first).status == .completed)
+    }
+
+    /// Only the record an interrupt writes ends a turn, and a slash command is
+    /// not one.
+    ///
+    /// The rule this pins is one clause stronger than the obvious one, and the
+    /// clause is the whole of it. A `user` record with a text block, no
+    /// `promptSource` and no `isMeta` also describes every slash-command record
+    /// in every transcript on this machine -- 202 of them, 23 followed by the
+    /// model working on that same `promptId`. Those carry their content as a
+    /// plain string rather than as blocks, which is what separates them, and
+    /// ending a turn on one would retire a turn that is still running.
+    @Test @MainActor
+    func aSlashCommandOrAPromptRecordDoesNotEndATurn() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+
+        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
+            // A slash command, as Claude Code writes one: the same turn, the
+            // same absent `promptSource`, and content that is a string.
+            [
+                "type": "user",
+                "promptId": "p-1",
+                "timestamp": ClaudeCodeHarness.transcriptInstant(200),
+                "message": [
+                    "role": "user",
+                    "content": "<command-name>/context</command-name>"
+                ]
+            ],
+            // The prompt that opened the turn. Blocks, like an interrupt record,
+            // and told apart from one by `promptSource` -- but it names the turn
+            // it *starts*, so it could not end it even without that.
+            [
+                "type": "user",
+                "promptId": "p-1",
+                "promptSource": "sdk",
+                "timestamp": ClaudeCodeHarness.transcriptInstant(201),
+                "message": [
+                    "role": "user",
+                    "content": [["type": "text", "text": "Have another look."]]
+                ]
+            ],
+            // A tool result, which is a `user` record too.
+            [
+                "type": "user",
+                "promptId": "p-1",
+                "timestamp": ClaudeCodeHarness.transcriptInstant(202),
+                "message": [
+                    "role": "user",
+                    "content": [["type": "tool_result", "tool_use_id": "call-1"]]
+                ]
+            ]
+        ])
+
+        let snapshot = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(try #require(snapshot.sessions.first).status == .running)
+    }
+
+    /// A transcript gaining a record wakes the product, and only while it
+    /// matters.
+    ///
+    /// The edge the interrupt fix needs for the sessions that report nothing.
+    /// Their record in `~/.claude/sessions` never changes on an interrupt --
+    /// there is no status in it to flip -- so the record watcher, which answers
+    /// this for a CLI session, has nothing to see. Without this the row waited
+    /// for whatever refresh came next, up to a whole heartbeat, with the elapsed
+    /// time still counting.
+    ///
+    /// Two things it must not do. A session that answers for itself is not
+    /// watched here at all: its own record already reports the flip, and reading
+    /// its transcript would be a second answer to a question already answered.
+    /// And a turn that has ended is not watched either.
+    ///
+    /// Asserted on the count of edges rather than on one arriving: this stream
+    /// buffers, so "an edge is on it" can be true before the append. Nothing
+    /// else writes in the window measured -- no hook is posted, no session file
+    /// is touched, and the usage reader is silent -- so a rise is this append.
+    @Test @MainActor
+    func aTranscriptGainingARecordWakesTheProductWhileItsTurnIsGoing() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "UserPromptSubmit", session: "s-2", turn: "p-2", at: 101)
+        harness.live = [
+            harness.session(id: "s-1", cwd: cwd),
+            // A session that says what it is doing needs no watch here.
+            harness.session(id: "s-2", cwd: cwd, activity: .busy, observedAt: 200, pid: 2)
+        ]
+        // The file has to exist before it can be watched, exactly as the real
+        // one does: Claude Code writes the transcript from the first record of
+        // the session.
+        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
+            ["type": "ai-title", "aiTitle": "Something"]
+        ])
+        try harness.writeTranscript(session: "s-2", cwd: cwd, records: [
+            ["type": "ai-title", "aiTitle": "Something else"]
+        ])
+
+        let running = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(running.sessions.allSatisfy { $0.status == .running })
+        #expect(harness.watchedTranscripts == 1)
+
+        let edges = PreviewWakeUpCounter()
+        let observer = Task {
+            for await _ in harness.service.stateChangeEvents {
+                edges.record()
+            }
+        }
+        defer { observer.cancel() }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let beforeTheRecord = edges.count
+
+        try harness.writeTranscript(session: "s-1", cwd: cwd, records: [
+            ["type": "ai-title", "aiTitle": "Something"],
+            harness.interruptRecord(turn: "p-1", at: 200)
+        ])
+        for _ in 0 ..< 150 where edges.count == beforeTheRecord {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(
+            edges.count > beforeTheRecord,
+            "the interrupt was written and nothing asked for the rows to be redrawn"
+        )
+
+        // The refresh that edge causes ends the turn, and a turn that has ended
+        // is not worth a descriptor.
+        let ended = await harness.service.fetchSnapshot(showsContentPreviews: false)
+        #expect(ended.sessions.first { $0.threadID == "s-1" }?.status == .completed)
+        #expect(harness.watchedTranscripts == 0)
+    }
+
     /// A title the user typed outranks one the product generated, and a title
     /// that cannot be read is never replaced by the folder name.
     @Test @MainActor
@@ -13186,6 +13405,9 @@ private final class ClaudeCodeHarness {
     /// How many session records the service is currently watching.
     var watchedRecords: Int { service.recordWatcher.watchedCount }
 
+    /// How many transcripts the service is currently watching.
+    var watchedTranscripts: Int { service.transcriptWatcher.watchedCount }
+
     /// Waits for the service to report the list out of date again.
     ///
     /// The count, rather than the change stream: only the two watchers call
@@ -13348,6 +13570,44 @@ private final class ClaudeCodeHarness {
         if let toolUseID { payload["tool_use_id"] = toolUseID }
         try JSONSerialization.data(withJSONObject: payload)
             .write(to: paths.eventsDirectory.appendingPathComponent("\(received).json"))
+    }
+
+    /// A moment as a transcript record writes it: RFC 3339, UTC, fractional
+    /// seconds -- on the same scale of seconds the hook events here use, so a
+    /// test can place a record either side of a Turn's last moment.
+    static func transcriptInstant(_ seconds: Double) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.string(from: Date(timeIntervalSince1970: seconds))
+    }
+
+    /// The record Claude Code writes when it aborts a Turn.
+    ///
+    /// Field for field as 2.1.237 writes one, captured from a real interrupted
+    /// session rather than reduced to the fields the rule reads -- the point of
+    /// the extra ones is that they are there and are ignored. The text is the
+    /// real one too, and nothing in the product reads it: what the rule asks
+    /// about is the shape of the record and the Turn it names.
+    func interruptRecord(turn: String, at seconds: Double) -> [String: Any] {
+        [
+            "parentUuid": UUID().uuidString,
+            "isSidechain": false,
+            "promptId": turn,
+            "type": "user",
+            "uuid": UUID().uuidString,
+            "timestamp": ClaudeCodeHarness.transcriptInstant(seconds),
+            "userType": "external",
+            "entrypoint": "claude-desktop",
+            "cwd": "/Users/someone/Projects/thing",
+            "sessionId": "whatever",
+            "version": "2.1.237",
+            "gitBranch": "master",
+            "message": [
+                "role": "user",
+                "content": [["type": "text", "text": "[Request interrupted by user]"]]
+            ]
+        ]
     }
 
     func writeTranscript(session: String, cwd: String, title: String) throws {

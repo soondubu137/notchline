@@ -477,7 +477,7 @@ flowchart LR
 ## 7. 保持 clean and neat 的架构约束
 
 1. **只有一个编排中心**：跨数据源的决策集中在 `LiveCodexMonitorService`；UI、文件适配器和 transport 不互相拼状态。
-2. **只有一个 Turn reducer**：Hook 事件只进入 `HookEventRepository`；历史回放、乱序、重复和精确身份规则不散落在视图层。第二个来源可以**退休**一个 Turn，但只能在这个 actor 里、带顺序护栏，并且不得携带 Turn 身份：Codex 侧的 `removeThreads(notIn:snapshotStartedAt:)` 与 Claude Code 侧的 `endTurnsForStoppedSessions(_:)` 是仅有的两处，后者见 [ADR 0011](adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md)。
+2. **只有一个 Turn reducer**：Hook 事件只进入 `HookEventRepository`；历史回放、乱序、重复和精确身份规则不散落在视图层。第二个来源可以**退休**一个 Turn，但只能在这个 actor 里、带顺序护栏，并且**不得开启、命名或描述**一个 Turn：Codex 侧的 `removeThreads(notIn:snapshotStartedAt:)` 与 Claude Code 侧的 `endTurnsForStoppedSessions(_:)`、`endInterruptedTurns(_:)` 是仅有的三处，后两者见 [ADR 0011](adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md)。这一条此前写作「不得携带 Turn 身份」，而那是把当时唯一一份证据的性质写成了规则：会话状态那份读数里确实没有轮次身份。桌面端会话的中断记录里有——它就是 hook 的 `prompt_id`——**证据带着身份反而更严**：它只能结束它指名的那个轮次，指到一个 reducer 没在持有的轮次就什么也不做，而不像不带身份的读数那样只能对「此刻开着的那个」发话。因此规则改成对能力的约束（只能退休），不再是对证据形状的约束。
 3. **只有一个 UI 数据契约**：上层只接收 `MonitorSnapshot`；availability、sessions、quota 与 diagnostic 来自同一快照输入。
 4. **私有依赖停在边界**：`.codex-global-state.json` 的 schema 只存在于两个只读 repository；领域层只看到 Project resolution 和带权威性标记的 unread 集合。
 5. **恢复逻辑不伪造业务状态**：timeout、探活、缓存和断开宽限只决定保留或重建连接，不用计时器猜测 Running、Approval、已读或 Project。（ADR 0012 的第三条判定不是这一条的例外：它读的是三个当下的状态——哪个应用持有前台、显示器醒着没有、屏幕锁着没有——没有一个是计时器，等待本身也不会让任何一行消失。它确实推翻了同一份 ADR 里「只用跃迁」的写法，理由与代价写在那里。同 ADR 的终端判定更不是例外：它读的是内核记下的一次已经发生的动作，等待本身同样不产生它——一台没人的机器上那个时刻永远不动。）

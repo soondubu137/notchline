@@ -75,6 +75,25 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     /// asserting that an edge did *not* arrive, which any other source firing
     /// would make untrue.
     nonisolated let recordWatcher: ClaudeCodeSessionRecordWatcher
+    /// The transcripts of the turns that are still going in a session which
+    /// reports no status of its own.
+    ///
+    /// The same job as ``recordWatcher`` for the sessions that one cannot
+    /// answer for: a desktop-hosted session publishes no working status, so the
+    /// only report its interrupt makes is the record Claude Code appends to
+    /// this file (CC-022). A file rather than the directory it sits in, for the
+    /// reason given on ``ClaudeCodeSessionRecordWatcher`` -- an append inside a
+    /// directory produces no directory event.
+    ///
+    /// **It deliberately does not invalidate the session list.** That is the
+    /// difference between this edge and the record one: an edge here means a
+    /// file this app reads itself has changed, and the answer costs a 64 KiB
+    /// tail read rather than a `claude` launch. Invalidating as well would buy
+    /// a subprocess for an answer no subprocess holds.
+    ///
+    /// Not private, for the reason ``recordWatcher`` is not: what is watched,
+    /// and for how long, is an invariant a test has to be able to state.
+    nonisolated let transcriptWatcher: PathSetChangeWatcher
     /// Which sessions the user has already read, when anything can say.
     private let readState: any ClaudeCodeReadStateProviding
     /// When Claude Desktop last came to the front.
@@ -272,6 +291,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             debounceInterval: timing.unreadStateDebounceInterval
         )
         self.recordWatcher = recordWatcher
+        let transcriptWatcher = PathSetChangeWatcher(
+            debounceInterval: timing.unreadStateDebounceInterval
+        )
+        self.transcriptWatcher = transcriptWatcher
         self.stateChangeEvents = DirectoryChangeWatcher.merged([
             repository.changeEvents(),
             Self.sessionsChanged(
@@ -288,6 +311,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
                 recordWatcher.events(),
                 invalidating: resolvedSessions
             ),
+            // A transcript gaining a record while its turn is still going.
+            // Only one kind of record can end that turn, but this is a signal
+            // and not a reading: what arrived is answered by the refresh, in
+            // the reader that already knows how to answer it. Nothing here
+            // invalidates the session list -- see ``transcriptWatcher``.
+            transcriptWatcher.events(),
             // Claude Desktop writing a session's record. It is the low-latency
             // half of retiring a finished row: the write that stamps a focus is
             // an atomic replace inside the account folder, so this edge lands
@@ -315,6 +344,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // on the record of whatever turn happened to be running when it
             // was.
             recordWatcher.watch(processIdentifiers: [])
+            transcriptWatcher.watch(paths: [])
             // Nothing is listed, so nothing is waiting to be read. Left alone,
             // the gate would go on reporting a re-check deadline for rows this
             // branch is not going to publish, and a session that was on screen
@@ -348,6 +378,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
         guard let registration = await setup.installedRegistration(),
               await bindListenerIfNeeded(registration) else {
             recordWatcher.watch(processIdentifiers: [])
+            transcriptWatcher.watch(paths: [])
             // Nothing is listed, so nothing is waiting to be read. Left alone,
             // the gate would go on reporting a re-check deadline for rows this
             // branch is not going to publish, and a session that was on screen
@@ -396,13 +427,52 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
             // bug, not a reason to trap.
             uniquingKeysWith: { first, _ in first }
         )
-        let hookState = stopped.isEmpty
-            ? consumed
-            : await hookEvents.endTurnsForStoppedSessions(stopped)
-        // What draining the queue had to say about it survives the second call,
-        // which knows nothing about the files this refresh read: a corrupt
-        // event is reported on the refresh that found it, whether or not some
-        // session also went idle in the same one.
+        // The other half of the same question, for the sessions the reading
+        // above cannot answer for at all. A desktop-hosted session never
+        // reports a working status -- the terminal interface publishes that
+        // field and the desktop app runs the CLI without one -- so `stopped`
+        // above is empty for it however long ago it was interrupted (CC-022).
+        // What it does leave is a record in its own transcript, and that record
+        // names the turn it ended.
+        //
+        // Asked only of the sessions that say nothing, and only about a turn
+        // this app is still holding open: a session that answers for itself is
+        // answered by its own answer, and a file read that nothing is waiting
+        // on is a file read not worth doing.
+        var interruptions: [TurnInterruption] = []
+        for turn in consumed.turns where turn.sessionStatus.keepsTiming {
+            guard let session = liveByID[turn.threadID],
+                  session.activity == nil else {
+                continue
+            }
+            guard let endedAt = await transcripts.interruption(
+                forSession: session.sessionID,
+                workingDirectory: session.workingDirectory,
+                turnID: turn.turnID,
+                after: turn.lastEventAt
+            ) else {
+                continue
+            }
+            interruptions.append(
+                TurnInterruption(
+                    threadID: turn.threadID,
+                    turnID: turn.turnID,
+                    endedAt: endedAt
+                )
+            )
+        }
+
+        var hookState = consumed
+        if !stopped.isEmpty {
+            hookState = await hookEvents.endTurnsForStoppedSessions(stopped)
+        }
+        if !interruptions.isEmpty {
+            hookState = await hookEvents.endInterruptedTurns(interruptions)
+        }
+        // What draining the queue had to say about it survives whichever of
+        // those calls ran, none of which knows anything about the files this
+        // refresh read: a corrupt event is reported on the refresh that found
+        // it, whether or not a turn also ended in the same one.
         let hookDiagnostic = consumed.diagnostic ?? hookState.diagnostic
 
         await transcripts.retain(sessionIDs: Set(liveByID.keys))
@@ -498,6 +568,28 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
                     .compactMap { liveByID[$0.threadID]?.processIdentifier }
             )
         )
+
+        // And the transcripts of exactly the turns the reading above cannot
+        // see stop -- the ones whose session reports nothing. Watched from
+        // `rows` for the same reason: a row withheld for presence is still a
+        // turn this app is holding.
+        //
+        // A session that answers for itself is not watched here at all, even
+        // while its turn runs: its record already reports the flip, and the
+        // reading behind it is the one this app trusts first.
+        var watchedTranscripts: Set<URL> = []
+        for row in rows where row.status.keepsTiming {
+            guard let session = liveByID[row.threadID],
+                  session.activity == nil,
+                  let url = await transcripts.transcriptURL(
+                    forSession: session.sessionID,
+                    workingDirectory: session.workingDirectory
+                  ) else {
+                continue
+            }
+            watchedTranscripts.insert(url)
+        }
+        transcriptWatcher.watch(paths: watchedTranscripts)
 
         return snapshot(
             availability: .ready,
