@@ -403,32 +403,21 @@ private struct ExpandedPanelFooter: View {
 
 /// The footer's last line, and the disclosure that folds the rules away.
 ///
-/// The whole line is the hit target — the chevron is the affordance, not the
-/// target — so clicking the quota caption itself folds the block, which is what
-/// a user tries first.
+/// The chevron is the whole hit target. The rest of the line is a reading —
+/// today's tokens — and a number that resizes the panel when clicked is a trap
+/// for anyone reaching in to select or simply read it; the affordance and the
+/// target are the same `16pt` square instead.
 private struct QuotaFoldLine<Content: View>: View {
     @EnvironmentObject private var store: MonitorStore
 
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        Group {
+        HStack(spacing: PanelMetrics.footerWindowSpacing) {
+            content()
+
             if store.showsQuotaFoldControl {
-                Button {
-                    store.toggleQuotaFold()
-                } label: {
-                    HStack(spacing: PanelMetrics.footerWindowSpacing) {
-                        content()
-                        QuotaFoldChevron(isFolded: store.isQuotaFolded)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(
-                    store.isQuotaFolded ? "Show quota rules" : "Hide quota rules"
-                )
-            } else {
-                content()
+                QuotaFoldChevron(isFolded: store.isQuotaFolded)
             }
         }
         // The control is a point taller than the caption it rides. The footer's
@@ -442,25 +431,45 @@ private struct QuotaFoldLine<Content: View>: View {
 ///
 /// It points down while folded because the panel hangs from the notch and can
 /// only grow downward — the chevron points the way the panel will move, which is
-/// also the "show more" every list uses.
+/// also the "show more" every list uses. Being the only hit target, it carries
+/// the gear's hover wash so the square it answers to is visible before the
+/// click, not guessed at.
 private struct QuotaFoldChevron: View {
     @EnvironmentObject private var store: MonitorStore
+
+    @State private var isHovered = false
 
     let isFolded: Bool
 
     var body: some View {
-        Image(systemName: "chevron.down")
-            .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(NotchPalette.label)
-            .frame(
-                width: PanelMetrics.quotaFoldControlSize,
-                height: PanelMetrics.quotaFoldControlSize
-            )
-            .rotationEffect(.degrees(isFolded ? 0 : 180))
-            .animation(
-                store.reduceMotion ? nil : .easeOut(duration: 0.16),
-                value: isFolded
-            )
+        Button {
+            store.toggleQuotaFold()
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(NotchPalette.label)
+                .rotationEffect(.degrees(isFolded ? 0 : 180))
+                .frame(
+                    width: PanelMetrics.quotaFoldControlSize,
+                    height: PanelMetrics.quotaFoldControlSize
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.white.opacity(isHovered ? 0.12 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(
+            store.reduceMotion ? nil : .easeOut(duration: 0.16),
+            value: isFolded
+        )
+        .animation(
+            store.reduceMotion ? nil : .easeOut(duration: 0.12),
+            value: isHovered
+        )
+        .accessibilityLabel(isFolded ? "Show quota rules" : "Hide quota rules")
     }
 }
 
