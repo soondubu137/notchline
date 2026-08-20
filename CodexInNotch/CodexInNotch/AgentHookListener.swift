@@ -1,50 +1,59 @@
 import Foundation
-import Network
 import os
 
-/// Receives one product's lifecycle events over loopback and queues them for
-/// the Turn reducer.
+/// Receives one product's lifecycle events over a Unix domain socket and queues
+/// them for the Turn reducer.
 ///
-/// This is the counterpart to the Codex side's helper script. Codex has no HTTP
-/// hook type, so there a Python process is spawned per event to write a file;
-/// Claude Code can POST directly, which matters because its `PostToolUse` has
-/// to be registered without a matcher and a busy session makes hundreds of tool
-/// calls. Loopback costs a socket write; a process launch does not.
+/// **Why a socket and not a port.** This used to be an HTTP listener on
+/// `127.0.0.1:51741`, because Claude Code can POST a hook payload directly and
+/// that costs a socket write where a `command` hook costs a process launch —
+/// which matters when `PostToolUse` has to be registered without a matcher and
+/// a busy session makes hundreds of tool calls. The port turned out to cost
+/// more than the process. Nothing owns it while this app is closed, so the CLI
+/// prints `connect ECONNREFUSED` once per event in the user's session, with no
+/// setting that suppresses it; and being unowned inside the ephemeral range, it
+/// can be taken by any local process, which then receives the prompt and can
+/// answer with `permissionDecision`. Neither is fixable from the registration
+/// (CC-021, CC-014). A helper that exits 0 says nothing when this app is
+/// closed, and a socket in a directory this app owns cannot be taken.
 ///
-/// Two things this has to do that the helper did not:
+/// The helper is `ClaudeCodeHookSetup.helperScript(socketPath:)`: `nc -U` and
+/// an unconditional `exit 0`. One connection carries one payload and is closed
+/// by the writer, so the frame is simply "read to EOF" — there is no request
+/// line, no header, and no token, because the socket is `0600` in this user's
+/// own directory and the filesystem answers the question a bearer token used to.
+///
+/// Two things this has to do that the Codex helper did not:
 ///
 /// **Stamp arrival.** Claude Code's hook payloads carry no timestamp of any
 /// kind — measured 2026-08-16 — where the helper wrote `received_at` itself.
 /// The reducer's freshness rule needs one, so it is taken here, at the moment
-/// the request lands.
+/// the payload lands.
 ///
-/// **Keep the text out of the queue.** A hook payload carries `prompt`,
-/// `tool_input`, `tool_response` and `last_assistant_message`: shell command
-/// lines, file paths, diffs, whole answers. ``Payload`` has no field for any of
-/// them, so they are dropped by the decoder and cannot reach the queue — which
-/// is a directory of files, and therefore the disk.
+/// **Keep `MessageDisplay` out of the queue.** That event carries the assistant
+/// text as it is printed to the screen, and that is the row's third line
+/// (CC-015). It is decoded by a *second* decoder, diverted in ``record(_:)``
+/// before the queue is touched, and held in ``previewsBySessionID``. This is a
+/// performance rule, not a privacy one (PRD 7): the queue is a directory of
+/// files, and measured against CLI 2.1.234 by driving an interactive session
+/// under a pty, one 1561-character message arrived as eleven deltas, 0.20s to
+/// 0.44s apart, mean 0.29s. At three a second it must not become a file each
+/// time.
 ///
-/// One exception is collected, on purpose and only in memory: `MessageDisplay`
-/// carries the assistant text as it is printed to the screen, and that is the
-/// row's third line (CC-015). It is decoded by a *second* decoder, diverted in
-/// ``record(_:)`` before the queue is touched, and held in
-/// ``previewsBySessionID`` — never encoded into ``QueuedEvent``, never written.
-/// The Codex side needs a whole Unix socket for the same guarantee, because
-/// there a hook is a shell command and the only other way home is a file; here
-/// the text is already inside this process when it arrives.
+/// Only the *head* of each message is kept, so a long answer costs nothing
+/// after its first 240 characters and the retained bytes per session are
+/// bounded by a constant rather than by how much the model said. The row
+/// therefore shows the beginning of whatever message is being printed now — not
+/// a running tail, and not the turn concatenated.
 ///
-/// Two consequences of the event's shape. Measured against CLI 2.1.234 by
-/// driving an interactive session under a pty, against a listener registered
-/// through a temporary `--settings` file — one 1561-character message arrived
-/// as eleven deltas, 0.20s to 0.44s apart, mean 0.29s:
-///
-/// - at three a second it must not become a file each time, which is what
-///   diverting it in ``record(_:)`` is for;
-/// - only the *head* of each message is kept, so a long answer costs nothing
-///   after its first 240 characters and the retained bytes per session are
-///   bounded by a constant rather than by how much the model said. The row
-///   therefore shows the beginning of whatever message is being printed now —
-///   not a running tail, and not the turn concatenated.
+/// **Order is preserved by the read queue, not promised by the transport.**
+/// Connections are accepted in arrival order and handed to one serial queue, so
+/// ``record(_:)`` runs in the order the payloads landed. That is worth stating
+/// because the registration is deliberately synchronous: Claude Code's
+/// `command` schema does have an `async` key, unlike its `http` one, and using
+/// it was measured to reorder a `PreToolUse` against its own `PostToolUse` and
+/// to lose `Stop` entirely under `-p`, where the process exits before a
+/// backgrounded hook finishes. Paying 6.3 ms on the session buys both back.
 final class AgentHookListener: @unchecked Sendable {
     private static let log = Logger(
         subsystem: "com.yinfenglu.CodexInNotch",
@@ -146,8 +155,20 @@ final class AgentHookListener: @unchecked Sendable {
         }
     }
 
-    /// A request body larger than this is refused outright rather than read.
+    /// A payload larger than this is dropped rather than read to the end.
     static let maximumBodyBytes = 1 << 20
+
+    /// How long one connection may take to deliver its payload.
+    ///
+    /// The helper connects, writes once and closes, so anything slower is a
+    /// client that has stopped making progress. It has to be well inside the
+    /// helper's own `nc -w 1`, which is in turn inside the registration's
+    /// `timeout: 3` -- three bounds, innermost first, so the one that fires is
+    /// always the one closest to the problem.
+    ///
+    /// This only bounds anything on a *blocking* descriptor; see
+    /// ``receivePayload(on:)``, which is where that is made true.
+    static let receiveTimeoutMicroseconds: Int32 = 250_000
 
     /// The event that carries assistant text, and the only one that does.
     ///
@@ -169,12 +190,7 @@ final class AgentHookListener: @unchecked Sendable {
     /// is a leak stop for text belonging to a session that never appears there
     /// — not a working set.
     static let maximumRetainedPreviews = 64
-
     private let eventsDirectory: URL
-    /// Set when the listener binds, because it comes from the user's settings
-    /// rather than from this app: whatever token their registration carries is
-    /// the one Claude Code will send.
-    private var token: String
     private let clock: any MonitorClock
     private let fileManager: FileManager
     /// Events whose working directory is this one are dropped.
@@ -185,9 +201,24 @@ final class AgentHookListener: @unchecked Sendable {
     /// absent from every event including a human's — so the poll is pinned to a
     /// directory of its own and recognised by that instead.
     private let ignoredWorkingDirectory: URL?
-    private let queue = DispatchQueue(label: "com.yinfenglu.CodexInNotch.hook-listener")
-    private var listener: NWListener?
-    private var boundPort: UInt16?
+
+    /// Listening state, under a lock rather than a queue.
+    ///
+    /// Same shape as ``HookPreviewChannel``: the accept handler runs on one GCD
+    /// queue, payloads are read on another, and the shared state is two fields.
+    private let socketLock = NSLock()
+    private var listeningDescriptor: Int32 = -1
+    private var acceptSource: DispatchSourceRead?
+    private var boundSocketURL: URL?
+
+    private let acceptQueue = DispatchQueue(
+        label: "com.yinfenglu.CodexInNotch.hook-listener.accept"
+    )
+    /// Serial on purpose: it is what makes ``record(_:)`` see payloads in the
+    /// order they arrived.
+    private let readQueue = DispatchQueue(
+        label: "com.yinfenglu.CodexInNotch.hook-listener.read"
+    )
 
     /// Preview state, under a lock of its own rather than under ``queue``.
     ///
@@ -220,19 +251,20 @@ final class AgentHookListener: @unchecked Sendable {
     /// the connection queue, and a handler installed while a delta is being
     /// folded must not be a data race.
     private var onPreviewAppeared: (@Sendable () -> Void)?
-
     init(
         eventsDirectory: URL,
-        token: String = "",
         ignoredWorkingDirectory: URL? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         fileManager: FileManager = .default
     ) {
         self.eventsDirectory = eventsDirectory
-        self.token = token
         self.ignoredWorkingDirectory = ignoredWorkingDirectory
         self.clock = clock
         self.fileManager = fileManager
+    }
+
+    deinit {
+        stop()
     }
 
     /// Registers the handler for ``onPreviewAppeared``.
@@ -242,170 +274,180 @@ final class AgentHookListener: @unchecked Sendable {
         previewLock.unlock()
     }
 
-    /// The port events are being accepted on, once bound.
-    var port: UInt16? {
-        queue.sync { boundPort }
+    /// The socket payloads are being accepted on, once bound.
+    var socketURL: URL? {
+        socketLock.lock()
+        defer { socketLock.unlock() }
+        return boundSocketURL
     }
 
-    /// Binds loopback and starts accepting.
+    /// Binds the socket and starts accepting.
     ///
-    /// `preferredPort` is the port the installed configuration already names.
-    /// Keeping it means the user's settings do not have to be rewritten on
-    /// every launch; failing to get it is ordinary — something else may hold it
-    /// — so it falls back to an ephemeral one and the caller repairs the
-    /// configuration.
+    /// Returns `false` rather than throwing: the caller's only recourse is to
+    /// report it in the settings card, and every failure here has the same
+    /// consequence — the helper the user pasted has nothing to hand its
+    /// payloads to.
     @discardableResult
-    func start(preferredPort: UInt16? = nil, token: String? = nil) -> UInt16? {
-        if let token { queue.sync { self.token = token } }
-        if let preferredPort, let bound = bind(to: preferredPort) {
-            return bound
+    func start(socketURL: URL) -> Bool {
+        socketLock.lock()
+        let alreadyBound = listeningDescriptor >= 0 && boundSocketURL == socketURL
+        socketLock.unlock()
+        if alreadyBound { return true }
+        stop()
+
+        let pathBytes = Array(socketURL.path.utf8)
+        // `sun_path` is a fixed 104-byte field, and a home directory deep
+        // enough to overflow it would otherwise fail inside `bind` with an
+        // errno nobody could act on.
+        guard pathBytes.count < MemoryLayout<sockaddr_un>.size
+            - MemoryLayout<UInt8>.size * 2 else {
+            Self.log.error("hook socket path is too long to bind")
+            return false
         }
-        return bind(to: 0)
-    }
 
-    private func bind(to port: UInt16) -> UInt16? {
-        let parameters = NWParameters.tcp
-        // Loopback only. This accepts lifecycle events from processes on this
-        // machine and must not be reachable from anywhere else.
-        parameters.requiredLocalEndpoint = .hostPort(
-            host: .ipv4(.loopback),
-            port: NWEndpoint.Port(rawValue: port) ?? .any
+        try? fileManager.createDirectory(
+            at: socketURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
         )
-        guard let listener = try? NWListener(using: parameters) else { return nil }
+        // A socket left behind by a crash keeps `bind` from succeeding, and it
+        // is ours by construction -- it lives in a directory this app owns.
+        unlink(socketURL.path)
 
-        let ready = DispatchSemaphore(value: 0)
-        listener.stateUpdateHandler = { state in
-            switch state {
-            case .ready, .failed, .cancelled:
-                ready.signal()
-            default:
-                break
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { raw in
+            raw.copyBytes(from: pathBytes)
+        }
+        address.sun_len = UInt8(
+            MemoryLayout<sockaddr_un>.size - MemoryLayout.size(ofValue: address.sun_path)
+                + pathBytes.count
+        )
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.accept(connection)
+        guard bound == 0 else {
+            close(descriptor)
+            return false
         }
-        listener.start(queue: queue)
-        _ = ready.wait(timeout: .now() + 2)
 
-        guard case .ready = listener.state, let bound = listener.port?.rawValue else {
-            listener.cancel()
-            return nil
+        // Only this user's processes may hand events to this app. This is the
+        // whole of the access control, and it is stronger than the bearer token
+        // it replaced: that one authenticated the CLI to the listener and said
+        // nothing about who the listener was.
+        chmod(socketURL.path, 0o600)
+
+        guard listen(descriptor, 64) == 0 else {
+            close(descriptor)
+            unlink(socketURL.path)
+            return false
         }
-        queue.sync {
-            self.listener?.cancel()
-            self.listener = listener
-            self.boundPort = bound
+
+        // Non-blocking so the accept handler can drain the backlog and return
+        // rather than parking the queue on the next connection.
+        let flags = fcntl(descriptor, F_GETFL, 0)
+        _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
+
+        let source = DispatchSource.makeReadSource(
+            fileDescriptor: descriptor,
+            queue: acceptQueue
+        )
+        source.setEventHandler { [weak self] in
+            self?.acceptPendingConnections()
         }
-        return bound
+        source.setCancelHandler {
+            close(descriptor)
+        }
+
+        socketLock.lock()
+        listeningDescriptor = descriptor
+        acceptSource = source
+        boundSocketURL = socketURL
+        socketLock.unlock()
+
+        source.resume()
+        return true
     }
 
     func stop() {
-        queue.sync {
-            listener?.cancel()
-            listener = nil
-            boundPort = nil
-        }
+        socketLock.lock()
+        let source = acceptSource
+        let url = boundSocketURL
+        acceptSource = nil
+        listeningDescriptor = -1
+        boundSocketURL = nil
+        socketLock.unlock()
+
+        source?.cancel()
+        if let url { unlink(url.path) }
     }
 
-    private func accept(_ connection: NWConnection) {
-        connection.start(queue: queue)
-        receive(connection, buffer: Data())
-    }
+    private func acceptPendingConnections() {
+        socketLock.lock()
+        let descriptor = listeningDescriptor
+        socketLock.unlock()
+        guard descriptor >= 0 else { return }
 
-    private func receive(_ connection: NWConnection, buffer: Data) {
-        connection.receive(
-            minimumIncompleteLength: 1,
-            maximumLength: 64 * 1024
-        ) { [weak self] chunk, _, isComplete, error in
-            guard let self else { return }
-            guard error == nil else {
-                connection.cancel()
-                return
-            }
-            var buffer = buffer
-            if let chunk { buffer.append(chunk) }
-
-            switch self.consume(buffer) {
-            case .needMore:
-                if isComplete {
-                    connection.cancel()
-                } else if buffer.count > Self.maximumBodyBytes {
-                    self.respond(connection, status: "413 Payload Too Large")
-                } else {
-                    self.receive(connection, buffer: buffer)
-                }
-            case let .answer(status, body):
-                self.respond(connection, status: status)
-                if let body { self.record(body) }
+        while true {
+            let connection = accept(descriptor, nil, nil)
+            guard connection >= 0 else { return }
+            readQueue.async { [weak self] in
+                self?.receivePayload(on: connection)
             }
         }
     }
 
-    private enum Outcome {
-        case needMore
-        case answer(status: String, body: Data?)
-    }
+    /// Reads one payload and hands it to ``record(_:)``.
+    ///
+    /// One connection is one payload: the helper writes what it was given on
+    /// stdin and closes, so the end of the message is the end of the stream and
+    /// there is no framing to get wrong.
+    private func receivePayload(on descriptor: Int32) {
+        defer { close(descriptor) }
 
-    /// Parses one HTTP/1.1 request, far enough to decide and no further.
-    private func consume(_ buffer: Data) -> Outcome {
-        let separator = Data("\r\n\r\n".utf8)
-        guard let headerEnd = buffer.range(of: separator) else { return .needMore }
-        guard let head = String(
-            data: buffer[buffer.startIndex ..< headerEnd.lowerBound],
-            encoding: .utf8
-        ) else {
-            return .answer(status: "400 Bad Request", body: nil)
-        }
-
-        let lines = head.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else {
-            return .answer(status: "400 Bad Request", body: nil)
-        }
-        let requestParts = requestLine.split(separator: " ")
-        guard requestParts.count >= 2, requestParts[0] == "POST" else {
-            return .answer(status: "405 Method Not Allowed", body: nil)
+        // Darwin hands `accept` a descriptor that inherits the listening
+        // socket's file status flags, and the listening socket is `O_NONBLOCK`
+        // so the accept handler can drain its backlog rather than park on the
+        // next connection. Inherited here that is silent data loss: a client
+        // that has connected but whose write has not landed yet makes `read`
+        // fail with `EAGAIN`, which the loop below cannot tell from the end of
+        // a payload, so the event is dropped for good instead of waited for.
+        // This is the same trap ``HookPreviewChannel`` documents as CC-023, and
+        // clearing the flag is what makes the timeout below the thing that
+        // bounds this.
+        let flags = fcntl(descriptor, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(descriptor, F_SETFL, flags & ~O_NONBLOCK)
         }
 
-        var headers: [String: String] = [:]
-        for line in lines.dropFirst() {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            headers[line[line.startIndex ..< colon].lowercased()] =
-                line[line.index(after: colon)...]
-                    .trimmingCharacters(in: .whitespaces)
-        }
-
-        // Constant-time comparison: the token is a nonce guarding a loopback
-        // socket rather than a credential, but there is no reason to leak it.
-        let offered = headers["authorization"] ?? ""
-        let expected = "Bearer \(token)"
-        guard offered.utf8.count == expected.utf8.count,
-              zip(offered.utf8, expected.utf8).reduce(0, { $0 | ($1.0 ^ $1.1) }) == 0
-        else {
-            return .answer(status: "403 Forbidden", body: nil)
-        }
-
-        guard let length = Int(headers["content-length"] ?? ""), length >= 0 else {
-            return .answer(status: "411 Length Required", body: nil)
-        }
-        guard length <= Self.maximumBodyBytes else {
-            return .answer(status: "413 Payload Too Large", body: nil)
-        }
-
-        let bodyStart = headerEnd.upperBound
-        guard buffer.distance(from: bodyStart, to: buffer.endIndex) >= length else {
-            return .needMore
-        }
-        let body = buffer[bodyStart ..< buffer.index(bodyStart, offsetBy: length)]
-        return .answer(status: "200 OK", body: Data(body))
-    }
-
-    private func respond(_ connection: NWConnection, status: String) {
-        let response = "HTTP/1.1 \(status)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        connection.send(
-            content: Data(response.utf8),
-            completion: .contentProcessed { _ in connection.cancel() }
+        var timeout = timeval(tv_sec: 0, tv_usec: Self.receiveTimeoutMicroseconds)
+        setsockopt(
+            descriptor,
+            SOL_SOCKET,
+            SO_RCVTIMEO,
+            &timeout,
+            socklen_t(MemoryLayout<timeval>.size)
         )
+
+        var payload = Data()
+        var buffer = [UInt8](repeating: 0, count: 16 * 1_024)
+        while payload.count <= Self.maximumBodyBytes {
+            let readCount = read(descriptor, &buffer, buffer.count)
+            guard readCount > 0 else { break }
+            payload.append(contentsOf: buffer[0 ..< readCount])
+        }
+
+        // Over the cap is dropped rather than truncated: a half payload decodes
+        // to nothing useful and would be quarantined as corruption.
+        guard !payload.isEmpty, payload.count <= Self.maximumBodyBytes else {
+            return
+        }
+        record(payload)
     }
 
     /// Takes one event: to memory if it is text, to the queue otherwise.

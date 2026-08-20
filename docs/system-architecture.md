@@ -372,7 +372,7 @@ flowchart LR
 | 核心编排 | `LiveCodexMonitorService` | 协调 Hook、App Server、Project、未读、缓存、成员集合与降级 | [`LiveCodexMonitorService.swift`](../CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift) |
 | Turn reducer | `HookEventRepository` | 用精确身份消费事件、拒绝回放复活、维护内存 `HookTurnState` | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
 | 正文边界（Codex） | `HookPreviewChannel` | 经 Unix socket 收取 prompt/回答并留在内存。这条 socket 当初是为「正文不落盘」而建，那条承诺已随 PRD 第 7 节删除；它留着只是因为它在跑，改成由 helper 直接写事件文件同样可以 | [`HookPreviewChannel.swift`](../CodexInNotch/CodexInNotch/HookPreviewChannel.swift) |
-| 正文边界（Claude Code） | `AgentHookListener` | loopback 收取生命周期事件并落成 0600 事件文件；**先应答再处理**，**`MessageDisplay` 在写队列之前转向内存**，只留每条消息头部 240 字符；正文只在**从没有到有**时报一个边沿（`onPreviewAppeared`），其余 delta 一律不进变更流 | [`AgentHookListener.swift`](../CodexInNotch/CodexInNotch/AgentHookListener.swift) |
+| 正文边界（Claude Code） | `AgentHookListener` | 从 0600 Unix domain socket 收取生命周期事件并落成 0600 事件文件（一次连接一条 payload，写方关闭即帧尾）；**串行读取队列保序**，**`MessageDisplay` 在写队列之前转向内存**，只留每条消息头部 240 字符；正文只在**从没有到有**时报一个边沿（`onPreviewAppeared`），其余 delta 一律不进变更流 | [`AgentHookListener.swift`](../CodexInNotch/CodexInNotch/AgentHookListener.swift) |
 | 会话身份（Claude Code） | `ClaudeCodeSessionRegistry` | 按节拍运行 `claude agents --json` 并对读取单飞；新鲜度从**上一次尝试**起算，失败保留上一次列表；**会话目录的变更可以把新鲜度窗口截断**（`invalidate()`，不低于 `edgeFloor`，读取途中到达的边沿不被该次读取消费）；在 stdout 里定位数组而不假定它独占该流；**排除本应用自己的额度读取会话**（见 `tech-design.md` §15.1） | [`ClaudeCodeSessionRegistry.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeSessionRegistry.swift) |
 | Hook 管理 | `CodexHookInstaller` | 安装、升级、校验和移除本应用管理的六类 Hook 定义 | [`HookIntegration.swift`](../CodexInNotch/CodexInNotch/HookIntegration.swift) |
 | 用户配置编辑 | `ManagedHooksConfiguration` | 在用户拥有的配置里严格增删本应用的定义；看不懂的结构一律不改，必须改才能继续时整体拒绝 | [`ManagedHooksConfiguration.swift`](../CodexInNotch/CodexInNotch/ManagedHooksConfiguration.swift) |
@@ -490,7 +490,7 @@ flowchart LR
 | `-Onone` | 3.08 s CPU | 0.08 s CPU |
 | `-O` | 0.12 s CPU | 0.08 s CPU |
 
-整机验证（Debug 构建，hook 端口空闲、集成为 active 的干净启动）：峰值 `%cpu` 68 → 99.8 → 84.8，12 秒累计 3.87 s；改后峰值 21%，累计 0.70 s，与 Release 同价。
+整机验证（Debug 构建，集成为 active 的干净启动）：峰值 `%cpu` 68 → 99.8 → 84.8，12 秒累计 3.87 s；改后峰值 21%，累计 0.70 s，与 Release 同价。
 
 **这条记在这里，不是因为「Debug 也要快」**——性能结论一律以 Release 为准（见 `AGENTS.md` §2）——而是因为**一段热点代码的代价不该由构建配置决定**。逐字节的 Swift 循环把 26 倍的差价押在优化器身上，本地开发天天跑的那个构建于是背着一个 3 秒的启动尖峰，盖得住别的东西；`memchr` 两边同价，这一维就不必再靠「记得用 Release 量」来守。测法仍是本节「怎么测」那条：突发看累计 CPU 时间的差分，热点靠 `sample`。
 

@@ -166,7 +166,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// ``ClaudeCodeReadStateSnapshot/readState(forSession:terminalBoundaryAt:)``.
     private var terminalReadMembershipGate: TerminalUnreadMembershipGate
     private let clock: any MonitorClock
-    private var boundPort: UInt16?
     private var lastDiagnostic: String?
 
     init(
@@ -220,8 +219,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         let (previewsAppeared, previewLanded) = AsyncStream<Void>.makeStream(
             bufferingPolicy: .bufferingNewest(1)
         )
-        // The token is not supplied here: it lives in the user's settings, and
-        // the listener is told it when it binds.
         let resolvedListener = listener ?? AgentHookListener(
             eventsDirectory: paths.eventsDirectory,
             ignoredWorkingDirectory: quotaDirectory,
@@ -358,6 +355,14 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     // MARK: - AgentMonitoring
 
     func fetchSnapshot() async -> AgentSnapshot {
+        // Before the status gate, not after it. The helper has to exist from
+        // the moment the user *could* have pasted the block naming it, and
+        // that moment is not the moment this app decides the paste is
+        // complete -- a registration made while this app was closed is live in
+        // their next session either way, and a missing helper there prints the
+        // one line CC-021 is about. Cheap enough to repeat: one read and a
+        // string comparison once the file is right.
+        await setup.prepareHelper()
         let status = await setup.status()
         guard status == .active else {
             // Nothing is being monitored, so nothing is worth an edge. Left
@@ -394,12 +399,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // again, and one failed `open` per refresh is cheaper than a timer.
         sessionsWatcher.attachIfNeeded()
 
-        // Bind whatever the user's settings name. Their file is the authority,
-        // so a port that moved there moves here -- and a port this app cannot
-        // take is reported rather than silently swapped, because nothing here
-        // may edit their file to agree with it.
-        guard let registration = await setup.installedRegistration(),
-              await bindListenerIfNeeded(registration) else {
+        // Install the helper the registration names, and bind the socket it
+        // hands payloads to. Both are this app's own files in this app's own
+        // directory, so unlike the port they used to replace there is nothing
+        // here to lose a race for and nothing in the user's file to follow.
+        guard await prepareTransport() else {
             recordWatcher.watch(processIdentifiers: [])
             transcriptWatcher.watch(paths: [])
             // Nothing is listed, so nothing is waiting to be read. Left alone,
@@ -413,8 +417,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 availability: .disconnected,
                 sessions: [],
                 setupStatus: status,
-                diagnostic: "Cannot listen on the port named in the settings file; "
-                    + "choose another port, or quit whatever is holding it."
+                diagnostic: "Cannot open the hook helper or its socket in "
+                    + "this app's support folder; check that the folder is "
+                    + "writable, then reopen Settings."
             )
         }
 
@@ -1071,7 +1076,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
 
     func disconnect() async {
         listener.stop()
-        boundPort = nil
     }
 
     /// The process running a session, for navigation.
@@ -1119,24 +1123,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         }
     }
 
-    private func bindListenerIfNeeded(
-        _ registration: ClaudeCodeHookRegistration
-    ) async -> Bool {
-        if boundPort == registration.port { return true }
-        listener.stop()
-        let bound = listener.start(
-            preferredPort: registration.port,
-            token: registration.token
-        )
-        // An ephemeral fallback is useless here: the user's settings name a
-        // port, and nothing would ever post to a different one.
-        guard bound == registration.port else {
-            listener.stop()
-            boundPort = nil
-            return false
-        }
-        boundPort = bound
-        return true
+    /// Ensures the helper exists and the socket is bound.
+    ///
+    /// Both every refresh, and cheap on both counts: the helper is one read and
+    /// a string comparison, and ``AgentHookListener/start(socketURL:)`` returns
+    /// immediately once it holds that socket. Repeating it is what repairs a
+    /// support folder a user emptied while the app was running, which is the
+    /// same reason the sessions watcher re-attaches here.
+    private func prepareTransport() async -> Bool {
+        guard await setup.prepareHelper() else { return false }
+        return listener.start(socketURL: await setup.socketURL)
     }
 
     private func row(

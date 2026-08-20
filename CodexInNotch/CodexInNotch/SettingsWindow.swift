@@ -321,14 +321,15 @@ struct AppSettingsView: View {
     /// A registration that does not match this build gets its own sentence,
     /// because it is the failure with no other symptom. An event left out
     /// simply never arrives; a handler in an older shape does arrive and
-    /// misbehaves quietly — one missing `async` is a session that waits on
-    /// this app three times a second while a turn talks. Neither reports an
+    /// misbehaves quietly — an `http` handler from before ADR 0013 posts every
+    /// event to a port nothing listens on, which is a line in the user's
+    /// session each time and nothing at all in the notch. Neither reports an
     /// error anywhere.
     private var claudeCodeStatusLine: String {
         switch store.setupStatus(for: .claudeCode) {
         case .active:
             store.agentAvailability(for: .claudeCode) == .disconnected
-                ? "Registered · the port in your settings is unavailable"
+                ? "Registered · the hook helper could not be set up"
                 : "Connected · hooks installed"
         case .repairRequired:
             "Registration is out of date · nothing here reports an error"

@@ -470,7 +470,7 @@ repository 启动时记录 live cutoff。`received_at` 早于该 cutoff 的积�
 source + method + threadId + turnId + requestOrItemId + revision
 ```
 
-所有未知字段与枚举写入诊断，不让应用崩溃。诊断只保留方法名、版本和枚举标识，不写入 loopback token 等凭据。
+所有未知字段与枚举写入诊断，不让应用崩溃。诊断只保留方法名、版本和枚举标识。
 
 ## 10. 汇总与排序
 
@@ -518,7 +518,9 @@ helper 那边 connect 和 write 通常紧挨着，所以这只在机器繁忙、
 
 ### 正文如何到达本进程（Claude Code）
 
-**不需要第二条 `HookPreviewChannel`。** 这曾经是 #34 认定的前提，它是错的：Claude Code 把整个 payload POST 进本进程，正文抵达时**已经在内存里**，再绑一个 socket 什么也没搬动。
+**两个产品现在都走 helper 加 Unix domain socket，但 Codex 要两条通道、这边只要一条。** Codex 那边一条 hook 必须变成一个事件文件，而正文不进那个文件，于是正文自带一条 socket。这边 helper 把**整份 payload** 顺着同一条 socket 送进来，由 `AgentHookListener` 决定什么变成文件——`MessageDisplay` 在 `record(_:)` 里转向内存，根本不到队列。再绑一条 socket 什么也搬不动（这曾经是 #34 认定的前提，它是错的）。
+
+**这条通道此前是 `type: "http"`，指向 `127.0.0.1:51741`；换成 helper 的理由与正文无关，见 [ADR 0013](adr/0013-claude-code-hooks-run-a-helper-not-a-port.md)。** 一句话：端口在本应用没开时不属于任何人，于是 CLI 每个事件都往用户会话里打一行 `connect ECONNREFUSED`，而且关不掉；这两件事都不是注册能修的。
 
 来源是官方 Hook `MessageDisplay`（官方描述 "While assistant message text is displayed"，公开 payload 为 `turn_id, message_id, index, final, delta`）。它此前从未进入本仓库的事件表，Phase 0 的 30 事件清单里没有它——这正是「取不到正文」这个结论的由来。
 
@@ -527,7 +529,7 @@ helper 那边 connect 和 write 通常紧挨着，所以这只在机器繁忙、
 `AgentHookListener` 对它做四件事：
 
 1. **在写队列之前转向。** 事件队列是一个文件目录。三次每秒写一个文件、再由 reducer 读一个删一个，是这条路径最贵的做法；`record(_:)` 认出 `MessageDisplay` 后交给内存并直接返回，**不产生任何文件**。这同时也是「正文不落盘」这句话的实现。
-2. **先应答，再处理。** 每一条注册都是**同步**的：Claude Code 的 `http` hook 配置里根本没有 “后台投递” 这个键（2026-08-18 读 schema 证实；此前本文档以为的 `async: true` 会被 settings 解析器直接丢掉），所以 CLI 一定在等这个响应。因此响应先于任何工作发出，排在已经串行化每个连接的那条队列上——一个正在说话的轮次不会一秒钟等三次。这也是这条通道现在“不阻塞用户会话”的**全部**依据：它不在配置里，而在这里。
+2. **一条串行读取队列，保序而不是抢快。** 连接按到达顺序 accept，交给同一条串行队列，所以 `record(_:)` 看到的顺序就是 payload 落地的顺序。这一条现在要单独说，因为 `command` schema **有** `async` 这个键（`http` schema 没有，2026-08-18 读 schema 证实，此前本文档以为写得进去的 `async: true` 会被 settings 解析器直接丢掉）。实测 2.1.237：`async: true` 会让同一个 `tool_use_id` 的 `PreToolUse` 与 `PostToolUse` 互相超车，并且在 `-p` 下**整个丢掉 `Stop`**——进程在后台 hook 跑完之前就退出了。所以注册是同步的，代价是每个事件 6.3 ms 落在会话上（对照：Codex 那边的 Python helper 一直是 30 ms）。
 3. **只留每条消息的头部 240 字符。** 内存由常数决定，而不是由模型说了多少决定：头写满之后，后续 delta 在被扫描进任何保留结构之前就停下。
 4. **一趟扫完，只扫新 delta。** 折叠函数以已规范化的头部为种子往下写，长度用 `Int` 随行。此前的写法是重建 `carried + delta` 再在每个字符后取 `.count`——`String.count` 要走一遍字素边界，于是相对截断长度是平方级，还额外整份拷贝了 delta（上限 `maximumBodyBytes`，1 MB）。现在超长 delta 与普通 delta 同价。
 
@@ -806,7 +808,7 @@ Mock 与真实实现共享协议，Preview/测试继续使用 Mock；生产入�
 
 ### 20.3 集成边界测试
 
-- 确认诊断与日志不写入 loopback token 等凭据。
+- 确认诊断与日志不写入用户路径以外的凭据；Claude Code 这条通道已经没有 token 可写。
 - 确认不申请 Accessibility/Screen Recording——这是一条安装摩擦的取舍，不是隐私承诺：这两项授权都要用户去系统设置里点，而本产品能做到的事不值这个价。
 - 确认 observer 不发送会改变 Thread/Turn 的方法。
 - 确认移除集成不会删除用户其他配置。

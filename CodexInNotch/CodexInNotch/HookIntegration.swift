@@ -91,6 +91,26 @@ nonisolated struct HookIntegrationPaths: Sendable {
         agentDirectory.appendingPathComponent("codex_in_notch_hook.py")
     }
 
+    /// The helper Claude Code runs once per event.
+    ///
+    /// A file of this app's own, in this app's own directory, and therefore
+    /// nothing ADR 0010 speaks to -- that decision is about `settings.json`,
+    /// which still belongs to the user and is still never written. What the
+    /// user pastes is a path to this script; what the script does is pipe one
+    /// payload into ``hookSocket``.
+    var hookHelper: URL {
+        agentDirectory.appendingPathComponent("hook.sh")
+    }
+
+    /// Where that helper hands one payload to a running app.
+    ///
+    /// Shorter than ``previewSocket`` on purpose: both share the 104-byte
+    /// `sun_path` budget, and this one is the transport rather than a
+    /// side channel, so it is the one that must not be the first to overflow.
+    var hookSocket: URL {
+        agentDirectory.appendingPathComponent("hook.sock")
+    }
+
     var eventsDirectory: URL {
         agentDirectory.appendingPathComponent("events", isDirectory: true)
     }
@@ -309,12 +329,13 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     nonisolated let reportsApprovalDenials = true
     /// No side channel, and none needed — which is not the same as no preview.
     ///
-    /// Codex's helper needs one because a hook there is a shell command: the
-    /// only ways home are a file or a socket, and text may not go in a file.
-    /// Claude Code POSTs its payload straight into this process, so the text is
-    /// already in memory when it arrives; ``AgentHookListener`` diverts
-    /// `MessageDisplay` there and never lets it reach the queue. Binding a
-    /// second socket would move nothing.
+    /// Both products now reach this app through a helper and a Unix domain
+    /// socket, but Codex needs *two* channels and this one needs one. There a
+    /// hook's payload has to become an event file, and the text must not go
+    /// into it, so the text takes a socket of its own. Here the helper pipes
+    /// the whole payload down a single socket and ``AgentHookListener`` decides
+    /// what becomes a file: `MessageDisplay` is diverted in `record(_:)` and
+    /// never reaches the queue. A second socket would move nothing.
     nonisolated let usesPreviewChannel = false
 
     /// The tool Claude Code uses to put a question to the user.
@@ -340,23 +361,27 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             ManagedHookDefinition(event: "MessageDisplay", matcher: nil),
             ManagedHookDefinition(event: "Stop", matcher: nil),
             ManagedHookDefinition(event: "StopFailure", matcher: nil)
-            // SessionEnd is deliberately absent, and it is the only event
-            // worth excluding on these grounds. With nothing listening it
-            // writes `SessionEnd hook [...] failed: connect ECONNREFUSED` to
-            // the CLI's own stderr, once per session -- measured 2026-08-16,
-            // re-measured against 2.1.235 on 2026-08-18 with `Stop` and
-            // `PreToolUse` registered alongside it, which wrote nothing there.
+            // SessionEnd is deliberately absent, and the reason it was
+            // absent has just been retired -- so this is a note about what to
+            // do next, not a justification.
             //
-            // Stderr is the point. Every registered event prints a `hook error`
-            // line in an interactive session and there is no way to suppress
-            // it (CC-021), so excluding this one does not buy silence. What it
-            // buys is that the failure stays out of `claude -p`, and so out of
-            // scripts, pipelines and CI, where nothing is watching a notch and
-            // a stray line lands in somebody's output.
+            // It was excluded because it is the only event whose failure is
+            // written to the CLI's *own* stderr rather than drawn by the TUI,
+            // so with nothing listening it followed `claude -p` into scripts,
+            // pipelines and CI where nothing is watching a notch. Measured
+            // 2026-08-16, re-measured against 2.1.235 on 2026-08-18.
             //
-            // Nothing here needs the event anyway: a session going away is
-            // equally visible through the official session list and the
-            // sessions directory watcher.
+            // The helper cannot fail that way. It exits 0 and writes to
+            // neither stream whether or not this app is running, so no
+            // registered event can put a line anywhere -- which is the whole
+            // of CC-021 -- and this one costs exactly what the others do.
+            //
+            // Registering it is still a change of its own and is left out of
+            // this one: it needs a `signal(forEvent:toolName:)` case, and the
+            // reducer decision behind that case is whether a dead session's
+            // row should retire on the event or go on waiting for the sessions
+            // directory watcher, which is the only thing that can do it today
+            // (`ClaudeCodeSessionRegistry.swift`, `ClaudeCodeMonitorService`).
         ]
     }
 

@@ -670,3 +670,27 @@ slave=/dev/ttys004
 没有覆盖的是「读完之后继续盯着那个 tab 一动不动」。终端上它比 Desktop 上便宜得多：接下来做的任何一件事都会撤掉那一行。产品因此选择**不救**这一种，而不是像第三条那样为了救它接受撤掉没人读过的行。
 
 **这一条推翻的是本文件与 ADR 0012 里「终端会话不回答」的结论，不是它的任何一条论据。** 「哪个 tab 在用户眼前无从得知」至今成立，本实现一次也没有去回答它。规则、代价与被保留的禁令见 [ADR 0012](../../adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
+
+### 2026-08-20 — hook 传输从端口换成 helper：`command` 有 `async`，`http` 没有（CC-021）
+
+基线：Claude Code CLI `2.1.237`（schema 与 2.1.235 一致），macOS `Darwin 25.5.0`。执行范围：pty 驱动的交互式会话与 `-p`，注册一律通过临时 `--settings` 文件，**未改动 `~/.claude/settings.json`**；另有一个临时 launchd agent，用完即 `bootout`。结论已实施，见 [ADR 0013](../../adr/0013-claude-code-hooks-run-a-helper-not-a-port.md)。
+
+先把 2026-08-18 那条记录留下的一个空白补上：`if` 不是通用条件，因此**没有**「应用没开就不跑这个 hook」这条便宜路。它的官方描述是 `Permission rule syntax to filter when this hook runs (e.g. "Bash(git *)")`，只匹配工具调用。
+
+| # | 结果 | 依据 | 影响 |
+| --- | --- | --- | --- |
+| 1 | **`command` hook 的 schema 里有 `async`**（`If true, hook runs in background without blocking`），还有 `args`（exec form，直接 spawn 不过 shell）。`http` 的 schema 里两个都没有 | 从 2.1.237 读出五个 hook schema | 2026-08-18 第 1 条「`async` 不是配置键」只对 `http` 成立，对 `command` 不成立。这是换传输的入口 |
+| 2 | **`command` hook 收到的 payload 与 `http` 逐字段相同**，含 `MessageDisplay` 的 `message_id` / `delta` / `final` / `index` / `turn_id` | 同一句提示、同一组 12 个事件，两种注册各跑一次 | reducer 的词表一个字都不用改 |
+| 3 | **同一套 harness 的 A/B：`http` → 无人监听的端口打 9 行 `hook error`；`command` + always-`exit 0` 的 helper 打 0 行**，且 5 类事件全部送达 | pty 交互式会话，两次工具调用 | 这就是 CC-021 的修法。噪声不可能从注册里关掉，只能让 hook 不失败 |
+| 4 | **`async: true` 会重排成对事件，并在 `-p` 下整个丢掉 `Stop`** | `-p` 实测：3 个 `PreToolUse`、3 个 `PostToolUse`、**0 个 `Stop`**；同一份注册改同步则 `Stop` 到达。交互式会话不丢（进程在后台 hook 跑完之后才退出） | 注册保持同步。保序与终态比每事件 6.3 ms 值钱 |
+| 5 | **每事件 CPU**（15 次运行，注册数放大 10×/60× 后按事件数回归，基线为不注册任何 hook 的同一句提示）：`http` **1.2 ms**、`command` + 编译产物 **4.8 ms**、`command` + `sh`+`nc` **6.3 ms**；一个轮次约 17 个事件 | `getrusage(RUSAGE_CHILDREN)`，pty 交互式会话 | 一个轮次 21 ms → 107 ms。对照 `tech-design.md` 第 11 节记录的 Codex Python helper：**30 ms/事件**，一直如此 |
+| 6 | helper 的四种状态都实测过：应用没开 **17 ms / rc 0 / 两条流为空**；socket 文件是陈留物 6.2 ms；应用在听 6.3 ms 且 30/30 送达；对端 accept 了却不读，`nc -w 1` 在 1 s 收口 | 直接跑脚本，30 次取平均 | `exit 0` 与 `-w` 各自扛一种失败 |
+
+**否决掉的那条路，值得单独记下来，因为它前半段成立得很好。** 「一个常驻进程占住端口、应用启动时交接」：
+
+| # | 结果 | 依据 |
+| --- | --- | --- |
+| 7 | launchd 的 socket activation **在没有任何进程运行时**占住端口；job 按需拉起并在 3 次/秒下复用（1 次拉起服务 31 个连接）；`SIGKILL` 之后端口仍被占住（t+0.0/0.2/0.4 s 三次 bind 全被拒），下一个 POST 照常 200 | 临时 LaunchAgent，`Sockets` + `launch_activate_socket` |
+| 8 | **交接没有安全做法。** `SO_REUSEPORT` 下两个进程可同时持有同一端口，投递 6/6 给后 bind 的那个；但普通 bind 与 `SO_REUSEPORT` 互不兼容（两个方向都实测 `EADDRINUSE`），所以开启它等于允许任何本地进程后 bind 接管投递——**包括本应用正在运行时**。把「关着时有窗口」换成「一直开着」 | 本机 socket 实测 |
+| 9 | **job 拉不起来时，失败形态比原病更重。** 程序不存在时 `connect()` **1 ms 成功**、`recv()` 永不返回（10 s 无响应，`last exit code = 78: EX_CONFIG`），于是每个事件都等满自己的 `timeout`；而本应用改不了用户文件里的 `timeout` | 同上 |
+| 10 | **端口被占时 bootstrap 静默成功**：`rc 0`、job 注册上、`launchctl print` 与健康时**逐字节相同**（都报 `sockets = { 16 (no bytes to read) }`），抢占者照常收 POST。今天 `bind()` 失败是个干脆的信号，这个方案把它弄丢 | 同上 |

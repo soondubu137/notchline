@@ -9205,7 +9205,7 @@ for line in sys.stdin:
         try await Task.sleep(nanoseconds: 300_000_000)
         let beforeTheDelta = edges.count
 
-        try await post(port: harness.port, token: "harness-token", body: [
+        try send(to: harness.hookSocket, body: [
             "hook_event_name": "MessageDisplay", "session_id": "s-1",
             "message_id": "m-1", "delta": "Reading the settings window."
         ])
@@ -10911,12 +10911,12 @@ for line in sys.stdin:
 
         // Binds the port the registration names; nothing can post before this.
         _ = await harness.service.fetchSnapshot()
-        try await post(port: harness.port, token: "harness-token", body: [
+        try send(to: harness.hookSocket, body: [
             "hook_event_name": "MessageDisplay", "session_id": "s-1",
             "message_id": "m-1", "index": 0, "final": false,
             "delta": "Checking the event order before "
         ])
-        try await post(port: harness.port, token: "harness-token", body: [
+        try send(to: harness.hookSocket, body: [
             "hook_event_name": "MessageDisplay", "session_id": "s-1",
             "message_id": "m-1", "index": 1, "final": true,
             "delta": "touching anything."
@@ -11028,8 +11028,7 @@ for line in sys.stdin:
         #expect(await setup.status() == .notInstalled)
 
         // Everything the panel can do with an un-registered install: read the
-        // state, mint a proposal, render instructions.
-        let proposal = await setup.proposedRegistration()
+        // state and render instructions.
         let snippet = await setup.configurationSnippet()
         #expect(await setup.status() == .notInstalled)
 
@@ -11047,12 +11046,37 @@ for line in sys.stdin:
                 == Set(ClaudeCodeHookVocabulary().managedDefinitions.map(\.event))
         )
         #expect(!hooks.keys.contains("SessionEnd"))
-        #expect(snippet.contains("127.0.0.1:\(proposal.port)"))
-        #expect(snippet.contains(proposal.token))
 
-        // The proposal is stable, so a user cannot be told two different things
-        // to paste for the same install.
-        #expect(await setup.proposedRegistration() == proposal)
+        // Rendering the block created the helper it names. Showing a user a
+        // path that does not exist would hand them a registration whose every
+        // event prints `ENOENT: ... posix_spawn` -- the same line the move off
+        // a port was made to remove.
+        #expect(FileManager.default.isExecutableFile(atPath: paths.hookHelper.path))
+
+        // It names this app's own helper and nothing else. No port, no token,
+        // no host: the two faults CC-021 is about were both properties of the
+        // loopback URL that used to be here, and neither can be expressed in
+        // what replaced it.
+        #expect(snippet.contains(paths.hookHelper.path))
+        #expect(!snippet.contains("127.0.0.1"))
+        #expect(!snippet.contains("Bearer"))
+        #expect(!snippet.contains("\"url\""))
+
+        // Exec form: `args` present means the CLI resolves the command as an
+        // executable and spawns it directly rather than through a shell.
+        let group = try #require((hooks["Stop"] as? [[String: Any]])?.first)
+        let handler = try #require((group["hooks"] as? [[String: Any]])?.first)
+        #expect(handler["type"] as? String == "command")
+        #expect(handler["command"] as? String == paths.hookHelper.path)
+        #expect(handler["args"] as? [String] == [])
+        // Deliberately no `async`. Claude Code's command schema does have that
+        // key, unlike its HTTP one, and using it was measured to reorder a
+        // `PreToolUse` against its own `PostToolUse` and to lose `Stop`
+        // entirely under `-p`.
+        #expect(handler["async"] == nil)
+
+        // Nothing is minted, so a user cannot be told two different things to
+        // paste for the same install.
         #expect(await setup.configurationSnippet() == snippet)
     }
 
@@ -11171,48 +11195,31 @@ for line in sys.stdin:
     /// The hook URL names a port, and since the app cannot rewrite their file
     /// it cannot move that port either. So the direction reverses: the
     /// registration is read back out of their settings and the listener binds
-    /// what it finds — a user who edits the port is followed, not overruled.
+    /// A registration from before the transport moved asks to be repaired.
+    ///
+    /// Every event is there, so nothing is missing in the sense the partial
+    /// test below means; what is there is the `http` handler naming a port,
+    /// which this build neither installs nor listens on. Reported as
+    /// `notInstalled` it would read as "you have not set this up", and the user
+    /// would paste a second block beside the first. `repairRequired` is the
+    /// honest answer, and reaching it is the whole job of the legacy marker —
+    /// this app cannot take the old handler out of their file (ADR 0010), so
+    /// recognising it is all it can do.
     @Test @MainActor
-    func theRegistrationIsReadBackOutOfWhatTheUserActuallyPasted() async throws {
-        let root = URL(fileURLWithPath: "/tmp")
-            .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let settings = root.appendingPathComponent("settings.json")
-        let paths = HookIntegrationPaths(
-            supportDirectory: root.appendingPathComponent("AS"),
-            hooksConfiguration: settings,
-            agent: .claudeCode
-        )
-        let setup = ClaudeCodeHookSetup(paths: paths)
+    func anHTTPEraRegistrationAsksToBeRepairedRatherThanReadingAsAbsent() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
 
-        // The user pastes it, but on a port of their own choosing.
-        let snippet = await setup.configurationSnippet()
-        var document = try #require(
-            try JSONSerialization.jsonObject(with: Data(snippet.utf8)) as? [String: Any]
-        )
-        document["theme"] = "auto"
-        var text = String(
-            decoding: try JSONSerialization.data(
-                withJSONObject: document,
-                options: [.prettyPrinted, .withoutEscapingSlashes]
-            ),
-            as: UTF8.self
-        )
-        let proposed = await setup.proposedRegistration()
-        text = text.replacingOccurrences(
-            of: "127.0.0.1:\(proposed.port)",
-            with: "127.0.0.1:49999"
-        )
-        try Data(text.utf8).write(to: settings)
+        try harness.registerLegacyHTTPHooks()
+        #expect(await harness.setup.status() == .repairRequired)
 
-        let installed = try #require(await setup.installedRegistration())
-        #expect(installed.port == 49_999)
-        #expect(installed.token == proposed.token)
-        #expect(await setup.status() == .active)
-        // And the proposal now defers to it, so the instructions stop offering
-        // a port the user has already replaced.
-        #expect(await setup.proposedRegistration() == installed)
+        let snapshot = await harness.service.fetchSnapshot()
+        #expect(snapshot.availability == .setupRequired)
+        #expect(snapshot.diagnostic != nil)
+
+        // And pasting what this build offers clears it.
+        try harness.registerHooks()
+        #expect(await harness.setup.status() == .active)
     }
 
     /// Half a registration is worse than none, because the gap is silent.
@@ -11266,7 +11273,6 @@ for line in sys.stdin:
                 )
             )
             #expect(await setup.status() == .notInstalled)
-            #expect(await setup.installedRegistration() == nil)
             #expect(
                 String(decoding: try Data(contentsOf: settings), as: UTF8.self) == contents
             )
@@ -11907,54 +11913,67 @@ for line in sys.stdin:
         )
     }
 
-    /// An HTTP handler stays recognisable after its port moves.
+    /// The handler this build stopped installing stays recognisable.
     ///
-    /// A command line identifies itself; a URL cannot, because the port in it
-    /// is the one part allowed to change — a port taken at launch has to be
-    /// rebound, which is exactly the moment the old registration most needs to
-    /// be found and replaced. So identity is a fixed path inside the URL, and
-    /// a reinstall on a different port replaces rather than accumulates.
+    /// A command line identifies itself, so the marker is the command. The
+    /// handler before it was an HTTP one whose URL carried a port, and it is
+    /// still out there in the settings of everyone who installed before this
+    /// change — so the configuration carries the old URL path as a legacy
+    /// marker and the two questions come apart: `isManagedHandler` says "this
+    /// is ours, in any shape we ever wrote", and `isCurrentManagedHandler`
+    /// says "and it is the one this build installs". The first is what makes
+    /// an upgrade replace rather than accumulate; the second is what makes a
+    /// stale paste report as needing repair instead of as active.
     @Test @MainActor
-    func anHTTPHandlerIsIdentifiedByItsPathSoItSurvivesARebind() throws {
-        func configuration(port: UInt16) -> ManagedHooksConfiguration {
-            .loopbackPost(
-                port: port,
-                path: "/codex-in-notch/hook",
-                token: "token-\(port)",
-                definitions: [ManagedHookDefinition(event: "Stop", matcher: nil)]
-            )
-        }
+    func theHandlerThisBuildReplacedStaysRecognisableSoAnUpgradeReplacesIt() throws {
+        let definitions = [ManagedHookDefinition(event: "Stop", matcher: nil)]
+        let configuration = ManagedHooksConfiguration.command(
+            "/Users/someone/Library/Application Support/CodexInNotch/agents/claudeCode/hook.sh",
+            arguments: [],
+            legacyCommands: [ClaudeCodeHookSetup.legacyHookPath],
+            definitions: definitions
+        )
 
-        // A settings file with content of the user's own in it.
+        let legacyHandler: [String: Any] = [
+            "type": "http",
+            "url": "http://127.0.0.1:51741\(ClaudeCodeHookSetup.legacyHookPath)",
+            "timeout": 5,
+            "headers": ["Authorization": "Bearer abc"]
+        ]
+        // A settings file carrying the old registration and content of the
+        // user's own beside it.
         let original: [String: Any] = [
             "theme": "auto",
             "env": ["SOME_KEY": "value"],
-            "hooks": ["PreToolUse": [["hooks": [["type": "command", "command": "theirs"]]]]]
+            "hooks": [
+                "Stop": [["hooks": [legacyHandler]]],
+                "PreToolUse": [["hooks": [["type": "command", "command": "theirs"]]]]
+            ]
         ]
 
-        let installed = try configuration(port: 51_000)
-            .installing(into: original, isNewFile: false)
-        #expect(configuration(port: 51_000).isFullyInstalled(in: installed))
+        // Ours by any shape we ever wrote, but not the shape we write now.
+        #expect(configuration.isManagedHandler(legacyHandler))
+        #expect(!configuration.isCurrentManagedHandler(legacyHandler))
+        #expect(!configuration.isFullyInstalled(in: original))
+
+        let installed = try configuration.installing(into: original, isNewFile: false)
+        #expect(configuration.isFullyInstalled(in: installed))
+        // Replaced, not left behind beside the new one.
+        let stop = try #require(
+            (installed["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]]
+        )
+        #expect(stop.count == 1)
+        let handlers = try #require(stop[0]["hooks"] as? [[String: Any]])
+        #expect(handlers.count == 1)
+        #expect(handlers[0]["type"] as? String == "command")
+
         // Everything that was not ours is exactly as it was.
         #expect(installed["theme"] as? String == "auto")
         #expect((installed["env"] as? [String: Any])?["SOME_KEY"] as? String == "value")
-        let hooks = try #require(installed["hooks"] as? [String: Any])
-        #expect(hooks["PreToolUse"] != nil)
 
-        // Rebound to a different port: the old handler is recognised and
-        // replaced, not left behind beside the new one.
-        let rebound = try configuration(port: 52_000)
-            .installing(into: installed, isNewFile: false)
-        #expect(configuration(port: 52_000).isFullyInstalled(in: rebound))
-        let reboundStop = try #require(
-            (rebound["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]]
-        )
-        #expect(reboundStop.count == 1)
-
-        // And removal leaves no trace of ours, while keeping theirs.
-        let removed = try configuration(port: 52_000).removing(from: rebound)
-        #expect(configuration(port: 52_000).isFullyRemoved(from: removed))
-        #expect(configuration(port: 51_000).isFullyRemoved(from: removed))
+        // And removal leaves no trace of either shape, while keeping theirs.
+        let removed = try configuration.removing(from: installed)
+        #expect(configuration.isFullyRemoved(from: removed))
         #expect(removed["theme"] as? String == "auto")
         let theirs = try #require(
             (removed["hooks"] as? [String: Any])?["PreToolUse"] as? [[String: Any]]
@@ -11978,16 +11997,15 @@ for line in sys.stdin:
         let clock = TestClock(now: Date(timeIntervalSince1970: 1_700))
         let listener = AgentHookListener(
             eventsDirectory: events,
-            token: "secret-token",
             clock: clock
         )
         defer { listener.stop() }
-        let port = try #require(listener.start())
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
 
         let secret = "rm -rf /Users/someone/private"
-        try await post(
-            port: port,
-            token: "secret-token",
+        try send(
+            to: socket,
             body: [
                 "hook_event_name": "PreToolUse",
                 "session_id": "session-1",
@@ -12022,26 +12040,146 @@ for line in sys.stdin:
         #expect(decoded["prompt"] == nil)
     }
 
-    /// The socket is loopback, POST-only, and answers nothing without the token.
+    /// The socket is this user's alone, and rubbish on it is dropped.
+    ///
+    /// This replaced a test that asserted `403` for a wrong bearer token and
+    /// `405` for a `GET`, both of which were properties of an HTTP listener on
+    /// a loopback port. Neither question survives the move: there is no method
+    /// to get wrong, and the token is gone because it never answered the
+    /// question that mattered. It authenticated the CLI *to* this app, while
+    /// the risk in CC-021 ran the other way — anything could hold the port and
+    /// the CLI would hand it the prompt. File permissions answer that one, so
+    /// the mode is the assertion.
     @Test @MainActor
-    func theListenerRefusesAnythingItDidNotAskFor() async throws {
+    func theSocketIsPrivateToThisUserAndDropsWhatItCannotRead() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
         let events = root.appendingPathComponent("events", isDirectory: true)
-        let listener = AgentHookListener(eventsDirectory: events, token: "right")
+        let listener = AgentHookListener(eventsDirectory: events)
         defer { listener.stop() }
-        let port = try #require(listener.start())
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
+        #expect(listener.socketURL == socket)
 
-        let body: [String: Any] = [
-            "hook_event_name": "Stop", "session_id": "s", "prompt_id": "p"
-        ]
-        #expect(try await postStatus(port: port, token: "wrong", body: body) == 403)
-        #expect(try await postStatus(port: port, token: "right", body: body) == 200)
-        #expect(
-            try await getStatus(port: port, path: "/hook") == 405,
-            "only POST is answered"
+        // Nobody but this user may hand events to this app.
+        let mode = try #require(
+            try FileManager.default.attributesOfItem(atPath: socket.path)[.posixPermissions]
+                as? NSNumber
         )
+        #expect(mode.int16Value & 0o077 == 0)
+
+        // Not JSON, and JSON without the two fields the reducer needs to place
+        // an event. Neither becomes a queue file, and neither takes the
+        // listener down with it.
+        try sendRaw(to: socket, bytes: Data("{ not json at all".utf8))
+        try send(to: socket, body: ["hook_event_name": "Stop"])
+        try send(to: socket, body: ["session_id": "s"])
+
+        // Proven against something that does queue, so this is not just
+        // "nothing has been processed yet".
+        try send(to: socket, body: [
+            "hook_event_name": "Stop", "session_id": "s", "prompt_id": "p"
+        ])
+        let queued = await waitForQueuedEvents(in: events, count: 1)
+        #expect(queued.count == 1)
+    }
+
+    /// The helper delivers when the app is up, and says nothing when it is not.
+    ///
+    /// This is CC-021 itself, and it is why the transport moved off a port. An
+    /// `http` handler pointed at a port nobody owns makes the CLI print
+    /// `<event> hook error / connect ECONNREFUSED` in the user's session, once
+    /// per event — measured 9 lines for a two-tool turn against 2.1.237 — and
+    /// the renderer suppresses that line only for `Stop` and `SubagentStop`,
+    /// with no setting or environment variable that reaches it. So the fix
+    /// cannot live in the registration; it has to be that the helper never
+    /// fails and never speaks.
+    ///
+    /// Both halves are asserted against the real script, run the way Claude
+    /// Code runs it — argv exec form, payload on stdin — because a hand-rolled
+    /// stand-in would prove nothing about the file this app writes.
+    @Test @MainActor
+    func theHelperDeliversWhenTheAppIsUpAndIsSilentWhenItIsNot() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-helper-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
+        )
+        let setup = ClaudeCodeHookSetup(paths: paths)
+
+        // A marker left by the version that minted a port and a token. It has
+        // nothing to say any more, and it is holding that token on the disk.
+        try FileManager.default.createDirectory(
+            at: paths.agentDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data("{\"port\":51741,\"token\":\"deadbeef\"}".utf8)
+            .write(to: paths.installMarker)
+
+        #expect(await setup.prepareHelper())
+        #expect(FileManager.default.isExecutableFile(atPath: paths.hookHelper.path))
+        #expect(!FileManager.default.fileExists(atPath: paths.installMarker.path))
+
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "PreToolUse",
+            "session_id": "session-1",
+            "prompt_id": "prompt-1",
+            "tool_name": "Bash",
+            "tool_use_id": "call-1",
+            "tool_input": ["command": "rm -rf /Users/someone/private"]
+        ])
+
+        // 1. The app is not running. Nothing is listening on the socket, and
+        //    the helper still has to exit 0 with both streams empty.
+        let closed = try runHelper(at: paths.hookHelper, stdin: payload)
+        #expect(closed.status == 0)
+        #expect(closed.stdout.isEmpty)
+        #expect(closed.stderr.isEmpty)
+
+        // 2. The app is running. The same helper, unchanged, delivers.
+        let listener = AgentHookListener(eventsDirectory: paths.eventsDirectory)
+        defer { listener.stop() }
+        #expect(listener.start(socketURL: paths.hookSocket))
+
+        let open = try runHelper(at: paths.hookHelper, stdin: payload)
+        #expect(open.status == 0)
+        #expect(open.stdout.isEmpty)
+        #expect(open.stderr.isEmpty)
+
+        let queued = await waitForQueuedEvents(in: paths.eventsDirectory, count: 1)
+        let queuedEvent = try #require(queued.first)
+        let decoded = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: queuedEvent))
+                as? [String: Any]
+        )
+        #expect(decoded["hook_event_name"] as? String == "PreToolUse")
+        #expect(decoded["session_id"] as? String == "session-1")
+        #expect(decoded["turn_id"] as? String == "prompt-1")
+        #expect(decoded["tool_use_id"] as? String == "call-1")
+
+        // Stdout is not merely empty by luck: Claude Code parses it for
+        // directives, so anything the helper printed would be read as one.
+        #expect(queued.count == 1)
+    }
+
+    /// A path with a quote in it is still one word to the shell.
+    ///
+    /// The socket path is under the user's home directory, and a home
+    /// directory is a user-chosen string. Interpolated raw, `O'Brien` would
+    /// close the quoting and leave the rest of the path as shell words — the
+    /// helper would then connect to the wrong place, or to nothing, on exactly
+    /// the machines nobody tests on.
+    @Test @MainActor
+    func theHelperQuotesASocketPathThatCarriesAQuote() throws {
+        let awkward = "/tmp/cin O'Brien/hook.sock"
+        let script = ClaudeCodeHookSetup.helperScript(socketPath: awkward)
+        #expect(script.contains("'/tmp/cin O'\\''Brien/hook.sock'"))
+        #expect(ClaudeCodeHookSetup.singleQuoted("plain") == "'plain'")
     }
 
     /// Our own quota reading is a real session firing real hooks.
@@ -12060,17 +12198,17 @@ for line in sys.stdin:
 
         let listener = AgentHookListener(
             eventsDirectory: events,
-            token: "t",
             ignoredWorkingDirectory: ours
         )
         defer { listener.stop() }
-        let port = try #require(listener.start())
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
 
-        try await post(port: port, token: "t", body: [
+        try send(to: socket, body: [
             "hook_event_name": "UserPromptSubmit", "session_id": "poll",
             "prompt_id": "p", "cwd": ours.path
         ])
-        try await post(port: port, token: "t", body: [
+        try send(to: socket, body: [
             "hook_event_name": "UserPromptSubmit", "session_id": "real",
             "prompt_id": "p", "cwd": "/Users/someone/Projects/thing"
         ])
@@ -12103,19 +12241,20 @@ for line in sys.stdin:
         defer { try? FileManager.default.removeItem(at: root) }
         let events = root.appendingPathComponent("events", isDirectory: true)
 
-        let listener = AgentHookListener(eventsDirectory: events, token: "t")
+        let listener = AgentHookListener(eventsDirectory: events)
         defer { listener.stop() }
-        let port = try #require(listener.start())
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
 
         let said = "Reading the listener before changing it."
-        try await post(port: port, token: "t", body: [
+        try send(to: socket, body: [
             "hook_event_name": "MessageDisplay",
             "session_id": "s-1", "message_id": "m-1", "index": 0,
             "delta": said, "final": false
         ])
         // Queues, so its arrival proves the one before it was processed too:
         // both are recorded on the listener's own serial queue.
-        try await post(port: port, token: "t", body: [
+        try send(to: socket, body: [
             "hook_event_name": "Stop", "session_id": "s-1", "prompt_id": "p-1"
         ])
 
@@ -12141,13 +12280,13 @@ for line in sys.stdin:
         defer { try? FileManager.default.removeItem(at: root) }
         let listener = AgentHookListener(
             eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
-            token: "t"
         )
         defer { listener.stop() }
-        let port = try #require(listener.start())
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
 
         func display(_ delta: String, message: String, session: String = "s-1") async throws {
-            try await post(port: port, token: "t", body: [
+            try send(to: socket, body: [
                 "hook_event_name": "MessageDisplay", "session_id": session,
                 "message_id": message, "delta": delta
             ])
@@ -12216,13 +12355,13 @@ for line in sys.stdin:
         defer { try? FileManager.default.removeItem(at: root) }
         let listener = AgentHookListener(
             eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
-            token: "t"
         )
         defer { listener.stop() }
-        let port = try #require(listener.start())
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
 
         for session in ["alive", "ghost"] {
-            try await post(port: port, token: "t", body: [
+            try send(to: socket, body: [
                 "hook_event_name": "MessageDisplay", "session_id": session,
                 "message_id": "m-1", "delta": "Words from \(session)."
             ])
@@ -12254,14 +12393,14 @@ for line in sys.stdin:
         let wakeUps = PreviewWakeUpCounter()
         let listener = AgentHookListener(
             eventsDirectory: root.appendingPathComponent("events", isDirectory: true),
-            token: "t"
         )
         listener.setOnPreviewAppeared { wakeUps.record() }
         defer { listener.stop() }
-        let port = try #require(listener.start())
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
 
         func display(_ delta: String, message: String) async throws {
-            try await post(port: port, token: "t", body: [
+            try send(to: socket, body: [
                 "hook_event_name": "MessageDisplay", "session_id": "s-1",
                 "message_id": message, "delta": delta
             ])
@@ -12311,29 +12450,77 @@ for line in sys.stdin:
     }
 
     @discardableResult
-    private func postStatus(
-        port: UInt16,
-        token: String,
-        body: [String: Any]
-    ) async throws -> Int {
-        var request = URLRequest(
-            url: URL(string: "http://127.0.0.1:\(port)/hook")!
+    /// Runs the installed helper exactly as Claude Code's exec form does.
+    private func runHelper(
+        at url: URL,
+        stdin: Data
+    ) throws -> (status: Int32, stdout: Data, stderr: Data) {
+        let process = Process()
+        process.executableURL = url
+        let input = Pipe(), output = Pipe(), errors = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        input.fileHandleForWriting.write(stdin)
+        try input.fileHandleForWriting.close()
+        let out = output.fileHandleForReading.readDataToEndOfFile()
+        let err = errors.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, out, err)
+    }
+
+    /// Hands one payload to a listening socket, the way the helper does.
+    ///
+    /// Deliberately the same shape as `ClaudeCodeHookSetup.helperScript`:
+    /// connect, write once, close. The close is the frame — there is no length
+    /// header — so a helper that kept the descriptor open would hang the read,
+    /// and this proves the product's own client does not.
+    private func send(to socketURL: URL, body: [String: Any]) throws {
+        try sendRaw(
+            to: socketURL,
+            bytes: try JSONSerialization.data(withJSONObject: body)
         )
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (_, response) = try await URLSession.shared.data(for: request)
-        return (response as? HTTPURLResponse)?.statusCode ?? -1
     }
 
-    private func getStatus(port: UInt16, path: String) async throws -> Int {
-        let request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
-        let (_, response) = try await URLSession.shared.data(for: request)
-        return (response as? HTTPURLResponse)?.statusCode ?? -1
-    }
+    private func sendRaw(to socketURL: URL, bytes: Data) throws {
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        try #require(descriptor >= 0)
+        defer { close(descriptor) }
 
-    private func post(port: UInt16, token: String, body: [String: Any]) async throws {
-        _ = try await postStatus(port: port, token: token, body: body)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketURL.path.utf8)
+        try #require(pathBytes.count < 104)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+        address.sun_len = UInt8(
+            MemoryLayout<sockaddr_un>.size - MemoryLayout.size(ofValue: address.sun_path)
+                + pathBytes.count
+        )
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        try #require(connected == 0)
+        _ = bytes.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
+        shutdown(descriptor, SHUT_WR)
+
+        // Wait for the listener to close its end, which it does only after
+        // `record(_:)` has returned. That is the delivery barrier these tests
+        // need -- the HTTP client this replaced got one for free by awaiting a
+        // response -- and it is not a test-only contrivance: `nc` in the real
+        // helper waits for the same close, bounded by its own `-w 1`.
+        var timeout = timeval(tv_sec: 3, tv_usec: 0)
+        setsockopt(
+            descriptor,
+            SOL_SOCKET,
+            SO_RCVTIMEO,
+            &timeout,
+            socklen_t(MemoryLayout<timeval>.size)
+        )
+        var drain = [UInt8](repeating: 0, count: 64)
+        while read(descriptor, &drain, drain.count) > 0 {}
     }
 
     private func waitForQueuedEvents(in directory: URL, count: Int) async -> [URL] {
@@ -13836,23 +14023,21 @@ private final class ClaudeCodeHarness {
     let paths: HookIntegrationPaths
     let setup: ClaudeCodeHookSetup
     let service: ClaudeCodeMonitorService
-    /// Its own port per harness: these tests run in parallel, and two of them
-    /// asking for one fixed port is the same collision the product surfaces to
-    /// the user rather than working around.
+    /// No port, and therefore nothing to hand out.
     ///
-    /// Handed out by a counter rather than drawn at random. It used to be
-    /// `UInt16.random(in: 49_200 ... 50_900)`, which is inside the range macOS
-    /// hands out for outbound connections (`net.inet.ip.portrange.first` is
-    /// `49152`), so a harness could draw a port something else on the machine
-    /// already held for a moment. That is not a product bug — the app binds the
-    /// port the user's file names or reports that it cannot, and never
-    /// substitutes one (ADR 0010) — so a taken port made `fetchSnapshot` return
-    /// `.disconnected` with **no sessions**, and a test asserting a row got an
-    /// empty array. `sessions[0]` on it trapped, and a trap took the whole test
-    /// process down: that is where the runs of "138 passed, 67 failed in
-    /// `0.000s`" came from. Random also let two harnesses draw the same number.
-    /// A counter outside the ephemeral range removes both causes.
-    let port = ClaudeCodeHarness.reservePort()
+    /// This used to be `let port = ClaudeCodeHarness.reservePort()`, with a
+    /// counter behind it, because a fixed loopback port made two harnesses
+    /// running in parallel collide — the same collision the product used to
+    /// surface to the user rather than work around (CC-014). It was also drawn
+    /// at random once, from inside the range macOS hands out for outbound
+    /// connections, so a harness could lose the port to something else on the
+    /// machine for a moment; `fetchSnapshot` then returned `.disconnected` with
+    /// no sessions, a test asserting a row indexed an empty array, and the trap
+    /// took the whole process down. That is where the runs of "138 passed,
+    /// 67 failed in `0.000s`" came from.
+    ///
+    /// Every harness now has its own support directory and therefore its own
+    /// socket, so the whole class of problem is gone rather than avoided.
     private let listener: AgentHookListener
     private let listing = StubSessionListing()
     private let activationStub = StubDesktopActivation()
@@ -13882,16 +14067,10 @@ private final class ClaudeCodeHarness {
         set { readingStub.isInFront = newValue }
     }
 
-    private static let portLock = NSLock()
-    private static var nextPort: UInt16 = 21_000
-
-    private static func reservePort() -> UInt16 {
-        portLock.lock()
-        defer { portLock.unlock() }
-        let port = nextPort
-        nextPort += 1
-        return port
-    }
+    /// Where this harness's helper hands payloads, and where its listener
+    /// binds. Inside the harness's own support directory, so parallel tests
+    /// cannot reach each other's.
+    var hookSocket: URL { paths.hookSocket }
 
     var live: [ClaudeCodeSession] {
         get { listing.sessions }
@@ -14100,23 +14279,42 @@ private final class ClaudeCodeHarness {
     }
 
     func tearDown() {
-        // Releases the port. Without this every harness in a run held its own
-        // until the process exited, so the ports only ever accumulated.
+        // Unlinks the socket. Without this every harness in a run kept its
+        // descriptor open until the process exited.
         listener.stop()
         try? FileManager.default.removeItem(at: root)
     }
 
     /// Writes the block the app would have told the user to paste.
     func registerHooks() throws {
-        let snippet = ClaudeCodeHookVocabulary().managedDefinitions
+        var hooks: [String: Any] = [:]
+        let handler: [String: Any] = [
+            "type": "command",
+            "command": paths.hookHelper.path,
+            "args": [],
+            "timeout": 3
+        ]
+        for definition in ClaudeCodeHookVocabulary().managedDefinitions {
+            hooks[definition.event] = [["hooks": [handler]]]
+        }
+        try JSONSerialization
+            .data(withJSONObject: ["theme": "auto", "hooks": hooks])
+            .write(to: paths.hooksConfiguration)
+    }
+
+    /// Writes the block a user pasted before the transport moved off a port.
+    ///
+    /// Every event is registered and every one of them points at an HTTP
+    /// handler this build no longer installs.
+    func registerLegacyHTTPHooks(port: UInt16 = 51_741) throws {
         var hooks: [String: Any] = [:]
         let handler: [String: Any] = [
             "type": "http",
-            "url": "http://127.0.0.1:\(port)\(ClaudeCodeHookSetup.hookPath)",
+            "url": "http://127.0.0.1:\(port)\(ClaudeCodeHookSetup.legacyHookPath)",
             "timeout": 5,
-            "headers": ["Authorization": "Bearer harness-token"]
+            "headers": ["Authorization": "Bearer whatever-they-pasted"]
         ]
-        for definition in snippet {
+        for definition in ClaudeCodeHookVocabulary().managedDefinitions {
             hooks[definition.event] = [["hooks": [handler]]]
         }
         try JSONSerialization
