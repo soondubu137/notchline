@@ -637,7 +637,11 @@ final class MonitorStore: ObservableObject {
         // only runs Codex sees exactly what they saw before.
         services: [liveService, claudeCodeService],
         navigator: AgentNavigationRouter([
-            .codex: CodexDesktopNavigator(targetChecker: liveService)
+            .codex: CodexDesktopNavigator(targetChecker: liveService),
+            // Raises the host rather than reopening the session, which is the
+            // declared boundary rather than a fallback -- see ADR 0004 and
+            // ``ClaudeCodeNavigator``.
+            .claudeCode: ClaudeCodeNavigator(sessions: claudeCodeService)
         ]),
         initialSnapshot: .connecting,
         preferences: .standard,

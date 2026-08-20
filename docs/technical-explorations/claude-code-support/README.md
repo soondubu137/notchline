@@ -412,6 +412,10 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 
 ### Phase 3：降级导航
 
+> **2026-08-19：已实现并合入**（[#31](https://github.com/soondubu137/codex-in-notch/issues/31)）。第 1–3 条按下面的形状落地，实现与实测结论见 [`tech-design.md`](../../tech-design.md) §14.2、[`ClaudeCodeNavigator.swift`](../../../CodexInNotch/CodexInNotch/ClaudeCodeNavigator.swift) 与[私有依赖清单](../../non-public-codex-integration-features.md)。两点与下面的设想不同：走祖先链用的是 `sysctl(KERN_PROC_PID)` 与 `proc_pidpath` 而不是 `ps` 子进程；Ghostty 有完整脚本字典但整份没有 tty，因此归入「只激活应用」而不是需要逐个适配的那一类。**第 4 条已做**：2026-08-19 在 Terminal.app 里的真实 Claude Code 会话上跑通了未决 / 允许 / 拒绝三条路径，弹窗原文与实测数字见 [`tech-design.md`](../../tech-design.md) §14.2。
+
+> **验证这条路径时踩到的坑，留给下一个人。** TCC 认的客户端身份取决于**应用是怎么被启动的**。直接 exec `…/DerivedData/…/CodexInNotch.app/Contents/MacOS/CodexInNotch` 拿到的授权，与经 Launch Services（`open -n -a`）启动同一个 bundle 拿到的**不是同一条记录**：前者授权之后，后者仍然报 `undecided`。这也解释了另外两个现象——那条授权在「系统设置 › 隐私与安全性 › 自动化」里根本不出现，`tccutil reset AppleEvents com.yinfenglu.CodexInNotch` 也匹配不到它。**只有 Launch Services 那条路径才是发布后的真实身份**，验证必须走 `open -n -a … --env … --stderr …`，直接跑二进制测出来的结论不作数。
+
 产品已决定采用降级导航（§8.1），本阶段只验证实现：
 
 1. 用 `ps -o ppid=` 向上走进程祖先链判定宿主类型。实测形态：

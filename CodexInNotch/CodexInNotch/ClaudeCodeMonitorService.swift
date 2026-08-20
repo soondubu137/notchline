@@ -34,7 +34,7 @@ enum AgentSetupError: LocalizedError, Equatable {
 /// the reconstruction could only ever say Running -- a session parked on a
 /// permission prompt when the app started was drawn as working, and telling a
 /// wait from work is precisely what the product is for.
-actor ClaudeCodeMonitorService: AgentMonitoring {
+actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     nonisolated let agent = AgentKind.claudeCode
     nonisolated let stateChangeEvents: AsyncStream<Void>
 
@@ -1010,6 +1010,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring {
     func disconnect() async {
         listener.stop()
         boundPort = nil
+    }
+
+    /// The process running a session, for navigation.
+    ///
+    /// The same list the rows come from, asked again at click time. A session
+    /// that has ended is no longer in it, so the click fails and the store
+    /// corrects the set -- which is the re-confirmation the PRD asks for before
+    /// a click, done against the product's own answer rather than against a pid
+    /// this app wrote down when the row was drawn.
+    func processIdentifier(forThreadID threadID: String) async -> Int32? {
+        await sessions.liveSessions()
+            .first { $0.sessionID == threadID }?
+            .processIdentifier
     }
 
     // MARK: - Internals

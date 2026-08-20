@@ -48,6 +48,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 实现必须处理原子替换与短暂主/备份代际差异；活动 Turn 无论蓝点如何都继续显示，只有终态 Turn 在主文件权威快照中从 unread 集合消失后才移除。不得注入 IPC、修改 `app.asar`、使用 Accessibility/AppleScript，或把 Stop/SessionEnd 当作已读。
 - Developer ID 直接分发在关闭 App Sandbox 时技术上可读取该路径；Mac App Store sandbox 需要用户选择目录与 security-scoped bookmark。无论分发方式如何，文件可读都不等于接口受支持。
 - 长期方向仍是迁移到 Codex 未来公开的 `hasUnreadTurn` 快照与变化通知；出现等价公开能力时必须在同一改动中移除私有适配器与清单行。
+- **Claude Code 一侧没有等价的 deep link。** `claude-cli://open` 与 `claude://code/new` 都只新建会话，实测 `claude://code/sessions/local_…` 被 Desktop 拒绝。因此那一侧实现为宿主唤起（§14.2），并按 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md) 只对该产品降级。每次 Claude Desktop 更新后复查 `/code/sessions/` 路由是否开始接受本地会话 ID；一旦官方支持出现，应迁移到 deep link 并移除 Apple Events 路径。
 
 ### 1.3 Desktop 未读私有只读适配器（已实现）
 
@@ -559,7 +560,11 @@ reset 按**剩余时长**而不是本地日历日计算——`Resets today` 在 
 4. 账户标识变化时先清空额度与今日用量，再读取新账户。
 5. 任一账户用量字段失败都不改变 availability、会话状态或导航。
 
-## 14. 精确导航
+## 14. 导航
+
+点击成功的定义按产品成立，两个产品各有一个导航器，由 `AgentNavigationRouter` 按 `MonitoredSession.agent` 分发；没有注册导航器的产品报自己的名字失败，而不是被交给表里第一个。传过去的是整行而不是一个 thread id——Codex 行是一条 deep link，Claude Code 行是一个进程加一个工作目录，没有一个标识能同时装下两者。
+
+### 14.1 精确导航（Codex）
 
 `CodexDesktopNavigator.open(threadId:)`：
 
@@ -571,6 +576,33 @@ reset 按**剩余时长**而不是本地日历日计算——`Resets today` 在 
 6. 预检或打开失败时保持面板和行，显示非破坏性反馈并触发集合校正。
 
 禁止：首页 fallback 作为成功、使用未文档化 URL、私有 IPC、Accessibility 点击、标题匹配。
+
+### 14.2 宿主唤起（Claude Code）
+
+ADR 0004 的精确导航门槛只约束 Codex：目前没有任何受支持的接口能聚焦一个已经存在的 Claude Code 会话，官方 deep link 一律新建。`ClaudeCodeNavigator.open(_:)` 因此唤起宿主，这是**声明过的能力边界**，不是伪装成成功的 fallback。行上不加任何标记（一行只带一个标记，那个标记是计时），差别只由 `NavigationOutcome` 的那句反馈说出来。
+
+1. 向 `ClaudeCodeMonitorService` 问该 `threadID` 此刻的 pid，答案来自同一份 `claude agents --json` 会话列表。**这就是点击前的重新确认**：已经结束的会话不在列表里，于是点击失败并触发集合校正。pid 不预先写在行上——过期的 pid 不是死链接，而是别人的进程。
+2. 用 `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID)` 的 `e_ppid` 与 `proc_pidpath` 向上走进程祖先链，**从父进程开始**：桌面端托管的 `claude` 自己就跑在一个 bundle 里（`~/Library/Application Support/Claude/claude-code/<version>/claude.app`，`com.anthropic.claude-code`），把会话进程本身算进去会让每个桌面端会话都"自己托管自己"。每个祖先取它最外层的 `.app`，helper 因此归到发它的应用名下。
+3. 祖先里出现 Claude Desktop（`com.anthropic.claudefordesktop`）即为桌面端托管，激活它。取该 bundle id 在链上**最高**的那个祖先，因为最近的那个是 `Claude.app/Contents/Helpers/disclaimer`，而 helper 不是窗口服务器认识的应用。
+4. 否则最近的那个 `.app` 就是宿主终端。取该会话的控制终端设备（与终端已读同一条 `sysctl` + `devname_r` 路径），交给终端**自己的公开脚本字典**选中那个标签页：Terminal.app 的 `tab` 有 `tty`，iTerm2 的 `session` 有 `tty`。报不出 tty 的终端只激活应用——Ghostty 有完整字典却整份里没有 tty，只有标题和工作目录，按之匹配正是 PRD 禁止的猜测。
+5. **Automation 授权不在点击里等人。** 未决时后台发出一次授权请求并当场降级为激活应用；被拒之后系统本身就不再弹窗，本应用也不再问，且不产生任何错误——用户看到的仍然是那句"已唤起 X"。脚本执行有 5 秒上限，卡住的终端不会把「同一时刻只有一次导航」的名额一直占着。
+
+   2026-08-19 在 Terminal.app 里的真实会话上实测（`claude` pid 69273，`/dev/ttys015`）：
+
+   | 时刻 | 观察 |
+   | --- | --- |
+   | 未决，弹窗正在屏幕上 | 第一次点击 **0.02s** 返回 `raisedApplication(host: "Terminal")`——弹窗没有挡住导航，这条设计成立 |
+   | 用户点 Allow | 之后每次点击 0.06–0.14s 返回 `focusedTerminal(host: "Terminal")`；Terminal 拿到前台，且 `/dev/ttys015` 的访问时间在那一刻前进——**被选中的是那一个标签页，不只是那个应用** |
+   | 用户点 Don't Allow | 同一进程内后两次点击 0.03s / 0.09s 返回 `raisedApplication`；再起两个全新进程各点三次，六次全部 0.01–0.02s 返回 `raisedApplication`，**不弹第二次窗、不报错**，Terminal 仍被带到前台 |
+
+   系统弹窗的原文（模板取自 `TCC.framework` 的 `REQUEST_ACCESS_SERVICE_kTCCServiceAppleEvents`，两个 `%@` 填入两侧应用名，末尾接本应用的 `NSAppleEventsUsageDescription`）：
+
+   > “CodexInNotch.app” wants access to control “Terminal.app”. Allowing control will provide access to documents and data in “Terminal.app”, and to perform actions within that app. 点击 Claude Code 会话行时，用它把该会话所在的终端标签页带到前台。
+
+   两点值得记下来。其一，**用途说明确实会显示**，所以那句话是用户看到的文案而不只是一个必填字段。其二，弹窗里的应用名是 **`CodexInNotch.app`**——带 `.app` 后缀、没有空格，因为它取自 bundle 的文件名而不是 `CFBundleName`；产品叫「Codex in Notch」，这句不好看。改它要动 `PRODUCT_NAME`，牵连 scheme、二进制名与 bundle 名，不在本次范围内。
+6. 不读 `~/.claude/sessions/<pid>.json`：它确实带 `entrypoint`，但那是私有 schema，而祖先链是内核公开的事实。该文件只作为二者不一致时的旁证。
+
+禁止：按窗口标题或工作目录匹配标签页、Accessibility 点击、GUI 自动化、连接 `/tmp/cc-socks/*.sock`。
 
 ## 15. 可用性与局部降级
 

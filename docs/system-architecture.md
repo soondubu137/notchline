@@ -73,6 +73,7 @@ flowchart LR
         productRoot["ProductRootView 首次引导"]
         settingsView["AppSettingsView 单面板设置窗口"]
         navigator["CodexDesktopNavigator"]
+        claudeNavigator["ClaudeCodeNavigator 按进程祖先链唤起宿主"]
     end
 
     desktopHooks -->|"执行受信 handler"| hookHelper
@@ -124,7 +125,8 @@ flowchart LR
     monitorStore -->|"Published 状态与用户操作"| notchView
     monitorStore -->|"onboarding 状态"| productRoot
     settingsView -->|"安装 移除 预览 显示器"| monitorStore
-    monitorStore -->|"点击会话"| navigator
+    monitorStore -->|"点击 Codex 行"| navigator
+    monitorStore -->|"点击 Claude Code 行"| claudeNavigator
     navigator -->|"目标预检 thread/list"| liveService
     navigator -->|"codex://threads/{threadId}"| desktopDeepLink
     desktopDeepLink -.->|"Launch Services 定向打开"| desktopProcess
@@ -385,7 +387,9 @@ flowchart LR
 | 在不在人眼前 | `DesktopReadingWatcher` | 同一个公开激活通知维护「那个应用此刻是否持有前台」，再减去三种持有前台但等于没有的状态：`CGDisplayIsAsleep`、`CGSessionCopyCurrentDictionary` 的锁屏与 console、屏保的公开分布式通知。**全应用唯一一条读状态而不是等跃迁的判定**，因而唯一可能撤掉没人读过的行；最小化、另一块显示器与另一个 Space 分辨不了（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)） | [`DesktopReadingWatcher.swift`](../CodexInNotch/CodexInNotch/DesktopReadingWatcher.swift) |
 | 路径集合监听 | `PathSetChangeWatcher` | 监听一个**运行期间会变化**的路径集合并合成单一事件流；`ClaudeCodeSessionRecordWatcher` 与私有已读边界共用它 | [`PathSetChangeWatcher.swift`](../CodexInNotch/CodexInNotch/PathSetChangeWatcher.swift) |
 | 领域模型 | `MonitorSnapshot`、`MonitoredSession`、`MonitorAggregation` | 定义 UI 唯一消费的数据契约与聚合优先级 | [`MonitorDomain.swift`](../CodexInNotch/CodexInNotch/MonitorDomain.swift) |
-| 精确导航 | `CodexDesktopNavigator` | 预检目标并使用官方 deep link 打开同一 Thread | [`CodexDesktopNavigator.swift`](../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift) |
+| 精确导航（Codex） | `CodexDesktopNavigator` | 预检目标并使用官方 deep link 打开同一 Thread | [`CodexDesktopNavigator.swift`](../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift) |
+| 导航分发 | `AgentNavigationRouter` | 按产品把整行交给它自己的导航器；没有注册导航器的产品报自己的名字失败，而不是被交给表里第一个 | [`CodexDesktopNavigator.swift`](../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift) |
+| 宿主唤起（Claude Code） | `ClaudeCodeNavigator`、`ProcessAncestryHostResolver`、`AppleEventsTerminalTabFocuser` | 点击时向 `ClaudeCodeMonitorService` 问该会话此刻的 pid（会话已结束就失败，这就是点击前的重新确认），用 `sysctl(KERN_PROC_PID)` 的 `e_ppid` 与 `proc_pidpath` 向上走进程祖先链判定宿主：祖先里有 Claude Desktop 就激活它，否则最近的那个 `.app` 就是宿主终端。终端能报出 tty 的（Terminal.app、iTerm2）用它自己的公开脚本字典选中该标签页，报不出的只激活应用（见 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)） | [`ClaudeCodeNavigator.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeNavigator.swift) |
 | 窗体 | `OverlayPanelController` | NSPanel 生命周期、目标显示器、顶部吸附、尺寸和动画 | [`OverlayPanelController.swift`](../CodexInNotch/CodexInNotch/OverlayPanelController.swift) |
 | 视图 | `NotchOverlayView` | 只渲染 `MonitorStore`，不解析协议、不读文件；终态行上盖一层只认领次要点击的 `SecondaryClickCatcher`，发出的仍然只是意图（`tech-design.md` §17） | [`NotchOverlayView.swift`](../CodexInNotch/CodexInNotch/NotchOverlayView.swift) |
 | 设置窗口 | `AppSettingsView`、`MacOSWindowColor` | macOS 26 单面板设置：分组卡片自绘，控件全用原生；`Color / macOS Window` 两模式 token（见 `figma-design.md` §8） | [`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift) |

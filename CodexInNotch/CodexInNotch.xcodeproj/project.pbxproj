@@ -399,6 +399,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "\U70b9\U51fb Claude Code \U4f1a\U8bdd\U884c\U65f6\Uff0c\U7528\U5b83\U628a\U8be5\U4f1a\U8bdd\U6240\U5728\U7684\U7ec8\U7aef\U6807\U7b7e\U9875\U5e26\U5230\U524d\U53f0\U3002";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -429,6 +430,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "\U70b9\U51fb Claude Code \U4f1a\U8bdd\U884c\U65f6\Uff0c\U7528\U5b83\U628a\U8be5\U4f1a\U8bdd\U6240\U5728\U7684\U7ec8\U7aef\U6807\U7b7e\U9875\U5e26\U5230\U524d\U53f0\U3002";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

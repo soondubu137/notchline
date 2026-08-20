@@ -18,7 +18,7 @@
 
 这是既有约束 2「无内容可说的区域被移除，不是变暗」第一次被应用到矩阵自身：单产品时它不必成立，因为那个产品就是全部；两个产品之后，为用户从不打开的那一个长期变暗，就成了替别人的工具做广告。约束 1 因此多出第三个通道——**在场表示产品是否打开**，色相与亮度的分工不变。
 
-**本文描述的双产品界面已实现**（矩阵成对与色相、行归属三选项与其设置、页脚三条规则、齿轮移入顶栏），与在场制一同落地。Claude Code 行的内容预览（[#34](https://github.com/soondubu137/codex-in-notch/issues/34)）也已落地——来源是官方 Hook `MessageDisplay`，两个产品的行现在是同样的三行。仍未实现的是导航（[#31](https://github.com/soondubu137/codex-in-notch/issues/31)）。
+**本文描述的双产品界面已实现**（矩阵成对与色相、行归属三选项与其设置、页脚三条规则、齿轮移入顶栏），与在场制一同落地。Claude Code 行的内容预览（[#34](https://github.com/soondubu137/codex-in-notch/issues/34)）也已落地——来源是官方 Hook `MessageDisplay`，两个产品的行现在是同样的三行。导航（[#31](https://github.com/soondubu137/codex-in-notch/issues/31)）也已落地：Claude Code 行按进程祖先链找到宿主并唤起它，行上不加任何标记，差别只在点击后的那句反馈里。
 
 判断每个方案时使用的既有约束，均来自当前已发布的界面：
 
@@ -209,7 +209,7 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 | `Disconnected` 这个词是否保留 | **语义已定**（[`figma-design.md`](figma-design.md) §6.7：没有任何智能体**已连接**）。词本身待定，备选 `No agents`、`Nothing running`，上屏后判断 |
 | 双产品无刘海紧凑标签由哪一状态定宽 | **已被在场制吸收，见下。** 成因仍记录在 [#29](https://github.com/soondubu137/codex-in-notch/issues/29) |
 
-降级导航已确认并接受：Claude Code 行只能唤起 Claude Desktop 或聚焦终端，行内不为此增加任何标记。
+降级导航已确认并接受，且已实现：Claude Code 行只能唤起 Claude Desktop 或聚焦终端，行内不为此增加任何标记。**「聚焦终端」在实现里又分了一层**，也同样不加标记：终端能报出 tty 的（Terminal.app、iTerm2）选中那一个标签页，报不出的（Ghostty 有完整脚本字典却没有 tty，kitty / WezTerm / Alacritty 没有字典）只激活应用。三种结果都由 `NavigationOutcome` 的那句话区分，界面上一个像素都不差——因为一行只带一个标记，而那个标记是计时。
 
 > 未决事项统一跟踪在 GitHub 看板 [soondubu137/projects/2](https://github.com/users/soondubu137/projects/2)，本表只保留设计侧的结论与理由，不重复记录进度。
 

@@ -12508,6 +12508,448 @@ for line in sys.stdin:
         )
     }
 
+    // MARK: - Claude Code navigation
+
+    /// A desktop-hosted row raises Claude Desktop, and names the application
+    /// rather than the helper it reached the CLI through.
+    ///
+    /// The tree is the one measured on 2026-08-19: the session's own executable
+    /// lives inside `claude.app`, its parent is `Claude.app/Contents/Helpers/
+    /// disclaimer`, and only above that is the application itself. Both of the
+    /// first two are traps -- one would make every desktop session look like it
+    /// was hosted by an application called Claude Code, and the other would
+    /// hand the window server a pid it does not know as an application.
+    @Test @MainActor
+    func aDesktopHostedRowRaisesClaudeDesktopItself() async throws {
+        let activator = HostActivatorSpy()
+        let navigator = ClaudeCodeNavigator(
+            sessions: ClaudeCodeSessionLocatorStub(["cc-desktop": 46_868]),
+            hosts: Self.measuredDesktopTree(),
+            activator: activator,
+            tabs: TerminalTabFocuserSpy(answer: .focused),
+            controllingTerminalPath: { _ in nil }
+        )
+
+        let outcome = try await navigator.open(
+            makeSession(agent: .claudeCode, threadID: "cc-desktop")
+        )
+
+        #expect(outcome == .raisedApplication(host: "Claude Desktop"))
+        #expect(activator.raised.map(\.bundleIdentifier) == ["com.anthropic.claudefordesktop"])
+        #expect(activator.raised.map(\.processIdentifier) == [24_014])
+        #expect(
+            outcome.message(forTitle: "Fix the walk")
+                == "已唤起 Claude Desktop，但无法定位到具体会话：Fix the walk"
+        )
+    }
+
+    /// A terminal row selects its own tab where the terminal can name one.
+    ///
+    /// The tab is named by the controlling terminal device and by nothing else.
+    /// Title and working directory are both available from every terminal that
+    /// publishes anything at all, and matching on either is the guessing the
+    /// PRD forbids.
+    @Test @MainActor
+    func aTerminalRowSelectsTheTabItsSessionIsAttachedTo() async throws {
+        let activator = HostActivatorSpy()
+        let focuser = TerminalTabFocuserSpy(answer: .focused)
+        let navigator = ClaudeCodeNavigator(
+            sessions: ClaudeCodeSessionLocatorStub(["cc-tty": 60_817]),
+            hosts: Self.terminalTree(
+                bundleIdentifier: "com.apple.Terminal",
+                displayName: "Terminal"
+            ),
+            activator: activator,
+            tabs: focuser,
+            controllingTerminalPath: { $0 == 60_817 ? "/dev/ttys001" : nil }
+        )
+
+        let outcome = try await navigator.open(
+            makeSession(agent: .claudeCode, threadID: "cc-tty")
+        )
+
+        #expect(outcome == .focusedTerminal(host: "Terminal"))
+        #expect(focuser.requested.map(\.device) == ["/dev/ttys001"])
+        // Focusing the tab already brought the terminal forward, and raising it
+        // a second time would be a second activation the user can see.
+        #expect(activator.raised.isEmpty)
+    }
+
+    /// A terminal that cannot name a tab has its application raised instead.
+    ///
+    /// Measured against Ghostty 1.3.1 on 2026-08-19: it publishes a full
+    /// scripting dictionary -- windows, tabs, terminal surfaces, `select tab`,
+    /// `activate window` -- and no tty anywhere in it. That is the whole
+    /// difference. The row draws no mark for the degrade; the sentence carries
+    /// it.
+    @Test @MainActor
+    func aTerminalThatCannotNameATabHasItsApplicationRaised() async throws {
+        let activator = HostActivatorSpy()
+        let navigator = ClaudeCodeNavigator(
+            sessions: ClaudeCodeSessionLocatorStub(["cc-ghostty": 60_817]),
+            hosts: Self.terminalTree(
+                bundleIdentifier: "com.mitchellh.ghostty",
+                displayName: "Ghostty"
+            ),
+            activator: activator,
+            tabs: TerminalTabFocuserSpy(answer: .unavailable),
+            controllingTerminalPath: { _ in "/dev/ttys001" }
+        )
+
+        let outcome = try await navigator.open(
+            makeSession(agent: .claudeCode, threadID: "cc-ghostty")
+        )
+
+        #expect(outcome == .raisedApplication(host: "Ghostty"))
+        #expect(activator.raised.map(\.processIdentifier) == [665])
+        #expect(
+            outcome.message(forTitle: "Fix the walk")
+                == "已唤起 Ghostty，但无法定位到具体会话：Fix the walk"
+        )
+    }
+
+    /// A session with no controlling terminal is not asked about tabs at all.
+    ///
+    /// `-p` with its output piped has none, and the same nil is what a
+    /// terminal-hosted session answers once its device has gone.
+    @Test @MainActor
+    func aSessionWithNoControllingTerminalSkipsTheTabLookup() async throws {
+        let focuser = TerminalTabFocuserSpy(answer: .focused)
+        let navigator = ClaudeCodeNavigator(
+            sessions: ClaudeCodeSessionLocatorStub(["cc-piped": 60_817]),
+            hosts: Self.terminalTree(
+                bundleIdentifier: "com.apple.Terminal",
+                displayName: "Terminal"
+            ),
+            activator: HostActivatorSpy(),
+            tabs: focuser,
+            controllingTerminalPath: { _ in nil }
+        )
+
+        let outcome = try await navigator.open(
+            makeSession(agent: .claudeCode, threadID: "cc-piped")
+        )
+
+        #expect(outcome == .raisedApplication(host: "Terminal"))
+        #expect(focuser.requested.isEmpty)
+    }
+
+    /// A row whose session has ended opens nothing.
+    ///
+    /// The pid is asked for at click time rather than carried on the row, so
+    /// this is also the re-confirmation the PRD requires before a click. It
+    /// matters more here than on the Codex side: a stale pid is not a dead
+    /// link, it is somebody else's process, and raising whatever now holds that
+    /// number would put an unrelated window in front of the user.
+    @Test @MainActor
+    func aRowWhoseSessionHasEndedRaisesNothing() async {
+        let activator = HostActivatorSpy()
+        let navigator = ClaudeCodeNavigator(
+            sessions: ClaudeCodeSessionLocatorStub([:]),
+            hosts: Self.measuredDesktopTree(),
+            activator: activator,
+            tabs: TerminalTabFocuserSpy(answer: .focused),
+            controllingTerminalPath: { _ in nil }
+        )
+
+        await #expect(throws: ClaudeCodeNavigationError.sessionGone) {
+            try await navigator.open(
+                makeSession(agent: .claudeCode, threadID: "gone")
+            )
+        }
+        #expect(activator.raised.isEmpty)
+    }
+
+    /// A session with no application above it is not guessed at.
+    ///
+    /// A `claude` started by a launch agent, a cron job or a script has no host
+    /// to raise. Nothing here invents one -- the click fails, the panel stays
+    /// open and the row stays visible.
+    @Test @MainActor
+    func aSessionWithNoApplicationAboveItFailsRatherThanGuessing() async {
+        let activator = HostActivatorSpy()
+        let navigator = ClaudeCodeNavigator(
+            sessions: ClaudeCodeSessionLocatorStub(["headless": 4_242]),
+            hosts: ProcessAncestryHostResolver(
+                parent: { [4_242: Int32(4_240), 4_240: Int32(1)][$0] },
+                executablePath: {
+                    [4_242: "/opt/homebrew/bin/claude", 4_240: "/bin/sh"][$0]
+                },
+                bundle: { _ in nil }
+            ),
+            activator: activator,
+            tabs: TerminalTabFocuserSpy(answer: .focused),
+            controllingTerminalPath: { _ in "/dev/ttys009" }
+        )
+
+        await #expect(throws: ClaudeCodeNavigationError.hostUnknown) {
+            try await navigator.open(
+                makeSession(agent: .claudeCode, threadID: "headless")
+            )
+        }
+        #expect(activator.raised.isEmpty)
+    }
+
+    /// The walk starts above the session, because the session is in a bundle
+    /// too.
+    ///
+    /// A desktop-hosted `claude` runs out of
+    /// `~/Library/Application Support/Claude/claude-code/<version>/claude.app`,
+    /// identifier `com.anthropic.claude-code` (measured 2026-08-19). Including
+    /// the session process in the scan would find that bundle for every desktop
+    /// session and report the CLI as its own host.
+    @Test @MainActor
+    func theHostWalkNeverNamesTheSessionsOwnBundle() async {
+        let host = await Self.measuredDesktopTree().host(ofProcess: 46_868)
+        guard case let .desktop(application) = host else {
+            Issue.record("expected a desktop host, got \(String(describing: host))")
+            return
+        }
+        #expect(application.bundleIdentifier == "com.anthropic.claudefordesktop")
+        #expect(application.processIdentifier == 24_014)
+    }
+
+    /// The walk is bounded, so a reused pid cannot turn it into a loop.
+    @Test @MainActor
+    func theHostWalkIsBounded() async {
+        let resolver = ProcessAncestryHostResolver(
+            parent: { $0 == 2 ? 3 : 2 },
+            executablePath: { _ in "/bin/sh" },
+            bundle: { _ in nil }
+        )
+        #expect(await resolver.host(ofProcess: 7) == nil)
+    }
+
+    /// A helper is attributed to the application that ships it.
+    @Test @MainActor
+    func theEnclosingBundleIsTheOutermostOne() {
+        let enclosing = ProcessAncestryHostResolver.enclosingApplicationBundlePath
+        #expect(
+            enclosing("/Applications/Claude.app/Contents/Helpers/disclaimer")
+                == "/Applications/Claude.app"
+        )
+        #expect(
+            enclosing(
+                "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app"
+                    + "/Contents/MacOS/Claude Helper"
+            ) == "/Applications/Claude.app"
+        )
+        #expect(
+            enclosing("/Applications/iTerm.app/Contents/MacOS/iTermServer-3.5.14")
+                == "/Applications/iTerm.app"
+        )
+        #expect(enclosing("/Users/someone/.local/share/claude/versions/2.1.237") == nil)
+        #expect(enclosing("/bin/zsh") == nil)
+        // A directory that merely ends in the four characters is not a bundle.
+        #expect(enclosing("/tmp/.app/thing") == nil)
+    }
+
+    /// Only the hosts that publish a terminal device get a script.
+    ///
+    /// Everything else takes the documented degrade rather than a script that
+    /// would have to match on a title or a working directory to find anything.
+    @Test @MainActor
+    func onlyHostsThatPublishATerminalDeviceAreScripted() {
+        let script = AppleEventsTerminalTabFocuser.script
+        #expect(script("com.apple.Terminal", "/dev/ttys001")?.contains("tty of theTab") == true)
+        #expect(
+            script("com.googlecode.iterm2", "/dev/ttys001")?.contains("tty of theSession")
+                == true
+        )
+        for unscripted in [
+            "com.mitchellh.ghostty",
+            "net.kovidgoyal.kitty",
+            "com.github.wez.wezterm",
+            "org.alacritty",
+            "com.microsoft.VSCode"
+        ] {
+            #expect(script(unscripted, "/dev/ttys001") == nil)
+        }
+        // The device reaches the script through two layers of C, so it is
+        // escaped rather than trusted to keep its shape.
+        #expect(
+            AppleEventsTerminalTabFocuser.appleScriptLiteral(#"/dev/"od\d"#)
+                == #""/dev/\"od\\d""#
+        )
+    }
+
+    /// The first click asks for Automation once and does not wait for the answer.
+    ///
+    /// Letting the system prompt come up inside the click would freeze
+    /// navigation for as long as it sits unanswered -- the store allows one
+    /// navigation in flight -- so consent is requested behind the click and the
+    /// click degrades to raising the terminal. A burst of clicks asks once.
+    @Test @MainActor
+    func anUndecidedHostIsAskedOnceAndTheClickDoesNotWait() async {
+        let asked = CountingBox()
+        let ran = CountingBox()
+        let focuser = AppleEventsTerminalTabFocuser(
+            timeout: 60,
+            permission: { _ in .undecided },
+            requestConsent: { _ in asked.increment() },
+            execute: { _ in
+                ran.increment()
+                return true
+            }
+        )
+        let terminal = HostApplication(
+            bundleIdentifier: "com.apple.Terminal",
+            displayName: "Terminal",
+            processIdentifier: 877
+        )
+
+        for _ in 0 ..< 3 {
+            #expect(
+                await focuser.focusTab(withTerminalDevice: "/dev/ttys001", in: terminal)
+                    == .unavailable
+            )
+        }
+
+        #expect(asked.value == 1)
+        #expect(ran.value == 0)
+    }
+
+    /// A refusal never errors, never runs a script and is never asked again.
+    ///
+    /// Once TCC holds a denial the permission call answers it without
+    /// prompting, so the only thing left to prove is that this app does not
+    /// turn that answer into an error, a second prompt or a failed click.
+    @Test @MainActor
+    func arefusedHostDegradesSilentlyAndIsNeverAskedAgain() async {
+        let asked = CountingBox()
+        let ran = CountingBox()
+        let focuser = AppleEventsTerminalTabFocuser(
+            timeout: 60,
+            permission: { _ in .refused },
+            requestConsent: { _ in asked.increment() },
+            execute: { _ in
+                ran.increment()
+                return true
+            }
+        )
+        let terminal = HostApplication(
+            bundleIdentifier: "com.apple.Terminal",
+            displayName: "Terminal",
+            processIdentifier: 877
+        )
+
+        for _ in 0 ..< 3 {
+            #expect(
+                await focuser.focusTab(withTerminalDevice: "/dev/ttys001", in: terminal)
+                    == .unavailable
+            )
+        }
+        #expect(asked.value == 0)
+        #expect(ran.value == 0)
+
+        // And the row still opens: the click raises the terminal and says so.
+        let activator = HostActivatorSpy()
+        let navigator = ClaudeCodeNavigator(
+            sessions: ClaudeCodeSessionLocatorStub(["cc": 60_817]),
+            hosts: Self.terminalTree(
+                bundleIdentifier: "com.apple.Terminal",
+                displayName: "Terminal"
+            ),
+            activator: activator,
+            tabs: focuser,
+            controllingTerminalPath: { _ in "/dev/ttys001" }
+        )
+        let outcome = try? await navigator.open(
+            makeSession(agent: .claudeCode, threadID: "cc")
+        )
+        #expect(outcome == .raisedApplication(host: "Terminal"))
+    }
+
+    /// A terminal that never answers does not hold navigation open.
+    ///
+    /// The store allows one navigation at a time, so a script that never
+    /// returns would not merely lose this click -- it would disable the row
+    /// click for the rest of the run.
+    @Test @MainActor
+    func aWedgedTerminalGivesTheClickBack() async {
+        let focuser = AppleEventsTerminalTabFocuser(
+            timeout: 0.05,
+            permission: { _ in .granted },
+            requestConsent: { _ in },
+            execute: { _ in
+                Thread.sleep(forTimeInterval: 5)
+                return true
+            }
+        )
+        let started = Date()
+        let answer = await focuser.focusTab(
+            withTerminalDevice: "/dev/ttys001",
+            in: HostApplication(
+                bundleIdentifier: "com.apple.Terminal",
+                displayName: "Terminal",
+                processIdentifier: 877
+            )
+        )
+        #expect(answer == .unavailable)
+        #expect(Date().timeIntervalSince(started) < 2)
+    }
+
+    /// The tree measured on this machine on 2026-08-19 for a desktop-hosted
+    /// session: `claude` inside its own bundle, a helper of Claude Desktop's,
+    /// then Claude Desktop.
+    private static func measuredDesktopTree() -> ProcessAncestryHostResolver {
+        ProcessAncestryHostResolver(
+            parent: {
+                [46_868: Int32(46_867), 46_867: Int32(24_014), 24_014: Int32(1)][$0]
+            },
+            executablePath: {
+                [
+                    46_868: "/Users/someone/Library/Application Support/Claude"
+                        + "/claude-code/2.1.234/claude.app/Contents/MacOS/claude",
+                    46_867: "/Applications/Claude.app/Contents/Helpers/disclaimer",
+                    24_014: "/Applications/Claude.app/Contents/MacOS/Claude"
+                ][$0]
+            },
+            bundle: {
+                [
+                    "/Users/someone/Library/Application Support/Claude"
+                        + "/claude-code/2.1.234/claude.app": ApplicationBundle(
+                            identifier: "com.anthropic.claude-code",
+                            displayName: "Claude Code"
+                        ),
+                    "/Applications/Claude.app": ApplicationBundle(
+                        identifier: "com.anthropic.claudefordesktop",
+                        displayName: "Claude"
+                    )
+                ][$0]
+            }
+        )
+    }
+
+    /// The tree measured on this machine on 2026-08-19 for a terminal session,
+    /// with the emulator swapped for whichever one the test is about.
+    private static func terminalTree(
+        bundleIdentifier: String,
+        displayName: String
+    ) -> ProcessAncestryHostResolver {
+        ProcessAncestryHostResolver(
+            parent: {
+                [60_817: Int32(880), 880: Int32(877), 877: Int32(665), 665: Int32(1)][$0]
+            },
+            executablePath: {
+                [
+                    60_817: "/Users/someone/.local/share/claude/versions/2.1.237",
+                    880: "/bin/zsh",
+                    877: "/usr/bin/login",
+                    665: "/Applications/Host.app/Contents/MacOS/host"
+                ][$0]
+            },
+            bundle: {
+                $0 == "/Applications/Host.app"
+                    ? ApplicationBundle(
+                        identifier: bundleIdentifier,
+                        displayName: displayName
+                    )
+                    : nil
+            }
+        )
+    }
+
     /// A fast product's rows are on screen while a slow one is still being
     /// asked.
     ///
@@ -13859,6 +14301,69 @@ private actor HoldableMonitoringStub: AgentMonitoring {
     nonisolated func setContentPreviewsEnabled(_ isEnabled: Bool) {}
     func discardCollectedPreviews() async {}
     func disconnect() async {}
+}
+
+private struct ClaudeCodeSessionLocatorStub: ClaudeCodeSessionLocating {
+    private let processIdentifiers: [String: Int32]
+
+    init(_ processIdentifiers: [String: Int32]) {
+        self.processIdentifiers = processIdentifiers
+    }
+
+    func processIdentifier(forThreadID threadID: String) async -> Int32? {
+        processIdentifiers[threadID]
+    }
+}
+
+@MainActor
+private final class HostActivatorSpy: HostApplicationActivating {
+    private let succeeds: Bool
+    private(set) var raised: [HostApplication] = []
+
+    init(succeeds: Bool = true) {
+        self.succeeds = succeeds
+    }
+
+    func activate(_ application: HostApplication) async -> Bool {
+        raised.append(application)
+        return succeeds
+    }
+}
+
+@MainActor
+private final class TerminalTabFocuserSpy: TerminalTabFocusing {
+    private let answer: TerminalTabFocus
+    private(set) var requested: [(device: String, host: String)] = []
+
+    init(answer: TerminalTabFocus) {
+        self.answer = answer
+    }
+
+    func focusTab(
+        withTerminalDevice device: String,
+        in application: HostApplication
+    ) async -> TerminalTabFocus {
+        requested.append((device, application.bundleIdentifier))
+        return answer
+    }
+}
+
+/// Counts calls made from whichever thread the work landed on.
+private final class CountingBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
 }
 
 @MainActor
