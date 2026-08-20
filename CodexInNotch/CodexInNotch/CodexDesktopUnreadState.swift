@@ -105,10 +105,24 @@ struct TerminalUnreadMembershipGate: Sendable {
             isHidden: false,
             canHideByWaiting: false
         )
+        // Whether a *newer* Turn has ended than the one this entry describes,
+        // which is the only thing allowed to bring a hidden row back -- see
+        // below. Read before the boundary is folded in, because folding it in
+        // is what makes the two equal.
+        //
+        // A new Turn normally passes through a running status, and the guard
+        // above drops the entry outright when it does. This covers the case
+        // where no refresh saw it: a Turn that started and ended between two
+        // looks is still a Turn the user has not read.
+        let endedAgain = terminalBoundaryAt > entry.terminalObservedAt
         entry.terminalObservedAt = max(
             entry.terminalObservedAt,
             terminalBoundaryAt
         )
+        if endedAgain {
+            entry.isHidden = false
+            entry.hasObservedUnread = false
+        }
         let isCurrentlyUnread = unreadState.unreadThreadIDs.contains(threadID)
         entry.canHideByWaiting = unreadState.source.isAuthoritative
             && !isCurrentlyUnread
@@ -118,9 +132,18 @@ struct TerminalUnreadMembershipGate: Sendable {
             return !entry.isHidden
         }
 
+        // Hiding is final for the Turn it was decided for. It used to be
+        // provisional -- a row reported unread again came back -- and that made
+        // the row a live readout of whatever the sources happened to say rather
+        // than a record of a decision. Every source behind that decision is
+        // assembled from files written by another application at times it
+        // chooses, so a moment where they disagree is ordinary rather than
+        // exceptional, and each one flashed a retired row back onto the notch
+        // (CC-024). Nothing is lost by refusing: within one finished Turn there
+        // is no way to become unread again, and a row that starts running has
+        // dropped its entry above before it can ask.
         if isCurrentlyUnread {
             entry.hasObservedUnread = true
-            entry.isHidden = false
         } else if entry.hasObservedUnread
                     || now.timeIntervalSince(entry.terminalObservedAt)
                         >= settlingInterval {

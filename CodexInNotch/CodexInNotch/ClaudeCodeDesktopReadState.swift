@@ -78,6 +78,17 @@ struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
     /// to nothing, and a session that joins to nothing is not one of these
     /// rows.
     private let cliSessionIDsByDesktopID: [String: String]
+    /// The same join pointed back again: Claude Desktop's own id for a session
+    /// the hooks name. Derived rather than stored separately, so the two can
+    /// never disagree.
+    ///
+    /// It answers the one question the forward join cannot, and only that one:
+    /// *is the name on screen a different session's name?* A record Claude
+    /// Desktop has not written yet joins to nothing forwards -- which is the
+    /// ordinary state for a second or so after the user navigates -- and a
+    /// session whose own record names a different id is plainly not the one on
+    /// screen, whatever that pending record turns out to say.
+    private let desktopIDsByCLISessionID: [String: String]
     let source: Source
     let diagnostic: String?
     /// The session Claude Desktop most recently put on screen, if it has
@@ -101,6 +112,20 @@ struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
     ) {
         self.entries = entries
         self.cliSessionIDsByDesktopID = cliSessionIDsByDesktopID
+        // A session two Desktop ids claim cannot say which one is its own, so
+        // it answers nothing rather than picking -- the same rule the forward
+        // join applies to an ambiguous Desktop id, pointed the other way.
+        var desktopIDs: [String: String] = [:]
+        var ambiguous: Set<String> = []
+        for (desktopID, cliSessionID) in cliSessionIDsByDesktopID {
+            if let existing = desktopIDs[cliSessionID], existing != desktopID {
+                ambiguous.insert(cliSessionID)
+                continue
+            }
+            desktopIDs[cliSessionID] = desktopID
+        }
+        for cliSessionID in ambiguous { desktopIDs.removeValue(forKey: cliSessionID) }
+        self.desktopIDsByCLISessionID = desktopIDs
         self.source = source
         self.diagnostic = diagnostic
         // Ties broken by id so the answer cannot flap between two records that
@@ -143,6 +168,13 @@ struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
     /// `desktopSessionID`, when the records can say.
     nonisolated func cliSessionID(forDesktopSessionID desktopSessionID: String) -> String? {
         cliSessionIDsByDesktopID[desktopSessionID]
+    }
+
+    /// What Claude Desktop calls the session the hooks call `sessionID`, when
+    /// the records say. `nil` for a session Desktop has no record of, and for
+    /// one whose record has stopped carrying its own id.
+    nonisolated func desktopSessionID(forSession sessionID: String) -> String? {
+        desktopIDsByCLISessionID[sessionID]
     }
 
     /// Whether the user has read what ended at `terminalBoundaryAt`.

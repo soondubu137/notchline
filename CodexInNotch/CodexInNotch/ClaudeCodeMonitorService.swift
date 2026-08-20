@@ -767,21 +767,65 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         ///
         /// Not the negation of the above, and the difference is the whole
         /// point: a composer is not a session, so navigating to one displaces a
-        /// session without anybody having moved on from reading it. Only both
-        /// sources naming something else counts.
+        /// session without anybody having moved on from reading it. That is
+        /// what ``DesktopDisplayedSession/nothing`` answers, and it answers it
+        /// here as it does above.
+        ///
+        /// **The log answers this one on its own, and the records only stand in
+        /// when it cannot.** Everywhere else the log is a veto over the records
+        /// and never a source, because the direction it is trusted in can only
+        /// *keep* a row. This is the one question where the same asymmetry
+        /// pointed the same way produces a hole instead, and the hole is a
+        /// visible bug: the two sources say the same thing at different times.
+        /// Claude Desktop stamps `lastFocusedAt` and logs the navigation in the
+        /// same instant, then writes the record about a second later (measured
+        /// on this machine, 2026-08-20: 1.03s between the stamp and the write
+        /// landing). Requiring the *records* to already name something else
+        /// meant that for that second the session the user had just left was
+        /// neither on screen -- the log vetoed it -- nor replaced, because the
+        /// newest stamp was still its own. Every read route failed, the row was
+        /// reported unread again, and the finished row came back and lit the
+        /// matrix until the record landed (CC-024).
+        ///
+        /// Believing the log here is not a new verdict, only an earlier one: it
+        /// is the same session the records name a second later. And it stays a
+        /// claim about what is *on screen* rather than about what was read --
+        /// ``movedOnFrom(_:)`` is what turns it into reading, and it does that
+        /// only for a session already seen on screen with its Turn over.
         func hasReplacedItOnScreen(_ sessionID: String) -> Bool {
-            guard let stamped = readState.mostRecentlyDisplayedSessionID,
-                  stamped != sessionID else {
-                return false
-            }
             switch displayedSession {
             case .unknown:
-                return true
+                guard let stamped = readState.mostRecentlyDisplayedSessionID else {
+                    return false
+                }
+                return stamped != sessionID
             case .nothing:
                 return false
             case let .session(desktopSessionID):
-                return readState.cliSessionID(forDesktopSessionID: desktopSessionID)
-                    != sessionID
+                if let onScreen = readState
+                    .cliSessionID(forDesktopSessionID: desktopSessionID) {
+                    return onScreen != sessionID
+                }
+                // The name on screen joins to nothing, and two very different
+                // things look like that. A record Claude Desktop has not
+                // written yet is the case this branch exists for. A record
+                // that has stopped carrying its own id is the other, and
+                // retiring a row on a name nothing verified is exactly what
+                // reading the log as a veto is meant to prevent.
+                //
+                // This session's own record separates them without waiting for
+                // anything: a session whose record names a *different* Desktop
+                // id is not the one on screen, whatever the pending record
+                // turns out to say. A session whose record names none cannot be
+                // told apart from the name on screen at all, so the records
+                // answer alone, exactly as they did before the log was read.
+                guard let own = readState.desktopSessionID(forSession: sessionID) else {
+                    guard let stamped = readState.mostRecentlyDisplayedSessionID else {
+                        return false
+                    }
+                    return stamped != sessionID
+                }
+                return own != desktopSessionID
             }
         }
 

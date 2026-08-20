@@ -2982,7 +2982,7 @@ struct CodexInNotchTests {
     /// once. On a freshly built tree it failed twice in a full-suite run and
     /// passed on the immediate re-run of the same tree, which is the shape of a
     /// source that was not armed yet rather than of a signal that was late
-    /// (CC-023).
+    /// (CC-024).
     @Test @MainActor
     func desktopUnreadStateDirectoryWatcherObservesAtomicReplacement() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -7643,7 +7643,7 @@ for line in sys.stdin:
     /// `EAGAIN` from a client that had connected but not yet written, could not
     /// tell it from the end of a message, and dropped the preview for good: a
     /// Turn whose text never appeared and never would, on exactly the busy
-    /// machine that pulls the two steps apart (CC-023). The receive timeout was
+    /// machine that pulls the two steps apart (CC-024). The receive timeout was
     /// meant to cover this and could not -- it bounds nothing on a non-blocking
     /// descriptor.
     ///
@@ -7838,7 +7838,7 @@ for line in sys.stdin:
     /// it costs a green run nothing. A budget trimmed to an idle machine costs
     /// something real instead: there is no CI here, so the local suite is the
     /// only gate, and a gate that fails once in a while teaches you to re-run
-    /// it rather than read it (CC-023).
+    /// it rather than read it (CC-024).
     ///
     /// Waits that assert *silence* are the exception and pass a much shorter
     /// budget of their own -- there the whole budget is spent on every green
@@ -7922,7 +7922,7 @@ for line in sys.stdin:
     /// its condition can say what it was waiting for. Running out quietly and
     /// proceeding anyway is the failure mode this exists to prevent: it
     /// surfaces as whatever the next assertion happens to check, which is how a
-    /// timing budget gets read as a broken feature (CC-023).
+    /// timing budget gets read as a broken feature (CC-024).
     private func holds(
         within budget: Duration = CodexInNotchTests.waitBudget,
         _ condition: () async -> Bool
@@ -7998,7 +7998,7 @@ for line in sys.stdin:
     /// Reported as well as recorded, because claiming a preview is destructive:
     /// a caller that gives up here and consumes anyway deletes the event it was
     /// waiting for, and then fails on a missing preview rather than on the wait
-    /// that ran out (CC-023).
+    /// that ran out (CC-024).
     @discardableResult
     private func waitForRetainedPreviews(
         _ channel: HookPreviewChannel,
@@ -9779,6 +9779,123 @@ for line in sys.stdin:
         try harness.appendDesktopFocusStatement(desktopID: "d-2")
         let started = await harness.service.fetchSnapshot()
         #expect(started.sessions.map(\.threadID) == ["s-1"])
+    }
+
+    /// Switching sessions does not flash the row of the one left behind back
+    /// onto the notch.
+    ///
+    /// The bug, as the user meets it: switching between two *finished* Claude
+    /// Desktop sessions lights the Claude Code matrix for about a second, like
+    /// a Turn completing, then puts it out again. Nothing completed. A row that
+    /// had already been retired came back and left.
+    ///
+    /// It happens because the two sources behind "which session is on screen"
+    /// say the same thing at different times. Measured on this machine,
+    /// 2026-08-20, switching to a session at 11:14:41.910:
+    ///
+    /// | time | what happened |
+    /// | --- | --- |
+    /// | 11:14:41.910 | Desktop stamps `lastFocusedAt` and logs the navigation |
+    /// | 11:14:42.257 | the CLI it spawns writes its session record, which wakes a refresh |
+    /// | 11:14:42.938 | Desktop's own record finally lands on disk |
+    ///
+    /// For that second the log named the new session while the newest stamp
+    /// was still the old one's, so the old session was neither on screen -- the
+    /// log vetoed it -- nor replaced, because `hasReplacedItOnScreen` asked the
+    /// records for that and the records had not moved. Every read route failed
+    /// at once and the retired row came back (CC-024).
+    @Test @MainActor
+    func switchingSessionsDoesNotFlashTheRowOfTheOneLeftBehind() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        // The Turn ends while the user is watching it. Desktop stamped the
+        // focus when they navigated *in*, which is before the Turn's last
+        // moment, so its own records call this row unread for the rest of its
+        // life -- the ordinary case, not a corner of one.
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 99,
+            desktopID: "d-1"
+        )
+        try harness.appendDesktopFocusStatement(desktopID: "d-1")
+        harness.desktopIsInFrontOfTheUser = true
+
+        let retired = await harness.service.fetchSnapshot()
+        #expect(retired.sessions.isEmpty, "the answer was in front of the user")
+
+        // The user clicks another finished session. Desktop logs it and spawns
+        // its CLI, which is the edge that wakes this refresh; its own record
+        // has not been rewritten yet.
+        harness.live = [
+            harness.session(id: "s-1", cwd: cwd),
+            harness.session(id: "s-2", cwd: cwd)
+        ]
+        try harness.appendDesktopFocusStatement(desktopID: "d-2")
+        let midSwitch = await harness.service.fetchSnapshot()
+        #expect(
+            midSwitch.sessions.isEmpty,
+            "a retired row came back while Claude Desktop caught up: the flash"
+        )
+
+        // Desktop's record lands. Nothing moves, which is the whole point.
+        try harness.writeDesktopRecord(
+            session: "s-2",
+            lastFocusedAt: 102,
+            desktopID: "d-2"
+        )
+        let settled = await harness.service.fetchSnapshot()
+        #expect(settled.sessions.isEmpty)
+    }
+
+    /// Moving on from a session is read off the log, not waited for in the
+    /// records.
+    ///
+    /// The other half of the same gap, on a row that had not been retired yet:
+    /// the user leaves a finished session for another one, and the row stays
+    /// listed for as long as Claude Desktop takes to write the record --
+    /// roughly a second, and bounded by nothing this app controls.
+    ///
+    /// Everywhere else the log is a veto over the records and never a source,
+    /// because that direction can only *keep* a row. This is the one question
+    /// where the same rule leaves a hole rather than a safe margin, and
+    /// believing the log here is not a new verdict: it is the one the records
+    /// hand down a second later.
+    @Test @MainActor
+    func movingOnIsReadOffTheLogWithoutWaitingForTheRecord() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 99,
+            desktopID: "d-1"
+        )
+        try harness.appendDesktopFocusStatement(desktopID: "d-1")
+
+        // On screen, but nobody is in front of it, so the row is still listed
+        // and still unread. This is what earns the membership the route below
+        // needs: seen on screen with its Turn already over.
+        let listed = await harness.service.fetchSnapshot()
+        #expect(listed.sessions.map(\.threadID) == ["s-1"])
+
+        // The user goes to another session. Only the log says so yet.
+        try harness.appendDesktopFocusStatement(desktopID: "d-2")
+        let movedOn = await harness.service.fetchSnapshot()
+        #expect(
+            movedOn.sessions.isEmpty,
+            "moving on stands whether or not Desktop has written the record"
+        )
     }
 
     /// A composer in front of the user is not the answer behind it.
@@ -14919,6 +15036,65 @@ extension CodexInNotchTests {
         )
         #expect(!hidden)
         #expect(gate.nextDeadline(now: start.addingTimeInterval(2.1)) == nil)
+    }
+
+    /// Hiding is a decision, not a live readout.
+    ///
+    /// The gate used to un-hide a row the moment it read as unread again, which
+    /// made every listed row a running report of whatever the sources happened
+    /// to be saying. They are files another application writes when it likes,
+    /// so a moment where they disagree is ordinary -- and each one put a
+    /// retired row back on the notch for as long as it lasted (CC-024). Within
+    /// one finished Turn there is no way to become unread again, so refusing
+    /// costs nothing.
+    @Test
+    func terminalGateDoesNotBringBackARowItHasAlreadyHidden() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
+        let boundary = Date(timeIntervalSince1970: 1_000)
+        let unread = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: ["thread"],
+            source: .current
+        )
+        let read = DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+
+        let listed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: boundary, unreadState: unread, now: boundary
+        )
+        #expect(listed)
+
+        let hidden = !gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: boundary, unreadState: read,
+            now: boundary.addingTimeInterval(0.1)
+        )
+        #expect(hidden)
+
+        // The sources disagree for a moment and the same Turn reads as unread
+        // again. That is the flash, and it must not happen.
+        let flashed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: boundary, unreadState: unread,
+            now: boundary.addingTimeInterval(0.2)
+        )
+        #expect(!flashed, "a hidden row stays hidden for the Turn it was hidden for")
+        #expect(
+            gate.nextDeadline(now: boundary.addingTimeInterval(0.2)) == nil,
+            "and it goes on asking for nothing"
+        )
+
+        // A newer Turn is the one thing that brings it back. Normally the
+        // running status between them drops the entry outright; this is the
+        // case where no refresh saw that happen.
+        let again = boundary.addingTimeInterval(10)
+        let relisted = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: again, unreadState: unread, now: again
+        )
+        #expect(relisted, "a Turn nobody has read is a Turn to show")
     }
 
     /// An unreadable state cannot hide anything, but it can become readable.
