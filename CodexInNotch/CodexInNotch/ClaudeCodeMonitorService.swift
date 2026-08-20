@@ -897,19 +897,21 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 && hasReplacedItOnScreen(sessionID)
         }
 
-        /// When the user was last at this session's own terminal.
+        /// What this session's own terminal says about the user being at it.
         ///
         /// Read once per row per refresh rather than lazily inside the switch,
-        /// so a row's verdict and its gate entry come from one reading. Only a
+        /// so a row's verdict and its gate entry come from one reading -- and
+        /// so the two halves of that reading, the gesture and who was holding
+        /// the front when it was taken, describe the same instant. Only a
         /// session with a controlling terminal answers at all.
-        var lastGestureByThreadID: [String: Date] = [:]
+        var terminalReadingByThreadID: [String: ControllingTerminalReading] = [:]
         for row in rows {
             guard let pid = processIdentifierByThreadID[row.threadID],
-                  let at = await terminalGestures
-                    .lastUserGesture(forProcessIdentifier: pid) else {
+                  let reading = await terminalGestures
+                    .reading(forProcessIdentifier: pid) else {
                 continue
             }
-            lastGestureByThreadID[row.threadID] = at
+            terminalReadingByThreadID[row.threadID] = reading
         }
 
         /// Whether the user was at this session's own terminal after it
@@ -932,9 +934,22 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         /// session Claude Desktop hosts has none -- Desktop runs the CLI as
         /// `--output-format stream-json` over pipes, with no terminal UI at
         /// all, which is also why those sessions report no `status` (#41).
+        ///
+        /// **Two facts, and the second is not decoration.** The gesture says
+        /// the terminal handed this session something after its answer landed;
+        /// the front says that terminal's application was the one the user was
+        /// in when it did. Requiring both is what stops the pointer crossing an
+        /// unfocused terminal window on a second display from retiring a row --
+        /// Claude Code turns on any-event mouse tracking, so that crossing is
+        /// bytes into the pty and a gesture indistinguishable from a keystroke
+        /// by the time it is read. ``ControllingTerminalGestureReporting``
+        /// carries the measurements.
         func wereAtItsTerminal(_ threadID: String, since boundary: Date) -> Bool {
-            guard let at = lastGestureByThreadID[threadID] else { return false }
-            return at >= boundary
+            guard let reading = terminalReadingByThreadID[threadID],
+                  reading.hostIsInFrontOfTheUser else {
+                return false
+            }
+            return reading.lastGesture >= boundary
         }
 
         for row in rows {
@@ -964,7 +979,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             }
             // Whether a reading that cannot be a generation behind is what
             // decides this row -- see where the two snapshots are built.
-            let terminalCanSpeak = lastGestureByThreadID[row.threadID] != nil
+            // A session whose device could be read *can* be asked, whatever
+            // the answer was. A terminal nobody is in front of answers "not
+            // read" rather than "cannot say", so the row belongs in the gate
+            // and gets looked at again a second later.
+            let terminalCanSpeak = terminalReadingByThreadID[row.threadID] != nil
             let terminalSaysRead = wereAtItsTerminal(row.threadID, since: boundary)
             switch state {
             case .unknown:

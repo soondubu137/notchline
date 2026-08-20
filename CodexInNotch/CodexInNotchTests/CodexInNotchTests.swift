@@ -10403,6 +10403,60 @@ for line in sys.stdin:
         #expect(read.sessions.isEmpty)
     }
 
+    /// A gesture at a terminal the user is not in front of retires nothing.
+    ///
+    /// The regression this pairing exists for. Claude Code turns on any-event
+    /// mouse tracking (`ESC [ ? 1003 h`, measured against `2.1.238`), so a
+    /// terminal reports every pointer motion across its window -- no button, no
+    /// keystroke, and **no focus**. On a second display a pointer merely
+    /// crossing an unfocused terminal moved the access time, and the row for a
+    /// Turn nobody had looked at went away within the second.
+    ///
+    /// The access time cannot say which bytes moved it; by the time it is read
+    /// the reason is gone. So the gesture is required to coincide with that
+    /// terminal's application holding the front, which a pointer crossing an
+    /// unfocused window does not and a keystroke or `ESC [ I` necessarily does.
+    ///
+    /// The row must also keep asking. A terminal nobody is in front of answers
+    /// "not read", not "cannot say", so it stays in the gate and books the
+    /// one-second re-check -- otherwise coming back to it would clear nothing
+    /// until some unrelated refresh happened along.
+    @Test @MainActor
+    func aGestureAtATerminalNobodyIsInFrontOfRetiresNothing() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "cli", cwd: cwd, pid: 4_242)]
+
+        // After the Turn ended, and by every earlier reading of this route,
+        // "the user came back". They did not: the terminal is on the other
+        // display and its application has never held the front.
+        harness.setTerminalGesture(
+            Date(timeIntervalSince1970: 102),
+            forPID: 4_242,
+            hostIsInFront: false
+        )
+        let unread = await harness.service.fetchSnapshot()
+        #expect(unread.sessions.count == 1)
+        #expect(try #require(unread.sessions.first).status == .completed)
+        let waiting = await harness.service.nextRefreshDeadline()
+        #expect((waiting?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+
+        // The same instant, once that terminal is the application the user is
+        // in. Nothing about the gesture changed.
+        harness.setTerminalGesture(
+            Date(timeIntervalSince1970: 102),
+            forPID: 4_242,
+            hostIsInFront: true
+        )
+        let read = await harness.service.fetchSnapshot()
+        #expect(read.sessions.isEmpty)
+    }
+
     /// A remote-controlled session is read wherever the user actually reads
     /// it, including in the terminal it is running in.
     ///
@@ -10504,19 +10558,26 @@ for line in sys.stdin:
         #expect(try #require(snapshot.sessions.first).status == .running)
     }
 
-    /// Reading a terminal moves its access time, and writing to it does not.
+    /// A terminal's access time records that the session read the device, not
+    /// that anybody typed into it.
     ///
-    /// The one fact the whole terminal route rests on, pinned against the real
-    /// kernel rather than against a stub. A pty is opened here directly, so
-    /// this asserts the mechanism (`ESC [ I`, a keystroke, anything the
-    /// terminal hands the session moves the access time) without needing a
-    /// terminal emulator or a window.
+    /// The fact the whole terminal route rests on, pinned against the real
+    /// kernel rather than against a stub, and **stated as what it is rather
+    /// than as what it was assumed to be**. This used to assert only the two
+    /// halves the route was designed around -- the terminal handing the session
+    /// something moves the access time, the session writing its answer out does
+    /// not -- and both of those are still here and still true.
     ///
-    /// The second half matters as much as the first: the CLI writes its answer
-    /// out about twice a second for as long as a Turn runs, and reading the
-    /// *modification* time would report every one of those as the user.
+    /// The third assertion is the one that overturned the reasoning above it
+    /// (measured 2026-08-20): a `read` that returns **no bytes at all** moves
+    /// the access time just as far. So the reading is evidence that the session
+    /// looked at its terminal, and only circumstantially evidence that a person
+    /// put something there -- which is why the verdict in
+    /// `ClaudeCodeMonitorService` pairs it with who is holding the front.
+    /// Asserting only the first two halves is what let mouse reporting retire
+    /// rows nobody had read.
     @Test
-    func aTerminalsAccessTimeMovesWhenItIsReadFromAndNotWhenItIsWrittenTo() throws {
+    func aTerminalsAccessTimeRecordsBeingReadFromRatherThanBeingTypedInto() throws {
         let master = posix_openpt(O_RDWR | O_NOCTTY)
         try #require(master >= 0)
         defer { close(master) }
@@ -10557,6 +10618,18 @@ for line in sys.stdin:
             ControllingTerminalGestureReader.systemLastAccess(ofDevice: device)
         )
         #expect(after > before)
+
+        // And a read that finds nothing there moves it exactly as far. Nothing
+        // arrived; the session merely looked. This is the assertion that says
+        // the access time cannot be read as "a person did something".
+        Thread.sleep(forTimeInterval: 1.1)
+        #expect(fcntl(slave, F_SETFL, O_NONBLOCK) == 0)
+        #expect(read(slave, &buffer, 64) < 0)
+        #expect(errno == EAGAIN)
+        let afterAnEmptyRead = try #require(
+            ControllingTerminalGestureReader.systemLastAccess(ofDevice: device)
+        )
+        #expect(afterAnEmptyRead > after)
     }
 
     /// A process with no controlling terminal answers nothing, not "not
@@ -10579,6 +10652,71 @@ for line in sys.stdin:
             ControllingTerminalGestureReader
                 .systemControllingTerminalPath(forProcessIdentifier: -1) == nil
         )
+    }
+
+    /// A session's terminal belongs to whichever application spawned it, found
+    /// by walking the process tree rather than by naming emulators.
+    ///
+    /// The chain on a plain terminal session is `claude` → the login shell →
+    /// `login` → the emulator, so the question "is this session's terminal the
+    /// application in front of the user" is answerable as "is the frontmost
+    /// process one of this session's ancestors". No list of terminals, no
+    /// bundle identifier, and no judgement about which ancestor counts as the
+    /// application.
+    ///
+    /// The three ways it answers no are what keep the row: nothing above this
+    /// session is the frontmost process, the chain reaches `launchd` -- which
+    /// is every multiplexer and every `ssh` session -- and the front means
+    /// nothing because the screen is asleep, locked, or switched away.
+    @Test
+    func aTerminalIsInFrontOnlyWhenItsOwnApplicationIs() async throws {
+        let chain: [Int32: Int32] = [900: 880, 880: 877, 877: 665, 665: 1]
+        func reader(
+            frontmost: Int32?,
+            screenIsAvailable: Bool = true
+        ) -> ControllingTerminalGestureReader {
+            ControllingTerminalGestureReader(
+                controllingTerminalPath: { _ in "/dev/ttys999" },
+                lastAccess: { _ in Date(timeIntervalSince1970: 500) },
+                parentProcessIdentifier: { chain[$0] },
+                frontmostProcessIdentifier: { frontmost },
+                screenIsAvailable: { screenIsAvailable }
+            )
+        }
+
+        // The emulator four hops up.
+        let inFront = await reader(frontmost: 665).reading(forProcessIdentifier: 900)
+        #expect(try #require(inFront).hostIsInFrontOfTheUser)
+        // The gesture is reported either way -- only the second half changes.
+        #expect(
+            try #require(inFront).lastGesture == Date(timeIntervalSince1970: 500)
+        )
+
+        // Some other application entirely, and the shape a multiplexer or an
+        // `ssh` session has: the walk reaches `launchd` without meeting it.
+        for front in [Int32(4_242), 1] {
+            let elsewhere = await reader(frontmost: front)
+                .reading(forProcessIdentifier: 900)
+            #expect(try #require(elsewhere).hostIsInFrontOfTheUser == false)
+        }
+
+        // Holding the front behind a locked or sleeping screen is not holding
+        // it in front of anybody -- and locking is itself a way for a surface
+        // to be sent `ESC [ O`.
+        let asleep = await reader(frontmost: 665, screenIsAvailable: false)
+            .reading(forProcessIdentifier: 900)
+        #expect(try #require(asleep).hostIsInFrontOfTheUser == false)
+
+        // A session with no controlling terminal is still not asked at all,
+        // whoever is in front.
+        let noDevice = ControllingTerminalGestureReader(
+            controllingTerminalPath: { _ in nil },
+            lastAccess: { _ in Date(timeIntervalSince1970: 500) },
+            parentProcessIdentifier: { chain[$0] },
+            frontmostProcessIdentifier: { 665 },
+            screenIsAvailable: { true }
+        )
+        #expect(await noDevice.reading(forProcessIdentifier: 900) == nil)
     }
 
     /// Archiving a session in Claude Desktop retires its row like reading it.
@@ -14260,9 +14398,34 @@ private final class ClaudeCodeHarness {
     /// runs as. A pid with no entry is a session with no controlling terminal
     /// at all -- which is what every session in this suite is unless a test
     /// says otherwise, so nothing here answers with the developer's own tty.
+    ///
+    /// Setting through here says the terminal's application was *also* in front
+    /// of the user, because that is what "the user was at that terminal" means.
+    /// The half where it was not is the bug this pairing exists for, and it is
+    /// written explicitly by ``setTerminalGesture(_:forPID:hostIsInFront:)``.
     var lastTerminalGestureByPID: [Int32: Date] {
-        get { terminalStub.lastGestureByPID }
-        set { terminalStub.lastGestureByPID = newValue }
+        get { terminalStub.readingByPID.mapValues(\.lastGesture) }
+        set {
+            terminalStub.readingByPID = newValue.mapValues {
+                ControllingTerminalReading(
+                    lastGesture: $0,
+                    hostIsInFrontOfTheUser: true
+                )
+            }
+        }
+    }
+
+    /// A gesture at a terminal whose application may or may not be the one the
+    /// user is in.
+    func setTerminalGesture(
+        _ at: Date,
+        forPID pid: Int32,
+        hostIsInFront: Bool
+    ) {
+        terminalStub.readingByPID[pid] = ControllingTerminalReading(
+            lastGesture: at,
+            hostIsInFrontOfTheUser: hostIsInFront
+        )
     }
 
     /// When Claude Desktop last came to the front, as this harness's service
@@ -14671,10 +14834,12 @@ private final class StubDesktopActivation: DesktopActivationReporting, @unchecke
 /// controlling terminal -- the reading that keeps a row listed.
 private final class StubControllingTerminalGestures:
     ControllingTerminalGestureReporting, @unchecked Sendable {
-    var lastGestureByPID: [Int32: Date] = [:]
+    var readingByPID: [Int32: ControllingTerminalReading] = [:]
 
-    func lastUserGesture(forProcessIdentifier pid: Int32) async -> Date? {
-        lastGestureByPID[pid]
+    func reading(
+        forProcessIdentifier pid: Int32
+    ) async -> ControllingTerminalReading? {
+        readingByPID[pid]
     }
 }
 

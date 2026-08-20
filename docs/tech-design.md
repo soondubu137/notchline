@@ -173,17 +173,20 @@ setFocusedSession(e){ log.info(`[CCD] LocalSessions.setFocusedSession: sessionId
 
 **它没有自己的边沿。** 只有它能看见的那个跃迁（会话让位给输入框）只会保留行，而列在通知栏里的终态行本来每秒复查一次；能撤掉行的跃迁都伴随 Desktop 写记录或 hook 到达，那些边沿已经存在。为它单独挂 watcher 等于为 Claude Desktop 记的每一行 oauth 与 git diff 计时买一次唤醒。
 
-#### 1.5.1 终端会话：控制终端的访问时间（已实现）
+#### 1.5.1 终端会话：控制终端的访问时间，加上那个终端在不在人眼前（已实现）
 
 Desktop 那棵树对终端会话什么都不说，而 Claude Code 自己没有已读概念。这一半因此换了个对象问：**该会话的控制终端**。
 
-`ControllingTerminalGestureReader` 三步，全部是公开 BSD 接口，不打开任何文件内容：
+`ControllingTerminalGestureReader` 一次读出**两个事实**，全部是公开 BSD 接口加一条公开的 workspace 通知，不打开任何文件内容：
 
 1. `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid)` → `kp_eproc.e_tdev`，该进程的控制终端设备号（`-1` 即没有控制终端）。pid 来自公开命令 `claude agents --json`，与 `~/.claude/sessions/<pid>.json` 的命名用的是同一个。
 2. `devname_r(dev, S_IFCHR, …)` → `ttysNNN`，拼成 `/dev/ttysNNN`。**回查一次**：`stat` 出来必须仍是字符设备且 `st_rdev` 等于第 1 步那个设备号——`devname_r` 答的是一份按设备号缓存的名字表，名字被复用会把别的终端的动作算到这个会话头上。
-3. `stat` 的 `st_atimespec`，即**最后一次有东西从这个设备被读走**的时刻。
+3. `stat` 的 `st_atimespec`——**手势**这一半。
+4. 同一个 `sysctl` 的 `kp_eproc.e_ppid` 逐级向上，看**前台应用的 pid 是不是这个会话的某一级祖先**——**在不在人眼前**这一半。链路在本机实测是 `claude` → `-/bin/zsh` → `/usr/bin/login` → `Ghostty`，最多走 16 级。前台 pid 由 `NSWorkspace.didActivateApplicationNotification` 维护（与 `DesktopReadingWatcher` 同一条通知，理由也一样：这一问发生在刷新所在的 executor 上，AppKit 不保证在那里作答），并复用 `DesktopReadingWatcher.systemScreenIsAvailable`——显示器睡着、锁屏或切走了用户，持有前台不算在谁眼前，而**锁屏本身就是一种让界面收到 `ESC [ O` 的方式**。
 
-判定在编排器里（`ClaudeCodeMonitorService.rowsStillWorthShowing`），是 Desktop 那四条之外的第五条：**访问时间 ≥ 该 Turn 的终止时刻即已读**，比较左边与前四条同源（Turn 自己的终止时刻）。答 `nil`（没有控制终端 / 读不出）的会话完全不进 gate。
+第 4 步不需要任何终端名单、bundle id 或"哪一级才算应用"的判断：**能走到前台进程的链路就是它托管的链路**，是谁都一样。它和导航那条路径共用同一份 `systemParentProcessIdentifier`（`ProcessAncestryHostResolver.systemParent` 现在只是它的转发）。
+
+判定在编排器里（`ClaudeCodeMonitorService.rowsStillWorthShowing`），是 Desktop 那四条之外的第五条：**访问时间 ≥ 该 Turn 的终止时刻，且该终端的应用此刻持有前台，才算已读**。比较左边与前四条同源（Turn 自己的终止时刻）。答 `nil`（没有控制终端 / 读不出）的会话完全不进 gate；**答"没人在它前面"的会话进 gate**——那是"未读"而不是"问不出来"，因此它继续按每秒复查，回到那个终端的下一刻就会清掉。
 
 **它是前四条的平级，不是它们的兜底**，尽管写成兜底看上去更自然（Desktop 托管的会话有记录，终端起的没有，两边本该正好分完）。**远程控制**是不能那样写的原因：同一个会话同时摆在终端和 Claude Desktop 面前，而两边由不同的手势读，只有一边写进本应用看得见的地方——在终端里读它，Desktop 的记录一个字节都不动。写成兜底，这样一行会为一个永远不会前进的 `lastFocusedAt` 无限期等下去。
 
@@ -191,24 +194,34 @@ Desktop 那棵树对终端会话什么都不说，而 Claude Code 自己没有�
 
 （实测 2026-08-19：一个开着远程控制的 CLI 会话在 `claude-code-sessions` 树里**根本没有记录**——整棵 Claude Application Support 树里没有任何文件提到它的 `sessionId` 或它的 `bridgeSessionId`——所以今天它答 `unknown`，走不到「两边都有」这个分支。那是某一个 Desktop 版本的事实，不是产品该依赖的性质。）
 
-实测（2026-08-19，Ghostty + CLI `2.1.236`）：
+实测（2026-08-19 起，2026-08-20 在 Ghostty + CLI `2.1.238` 上重测并补测）：
 
 | 事情 | 访问时间 | 修改时间 |
 | --- | --- | --- |
 | 敲键 | 前进 | — |
 | 那个界面拿到前台（`ESC [ I`） | 前进 | — |
 | 那个界面失去前台（`ESC [ O`） | 前进 | — |
+| **指针划过那个界面**（`ESC [ ? 1003 h` 全动作鼠标上报） | **前进，且不需要前台** | — |
 | **隐藏的界面**经历两轮完整前台切换 | **0 次变化** | — |
 | CLI 渲染输出 | 不变 | 每秒约 2 次 |
-| **一整轮跑完**（提交 → 答案 → Stop hook → `OSC 777` 通知） | **只在提交那一下前进**，此后 67 秒不变 | 全程在动 |
+| **一整轮跑完**（提交 → 答案 → Stop hook → 通知与响铃） | **只在提交那一下前进**，此后 110 秒不变 | 全程在动 |
+| 会话空转（无人碰终端） | 150 秒 0 次变化 | — |
+| **一次返回 `EAGAIN`、一个字节都没读到的 `read`** | **前进** | — |
+| 对同一设备 `write` / `open` / `close` / `tcgetattr` / `ioctl` / `select` | 不变 | `write` 前进 |
 
-第四行是这条路径能成立的全部理由，第五行是必须读访问时间而不是修改时间的全部理由。焦点上报是 Claude Code 自己开的（`ESC [ ? 1004 h` 在发布二进制里，每次离开 alternate screen 写一次）。
+**倒数第二行推翻了这条路径原来的立论。** 访问时间记的不是"终端递给了会话什么"，而是"会话对这个设备发起过一次读"——空读和读到一个按键一样远。这个区别在"只有终端递东西才会让 CLI 去读"的时候看不出来，而下面这条让它看出来了。
 
-**没有边沿，只有采样。** 设备访问时间由内核推进，不产生任何文件系统事件，因此它在 gate 已经为等待中的行预约的 `terminalUnreadRecheckInterval`（1 秒）上采样，那一秒同时是行离开的上界。代价是每个列出的终态终端行每秒一次 `sysctl` 加一次 `stat`；没有行在等的时候一次也不问。
+**第四行是这次的 bug。** Claude Code 自己打开全动作鼠标上报——`ESC [ ? 1000 h`、`1002 h`、**`1003 h`**、`1006 h`，启动时写一次，会话中途再写一次（`2.1.238` 抓包）——于是终端为**指针在窗口上的每一次移动**都写字节进 pty，不需要按键、不需要按下、**也不需要前台**。macOS 把指针移动投递给指针底下的东西，与哪个应用是活跃应用无关（[ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md) 否掉 `CGEventSource` 鼠标移动那一段说的正是这件事）。双屏下指针**只是路过**另一块屏上那个没有焦点的终端窗口，访问时间就前进，一行没人看过的终态在一秒内消失。事后无从分辨：访问时间是一个标量，读到它的时候它为什么动已经没了。
 
-**退化方向。** 不实现焦点上报的终端（或没开 `focus-events` 的 multiplexer）只剩按键，行等的是下一次敲键而不是回到 tab；没有控制终端的会话保持既有行为。**唯一朝提前移除倒的**是失去前台那一下不由用户产生——某个应用自己跳到前台，屏幕上那个界面就收到一次 `ESC [ O`。
+因此判定改成手势与前台**同时成立**。这是把一个状态并进一个跃迁，方向与 `DesktopReadingReporting` 那次反转相同，但这里只做 `AND`，**只可能让这条路径更窄**：指针划过没有焦点的窗口不再算数；某个应用抢前台造成的 `ESC [ O` 不再算数（采样那一刻持有前台的是它，不是这个终端）；敲键与 `ESC [ I` 照旧算数，因为这两件事本来就要求那个终端在前台。**它仍然首先是一个跃迁**——终端摆在空椅子前面不产生任何手势，光有状态永远不够。
 
-单测按两层：`aTerminalsAccessTimeMovesWhenItIsReadFromAndNotWhenItIsWrittenTo` 直接开一个 pty 对着真内核验上表的第一行与最后一行；行为层的四个用例走注入的替身，因此不依赖跑测试时开发者在哪个终端里。
+第五行是这条路径能按会话而不是按应用成立的全部理由，第六行是必须读访问时间而不是修改时间的全部理由。焦点上报也是 Claude Code 自己开的（`ESC [ ? 1004 h` 在发布二进制里，每次离开 alternate screen 写一次）。
+
+**没有边沿，只有采样。** 设备访问时间由内核推进，不产生任何文件系统事件，因此它在 gate 已经为等待中的行预约的 `terminalUnreadRecheckInterval`（1 秒）上采样，那一秒同时是行离开的上界。代价是每个列出的终态终端行每秒一次 `sysctl` 加一次 `stat`，加上前台成立时最多 16 次 `sysctl` 的向上走链；没有行在等的时候一次也不问。
+
+**退化方向。** 不实现焦点上报的终端（或没开 `focus-events` 的 multiplexer）只剩按键，行等的是下一次敲键而不是回到 tab；`tmux`、`screen`、`ssh` 里的会话向上走链只会走到 `launchd`，它的宿主永远不持有前台，于是那样一行改为等下一次提交——**这是这次修改新增的一处退化**，方向是保留而不是提前移除；没有控制终端的会话保持既有行为。**仍然朝提前移除倒的**有两处：指针在**确实持有前台**的终端窗口上移动算已读（与 `DesktopReadingReporting` 对"窗口摆在空椅子前"的取舍相同，而且更窄——它还要求有人动了指针）；以及前台是在手势之后约一秒才采样的，用户在 `ESC [ O` 与 workspace 通知之间那几毫秒离开终端，会被读成没有离开。
+
+单测按两层：`aTerminalsAccessTimeRecordsBeingReadFromRatherThanBeingTypedInto` 直接开一个 pty 对着真内核验上表的第一、六、九、十行——**空读那一条是这次补上的，它才是这个读数真正的语义**；`aTerminalIsInFrontOnlyWhenItsOwnApplicationIs` 用注入的进程链验第 4 步的四种答法（走到前台进程、走到别的应用、走到 `launchd`、屏幕不可用）。行为层的五个用例走注入的替身，因此不依赖跑测试时开发者在哪个终端里，其中 `aGestureAtATerminalNobodyIsInFrontOfRetiresNothing` 钉的就是这次的 bug。
 
 ## 2. 设计约束
 

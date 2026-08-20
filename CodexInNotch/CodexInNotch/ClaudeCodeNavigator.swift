@@ -177,21 +177,14 @@ struct ProcessAncestryHostResolver: ClaudeCodeHostResolving {
         return nil
     }
 
-    /// A process's parent, read the same way ``ControllingTerminalGestureReader``
-    /// reads its controlling terminal.
+    /// A process's parent.
+    ///
+    /// Read by ``ControllingTerminalGestureReader``, which needs the same walk
+    /// to answer whether a session's terminal is the application in front of
+    /// the user. It used to be a second copy of that `sysctl` here.
     nonisolated static func systemParent(ofProcess pid: Int32) -> Int32? {
-        guard pid > 0 else { return nil }
-        var process = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        let read = mib.withUnsafeMutableBufferPointer { buffer in
-            sysctl(buffer.baseAddress, UInt32(buffer.count), &process, &size, nil, 0)
-        }
-        // A process that has gone answers a zero-length record rather than an
-        // error, so the size is checked as well as the return value.
-        guard read == 0, size >= MemoryLayout<kinfo_proc>.stride else { return nil }
-        let parent = process.kp_eproc.e_ppid
-        return parent > 0 ? parent : nil
+        ControllingTerminalGestureReader
+            .systemParentProcessIdentifier(forProcessIdentifier: pid)
     }
 
     /// What a process is running, by absolute path.
