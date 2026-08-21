@@ -150,6 +150,7 @@ sequenceDiagram
     participant store as MonitorStore
     participant service as LiveCodexMonitorService
     participant hooks as HookEventRepository
+    participant registrar as CodexHookRegistrar
     participant appServer as CodexAppServerClient
     participant project as Project metadata repository
     participant unread as Unread state repository
@@ -157,9 +158,10 @@ sequenceDiagram
 
     loop 由 watcher 事件、到期唤醒或 60 秒心跳触发
         store->>service: fetchSnapshot
-        service->>hooks: consumeEvents
-        hooks-->>service: post-launch exact Turn evidence and configuration trust
-        service->>service: discard all pre-cutoff lifecycle events
+        service->>hooks: drainDeliveredEvents
+        hooks-->>service: post-launch exact Turn evidence
+        service->>registrar: registration
+        registrar-->>service: configuration trust cached until hooks.json changes
         service->>service: bind only post-launch evidence to current Desktop PID
         service->>appServer: connect and initialize if needed
         service->>project: snapshot
@@ -207,9 +209,9 @@ sequenceDiagram
 
 **心跳只是兜底，不承担任何延迟指标。** 它存在的唯一理由是本仓库已知的两类静默失效：`DirectoryChangeWatcher` 在 `open(O_EVTONLY)` 失败或目录被替换后不会重新挂载（CR-018），而到期唤醒同样可能因为任务被取消或 deadline 算错而无声丢失。任何"更新太慢"的问题都不得通过缩短心跳来解决。
 
-安装健康度同理：`installationState` 是三次文件读取，回答的却是一个只在本应用写配置、用户修复或外部编辑时才变化的问题。它改为缓存，由本应用自身的 install/uninstall/upgrade 与用户 Recheck 直接失效，另有 60 秒上限兜住外部编辑。**轮询配置本来就无法回答真正会出问题的那一维**——Codex 按定义内容哈希记录信任，扫描通过并不意味着 hook 会被执行（见第 8 节）。
+安装健康度同理：注册完整度回答的是一个只在本应用写 `hooks.json`、用户主动 Recheck 或该文件在我们脚下被改动时才变化的问题，因此它同样不按节拍重算。`CodexHookRegistrar.registration()` 缓存上一次读数，前两者直接失效缓存，外部编辑则在读取时比对 watcher 的 `changeCount` 认出来——**没有兜底的上限节拍**（`tech-design.md` §442）。**轮询配置本来就无法回答真正会出问题的那一维**——Codex 按定义内容哈希记录信任，扫描通过并不意味着 hook 会被执行（见第 8 节）。
 
-事件消费**每轮只发生一次**。`consumeEvents` 会删除文件并推进 Turn 状态，因此它只出现在快照路径上；`hookSetupStatus` 改为只读持久化信任标记，集成健康度随 `MonitorSnapshot.setupStatus` 一并返回，上层不再二次询问。
+事件消费**每轮只发生一次**。`drainDeliveredEvents` 把 inbox 整体取走并推进 Turn 状态，取走是原子的，因此第二次读取只会把第一次本该被告知的证据据为己有；它只出现在快照路径上。`hookSetupStatus` 改为只读持久化信任标记，集成健康度随 `MonitorSnapshot.setupStatus` 一并返回，上层不再二次询问。
 
 ### 2.1 启动边界：不做现状同步
 
