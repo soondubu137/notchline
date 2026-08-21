@@ -460,7 +460,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
                 params: .object([
                     "clientInfo": .object([
                         "name": .string("codex-in-notch"),
-                        "title": .string("Codex in Notch"),
+                        "title": .string("Notchline"),
                         "version": .string("0.1.0")
                     ]),
                     "capabilities": .object([

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="120" viewBox="0 0 640 120">
+  <g transform="scale(1.318681)">
+  <rect x="0" y="0" width="27" height="27" rx="2" fill="#6CB4FF"></rect>
+  <rect x="32" y="0" width="27" height="27" rx="2" fill="#6CB4FF"></rect>
+  <rect x="0" y="32" width="27" height="27" rx="2" fill="#6CB4FF"></rect>
+  <rect x="64" y="32" width="27" height="27" rx="2" fill="#D97757"></rect>
+  <rect x="32" y="64" width="27" height="27" rx="2" fill="#D97757"></rect>
+  <rect x="64" y="64" width="27" height="27" rx="2" fill="#D97757"></rect>
+  </g>
+  <text x="150" y="120" font-family="'Bell MT', Bell, Georgia, serif" font-weight="500" font-size="163" fill="#1d1f20">Notchline</text>
+</svg>

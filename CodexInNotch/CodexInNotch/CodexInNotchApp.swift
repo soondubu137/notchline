@@ -90,7 +90,7 @@ struct CodexInNotchApp: App {
         //
         // There is exactly one launch that does want it, and that is the
         // first: onboarding has to appear without being sent for.
-        Window("Codex in Notch", id: Self.mainWindowID) {
+        Window("Notchline", id: Self.mainWindowID) {
             ProductRootView()
                 .environmentObject(store)
         }

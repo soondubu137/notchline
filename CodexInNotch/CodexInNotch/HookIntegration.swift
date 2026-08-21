@@ -239,7 +239,7 @@ nonisolated enum AgentHookHelper {
     nonisolated static func script(socketPath: String) -> String {
         """
         #!/bin/sh
-        # Codex in Notch — hands one hook payload to the running app.
+        # Notchline — hands one hook payload to the running app.
         #
         # Says nothing on any stream and always exits 0. Both are required: the
         # agent prints a line in the user's session for every hook that fails or

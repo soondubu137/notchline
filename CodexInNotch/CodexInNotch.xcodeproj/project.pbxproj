@@ -399,7 +399,9 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Codex in Notch uses this to bring the terminal tab running a Claude Code session to the front when you click its row.";
+				INFOPLIST_KEY_CFBundleDisplayName = Notchline;
+				INFOPLIST_KEY_CFBundleName = Notchline;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Notchline uses this to bring the terminal tab running a Claude Code session to the front when you click its row.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -430,7 +432,9 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Codex in Notch uses this to bring the terminal tab running a Claude Code session to the front when you click its row.";
+				INFOPLIST_KEY_CFBundleDisplayName = Notchline;
+				INFOPLIST_KEY_CFBundleName = Notchline;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Notchline uses this to bring the terminal tab running a Claude Code session to the front when you click its row.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

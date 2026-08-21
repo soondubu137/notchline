@@ -1439,7 +1439,7 @@ final class MonitorStore: ObservableObject {
             agents: Array(latestByAgent.values),
             sessions: []
         )
-        lastIntegrationMessage = "Cleared the Codex in Notch session list; no Codex sessions were deleted."
+        lastIntegrationMessage = "Cleared the Notchline session list; no Codex sessions were deleted."
 
         for service in services {
             await service.clearSessions()
@@ -1579,7 +1579,7 @@ final class MonitorStore: ObservableObject {
             status = .setupRequired
             hookSetupStatus = .notInstalled
             integrationSwitchIsOn = false
-            lastIntegrationMessage = "The hooks managed by Codex in Notch have been removed."
+            lastIntegrationMessage = "The hooks managed by Notchline have been removed."
             return true
         } catch {
             lastIntegrationMessage = "Could not remove the integration: \(error.localizedDescription)"
@@ -1967,7 +1967,7 @@ final class MonitorStore: ObservableObject {
                 MonitoredSession(
                     threadID: "preview-input",
                     turnID: "turn-input",
-                    projectName: "codex-in-notch",
+                    projectName: "notchline",
                     title: "Confirm the final overlay interaction details",
                     preview: "Please choose whether the panel should remain open after a click.",
                     status: .inputNeeded,
@@ -1976,7 +1976,7 @@ final class MonitorStore: ObservableObject {
                 MonitoredSession(
                     threadID: "preview-running",
                     turnID: "turn-running",
-                    projectName: "codex-in-notch",
+                    projectName: "notchline",
                     title: "Implement the Codex status event adapter",
                     preview: "Checking event order, status mapping, and reconnect behavior…",
                     status: .running,
