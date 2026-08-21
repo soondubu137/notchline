@@ -259,7 +259,7 @@ enum MonitorAvailability: Equatable, Sendable {
     /// No longer the collapsed status: that one is decided by presence as well
     /// (``AgentSnapshot/isConnected``), so availability alone can no longer
     /// name it. `.ready` maps to `.connected` for coherence only —
-    /// ``emptyListMessage(for:)`` answers "No active turns" for that case
+    /// ``emptyListMessage(for:)`` answers "No active sessions" for that case
     /// before ever reaching here.
     var status: MonitorStatus {
         switch self {
@@ -303,7 +303,7 @@ enum MonitorAvailability: Equatable, Sendable {
         case .setupRequired:
             "Set up integration"
         case .ready:
-            "No active turns"
+            "No active sessions"
         case .connecting, .updateAgent, .unsupportedVersion, .disconnected:
             // The same sentence the panel header shows, so the two cannot drift.
             status.displayName
@@ -563,10 +563,12 @@ struct AgentSnapshot: Equatable, Sendable {
 /// `dual-agent-design.md` §4. A per-row matrix is still not offered: it puts a
 /// second mark on a row that is meant to carry one.
 enum ProductAttributionStyle: String, CaseIterable, Codable, Sendable, Identifiable {
-    /// The caption is prefixed `Codex ·` in that product's lit colour. Default:
-    /// the only option that adds nothing, and the only one where hue reinforces
-    /// the signal rather than being all of it — remove the colour and the words
-    /// still say it.
+    /// The caption is prefixed `Codex ·` in that product's lit colour. The
+    /// prefix alone takes the colour; the Project after it stays the ordinary
+    /// caption grey, because the prefix is the whole of what the colour is
+    /// about. Default: the only option that adds nothing, and the only one
+    /// where hue reinforces the signal rather than being all of it — remove the
+    /// colour and the words still say it.
     case nameAndColour
     /// The same words in the ordinary caption grey. Geometry is identical, so
     /// switching moves nothing, and it depends on colour not at all.
@@ -600,6 +602,17 @@ enum ProductAttributionStyle: String, CaseIterable, Codable, Sendable, Identifia
     /// entirely, so both leave the caption as the bare project name.
     var namesProductInCaption: Bool {
         self == .nameAndColour || self == .nameOnly
+    }
+
+    /// Whether the product name on the caption is drawn in that product's
+    /// colour.
+    ///
+    /// The name and nothing else: the Project beside it keeps the ordinary
+    /// caption grey under every style. The colour answers "which product", and
+    /// the Project is this row's own subject rather than a second saying of
+    /// that — colouring it too made the whole line read as the mark.
+    var tintsProductName: Bool {
+        self == .nameAndColour
     }
 }
 

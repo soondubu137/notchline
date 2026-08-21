@@ -99,9 +99,13 @@ struct NotchlineApp: App {
             store.hasCompletedOnboarding ? .suppressed : .presented
         )
 
+        // The tracker hands this scene's window to ``SettingsWindowPresenter``,
+        // which is what makes `⌘,` land in front of the user on the display
+        // they are working on rather than wherever the window was last closed.
         Settings {
             AppSettingsView()
                 .environmentObject(store)
+                .background(SettingsWindowTracker())
         }
         .windowResizability(.contentSize)
     }

@@ -287,7 +287,11 @@ private struct SettingsButton: View {
 
     var body: some View {
         Button {
-            openSettings()
+            // Not `openSettings()` on its own: the click arrives while another
+            // app is active, so the window it orders comes up behind that app,
+            // and on the display it was last closed on. See
+            // ``SettingsWindowPresenter``.
+            SettingsWindowPresenter.present { openSettings() }
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 13, weight: .regular))
@@ -609,8 +613,7 @@ private struct SessionRowContent: View {
                             text: preview,
                             font: .systemFont(ofSize: 13, weight: .light),
                             color: NotchPalette.labelDrawingColor,
-                            lineHeight: 18,
-                            sweeps: sweepsBody
+                            lineHeight: 18
                         )
                     }
                 }
@@ -649,12 +652,6 @@ private struct SessionRowContent: View {
     /// while two products are connected and there is something to tell apart.
     private var drawsRail: Bool {
         store.showsProductAttribution && store.productAttribution == .colourBar
-    }
-
-    /// A session sweeps its body until it finishes. Hovering no longer changes
-    /// anything about the indicator, so the row's own state is the only input.
-    private var sweepsBody: Bool {
-        session.status.keepsTiming && !store.reduceMotion
     }
 
     private var backgroundColor: Color {
@@ -740,9 +737,8 @@ private struct SessionRowCaption: View {
                     .fixedSize()
             }
 
-            Text(captionText)
+            caption
                 .font(.system(size: 11, weight: .light))
-                .foregroundStyle(captionColor)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
@@ -752,21 +748,31 @@ private struct SessionRowCaption: View {
         .frame(height: showsAttribution && style == .badge ? 16 : 14)
     }
 
-    private var captionText: String {
+    /// One `Text`, two runs: the product prefix and the Project.
+    ///
+    /// Concatenated rather than laid out side by side so the line still
+    /// truncates as one string — the tail that goes is the Project's, which is
+    /// what the attribution was always spending.
+    private var caption: Text {
+        let project = Text(session.projectName)
+            .foregroundStyle(NotchPalette.label)
         guard showsAttribution, style.namesProductInCaption else {
-            return session.projectName
+            return project
         }
-        return "\(session.agent.displayName) · \(session.projectName)"
+        return Text("\(session.agent.displayName) · ")
+            .foregroundStyle(prefixColor) + project
     }
 
-    /// Only `nameAndColour` tints, and it tints the whole line rather than the
-    /// prefix alone — the Project belongs to that product too, and a two-colour
-    /// caption would be a third encoding of the same fact.
-    private var captionColor: Color {
-        guard showsAttribution, style == .nameAndColour else {
-            return NotchPalette.label
-        }
-        return NotchPalette.ink(for: session.agent).on
+    /// Only `nameAndColour` tints, and it tints the product name alone.
+    ///
+    /// The prefix is the whole of what the colour is about: it says which
+    /// product, and the Project beside it is the row's own subject rather than
+    /// a second statement of that. Tinting the line entire made the Project
+    /// read as part of the mark and cost the caption its ordinary grey.
+    private var prefixColor: Color {
+        style.tintsProductName
+            ? NotchPalette.ink(for: session.agent).on
+            : NotchPalette.label
     }
 }
 

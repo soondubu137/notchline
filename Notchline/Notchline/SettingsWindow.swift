@@ -687,6 +687,178 @@ struct SettingsWindowChrome: NSViewRepresentable {
     }
 }
 
+// MARK: - Presentation
+
+/// Puts the Settings window in front of the user, on the display the user is
+/// working on.
+///
+/// The `Settings` scene does neither on its own, and for this app both matter.
+/// Its only permanent surface is in the notch, so the request almost always
+/// arrives while some *other* app is active: SwiftUI orders the window front
+/// within this app and this app stays behind, which from the outside is a gear
+/// that was clicked and did nothing. And the window reopens on whichever screen
+/// it was last closed on — on a second display, that is behind the user rather
+/// than in front of them.
+///
+/// So: activate, and place the window on the screen that has the focus. Placing
+/// is only done when that is a *different* screen. A window the user has moved
+/// somewhere on the screen they are already on has been positioned, and moving
+/// it back to the middle would be this app overruling that.
+@MainActor
+enum SettingsWindowPresenter {
+    private static weak var window: NSWindow?
+    private static var visibility: NSKeyValueObservation?
+
+    /// The screen a request named, held until there is a window to put on it.
+    ///
+    /// The first `openSettings()` of a launch has no window yet — the scene
+    /// builds one — so the answer has to outlive the call that knew it.
+    private static var pendingScreen: NSScreen?
+
+    /// Opens Settings frontmost, on the screen that has the focus.
+    static func present(using openSettings: () -> Void) {
+        pendingScreen = focusedScreen()
+        openSettings()
+        DispatchQueue.main.async { reveal() }
+    }
+
+    /// Takes the window the `Settings` scene has just built.
+    ///
+    /// Also the hook for every *other* way this window opens — `⌘,` and the
+    /// app menu go through SwiftUI's own item, which this app does not see.
+    /// Those are caught by watching the window go visible instead.
+    static func track(_ window: NSWindow) {
+        guard window !== Self.window else { return }
+        Self.window = window
+        // A window left on another Space comes to this one rather than taking
+        // the user to it: what was asked for is Settings here, not a trip to
+        // wherever it was last closed.
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        visibility = window.observe(\.isVisible, options: [.old, .new]) { _, change in
+            guard change.oldValue == false, change.newValue == true else { return }
+            // KVO is delivered on the thread that ordered the window, which is
+            // the main one. The screen is read *here*, synchronously, because
+            // ordering runs before the window takes key: a moment later the
+            // focused window is this one and the answer is its own screen —
+            // the question restated rather than answered. The move itself waits
+            // for the next turn, so nothing re-enters AppKit's ordering.
+            MainActor.assumeIsolated {
+                pendingScreen = pendingScreen ?? focusedScreen()
+                DispatchQueue.main.async { reveal() }
+            }
+        }
+        reveal()
+    }
+
+    /// The screen holding the window with the keyboard focus.
+    ///
+    /// Read before this app activates and before the window is ordered, for the
+    /// reason above. The pointer is the fallback rather than the rule: the gear
+    /// that opens this window lives in the notch, so the pointer is on the
+    /// built-in display whenever it is used, and it would answer "the notch's
+    /// screen" every time no matter where the user was working.
+    static func focusedScreen() -> NSScreen? {
+        if let focused = NSScreen.main { return focused }
+        let pointer = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(pointer) }
+            ?? NSScreen.screens.first
+    }
+
+    private static func reveal() {
+        guard let window else { return }
+
+        if let target = pendingScreen, !isShowing(window, on: target) {
+            window.setFrameOrigin(
+                SettingsWindowPlacement.origin(
+                    for: window.frame.size,
+                    on: target.visibleFrame
+                )
+            )
+        }
+        pendingScreen = nil
+
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Whether the window is already on `screen`.
+    ///
+    /// `false` when it is on no screen at all — never placed, or last closed on
+    /// a display that has since been unplugged — which is exactly when it most
+    /// needs putting somewhere.
+    private static func isShowing(_ window: NSWindow, on screen: NSScreen) -> Bool {
+        let screens = NSScreen.screens
+        guard let index = SettingsWindowPlacement.index(
+            holding: window.frame,
+            among: screens.map(\.frame)
+        ) else {
+            return false
+        }
+        return screens[index] === screen
+    }
+}
+
+/// The arithmetic of putting the Settings window on a screen, kept apart from
+/// the window itself so it can be checked without one.
+nonisolated enum SettingsWindowPlacement {
+    /// Which of `frames` a window at `frame` is on: the one it covers most of.
+    ///
+    /// Overlap rather than the window's origin, because a window straddling two
+    /// displays belongs to the one showing more of it — and because an origin
+    /// can sit in the gap between two frames that are not the same height.
+    static func index(holding frame: NSRect, among frames: [NSRect]) -> Int? {
+        var best: (index: Int, area: CGFloat)?
+        for (index, candidate) in frames.enumerated() {
+            let overlap = candidate.intersection(frame)
+            guard !overlap.isNull else { continue }
+            let area = overlap.width * overlap.height
+            guard area > 0, area > (best?.area ?? 0) else { continue }
+            best = (index, area)
+        }
+        return best?.index
+    }
+
+    /// Centred across `visibleFrame`, with a third of the leftover height above
+    /// it — where macOS itself puts a window it is asked to centre, and higher
+    /// than the true middle because a window sitting on the optical centre of a
+    /// screen looks low.
+    static func origin(for size: NSSize, on visibleFrame: NSRect) -> NSPoint {
+        let slack = max(0, visibleFrame.height - size.height)
+        let x = visibleFrame.midX - size.width / 2
+        let y = visibleFrame.maxY - size.height - slack / 3
+        // Clamped so a window wider or taller than the screen keeps its leading
+        // and top edges on it: that is where the title bar and the controls are.
+        let rightmost = max(visibleFrame.maxX - size.width, visibleFrame.minX)
+        return NSPoint(
+            x: min(max(x, visibleFrame.minX), rightmost),
+            y: max(y, visibleFrame.minY)
+        )
+    }
+}
+
+/// Hands the Settings window to ``SettingsWindowPresenter`` as soon as the
+/// scene builds it.
+///
+/// Attached to the `Settings` scene rather than to ``AppSettingsView``, because
+/// that same view is what the first-run window shows once onboarding is done —
+/// and that window is not the one this is about.
+struct SettingsWindowTracker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { track(view) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { track(nsView) }
+    }
+
+    private func track(_ view: NSView) {
+        guard let window = view.window else { return }
+        SettingsWindowPresenter.track(window)
+    }
+}
+
 #Preview("Settings") {
     AppSettingsView()
         .environmentObject(MonitorStore())

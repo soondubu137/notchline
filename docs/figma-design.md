@@ -314,7 +314,7 @@ Input needed
 | 已退休 | 去处 |
 | --- | --- |
 | 静息的熄灭产品矩阵 | 直接删除。灰槽不指认任何产品 |
-| `Idle` / `No active turns` | 并入 `Connected`（§6.4） |
+| `Idle` / `No active sessions` | 并入 `Connected`（§6.4） |
 | `Connecting to Codex` | 删除。在场由系统 API 直接回答，没有需要向用户解释的等待 |
 | `Update Codex` | 设置里的产品行，以及用户打开时的展开面板；名字里的产品已去掉，见下 |
 | `Codex version unsupported` | 同上 |
@@ -394,6 +394,8 @@ Input needed
 
 **标题栏按 macOS 自己的样子渲染，不按本表这一行。** 板上的标题栏与窗口同色、高 `52`、不画分隔线；SwiftUI 持有 scene 窗口的标题栏并在每次布局重新应用自己的配置，`titlebarAppearsTransparent`、`backgroundColor`、`titlebarSeparatorStyle` 与 `.fullSizeContentView` 实测全部无效。剩下的做法是 `.hiddenTitleBar` 加自绘 `52` 色带与居中标题——那会让「用原生控件而不是它们的近似物」这个论点里最显眼的一块变成唯一的近似物。因此标题栏保持系统材质，`52` 是板上的排版约定而不是验收项。
 
+**窗口如何出现：永远在最前，落在有焦点的那块屏幕上。** 板上没有这一条，它是交互而不是版面，写在这里因为它决定用户第一眼在哪看到这扇窗。本应用唯一常驻的界面在刘海里，所以打开 Settings 的请求几乎总是在别的应用处于前台时发出——SwiftUI 只把窗口排到本应用之内，从外面看就是「点了齿轮什么也没发生」。因此打开时先激活应用，再把窗口排到最前。落点取**持有键盘焦点的那扇窗所在的显示器**，且必须读在窗口被排出、本应用被激活**之前**：晚一步问，答案就是 Settings 自己那块屏，等于把问题重述一遍。指针位置只作兜底——齿轮长在刘海里，按指针问出来的永远是内建屏。窗口此刻已经在那块屏上时不移动它（用户在同一块屏上自己摆过的位置不该被居中覆盖）；要移动时横向居中、余量的三分之一留在上方，也就是 macOS 自己居中窗口的落点。窗口留在别的 Space 时取到当前 Space，而不是把用户送过去。实现见 [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift) 的 `SettingsWindowPresenter` 与 `SettingsWindowPlacement`。
+
 ### 8.1 Products
 
 `Codex Desktop` 与 `Claude Code` 是同一张卡片里的两行，不是两个分组。加入第三个产品的代价是一行，而不是一个新面板。
@@ -411,7 +413,7 @@ Input needed
 
 ### 8.2 Session list
 
-弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品都已连接时有效果（不要求两个产品此刻都有会话，见 [`dual-agent-design.md`](dual-agent-design.md) §4）；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
+弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`／`Colour bar`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品都已连接时有效果（不要求两个产品此刻都有会话，见 [`dual-agent-design.md`](dual-agent-design.md) §4）；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
 
 卡片里还有第二行 `Clear the session list`，尾部胶囊按钮 `Clear`，列表为空时 disabled。它在 v1 是 Codex 卡片里的一枚破坏性按钮；产品分组现在只讲产品，而这个动作的对象是会话列表，它属于这里。板上没有这一行，因为板只画了三个已确认的**设置**，而这是一个动作。
 
@@ -482,7 +484,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] 三行 `508 × 80` 视口与滚动契约。
 - [x] SF Pro 文件级字体统一。
 - [x] Quota unavailable 局部降级。
-- [x] ~~No active turns、Connecting、Disconnected、Update、unsupported、setup 薄层。~~ 收敛为 `Disconnected` 与 `Connected` 两个系统状态，见 §6.4 与 §6.6。
+- [x] ~~No active sessions、Connecting、Disconnected、Update、unsupported、setup 薄层。~~ 收敛为 `Disconnected` 与 `Connected` 两个系统状态，见 §6.4 与 §6.6。
 - [x] 收起态在场规则与开合序列（§6.4，`624:1560`）：矩阵随智能体打开与关闭出现和离开，第一个产品接管灰槽。**画法已随 [#35](https://github.com/soondubu137/notchline/issues/35) 落地**：每个已连接产品一个矩阵，各自跑自己的曲线；无产品时一个灰色静息标记；有刘海形态静息时整条前导翼消失。
 - [x] hover 只横向展开药丸、不落下面板；展开尾部为齿轮。**宽度改为按组成计算**，原因见 §6.4 的实现记录。
 - [x] `Disconnected` 按 §6.7 重定义为「没有任何智能体已连接」；灰色取 `#151515`，为界面上最暗值（§6.4）。

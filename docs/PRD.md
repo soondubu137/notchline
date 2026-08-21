@@ -154,7 +154,7 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 | Codex 版本未经验证 | 空 | `Version unsupported` | 否 |
 | App Server 无响应、启动失败或连接断开 | 清空 | `Disconnected` | 否 |
 
-上表的文案都不指名产品：**哪个**产品不健康由 Settings 的产品行逐条列出，展开面板只说发生了什么（见 [`figma-design.md`](figma-design.md) §6.6）。`Connecting to Codex` 被删除而不是搬家：在场由系统 API 直接回答，没有需要向用户解释的等待。`No active turns` 并入 `Connected`；这次改名值得——`Idle` 描述的是我们看到的空列表，用户无从核对，`Connected` 描述的是用户瞄一眼自己的 Dock 就能核对的事实。
+上表的文案都不指名产品：**哪个**产品不健康由 Settings 的产品行逐条列出，展开面板只说发生了什么（见 [`figma-design.md`](figma-design.md) §6.6）。`Connecting to Codex` 被删除而不是搬家：在场由系统 API 直接回答，没有需要向用户解释的等待。`No active sessions` 并入 `Connected`；这次改名值得——`Idle` 描述的是我们看到的空列表，用户无从核对，`Connected` 描述的是用户瞄一眼自己的 Dock 就能核对的事实。
 
 Disconnected 是全局集成健康问题，不能用于单会话。进入 Disconnected 时必须清空列表，不显示最后一次可信快照。应用不自动启动 Codex；用户在 Codex 或系统中自行完成相应操作。
 
@@ -281,9 +281,11 @@ V1 设置窗口只包含已经确认的三组能力：
 
 1. **Display**：选择组件显示在哪个已连接显示器；选择跨启动保留，显示器临时断开时回退到可用屏幕。
 2. **Codex integration**：显示连接与兼容状态，以及该产品自己报出的失败（第 12 节）；提供一个总开关同时启停全部六种必需 lifecycle event 定义；提供重新检测。关闭只移除本应用管理的定义并保留用户其他 Hooks；重新开启会安装或修复完整集合。
-3. **Session list**：`Distinguish products` 选择器，三选一——`Name and colour`（默认）、`Name only`、`Badge`。控件始终可见，即使标记只在两个产品都已连接时才绘制：一个要等到第二个产品恰好打开才找得到的偏好，用户永远找不到。
+3. **Session list**：`Distinguish products` 选择器，四选一——`Name and colour`（默认）、`Name only`、`Badge`、`Colour bar`（四种呈现见 [`dual-agent-design.md`](dual-agent-design.md) §6）。`Name and colour` 只给产品名上色，其后的 Project 仍是普通说明行灰：颜色回答的是「哪个产品」，Project 是这一行自己的主语。控件始终可见，即使标记只在两个产品都已连接时才绘制：一个要等到第二个产品恰好打开才找得到的偏好，用户永远找不到。
 
 设置只影响 Codex in Notch。`Update required`、`Version unsupported` 和 `Disconnected` 不提供操作；它们已退出收起态，只在展开面板与 Settings 的产品行中出现（见 6.3）。
+
+**设置窗口打开时永远在最前，并落在有焦点的那块显示器上。** 本产品唯一常驻的界面在刘海里，请求几乎总是在别的应用处于前台时发出的，而 SwiftUI 只把窗口排到本应用之内——从外面看就是「点了齿轮什么也没发生」。落点取此刻**持有键盘焦点的那扇窗所在的显示器**（读在窗口被排出、本应用被激活之前，晚一步读到的是 Settings 自己那块屏）；窗口此刻已经在那块屏上时不动它，用户自己摆过的位置不该被居中覆盖。窗口留在别的 Space 时取到当前 Space，而不是把用户送过去。
 
 **设置窗口由用户打开，不在启动时自己出现。** 启动只画 notch 组件；设置走 macOS 自己那条路——应用菜单的 `Settings…`／`⌘,`。第 5 节的首次引导是唯一的例外，它必须不请自来。这条既是产品判断（本产品是常驻组件，不是一个每次启动都要看一眼的窗口），也是一条实测的启动代价：那个窗口的构建、布局与它引起的 tracking-area 一遍，占一次 Release 启动 CPU 的一半（`0.62 s → 0.32 s`，峰值 `%cpu 55 → 33`），详见 [`system-architecture.md` §6](system-architecture.md)。
 
@@ -329,7 +331,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 7. 点击任意行进入同一 `threadId` 会话；打开首页不算通过。
 8. 主额度窗口切换和不可用行为正确；额度失败不影响会话列表。
 9. 关闭预览后无正文泄露，缺失标题显示 `Untitled`，行高和面板几何不变。
-10. Disconnected 清空列表；No active turns 与四类被动状态不含操作按钮。
+10. Disconnected 清空列表；No active sessions 与四类被动状态不含操作按钮。
 11. 展开基准为 `520 × 302`，顶部参考高 `46` 且只横向扩张；状态名不被物理刘海遮挡。
 12. 三行以上可以垂直滚动，重排不强制打断用户当前滚动位置。
 13. 首次引导在更改集成前明确说明范围并取得用户确认；Settings 中一个总开关原子启停六种必需定义，部分安装失败关闭并可修复，关闭不影响用户其他 Hooks。

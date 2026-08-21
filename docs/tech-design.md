@@ -688,7 +688,7 @@ ADR 0004 的精确导航门槛只约束 Codex：目前没有任何受支持的�
 
 | 故障 | 收起态 | 展开面板 |
 | --- | --- | --- |
-| 无活动或未读终态，且产品已打开 | `Connected` | 薄层 `No active turns` |
+| 无活动或未读终态，且产品已打开 | `Connected` | 薄层 `No active sessions` |
 | App Server 已开始连接、会话快照尚未返回 | `Disconnected` | 薄层 `Connecting`，≤ 5s |
 | 尚未注册集成（产品可能已打开） | `Disconnected` | 薄层 `Set up integration` |
 | 版本过旧 | `Disconnected` | 清空列表，薄层 `Update required` |

@@ -880,6 +880,28 @@ struct NotchlineTests {
         )
     }
 
+    /// The colour goes on the product name, and stops there.
+    ///
+    /// `Name and colour` is the only style that tints at all, and what it tints
+    /// is the two words that say which product — not the Project after them.
+    /// The Project is the row's own subject; painting it the product's colour
+    /// said the same thing twice and left the caption without an ordinary grey
+    /// to read as ordinary.
+    @Test @MainActor
+    func onlyTheProductNameTakesTheProductColour() {
+        #expect(ProductAttributionStyle.nameAndColour.tintsProductName)
+        #expect(!ProductAttributionStyle.nameOnly.tintsProductName)
+
+        // The two that put nothing on the caption cannot tint it either — a
+        // style that both hid the name and coloured it would colour the
+        // Project alone, which is the mistake this pair of flags exists to
+        // keep apart.
+        for style in ProductAttributionStyle.allCases
+        where !style.namesProductInCaption {
+            #expect(!style.tintsProductName)
+        }
+    }
+
     /// The rail is a mark in the gutter, not a fifth element inside the row.
     ///
     /// It lives in the `6` the row gave back, so it costs no caption room and
@@ -893,6 +915,69 @@ struct NotchlineTests {
         #expect(
             PanelMetrics.sessionRowRailHeight < PanelMetrics.sessionRowHeight
         )
+    }
+
+    /// Settings is only moved when it is on a display other than the one with
+    /// the focus.
+    ///
+    /// A window the user has dragged somewhere on the screen they are already
+    /// looking at has been positioned, and re-centring it there would be the
+    /// app overruling that. Ownership is by overlap rather than by origin: a
+    /// window straddling two displays belongs to the one showing more of it,
+    /// and an origin can land in the gap between two frames of unequal height.
+    @Test
+    func theSettingsWindowKnowsWhichDisplayItIsAlreadyOn() {
+        let builtIn = NSRect(x: 0, y: 0, width: 1512, height: 982)
+        let external = NSRect(x: 1512, y: 0, width: 2560, height: 1440)
+        let screens = [builtIn, external]
+        let size = NSSize(width: 580, height: 700)
+
+        #expect(
+            SettingsWindowPlacement.index(
+                holding: NSRect(origin: NSPoint(x: 2000, y: 400), size: size),
+                among: screens
+            ) == 1
+        )
+        // 100 pt of it on the built-in display, 480 on the external one.
+        #expect(
+            SettingsWindowPlacement.index(
+                holding: NSRect(origin: NSPoint(x: 1412, y: 400), size: size),
+                among: screens
+            ) == 1
+        )
+        // Last closed on a display that has since been unplugged: on no screen
+        // at all, which is when it most needs putting somewhere.
+        #expect(
+            SettingsWindowPlacement.index(
+                holding: NSRect(origin: NSPoint(x: 5000, y: 3000), size: size),
+                among: screens
+            ) == nil
+        )
+    }
+
+    /// Where it lands when it is moved: centred across the screen, high.
+    @Test
+    func theSettingsWindowLandsCentredAndAboveTheMiddle() {
+        let visible = NSRect(x: 1512, y: 0, width: 2560, height: 1400)
+        let size = NSSize(width: 580, height: 700)
+        let origin = SettingsWindowPlacement.origin(for: size, on: visible)
+
+        #expect(origin.x == visible.midX - size.width / 2)
+        // A third of the leftover height above it — where macOS itself centres
+        // a window, and above the true middle, which is where a window centred
+        // on the arithmetic centre looks low.
+        #expect(
+            origin.y == visible.maxY - size.height - (visible.height - size.height) / 3
+        )
+        #expect(origin.y > visible.midY - size.height / 2)
+
+        // Taller than the screen it is going to: the top is the part that has
+        // to be reachable, because that is where the title bar is.
+        let clamped = SettingsWindowPlacement.origin(
+            for: NSSize(width: size.width, height: 1600),
+            on: visible
+        )
+        #expect(clamped.y == visible.minY)
     }
 
     /// A preference written before the rail existed still reads back.
@@ -3645,7 +3730,7 @@ struct NotchlineTests {
             store.currentPanelSize.height
                 == 38 + PanelMetrics.thinExpandedContentHeight
         )
-        #expect(store.emptyListMessage == "No active turns")
+        #expect(store.emptyListMessage == "No active sessions")
     }
 
     @Test @MainActor
@@ -5147,19 +5232,17 @@ struct NotchlineTests {
     }
 
     @Test @MainActor
-    func sessionRowTextFadesItsOverflowAndSweepsThroughCoreAnimation() throws {
-        // This row owns two masks that used to be SwiftUI's: the trailing fade
-        // its caller applied, and the sweep over the bright copy. Getting either
-        // wrong is silent -- a row that clips hard instead of fading, or a bar
-        // painted across the panel -- so both are asserted on the layer.
+    func sessionRowTextFadesItsOverflowThroughCoreAnimation() throws {
+        // This row owns the trailing fade its caller used to apply as a SwiftUI
+        // mask. Getting it wrong is silent -- a row that clips hard instead of
+        // fading -- so it is asserted on the layer.
         let font = NSFont.systemFont(ofSize: 13, weight: .light)
         let text = "A preview long enough to run past the row it is drawn in"
         let view = SessionRowTextView()
         view.apply(
             text: text,
             font: font,
-            color: NotchPalette.labelDrawingColor,
-            sweeps: true
+            color: NotchPalette.labelDrawingColor
         )
 
         // Narrower than the glyphs, which is the case the fade exists for.
@@ -5170,7 +5253,9 @@ struct NotchlineTests {
 
         let root = try #require(view.layer)
         let sublayers = try #require(root.sublayers)
-        #expect(sublayers.count == 2)
+        // One layer, not two: the bright swept copy the row used to carry is
+        // gone, so live progress text is drawn once and left still.
+        #expect(sublayers.count == 1)
 
         // Only what the row can show is drawn. The remainder sits behind the
         // fade, so drawing it would upload a texture per update for pixels that
@@ -5192,21 +5277,6 @@ struct NotchlineTests {
         let fadeStart = try #require(locations.dropFirst().first).doubleValue
         #expect(fadeStart > 0)
         #expect(fadeStart < 1)
-
-        // The bright copy sweeps across the glyphs, driven by Core Animation.
-        let highlight = try #require(sublayers.last)
-        #expect(!highlight.isHidden)
-        let sweep = try #require(highlight.mask)
-        #expect(sweep.animation(forKey: NotchTextRaster.sweepAnimationKey) != nil)
-
-        view.apply(
-            text: text,
-            font: font,
-            color: NotchPalette.labelDrawingColor,
-            sweeps: false
-        )
-        #expect(highlight.isHidden)
-        #expect(sweep.animation(forKey: NotchTextRaster.sweepAnimationKey) == nil)
     }
 
     @Test @MainActor
@@ -5245,63 +5315,6 @@ struct NotchlineTests {
         await clock.advance(by: 591)
         #expect(store.compactTimerText == "10:00")
         #expect(publishes > 0, "a width change must reach the panel")
-    }
-
-    @Test @MainActor
-    func sweepPhaseSurvivesTheTextBeingReplaced() throws {
-        // A running turn's body text is its live progress, so it is replaced
-        // every few seconds -- and every replacement re-rasterises the glyphs
-        // and re-installs the sweep. If the sweep's phase came from the moment
-        // it was installed, each update would restart it.
-        //
-        // That is not a cosmetic stutter. The band is four times the width of
-        // what it crosses and its bright peak sits at the centre, so the peak
-        // does not reach the glyphs until 40% into the loop. Restarting more
-        // often than that means the highlight is never drawn at all.
-        let font = NSFont.systemFont(ofSize: 13, weight: .light)
-        let view = SessionRowTextView()
-        view.apply(
-            text: "Reading LiveCodexMonitorService.swift",
-            font: font,
-            color: NotchPalette.labelDrawingColor,
-            sweeps: true
-        )
-        view.frame = NSRect(x: 0, y: 0, width: 200, height: 18)
-        view.layout()
-
-        let highlight = try #require(view.layer?.sublayers?.last)
-        let mask = try #require(highlight.mask)
-        let before = try #require(
-            mask.animation(forKey: NotchTextRaster.sweepAnimationKey)
-        )
-
-        view.apply(
-            text: "Now editing NotchStatusMatrix.swift instead",
-            font: font,
-            color: NotchPalette.labelDrawingColor,
-            sweeps: true
-        )
-        let after = try #require(
-            mask.animation(forKey: NotchTextRaster.sweepAnimationKey)
-        )
-
-        // Phase is anchored to a global grid of whole periods, so it is a
-        // function of the clock rather than of when the text last changed.
-        // A left-at-default `beginTime` of 0 is exactly the broken case: Core
-        // Animation then starts the loop at whatever moment it was added.
-        for (label, animation) in [("before", before), ("after", after)] {
-            #expect(
-                animation.beginTime > 0,
-                "\(label) sweep starts when it was installed, not on the clock"
-            )
-            let offset = animation.beginTime.truncatingRemainder(
-                dividingBy: SessionRowTextView.sweepPeriod
-            )
-            #expect(
-                abs(offset) < 0.001,
-                "\(label) sweep is not aligned to a whole-period boundary"
-            )
-        }
     }
 
     @Test @MainActor

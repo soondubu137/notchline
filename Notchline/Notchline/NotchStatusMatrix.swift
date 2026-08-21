@@ -410,9 +410,12 @@ private enum MatrixTrack {
         0.743, 0.622, 0.492, 0.363, 0.243, 0.141, 0.063, 0.015,
         0.000, 0.019, 0.071, 0.152, 0.257, 0.378, 0.508, 0.637
     ]
+    /// The ring holds at ``inactiveLevel`` rather than at nothing: an unlit
+    /// cell is the same darkness here as it is on a connected matrix, so the
+    /// two readouts stay one family and only the flash tells them apart.
     static let attentionRing: [Double] = [
-        0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000,
-        0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000,
+        0.200, 0.200, 0.200, 0.200, 0.200, 0.200, 0.200, 0.200,
+        0.200, 0.200, 0.200, 0.200, 0.200, 0.200, 0.200, 0.200,
         1.000, 0.981, 0.963, 0.944, 0.925, 0.906, 0.887, 0.869
     ]
     static let attentionCentre: [Double] = [
@@ -1267,26 +1270,23 @@ final class SweepingLabelView: NSView {
 /// A session row's title or preview: one line, never truncated with an ellipsis,
 /// fading out where it runs past the row instead.
 ///
-/// Layer-backed for the same reason the notch readout is — a sweeping row cost
-/// ~7% of a core, and the expanded panel shows up to three of them at once — but
-/// it also owns the trailing fade its caller used to apply. A SwiftUI `.mask`
-/// over an AppKit view is not dependable, and the fade is the row's own
-/// behaviour rather than the caller's, so both masks live on the layer now: the
-/// fade on the container, the sweep on the bright copy.
+/// Layer-backed for the same reason the notch readout is — a running turn
+/// replaces its body text constantly, and the expanded panel shows up to three
+/// rows at once — but it also owns the trailing fade its caller used to apply.
+/// A SwiftUI `.mask` over an AppKit view is not dependable, and the fade is the
+/// row's own behaviour rather than the caller's, so it lives on the layer now.
 struct SessionRowText: View {
     let text: String
     let font: NSFont
     let color: NSColor
     let lineHeight: CGFloat
-    var sweeps = false
 
     var body: some View {
         SessionRowTextRepresentable(
             text: text,
             font: font,
             color: color,
-            lineHeight: lineHeight,
-            sweeps: sweeps
+            lineHeight: lineHeight
         )
         .frame(height: lineHeight)
     }
@@ -1297,14 +1297,13 @@ private struct SessionRowTextRepresentable: NSViewRepresentable {
     let font: NSFont
     let color: NSColor
     let lineHeight: CGFloat
-    let sweeps: Bool
 
     func makeNSView(context: Context) -> SessionRowTextView {
         SessionRowTextView()
     }
 
     func updateNSView(_ view: SessionRowTextView, context: Context) {
-        view.apply(text: text, font: font, color: color, sweeps: sweeps)
+        view.apply(text: text, font: font, color: color)
     }
 
     func sizeThatFits(
@@ -1322,28 +1321,20 @@ private struct SessionRowTextRepresentable: NSViewRepresentable {
 }
 
 final class SessionRowTextView: NSView {
-    static let sweepPeriod: TimeInterval = 2
     /// Distance over which the last glyphs fade out, matching the gradient the
     /// caller used to apply as a separate SwiftUI mask.
     private static let trailingFadeWidth: CGFloat = 48
 
     private let baseLayer = CALayer()
-    private let highlightLayer = CALayer()
-    private let sweepMask = NotchTextRaster.makeSweepMask()
     private let fadeMask = CAGradientLayer()
     private var appliedText = ""
     private var appliedFont = NSFont.systemFont(ofSize: 13, weight: .light)
     private var appliedColor = NSColor.white
-    private var appliedSweeps = false
     private var renderedScale: CGFloat = 0
     /// The glyph size actually drawn, which is the natural text size clipped to
     /// the row. Only this much is ever visible, and every byte beyond it is a
     /// texture upload per update that nothing can see.
     private var renderedGlyphSize: CGSize = .zero
-    /// Geometry the running sweep was built for, so an unchanged one is left
-    /// alone rather than torn down and rebuilt on every text update.
-    private var installedSweepWidth: CGFloat?
-    private var installedSweepHeight: CGFloat?
 
     override var isFlipped: Bool { true }
 
@@ -1359,9 +1350,7 @@ final class SessionRowTextView: NSView {
             CGColor(gray: 0, alpha: 0)
         ]
 
-        highlightLayer.mask = sweepMask
         layer?.addSublayer(baseLayer)
-        layer?.addSublayer(highlightLayer)
         // Sized to the row, so it clips the overflow as well as fading it.
         layer?.mask = fadeMask
     }
@@ -1373,28 +1362,24 @@ final class SessionRowTextView: NSView {
         NotchTextRaster.textSize(appliedText, font: appliedFont)
     }
 
-    func apply(text: String, font: NSFont, color: NSColor, sweeps: Bool) {
-        let textChanged = text != appliedText
+    func apply(text: String, font: NSFont, color: NSColor) {
+        guard text != appliedText
             || font != appliedFont
             || color != appliedColor
-        guard textChanged || sweeps != appliedSweeps else { return }
+        else { return }
 
         appliedText = text
         appliedFont = font
         appliedColor = color
-        appliedSweeps = sweeps
 
-        if textChanged {
-            // No `invalidateIntrinsicContentSize` here on purpose. This view is
-            // always given the width it is offered, so its intrinsic size never
-            // decides the layout -- invalidating it only makes SwiftUI re-measure
-            // and re-lay-out the subtree, once per row for every update, and a
-            // running turn's body text updates constantly.
-            renderedScale = 0
-            renderedGlyphSize = .zero
-            redrawGlyphs()
-        }
-        highlightLayer.isHidden = !sweeps
+        // No `invalidateIntrinsicContentSize` here on purpose. This view is
+        // always given the width it is offered, so its intrinsic size never
+        // decides the layout -- invalidating it only makes SwiftUI re-measure
+        // and re-lay-out the subtree, once per row for every update, and a
+        // running turn's body text updates constantly.
+        renderedScale = 0
+        renderedGlyphSize = .zero
+        redrawGlyphs()
         layout()
     }
 
@@ -1428,44 +1413,11 @@ final class SessionRowTextView: NSView {
             height: glyphs.height
         )
         baseLayer.frame = glyphFrame
-        highlightLayer.frame = glyphFrame
 
         fadeMask.frame = bounds
         let width = max(bounds.width, 1)
         let fadeStart = max(0, width - Self.trailingFadeWidth) / width
         fadeMask.locations = [0, NSNumber(value: fadeStart), 1]
-
-        if appliedSweeps {
-            // The sweep crosses what is *visible*, not the whole string. A
-            // 240-character body line is three times the row, so a band scaled
-            // to the glyphs spends most of its loop off-screen -- the highlight
-            // degrades to a 0.13s flicker once every two seconds. Bounding it to
-            // the row keeps one full, even pass however long the text is.
-            //
-            // It also makes the sweep's geometry independent of the text, which
-            // is what lets the reinstall below be skipped: a running turn
-            // replaces this text constantly, and re-adding the animation each
-            // time is a CATransaction commit per row per update.
-            let sweepWidth = min(glyphs.width, bounds.width)
-            let sweepHeight = glyphs.height
-            if sweepWidth != installedSweepWidth
-                || sweepHeight != installedSweepHeight
-                || sweepMask.animation(
-                    forKey: NotchTextRaster.sweepAnimationKey
-                ) == nil {
-                installedSweepWidth = sweepWidth
-                installedSweepHeight = sweepHeight
-                NotchTextRaster.installSweep(
-                    on: sweepMask,
-                    across: sweepWidth,
-                    height: sweepHeight,
-                    period: Self.sweepPeriod
-                )
-            }
-        } else {
-            installedSweepWidth = nil
-            sweepMask.removeAnimation(forKey: NotchTextRaster.sweepAnimationKey)
-        }
 
         CATransaction.commit()
     }
@@ -1482,7 +1434,6 @@ final class SessionRowTextView: NSView {
 
         guard !appliedText.isEmpty else {
             baseLayer.contents = nil
-            highlightLayer.contents = nil
             renderedGlyphSize = .zero
             return
         }
@@ -1500,18 +1451,10 @@ final class SessionRowTextView: NSView {
         renderedGlyphSize = size
 
         baseLayer.contentsScale = scale
-        highlightLayer.contentsScale = scale
         baseLayer.contents = NotchTextRaster.glyphImage(
             text: appliedText,
             font: appliedFont,
             color: appliedColor,
-            size: size,
-            scale: scale
-        )
-        highlightLayer.contents = NotchTextRaster.glyphImage(
-            text: appliedText,
-            font: appliedFont,
-            color: NotchPalette.spotlightDrawingColor,
             size: size,
             scale: scale
         )

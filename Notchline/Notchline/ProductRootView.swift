@@ -73,7 +73,7 @@ private struct OnboardingView: View {
                 .frame(width: 52, height: 52)
 
             Text(
-                "Notchline keeps every Codex and Claude Code turn that is "
+                "Notchline keeps every Codex and Claude Code session that is "
                     + "running, waiting on you, or finished but unseen at the "
                     + "top of your screen. It only ever reads."
             )
