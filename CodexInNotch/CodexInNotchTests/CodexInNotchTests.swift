@@ -9903,53 +9903,92 @@ for line in sys.stdin:
     /// unheard notification or a guard read the wrong way round would retire
     /// rows through a locked screen, which is precisely what the guards exist
     /// to stop.
+    ///
+    /// **Both notification centres are the test's own, and neither post waits.**
+    /// This used to post the screensaver notifications into the real
+    /// distributed centre, which means `distnoted`: another process, free to
+    /// take as long as it likes and to coalesce. Whatever this test then did
+    /// about that -- 300 ms of sleep, later a poll -- was an assertion about a
+    /// delivery latency nothing promises, and it failed roughly one run in
+    /// three once the suite had grown enough to keep the machine busy
+    /// (CC-024). Posting into a private centre asserts the invariant the
+    /// product actually has -- *a screensaver takes the answer away and its end
+    /// gives the answer back* -- and asserts it synchronously. What is no
+    /// longer covered is that `distnoted` is wired up at all: the defaults in
+    /// ``DesktopReadingWatcher`` name the real centres, and nothing here reads
+    /// them. That is the trade, and it is the right way round -- the missing
+    /// half is a delivery this reading is documented as being allowed to miss,
+    /// while the half now pinned is the one that decides whether a row is
+    /// retired.
+    ///
+    /// A private front centre buys a second thing: this suite runs in
+    /// parallel, and a fake activation posted into the workspace's own centre
+    /// is heard by every other watcher alive at that moment.
     @Test @MainActor
     func desktopReadingWatcherAnswersOnlyWhileItsOwnApplicationIsInFront() async throws {
         let current = try #require(NSRunningApplication.current.bundleIdentifier)
-        let mine = DesktopReadingWatcher(
-            bundleIdentifier: current,
-            screenIsAvailable: { true }
-        )
-        let somebodyElse = DesktopReadingWatcher(
-            bundleIdentifier: "com.example.not-this-one",
+        let front = NotificationCenter()
+        let screensaver = NotificationCenter()
+        func watcher(
+            _ bundleIdentifier: String,
+            screenIsAvailable: @escaping @Sendable () -> Bool
+        ) -> DesktopReadingWatcher {
+            DesktopReadingWatcher(
+                bundleIdentifier: bundleIdentifier,
+                screenIsAvailable: screenIsAvailable,
+                frontNotifications: front,
+                screensaverNotifications: screensaver
+            )
+        }
+        let mine = watcher(current, screenIsAvailable: { true })
+        let somebodyElse = watcher(
+            "com.example.not-this-one",
             screenIsAvailable: { true }
         )
         // The same application in front, but nothing on the screen to see: a
         // sleeping display, a locked screen or another user switched in.
-        let darkened = DesktopReadingWatcher(
-            bundleIdentifier: current,
-            screenIsAvailable: { false }
-        )
+        let darkened = watcher(current, screenIsAvailable: { false })
 
-        NSWorkspace.shared.notificationCenter.post(
+        // Somebody else takes the front first, so that the activation below is
+        // read as a transition rather than as whatever the machine running this
+        // test happened to have in front when the watchers were built -- each
+        // of them seeds itself from the real workspace, and if this process
+        // already held the front the assertion after it would pass without the
+        // notification having been heard at all.
+        let anybodyElse = try #require(
+            NSWorkspace.shared.runningApplications.first {
+                $0.bundleIdentifier != nil && $0.bundleIdentifier != current
+            }
+        )
+        front.post(
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: NSWorkspace.shared,
+            userInfo: [NSWorkspace.applicationUserInfoKey: anybodyElse]
+        )
+        #expect(await mine.isInFrontOfTheUser() == false)
+
+        front.post(
             name: NSWorkspace.didActivateApplicationNotification,
             object: NSWorkspace.shared,
             userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current]
         )
-        // Waited for rather than slept past. Both notifications below are
-        // delivered on a run loop this test does not own -- the screensaver one
-        // through `distnoted`, from another process -- so a fixed pause is a
-        // guess about a busy machine rather than a barrier, and the whole suite
-        // running beside it is exactly what makes the guess wrong. Polling the
-        // condition asserts the same thing and stops asserting a delivery
-        // latency nothing promises (CC-024).
-        #expect(await holds { await mine.isInFrontOfTheUser() })
+        #expect(await mine.isInFrontOfTheUser())
         #expect(await somebodyElse.isInFrontOfTheUser() == false)
         #expect(await darkened.isInFrontOfTheUser() == false)
 
         // A screensaver over the top of the front application says the same
         // thing a locked screen does.
-        DistributedNotificationCenter.default().post(
+        screensaver.post(
             name: Notification.Name("com.apple.screensaver.didstart"),
             object: nil
         )
-        #expect(await holds { await mine.isInFrontOfTheUser() == false })
+        #expect(await mine.isInFrontOfTheUser() == false)
 
-        DistributedNotificationCenter.default().post(
+        screensaver.post(
             name: Notification.Name("com.apple.screensaver.didstop"),
             object: nil
         )
-        #expect(await holds { await mine.isInFrontOfTheUser() })
+        #expect(await mine.isInFrontOfTheUser())
     }
 
     /// One line of Claude Desktop's log, in the shape `1.32885.1` writes it.

@@ -73,15 +73,34 @@ final class DesktopReadingWatcher: DesktopReadingReporting, @unchecked Sendable 
     private let screenIsAvailable: @Sendable () -> Bool
     nonisolated(unsafe) private var isFrontmost: Bool
     nonisolated(unsafe) private var isRunningScreensaver = false
-    nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
+    nonisolated(unsafe) private var observers: [
+        (NotificationCenter, NSObjectProtocol)
+    ] = []
 
-    /// - Parameter screenIsAvailable: Whether the display is awake and the login
-    ///   session unlocked and on the console. Injected so a test can put the
-    ///   machine in each of those states without touching the real one.
+    /// - Parameters:
+    ///   - screenIsAvailable: Whether the display is awake and the login
+    ///     session unlocked and on the console. Injected so a test can put the
+    ///     machine in each of those states without touching the real one.
+    ///   - frontNotifications: Where activations are heard. The default is the
+    ///     workspace's own centre, which is process-wide: a test that posts
+    ///     into it is heard by every other watcher alive at the time, this
+    ///     suite's included.
+    ///   - screensaverNotifications: Where the screensaver is heard. The
+    ///     default is the distributed centre, and this is the parameter that
+    ///     earns the pair. The screensaver is the third of the three machine
+    ///     states above, and it was the only one a test could not stage: the
+    ///     other two are read on demand, while this one arrives from
+    ///     `distnoted` -- another process, on its own schedule, free to
+    ///     coalesce. Asking a test to wait for that round trip is asking it to
+    ///     assert a latency nothing promises (CC-024).
     nonisolated init(
         bundleIdentifier: String,
         screenIsAvailable: @escaping @Sendable () -> Bool =
-            DesktopReadingWatcher.systemScreenIsAvailable
+            DesktopReadingWatcher.systemScreenIsAvailable,
+        frontNotifications: NotificationCenter =
+            NSWorkspace.shared.notificationCenter,
+        screensaverNotifications: NotificationCenter =
+            DistributedNotificationCenter.default()
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.screenIsAvailable = screenIsAvailable
@@ -90,11 +109,20 @@ final class DesktopReadingWatcher: DesktopReadingReporting, @unchecked Sendable 
         // Desktop when this app starts never generates an activation for it.
         isFrontmost = NSWorkspace.shared.frontmostApplication?
             .bundleIdentifier == bundleIdentifier
+        // Delivered wherever it was posted rather than hopped onto the main
+        // queue. Both readings are two booleans behind a lock, read from
+        // whichever executor asks, so the hop protected nothing and only ever
+        // widened the window in which this answers with the state before the
+        // notification -- and the window it widens belongs to the one rule in
+        // the product that retires a row without a gesture. The distributed
+        // centre still delivers on the main run loop with no queue asked for
+        // (measured 2026-08-20), so this changes which hop happens, not which
+        // thread arrives.
         observers.append(
-            NSWorkspace.shared.notificationCenter.addObserver(
+            (frontNotifications, frontNotifications.addObserver(
                 forName: NSWorkspace.didActivateApplicationNotification,
                 object: nil,
-                queue: .main
+                queue: nil
             ) { [weak self] notification in
                 guard let application = notification.userInfo?[
                     NSWorkspace.applicationUserInfoKey
@@ -104,28 +132,27 @@ final class DesktopReadingWatcher: DesktopReadingReporting, @unchecked Sendable 
                 self?.set { $0.isFrontmost = application
                     .bundleIdentifier == bundleIdentifier
                 }
-            }
+            })
         )
         for (name, isRunning) in [
             (Self.screensaverDidStart, true),
             (Self.screensaverDidStop, false)
         ] {
             observers.append(
-                DistributedNotificationCenter.default().addObserver(
+                (screensaverNotifications, screensaverNotifications.addObserver(
                     forName: name,
                     object: nil,
-                    queue: .main
+                    queue: nil
                 ) { [weak self] _ in
                     self?.set { $0.isRunningScreensaver = isRunning }
-                }
+                })
             )
         }
     }
 
     deinit {
-        for observer in observers {
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-            DistributedNotificationCenter.default().removeObserver(observer)
+        for (centre, observer) in observers {
+            centre.removeObserver(observer)
         }
     }
 
