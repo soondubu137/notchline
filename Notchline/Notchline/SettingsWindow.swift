@@ -713,6 +713,14 @@ struct SettingsWindowChrome: NSViewRepresentable {
 /// window does discard a position the user dragged it to, which is a real cost
 /// and the one this deliberately pays: a window that is sometimes centred and
 /// sometimes wherever it was left is a window the user has to go and find.
+///
+/// And always while the window is off screen — that is what the two hooks are
+/// for. `SettingsWindowTracker` reports the window as the view enters it, which
+/// is before SwiftUI has ordered it anywhere, and the `isVisible` observation
+/// puts it back on the right display the moment it is *hidden*, so the frame it
+/// will next be shown at is already the right one. Placing it after it appears
+/// is what the user sees as a flash: the window arriving on the display it was
+/// last closed on and stepping across to this one a frame or two later.
 @MainActor
 enum SettingsWindowPresenter {
     private static weak var window: NSWindow?
@@ -724,11 +732,12 @@ enum SettingsWindowPresenter {
         DispatchQueue.main.async { reveal() }
     }
 
-    /// Takes the window the `Settings` scene has just built.
+    /// Takes the window the `Settings` scene has just built, before it is on
+    /// screen.
     ///
     /// Also the hook for every *other* way this window opens — `⌘,` and the
     /// app menu go through SwiftUI's own item, which this app does not see.
-    /// Those are caught by watching the window go visible instead.
+    /// Those are caught by watching the window cross between hidden and shown.
     static func track(_ window: NSWindow) {
         guard window !== Self.window else { return }
         Self.window = window
@@ -736,33 +745,54 @@ enum SettingsWindowPresenter {
         // the user to it: what was asked for is Settings here, not a trip to
         // wherever it was last closed.
         window.collectionBehavior.insert(.moveToActiveSpace)
-        visibility = window.observe(\.isVisible, options: [.old, .new]) { _, change in
-            guard change.oldValue == false, change.newValue == true else { return }
+        visibility = window.observe(\.isVisible, options: [.old, .new]) { window, change in
+            guard change.oldValue != change.newValue else { return }
             // KVO is delivered on the thread that ordered the window, which is
-            // the main one. The move waits for the next turn, so nothing
-            // re-enters AppKit while it is still ordering.
+            // the main one.
             MainActor.assumeIsolated {
+                // Both edges, and the *hiding* one is the load-bearing half:
+                // it is the only moment the window can be moved with nobody
+                // watching. The showing edge is a second chance at a window
+                // that was somehow parked wrong, not the plan.
+                place(window)
+                guard change.newValue == true else { return }
+                // Activation waits for the next turn rather than re-entering
+                // AppKit while it is still ordering this window.
                 DispatchQueue.main.async { reveal() }
             }
         }
-        reveal()
+        place(window)
+        DispatchQueue.main.async { reveal() }
     }
 
-    private static func reveal() {
-        guard let window else { return }
-
+    /// Centres the window on Notchline's display.
+    ///
+    /// Called only when the window cannot be seen — that is the whole design.
+    /// Moving a window that is already on screen is a window the user watches
+    /// jump, which is what this did when the move waited for the turn after
+    /// SwiftUI ordered the window front: it appeared on the display it was
+    /// last closed on, and stepped across to this one about `50 ms` later.
+    private static func place(_ window: NSWindow) {
         // `NSScreen.main` only as the answer of last resort: the chosen display
         // has been unplugged since the store last looked, and a window with
         // nowhere of its own to go still has to be somewhere.
-        if let screen = MonitorStore.shared.selectedScreen ?? NSScreen.main {
-            window.setFrameOrigin(
-                SettingsWindowPlacement.origin(
-                    for: window.frame.size,
-                    on: screen.visibleFrame
-                )
-            )
-        }
+        guard let screen = MonitorStore.shared.selectedScreen ?? NSScreen.main
+        else { return }
 
+        let origin = SettingsWindowPlacement.origin(
+            for: window.frame.size,
+            on: screen.visibleFrame
+        )
+        guard window.frame.origin != origin else { return }
+        window.setFrameOrigin(origin)
+    }
+
+    /// Brings the app and the window forward. The placing is `place`'s job and
+    /// has already happened by here; the call is repeated because `present`
+    /// reaches this on a window that was open all along.
+    private static func reveal() {
+        guard let window else { return }
+        place(window)
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
@@ -797,18 +827,23 @@ nonisolated enum SettingsWindowPlacement {
 /// and that window is not the one this is about.
 struct SettingsWindowTracker: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { track(view) }
-        return view
+        WindowReportingView()
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { track(nsView) }
-    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 
-    private func track(_ view: NSView) {
-        guard let window = view.window else { return }
-        SettingsWindowPresenter.track(window)
+    /// Reports its window the instant it has one.
+    ///
+    /// `makeNSView` is too early — the view is not in a window yet — and a hop
+    /// to the next turn is too late: SwiftUI orders the window on screen inside
+    /// that turn, so a frame set afterwards is a window the user watches jump.
+    /// `viewDidMoveToWindow` is the moment in between.
+    private final class WindowReportingView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            SettingsWindowPresenter.track(window)
+        }
     }
 }
 
