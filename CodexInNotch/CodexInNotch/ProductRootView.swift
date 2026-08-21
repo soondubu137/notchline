@@ -1,3 +1,15 @@
+// First run, as redesigned for macOS 26. See `figma-design.md` §7.
+//
+// One pane, not three. V1 spent a window each on value, consent and
+// confirmation, but the consent is the switch and the confirmation is the row
+// turning green — the other two windows were narration around two controls.
+// Collapsing them leaves room for the thing the flow never explained: what the
+// notch actually draws.
+//
+// It is the Settings window's shapes throughout, because it becomes the
+// Settings window: the same scene shows this view until onboarding completes
+// and `AppSettingsView` afterwards, so the second time it opens nothing has
+// moved.
 import AppKit
 import SwiftUI
 
@@ -5,9 +17,6 @@ struct ProductRootView: View {
     @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
-        // No shared backdrop: onboarding is a light-only design and paints its
-        // own, while Settings paints the two-mode window colour. One colour
-        // behind both would be wrong for whichever of them it did not belong to.
         Group {
             if store.hasCompletedOnboarding {
                 AppSettingsView()
@@ -20,334 +29,215 @@ struct ProductRootView: View {
 
 private struct OnboardingView: View {
     @EnvironmentObject private var store: MonitorStore
-    @State private var step = 0
-    @State private var isAwaitingHookTrust = false
-    @State private var setupMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("STEP \(step + 1) OF 3")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(DesignColor.tertiaryText)
+        VStack(alignment: .leading, spacing: 22) {
+            hero
+            connectGroup
+            notchGroup
 
-            Group {
-                switch step {
-                case 0:
-                    welcomeContent
-                case 1:
-                    connectContent
-                default:
-                    readyContent
+            // Same shape as the Settings window's closing line: the standing
+            // statement about what this app does, and the action it is about.
+            HStack(alignment: .center, spacing: 16) {
+                Text(
+                    "Notchline only reads. Nothing here changes state in "
+                        + "Codex or Claude Code."
+                )
+                .settingsFootnote(MacOSWindowColor.tertiaryText)
+
+                Button("Start") {
+                    store.completeOnboarding()
                 }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(.horizontal, 48)
-        .padding(.vertical, 32)
-        .frame(width: 580, height: 588, alignment: .topLeading)
-        .background(DesignColor.windowBackground)
-        .background(WindowTitleSetter(title: windowTitle))
+        .padding(.horizontal, 24)
+        .padding(.top, 20)
+        .padding(.bottom, 22)
+        .frame(width: 580, alignment: .leading)
+        .background(MacOSWindowColor.windowBackground)
+        .background(SettingsWindowChrome(title: "Welcome to Notchline"))
     }
 
-    private var welcomeContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            NotchPreview()
-                .frame(maxWidth: .infinity)
+    /// The icon, and the one sentence about what the app is for.
+    ///
+    /// No second title: the window's own title bar already says the name, and
+    /// repeating it in the content area is the mistake the Settings redesign
+    /// removed.
+    private var hero: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 52, height: 52)
 
-            VStack(alignment: .leading, spacing: 8) {
-                pageTitle("Keep every Codex turn in view")
-                bodyText(
-                    "A quiet, top-of-screen monitor for the turns you start while it is running — waiting, working, or finished but unread."
-                )
-            }
-
-            BenefitRow(
-                systemImage: "person.crop.circle.badge.exclamationmark",
-                title: "Know what needs you",
-                detail: "Input and approval requests rise above background work."
+            Text(
+                "Notchline keeps every Codex and Claude Code turn that is "
+                    + "running, waiting on you, or finished but unseen at the "
+                    + "top of your screen. It only ever reads."
             )
-            BenefitRow(
-                systemImage: "arrow.up.forward.app",
-                title: "Return to the exact chat",
-                detail: "Every visible row opens the same Codex Desktop thread."
-            )
-
-            Spacer(minLength: 0)
-            PrimaryButton(title: "Continue") {
-                step = 1
-            }
-        }
-    }
-
-    private var connectContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                pageTitle("Connect to Codex Desktop")
-                bodyText(
-                    "Codex in Notch needs your confirmation before it installs or registers any user-level integration."
-                )
-            }
-
-            BenefitRow(
-                systemImage: "doc.text.magnifyingglass",
-                title: "Read supported local metadata",
-                detail: "Active state, Desktop Projects, chat titles, and public progress."
-            )
-            BenefitRow(
-                systemImage: "gauge.with.dots.needle.33percent",
-                title: "Read the account quota window",
-                detail: "The same primary quota source used by the current Codex account."
-            )
-
-            InformationBlock(
-                title: isAwaitingHookTrust
-                    ? "Review the integration in Codex"
-                    : "Local, minimal, and reversible",
-                detail: isAwaitingHookTrust
-                    ? "Open /hooks in Codex, trust the new definitions, start a turn, then recheck the connection."
-                    : "No prompt or answer is persisted by Codex in Notch. Setup can be removed later from Settings.",
-                color: DesignColor.blueInformation
-            )
-
-            if let setupMessage {
-                Text(setupMessage)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color(red: 0.82, green: 0.12, blue: 0.15))
-            }
-
-            Spacer(minLength: 0)
-
-            PrimaryButton(
-                title: isAwaitingHookTrust ? "Recheck Connection" : "Set Up Integration",
-                isBusy: store.isInstallingIntegration
-            ) {
-                Task {
-                    if isAwaitingHookTrust {
-                        let status = await store.recheckIntegrationAndWait()
-                        if status == .active {
-                            setupMessage = nil
-                            step = 2
-                        } else {
-                            setupMessage = "Codex has not delivered a trusted lifecycle event yet."
-                        }
-                    } else if await store.installIntegrationHooksAndWait() {
-                        isAwaitingHookTrust = true
-                        setupMessage = nil
-                    }
-                }
-            }
-
-            SecondaryButton(title: "Back") {
-                step = 0
-            }
-        }
-    }
-
-    private var readyContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(Color(red: 0.11, green: 0.68, blue: 0.31))
-                .frame(maxWidth: .infinity)
-
-            VStack(alignment: .leading, spacing: 8) {
-                pageTitle("Codex is connected")
-                bodyText(
-                    "The monitor tracks turns that start from now on. Turns already underway in Codex Desktop stay invisible until their next lifecycle event. Completed turns remain until you read them in Desktop."
-                )
-            }
-
-            BenefitRow(
-                systemImage: "waveform.path.ecg",
-                title: "Real-time turn state",
-                detail: "Running, input, approval, and completed states."
-            )
-            BenefitRow(
-                systemImage: "arrow.up.forward.app",
-                title: "Exact chat navigation",
-                detail: "The supported Codex deep link targets the same Desktop thread."
-            )
-
-            InformationBlock(
-                title: "Content previews are on by default",
-                detail: "You can hide all current-content previews at any time in Settings.",
-                color: DesignColor.greenInformation
-            )
-
-            Spacer(minLength: 0)
-            PrimaryButton(title: "Start Monitoring") {
-                store.completeOnboarding()
-            }
-        }
-    }
-
-    private var windowTitle: String {
-        switch step {
-        case 0: "Welcome"
-        case 1: "Connect to Codex"
-        default: "Ready"
-        }
-    }
-
-    private func pageTitle(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 26, weight: .bold))
-            .foregroundStyle(DesignColor.primaryText)
-    }
-
-    private func bodyText(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 14))
-            .foregroundStyle(DesignColor.secondaryText)
+            .font(.system(size: 13))
+            .foregroundStyle(MacOSWindowColor.secondaryText)
             .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-private struct NotchPreview: View {
-    var body: some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(Color(red: 0.04, green: 0.52, blue: 1))
-                .frame(width: 8, height: 8)
-            Text("Codex in Notch")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
-            Spacer()
-            Circle()
-                .stroke(.white, lineWidth: 2)
-                .frame(width: 18, height: 18)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 22)
-        .frame(width: 300, height: 72)
-        .background(.black, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
-}
 
-private struct BenefitRow: View {
-    let systemImage: String
-    let title: String
-    let detail: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color(red: 0.03, green: 0.45, blue: 0.98))
-                .frame(width: 28, height: 28)
-                .background(DesignColor.sidebarSelection, in: Circle())
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(DesignColor.primaryText)
-                Text(detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(DesignColor.secondaryText)
-                    .lineLimit(2)
-            }
-        }
-        .frame(height: 44)
-    }
-}
-
-private struct InformationBlock: View {
-    let title: String
-    let detail: String
-    let color: Color
-    var height: CGFloat = 84
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(DesignColor.primaryText)
-            Text(detail)
-                .font(.system(size: 11))
-                .foregroundStyle(DesignColor.secondaryText)
-                .lineLimit(2)
-        }
-        .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, minHeight: height, alignment: .leading)
-        .background(color, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-private struct PrimaryButton: View {
-    let title: String
-    var isBusy = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if isBusy {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white)
+    /// The two connections, in the rows Settings uses for the same job.
+    ///
+    /// `Recheck` sits in the footnote rather than beside the switch because
+    /// turning the switch on is not the end of it: Codex keys hook trust to
+    /// each definition's place in the file and asks before it will run one, so
+    /// the row only says Connected once a trusted event has actually arrived.
+    private var connectGroup: some View {
+        SettingsGroup(header: "Connect your agents") {
+            ProductConnectionRows()
+        } footnote: {
+            SettingsFootnote(
+                "The switch installs five lifecycle definitions in "
+                    + "~/.codex/hooks.json and removes them again when it is "
+                    + "off; your own hooks are untouched. Claude Code is "
+                    + "registered by hand — Notchline never writes that file."
+            ) {
+                Button("Recheck") {
+                    store.refreshNow()
                 }
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
             }
-            .frame(maxWidth: .infinity, minHeight: 34)
-            .foregroundStyle(.white)
-            .background(
-                Color(red: 0.02, green: 0.45, blue: 0.98),
-                in: RoundedRectangle(cornerRadius: 8)
+        }
+    }
+
+    /// The whole of what the notch draws, in four specimens and two words.
+    ///
+    /// A state called `Running` does not need a sentence saying that a turn is
+    /// running. The specimens carry the pattern, the labels carry the names,
+    /// and the only thing left to say is which colour belongs to which product.
+    private var notchGroup: some View {
+        SettingsGroup(header: "Reading the notch") {
+            MatrixLegend()
+            SettingsSeparator()
+            ProductColourKey()
+        } footnote: {
+            SettingsFootnote(
+                "With nothing connected the matrix is grey — or on a notched "
+                    + "display, absent."
             )
         }
-        .buttonStyle(.plain)
-        .disabled(isBusy)
     }
 }
 
-private struct SecondaryButton: View {
-    let title: String
-    let action: () -> Void
+/// The four appearances, live.
+///
+/// They animate here for the same reason they animate in the notch: the
+/// pattern *is* the motion, and a still checkerboard says far less than a
+/// moving one. It costs nothing to run — the tracks are layer animations on
+/// the render server, and `Connected` holds by itself because its state has no
+/// period at all.
+private struct MatrixLegend: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    private static let states: [(NotchMatrixState, String)] = [
+        (.running, "Running"),
+        (.needsAttention, "Input · Approval"),
+        (.completed, "Completed"),
+        (.inactive, "Connected")
+    ]
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .frame(maxWidth: .infinity, minHeight: 34)
-                .foregroundStyle(DesignColor.primaryText)
-                .background(.white, in: RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(DesignColor.border, lineWidth: 1)
+        HStack(spacing: 0) {
+            ForEach(Array(Self.states.enumerated()), id: \.offset) { _, entry in
+                VStack(alignment: .leading, spacing: 8) {
+                    NotchChip {
+                        NotchStatusMatrix(
+                            state: entry.0,
+                            size: OnboardingMetrics.matrixSize,
+                            isAnimated: !store.reduceMotion,
+                            split: .products
+                        )
+                    }
+
+                    Text(entry.1)
+                        .font(.system(size: 12))
+                        .foregroundStyle(MacOSWindowColor.primaryText)
                 }
+                .padding(.trailing, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(14)
     }
 }
 
-private struct WindowTitleSetter: NSViewRepresentable {
-    let title: String
+/// Which hue belongs to which product, in the fewest words that can say it.
+///
+/// The specimens above carry both colours at once, which shows that there are
+/// two but not which is which. This row answers only that, and it sits on the
+/// same four columns as the legend so the two chips line up under specimens
+/// rather than floating between them.
+private struct ProductColourKey: View {
+    private static let products: [AgentKind?] = [.codex, nil, .claudeCode, nil]
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            view.window?.title = title
-        }
-        return view
-    }
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(Self.products.enumerated()), id: \.offset) { _, entry in
+                HStack(spacing: 8) {
+                    if let agent = entry {
+                        NotchChip {
+                            NotchStatusMatrix(
+                                state: .running,
+                                size: OnboardingMetrics.matrixSize,
+                                isAnimated: false,
+                                agent: agent
+                            )
+                        }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            nsView.window?.title = title
+                        Text(agent.displayName)
+                            .font(.system(size: 12))
+                            .foregroundStyle(MacOSWindowColor.primaryText)
+                    }
+                }
+                .padding(.trailing, 12)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: OnboardingMetrics.chipSize,
+                    alignment: .leading
+                )
+            }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
     }
 }
 
-private enum DesignColor {
-    static let windowBackground = Color(red: 0.973, green: 0.976, blue: 0.980)
-    static let sidebar = Color(red: 0.933, green: 0.941, blue: 0.949)
-    static let sidebarSelection = Color(red: 0.878, green: 0.941, blue: 1)
-    static let blueInformation = Color(red: 0.898, green: 0.949, blue: 1)
-    static let greenInformation = Color(red: 0.898, green: 0.980, blue: 0.929)
-    static let primaryText = Color(red: 0.075, green: 0.082, blue: 0.102)
-    static let secondaryText = Color(red: 0.341, green: 0.361, blue: 0.412)
-    static let tertiaryText = Color(red: 0.478, green: 0.502, blue: 0.549)
-    static let border = Color(red: 0.820, green: 0.839, blue: 0.878)
+/// A scrap of the notch to stand a specimen on.
+///
+/// The matrix is drawn for one surface only — a black one — and its unlit bed
+/// is nearly black by design. Dropped straight onto a light card it would read
+/// as a smudge, so the legend brings the ground it belongs to with it. The chip
+/// is also what contains the glow: the lit passes bleed `cell × 10.5/27 × 3`
+/// past the matrix's own bounds, which at this size is less than the padding
+/// here.
+private struct NotchChip<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .padding((OnboardingMetrics.chipSize - OnboardingMetrics.matrixSize) / 2)
+            .background(
+                Color.black,
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+    }
+}
+
+private enum OnboardingMetrics {
+    /// The size the notch itself draws a matrix at, so the legend is a
+    /// specimen rather than an illustration of one.
+    static let matrixSize = PanelMetrics.statusMatrixSize
+    static let chipSize: CGFloat = 30
 }
 
 #Preview("Onboarding") {

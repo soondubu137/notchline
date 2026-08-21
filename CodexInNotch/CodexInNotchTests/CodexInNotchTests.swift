@@ -245,6 +245,52 @@ struct CodexInNotchTests {
         #expect(NotchPalette.ink(for: .codex) != NotchPalette.ink(for: .claudeCode))
     }
 
+    /// The legend's seam runs the way the app's own mark does.
+    ///
+    /// This is the first asymmetric thing the matrix has ever drawn. All four
+    /// patterns are symmetric top to bottom — a checkerboard, a centre cell,
+    /// and two uniform fields — so the view's `isFlipped` has never been
+    /// observable and nothing would have caught it being wrong. The seam
+    /// would: mirrored, it runs upper-left to lower-right and the legend stops
+    /// looking like the icon.
+    ///
+    /// Asserted on the path rather than on rendered pixels because the path is
+    /// what the code decides; the row and column arithmetic beside it is the
+    /// other half of the same claim.
+    @Test @MainActor
+    func theSplitMatrixCutsOnTheSameDiagonalAsTheMark() {
+        // Codex above the seam, Claude Code below — the mark's own order.
+        #expect(NotchPalette.MatrixSplit.products.above == NotchPalette.codexInk)
+        #expect(NotchPalette.MatrixSplit.products.below == NotchPalette.claudeCodeInk)
+
+        // Row 0 is the top row, which is what makes "above" mean above.
+        #expect(MatrixIndicatorView(frame: .zero).isFlipped)
+
+        // Three cells a side, three on the seam itself.
+        let sides = (0 ..< 9).map { MatrixIndicatorView.DiagonalSide.of(cell: $0) }
+        #expect(sides == [
+            .above, .above, .onSeam,
+            .above, .onSeam, .below,
+            .onSeam, .below, .below
+        ])
+
+        // The trailing half is the lower-right one: y grows downwards, so the
+        // corner it must cover is the bottom-right and the one it must leave
+        // alone is the top-left.
+        let edge: CGFloat = 27
+        let half = MatrixIndicatorView.trailingHalf(edge: edge, radius: 2)
+        #expect(half.contains(CGPoint(x: edge * 0.8, y: edge * 0.8)))
+        #expect(!half.contains(CGPoint(x: edge * 0.2, y: edge * 0.2)))
+        // And it is a half, not a quadrant: it reaches both ends of the seam,
+        // and neither of the two cells the seam separates is on it. Every
+        // point here is clear of the line x + y = edge, which `contains` is
+        // entitled to answer either way.
+        #expect(half.contains(CGPoint(x: edge * 0.9, y: edge * 0.5)))
+        #expect(half.contains(CGPoint(x: edge * 0.5, y: edge * 0.9)))
+        #expect(!half.contains(CGPoint(x: edge * 0.5, y: edge * 0.1)))
+        #expect(!half.contains(CGPoint(x: edge * 0.1, y: edge * 0.5)))
+    }
+
     /// One mark per connected product, in `AgentKind` order, never by urgency.
     @Test @MainActor
     func theMarksAreOnePerConnectedProductInAFixedOrder() throws {

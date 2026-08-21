@@ -13,8 +13,6 @@ import SwiftUI
 
 struct AppSettingsView: View {
     @EnvironmentObject private var store: MonitorStore
-    @State private var isShowingClaudeCodeSetup = false
-    @State private var didCopyClaudeCodeSnippet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -31,17 +29,17 @@ struct AppSettingsView: View {
             // that the text beside it is about.
             HStack(alignment: .top, spacing: 16) {
                 Text(
-                    "Codex in Notch only reads. Nothing here changes state in "
+                    "Notchline only reads. Nothing here changes state in "
                         + "Codex or Claude Code."
                 )
                 .settingsFootnote(MacOSWindowColor.tertiaryText)
 
-                Button("Quit Codex in Notch") {
+                Button("Quit Notchline") {
                     NSApp.terminate(nil)
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
-                .help("Quits Codex in Notch and takes the component off the menu bar.")
+                .help("Quits Notchline and takes the component off the menu bar.")
             }
         }
         .padding(.horizontal, 24)
@@ -63,45 +61,7 @@ struct AppSettingsView: View {
     /// putting the two rows side by side is what makes it visible.
     private var productsGroup: some View {
         SettingsGroup(header: "Products") {
-            SettingsRow(
-                title: "Codex Desktop",
-                caption: codexCopy.diagnostic,
-                status: SettingsRowStatus(
-                    color: codexCopy.color,
-                    text: codexCopy.status
-                )
-            ) {
-                Toggle("Codex integration", isOn: integrationSelection)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .disabled(store.isInstallingIntegration || store.isRemovingIntegration)
-                    .help("Installs or removes the five Codex lifecycle definitions together.")
-            }
-
-            if let setup = store.manualSetups[.claudeCode] {
-                SettingsSeparator()
-
-                SettingsRow(
-                    title: "Claude Code",
-                    caption: claudeCodeCopy.diagnostic,
-                    status: SettingsRowStatus(
-                        color: claudeCodeCopy.color,
-                        text: claudeCodeCopy.status
-                    )
-                ) {
-                    Button(isShowingClaudeCodeSetup ? "Hide Setup" : "Set Up…") {
-                        isShowingClaudeCodeSetup.toggle()
-                        didCopyClaudeCodeSnippet = false
-                    }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
-                }
-
-                if isShowingClaudeCodeSetup {
-                    SettingsSeparator()
-                    claudeCodeSetup(setup)
-                }
-            }
+            ProductConnectionRows()
 
             if let transcripts = store.diskFootprints[.claudeCode] {
                 SettingsSeparator()
@@ -109,7 +69,7 @@ struct AppSettingsView: View {
             }
         } footnote: {
             SettingsFootnote(
-                "The switch installs only the five lifecycle events Codex in Notch needs, "
+                "The switch installs only the five lifecycle events Notchline needs, "
                     + "and removes them again when it is off. Claude Code is registered by "
                     + "hand — this app reads that file and never writes it."
             ) {
@@ -141,7 +101,7 @@ struct AppSettingsView: View {
         SettingsRow(
             title: "Quota reading transcripts",
             caption: "Each reading leaves one in Claude Code's project folder. "
-                + "Codex in Notch never deletes them."
+                + "Notchline never deletes them."
         ) {
             HStack(spacing: 10) {
                 // Beside the button rather than in the status slot: that slot
@@ -158,6 +118,157 @@ struct AppSettingsView: View {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .disabled(report.directory == nil)
+            }
+        }
+    }
+
+    // MARK: - Display
+
+    /// Not on the redesign board, which shows the three confirmed groups only.
+    ///
+    /// It is a control that already exists and has nowhere else to live: the
+    /// component appears on exactly one display and the user picks which. Kept
+    /// in the same shape rather than dropped, and recorded in `figma-design.md`
+    /// §8.4 so the board and the window can be reconciled deliberately.
+    private var displayGroup: some View {
+        SettingsGroup(header: "Display") {
+            SettingsRow(
+                title: "Show Notchline on",
+                caption: selectedDisplayDescription
+            ) {
+                if store.displays.isEmpty {
+                    Text("No display available")
+                        .font(.system(size: 11))
+                        .foregroundStyle(MacOSWindowColor.secondaryText)
+                } else {
+                    Picker("Display for Notchline", selection: displaySelection) {
+                        ForEach(store.displays) { display in
+                            Text(display.pickerTitle).tag(display.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                }
+            }
+        } footnote: {
+            SettingsFootnote(
+                "The component takes the menu bar of the display you choose, and its "
+                    + "geometry with it — a cut-out to wrap, or a pill where there is none."
+            )
+        }
+    }
+
+    // MARK: - Session list
+
+    private var sessionListGroup: some View {
+        SettingsGroup(header: "Session list") {
+            SettingsRow(
+                title: "Distinguish products",
+                caption: "How a row shows which product it came from."
+            ) {
+                Picker("Distinguish products", selection: $store.productAttribution) {
+                    ForEach(ProductAttributionStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+
+            SettingsSeparator()
+
+            SettingsRow(
+                title: "Clear the session list",
+                caption: "Removes rows from Notchline. No Codex chat is deleted."
+            ) {
+                Button(store.isClearingSessions ? "Clearing…" : "Clear") {
+                    store.clearSessions()
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .disabled(store.sessions.isEmpty || store.isClearingSessions)
+            }
+        } footnote: {
+            // Visible with one product too. A preference you cannot find until a
+            // second product happens to be open is one you never find.
+            SettingsFootnote(
+                "Only applies while both products are connected — with one product there "
+                    + "is nothing to tell apart."
+            )
+        }
+    }
+
+    private var selectedDisplayDescription: String {
+        guard let display = store.selectedDisplay else {
+            return "Connect a display to choose where the component appears."
+        }
+
+        let geometry = display.geometry == .notched
+            ? "Notch display"
+            : "Display without a notch"
+        return "\(geometry) · \(Int(display.menuBarHeight.rounded())) pt menu bar"
+    }
+
+    private var displaySelection: Binding<String> {
+        Binding(
+            get: { store.selectedDisplayID },
+            set: { store.selectDisplay(id: $0) }
+        )
+    }
+}
+
+/// The two connections the app needs, as the two rows that ask for them.
+///
+/// Shared by first run and Settings rather than drawn twice. Both windows ask
+/// for exactly the same thing, and the pair is the one place ADR 0010's
+/// asymmetry is visible — a switch for Codex, a paste-it-yourself button for
+/// Claude Code. A second copy would be a second place for that asymmetry to be
+/// quietly evened out.
+struct ProductConnectionRows: View {
+    @EnvironmentObject private var store: MonitorStore
+    @State private var isShowingClaudeCodeSetup = false
+    @State private var didCopyClaudeCodeSnippet = false
+
+    var body: some View {
+        SettingsRow(
+            title: "Codex Desktop",
+            caption: codexCopy.diagnostic,
+            status: SettingsRowStatus(
+                color: codexCopy.color,
+                text: codexCopy.status
+            )
+        ) {
+            Toggle("Codex integration", isOn: integrationSelection)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(store.isInstallingIntegration || store.isRemovingIntegration)
+                .help("Installs or removes the five Codex lifecycle definitions together.")
+        }
+
+        if let setup = store.manualSetups[.claudeCode] {
+            SettingsSeparator()
+
+            SettingsRow(
+                title: "Claude Code",
+                caption: claudeCodeCopy.diagnostic,
+                status: SettingsRowStatus(
+                    color: claudeCodeCopy.color,
+                    text: claudeCodeCopy.status
+                )
+            ) {
+                Button(isShowingClaudeCodeSetup ? "Hide Setup" : "Set Up…") {
+                    isShowingClaudeCodeSetup.toggle()
+                    didCopyClaudeCodeSnippet = false
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+            }
+
+            if isShowingClaudeCodeSetup {
+                SettingsSeparator()
+                claudeCodeSetup(setup)
             }
         }
     }
@@ -204,85 +315,6 @@ struct AppSettingsView: View {
         .padding(.vertical, 12)
     }
 
-    // MARK: - Display
-
-    /// Not on the redesign board, which shows the three confirmed groups only.
-    ///
-    /// It is a control that already exists and has nowhere else to live: the
-    /// component appears on exactly one display and the user picks which. Kept
-    /// in the same shape rather than dropped, and recorded in `figma-design.md`
-    /// §8.4 so the board and the window can be reconciled deliberately.
-    private var displayGroup: some View {
-        SettingsGroup(header: "Display") {
-            SettingsRow(
-                title: "Show Codex in Notch on",
-                caption: selectedDisplayDescription
-            ) {
-                if store.displays.isEmpty {
-                    Text("No display available")
-                        .font(.system(size: 11))
-                        .foregroundStyle(MacOSWindowColor.secondaryText)
-                } else {
-                    Picker("Display for Codex in Notch", selection: displaySelection) {
-                        ForEach(store.displays) { display in
-                            Text(display.pickerTitle).tag(display.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                }
-            }
-        } footnote: {
-            SettingsFootnote(
-                "The component takes the menu bar of the display you choose, and its "
-                    + "geometry with it — a cut-out to wrap, or a pill where there is none."
-            )
-        }
-    }
-
-    // MARK: - Session list
-
-    private var sessionListGroup: some View {
-        SettingsGroup(header: "Session list") {
-            SettingsRow(
-                title: "Distinguish products",
-                caption: "How a row shows which product it came from."
-            ) {
-                Picker("Distinguish products", selection: $store.productAttribution) {
-                    ForEach(ProductAttributionStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
-            }
-
-            SettingsSeparator()
-
-            SettingsRow(
-                title: "Clear the session list",
-                caption: "Removes rows from Codex in Notch. No Codex chat is deleted."
-            ) {
-                Button(store.isClearingSessions ? "Clearing…" : "Clear") {
-                    store.clearSessions()
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .disabled(store.sessions.isEmpty || store.isClearingSessions)
-            }
-        } footnote: {
-            // Visible with one product too. A preference you cannot find until a
-            // second product happens to be open is one you never find.
-            SettingsFootnote(
-                "Only applies while both products are connected — with one product there "
-                    + "is nothing to tell apart."
-            )
-        }
-    }
-
-    // MARK: - Status copy
 
     private var codexCopy: ProductSettingsCopy {
         .codex(
@@ -297,24 +329,6 @@ struct AppSettingsView: View {
             setup: store.setupStatus(for: .claudeCode),
             availability: store.agentAvailability(for: .claudeCode),
             diagnostic: store.diagnostic(for: .claudeCode)
-        )
-    }
-
-    private var selectedDisplayDescription: String {
-        guard let display = store.selectedDisplay else {
-            return "Connect a display to choose where the component appears."
-        }
-
-        let geometry = display.geometry == .notched
-            ? "Notch display"
-            : "Display without a notch"
-        return "\(geometry) · \(Int(display.menuBarHeight.rounded())) pt menu bar"
-    }
-
-    private var displaySelection: Binding<String> {
-        Binding(
-            get: { store.selectedDisplayID },
-            set: { store.selectDisplay(id: $0) }
         )
     }
 
@@ -426,7 +440,7 @@ struct ProductSettingsCopy: Equatable {
 /// grouped `Form` reaches none of them. The controls *inside* it are native, so
 /// the switch, the popup and the capsule buttons are the real Tahoe shapes
 /// rather than approximations of them.
-private struct SettingsGroup<Content: View, Footnote: View>: View {
+struct SettingsGroup<Content: View, Footnote: View>: View {
     let header: String
     @ViewBuilder let content: () -> Content
     @ViewBuilder let footnote: () -> Footnote
@@ -459,7 +473,7 @@ private struct SettingsGroup<Content: View, Footnote: View>: View {
     }
 }
 
-private struct SettingsRowStatus {
+struct SettingsRowStatus {
     let color: Color
     let text: String
 }
@@ -469,7 +483,7 @@ private struct SettingsRowStatus {
 /// The status dot starts the caption line rather than standing left of the
 /// product name, so every primary label in the window shares one indent and
 /// there is a single column to read down.
-private struct SettingsRow<Control: View>: View {
+struct SettingsRow<Control: View>: View {
     let title: String
     var caption: String?
     var status: SettingsRowStatus?
@@ -511,7 +525,7 @@ private struct SettingsRow<Control: View>: View {
     }
 }
 
-private struct SettingsSeparator: View {
+struct SettingsSeparator: View {
     var body: some View {
         Rectangle()
             .fill(MacOSWindowColor.separator)
@@ -520,7 +534,7 @@ private struct SettingsSeparator: View {
 }
 
 /// Footnote text, optionally with a control on its trailing side.
-private struct SettingsFootnote<Accessory: View>: View {
+struct SettingsFootnote<Accessory: View>: View {
     private let text: String
     private let accessory: () -> Accessory
 
@@ -544,7 +558,7 @@ extension SettingsFootnote where Accessory == EmptyView {
     }
 }
 
-private extension Text {
+extension Text {
     func settingsFootnote(_ color: Color) -> some View {
         font(.system(size: 11))
             .foregroundStyle(color)
@@ -649,7 +663,11 @@ enum MacOSWindowColor {
 /// `.hiddenTitleBar` -- which would make the most conspicuous element in a
 /// window whose whole argument is "native controls, not approximations of
 /// them" the one piece that is an approximation. The band stays macOS's.
-private struct SettingsWindowChrome: NSViewRepresentable {
+struct SettingsWindowChrome: NSViewRepresentable {
+    /// Which of the two windows this is. The same scene shows first run and
+    /// then Settings, so the band has to be told which one it is under.
+    var title = "Notchline Settings"
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async { apply(to: view.window) }
@@ -662,7 +680,7 @@ private struct SettingsWindowChrome: NSViewRepresentable {
 
     private func apply(to window: NSWindow?) {
         guard let window else { return }
-        window.title = "Codex in Notch Settings"
+        window.title = title
         // Only reaches the window's own edges, not the title bar, but it keeps
         // a resize or a first paint from flashing the default grey.
         window.backgroundColor = MacOSWindowColor.windowBackgroundColor

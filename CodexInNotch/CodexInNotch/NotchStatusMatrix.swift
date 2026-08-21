@@ -84,6 +84,26 @@ enum NotchPalette {
         onRed: 0x15 / 255, onGreen: 0x15 / 255, onBlue: 0x15 / 255
     )
 
+    /// Two inks in one matrix, cut on the mark's diagonal.
+    ///
+    /// The surface never draws this. Every mark on the notch belongs to exactly
+    /// one product, because hue is how the user tells two marks apart, and a
+    /// mark carrying both hues would answer that question with "both". It
+    /// exists for the first-run legend, where one specimen per state has to
+    /// stand for both products at once and drawing eight specimens would say
+    /// that the pattern differs by product, which it does not.
+    ///
+    /// The cut runs from the lower-left corner to the upper-right one, Codex
+    /// above and Claude Code below — the same seam the app's own mark has, so
+    /// the legend reads as the icon rather than as a fifth state.
+    nonisolated struct MatrixSplit: Equatable, Sendable {
+        let above: MatrixInk
+        let below: MatrixInk
+
+        /// The pairing the icon uses: Codex leading, Claude Code trailing.
+        static let products = MatrixSplit(above: codexInk, below: claudeCodeInk)
+    }
+
     /// The ink for one product, or the resting grey when no product owns the mark.
     nonisolated static func ink(for agent: AgentKind?) -> MatrixInk {
         switch agent {
@@ -451,13 +471,19 @@ struct NotchStatusMatrix: View {
     var isAnimated = true
     /// Which product this mark belongs to, or nil for the resting grey.
     var agent: AgentKind?
+    /// Draw one specimen for both products instead, cut on the mark's diagonal.
+    ///
+    /// Only the first-run legend passes this; on the surface a mark always
+    /// belongs to one product. When set it replaces `agent`'s ink entirely.
+    var split: NotchPalette.MatrixSplit?
 
     var body: some View {
         MatrixIndicator(
             state: state,
             size: size,
             isAnimated: isAnimated,
-            ink: NotchPalette.ink(for: agent)
+            ink: NotchPalette.ink(for: agent),
+            split: split
         )
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -469,13 +495,20 @@ private struct MatrixIndicator: NSViewRepresentable {
     let size: CGFloat
     let isAnimated: Bool
     let ink: NotchPalette.MatrixInk
+    let split: NotchPalette.MatrixSplit?
 
     func makeNSView(context: Context) -> MatrixIndicatorView {
         MatrixIndicatorView()
     }
 
     func updateNSView(_ view: MatrixIndicatorView, context: Context) {
-        view.apply(state: state, size: size, isAnimated: isAnimated, ink: ink)
+        view.apply(
+            state: state,
+            size: size,
+            isAnimated: isAnimated,
+            ink: ink,
+            split: split
+        )
     }
 }
 
@@ -486,10 +519,35 @@ final class MatrixIndicatorView: NSView {
         let opacity: Float
     }
 
+    /// One cell's colours: the product's, or both where the seam crosses it.
+    private enum CellInk {
+        case single(CGColor)
+        case split(above: CGColor, below: CGColor)
+    }
+
+    /// Which side of the mark's diagonal a cell falls on.
+    ///
+    /// The seam runs from the lower-left corner to the upper-right one, so with
+    /// row 0 at the top the sum of a cell's row and column is below 2 above the
+    /// seam, above 2 below it, and exactly 2 on the three cells the seam itself
+    /// passes through.
+    enum DiagonalSide: Equatable {
+        case above, below, onSeam
+
+        static func of(cell index: Int) -> DiagonalSide {
+            switch index / 3 + index % 3 {
+            case ..<2: .above
+            case 2: .onSeam
+            default: .below
+            }
+        }
+    }
+
     private var appliedState: NotchMatrixState?
     private var appliedSize: CGFloat = 0
     private var appliedIsAnimated = true
     private var appliedInk = NotchPalette.codexInk
+    private var appliedSplit: NotchPalette.MatrixSplit?
 
     // Row 0 is the top row, as in the SVG.
     override var isFlipped: Bool { true }
@@ -508,18 +566,21 @@ final class MatrixIndicatorView: NSView {
         state: NotchMatrixState,
         size: CGFloat,
         isAnimated: Bool,
-        ink: NotchPalette.MatrixInk
+        ink: NotchPalette.MatrixInk,
+        split: NotchPalette.MatrixSplit? = nil
     ) {
         guard state != appliedState
             || size != appliedSize
             || isAnimated != appliedIsAnimated
-            || ink != appliedInk else {
+            || ink != appliedInk
+            || split != appliedSplit else {
             return
         }
         appliedState = state
         appliedSize = size
         appliedIsAnimated = isAnimated
         appliedInk = ink
+        appliedSplit = split
         rebuild()
     }
 
@@ -554,7 +615,39 @@ final class MatrixIndicatorView: NSView {
         let bleed = cell * 10.5 / 27 * 3
         let scale = window?.backingScaleFactor ?? 2
 
-        func pass(_ pass: GlowPass, color: CGColor, animated: Bool) -> CALayer {
+        /// One cell, in one colour or cut into two on the mark's diagonal.
+        ///
+        /// The split cell is a full rounded rect in the leading colour with the
+        /// trailing colour laid over its lower-right half. The mask is a plain
+        /// triangle rather than a gradient stop: it is drawn in the same
+        /// flipped space the cell frames are laid out in, so the seam cannot
+        /// come out mirrored the way a unit-space gradient can.
+        func makeCell(_ ink: CellInk, side: DiagonalSide, edge: CGFloat) -> CALayer {
+            let layer = CALayer()
+            layer.cornerRadius = radius
+            layer.cornerCurve = .continuous
+            layer.contentsScale = scale
+
+            switch (ink, side) {
+            case let (.single(color), _):
+                layer.backgroundColor = color
+            case let (.split(above, _), .above):
+                layer.backgroundColor = above
+            case let (.split(_, below), .below):
+                layer.backgroundColor = below
+            case let (.split(above, below), .onSeam):
+                layer.backgroundColor = above
+                let trailing = CAShapeLayer()
+                trailing.frame = CGRect(x: 0, y: 0, width: edge, height: edge)
+                trailing.path = Self.trailingHalf(edge: edge, radius: radius)
+                trailing.fillColor = below
+                trailing.contentsScale = scale
+                layer.addSublayer(trailing)
+            }
+            return layer
+        }
+
+        func pass(_ pass: GlowPass, ink: CellInk, animated: Bool) -> CALayer {
             let container = CALayer()
             container.frame = CGRect(
                 x: -bleed,
@@ -574,17 +667,17 @@ final class MatrixIndicatorView: NSView {
             }
 
             for index in 0 ..< 9 {
-                let cellLayer = CALayer()
+                let cellLayer = makeCell(
+                    ink,
+                    side: DiagonalSide.of(cell: index),
+                    edge: cell
+                )
                 cellLayer.frame = CGRect(
                     x: bleed + CGFloat(index % 3) * pitch,
                     y: bleed + CGFloat(index / 3) * pitch,
                     width: cell,
                     height: cell
                 )
-                cellLayer.cornerRadius = radius
-                cellLayer.cornerCurve = .continuous
-                cellLayer.backgroundColor = color
-                cellLayer.contentsScale = scale
 
                 let track = state.track(forCell: index)
                 // The still the design file shows: every track's t=0 frame.
@@ -600,11 +693,18 @@ final class MatrixIndicatorView: NSView {
             return container
         }
 
+        let unlit: CellInk = appliedSplit.map {
+            .split(above: $0.above.offLayerColor, below: $0.below.offLayerColor)
+        } ?? .single(appliedInk.offLayerColor)
+        let lit: CellInk = appliedSplit.map {
+            .split(above: $0.above.onLayerColor, below: $0.below.onLayerColor)
+        } ?? .single(appliedInk.onLayerColor)
+
         // The unlit bed never animates; only the lit copies above it do.
         root.addSublayer(
             pass(
                 GlowPass(blur: nil, opacity: 1),
-                color: appliedInk.offLayerColor,
+                ink: unlit,
                 animated: false
             )
         )
@@ -621,11 +721,35 @@ final class MatrixIndicatorView: NSView {
             root.addSublayer(
                 pass(
                     glowPass,
-                    color: appliedInk.onLayerColor,
+                    ink: lit,
                     animated: appliedIsAnimated
                 )
             )
         }
+    }
+
+    /// The part of one cell that lies past the seam, corners and all.
+    ///
+    /// The seam runs from the cell's lower-left corner to its upper-right one,
+    /// so the half beyond it is the triangle through the top-right, bottom-right
+    /// and bottom-left corners — in this view's flipped space, where y grows
+    /// downwards. Intersecting with the cell's own rounded rect rather than
+    /// masking it keeps the two halves inside the same rounded outline and
+    /// leaves the result a plain path, which is a thing a test can ask about.
+    static func trailingHalf(edge: CGFloat, radius: CGFloat) -> CGPath {
+        let triangle = CGMutablePath()
+        triangle.move(to: CGPoint(x: edge, y: 0))
+        triangle.addLine(to: CGPoint(x: edge, y: edge))
+        triangle.addLine(to: CGPoint(x: 0, y: edge))
+        triangle.closeSubpath()
+
+        let cell = CGPath(
+            roundedRect: CGRect(x: 0, y: 0, width: edge, height: edge),
+            cornerWidth: radius,
+            cornerHeight: radius,
+            transform: nil
+        )
+        return triangle.intersection(cell)
     }
 
     /// Every cell's animation is added in one pass, so they share a `beginTime`
