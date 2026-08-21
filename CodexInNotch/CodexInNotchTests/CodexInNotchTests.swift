@@ -4425,6 +4425,82 @@ struct CodexInNotchTests {
         #expect(await registrar.registration() == .complete)
     }
 
+    /// The *first* reading after an outside edit is the edited one.
+    ///
+    /// The edge used to be delivered to two independent subscribers -- this
+    /// actor dropping its cached reading, and the refresh that asks it the
+    /// question -- with nothing ordering them. Whichever `Task` the scheduler
+    /// resumed first decided which answer the user got, and a refresh that won
+    /// cached the reading from before the edit with no second edge coming to
+    /// correct it (CR-028).
+    ///
+    /// This is not a reproduction of that race -- a race cannot be lost on
+    /// purpose, and against the old shape this test passed 50 runs out of 50,
+    /// because the invalidating subscriber usually got there first. What it
+    /// pins is the invariant that replaced the race: the first answer after the
+    /// edge is the edited one by construction rather than by scheduling, and
+    /// asserting eventual convergence instead would have said nothing at all.
+    /// Defeat the change-count comparison and this fails every time.
+    @Test @MainActor
+    func theFirstRegistrationReadingAfterAnOutsideEditIsTheEditedOne() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        #expect(await registrar.registration() == .complete)
+
+        var configuration = try #require(
+            JSONSerialization.jsonObject(
+                with: try Data(contentsOf: paths.hooksConfiguration)
+            ) as? [String: Any]
+        )
+        var hooks = try #require(configuration["hooks"] as? [String: Any])
+        hooks.removeValue(forKey: "Stop")
+        configuration["hooks"] = hooks
+        let damaged = try JSONSerialization.data(withJSONObject: configuration)
+        let hooksConfiguration = paths.hooksConfiguration
+
+        // Something outside this app removes a managed definition, and keeps
+        // removing it until the watcher reports the edit -- an in-place write,
+        // so the file the registrar is watching is the file that changed.
+        let observed = await receivesChange(registrar.changeEvents()) {
+            try damaged.write(to: hooksConfiguration)
+        }
+        #expect(observed)
+
+        // No `invalidateRegistration()` in between: the edge is the whole of
+        // what is under test here.
+        #expect(await registrar.registration() == .mismatched)
+    }
+
+    /// A reading taken while nothing was watching does not outlive the attach.
+    ///
+    /// On a first run `hooks.json` does not exist, so the watcher cannot attach
+    /// and no edge will ever report the file appearing. The reading taken then
+    /// -- `absent` -- was cached against nothing and would have survived
+    /// somebody else creating the file, because the only thing that dropped it
+    /// was an edge that could not be sent.
+    @Test @MainActor
+    func aReadingTakenBeforeTheWatcherCouldAttachIsNotKept() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let registrar = CodexHookRegistrar(paths: paths)
+        #expect(await registrar.registration() == .absent)
+
+        // Somebody else writes the file the watcher was waiting for.
+        try await CodexHookRegistrar(paths: paths).install()
+
+        #expect(await registrar.registration() == .complete)
+    }
+
     @Test @MainActor
     func backgroundQuotaReadPublishesWithoutWaitingForADeadline() async throws {
         // Quota is read in the background, so it lands after the snapshot that

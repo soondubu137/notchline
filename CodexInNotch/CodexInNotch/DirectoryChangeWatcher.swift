@@ -50,6 +50,7 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
     nonisolated(unsafe) private var pendingDelivery: DispatchWorkItem?
     nonisolated(unsafe) private var isFinished = false
     nonisolated(unsafe) private var lastAttachFailurePath: String?
+    nonisolated(unsafe) private var changeCounter: UInt64 = 0
 
     nonisolated init(directoryURL: URL, debounceInterval: TimeInterval) {
         self.directoryURL = directoryURL
@@ -105,6 +106,9 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
         }
         self.source = source
         lastAttachFailurePath = nil
+        // Attaching counts as a change: until this moment nothing was watching
+        // this path, so anything a caller read before it was read blind.
+        changeCounter &+= 1
         lock.unlock()
 
         // Resumed outside the lock: the handler takes the same lock.
@@ -116,6 +120,23 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return source != nil
+    }
+
+    /// How many changes this watcher has seen, readable without waiting for one.
+    ///
+    /// The stream says *when* something changed; this says *whether* anything
+    /// has changed since a caller last looked, which is a different question and
+    /// the one a cache needs answered. One edge wakes every subscriber in an
+    /// unspecified order, so a cached reading that one subscriber drops and
+    /// another re-reads is a race the scheduler settles -- and it can settle it
+    /// the wrong way round, leaving the stale value cached with no further edge
+    /// coming to correct it (CR-028). A caller that remembers this count
+    /// alongside whatever it derived from the file has no ordering left to lose:
+    /// the change is counted here before it is delivered anywhere.
+    nonisolated var changeCount: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return changeCounter
     }
 
     nonisolated func events() -> AsyncStream<Void> {
@@ -211,6 +232,9 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
     nonisolated private func deliver() {
         lock.lock()
         pendingDelivery = nil
+        // Counted before it is yielded, so no consumer can be woken by an edge
+        // that ``changeCount`` does not already reflect.
+        changeCounter &+= 1
         let continuations = Array(continuations.values)
         lock.unlock()
         continuations.forEach { $0.yield(()) }

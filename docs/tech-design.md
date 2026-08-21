@@ -439,7 +439,7 @@ launch
 
 这条此前挂在**每一次刷新**上（`upgradeManagedHookIfNeeded()` 读约 4 KB 脚本做字符串比较），去回答一个只有本应用自己升级时才会变的问题。
 
-**注册完整度也不按节拍重算。** 它只在三个时刻改变：本应用写了 `hooks.json`、用户主动要求重新检查、或该文件在我们脚下被改动（FSEvents 边沿）。前两者直接失效缓存，第三者由 `CodexHookRegistrar` 自己订阅。`installationRevalidationInterval`、缓存扫描与 `hasManagedSupportFootprint` 随之删除。
+**注册完整度也不按节拍重算。** 它只在三个时刻改变：本应用写了 `hooks.json`、用户主动要求重新检查、或该文件在我们脚下被改动（FSEvents 边沿）。前两者直接失效缓存；第三者**不靠订阅**——同一条边沿会同时唤醒 registrar 与刷新，谁先跑由调度器决定，刷新先跑就会读到改动前的缓存并把它留在那里，而不会再有第二条边沿来纠正（CR-028）。改成读的时候比对 `DirectoryChangeWatcher.changeCount`：计数在边沿投递**之前**递增，缓存读数连同计数一起存，顺序于是不再决定答案。挂载本身也计一次数——挂不上的那段时间没人在看，那时得出的结论不该活过挂载成功（首次运行时 `hooks.json` 还不存在，正是这种情况）。`installationRevalidationInterval`、缓存扫描与 `hasManagedSupportFootprint` 随之删除。
 
 安装与移除都对用户的 `hooks.json` **fail closed**，由 [`ManagedHooksConfiguration`](../CodexInNotch/CodexInNotch/ManagedHooksConfiguration.swift) 执行，规则只有三条：
 

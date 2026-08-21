@@ -672,8 +672,12 @@ actor CodexHookRegistrar {
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
     nonisolated private let configurationWatcher: DirectoryChangeWatcher
-    private var cachedRegistration: HookRegistration?
-    private var watcherTask: Task<Void, Never>?
+    /// The last reading, and the watcher's change count when it was taken.
+    ///
+    /// Kept together because separately they are a race: the count is what says
+    /// whether the file has moved underneath the reading, and a reading without
+    /// one is a value nobody can date.
+    private var cachedRegistration: (changeCount: UInt64, health: HookRegistration)?
 
     init(
         paths: HookIntegrationPaths = .live(),
@@ -692,10 +696,6 @@ actor CodexHookRegistrar {
         )
     }
 
-    deinit {
-        watcherTask?.cancel()
-    }
-
     nonisolated var socketURL: URL {
         paths.hookSocket
     }
@@ -708,22 +708,35 @@ actor CodexHookRegistrar {
     /// How complete the registration is, read from `hooks.json` and nothing
     /// else.
     ///
-    /// Cached, and the cache is invalidated by our own writes and by the file
-    /// watcher above — never by a timer. That is the whole of what replaced
-    /// `installationRevalidationInterval`, the cached scan and
+    /// Cached, and the cache is dropped by our own writes and by the file
+    /// changing underneath us — never by a timer. That is the whole of what
+    /// replaced `installationRevalidationInterval`, the cached scan and
     /// `hasManagedSupportFootprint`.
+    ///
+    /// The file's edge is consulted here rather than subscribed to. Subscribing
+    /// made this actor one of two consumers of the same edge, and the other one
+    /// is a refresh that asks this question: whichever `Task` the scheduler
+    /// resumed first decided whether the answer came from before or after the
+    /// edit, and losing that race cached the stale reading with no further edge
+    /// coming to correct it (CR-028). Comparing the watcher's change count
+    /// across the read has no order to lose.
     func registration() -> HookRegistration {
-        startWatchingIfNeeded()
         // On a first run `hooks.json` does not exist yet, so the attach made in
         // `init` necessarily failed and nothing else would think to ask again.
         // One failed `open` per ask is cheaper than a timer -- the same trade
         // ``DirectoryChangeWatcher/attachIfNeeded()`` exists for.
         configurationWatcher.attachIfNeeded()
-        if let cachedRegistration { return cachedRegistration }
+        // Read after that attach, not before: an attach is counted as a change,
+        // because a reading taken while nothing was watching cannot be trusted
+        // to have survived.
+        let changeCount = configurationWatcher.changeCount
+        if let cachedRegistration, cachedRegistration.changeCount == changeCount {
+            return cachedRegistration.health
+        }
         let scanned = managedConfiguration.registration(
             in: readConfigurationRoot()
         )
-        cachedRegistration = scanned
+        cachedRegistration = (changeCount, scanned)
         return scanned
     }
 
@@ -816,16 +829,6 @@ actor CodexHookRegistrar {
     }
 
     // MARK: - Internals
-
-    private func startWatchingIfNeeded() {
-        guard watcherTask == nil else { return }
-        let stream = configurationWatcher.events()
-        watcherTask = Task { [weak self] in
-            for await _ in stream {
-                await self?.invalidateRegistration()
-            }
-        }
-    }
 
     private func readConfigurationRoot() -> [String: Any]? {
         guard let data = try? Data(contentsOf: paths.hooksConfiguration),
