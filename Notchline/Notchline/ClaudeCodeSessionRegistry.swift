@@ -125,6 +125,25 @@ protocol ClaudeCodeSessionListing: Sendable {
     /// itself; a source that forgets gets a compile error rather than a
     /// no-op.
     func invalidate() async
+    /// When the reading behind the held list *began*, or `.distantFuture` for
+    /// a source that cannot be out of date.
+    ///
+    /// The left-hand side of "this event proves the list is wrong". A reading
+    /// that started before a session existed cannot be evidence that it does
+    /// not, so a caller holding a Turn the list does not name can ask whether
+    /// its evidence is newer than the reading and, if it is, say so —
+    /// ``invalidate()`` above.
+    ///
+    /// `.distantFuture` rather than `nil` for a source that reads live state:
+    /// nothing a caller can hear is newer than an answer taken on the spot, so
+    /// the comparison is simply never true. The registry answers the same way
+    /// before its first successful read, which is the fail-closed direction —
+    /// a `claude` that never answers must not be asked again on every event.
+    ///
+    /// **Without a default implementation**, for the reason ``invalidate()``
+    /// above has none: an actor satisfies an `async` requirement with a
+    /// synchronous member, and a default would then be what the caller gets.
+    func listReadStartedAt() async -> Date
 }
 
 extension ClaudeCodeSessionListing {
@@ -392,6 +411,9 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// When the command last *answered*. Decides how long the answer is
     /// believed.
     private var readAt: Date?
+    /// When the command behind the held list *started*. Decides what that list
+    /// can be held to have known -- see ``listReadStartedAt()``.
+    private var readStartedAt: Date?
     /// When the command was last *run*, answer or none. Decides when it is run
     /// again, which is a different question -- see ``liveSessions()``.
     private var attemptedAt: Date?
@@ -574,6 +596,25 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         invalidations += 1
     }
 
+    /// When the command behind the held list started running.
+    ///
+    /// The *start*, not the answer, because that is the instant the list stops
+    /// being able to speak for: `claude agents --json` takes a quarter of a
+    /// second alone and seconds under load, and a session born inside that
+    /// window is one this reading never saw. Reported so a caller holding
+    /// evidence of its own -- a hook event names a session, and a session that
+    /// sends events exists -- can tell "the list has not caught up" from "the
+    /// list is right and the Turn is stale".
+    ///
+    /// `.distantFuture` until a read has succeeded, so a caller compares
+    /// against an answer that cannot be beaten rather than against no answer
+    /// at all. That is deliberate in the fail-closed direction: while `claude`
+    /// is not answering, an edge would buy a launch every ``edgeFloor`` for a
+    /// list that is not going to change.
+    func listReadStartedAt() -> Date {
+        readStartedAt ?? .distantFuture
+    }
+
     /// Reads again regardless of freshness, for when something said to.
     ///
     /// Single-flighted: an actor suspends at every `await`, so without this two
@@ -621,6 +662,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
 
         cached = sessions.filter { !isOwnReading($0) }
         readAt = clock.now()
+        readStartedAt = observedAt
         return cached
     }
 

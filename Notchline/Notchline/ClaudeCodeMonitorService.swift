@@ -427,12 +427,62 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // after it so both come from the same reading: asked afterwards, the
         // two calls could land either side of a refresh and describe different
         // instants.
-        let presence = await sessions.presence()
-        let live = await sessions.liveSessions()
-        let liveByID = Dictionary(
-            live.map { ($0.sessionID, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        func readSessions() async -> (
+            presence: AgentPresence,
+            live: [ClaudeCodeSession],
+            byID: [String: ClaudeCodeSession]
+        ) {
+            let presence = await sessions.presence()
+            let live = await sessions.liveSessions()
+            return (
+                presence,
+                live,
+                Dictionary(
+                    live.map { ($0.sessionID, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+            )
+        }
+        var (presence, live, liveByID) = await readSessions()
+
+        // **A hook event is itself evidence that its session exists**, and
+        // when it is newer than the reading, it outranks it.
+        //
+        // Every route by which the list goes wrong is meant to be reported by
+        // an edge, and one route had none: a session id is not fixed for the
+        // life of a process. `/clear` and an in-session `/resume` rotate it in
+        // place -- same pid, same `~/.claude/sessions/<pid>.json`, same inode,
+        // a new `sessionId` written into it. Measured on this machine
+        // 2026-08-21: a record still naming the pid and start time of a process
+        // launched at 23:14 carried a session id whose transcript begins at
+        // 01:14, two hours later. Nothing is created and nothing is removed, so
+        // the directory source cannot see it; the record source is the one that
+        // can, and it is now pointed at every listed session for exactly this
+        // reason (below).
+        //
+        // This is the fail-safe behind that, and it is stated in terms of the
+        // evidence rather than of any one way the list can rot: the reducer is
+        // holding a Turn whose session the list does not name, and that Turn
+        // has moved since the reading was taken. A reading that started before
+        // the event cannot have seen what the event is reporting, so it is the
+        // reading that is wrong, not the Turn -- and the row that would
+        // otherwise be dropped below is drawn in this same refresh instead of
+        // whenever the next reading happens to land.
+        //
+        // Bounded on both sides. Turns that have *not* moved since the reading
+        // -- a session that really did end without a `Stop` -- never ask for
+        // anything, so a Turn the list will never name cannot become a `claude`
+        // launch every refresh. And what an invalidation costs is the
+        // registry's decision, not this one's: ``edgeFloor`` holds the extra
+        // reading to one every two seconds however many events arrive.
+        let readStartedAt = await sessions.listReadStartedAt()
+        let heardFromAnUnlistedSession = consumed.turns.contains { turn in
+            liveByID[turn.threadID] == nil && turn.lastEventAt > readStartedAt
+        }
+        if heardFromAnUnlistedSession {
+            await sessions.invalidate()
+            (presence, live, liveByID) = await readSessions()
+        }
 
         // The events are drained first and this is applied to what they left,
         // so an event that arrived after the list was read still wins -- the
@@ -568,25 +618,37 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         )
         let visibleRows = read.rows
 
-        // Watch the records of exactly the turns that are still going -- and
-        // watch them from `rows` rather than from what is about to be reported,
-        // because a row withheld for presence is a turn this app still holds
-        // and still has to be able to end.
+        // Watch every listed session's record -- not only the ones with a Turn
+        // in flight.
         //
-        // The cost of an edge is one `claude agents --json`, so what is watched
-        // matters. A session with no turn in flight is not watched at all: the
-        // turn it starts next announces itself with a hook, and its record
-        // flips `busy` in the same moment, which would have bought a launch for
-        // an answer already on its way. What is left is the flip that nothing
-        // else reports -- `busy` or `waiting` to `idle` with no `Stop` behind
-        // it -- and the registry's own `edgeFloor` caps a burst of them.
-        recordWatcher.watch(
-            processIdentifiers: Set(
-                rows
-                    .filter { $0.status.keepsTiming }
-                    .compactMap { liveByID[$0.threadID]?.processIdentifier }
-            )
-        )
+        // It used to be only those, on the argument that a session sitting at
+        // its prompt needs no edge because "the turn it starts next announces
+        // itself with a hook, and its record flips `busy` in the same moment,
+        // which would have bought a launch for an answer already on its way".
+        // That argument holds only while the hook and the list agree on what
+        // the session is called, and the record of an idle session is where
+        // they stop agreeing: `/clear` rotates the session id in place, so the
+        // list goes on naming the id the session had before while every hook
+        // from then on carries the new one. The idle record is not the one
+        // edge that could be spared, it is the one edge that reports the
+        // rename -- and the app was blind to it for the whole freshness
+        // window, which is up to thirty seconds of a turn drawing no row at
+        // all.
+        //
+        // The cost of an edge is still one `claude agents --json`, and it is
+        // small because these files are quiet. Measured here 2026-08-21, one
+        // sample a second for ninety seconds across six live sessions -- two
+        // of them interactive and sitting at their prompt: **not one record was
+        // rewritten**. A record is written when a session flips `busy`,
+        // `waiting` or `idle`, several times a turn, and the registry's
+        // ``edgeFloor`` caps a burst of those at one reading every two seconds
+        // whatever their source.
+        //
+        // Taken from `live` rather than from `rows`, which also settles what
+        // the old comment had to argue around: a row withheld for presence is
+        // a Turn this app still holds and still has to be able to end, and its
+        // session is listed either way.
+        recordWatcher.watch(processIdentifiers: Set(live.map(\.processIdentifier)))
 
         // And the transcripts of exactly the turns the reading above cannot
         // see stop -- the ones whose session reports nothing. Watched from

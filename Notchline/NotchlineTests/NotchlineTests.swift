@@ -11572,7 +11572,7 @@ for line in sys.stdin:
         #expect(try #require(ended.sessions.first).status == .completed)
     }
 
-    /// A record rewritten in place wakes the product, and only while it matters.
+    /// A record rewritten in place wakes the product, for every listed session.
     ///
     /// This is the edge the interrupt fix needs and the sessions *directory*
     /// cannot give: a session being interrupted neither creates nor removes a
@@ -11580,9 +11580,17 @@ for line in sys.stdin:
     /// source does not fire for a write inside the directory. Without this the
     /// row waited for whatever refresh came next, up to a whole heartbeat.
     ///
-    /// The second half is the cost. Every edge here buys a `claude agents
-    /// --json`, so a record is watched only while that session's turn is still
-    /// going; once it has ended, nothing is watching that file at all.
+    /// The second half used to be the cost, and said the opposite of what it
+    /// says now: a record was watched only while that session's turn was going,
+    /// on the argument that the next turn announces itself with a hook anyway.
+    /// The record of a session sitting at its prompt turned out to be the one
+    /// that matters most -- `/clear` rotates the session id into it in place,
+    /// and until something re-reads the list every hook from then on names a
+    /// session the list does not have, which is a turn with no row at all. So
+    /// every listed session's record is watched, and what bounds the cost is
+    /// that these files are quiet while nothing happens (measured: ninety
+    /// seconds, six sessions, not one rewrite) plus the registry's own
+    /// `edgeFloor`. Nothing listed is still nothing watched.
     ///
     /// Both halves are asserted through the invalidation count rather than the
     /// change stream. Only the watchers invalidate the list, so a rise proves
@@ -11590,7 +11598,7 @@ for line in sys.stdin:
     /// watcher can see. The stream would prove neither: it carries hook and
     /// quota edges as well, and it buffers.
     @Test @MainActor
-    func aSessionRecordRewrittenInPlaceWakesTheProductWhileItsTurnIsGoing() async throws {
+    func aSessionRecordRewrittenInPlaceWakesTheProductWhileItsSessionIsListed() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
         try harness.registerHooks()
@@ -11618,16 +11626,93 @@ for line in sys.stdin:
         try Data(#"{"status":"idle"}"#.utf8).write(to: record)
         #expect(await harness.invalidationsRise(above: beforeRewrite))
 
-        // The refresh that edge causes ends the turn -- and a turn that has
-        // ended is not worth a descriptor or a `claude` launch any more.
+        // The refresh that edge causes ends the turn -- and the record stays
+        // watched, because the session is still open and the next thing
+        // written there may be the id it has after a `/clear` rather than a
+        // status at all.
         harness.live = [harness.session(id: "s-1", cwd: cwd, activity: .idle, observedAt: 300)]
         let ended = await harness.service.fetchSnapshot()
         #expect(try #require(ended.sessions.first).status == .completed)
-        #expect(harness.watchedRecords == 0)
+        #expect(harness.watchedRecords == 1)
 
-        let beforeQuiet = harness.invalidations
+        let beforeIdleRewrite = harness.invalidations
         try Data(#"{"status":"busy"}"#.utf8).write(to: record)
-        #expect(await harness.invalidationsRise(above: beforeQuiet, within: 1) == false)
+        #expect(await harness.invalidationsRise(above: beforeIdleRewrite))
+
+        // Nothing listed, nothing watched: a descriptor on a record is only
+        // worth holding while there is a session behind it.
+        harness.live = []
+        _ = await harness.service.fetchSnapshot()
+        #expect(harness.watchedRecords == 0)
+    }
+
+    /// A Turn from a session the list does not name still draws its row, when
+    /// the Turn is the newer evidence.
+    ///
+    /// The `/clear` case, and the one failure this product cannot argue its way
+    /// out of: the notch went on saying the product was merely connected for a
+    /// whole turn, and if the turn was shorter than the freshness window no row
+    /// was ever drawn for it. A session id is not fixed for the life of a
+    /// process -- `/clear` and an in-session `/resume` rotate it in place, same
+    /// pid and same record -- so a list read before the rotation names the old
+    /// id while every hook from then on carries the new one, and row
+    /// construction drops what it cannot find in that list.
+    ///
+    /// What answers it is the ordering, not the id: the event is stamped after
+    /// the reading began, and a reading that started first cannot be evidence
+    /// against a session that has just sent an event. The rotation itself is
+    /// reported by the record watcher; this is the fail-safe for any future way
+    /// the list can rot that does not touch a file at all.
+    @Test @MainActor
+    func aTurnFromASessionTheListDoesNotNameStillDrawsItsRowWhenItIsNewer() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        // The list as it stood before the rotation, read at 50.
+        harness.live = [harness.session(id: "s-before", cwd: cwd)]
+        harness.listReadStartedAt = Date(timeIntervalSince1970: 50)
+        // What re-reading it finds: the same session under the id it now has.
+        harness.liveAfterInvalidation = [harness.session(id: "s-after", cwd: cwd)]
+
+        // The first prompt after the `/clear`, which is the first thing to name
+        // the new id anywhere.
+        try harness.queue(event: "UserPromptSubmit", session: "s-after", turn: "p-1", at: 100)
+
+        let snapshot = await harness.service.fetchSnapshot()
+        #expect(harness.invalidations == 1)
+        let row = try #require(snapshot.sessions.first)
+        #expect(row.threadID == "s-after")
+        #expect(row.status == .running)
+    }
+
+    /// A Turn older than the list it is missing from buys no reading.
+    ///
+    /// The other side of the rule above, and the reason it is stated as an
+    /// ordering rather than as "a held Turn whose session is not listed". A
+    /// session that ended without a `Stop` leaves exactly that -- a Turn the
+    /// list will never name again -- and if its mere existence asked for a
+    /// re-reading, every refresh for the rest of the run would buy a `claude`
+    /// launch. Its last event is older than the reading, so the reading is
+    /// entitled to say the session is gone.
+    @Test @MainActor
+    func aTurnOlderThanTheListItIsMissingFromBuysNoReading() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-gone", turn: "p-1", at: 100)
+        // Read after that event, and it does not name the session: the session
+        // is gone, not missing.
+        harness.live = [harness.session(id: "s-other", cwd: cwd)]
+        harness.listReadStartedAt = Date(timeIntervalSince1970: 200)
+        harness.liveAfterInvalidation = [harness.session(id: "s-gone", cwd: cwd)]
+
+        let snapshot = await harness.service.fetchSnapshot()
+        #expect(snapshot.sessions.isEmpty)
+        #expect(harness.invalidations == 0)
     }
 
     /// A session that reports no status still ends its interrupted turn.
@@ -15743,6 +15828,21 @@ private final class ClaudeCodeHarness {
         set { listing.sessions = newValue }
     }
 
+    /// When the reading behind ``live`` began, as this harness's service sees
+    /// it. Set it before an event's stamp to put the service in the one state
+    /// a list cannot report on: a session that exists and is not listed.
+    var listReadStartedAt: Date {
+        get { listing.readStartedAt }
+        set { listing.readStartedAt = newValue }
+    }
+
+    /// The list the next invalidation produces, for a test that needs the
+    /// re-reading to answer differently from the reading before it.
+    var liveAfterInvalidation: [ClaudeCodeSession]? {
+        get { listing.sessionsAfterInvalidation }
+        set { listing.sessionsAfterInvalidation = newValue }
+    }
+
     /// What the session list says about the product being open, when a test
     /// needs that to differ from "the list is not empty".
     var presence: AgentPresence? {
@@ -16152,11 +16252,32 @@ private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sen
     /// last list is still handed back, because a failed read never proved a
     /// session ended, while presence has stopped being evidence of anything.
     var presenceOverride: AgentPresence?
+    /// When the reading behind ``sessions`` began.
+    ///
+    /// `.distantFuture` by default, which is the honest answer for a list held
+    /// in memory: it is current at the moment it is read, so no event can be
+    /// newer than it and no test that has not asked for a stale list pays for
+    /// one. A test that wants the state this app cannot otherwise reach -- a
+    /// hook event from a session the list was read too early to know about --
+    /// sets it to an instant before that event.
+    var readStartedAt: Date = .distantFuture
+    /// What the list becomes when the service says it is out of date. Left
+    /// nil, an invalidation changes nothing, which is what every test that
+    /// only counts them wants.
+    var sessionsAfterInvalidation: [ClaudeCodeSession]?
     func liveSessions() async -> [ClaudeCodeSession] { sessions }
     func presence() async -> AgentPresence {
         presenceOverride ?? (sessions.isEmpty ? .closed : .open)
     }
-    func invalidate() async { invalidations += 1 }
+    func invalidate() async {
+        invalidations += 1
+        if let sessionsAfterInvalidation {
+            sessions = sessionsAfterInvalidation
+            readStartedAt = .distantFuture
+            self.sessionsAfterInvalidation = nil
+        }
+    }
+    func listReadStartedAt() async -> Date { readStartedAt }
 }
 
 /// Counts how many times the session list was actually read.
