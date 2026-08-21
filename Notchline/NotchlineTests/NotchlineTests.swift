@@ -15111,6 +15111,48 @@ for line in sys.stdin:
         #expect(await store.nextWakeUpForTesting() == nil)
     }
 
+    /// A deadline booked by a watcher-driven refresh is actually slept on.
+    ///
+    /// This is the shape of every late row. The one-second re-check a finished
+    /// Turn books when it starts waiting on the user is booked *by* the refresh
+    /// the Stop hook drives — at an instant when the wake-up had already been
+    /// armed from state in which no such row existed, so it was armed for the
+    /// heartbeat. Arming from the loop's own iteration meant the re-check was
+    /// reported, ignored, and the row stayed up to a minute past its time.
+    @Test @MainActor
+    func aDeadlineBookedByAWatcherDrivenRefreshIsWokenFor() async {
+        let clock = TestClock()
+        let service = OnDemandDeadlineMonitoringStub(agent: .claudeCode)
+        var send: AsyncStream<Void>.Continuation?
+        let events = AsyncStream<Void> { send = $0 }
+        let store = MonitorStore(
+            services: [service],
+            initialSnapshot: makeAgentSnapshot(
+                .claudeCode,
+                availability: .connecting
+            ),
+            refreshEvents: events,
+            clock: clock
+        )
+        await clock.settle()
+        let afterStart = await service.snapshotCount()
+        #expect(afterStart >= 1)
+
+        // The Turn finishes and starts waiting on the user: the hook edge
+        // drives a refresh, and *that* refresh is what books the re-check.
+        await service.setDeadline(clock.now().addingTimeInterval(1))
+        send?.yield()
+        await clock.settle()
+        let afterEdge = await service.snapshotCount()
+        #expect(afterEdge > afterStart)
+
+        // One second later the store has to have looked again. Before this was
+        // fixed the next look was 60 seconds out, booked before the row existed.
+        await clock.advance(by: 1)
+        #expect(await service.snapshotCount() > afterEdge)
+        _ = store
+    }
+
     /// One product's integration health never moves another product's switch.
     ///
     /// The store drives a single card today. A worst-of merge across products
@@ -15272,6 +15314,50 @@ for line in sys.stdin:
         }
     }
 
+}
+
+/// A service whose deadline only appears once the test says so.
+///
+/// Models the real sequence: a Turn is running and has nothing to wait for, then
+/// it finishes and starts waiting on the user, at which point the provider books
+/// a re-check — during the refresh a watcher edge drove, not during the store's
+/// own loop iteration.
+private actor OnDemandDeadlineMonitoringStub: AgentMonitoring {
+    nonisolated let agent: AgentKind
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    func manualSetup() async -> AgentManualSetup? { nil }
+
+    private var deadline: Date?
+    private var snapshots = 0
+
+    init(agent: AgentKind) {
+        self.agent = agent
+    }
+
+    func setDeadline(_ deadline: Date?) {
+        self.deadline = deadline
+    }
+
+    func snapshotCount() -> Int { snapshots }
+
+    func nextRefreshDeadline() async -> Date? { deadline }
+
+    func fetchSnapshot() async -> AgentSnapshot {
+        snapshots += 1
+        return AgentSnapshot(
+            agent: agent,
+            availability: .ready,
+            sessions: [],
+            quota: .unavailable,
+            diagnostic: nil
+        )
+    }
+
+    func hookSetupStatus() async -> HookSetupStatus { .active }
+    func installHooks() async throws {}
+    func removeHooks() async throws {}
+    func clearSessions() async {}
+    func disconnect() async {}
 }
 
 /// A service whose deadline is permanently overdue, however often it is asked.

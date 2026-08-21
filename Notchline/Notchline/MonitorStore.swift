@@ -806,7 +806,9 @@ final class MonitorStore: ObservableObject {
     private let timing: MonitorTiming
     private var preferredDisplayID: String?
     private var pendingHoverTask: Task<Void, Never>?
-    private var monitorTask: Task<Void, Never>?
+    /// The armed wake-up for the next moment output could change, re-armed at
+    /// the end of every refresh run. See ``scheduleNextWake()``.
+    private var wakeTask: Task<Void, Never>?
     private var refreshEventTask: Task<Void, Never>?
     private var elapsedTickTask: Task<Void, Never>?
     private let refreshEvents: AsyncStream<Void>?
@@ -899,7 +901,7 @@ final class MonitorStore: ObservableObject {
     }
 
     deinit {
-        monitorTask?.cancel()
+        wakeTask?.cancel()
         refreshEventTask?.cancel()
         pendingHoverTask?.cancel()
         elapsedTickTask?.cancel()
@@ -1607,7 +1609,7 @@ final class MonitorStore: ObservableObject {
     }
 
     func stopMonitoring() {
-        monitorTask?.cancel()
+        wakeTask?.cancel()
         refreshEventTask?.cancel()
         let services = services
         Task {
@@ -1622,9 +1624,9 @@ final class MonitorStore: ObservableObject {
         await refreshAndWait()
     }
 
-    /// The instant the loop would next wake for, or nil when only the heartbeat
-    /// is left. Exposed so the deadline arithmetic is assertable without
-    /// running the loop.
+    /// The instant the store would next wake for, or nil when only the
+    /// heartbeat is left. Exposed so the deadline arithmetic is assertable
+    /// without arming a real wake-up.
     func nextWakeUpForTesting() async -> Date? {
         (
             await providerDeadlines() + stabilityGates.values.map(\.nextPublishDeadline)
@@ -1662,38 +1664,6 @@ final class MonitorStore: ObservableObject {
     private func startMonitoring() {
         guard !services.isEmpty else { return }
 
-        // Refreshes are driven by the directory watchers below. This loop only
-        // sleeps until the next moment the service says its own output could
-        // change -- a settling window expiring, a cache going stale -- and
-        // otherwise idles until the heartbeat. It samples nothing on a cadence.
-        monitorTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.refreshAndWait()
-                guard !Task.isCancelled, let self else { return }
-
-                let heartbeat = timing.heartbeatInterval
-                // The gates' own deadlines count: a suppressed disconnect has
-                // to be re-examined when its grace expires, not whenever some
-                // provider happens to want attention next.
-                let deadline = (
-                    await self.providerDeadlines()
-                        + self.stabilityGates.values.map(\.nextPublishDeadline)
-                ).compactMap { $0 }.min()
-                // An overdue deadline is clamped up to the floor, never down to
-                // zero. Sleeping zero here re-runs a full snapshot -- a
-                // LaunchServices round trip on the main thread and several stat
-                // calls -- against a deadline the refresh cannot move, which is
-                // a busy loop, not a catch-up.
-                let untilDeadline = deadline.map {
-                    max(
-                        self.timing.minimumRefreshInterval,
-                        $0.timeIntervalSince(self.clock.now())
-                    )
-                } ?? heartbeat
-                try? await clock.sleep(seconds: min(heartbeat, untilDeadline))
-            }
-        }
-
         if let refreshEvents {
             refreshEventTask = Task { [weak self] in
                 for await _ in refreshEvents {
@@ -1704,6 +1674,60 @@ final class MonitorStore: ObservableObject {
                     self?.requestRefresh()
                 }
             }
+        }
+
+        // Refreshes are driven by the watchers above. The only other trigger is
+        // the wake-up ``scheduleNextWake`` arms whenever a refresh run finishes;
+        // this first request is what starts that chain. Nothing samples on a
+        // cadence.
+        requestRefresh()
+    }
+
+    /// Arms the next wake-up from the state a refresh has just left behind.
+    ///
+    /// This has to hang off the *end of a refresh run*, not off an iteration of
+    /// a loop of its own, and that distinction was the whole of the bug. A
+    /// provider books its re-check during a refresh; most refreshes are driven
+    /// by a watcher edge, not by the store. So a loop that computed the deadline
+    /// only after its own `refreshAndWait` armed itself from state in which the
+    /// row that now needs re-checking did not yet exist -- for the heartbeat --
+    /// and then slept through the deadline the edge-driven refresh had just
+    /// booked. A finished Turn waiting on the user asked to be looked at in a
+    /// second and was looked at in up to a minute; the same missed re-arm
+    /// delayed the disconnect grace re-examination and the usage retry.
+    ///
+    /// Every path into a refresh goes through ``startRefreshRunIfNeeded``, so
+    /// arming here covers the watchers, Recheck, and the heartbeat alike. The
+    /// wake-up is a task rather than an awaited sleep because the run that
+    /// schedules it must be able to finish -- ``refreshAndWait`` is waiting on
+    /// exactly that.
+    private func scheduleNextWake() {
+        wakeTask?.cancel()
+        wakeTask = Task { [weak self] in
+            guard let self else { return }
+            let heartbeat = self.timing.heartbeatInterval
+            // The gates' own deadlines count: a suppressed disconnect has to be
+            // re-examined when its grace expires, not whenever some provider
+            // happens to want attention next.
+            let deadline = (
+                await self.providerDeadlines()
+                    + self.stabilityGates.values.map(\.nextPublishDeadline)
+            ).compactMap { $0 }.min()
+            guard !Task.isCancelled else { return }
+            // An overdue deadline is clamped up to the floor, never down to
+            // zero. Sleeping zero here re-runs a full snapshot -- a
+            // LaunchServices round trip on the main thread and several stat
+            // calls -- against a deadline the refresh cannot move, which is
+            // a busy loop, not a catch-up.
+            let untilDeadline = deadline.map {
+                max(
+                    self.timing.minimumRefreshInterval,
+                    $0.timeIntervalSince(self.clock.now())
+                )
+            } ?? heartbeat
+            try? await self.clock.sleep(seconds: min(heartbeat, untilDeadline))
+            guard !Task.isCancelled else { return }
+            self.requestRefresh()
         }
     }
 
@@ -1904,9 +1928,9 @@ final class MonitorStore: ObservableObject {
 
     /// Requests a refresh without waiting for it.
     ///
-    /// For triggers that only need the state to converge -- the monitor loop,
-    /// the directory watchers. If one is already running, this raises the gate
-    /// so another follows; it is never dropped.
+    /// For triggers that only need the state to converge -- the scheduled
+    /// wake-up, the directory watchers. If one is already running, this raises
+    /// the gate so another follows; it is never dropped.
     private func requestRefresh() {
         refreshGate.request()
         startRefreshRunIfNeeded()
@@ -1938,6 +1962,12 @@ final class MonitorStore: ObservableObject {
             repeat {
                 await self.performRefresh()
             } while self.refreshGate.endRun()
+            // The run is over and the gate is idle, so this is the first moment
+            // the providers' deadlines describe the state the user is actually
+            // looking at. Arming from here is what makes a re-check booked by a
+            // watcher-driven refresh get slept on.
+            guard !Task.isCancelled else { return }
+            self.scheduleNextWake()
         }
     }
 
