@@ -14,3 +14,6 @@ xcuserdata/
 
 # Build and coverage artifacts
 *.profraw
+
+# Local Claude Code state
+/.claude/
