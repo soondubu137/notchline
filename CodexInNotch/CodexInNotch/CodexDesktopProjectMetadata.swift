@@ -104,31 +104,63 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
         let assignments: [String: Assignment]
         let projectlessThreadIDs: [String]
 
-        private enum CodingKeys: String, CodingKey, CaseIterable {
+        private enum CodingKeys: String, CodingKey {
             case localProjects = "local-projects"
             case remoteProjects = "remote-projects"
             case assignments = "thread-project-assignments"
             case projectlessThreadIDs = "projectless-thread-ids"
         }
 
+        /// The minimum key set that counts as the current Desktop schema.
+        ///
+        /// Deliberately not all four keys. A healthy install writes
+        /// `remote-projects` only once a cloud Project exists -- the key is
+        /// absent from a real, fully working state file -- so demanding it
+        /// would fail closed on the common case. `local-projects` is likewise
+        /// only as present as the user's Projects are.
+        ///
+        /// What must hold instead is that the document still answers the
+        /// question this adapter asks, which is two rules:
+        ///
+        /// 1. The mapping must exist in at least one direction -- assignments,
+        ///    projectless thread ids, or both. A document carrying only
+        ///    Project definitions maps no thread to anything.
+        /// 2. A Desktop that knows about Projects must also say which threads
+        ///    are in them. Defined Projects with no assignment key at all is
+        ///    the shape a renamed `thread-project-assignments` takes.
+        ///
+        /// A renamed `local-projects` or `remote-projects` is caught later, in
+        /// ``loadSnapshot(from:source:)``: every assignment it used to resolve
+        /// now dangles, and a dangling assignment rejects the whole snapshot
+        /// rather than quietly dropping that thread.
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            guard CodingKeys.allCases.contains(where: container.contains) else {
+            guard container.contains(.assignments)
+                    || container.contains(.projectlessThreadIDs) else {
                 throw ProjectMetadataError.incompatibleSchema
             }
 
-            localProjects = try container.contains(.localProjects)
-                ? container.decode([String: LocalProject].self, forKey: .localProjects)
-                : [:]
-            remoteProjects = try container.contains(.remoteProjects)
-                ? container.decode([RemoteProject].self, forKey: .remoteProjects)
-                : []
-            assignments = try container.contains(.assignments)
-                ? container.decode([String: Assignment].self, forKey: .assignments)
-                : [:]
-            projectlessThreadIDs = try container.contains(.projectlessThreadIDs)
-                ? container.decode([String].self, forKey: .projectlessThreadIDs)
-                : []
+            localProjects = try container.decodeIfPresent(
+                [String: LocalProject].self,
+                forKey: .localProjects
+            ) ?? [:]
+            remoteProjects = try container.decodeIfPresent(
+                [RemoteProject].self,
+                forKey: .remoteProjects
+            ) ?? []
+            assignments = try container.decodeIfPresent(
+                [String: Assignment].self,
+                forKey: .assignments
+            ) ?? [:]
+            projectlessThreadIDs = try container.decodeIfPresent(
+                [String].self,
+                forKey: .projectlessThreadIDs
+            ) ?? []
+
+            guard container.contains(.assignments)
+                    || (localProjects.isEmpty && remoteProjects.isEmpty) else {
+                throw ProjectMetadataError.missingThreadAssignments
+            }
         }
     }
 
@@ -153,16 +185,22 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
 
     private enum ProjectMetadataError: LocalizedError {
         case incompatibleSchema
+        case missingThreadAssignments
         case oversizedFile(Int)
         case unsafeFile
         case invalidProjectName
         case conflictingRemoteProjectID
         case conflictingThreadMembership
+        case emptyThreadIdentifier
+        case unsupportedProjectKind
+        case danglingProjectReference
 
         var errorDescription: String? {
             switch self {
             case .incompatibleSchema:
                 "The Desktop Project state schema is not compatible."
+            case .missingThreadAssignments:
+                "The Desktop Project state defines Projects but no thread assignments, so the schema is not compatible."
             case let .oversizedFile(size):
                 "The Desktop Project state file is implausibly large (\(size) bytes)."
             case .unsafeFile:
@@ -173,6 +211,12 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
                 "The Desktop Project state contains a duplicate remote Project."
             case .conflictingThreadMembership:
                 "The Desktop Project state marks a thread as belonging to both a Project and Chats."
+            case .emptyThreadIdentifier:
+                "The Desktop Project state contains an empty thread identifier."
+            case .unsupportedProjectKind:
+                "The Desktop Project state contains an assignment of an unsupported Project kind."
+            case .danglingProjectReference:
+                "The Desktop Project state assigns a thread to a Project it does not define."
             }
         }
     }
@@ -276,8 +320,18 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
             }
         }
 
+        // An assignment this reader cannot resolve is schema drift, not a
+        // thread without a Project: Desktop wrote a membership down and we no
+        // longer understand it. Skipping it would publish a mapping that is
+        // silently short of the truth and label it `.current`, which is the
+        // one outcome the fail-closed contract rules out. Reject the whole
+        // snapshot instead and let the caller fall back to the backup or to
+        // last-known-good, with a diagnostic saying why.
         var namesByThreadID: [String: String] = [:]
-        for (threadID, assignment) in state.assignments where !threadID.isEmpty {
+        for (threadID, assignment) in state.assignments {
+            guard !threadID.isEmpty else {
+                throw ProjectMetadataError.emptyThreadIdentifier
+            }
             let name: String?
             switch assignment.projectKind {
             case "local":
@@ -285,20 +339,19 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
             case "remote":
                 name = remoteProjectNames[assignment.projectID]
             default:
-                name = nil
+                throw ProjectMetadataError.unsupportedProjectKind
             }
-            if let name {
-                namesByThreadID[threadID] = name
+            guard let name else {
+                throw ProjectMetadataError.danglingProjectReference
             }
+            namesByThreadID[threadID] = name
         }
 
-        let projectlessThreadIDs = Set(
-            state.projectlessThreadIDs.filter { !$0.isEmpty }
-        )
-        let assignedThreadIDs = Set(
-            state.assignments.keys.filter { !$0.isEmpty }
-        )
-        if !projectlessThreadIDs.isDisjoint(with: assignedThreadIDs) {
+        guard !state.projectlessThreadIDs.contains(where: \.isEmpty) else {
+            throw ProjectMetadataError.emptyThreadIdentifier
+        }
+        let projectlessThreadIDs = Set(state.projectlessThreadIDs)
+        if !projectlessThreadIDs.isDisjoint(with: state.assignments.keys) {
             throw ProjectMetadataError.conflictingThreadMembership
         }
 

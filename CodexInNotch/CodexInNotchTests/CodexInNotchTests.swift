@@ -2697,7 +2697,7 @@ struct CodexInNotchTests {
     }
 
     @Test @MainActor
-    func desktopProjectMetadataResolvesKnownKindsAndRejectsUnsupportedKinds() async throws {
+    func desktopProjectMetadataResolvesLocalAndRemoteProjectNames() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2808,6 +2808,273 @@ struct CodexInNotchTests {
         #expect(
             snapshot.resolution(for: "missing").displayName
                 == DesktopProjectMetadataSnapshot.unavailableProjectName
+        )
+    }
+
+    /// A real, fully working state file has no `remote-projects` key at all --
+    /// Desktop writes it only once a cloud Project exists. The required key
+    /// set has to keep accepting that shape, or the stricter validation would
+    /// fail closed on the ordinary local-only install (CR-015).
+    @Test @MainActor
+    func desktopProjectMetadataAcceptsAStateFileWithoutRemoteProjects() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "local-projects": [
+                "local-1": ["name": "codex-in-notch"]
+            ],
+            "thread-project-assignments": [
+                "thread-local": [
+                    "projectKind": "local",
+                    "projectId": "local-1"
+                ]
+            ],
+            "projectless-thread-ids": ["thread-chat"]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let repository = CodexDesktopProjectMetadataRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.source == .current)
+        #expect(snapshot.diagnostic == nil)
+        #expect(
+            snapshot.resolution(for: "thread-local")
+                == .project("codex-in-notch")
+        )
+        #expect(snapshot.resolution(for: "thread-chat") == .chats)
+    }
+
+    /// Rename `thread-project-assignments` and every thread quietly loses its
+    /// Project. The old check passed the file as long as any one of the four
+    /// keys survived, so the whole mapping could go missing under a `.current`
+    /// label with no diagnostic anywhere. Defined Projects with no assignment
+    /// key is exactly that rename, and it now fails closed (CR-015).
+    @Test @MainActor
+    func desktopProjectMetadataRejectsProjectsWithNoAssignmentKey() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let renamed = try JSONSerialization.data(withJSONObject: [
+            "local-projects": [
+                "local-1": ["name": "codex-in-notch"]
+            ],
+            "thread-project-assignments-v2": [
+                "thread-local": [
+                    "projectKind": "local",
+                    "projectId": "local-1"
+                ]
+            ],
+            "projectless-thread-ids": ["thread-chat"]
+        ])
+        try renamed.write(to: stateFile, options: .atomic)
+
+        let repository = CodexDesktopProjectMetadataRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.source == .unavailable)
+        #expect(snapshot.projectNamesByThreadID.isEmpty)
+        #expect(snapshot.projectlessThreadIDs.isEmpty)
+        #expect(snapshot.diagnostic?.contains("not compatible") == true)
+        #expect(snapshot.resolution(for: "thread-chat") == .unavailable)
+    }
+
+    /// A document that defines Projects but maps no thread in either direction
+    /// is not a Project mapping at all, whatever else it carries (CR-015).
+    @Test @MainActor
+    func desktopProjectMetadataRejectsAStateFileWithNoMappingAtAll() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let partial = try JSONSerialization.data(withJSONObject: [
+            "local-projects": [
+                "local-1": ["name": "codex-in-notch"]
+            ],
+            "remote-projects": [
+                ["id": "remote-1", "label": "Remote workspace"]
+            ]
+        ])
+        try partial.write(to: stateFile, options: .atomic)
+
+        let repository = CodexDesktopProjectMetadataRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.source == .unavailable)
+        #expect(snapshot.diagnostic?.contains("schema is not compatible") == true)
+    }
+
+    /// An assignment whose `projectKind` this reader does not understand used
+    /// to be skipped, which published a mapping that was silently short of the
+    /// truth and still called it `.current`. It now rejects the snapshot
+    /// (CR-015).
+    @Test @MainActor
+    func desktopProjectMetadataRejectsAnUnsupportedProjectKind() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let unknownKind = try JSONSerialization.data(withJSONObject: [
+            "local-projects": [
+                "local-1": ["name": "codex-in-notch"]
+            ],
+            "thread-project-assignments": [
+                "thread-local": [
+                    "projectKind": "local",
+                    "projectId": "local-1"
+                ],
+                "thread-workspace": [
+                    "projectKind": "workspace",
+                    "projectId": "local-1"
+                ]
+            ],
+            "projectless-thread-ids": []
+        ])
+        try unknownKind.write(to: stateFile, options: .atomic)
+
+        let repository = CodexDesktopProjectMetadataRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.source == .unavailable)
+        #expect(snapshot.diagnostic?.contains("unsupported Project kind") == true)
+        // The resolvable half of the same file is refused with it.
+        #expect(snapshot.resolution(for: "thread-local") == .unavailable)
+    }
+
+    /// A rename of `local-projects` leaves every local assignment pointing at
+    /// a Project the document no longer defines. That is schema drift, not a
+    /// thread without a Project, so the whole current snapshot is refused and
+    /// the backup answers instead (CR-015).
+    @Test @MainActor
+    func desktopProjectMetadataRejectsADanglingAssignmentAndUsesBackup() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let backupFile = URL(fileURLWithPath: stateFile.path + ".bak")
+        let dangling = try JSONSerialization.data(withJSONObject: [
+            "local-projects-v2": [
+                "local-1": ["name": "codex-in-notch"]
+            ],
+            "thread-project-assignments": [
+                "thread-local": [
+                    "projectKind": "local",
+                    "projectId": "local-1"
+                ]
+            ],
+            "projectless-thread-ids": ["thread-chat"]
+        ])
+        try dangling.write(to: stateFile, options: .atomic)
+        let validBackup = try JSONSerialization.data(withJSONObject: [
+            "local-projects": [
+                "local-1": ["name": "codex-in-notch"]
+            ],
+            "thread-project-assignments": [
+                "thread-local": [
+                    "projectKind": "local",
+                    "projectId": "local-1"
+                ]
+            ],
+            "projectless-thread-ids": ["thread-chat"]
+        ])
+        try validBackup.write(to: backupFile, options: .atomic)
+
+        let repository = CodexDesktopProjectMetadataRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+
+        #expect(snapshot.source == .backup)
+        #expect(
+            snapshot.diagnostic?.contains("Project it does not define") == true
+        )
+        #expect(
+            snapshot.resolution(for: "thread-local")
+                == .project("codex-in-notch")
+        )
+    }
+
+    /// An empty thread identifier on either side of the mapping was dropped in
+    /// silence. A thread id is the only handle this app has on a session, so
+    /// an empty one is a broken document, not an entry to skip (CR-015).
+    @Test @MainActor
+    func desktopProjectMetadataRejectsAnEmptyThreadIdentifier() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let assignedFile = root.appendingPathComponent(".codex-global-state.json")
+        let emptyAssignment = try JSONSerialization.data(withJSONObject: [
+            "local-projects": [
+                "local-1": ["name": "codex-in-notch"]
+            ],
+            "thread-project-assignments": [
+                "": [
+                    "projectKind": "local",
+                    "projectId": "local-1"
+                ]
+            ],
+            "projectless-thread-ids": []
+        ])
+        try emptyAssignment.write(to: assignedFile, options: .atomic)
+
+        let assigned = await CodexDesktopProjectMetadataRepository(
+            stateFileURL: assignedFile
+        ).snapshot()
+        #expect(assigned.source == .unavailable)
+        #expect(
+            assigned.diagnostic?.contains("empty thread identifier") == true
+        )
+
+        let projectlessFile = root
+            .appendingPathComponent("projectless-global-state.json")
+        let emptyProjectless = try JSONSerialization.data(withJSONObject: [
+            "thread-project-assignments": [:],
+            "projectless-thread-ids": ["thread-chat", ""]
+        ])
+        try emptyProjectless.write(to: projectlessFile, options: .atomic)
+
+        let projectless = await CodexDesktopProjectMetadataRepository(
+            stateFileURL: projectlessFile
+        ).snapshot()
+        #expect(projectless.source == .unavailable)
+        #expect(
+            projectless.diagnostic?.contains("empty thread identifier") == true
         )
     }
 

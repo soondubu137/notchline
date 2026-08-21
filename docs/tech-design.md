@@ -86,9 +86,11 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 - 默认读取 `$CODEX_HOME/.codex-global-state.json`；可用 `CODEX_IN_NOTCH_CODEX_HOME` 显式指定 Codex Home。
 - `thread-project-assignments[threadId]` 的 `local` assignment 连接 `local-projects[projectId].name`，`remote` assignment 连接 `remote-projects[id].label`。
-- 只有 `projectless-thread-ids` 明确包含 thread ID 时显示 `Chats`。映射缺失、未知 `projectKind` 或无法解析时显示 `Project unavailable`，不得回退到 `cwd`、Git root、Section 或 `Chats`。
+- 只有 `projectless-thread-ids` 明确包含 thread ID 时显示 `Chats`。文件里根本没有该 thread 的映射时显示 `Project unavailable`，不得回退到 `cwd`、Git root、Section 或 `Chats`。
+- 当前 schema 的最小 key 集合：`thread-project-assignments` 与 `projectless-thread-ids` 至少存在其一；只要定义了任何 Project，就必须存在 `thread-project-assignments`。刻意不要求四个顶层 key 全在——实测健康的状态文件里 `remote-projects` 整个 key 缺失（只有存在云端 Project 时 Desktop 才写），要求它会让最常见的纯本地安装直接 fail closed。
+- **写下来但读不懂的 assignment 是 schema 漂移，不是“这个 thread 没有 Project”**：thread id 为空、`projectKind` 不是 `local`/`remote`、`projectId` 指向未定义的 Project，任意一条都作废整份当前快照并降级到 `.bak` / last-known-good，同时给出说明原因的诊断。跳过该条会发布一份悄悄少了内容的映射还标成 `.current`，正是 fail closed 契约要排除的结果。`local-projects` 或 `remote-projects` 改名也由这条规则兜住：它原本解析的 assignment 会全部悬空。
 - 主文件读取或解析失败时尝试 `.bak`；两者都失败时保留进程内 last-known-good 并发出诊断。文件未变化时按 size、mtime 与 inode revision 复用解析结果。
-- 读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、空 Project 名称、重复 remote id 与 Project/Chats 冲突成员关系；不记录原始 JSON、root path 或 thread id。
+- 读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、空 Project 名称、重复 remote id 与 Project/Chats 冲突成员关系；不记录原始 JSON、root path 或 thread id，诊断只说明违反了哪条规则。
 
 该适配器已在 Desktop `26.810.50856` build `6644`、CLI `0.148.0-alpha.9` 验证。它仍是高版本风险的私有 schema，更新与失效排查必须遵守 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。
 
