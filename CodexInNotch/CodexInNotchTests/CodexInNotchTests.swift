@@ -9926,10 +9926,14 @@ for line in sys.stdin:
             object: NSWorkspace.shared,
             userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current]
         )
-        // Delivered on the main queue, so let it drain.
-        try await Task.sleep(nanoseconds: 200_000_000)
-
-        #expect(await mine.isInFrontOfTheUser())
+        // Waited for rather than slept past. Both notifications below are
+        // delivered on a run loop this test does not own -- the screensaver one
+        // through `distnoted`, from another process -- so a fixed pause is a
+        // guess about a busy machine rather than a barrier, and the whole suite
+        // running beside it is exactly what makes the guess wrong. Polling the
+        // condition asserts the same thing and stops asserting a delivery
+        // latency nothing promises (CC-024).
+        #expect(await holds { await mine.isInFrontOfTheUser() })
         #expect(await somebodyElse.isInFrontOfTheUser() == false)
         #expect(await darkened.isInFrontOfTheUser() == false)
 
@@ -9939,15 +9943,13 @@ for line in sys.stdin:
             name: Notification.Name("com.apple.screensaver.didstart"),
             object: nil
         )
-        try await Task.sleep(nanoseconds: 300_000_000)
-        #expect(await mine.isInFrontOfTheUser() == false)
+        #expect(await holds { await mine.isInFrontOfTheUser() == false })
 
         DistributedNotificationCenter.default().post(
             name: Notification.Name("com.apple.screensaver.didstop"),
             object: nil
         )
-        try await Task.sleep(nanoseconds: 300_000_000)
-        #expect(await mine.isInFrontOfTheUser())
+        #expect(await holds { await mine.isInFrontOfTheUser() })
     }
 
     /// One line of Claude Desktop's log, in the shape `1.32885.1` writes it.
@@ -12467,6 +12469,192 @@ for line in sys.stdin:
         #expect(payload.hookEventName == "PostToolUse")
         #expect(payload.sessionID == "s-1")
         #expect(payload.toolUseID == "call-1")
+    }
+
+    /// A payload the store cannot read is reported, not dropped in silence.
+    ///
+    /// The queue-era reducer said `Ignored a corrupted hook event file.` and
+    /// 6aeb6b9 left no successor: a payload that would not decode, or carried
+    /// no event name or no session, returned from `deliver` without a word, and
+    /// so did a connection that delivered nothing at all. ADR 0015 says such a
+    /// payload is「报一个诊断然后丢掉」— report and drop — and for a while only
+    /// the second half was true (CR-029).
+    ///
+    /// It matters more than a missing string because every failure mode this
+    /// integration is designed around is silent by nature: a hook that has lost
+    /// trust simply stops firing, and the surface goes on saying Connected.
+    /// This is the one report that says the transport is delivering and the
+    /// store is not understanding.
+    @Test @MainActor
+    func aPayloadTheStoreCannotReadIsReportedRatherThanDroppedInSilence() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+
+        repository.deliver(Data("{ not json at all".utf8), at: Date(timeIntervalSince1970: 100))
+        // A connection that carried nothing. Only this user's own processes can
+        // reach the socket, so this is the helper failing to deliver rather
+        // than a stranger knocking.
+        repository.deliver(Data(), at: Date(timeIntervalSince1970: 101))
+
+        let snapshot = await repository.drainDeliveredEvents()
+        #expect(snapshot.turns.isEmpty)
+        let diagnostic = try #require(snapshot.diagnostic)
+        // The count is the difference between a one-off and a flood, which is
+        // the first thing anybody reading this line would want to know.
+        #expect(diagnostic.contains("2 hook payloads"))
+        #expect(diagnostic.contains("could not be read"))
+    }
+
+    /// What was dropped goes on being said until the run ends.
+    ///
+    /// The report used to be cleared by the refresh that carried it, which for
+    /// a line in a window that is usually shut means nobody ever sees it: the
+    /// user opens Settings *because* something looks wrong, which is always
+    /// later. Dropping payloads is a standing fact about this run, not an
+    /// event, so it is counted for the run and reported while the count stands.
+    @Test @MainActor
+    func theReportOfADroppedPayloadStandsForTheRun() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+        repository.deliver(Data("{".utf8), at: Date(timeIntervalSince1970: 100))
+
+        #expect(await repository.drainDeliveredEvents().diagnostic?.contains("1 hook payload") == true)
+        // The refresh that found it is not the refresh anybody was looking at.
+        let later = await repository.drainDeliveredEvents()
+        #expect(later.diagnostic?.contains("1 hook payload") == true)
+
+        // Reinstalling the integration is the one thing that makes it a fresh
+        // question, and it clears the count with everything else.
+        await repository.resetIntegrationObservation(clearTurns: true)
+        #expect(await repository.observedState().diagnostic == nil)
+    }
+
+    /// The report of a definition that stopped firing names its own product.
+    ///
+    /// ADR 0014 freezes the Codex definition because Codex keys trust by
+    /// content hash and a changed definition silently stops firing; the one
+    /// runtime signal it keeps is "three tool calls closed and none opened".
+    /// That signal is computed by a reducer both products share, and the
+    /// sentence it produced named Codex and `/hooks` — advice that is wrong for
+    /// Claude Code, whose registration is the user's own file and cannot lose
+    /// trust by hash (ADR 0010). The repair belongs to the vocabulary, which is
+    /// where everything else a product spells differently already lives.
+    @Test @MainActor
+    func theReportOfADefinitionThatStoppedFiringNamesItsOwnProduct() async throws {
+        func diagnosticAfterThreeClosesWithNoOpens(
+            _ vocabulary: any AgentHookVocabulary
+        ) async throws -> String {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            let repository = HookEventRepository(paths: paths, vocabulary: vocabulary)
+            for index in 0 ..< 3 {
+                deliverHook([
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "thread-1",
+                    "turn_id": "turn-1",
+                    "prompt_id": "turn-1",
+                    "tool_use_id": "call-\(index)"
+                ], to: repository)
+            }
+            return try #require(await repository.drainDeliveredEvents().diagnostic)
+        }
+
+        let codex = try await diagnosticAfterThreeClosesWithNoOpens(CodexHookVocabulary())
+        #expect(codex.contains("Codex is not running the PreToolUse hook"))
+        #expect(codex.contains("/hooks"))
+
+        let claudeCode = try await diagnosticAfterThreeClosesWithNoOpens(ClaudeCodeHookVocabulary())
+        #expect(claudeCode.contains("Claude Code is not running the PreToolUse hook"))
+        #expect(claudeCode.contains("~/.claude/settings.json"))
+        // The advice that belongs to the other product must not follow this one
+        // around: there is no `/hooks` to run here, and this app never writes
+        // that file for the user.
+        #expect(!claudeCode.contains("/hooks"))
+        #expect(!claudeCode.contains("Codex"))
+    }
+
+    /// One problem does not hide the next.
+    ///
+    /// The Claude Code provider reported `hookDiagnostic ?? read.diagnostic`,
+    /// which was harmless while a hook diagnostic lasted one refresh and is not
+    /// now that it stands for the run — an unreadable payload at 09:00 would
+    /// have hidden an unreadable read state for the rest of the day.
+    @Test @MainActor
+    func oneProblemDoesNotHideTheNext() {
+        #expect(MonitorDiagnostics.combined("first.", nil, "  ", "second.") == "first. second.")
+        #expect(MonitorDiagnostics.combined(nil, nil) == nil)
+        #expect(MonitorDiagnostics.combined("only.") == "only.")
+    }
+
+    /// What a product reported reaches the card that reports it.
+    ///
+    /// `AgentSnapshot.diagnostic` → `MonitorSnapshot.diagnostic` →
+    /// `MonitorStore` was a chain computed correctly, carried through three
+    /// layers, and read by no view in the app — only by tests. The Settings
+    /// card is the natural end for it: it is already the line that says
+    /// `Connected · hooks installed`, and a caption under that costs no overlay
+    /// redraw (`AGENTS.md` §7). The copy is a value so that this can be
+    /// asserted at all; a `body` cannot be (CR-029).
+    @Test @MainActor
+    func whatAProductReportedReachesTheCardThatReportsIt() {
+        let store = MonitorStore(services: [])
+        let reported = "Ignored 2 hook payloads that could not be read."
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, diagnostic: reported)
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, availability: .ready, setupStatus: .active)
+        )
+
+        // Per product, not merged: the row that shows it names one product, and
+        // the merged line prefixes both names once there are two.
+        #expect(store.diagnostic(for: .codex) == reported)
+        #expect(store.diagnostic(for: .claudeCode) == nil)
+
+        let codex = ProductSettingsCopy.codex(
+            setup: .active,
+            availability: .ready,
+            diagnostic: store.diagnostic(for: .codex)
+        )
+        #expect(codex.diagnostic == reported)
+        #expect(codex.status == "Connected · compatible version")
+        // The row's label is the product name, so the status line must not
+        // repeat it.
+        #expect(!codex.status.contains("Codex Desktop"))
+
+        let claudeCode = ProductSettingsCopy.claudeCode(
+            setup: .active,
+            availability: .ready,
+            diagnostic: store.diagnostic(for: .claudeCode)
+        )
+        #expect(claudeCode.status == "Connected · hooks installed")
+        // Nothing wrong, no line: a row that keeps an empty line for a failure
+        // that is not happening reads as one that is.
+        #expect(claudeCode.diagnostic == nil)
+
+        // A registration that stopped matching keeps its own sentence, and the
+        // report rides under it rather than replacing it.
+        let stale = ProductSettingsCopy.claudeCode(
+            setup: .repairRequired,
+            availability: .ready,
+            diagnostic: reported
+        )
+        #expect(stale.status.contains("out of date"))
+        #expect(stale.diagnostic == reported)
     }
 
     /// The socket is this user's alone, and rubbish on it is dropped.

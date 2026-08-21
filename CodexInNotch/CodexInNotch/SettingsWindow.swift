@@ -65,9 +65,10 @@ struct AppSettingsView: View {
         SettingsGroup(header: "Products") {
             SettingsRow(
                 title: "Codex Desktop",
+                caption: codexCopy.diagnostic,
                 status: SettingsRowStatus(
-                    color: codexStatusColor,
-                    text: codexStatusLine
+                    color: codexCopy.color,
+                    text: codexCopy.status
                 )
             ) {
                 Toggle("Codex integration", isOn: integrationSelection)
@@ -82,9 +83,10 @@ struct AppSettingsView: View {
 
                 SettingsRow(
                     title: "Claude Code",
+                    caption: claudeCodeCopy.diagnostic,
                     status: SettingsRowStatus(
-                        color: claudeCodeStatusColor,
-                        text: claudeCodeStatusLine
+                        color: claudeCodeCopy.color,
+                        text: claudeCodeCopy.status
                     )
                 ) {
                     Button(isShowingClaudeCodeSetup ? "Hide Setup" : "Set Up…") {
@@ -282,73 +284,20 @@ struct AppSettingsView: View {
 
     // MARK: - Status copy
 
-    /// The product name is the row label now, so the status line must not
-    /// repeat it: `Codex Desktop / Codex Desktop connected` reads as a stutter.
-    private var codexStatusLine: String {
-        if store.hookSetupStatus == .repairRequired {
-            return "Integration needs repair"
-        }
-        if store.hookSetupStatus == .notInstalled {
-            return "Integration is off"
-        }
-
-        return switch store.availability {
-        case .ready: "Connected · compatible version"
-        case .setupRequired: "Integration not installed"
-        case .connecting: "Connecting…"
-        case .updateAgent: "Update Codex Desktop"
-        case .unsupportedVersion: "Version unsupported"
-        case .disconnected: "Disconnected"
-        }
+    private var codexCopy: ProductSettingsCopy {
+        .codex(
+            setup: store.hookSetupStatus,
+            availability: store.availability,
+            diagnostic: store.diagnostic(for: .codex)
+        )
     }
 
-    private var codexStatusColor: Color {
-        if store.hookSetupStatus == .repairRequired {
-            return MacOSWindowColor.statusWarning
-        }
-        if store.hookSetupStatus == .notInstalled {
-            return MacOSWindowColor.statusIdle
-        }
-
-        return switch store.availability {
-        case .ready: MacOSWindowColor.statusHealthy
-        case .connecting: MacOSWindowColor.statusPending
-        case .setupRequired: MacOSWindowColor.statusIdle
-        case .updateAgent, .unsupportedVersion, .disconnected: MacOSWindowColor.statusBlocked
-        }
-    }
-
-    /// A registration that does not match this build gets its own sentence,
-    /// because it is the failure with no other symptom. An event left out
-    /// simply never arrives; a handler in an older shape does arrive and
-    /// misbehaves quietly — an `http` handler from before ADR 0013 posts every
-    /// event to a port nothing listens on, which is a line in the user's
-    /// session each time and nothing at all in the notch. Neither reports an
-    /// error anywhere.
-    private var claudeCodeStatusLine: String {
-        switch store.setupStatus(for: .claudeCode) {
-        case .active:
-            store.agentAvailability(for: .claudeCode) == .disconnected
-                ? "Registered · the hook helper could not be set up"
-                : "Connected · hooks installed"
-        case .repairRequired:
-            "Registration is out of date · nothing here reports an error"
-        default:
-            "Not registered yet"
-        }
-    }
-
-    private var claudeCodeStatusColor: Color {
-        switch store.setupStatus(for: .claudeCode) {
-        case .active:
-            store.agentAvailability(for: .claudeCode) == .disconnected
-                ? MacOSWindowColor.statusWarning
-                : MacOSWindowColor.statusHealthy
-        case .repairRequired:
-            MacOSWindowColor.statusWarning
-        default:
-            MacOSWindowColor.statusIdle
-        }
+    private var claudeCodeCopy: ProductSettingsCopy {
+        .claudeCode(
+            setup: store.setupStatus(for: .claudeCode),
+            availability: store.agentAvailability(for: .claudeCode),
+            diagnostic: store.diagnostic(for: .claudeCode)
+        )
     }
 
     private var selectedDisplayDescription: String {
@@ -374,6 +323,97 @@ struct AppSettingsView: View {
             get: { store.integrationSwitchIsOn },
             set: { store.setIntegrationEnabled($0) }
         )
+    }
+}
+
+/// What one product's row in Settings says about itself.
+///
+/// A value rather than four computed properties on the view, and for one
+/// reason: the line under the status is the only thing in this window that
+/// exists to report a failure, and CR-029 was exactly that line being derived
+/// correctly, carried down three layers, and then reaching no view at all. A
+/// value can be asserted by a test; a `body` cannot, and this window has no
+/// other test holding it.
+///
+/// The product name is the row's label, so the status line must not repeat it:
+/// `Codex Desktop / Codex Desktop connected` reads as a stutter.
+struct ProductSettingsCopy: Equatable {
+    /// The caption line the status dot starts.
+    let status: String
+    /// The dot.
+    let color: Color
+    /// What that product's own boundary had to say, when it went wrong. Shown
+    /// under the status line, and absent the rest of the time — a row that
+    /// keeps an empty line for a failure that is not happening reads as one
+    /// that is.
+    let diagnostic: String?
+
+    static func codex(
+        setup: HookSetupStatus,
+        availability: MonitorAvailability,
+        diagnostic: String?
+    ) -> Self {
+        if setup == .repairRequired {
+            return Self(
+                status: "Integration needs repair",
+                color: MacOSWindowColor.statusWarning,
+                diagnostic: diagnostic
+            )
+        }
+        if setup == .notInstalled {
+            return Self(
+                status: "Integration is off",
+                color: MacOSWindowColor.statusIdle,
+                diagnostic: diagnostic
+            )
+        }
+
+        let status = switch availability {
+        case .ready: "Connected · compatible version"
+        case .setupRequired: "Integration not installed"
+        case .connecting: "Connecting…"
+        case .updateAgent: "Update Codex Desktop"
+        case .unsupportedVersion: "Version unsupported"
+        case .disconnected: "Disconnected"
+        }
+        let color = switch availability {
+        case .ready: MacOSWindowColor.statusHealthy
+        case .connecting: MacOSWindowColor.statusPending
+        case .setupRequired: MacOSWindowColor.statusIdle
+        case .updateAgent, .unsupportedVersion, .disconnected: MacOSWindowColor.statusBlocked
+        }
+        return Self(status: status, color: color, diagnostic: diagnostic)
+    }
+
+    /// A registration that does not match this build gets its own sentence,
+    /// because it is the failure with no other symptom. An event left out
+    /// simply never arrives; a handler in an older shape does arrive and
+    /// misbehaves quietly — an `http` handler from before ADR 0013 posts every
+    /// event to a port nothing listens on, which is a line in the user's
+    /// session each time and nothing at all in the notch. Neither reports an
+    /// error anywhere.
+    static func claudeCode(
+        setup: HookSetupStatus,
+        availability: MonitorAvailability?,
+        diagnostic: String?
+    ) -> Self {
+        let status: String
+        let color: Color
+        switch setup {
+        case .active where availability == .disconnected:
+            status = "Registered · the hook helper could not be set up"
+            color = MacOSWindowColor.statusWarning
+        case .active:
+            status = "Connected · hooks installed"
+            color = MacOSWindowColor.statusHealthy
+        case .repairRequired:
+            status = "Registration is out of date · nothing here reports an error"
+            color = MacOSWindowColor.statusWarning
+        default:
+            status = "Not registered yet"
+            color = MacOSWindowColor.statusIdle
+        }
+        return Self(status: status, color: color, diagnostic: diagnostic)
     }
 }
 

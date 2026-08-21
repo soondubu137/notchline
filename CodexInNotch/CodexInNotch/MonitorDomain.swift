@@ -727,6 +727,30 @@ struct MonitorSnapshot: Equatable, Sendable {
     )
 }
 
+/// How several things that went wrong become one line.
+///
+/// Hoisted out of the Codex provider when the Claude Code one needed it too:
+/// that side reported `hookDiagnostic ?? read.diagnostic`, which was harmless
+/// while a hook diagnostic lasted one refresh and is not now that it stands for
+/// the run — the first sentence would have hidden every later one behind it
+/// (CR-029).
+enum MonitorDiagnostics {
+    nonisolated static func combined(_ diagnostics: String?...) -> String? {
+        combined(diagnostics)
+    }
+
+    nonisolated static func combined(_ diagnostics: [String?]) -> String? {
+        let messages = diagnostics.compactMap { diagnostic -> String? in
+            guard let diagnostic,
+                  !diagnostic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return diagnostic
+        }
+        return messages.isEmpty ? nil : messages.joined(separator: " ")
+    }
+}
+
 enum AgentSnapshotMerge {
     /// Folds every product's answer into the one snapshot the UI reads.
     ///

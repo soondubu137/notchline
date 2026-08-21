@@ -15,7 +15,7 @@
 
 **队列的删除还带走了一条跨产品的绕路。** `AgentHookListener` 从 socket 收到 Claude Code 的 payload，再把它写成事件文件，只为了让 `HookEventRepository`——一个目录读取器，因为 Codex——能把它读回来。这次改动删掉了那个读取器的最后一个客户。两个产品现在是同一个 store、同一个 reducer、各自一条 transport。这是本次改动里最大的一处简化，而它是把 Codex 这条路径设计对之后的副产物。
 
-`.invalid` 的实际后果值得记一笔：本机 `agents/claudeCode/events/` 累计了 **155 个**隔离文件，没有任何东西会再读它们，也没有任何东西会清它们。现在无法解析的 payload 是「报一个诊断然后丢掉」，没有可以被留下的地方。
+`.invalid` 的实际后果值得记一笔：本机 `agents/claudeCode/events/` 累计了 **155 个**隔离文件，没有任何东西会再读它们，也没有任何东西会清它们。现在无法解析的 payload 是「报一个诊断然后丢掉」，没有可以被留下的地方。**这句话曾有半年是假的**：6aeb6b9 删掉了队列时代那句 `Ignored a corrupted hook event file.`，却没有给它继任者，于是它只剩「丢掉」（CR-029）。现在 `deliver` 数下每一份读不懂的 payload——包括一个字节都没送到的连接——按本次运行累计报出来，并且到达 Settings 里该产品那一行。
 
 ## 三条守则变成架构性质
 
@@ -50,4 +50,4 @@ listener 的串行读取队列保证 `deliver` 按 payload 落地的顺序被调
 
 ## 状态
 
-已实施。`AgentHookListener` 只做 transport（绑定、accept、读一份 payload、交出去），`HookEventRepository` 持有 reducer、正文与投递证据。`HookPreviewChannel.swift` 已删除。测试：`anOversizedToolResultStillClosesTheWaitItBelongsTo`、`aPromptTooBigToForwardStillOpensItsTurnAndStillReadsAsItself`、`aConnectionPastTheCeilingIsCutAndKeepsWhatArrivedWhole`、`selectingFieldsReadsTheSameAsDecodingTheWholePayload`、`anIdentityTooLongToBeOneIsLeftOutRatherThanCutShort`、`aTextFieldIsCutOnlyWhereAJSONStringCanBeCut`、`aPayloadThatStopsPartWayThroughKeepsTheFieldsThatArrivedWhole`、`payloadsAreReducedInTheOrderTheyLanded`、`theStoreSignalsWhatIsDrawnAndNothingElse`、`nothingAThirdPartyCouldReplayIsEverWrittenDown`、`theListenerHandsOverOnePayloadPerConnection`、`aPayloadWrittenAfterTheConnectionIsAcceptedStillArrives`、`messageDisplayTextIsHeldInMemoryAndReducesNothing`、`aPreviewArrivingWhereThereWasNoneAsksToBeDrawn`。
+已实施。`AgentHookListener` 只做 transport（绑定、accept、读一份 payload、交出去），`HookEventRepository` 持有 reducer、正文与投递证据。`HookPreviewChannel.swift` 已删除。测试：`aPayloadTheStoreCannotReadIsReportedRatherThanDroppedInSilence`、`theReportOfADroppedPayloadStandsForTheRun`、`whatAProductReportedReachesTheCardThatReportsIt`、`anOversizedToolResultStillClosesTheWaitItBelongsTo`、`aPromptTooBigToForwardStillOpensItsTurnAndStillReadsAsItself`、`aConnectionPastTheCeilingIsCutAndKeepsWhatArrivedWhole`、`selectingFieldsReadsTheSameAsDecodingTheWholePayload`、`anIdentityTooLongToBeOneIsLeftOutRatherThanCutShort`、`aTextFieldIsCutOnlyWhereAJSONStringCanBeCut`、`aPayloadThatStopsPartWayThroughKeepsTheFieldsThatArrivedWhole`、`payloadsAreReducedInTheOrderTheyLanded`、`theStoreSignalsWhatIsDrawnAndNothingElse`、`nothingAThirdPartyCouldReplayIsEverWrittenDown`、`theListenerHandsOverOnePayloadPerConnection`、`aPayloadWrittenAfterTheConnectionIsAcceptedStillArrives`、`messageDisplayTextIsHeldInMemoryAndReducesNothing`、`aPreviewArrivingWhereThereWasNoneAsksToBeDrawn`。

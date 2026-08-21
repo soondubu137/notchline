@@ -1740,6 +1740,18 @@ final class MonitorStore: ObservableObject {
         setupStatusByAgent[agent] ?? .notInstalled
     }
 
+    /// What went wrong on this product's side, if anything did.
+    ///
+    /// Read off the same stored answer as ``agentAvailability(for:)`` rather
+    /// than published on its own: the two are shown on the same line of the
+    /// same card, and a second `@Published` would republish the whole store --
+    /// the overlay included -- for a caption in a window that is usually shut
+    /// (`AGENTS.md` §7). This is the reading end of the chain CR-029 found
+    /// computed and never shown.
+    func diagnostic(for agent: AgentKind) -> String? {
+        latestByAgent[agent]?.diagnostic
+    }
+
     /// Re-reads what a product has left on disk when it answers.
     ///
     /// Off the refresh for the same reason the instructions are: it lists a

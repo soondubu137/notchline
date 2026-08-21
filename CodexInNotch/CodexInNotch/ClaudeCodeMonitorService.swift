@@ -499,7 +499,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // those calls ran, none of which knows anything about the files this
         // refresh read: a corrupt event is reported on the refresh that found
         // it, whether or not a turn also ended in the same one.
-        let hookDiagnostic = consumed.diagnostic ?? hookState.diagnostic
+        let hookDiagnostic = MonitorDiagnostics.combined(consumed.diagnostic, hookState.diagnostic)
 
         await transcripts.retain(sessionIDs: Set(liveByID.keys))
         // Text belonging to a session that has ended does not outlive the row
@@ -625,7 +625,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // and it is the surface's half of the contract, not the registry's.
             sessions: presence.isOpen ? visibleRows : [],
             setupStatus: status,
-            diagnostic: hookDiagnostic ?? read.diagnostic,
+            diagnostic: MonitorDiagnostics.combined(hookDiagnostic, read.diagnostic),
             // Whatever is known right now. Awaiting the reading here is what
             // made a hook event's row wait on a `claude` launch.
             quota: await usage.currentQuota(),

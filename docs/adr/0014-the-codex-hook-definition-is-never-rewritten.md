@@ -52,6 +52,8 @@ trusted_hash = "sha256:e304ee0f…"
 
 **沉默探测保留。** 「自启动以来 ≥3 次 `PostToolUse` 而 0 次 `PreToolUse` ⇒ `PreToolUse` 已注册但不触发」仍然是运行期唯一能看见失信的证据。本决策堵住的是本应用自己造成该状态的路径；用户手改 `config.toml`、或 Codex 更新重新哈希，仍然可以到达它。只有「缺席确实构成证据」的蕴含式可以进这张表：`PermissionRequest` 只在有人被询问时触发，它的沉默什么也不证明，永远不得探测。
 
+**这条探测此前算得对、也传得下去，但没有任何一个 view 读它**，因此它作为「运行期唯一能看见失信的证据」这句话，有一段时间只在代码里成立（CR-029）。它现在写在 Settings 里该产品那一行的说明行下方。同时那句话本身改了：它原先在一个两个产品共用的 reducer 里点名 Codex 和 `/hooks`，对 Claude Code 是错的建议——那边的注册是用户自己的文件、不会因为哈希变化而失信（[ADR 0010](0010-never-write-the-users-claude-code-settings.md)）——所以修复方式由各自的 vocabulary 给出。
+
 ## 状态
 
 已实施。`CodexHookRegistrar` 写定义与脚本，`ManagedHooksFileEditor.install()` 带 no-op 守卫。测试：`theRegisteredDefinitionCarriesNothingThatCouldEverNeedToChange`、`registrationMergesAtTheTailAndAnAlreadyCorrectInstallWritesNothing`、`installingOverAnEarlierVersionsRegistrationReplacesIt`、`closesWithoutOpensReportTheUntrustedPreToolUseHook`。

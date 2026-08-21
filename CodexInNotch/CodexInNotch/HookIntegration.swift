@@ -334,12 +334,23 @@ protocol AgentHookVocabulary: Sendable {
     /// against CLI 2.1.234, one 1561-character message arrived as eleven
     /// deltas, mean 0.29 s apart. Three a second is not a redraw rate.
     nonisolated var messageDeltaEventName: String? { get }
+    /// What to tell the user when a definition this product registered has
+    /// stopped running.
+    ///
+    /// The reducer is shared and the repair is not: Codex keys trust by content
+    /// hash and takes it back through `/hooks`, while Claude Code's
+    /// registration is the user's own file and is repaired by editing it. The
+    /// sentence used to name Codex from inside the shared reducer, which made
+    /// it wrong for half the events it described (CR-029).
+    nonisolated var restoreDefinitionAdvice: String { get }
     /// `nil` means "not recognised": drop it and say so.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
 }
 
 nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated let agent: AgentKind = .codex
+    nonisolated let restoreDefinitionAdvice =
+        "Run /hooks in Codex and trust the definition again."
     /// A refusal produces no event whatsoever, so it has to be inferred.
     nonisolated let reportsApprovalDenials = false
     nonisolated let carriesTurnText = true
@@ -414,6 +425,10 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
 /// observation, not a reading of the documentation.
 nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     nonisolated let agent: AgentKind = .claudeCode
+    /// ADR 0010: this app never writes that file, so the repair is the user's
+    /// to make and the sentence says where.
+    nonisolated let restoreDefinitionAdvice =
+        "Check that PreToolUse is still registered in ~/.claude/settings.json."
     /// `PermissionDenied` carries the refused call's `tool_use_id`, so a
     /// refusal closes exactly. This is the one place Claude Code is plainly
     /// better than Codex, and it is what lets the reducer drop an inference
@@ -1636,6 +1651,19 @@ nonisolated final class HookChangeBroadcast: @unchecked Sendable {
 nonisolated final class HookDeliveryInbox: @unchecked Sendable {
     private let lock = NSLock()
     nonisolated(unsafe) private var pending: [DeliveredHookEvent] = []
+    /// Payloads that arrived and could not be read, waiting to be counted.
+    ///
+    /// It rides along with the events, under the same lock and taken in the
+    /// same call, because it is the same fact from the same queue: this many
+    /// arrived, that many were understood. Counted on the actor and reported
+    /// there, since the transport has nowhere to report to.
+    nonisolated(unsafe) private var unreadable = 0
+
+    /// One hand-off: everything that landed, and how much of it was rubbish.
+    struct Delivery: Sendable {
+        let events: [DeliveredHookEvent]
+        let unreadable: Int
+    }
 
     nonisolated init() {}
 
@@ -1645,17 +1673,25 @@ nonisolated final class HookDeliveryInbox: @unchecked Sendable {
         lock.unlock()
     }
 
-    nonisolated func take() -> [DeliveredHookEvent] {
+    nonisolated func recordUnreadablePayload() {
+        lock.lock()
+        unreadable += 1
+        lock.unlock()
+    }
+
+    nonisolated func take() -> Delivery {
         lock.lock()
         defer { lock.unlock() }
-        let taken = pending
+        let taken = Delivery(events: pending, unreadable: unreadable)
         pending.removeAll(keepingCapacity: true)
+        unreadable = 0
         return taken
     }
 
     nonisolated func removeAll() {
         lock.lock()
         pending.removeAll()
+        unreadable = 0
         lock.unlock()
     }
 }
@@ -1719,8 +1755,17 @@ actor HookEventRepository {
     /// is the one those events came from -- so an answer consumed by a
     /// background drain would silently cost a whole refresh of freshness.
     private var didReduceSinceLastReport = false
-    /// A payload this store could not make sense of, held for the same reason.
-    private var pendingDiagnostic: String?
+    /// Payloads that arrived and could not be read at all, since launch.
+    ///
+    /// **Counted for the run rather than reported once.** A diagnostic that
+    /// clears itself on the next refresh is one nobody is looking at when it
+    /// appears; the thing worth telling a user is that this run has been
+    /// dropping payloads, which is a standing fact and not an event. The count
+    /// is the difference between a one-off and a flood, which is the first
+    /// thing anybody would want to know (CR-029).
+    private var unreadablePayloadCount = 0
+    /// Payloads that read fine and described nothing this store could place.
+    private var unplaceableEventCount = 0
 
     init(
         paths: HookIntegrationPaths = .live(),
@@ -1767,6 +1812,17 @@ actor HookEventRepository {
         guard let payload = HookPayload.distilled(from: body),
               let eventName = payload.hookEventName,
               payload.sessionID != nil else {
+            // Nothing here can be placed: nothing at all, or not JSON, or
+            // JSON without the event name or the session this app keys
+            // everything on. It is still dropped — there is nowhere to
+            // quarantine it to, and the quarantine was itself unread litter —
+            // but it is dropped *aloud*. This is the one report that says the
+            // transport is delivering and the store is not understanding,
+            // which is what every silent failure this integration is designed
+            // around looks like from in here (CR-029). No drain is kicked for
+            // it: nothing rendered changed, and the refresh path drains every
+            // cycle anyway.
+            inbox.recordUnreadablePayload()
             return
         }
         // Our own quota reading is a real session firing real hooks.
@@ -1811,7 +1867,6 @@ actor HookEventRepository {
         drainInbox()
         let reported = snapshot(didConsumeEvents: didReduceSinceLastReport)
         didReduceSinceLastReport = false
-        pendingDiagnostic = nil
         return reported
     }
 
@@ -1823,14 +1878,15 @@ actor HookEventRepository {
 
     private func drainInbox() {
         let delivered = inbox.take()
-        guard !delivered.isEmpty else { return }
+        unreadablePayloadCount += delivered.unreadable
+        guard !delivered.events.isEmpty else { return }
 
         var didReduce = false
-        for event in delivered {
+        for event in delivered.events {
             if reduce(event) {
                 didReduce = true
             } else {
-                pendingDiagnostic = "Ignored a hook payload with no stable identity, or of an unsupported kind."
+                unplaceableEventCount += 1
             }
         }
 
@@ -1989,7 +2045,8 @@ actor HookEventRepository {
         hasObservedLiveEvent = false
         didRecordEventThisLaunch = false
         didReduceSinceLastReport = false
-        pendingDiagnostic = nil
+        unreadablePayloadCount = 0
+        unplaceableEventCount = 0
         inbox.removeAll()
         previews.removeAll()
         if clearTurns {
@@ -2364,7 +2421,32 @@ actor HookEventRepository {
         guard observedPreToolUseCount == 0, observedPostToolUseCount >= 3 else {
             return nil
         }
-        return "Codex is not running the PreToolUse hook, so input needed and approval needed cannot be shown; run /hooks in Codex to trust the definition again."
+        return "\(vocabulary.agent.displayName) is not running the PreToolUse hook, "
+            + "so Input needed and Approval needed cannot be shown. "
+            + vocabulary.restoreDefinitionAdvice
+    }
+
+    /// Everything this store currently has to say about its own health.
+    ///
+    /// Three independent facts, joined rather than ranked: payloads that could
+    /// not be read, events that could not be placed, and a definition that has
+    /// stopped firing. They have different causes and can hold at once, so
+    /// picking one to report would hide the others behind it.
+    private var reportedDiagnostic: String? {
+        let sentences = [
+            unreadablePayloadCount > 0
+                ? "Ignored \(Self.payloadCount(unreadablePayloadCount)) that could not be read."
+                : nil,
+            unplaceableEventCount > 0
+                ? "Ignored \(Self.payloadCount(unplaceableEventCount)) with no stable identity, or of an unsupported kind."
+                : nil,
+            undeliveredPreToolUseDiagnostic
+        ].compactMap { $0 }
+        return sentences.isEmpty ? nil : sentences.joined(separator: " ")
+    }
+
+    private static func payloadCount(_ count: Int) -> String {
+        count == 1 ? "1 hook payload" : "\(count) hook payloads"
     }
 
     /// The drain the transport kicks, which reports to nobody.
@@ -2378,7 +2460,7 @@ actor HookEventRepository {
             hasObservedLiveEvent: hasObservedLiveEvent,
             turns: turnsByThreadID.values.sorted { $0.startedAt > $1.startedAt },
             didConsumeEvents: didConsumeEvents,
-            diagnostic: pendingDiagnostic ?? undeliveredPreToolUseDiagnostic
+            diagnostic: reportedDiagnostic
         )
     }
 }

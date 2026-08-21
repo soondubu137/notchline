@@ -390,6 +390,7 @@ Input needed
 `Codex Desktop` 与 `Claude Code` 是同一张卡片里的两行，不是两个分组。加入第三个产品的代价是一行，而不是一个新面板。
 
 - 每行左侧是产品名，说明行以状态点开头，写连接结论与能力信息（`Connected · compatible version`、`Connected · hooks installed`）。
+- **说明行下面还可以再有一行，写该产品自己报出的失败，板上没有，这是实现与板不一致的第三处。** 例如 `Ignored 2 hook payloads that could not be read.`、`Claude Code is not running the PreToolUse hook, so Input needed and Approval needed cannot be shown.` 它**只在有话说的时候出现**：一行为了不存在的失败常驻的空行，读起来就像那个失败正在发生。这一行是本窗口里唯一为「报告失败」而存在的东西——集成失败在本产品里天然安静，界面会照旧写着 `Connected`——所以它按本次运行累计、而不是报一次就清（[`PRD.md`](PRD.md) 第 12 节、CR-029）。它与 `Quota reading transcripts` 那一行的「卡片会自己长出一行」是同一个代价，区别在于这一行长出来的时候，用户正需要它。
 - Codex 行右侧是一个原生 macOS switch，启停该产品所需的 lifecycle event 定义；切换进行中 disabled。
 - **Claude Code 行没有 switch，这是实现与板上不一致的一处，且是刻意的。** [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) 决定本应用永不写 `~/.claude/settings.json`，因此那一行给不出一个能兑现的开关。它的尾部是胶囊按钮 `Set Up…`，展开卡片内的一段：粘贴目标路径、可选中的 JSON 片段、`Copy` 与 `Reveal Settings File`。两行并排正是这个不对称唯一被看见的地方——把它藏进另一个流程，只会让它读起来像疏漏而不是决定。板上的双 switch 保留为「若日后恢复写入能力」的形态。
 - 卡片下方脚注说明开关只安装 Codex in Notch 需要的六项定义，关闭时移除，用户其他 hooks 不受影响，并写明 Claude Code 由用户自己注册。
@@ -487,7 +488,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] Claude Code 在场的第二条校正：为陈旧缓存设上限（`90` 秒 = 三次连续失败），超过后在场为未知并落到 `Disconnected`。`freshness` 与 `trustCeiling` 现在是两个参数。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
-- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift)），五处与板不一致均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、多一个 `Display` 分组与一行 `Clear the session list`（§8.4、§8.2）、少一个 `Privacy` 分组（§8.3）。
+- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift)），六处与板不一致均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、产品行说明行下多一行失败报告（§8.1）、多一个 `Display` 分组与一行 `Clear the session list`（§8.4、§8.2）、少一个 `Privacy` 分组（§8.3）。
 - [ ] 在装有 SF Pro 的 Figma 桌面端打开 `609:2`，确认字形正常渲染、多行脚注的换行落位与预期一致。
 - [ ] 同一次打开时，把 `closing note` 的四条 Inter 文字（`665:3`、`665:5`、`667:3`、`667:5`）重新键入为 SF Pro Regular，原因见 §3.1。
 - [x] 会话行已同步 Running／等待人工／Completed 三种计时表现，一行只有一个标记。

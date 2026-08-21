@@ -264,7 +264,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                         availability: .ready,
                         sessions: sessions.sorted(by: MonitorAggregation.rowOrder),
                         quota: cachedQuota,
-                        diagnostic: combinedDiagnostic(
+                        diagnostic: MonitorDiagnostics.combined(
                             hookDiagnostic,
                             unreadSnapshot.diagnostic,
                             projectDiagnostic(
@@ -902,18 +902,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         let unresolvedDiagnostic = unavailableCount > 0
             ? "\(unavailableCount) sessions have no verifiable Desktop Project mapping; they were not fallen back to Chats."
             : nil
-        return combinedDiagnostic(metadata.diagnostic, unresolvedDiagnostic)
-    }
-
-    private func combinedDiagnostic(_ diagnostics: String?...) -> String? {
-        let messages: [String] = diagnostics.compactMap { diagnostic -> String? in
-            guard let diagnostic,
-                  !diagnostic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return nil
-            }
-            return diagnostic
-        }
-        return messages.isEmpty ? nil : messages.joined(separator: " ")
+        return MonitorDiagnostics.combined(metadata.diagnostic, unresolvedDiagnostic)
     }
 
     private func snapshotPreservingTrustedState(

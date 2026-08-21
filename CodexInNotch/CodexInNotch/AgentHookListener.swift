@@ -272,13 +272,17 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
 
         var body = Data()
         readBody(on: descriptor, into: &body)
-        // A body that reached the ceiling is handed over rather than dropped.
-        // It used to be dropped, on the reasoning that half a payload decodes
-        // to nothing useful -- which was true while the whole payload had to
-        // decode. Selection now takes whole fields off the front, so the half
-        // that arrived is worth something and the half that did not was a tool
-        // result nobody reads (CR-030).
-        guard !body.isEmpty else { return }
+        // Handed over whatever it turned out to be, including nothing at all.
+        // A body that reached the ceiling used to be dropped here, on the
+        // reasoning that half a payload decodes to nothing useful -- true while
+        // the whole payload had to decode, and no longer so now that selection
+        // takes whole fields off the front (CR-030). An empty body used to be
+        // dropped here too, and that left this end with two silent exits: only
+        // this user's own processes can reach a `0600` socket in a directory
+        // this app owns, so a connection that delivers nothing is the helper
+        // failing to deliver, which is exactly the kind of thing CR-029 says
+        // must stop being silent. There is one place that can say so -- the
+        // store -- so everything that arrives goes there and it decides.
         deliver(body, clock.now())
     }
 
