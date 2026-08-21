@@ -290,7 +290,7 @@ private struct SettingsButton: View {
             openSettings()
         } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: 15, weight: .regular))
+                .font(.system(size: 13, weight: .regular))
                 .frame(width: size, height: size)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -432,8 +432,9 @@ private struct QuotaFoldLine<Content: View>: View {
 /// It points down while folded because the panel hangs from the notch and can
 /// only grow downward — the chevron points the way the panel will move, which is
 /// also the "show more" every list uses. Being the only hit target, it carries
-/// the gear's hover wash so the square it answers to is visible before the
-/// click, not guessed at.
+/// the gear's whole hover treatment — the wash behind it and the brighter
+/// glyph — so the square it answers to is visible before the click, not
+/// guessed at.
 private struct QuotaFoldChevron: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -447,7 +448,7 @@ private struct QuotaFoldChevron: View {
         } label: {
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(NotchPalette.label)
+                .foregroundStyle(isHovered ? NotchPalette.sessionTitle : NotchPalette.label)
                 .rotationEffect(.degrees(isFolded ? 0 : 180))
                 .frame(
                     width: PanelMetrics.quotaFoldControlSize,
