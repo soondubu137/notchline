@@ -257,7 +257,7 @@ setFocusedSession(e){ log.info(`[CCD] LocalSessions.setFocusedSession: sessionId
 
 所以第五条**不是**前四条的兜底，而是与它们平级的一条：**五条任一成立即已读。** 写成兜底的话，一个两边都在的会话会一直听 Desktop 的记录，而那份记录对着一个在终端里读完的用户永远不会前进——行就永远不走，恰好是 CC-013 要修的那件事在新配置下复发。
 
-**反方向是安全的，而且理由是结构性的而不是运气。** 第五条只可能对**真的有控制终端**的会话成立，而 Claude Desktop 托管的会话没有：Desktop 把 CLI 跑成 `--output-format stream-json`、走管道、没有终端界面——这也正是那些会话连 `status` 都没有的原因（[#41](https://github.com/soondubu137/codex-in-notch/issues/41)）。因此把第五条摊到所有会话上，动不了 Desktop 那一半的任何行为。
+**反方向是安全的，而且理由是结构性的而不是运气。** 第五条只可能对**真的有控制终端**的会话成立，而 Claude Desktop 托管的会话没有：Desktop 把 CLI 跑成 `--output-format stream-json`、走管道、没有终端界面——这也正是那些会话连 `status` 都没有的原因（[#41](https://github.com/soondubu137/notchline/issues/41)）。因此把第五条摊到所有会话上，动不了 Desktop 那一半的任何行为。
 
 **远程控制也不可能产生一次假的手势**，这一点值得单独写下来，因为它是本条最容易担心的地方：远程送进来的东西走的是 `/tmp/cc-socks/<pid>.sock`，不是那个 tty；而且退一步说，即使它写了 tty 也无害——远程能送的只有**提交**（那会开一个新轮次，行随即变回 Running）和**轮次进行中的审批**（时刻早于该轮终止）。没有任何一种能落在「该轮结束之后、又没有新轮次」这个唯一有意义的窗口里。
 

@@ -3,9 +3,9 @@ import Combine
 import Darwin
 import SwiftUI
 import Testing
-@testable import CodexInNotch
+@testable import Notchline
 
-struct CodexInNotchTests {
+struct NotchlineTests {
     /// A no-notch panel is one width across the whole working set.
     ///
     /// It used to measure itself, so it resized whenever the status changed or
@@ -2098,7 +2098,7 @@ struct CodexInNotchTests {
 
     @Test @MainActor
     func selectedDisplayPreferencePersistsAcrossStoreInstances() throws {
-        let suiteName = "CodexInNotchTests-\(UUID().uuidString)"
+        let suiteName = "NotchlineTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -2397,7 +2397,7 @@ struct CodexInNotchTests {
                 agent: agent,
                 threadID: "same-thread",
                 turnID: "same-turn",
-                projectName: "codex-in-notch",
+                projectName: "notchline",
                 title: "Task",
                 preview: nil,
                 status: .running,
@@ -2418,7 +2418,7 @@ struct CodexInNotchTests {
             agent: .claudeCode,
             threadID: "cc",
             turnID: "turn",
-            projectName: "codex-in-notch",
+            projectName: "notchline",
             title: "Still running",
             preview: nil,
             status: .running,
@@ -2610,7 +2610,7 @@ struct CodexInNotchTests {
             agent: .claudeCode,
             threadID: "cc",
             turnID: "turn",
-            projectName: "codex-in-notch",
+            projectName: "notchline",
             title: "Input",
             preview: nil,
             status: .inputNeeded,
@@ -2754,7 +2754,7 @@ struct CodexInNotchTests {
         let stateFile = root.appendingPathComponent(".codex-global-state.json")
         let data = try JSONSerialization.data(withJSONObject: [
             "local-projects": [
-                "local-1": ["name": "codex-in-notch"]
+                "local-1": ["name": "notchline"]
             ],
             "remote-projects": [
                 ["id": "remote-1", "label": "Remote workspace"]
@@ -2781,7 +2781,7 @@ struct CodexInNotchTests {
         #expect(snapshot.source == .current)
         #expect(
             snapshot.resolution(for: "thread-local")
-                == .project("codex-in-notch")
+                == .project("notchline")
         )
         #expect(
             snapshot.resolution(for: "thread-remote")
@@ -2873,7 +2873,7 @@ struct CodexInNotchTests {
         let stateFile = root.appendingPathComponent(".codex-global-state.json")
         let data = try JSONSerialization.data(withJSONObject: [
             "local-projects": [
-                "local-1": ["name": "codex-in-notch"]
+                "local-1": ["name": "notchline"]
             ],
             "thread-project-assignments": [
                 "thread-local": [
@@ -2894,7 +2894,7 @@ struct CodexInNotchTests {
         #expect(snapshot.diagnostic == nil)
         #expect(
             snapshot.resolution(for: "thread-local")
-                == .project("codex-in-notch")
+                == .project("notchline")
         )
         #expect(snapshot.resolution(for: "thread-chat") == .chats)
     }
@@ -2916,7 +2916,7 @@ struct CodexInNotchTests {
         let stateFile = root.appendingPathComponent(".codex-global-state.json")
         let renamed = try JSONSerialization.data(withJSONObject: [
             "local-projects": [
-                "local-1": ["name": "codex-in-notch"]
+                "local-1": ["name": "notchline"]
             ],
             "thread-project-assignments-v2": [
                 "thread-local": [
@@ -2954,7 +2954,7 @@ struct CodexInNotchTests {
         let stateFile = root.appendingPathComponent(".codex-global-state.json")
         let partial = try JSONSerialization.data(withJSONObject: [
             "local-projects": [
-                "local-1": ["name": "codex-in-notch"]
+                "local-1": ["name": "notchline"]
             ],
             "remote-projects": [
                 ["id": "remote-1", "label": "Remote workspace"]
@@ -2987,7 +2987,7 @@ struct CodexInNotchTests {
         let stateFile = root.appendingPathComponent(".codex-global-state.json")
         let unknownKind = try JSONSerialization.data(withJSONObject: [
             "local-projects": [
-                "local-1": ["name": "codex-in-notch"]
+                "local-1": ["name": "notchline"]
             ],
             "thread-project-assignments": [
                 "thread-local": [
@@ -3031,7 +3031,7 @@ struct CodexInNotchTests {
         let backupFile = URL(fileURLWithPath: stateFile.path + ".bak")
         let dangling = try JSONSerialization.data(withJSONObject: [
             "local-projects-v2": [
-                "local-1": ["name": "codex-in-notch"]
+                "local-1": ["name": "notchline"]
             ],
             "thread-project-assignments": [
                 "thread-local": [
@@ -3044,7 +3044,7 @@ struct CodexInNotchTests {
         try dangling.write(to: stateFile, options: .atomic)
         let validBackup = try JSONSerialization.data(withJSONObject: [
             "local-projects": [
-                "local-1": ["name": "codex-in-notch"]
+                "local-1": ["name": "notchline"]
             ],
             "thread-project-assignments": [
                 "thread-local": [
@@ -3067,7 +3067,7 @@ struct CodexInNotchTests {
         )
         #expect(
             snapshot.resolution(for: "thread-local")
-                == .project("codex-in-notch")
+                == .project("notchline")
         )
     }
 
@@ -3087,7 +3087,7 @@ struct CodexInNotchTests {
         let assignedFile = root.appendingPathComponent(".codex-global-state.json")
         let emptyAssignment = try JSONSerialization.data(withJSONObject: [
             "local-projects": [
-                "local-1": ["name": "codex-in-notch"]
+                "local-1": ["name": "notchline"]
             ],
             "thread-project-assignments": [
                 "": [
@@ -4523,7 +4523,7 @@ struct CodexInNotchTests {
     @Test @MainActor
     func liveCodexAppServerReturnsRealQuotaWhenOptedIn() async throws {
         guard ProcessInfo.processInfo.environment[
-            "CODEX_IN_NOTCH_RUN_LIVE_TEST"
+            "NOTCHLINE_RUN_LIVE_TEST"
         ] == "1" else {
             return
         }
@@ -4544,7 +4544,7 @@ struct CodexInNotchTests {
     @Test @MainActor
     func liveStartupAvoidsThreadReadsWhenOptedIn() async throws {
         guard ProcessInfo.processInfo.environment[
-            "CODEX_IN_NOTCH_RUN_LIVE_TEST"
+            "NOTCHLINE_RUN_LIVE_TEST"
         ] == "1" else {
             return
         }
@@ -5769,7 +5769,7 @@ struct CodexInNotchTests {
     @Test @MainActor
     func largeResponseDoesNotSwallowTheFollowingResponse() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexInNotchFramingTests-\(UUID().uuidString)")
+            .appendingPathComponent("NotchlineFramingTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(
             at: root,
@@ -5824,7 +5824,7 @@ for line in sys.stdin:
     @Test @MainActor
     func concurrentConnectsShareOneAppServerProcess() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexInNotchAppServerTests-\(UUID().uuidString)")
+            .appendingPathComponent("NotchlineAppServerTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
@@ -5876,7 +5876,7 @@ for line in sys.stdin:
     @Test @MainActor
     func failedLivenessProbeResetsUnresponsiveAppServer() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexInNotchTimeoutTests-\(UUID().uuidString)")
+            .appendingPathComponent("NotchlineTimeoutTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(
             at: root,
@@ -5947,7 +5947,7 @@ for line in sys.stdin:
     @Test @MainActor
     func concurrentBusinessTimeoutsDoNotBypassSuccessfulLivenessProbe() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexInNotchProbeTests-\(UUID().uuidString)")
+            .appendingPathComponent("NotchlineProbeTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(
             at: root,
@@ -6052,7 +6052,7 @@ for line in sys.stdin:
     @Test @MainActor
     func lateResponseDuringGracePeriodPreventsLivenessProbe() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexInNotchLateResponseTests-\(UUID().uuidString)")
+            .appendingPathComponent("NotchlineLateResponseTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(
             at: root,
@@ -8346,7 +8346,7 @@ for line in sys.stdin:
     /// signal that arrives first is buffered rather than lost.
     private func receivesChange(
         _ stream: AsyncStream<Void>,
-        within budget: Duration = CodexInNotchTests.waitBudget
+        within budget: Duration = NotchlineTests.waitBudget
     ) async -> Bool {
         await withTaskGroup(of: Bool.self) { group in
             group.addTask {
@@ -8378,7 +8378,7 @@ for line in sys.stdin:
     /// whether it took one attempt or ten.
     private func receivesChange(
         _ stream: AsyncStream<Void>,
-        within budget: Duration = CodexInNotchTests.waitBudget,
+        within budget: Duration = NotchlineTests.waitBudget,
         whileRepeating mutation: @escaping @Sendable () throws -> Void
     ) async -> Bool {
         let repeater = Task {
@@ -8409,7 +8409,7 @@ for line in sys.stdin:
     /// surfaces as whatever the next assertion happens to check, which is how a
     /// timing budget gets read as a broken feature (CC-024).
     private func holds(
-        within budget: Duration = CodexInNotchTests.waitBudget,
+        within budget: Duration = NotchlineTests.waitBudget,
         _ condition: () async -> Bool
     ) async -> Bool {
         let deadline = ContinuousClock.now.advanced(by: budget)
@@ -12804,7 +12804,7 @@ for line in sys.stdin:
     /// would still leave the product reported as open.
     @Test @MainActor
     func theAppsOwnQuotaReadingIsNotCountedAsASessionOrAsPresence() async {
-        let quota = URL(fileURLWithPath: "/Users/someone/Library/Application Support/CodexInNotch/agents/claudeCode/usage")
+        let quota = URL(fileURLWithPath: "/Users/someone/Library/Application Support/Notchline/agents/claudeCode/usage")
         func registry(_ json: String) -> ClaudeCodeSessionRegistry {
             let responses = ResponseQueue(items: [Data(json.utf8)])
             return ClaudeCodeSessionRegistry(
@@ -12958,7 +12958,7 @@ for line in sys.stdin:
     func theHandlerThisBuildReplacedStaysRecognisableSoAnUpgradeReplacesIt() throws {
         let definitions = [ManagedHookDefinition(event: "Stop", matcher: nil)]
         let configuration = ManagedHooksConfiguration.command(
-            "/Users/someone/Library/Application Support/CodexInNotch/agents/claudeCode/hook.sh",
+            "/Users/someone/Library/Application Support/Notchline/agents/claudeCode/hook.sh",
             arguments: [],
             legacyCommands: [ClaudeCodeHookSetup.legacyHookPath],
             definitions: definitions
@@ -14957,7 +14957,7 @@ for line in sys.stdin:
             agent: .claudeCode,
             threadID: "cc",
             turnID: "turn",
-            projectName: "codex-in-notch",
+            projectName: "notchline",
             title: "Wants you",
             preview: nil,
             status: .inputNeeded,
@@ -15042,7 +15042,7 @@ for line in sys.stdin:
             agent: agent,
             threadID: threadID,
             turnID: "turn",
-            projectName: "codex-in-notch",
+            projectName: "notchline",
             title: "Open this chat",
             preview: nil,
             status: status,
@@ -16375,7 +16375,7 @@ private final class AgentNavigatorStub: AgentNavigating {
     }
 }
 
-extension CodexInNotchTests {
+extension NotchlineTests {
     /// A Completed row the user has not read still asks to be looked at.
     ///
     /// Only the user reading it can hide it, and that arrives on the watcher as

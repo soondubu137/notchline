@@ -34,7 +34,7 @@ import os
 /// measured here (33 MB written on 2026-08-20).
 actor ClaudeCodeTokenCounter {
     private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeTokenCounter"
     )
 

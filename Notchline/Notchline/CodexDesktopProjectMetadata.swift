@@ -230,7 +230,7 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> URL {
-        let configuredHome = environment["CODEX_IN_NOTCH_CODEX_HOME"]
+        let configuredHome = environment["NOTCHLINE_CODEX_HOME"]
             ?? environment["CODEX_HOME"]
         let codexHome: URL
         if let configuredHome, !configuredHome.isEmpty {

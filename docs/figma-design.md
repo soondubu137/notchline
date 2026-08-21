@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | V1 SwiftUI 四态契约已同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个，在场与宽度已实现、画法待 [#35](https://github.com/soondubu137/codex-in-notch/issues/35)；外部 Figma 的旧状态变体待清理 |
+| 文档状态 | V1 SwiftUI 四态契约已同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个，在场与宽度已实现、画法待 [#35](https://github.com/soondubu137/notchline/issues/35)；外部 Figma 的旧状态变体待清理 |
 | 版本 | 1.1 |
 | 日期 | 2026-08-17 |
 | 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
@@ -304,7 +304,7 @@ Input needed
 
 1. **幽灵会话——已实测，官方命令自己做掉了，而且用的正是那条正确的判据。** 被 `SIGKILL` 的会话确实来不及删除自己的文件，所以这个担心是对的；但 `claude agents --json` 并不会列出它。实测 2.1.229：把一个活会话的文件逐字节复制、**只改 `procStart`**，它就从输出里消失；写一个指向活着但不相干进程（`pid 1`）的会话文件，同样消失。也就是说该命令按 `pid` + `procStart` 成对校验——正是这里需要的判据，也正是只查 `kill(pid, 0)` 会被 PID 回收骗过的那一条。
 
-    因此本应用**不重做、也不应重做**这条校验：`--json` 根本不输出 `procStart`，要自己判断就必须改去直接读 `~/.claude/sessions/<pid>.json` 这套私有 schema，等于为了复制一条已经正确的公开实现而登记一项非公开依赖（`AGENTS.md` §8）。结论记在 [`ClaudeCodeSessionRegistry.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeSessionRegistry.swift) 的 `runOfficialCommand` 注释里。
+    因此本应用**不重做、也不应重做**这条校验：`--json` 根本不输出 `procStart`，要自己判断就必须改去直接读 `~/.claude/sessions/<pid>.json` 这套私有 schema，等于为了复制一条已经正确的公开实现而登记一项非公开依赖（`AGENTS.md` §8）。结论记在 [`ClaudeCodeSessionRegistry.swift`](../Notchline/Notchline/ClaudeCodeSessionRegistry.swift) 的 `runOfficialCommand` 注释里。
 2. **我们自己的缓存没有上限。** `ClaudeCodeSessionRegistry.refresh()` 在读取失败时返回上一次结果且不更新 `readAt`。这对「行」是对的（一次失败不该退休所有行），但在场现在决定 `Connected` 与 `Disconnected`：只要 `claude` 被卸载或改名，读取会永久失败，而药丸会永远显示 `Connected`。因此「多久重读一次」（`freshness`，`30` 秒）与「陈旧答案还能被相信多久」必须分开，后者建议 `90` 秒（三次连续失败）。
 
 超过上限时在场是**未知**，而未知落到 `Disconnected`。按 §6.7 的语义这不是妥协而是字面真相：我们确实没有任何可用的连接。这与 tech-design 为 `Idle` 写下的规则是同一条，只是对称地用在非空集合上。
@@ -390,7 +390,7 @@ Input needed
 
 所有主标签共用同一左缩进：产品行的绿色状态点移到说明行行首，而不是站在产品名左边，因此三张卡片的标题列在同一条竖线上。
 
-浅色与深色是**同一批节点**：颜色全部绑定到两模式集合 `Color / macOS Window`（`Light` / `Dark`），深色窗口是浅色窗口的 clone 加一次 mode override。改一次颜色两边同时生效，不存在两套值漂移的可能。实现侧对应 [`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift) 的 `MacOSWindowColor`：每个 token 是一个 `NSColor(name:dynamicProvider:)`，一次声明同时回答两种外观，这是两模式集合在代码里的等价物。状态点例外，取系统色 —— `status/green` 的两个值本来就是 `systemGreen` 的两个值，用系统色还能跟随「增强对比度」。
+浅色与深色是**同一批节点**：颜色全部绑定到两模式集合 `Color / macOS Window`（`Light` / `Dark`），深色窗口是浅色窗口的 clone 加一次 mode override。改一次颜色两边同时生效，不存在两套值漂移的可能。实现侧对应 [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift) 的 `MacOSWindowColor`：每个 token 是一个 `NSColor(name:dynamicProvider:)`，一次声明同时回答两种外观，这是两模式集合在代码里的等价物。状态点例外，取系统色 —— `status/green` 的两个值本来就是 `systemGreen` 的两个值，用系统色还能跟随「增强对比度」。
 
 **标题栏按 macOS 自己的样子渲染，不按本表这一行。** 板上的标题栏与窗口同色、高 `52`、不画分隔线；SwiftUI 持有 scene 窗口的标题栏并在每次布局重新应用自己的配置，`titlebarAppearsTransparent`、`backgroundColor`、`titlebarSeparatorStyle` 与 `.fullSizeContentView` 实测全部无效。剩下的做法是 `.hiddenTitleBar` 加自绘 `52` 色带与居中标题——那会让「用原生控件而不是它们的近似物」这个论点里最显眼的一块变成唯一的近似物。因此标题栏保持系统材质，`52` 是板上的排版约定而不是验收项。
 
@@ -483,7 +483,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] SF Pro 文件级字体统一。
 - [x] Quota unavailable 局部降级。
 - [x] ~~No active turns、Connecting、Disconnected、Update、unsupported、setup 薄层。~~ 收敛为 `Disconnected` 与 `Connected` 两个系统状态，见 §6.4 与 §6.6。
-- [x] 收起态在场规则与开合序列（§6.4，`624:1560`）：矩阵随智能体打开与关闭出现和离开，第一个产品接管灰槽。**画法已随 [#35](https://github.com/soondubu137/codex-in-notch/issues/35) 落地**：每个已连接产品一个矩阵，各自跑自己的曲线；无产品时一个灰色静息标记；有刘海形态静息时整条前导翼消失。
+- [x] 收起态在场规则与开合序列（§6.4，`624:1560`）：矩阵随智能体打开与关闭出现和离开，第一个产品接管灰槽。**画法已随 [#35](https://github.com/soondubu137/notchline/issues/35) 落地**：每个已连接产品一个矩阵，各自跑自己的曲线；无产品时一个灰色静息标记；有刘海形态静息时整条前导翼消失。
 - [x] hover 只横向展开药丸、不落下面板；展开尾部为齿轮。**宽度改为按组成计算**，原因见 §6.4 的实现记录。
 - [x] `Disconnected` 按 §6.7 重定义为「没有任何智能体已连接」；灰色取 `#151515`，为界面上最暗值（§6.4）。
 - [x] 无刘海药丸在单产品工作集合内固定为 `196`，双产品 `218`，`Disconnected` 为 `136`；宽度用系统字体本机实测（§6.4）。
@@ -497,7 +497,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] Claude Code 在场的第二条校正：为陈旧缓存设上限（`90` 秒 = 三次连续失败），超过后在场为未知并落到 `Disconnected`。`freshness` 与 `trustCeiling` 现在是两个参数。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
-- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift)），六处与板不一致均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、产品行说明行下多一行失败报告（§8.1）、多一个 `Display` 分组与一行 `Clear the session list`（§8.4、§8.2）、少一个 `Privacy` 分组（§8.3）。
+- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift)），六处与板不一致均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、产品行说明行下多一行失败报告（§8.1）、多一个 `Display` 分组与一行 `Clear the session list`（§8.4、§8.2）、少一个 `Privacy` 分组（§8.3）。
 - [ ] 在装有 SF Pro 的 Figma 桌面端打开 `609:2`，确认字形正常渲染、多行脚注的换行落位与预期一致。
 - [ ] 同一次打开时，把 `closing note` 的四条 Inter 文字（`665:3`、`665:5`、`667:3`、`667:5`）重新键入为 SF Pro Regular，原因见 §3.1。
 - [x] 会话行已同步 Running／等待人工／Completed 三种计时表现，一行只有一个标记。

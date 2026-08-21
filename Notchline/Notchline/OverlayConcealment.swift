@@ -182,7 +182,7 @@ final class OverlayConcealmentWatcher {
     private let sampleWindows: @Sendable () -> [ChromeWindow]
     private let boundsOfDisplay: @Sendable (CGDirectDisplayID) -> CGRect
     private let queue = DispatchQueue(
-        label: "com.yinfenglu.CodexInNotch.overlay-concealment",
+        label: "com.yinfenglu.Notchline.overlay-concealment",
         qos: .utility
     )
 

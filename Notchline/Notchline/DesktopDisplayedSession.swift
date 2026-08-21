@@ -99,13 +99,13 @@ nonisolated enum DesktopDisplayedSession: Equatable, Sendable {
 /// it is a regular file owned by this user.
 actor ClaudeDesktopFocusLogReader: DesktopDisplayedSessionReporting {
     private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeDesktopFocusLog"
     )
 
     /// An override for tests and for an install somewhere unusual, the way
-    /// `CODEX_IN_NOTCH_CLAUDE_DESKTOP_HOME` points at Desktop's state tree.
-    nonisolated static let logOverrideKey = "CODEX_IN_NOTCH_CLAUDE_DESKTOP_LOG"
+    /// `NOTCHLINE_CLAUDE_DESKTOP_HOME` points at Desktop's state tree.
+    nonisolated static let logOverrideKey = "NOTCHLINE_CLAUDE_DESKTOP_LOG"
 
     nonisolated private static let statement =
         "[CCD] LocalSessions.setFocusedSession: sessionId="

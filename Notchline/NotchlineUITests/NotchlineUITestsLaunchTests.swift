@@ -1,13 +1,13 @@
 //
-//  CodexInNotchUITestsLaunchTests.swift
-//  CodexInNotchUITests
+//  NotchlineUITestsLaunchTests.swift
+//  NotchlineUITests
 //
 //  Created by Yinfeng Lu on 8/10/26.
 //
 
 import XCTest
 
-final class CodexInNotchUITestsLaunchTests: XCTestCase {
+final class NotchlineUITestsLaunchTests: XCTestCase {
 
     // Do not override `runsForEachTargetApplicationUIConfiguration` back to `true`.
     // On macOS the two target application UI configurations are the light and dark

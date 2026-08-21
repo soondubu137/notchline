@@ -46,7 +46,7 @@ import os
 /// backgrounded hook finishes. Paying 6.3 ms on the session buys both back.
 nonisolated final class AgentHookListener: @unchecked Sendable {
     private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "AgentHookListener"
     )
 
@@ -108,12 +108,12 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
     private var boundSocketNode: SocketNode?
 
     private let acceptQueue = DispatchQueue(
-        label: "com.yinfenglu.CodexInNotch.hook-listener.accept"
+        label: "com.yinfenglu.Notchline.hook-listener.accept"
     )
     /// Serial on purpose: it is what makes ``deliver`` see payloads in the
     /// order they arrived.
     private let readQueue = DispatchQueue(
-        label: "com.yinfenglu.CodexInNotch.hook-listener.read"
+        label: "com.yinfenglu.Notchline.hook-listener.read"
     )
 
     init(

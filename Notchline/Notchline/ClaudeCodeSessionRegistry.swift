@@ -142,7 +142,7 @@ extension ClaudeCodeSessionListing {
 /// Finds the `claude` executable the same way a user's shell would.
 enum ClaudeExecutableLocator {
     /// An override for tests and for a user whose install is somewhere unusual.
-    static let overrideEnvironmentKey = "CODEX_IN_NOTCH_CLAUDE_PATH"
+    static let overrideEnvironmentKey = "NOTCHLINE_CLAUDE_PATH"
 
     nonisolated static func locate(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -188,13 +188,13 @@ enum ClaudeExecutableLocator {
 /// recovered it.
 enum ClaudeCommand {
     private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCommand"
     )
 
     /// Blocking work belongs on a queue that is allowed to grow threads.
     private static let queue = DispatchQueue(
-        label: "com.yinfenglu.CodexInNotch.claude-command",
+        label: "com.yinfenglu.Notchline.claude-command",
         qos: .utility,
         attributes: .concurrent
     )
@@ -363,7 +363,7 @@ enum ClaudeCommand {
 
 actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeSessionRegistry"
     )
 

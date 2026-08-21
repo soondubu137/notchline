@@ -183,7 +183,7 @@ nonisolated struct HookIntegrationPaths: Sendable {
     }
 
     var hooksBackup: URL {
-        hooksConfiguration.appendingPathExtension("codex-in-notch-backup")
+        hooksConfiguration.appendingPathExtension("notchline-backup")
     }
 
     nonisolated static func live(
@@ -202,9 +202,9 @@ nonisolated struct HookIntegrationPaths: Sendable {
         fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
-        ).first?.appendingPathComponent("CodexInNotch", isDirectory: true)
+        ).first?.appendingPathComponent("Notchline", isDirectory: true)
             ?? fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/CodexInNotch")
+                .appendingPathComponent("Library/Application Support/Notchline")
     }
 }
 

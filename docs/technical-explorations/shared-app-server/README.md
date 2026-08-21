@@ -156,10 +156,10 @@ $CODEX_HOME/app-server-control/app-server-control.sock
 
 相关代码：
 
-- `CodexInNotch/CodexInNotch/CodexAppServerClient.swift`
-- `CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift`
-- `CodexInNotch/CodexInNotch/HookIntegration.swift`
-- `CodexInNotch/CodexInNotch/MonitorDomain.swift`
+- `Notchline/Notchline/CodexAppServerClient.swift`
+- `Notchline/Notchline/LiveCodexMonitorService.swift`
+- `Notchline/Notchline/HookIntegration.swift`
+- `Notchline/Notchline/MonitorDomain.swift`
 
 当前客户端：
 
@@ -724,8 +724,8 @@ Transport transient failure
 
 - 官方 Codex App Server：<https://developers.openai.com/codex/app-server/>
 - 当前产品/集成技术设计：`docs/tech-design.md`
-- 当前 App Server 客户端：`CodexInNotch/CodexInNotch/CodexAppServerClient.swift`
-- 当前实时监控服务：`CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift`
-- 当前 Hook reducer：`CodexInNotch/CodexInNotch/HookIntegration.swift`
-- 当前领域状态：`CodexInNotch/CodexInNotch/MonitorDomain.swift`
-- 当前状态存储与连接稳定性：`CodexInNotch/CodexInNotch/MonitorStore.swift`
+- 当前 App Server 客户端：`Notchline/Notchline/CodexAppServerClient.swift`
+- 当前实时监控服务：`Notchline/Notchline/LiveCodexMonitorService.swift`
+- 当前 Hook reducer：`Notchline/Notchline/HookIntegration.swift`
+- 当前领域状态：`Notchline/Notchline/MonitorDomain.swift`
+- 当前状态存储与连接稳定性：`Notchline/Notchline/MonitorStore.swift`

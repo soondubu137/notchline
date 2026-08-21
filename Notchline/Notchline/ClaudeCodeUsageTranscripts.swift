@@ -23,7 +23,7 @@ import os
 /// user at somebody else's transcripts.
 actor ClaudeCodeUsageTranscripts {
     private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeUsageTranscripts"
     )
 

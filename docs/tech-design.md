@@ -61,7 +61,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 生产实现采用以下架构：
 
-1. `CodexDesktopUnreadStateRepository` 默认只读 `$CODEX_HOME/.codex-global-state.json`，并支持测试/隔离环境用 `CODEX_IN_NOTCH_CODEX_HOME` 覆盖 Codex Home。
+1. `CodexDesktopUnreadStateRepository` 默认只读 `$CODEX_HOME/.codex-global-state.json`，并支持测试/隔离环境用 `NOTCHLINE_CODEX_HOME` 覆盖 Codex Home。
 2. 目录级 `DispatchSourceFileSystemObject` + `O_EVTONLY` 监听 Codex Home，而不是长期监听目标文件 inode；目录事件采用 `250 ms` trailing debounce 并触发刷新。watcher 挂不上时的兜底是 `nextRefreshDeadline()` 与 60 秒心跳，不是轮询。
    **挂载不是一次性的。** 监听目标不存在（首次运行时 `~/.codex/hooks.json` 还没被写出来）或被删除／替换（卸载后重装、Codex 整体换掉状态目录）都必须能恢复：watcher 收到 `rename`／`delete` 就重开描述符，未读 repository 的 `snapshot` 与 `CodexHookRegistrar.registration()` 也各自在本来就要做的那次读取上调一次 `attachIfNeeded()`；本应用自己 install/uninstall 之后 `invalidateRegistration()` 直接丢掉缓存，重挂由随之而来的那次读取顺带完成。**刻意不设自己的重试定时器**——挂不上的代价因此是每次刷新一个失败的 `open`，而不是一个额外的唤醒源。
 3. 只解析 `local` host 的字符串集合，同时校验所有 host 名称、空 id 与重复 id。读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、异常 JSON 与不兼容 schema；不记录原始 JSON 或 Thread id。
@@ -84,7 +84,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 当前公开 Thread schema 没有 Desktop `projectId/projectName`；`thread.section` 是独立的 Thread Section，不能作为 Project。经产品批准，Project 身份使用一个严格受限的私有只读适配器：
 
-- 默认读取 `$CODEX_HOME/.codex-global-state.json`；可用 `CODEX_IN_NOTCH_CODEX_HOME` 显式指定 Codex Home。
+- 默认读取 `$CODEX_HOME/.codex-global-state.json`；可用 `NOTCHLINE_CODEX_HOME` 显式指定 Codex Home。
 - `thread-project-assignments[threadId]` 的 `local` assignment 连接 `local-projects[projectId].name`，`remote` assignment 连接 `remote-projects[id].label`。
 - 只有 `projectless-thread-ids` 明确包含 thread ID 时显示 `Chats`。文件里根本没有该 thread 的映射时显示 `Project unavailable`，不得回退到 `cwd`、Git root、Section 或 `Chats`。
 - 当前 schema 的最小 key 集合：`thread-project-assignments` 与 `projectless-thread-ids` 至少存在其一；只要定义了任何 Project，就必须存在 `thread-project-assignments`。刻意不要求四个顶层 key 全在——实测健康的状态文件里 `remote-projects` 整个 key 缺失（只有存在云端 Project 时 Desktop 才写），要求它会让最常见的纯本地安装直接 fail closed。
@@ -107,7 +107,7 @@ Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次�
 
 生产实现：
 
-1. `ClaudeCodeDesktopReadStateRepository` 默认读 `~/Library/Application Support/Claude/claude-code-sessions`，可用 `CODEX_IN_NOTCH_CLAUDE_DESKTOP_HOME` 覆盖 Claude Desktop 的 application-support 根目录。目录结构按 `<org>/<account>` 恰好两级枚举，不做递归搜索。
+1. `ClaudeCodeDesktopReadStateRepository` 默认读 `~/Library/Application Support/Claude/claude-code-sessions`，可用 `NOTCHLINE_CLAUDE_DESKTOP_HOME` 覆盖 Claude Desktop 的 application-support 根目录。目录结构按 `<org>/<account>` 恰好两级枚举，不做递归搜索。
 2. 每条记录只解码四个字段：`cliSessionId`、`sessionId`（Desktop 自己的 `local_<uuid>`，即它的日志在屏幕上点名的那个 id，用来把日志接回 hook 的身份）、`lastFocusedAt`、`isArchived`。同一文件里的标题、`cwd` 与 MCP 配置一律不解码。读取器拒绝 symlink、非当前用户普通文件与超过 4 MiB 的文件。
 3. **按 `(size, mtime, inode)` 缓存解析结果**，每次读取只打开真正变化过的记录。本机 31 份记录（约 2 MB）实测首读 5 ms、全部命中缓存 1 ms。记录数超过 512 时按 mtime 取最新的 512 份——活着的会话必然是最近被显示或恢复过的那些，尾部答 unknown 并保留其行。
 4. 判定分两层。文件这一层在 provider 里：`readState(forSession:terminalBoundaryAt:)` 用 Turn 自己的终止时刻做比较左边（`HookTurnState.lastEventAt`），`lastFocusedAt >= boundary` 即已读，`isArchived` 同样为已读，**记录不存在则是 unknown 而不是未读**。跨来源的那一层在编排器里（`AGENTS.md` §6.1「决策跨数据源就属于编排中心」），文件说未读时还有三条，各自补一个文件里没有的事实：
@@ -148,7 +148,7 @@ setFocusedSession(e){ log.info(`[CCD] LocalSessions.setFocusedSession: sessionId
 
 每次导航都调用一次，`info` 无条件写出，`null` 正是记录写不下来的那一半（输入框、Home、设置页）。实测每次导航写成 `null` 后紧跟着目的地（另一个会话则再写一行 id，仍是 `null` 则表示屏幕上不是会话）。
 
-`ClaudeDesktopFocusLogReader` 因此读 `~/Library/Logs/Claude/main.log`（可用 `CODEX_IN_NOTCH_CLAUDE_DESKTOP_LOG` 覆盖），答 `.session(desktopSessionID:)` / `.nothing` / `.unknown` 三种：
+`ClaudeDesktopFocusLogReader` 因此读 `~/Library/Logs/Claude/main.log`（可用 `NOTCHLINE_CLAUDE_DESKTOP_LOG` 覆盖），答 `.session(desktopSessionID:)` / `.nothing` / `.unknown` 三种：
 
 1. **只认本应用看着被追加进来的那些行。** `AGENTS.md` §6.2：业务状态只能来自当前快照或本进程启动之后观察到的事件。启动时（以及日志被轮转、被截断之后）那份历史只读一次，并且**只允许它说一件事：`.nothing`**——那个方向只会让行多留一会儿，是产品本来就愿意付的代价；历史里点名的会话一律答 `.unknown`。
 2. 每次读取 `stat` 一次，按 (inode, size) 决定是续读还是重来，单次最多读 256 KiB（本机日志约 800 KiB/天），**只解析到最后一个换行为止**——正在被写的半行会带着半截 id，而半截 id 恰好会被读成「屏幕上是别的会话」。
@@ -192,7 +192,7 @@ Desktop 那棵树对终端会话什么都不说，而 Claude Code 自己没有�
 
 **它是前四条的平级，不是它们的兜底**，尽管写成兜底看上去更自然（Desktop 托管的会话有记录，终端起的没有，两边本该正好分完）。**远程控制**是不能那样写的原因：同一个会话同时摆在终端和 Claude Desktop 面前，而两边由不同的手势读，只有一边写进本应用看得见的地方——在终端里读它，Desktop 的记录一个字节都不动。写成兜底，这样一行会为一个永远不会前进的 `lastFocusedAt` 无限期等下去。
 
-反方向安全，而且是结构性的而不是撞运气：这一条只可能对**真的有控制终端**的会话成立，而 Claude Desktop 托管的会话没有——Desktop 把 CLI 跑成 `--output-format stream-json`、走管道、没有终端界面，这也正是那些会话没有 `status` 的原因（[#41](https://github.com/soondubu137/codex-in-notch/issues/41)）。
+反方向安全，而且是结构性的而不是撞运气：这一条只可能对**真的有控制终端**的会话成立，而 Claude Desktop 托管的会话没有——Desktop 把 CLI 跑成 `--output-format stream-json`、走管道、没有终端界面，这也正是那些会话没有 `status` 的原因（[#41](https://github.com/soondubu137/notchline/issues/41)）。
 
 （实测 2026-08-19：一个开着远程控制的 CLI 会话在 `claude-code-sessions` 树里**根本没有记录**——整棵 Claude Application Support 树里没有任何文件提到它的 `sessionId` 或它的 `bridgeSessionId`——所以今天它答 `unknown`，走不到「两边都有」这个分支。那是某一个 Desktop 版本的事实，不是产品该依赖的性质。）
 
@@ -443,7 +443,7 @@ launch
 
 **注册完整度也不按节拍重算。** 它只在三个时刻改变：本应用写了 `hooks.json`、用户主动要求重新检查、或该文件在我们脚下被改动（FSEvents 边沿）。前两者直接失效缓存；第三者**不靠订阅**——同一条边沿会同时唤醒 registrar 与刷新，谁先跑由调度器决定，刷新先跑就会读到改动前的缓存并把它留在那里，而不会再有第二条边沿来纠正（CR-028）。改成读的时候比对 `DirectoryChangeWatcher.changeCount`：计数在边沿投递**之前**递增，缓存读数连同计数一起存，顺序于是不再决定答案。挂载本身也计一次数——挂不上的那段时间没人在看，那时得出的结论不该活过挂载成功（首次运行时 `hooks.json` 还不存在，正是这种情况）。`installationRevalidationInterval`、缓存扫描与 `hasManagedSupportFootprint` 随之删除。
 
-安装与移除都对用户的 `hooks.json` **fail closed**，由 [`ManagedHooksConfiguration`](../CodexInNotch/CodexInNotch/ManagedHooksConfiguration.swift) 执行，规则只有三条：
+安装与移除都对用户的 `hooks.json` **fail closed**，由 [`ManagedHooksConfiguration`](../Notchline/Notchline/ManagedHooksConfiguration.swift) 执行，规则只有三条：
 
 1. **只改本应用管理的五个 event key**，其余 key、未知字段、分组内的自定义键一律原样保留。
 2. **看不懂的结构不改**。只有当「必须写入的那个 key 已经是看不懂的结构」时才整体拒绝并返回可见错误——因为写进去就等于覆盖用户的内容。不相关的 event 即使结构奇怪也只是跳过，不构成错误，否则用户将永远无法干净卸载。
@@ -675,9 +675,9 @@ ADR 0004 的精确导航门槛只约束 Codex：目前没有任何受支持的�
 
    系统弹窗的原文（模板取自 `TCC.framework` 的 `REQUEST_ACCESS_SERVICE_kTCCServiceAppleEvents`，两个 `%@` 填入两侧应用名，末尾接本应用的 `NSAppleEventsUsageDescription`）。**前半句是实测抄下来的原文；末尾那句按下面这版用途说明重排过**——实测当天用的还是中文那版，此后随全局英文化改写，模板部分一字未动：
 
-   > “CodexInNotch.app” wants access to control “Terminal.app”. Allowing control will provide access to documents and data in “Terminal.app”, and to perform actions within that app. Codex in Notch uses this to bring the terminal tab running a Claude Code session to the front when you click its row.
+   > “Notchline.app” wants access to control “Terminal.app”. Allowing control will provide access to documents and data in “Terminal.app”, and to perform actions within that app. Codex in Notch uses this to bring the terminal tab running a Claude Code session to the front when you click its row.
 
-   两点值得记下来。其一，**用途说明确实会显示**，所以那句话是用户看到的文案而不只是一个必填字段。其二，弹窗里的应用名是 **`CodexInNotch.app`**——带 `.app` 后缀、没有空格，因为它取自 bundle 的文件名而不是 `CFBundleName`；产品叫「Codex in Notch」，这句不好看。改它要动 `PRODUCT_NAME`，牵连 scheme、二进制名与 bundle 名，不在本次范围内。
+   两点值得记下来。其一，**用途说明确实会显示**，所以那句话是用户看到的文案而不只是一个必填字段。其二，弹窗里的应用名是 **`Notchline.app`**——带 `.app` 后缀、没有空格，因为它取自 bundle 的文件名而不是 `CFBundleName`；产品叫「Codex in Notch」，这句不好看。改它要动 `PRODUCT_NAME`，牵连 scheme、二进制名与 bundle 名，不在本次范围内。
 6. 不读 `~/.claude/sessions/<pid>.json`：它确实带 `entrypoint`，但那是私有 schema，而祖先链是内核公开的事实。该文件只作为二者不一致时的旁证。
 
 禁止：按窗口标题或工作目录匹配标签页、Accessibility 点击、GUI 自动化、连接 `/tmp/cc-socks/*.sock`。

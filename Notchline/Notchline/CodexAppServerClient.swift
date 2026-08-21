@@ -163,7 +163,7 @@ enum CodexExecutableLocator {
     ) -> URL? {
         var candidates: [String] = []
 
-        if let override = environment["CODEX_IN_NOTCH_CODEX_PATH"], !override.isEmpty {
+        if let override = environment["NOTCHLINE_CODEX_PATH"], !override.isEmpty {
             candidates.append(override)
         }
 
@@ -307,7 +307,7 @@ final class AppServerStreamPump: @unchecked Sendable {
 
 actor CodexAppServerClient: CodexAppServerCommunicating {
     nonisolated private static let logger = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "AppServerTransport"
     )
 
@@ -459,7 +459,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
                 method: "initialize",
                 params: .object([
                     "clientInfo": .object([
-                        "name": .string("codex-in-notch"),
+                        "name": .string("notchline"),
                         "title": .string("Notchline"),
                         "version": .string("0.1.0")
                     ]),

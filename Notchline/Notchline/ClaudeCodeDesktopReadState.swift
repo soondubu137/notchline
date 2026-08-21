@@ -235,14 +235,14 @@ struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
 /// sessions it could not speak for, which keeps their rows listed.
 actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
     private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeDesktopReadState"
     )
 
     /// An override for tests and for an install somewhere unusual. Points at
     /// Claude Desktop's application-support directory, the way
-    /// `CODEX_IN_NOTCH_CODEX_HOME` points at `$CODEX_HOME`.
-    nonisolated static let homeOverrideKey = "CODEX_IN_NOTCH_CLAUDE_DESKTOP_HOME"
+    /// `NOTCHLINE_CODEX_HOME` points at `$CODEX_HOME`.
+    nonisolated static let homeOverrideKey = "NOTCHLINE_CLAUDE_DESKTOP_HOME"
 
     nonisolated private static let sessionsDirectoryName = "claude-code-sessions"
     nonisolated private static let recordPrefix = "local_"

@@ -18,23 +18,23 @@ The product surface — every string a user can read, including accessibility la
 
 | Item | Value |
 | --- | --- |
-| Project | `CodexInNotch/CodexInNotch.xcodeproj` |
-| Scheme | `CodexInNotch` (the only one) |
-| Targets | `CodexInNotch`, `CodexInNotchTests`, `CodexInNotchUITests` |
+| Project | `Notchline/Notchline.xcodeproj` |
+| Scheme | `Notchline` (the only one) |
+| Targets | `Notchline`, `NotchlineTests`, `NotchlineUITests` |
 | Minimum OS | macOS 26.5 |
 | Test framework | Swift Testing (`@Test` / `#expect`), not XCTest |
-| Bundle ID | `com.yinfenglu.CodexInNotch` |
+| Bundle ID | `com.yinfenglu.Notchline` |
 
 Build:
 
 ```bash
-xcodebuild build -project CodexInNotch/CodexInNotch.xcodeproj -scheme CodexInNotch -destination 'platform=macOS'
+xcodebuild build -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS'
 ```
 
 Unit tests (352 cases today, a few seconds on a warm build):
 
 ```bash
-xcodebuild test -project CodexInNotch/CodexInNotch.xcodeproj -scheme CodexInNotch -destination 'platform=macOS' -only-testing:CodexInNotchTests
+xcodebuild test -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS' -only-testing:NotchlineTests
 ```
 
 Anything performance-related must be measured under **Release** (`-configuration Release`). Debug numbers mean nothing here.
@@ -70,7 +70,7 @@ Each document owns a specific scope. When a change lands in one of these scopes,
 Known issues are **not** tracked in documents inside this repository. The former `docs/current-issues.md` was migrated to a GitHub board and deleted on 2026-08-16:
 
 - Board: <https://github.com/users/soondubu137/projects/2> (numbering convention, priority definitions, and fix order live in the board README)
-- Issues: <https://github.com/soondubu137/codex-in-notch/issues>
+- Issues: <https://github.com/soondubu137/notchline/issues>
 
 The `CR-xxx` numbers carried over, and commit messages in git history reference them directly. File newly discovered problems as issues on the board — **do not reconstruct an issue-list file under `docs/`**. When fixing one, reference its number in the commit subject, e.g. `(CR-023)`.
 
@@ -93,7 +93,7 @@ Design conclusions, measured boundaries, and architectural constraints still liv
 
 ### 5.2 The contracts are not binding
 
-The design documents under `docs/` and the assertions in `CodexInNotchTests.swift` are **not constraints you have to honor**. If a better implementation requires breaking one, break it and update the contract in the same change.
+The design documents under `docs/` and the assertions in `NotchlineTests.swift` are **not constraints you have to honor**. If a better implementation requires breaking one, break it and update the contract in the same change.
 
 Two conditions:
 
@@ -210,7 +210,7 @@ Each entry should also record the dependency level, the signal that it has broke
 
 A change is not finished until all of the following hold:
 
-1. `xcodebuild test -only-testing:CodexInNotchTests` passes in full.
+1. `xcodebuild test -only-testing:NotchlineTests` passes in full.
 2. New logic has tests, and any old assertion that was broken has been rewritten to pin the real invariant rather than deleted.
 3. Every document whose scope in §3 the change touched was updated **in the same change**.
 4. If the change touches a non-public Codex dependency, the §8 registry is updated — or checked and explicitly declared not applicable.

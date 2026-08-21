@@ -17,7 +17,7 @@ import os
 /// that one eventually.
 actor ClaudeCodeUsageReader {
     private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeUsageReader"
     )
 

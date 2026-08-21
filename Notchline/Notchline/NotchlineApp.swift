@@ -1,6 +1,6 @@
 //
-//  CodexInNotchApp.swift
-//  CodexInNotch
+//  NotchlineApp.swift
+//  Notchline
 //
 //  Created by Yinfeng Lu on 8/10/26.
 //
@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct CodexInNotchApp: App {
+struct NotchlineApp: App {
     /// The identifier of the onboarding-and-settings window.
     ///
     /// A `Window` scene needs one, and it is also the key AppKit remembers the

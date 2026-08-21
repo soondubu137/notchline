@@ -119,7 +119,7 @@ flowchart LR
 | 会话消失 | `SessionEnd`（字段名是 `reason`） | — |
 | 行内容预览 | **`MessageDisplay`**（官方描述 "While assistant message text is displayed"；公开 payload `turn_id, message_id, index, final, delta`） | 新的 `message_id` 替换旧文本 |
 
-> **更正（2026-08-18）。** `MessageDisplay` 这一行是后补的。上面那句「官方 Hooks 文档公开 30 个事件」在本次调研时逐个映射过，**唯独漏掉了它**，于是 `ClaudeCodeHookVocabulary.managedDefinitions` 也没有它，于是 [#34 / CC-015](https://github.com/soondubu137/codex-in-notch/issues/34) 得出了「Claude Code 侧取不到正文，要取就得再造一条等价于 `HookPreviewChannel` 的通道」这个结论。两半都是错的：正文取得到，而且不需要新通道——payload 本来就是 POST 进本进程的，正文抵达时已经在内存里。
+> **更正（2026-08-18）。** `MessageDisplay` 这一行是后补的。上面那句「官方 Hooks 文档公开 30 个事件」在本次调研时逐个映射过，**唯独漏掉了它**，于是 `ClaudeCodeHookVocabulary.managedDefinitions` 也没有它，于是 [#34 / CC-015](https://github.com/soondubu137/notchline/issues/34) 得出了「Claude Code 侧取不到正文，要取就得再造一条等价于 `HookPreviewChannel` 的通道」这个结论。两半都是错的：正文取得到，而且不需要新通道——payload 本来就是 POST 进本进程的，正文抵达时已经在内存里。
 >
 > 本机实测（CLI 2.1.234，注册到一个临时 `--settings` 文件上的独立监听器，**全程未改动 `~/.claude/settings.json`**）：`-p` 非交互一次交付，`index: 0`、`final: true`，多行消息带着换行整份到达；交互式会话按增量交付，实测约每 0.3 秒一次。它也是唯一同时带 `prompt_id` 与 `turn_id` 的事件（两者不同值）；reducer 的身份仍用 `prompt_id`，此处只作记录。
 >
@@ -349,7 +349,7 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 ### 6.3 会话发现：事件驱动，不轮询
 
 - 启动时执行一次 `claude agents --json`，建立已有会话集合。~~**这就直接解决了 Codex 侧的冷启动能力边界**——不需要等待下一个生命周期事件。~~ **这一条已被实现否决（2026-08-19）。** 会话列表只答「有哪些会话」，轮次状态要靠 transcript 补；而等待用户期间 transcript 不写入任何东西，重建出的轮次因此只可能是 *Running*，启动瞬间停在权限请求上的会话被画成正在干活。启动前一律不显示如今是两个产品共同的规则，见 [`PRD.md`](../../PRD.md) 第 3 节与 [`system-architecture.md` §2.1](../../system-architecture.md#21-启动边界不做现状同步)。
-- 用 `DispatchSourceFileSystemObject` 监听 `~/.claude/sessions/` 目录 + 250 ms debounce（该模式在 [`CodexDesktopUnreadState.swift`](../../../CodexInNotch/CodexInNotch/CodexDesktopUnreadState.swift) 已有实现），变化时再执行一次 `claude agents --json` 复核。
+- 用 `DispatchSourceFileSystemObject` 监听 `~/.claude/sessions/` 目录 + 250 ms debounce（该模式在 [`CodexDesktopUnreadState.swift`](../../../Notchline/Notchline/CodexDesktopUnreadState.swift) 已有实现），变化时再执行一次 `claude agents --json` 复核。
 - 目录内容格式**不解析**，只当作“该复核了”的信号。权威数据永远来自官方命令。这样即使私有文件 schema 变化，最坏结果是复核触发变迟钝，退化到启动时的一次快照，而不是错误状态。
 
 启动时会话的状态未知，可以按 [`CONTEXT.md`](../../../CONTEXT.md) 已定义的**未知（Unknown）**发布，等第一个 Hook 事件收敛为四态之一。这比 Codex 侧“启动前会话一律不显示”严格更好。**——同样已被否决（2026-08-19）：一行状态未知的会话回答不了「谁在等我」，而这正是本产品存在的理由；两侧现在都是「启动前一律不显示」。**
@@ -412,9 +412,9 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 
 ### Phase 3：降级导航
 
-> **2026-08-19：已实现并合入**（[#31](https://github.com/soondubu137/codex-in-notch/issues/31)）。第 1–3 条按下面的形状落地，实现与实测结论见 [`tech-design.md`](../../tech-design.md) §14.2、[`ClaudeCodeNavigator.swift`](../../../CodexInNotch/CodexInNotch/ClaudeCodeNavigator.swift) 与[私有依赖清单](../../non-public-codex-integration-features.md)。两点与下面的设想不同：走祖先链用的是 `sysctl(KERN_PROC_PID)` 与 `proc_pidpath` 而不是 `ps` 子进程；Ghostty 有完整脚本字典但整份没有 tty，因此归入「只激活应用」而不是需要逐个适配的那一类。**第 4 条已做**：2026-08-19 在 Terminal.app 里的真实 Claude Code 会话上跑通了未决 / 允许 / 拒绝三条路径，弹窗原文与实测数字见 [`tech-design.md`](../../tech-design.md) §14.2。
+> **2026-08-19：已实现并合入**（[#31](https://github.com/soondubu137/notchline/issues/31)）。第 1–3 条按下面的形状落地，实现与实测结论见 [`tech-design.md`](../../tech-design.md) §14.2、[`ClaudeCodeNavigator.swift`](../../../Notchline/Notchline/ClaudeCodeNavigator.swift) 与[私有依赖清单](../../non-public-codex-integration-features.md)。两点与下面的设想不同：走祖先链用的是 `sysctl(KERN_PROC_PID)` 与 `proc_pidpath` 而不是 `ps` 子进程；Ghostty 有完整脚本字典但整份没有 tty，因此归入「只激活应用」而不是需要逐个适配的那一类。**第 4 条已做**：2026-08-19 在 Terminal.app 里的真实 Claude Code 会话上跑通了未决 / 允许 / 拒绝三条路径，弹窗原文与实测数字见 [`tech-design.md`](../../tech-design.md) §14.2。
 
-> **验证这条路径时踩到的坑，留给下一个人。** TCC 认的客户端身份取决于**应用是怎么被启动的**。直接 exec `…/DerivedData/…/CodexInNotch.app/Contents/MacOS/CodexInNotch` 拿到的授权，与经 Launch Services（`open -n -a`）启动同一个 bundle 拿到的**不是同一条记录**：前者授权之后，后者仍然报 `undecided`。这也解释了另外两个现象——那条授权在「系统设置 › 隐私与安全性 › 自动化」里根本不出现，`tccutil reset AppleEvents com.yinfenglu.CodexInNotch` 也匹配不到它。**只有 Launch Services 那条路径才是发布后的真实身份**，验证必须走 `open -n -a … --env … --stderr …`，直接跑二进制测出来的结论不作数。
+> **验证这条路径时踩到的坑，留给下一个人。** TCC 认的客户端身份取决于**应用是怎么被启动的**。直接 exec `…/DerivedData/…/Notchline.app/Contents/MacOS/Notchline` 拿到的授权，与经 Launch Services（`open -n -a`）启动同一个 bundle 拿到的**不是同一条记录**：前者授权之后，后者仍然报 `undecided`。这也解释了另外两个现象——那条授权在「系统设置 › 隐私与安全性 › 自动化」里根本不出现，`tccutil reset AppleEvents com.yinfenglu.Notchline` 也匹配不到它。**只有 Launch Services 那条路径才是发布后的真实身份**，验证必须走 `open -n -a … --env … --stderr …`，直接跑二进制测出来的结论不作数。
 
 产品已决定采用降级导航（§8.1），本阶段只验证实现：
 
@@ -446,7 +446,7 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 
 ### 8.2 仍待决定
 
-> 以下四条已全部有下文，逐条跟踪见 GitHub 看板 [soondubu137/projects/2](https://github.com/users/soondubu137/projects/2)：3 已由 ADR 0009 解决；4 已由 ADR 0007 解决（额度对所有用户可用，不限 Desktop）；5 见 #36；6 已决定保持四态，理由见 §10 与 [#26](https://github.com/soondubu137/codex-in-notch/issues/26)。
+> 以下四条已全部有下文，逐条跟踪见 GitHub 看板 [soondubu137/projects/2](https://github.com/users/soondubu137/projects/2)：3 已由 ADR 0009 解决；4 已由 ADR 0007 解决（额度对所有用户可用，不限 Desktop）；5 见 #36；6 已决定保持四态，理由见 §10 与 [#26](https://github.com/soondubu137/notchline/issues/26)。
 
 
 3. **Project 语义怎么定义？** Codex 侧有用户创建的 Project 实体且明令禁止从 cwd 推导。Claude Code 侧不存在该实体，只有 `cwd` / `gitBranch` / 派生 `name`。要么为 Claude Code 行放宽规则，要么该列显示为不适用。
@@ -547,10 +547,10 @@ Codex 侧安装六类定义。Claude Code 侧建议起点：
 - 官方 CLI 参考（含 `claude agents --json`）：<https://code.claude.com/docs/en/cli-reference>
 - 官方 Deep links：<https://code.claude.com/docs/en/deep-links>
 - 官方 Desktop 应用：<https://code.claude.com/docs/en/desktop>
-- 当前领域状态：[`MonitorDomain.swift`](../../../CodexInNotch/CodexInNotch/MonitorDomain.swift)
-- 当前 Hook reducer 与安装器：[`HookIntegration.swift`](../../../CodexInNotch/CodexInNotch/HookIntegration.swift)
-- 当前编排器：[`LiveCodexMonitorService.swift`](../../../CodexInNotch/CodexInNotch/LiveCodexMonitorService.swift)
-- 当前导航：[`CodexDesktopNavigator.swift`](../../../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift)
+- 当前领域状态：[`MonitorDomain.swift`](../../../Notchline/Notchline/MonitorDomain.swift)
+- 当前 Hook reducer 与安装器：[`HookIntegration.swift`](../../../Notchline/Notchline/HookIntegration.swift)
+- 当前编排器：[`LiveCodexMonitorService.swift`](../../../Notchline/Notchline/LiveCodexMonitorService.swift)
+- 当前导航：[`CodexDesktopNavigator.swift`](../../../Notchline/Notchline/CodexDesktopNavigator.swift)
 - 当前架构：[`system-architecture.md`](../../system-architecture.md)
 - 非公开依赖登记规则：[`AGENTS.md`](../../../AGENTS.md)
 

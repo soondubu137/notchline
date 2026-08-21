@@ -259,14 +259,14 @@ protocol TerminalTabFocusing: AnyObject {
 @MainActor
 final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
     nonisolated private static let log = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "TerminalTabFocus"
     )
 
     /// Apple Events block on the application being talked to, so they do not
     /// belong on a cooperative thread.
     nonisolated private static let queue = DispatchQueue(
-        label: "com.yinfenglu.CodexInNotch.terminal-focus",
+        label: "com.yinfenglu.Notchline.terminal-focus",
         qos: .userInitiated,
         attributes: .concurrent
     )

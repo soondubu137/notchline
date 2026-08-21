@@ -1,5 +1,5 @@
 import Foundation
-@testable import CodexInNotch
+@testable import Notchline
 
 /// A clock the test drives by hand.
 ///

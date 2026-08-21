@@ -33,14 +33,14 @@ import OSLog
 /// matters, because idle cost is a product constraint here.
 final class DirectoryChangeWatcher: @unchecked Sendable {
     nonisolated private static let logger = Logger(
-        subsystem: "com.yinfenglu.CodexInNotch",
+        subsystem: "com.yinfenglu.Notchline",
         category: "DirectoryChangeWatcher"
     )
 
     private let lock = NSLock()
     nonisolated private let directoryURL: URL
     private let queue = DispatchQueue(
-        label: "com.yinfenglu.codex-in-notch.directory-watcher"
+        label: "com.yinfenglu.notchline.directory-watcher"
     )
     private let debounceInterval: TimeInterval
     nonisolated(unsafe) private var source: DispatchSourceFileSystemObject?

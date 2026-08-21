@@ -12,37 +12,37 @@
 			containerPortal = 38130FEE302AE10800286EBC /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 38130FF5302AE10800286EBC;
-			remoteInfo = CodexInNotch;
+			remoteInfo = Notchline;
 		};
 		3813100E302AE10900286EBC /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 38130FEE302AE10800286EBC /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 38130FF5302AE10800286EBC;
-			remoteInfo = CodexInNotch;
+			remoteInfo = Notchline;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		38130FF6302AE10800286EBC /* CodexInNotch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodexInNotch.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		38131003302AE10900286EBC /* CodexInNotchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodexInNotchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		3813100D302AE10900286EBC /* CodexInNotchUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodexInNotchUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		38130FF6302AE10800286EBC /* Notchline.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notchline.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		38131003302AE10900286EBC /* NotchlineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotchlineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		3813100D302AE10900286EBC /* NotchlineUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotchlineUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		38130FF8302AE10800286EBC /* CodexInNotch */ = {
+		38130FF8302AE10800286EBC /* Notchline */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = CodexInNotch;
+			path = Notchline;
 			sourceTree = "<group>";
 		};
-		38131006302AE10900286EBC /* CodexInNotchTests */ = {
+		38131006302AE10900286EBC /* NotchlineTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = CodexInNotchTests;
+			path = NotchlineTests;
 			sourceTree = "<group>";
 		};
-		38131010302AE10900286EBC /* CodexInNotchUITests */ = {
+		38131010302AE10900286EBC /* NotchlineUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = CodexInNotchUITests;
+			path = NotchlineUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -75,9 +75,9 @@
 		38130FED302AE10800286EBC = {
 			isa = PBXGroup;
 			children = (
-				38130FF8302AE10800286EBC /* CodexInNotch */,
-				38131006302AE10900286EBC /* CodexInNotchTests */,
-				38131010302AE10900286EBC /* CodexInNotchUITests */,
+				38130FF8302AE10800286EBC /* Notchline */,
+				38131006302AE10900286EBC /* NotchlineTests */,
+				38131010302AE10900286EBC /* NotchlineUITests */,
 				38130FF7302AE10800286EBC /* Products */,
 			);
 			sourceTree = "<group>";
@@ -85,9 +85,9 @@
 		38130FF7302AE10800286EBC /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				38130FF6302AE10800286EBC /* CodexInNotch.app */,
-				38131003302AE10900286EBC /* CodexInNotchTests.xctest */,
-				3813100D302AE10900286EBC /* CodexInNotchUITests.xctest */,
+				38130FF6302AE10800286EBC /* Notchline.app */,
+				38131003302AE10900286EBC /* NotchlineTests.xctest */,
+				3813100D302AE10900286EBC /* NotchlineUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,9 +95,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		38130FF5302AE10800286EBC /* CodexInNotch */ = {
+		38130FF5302AE10800286EBC /* Notchline */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 38131017302AE10900286EBC /* Build configuration list for PBXNativeTarget "CodexInNotch" */;
+			buildConfigurationList = 38131017302AE10900286EBC /* Build configuration list for PBXNativeTarget "Notchline" */;
 			buildPhases = (
 				38130FF2302AE10800286EBC /* Sources */,
 				38130FF3302AE10800286EBC /* Frameworks */,
@@ -108,18 +108,18 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				38130FF8302AE10800286EBC /* CodexInNotch */,
+				38130FF8302AE10800286EBC /* Notchline */,
 			);
-			name = CodexInNotch;
+			name = Notchline;
 			packageProductDependencies = (
 			);
-			productName = CodexInNotch;
-			productReference = 38130FF6302AE10800286EBC /* CodexInNotch.app */;
+			productName = Notchline;
+			productReference = 38130FF6302AE10800286EBC /* Notchline.app */;
 			productType = "com.apple.product-type.application";
 		};
-		38131002302AE10900286EBC /* CodexInNotchTests */ = {
+		38131002302AE10900286EBC /* NotchlineTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 3813101A302AE10900286EBC /* Build configuration list for PBXNativeTarget "CodexInNotchTests" */;
+			buildConfigurationList = 3813101A302AE10900286EBC /* Build configuration list for PBXNativeTarget "NotchlineTests" */;
 			buildPhases = (
 				38130FFF302AE10900286EBC /* Sources */,
 				38131000302AE10900286EBC /* Frameworks */,
@@ -131,18 +131,18 @@
 				38131005302AE10900286EBC /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				38131006302AE10900286EBC /* CodexInNotchTests */,
+				38131006302AE10900286EBC /* NotchlineTests */,
 			);
-			name = CodexInNotchTests;
+			name = NotchlineTests;
 			packageProductDependencies = (
 			);
-			productName = CodexInNotchTests;
-			productReference = 38131003302AE10900286EBC /* CodexInNotchTests.xctest */;
+			productName = NotchlineTests;
+			productReference = 38131003302AE10900286EBC /* NotchlineTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		3813100C302AE10900286EBC /* CodexInNotchUITests */ = {
+		3813100C302AE10900286EBC /* NotchlineUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 3813101D302AE10900286EBC /* Build configuration list for PBXNativeTarget "CodexInNotchUITests" */;
+			buildConfigurationList = 3813101D302AE10900286EBC /* Build configuration list for PBXNativeTarget "NotchlineUITests" */;
 			buildPhases = (
 				38131009302AE10900286EBC /* Sources */,
 				3813100A302AE10900286EBC /* Frameworks */,
@@ -154,13 +154,13 @@
 				3813100F302AE10900286EBC /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				38131010302AE10900286EBC /* CodexInNotchUITests */,
+				38131010302AE10900286EBC /* NotchlineUITests */,
 			);
-			name = CodexInNotchUITests;
+			name = NotchlineUITests;
 			packageProductDependencies = (
 			);
-			productName = CodexInNotchUITests;
-			productReference = 3813100D302AE10900286EBC /* CodexInNotchUITests.xctest */;
+			productName = NotchlineUITests;
+			productReference = 3813100D302AE10900286EBC /* NotchlineUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -186,7 +186,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 38130FF1302AE10800286EBC /* Build configuration list for PBXProject "CodexInNotch" */;
+			buildConfigurationList = 38130FF1302AE10800286EBC /* Build configuration list for PBXProject "Notchline" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -200,9 +200,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				38130FF5302AE10800286EBC /* CodexInNotch */,
-				38131002302AE10900286EBC /* CodexInNotchTests */,
-				3813100C302AE10900286EBC /* CodexInNotchUITests */,
+				38130FF5302AE10800286EBC /* Notchline */,
+				38131002302AE10900286EBC /* NotchlineTests */,
+				3813100C302AE10900286EBC /* NotchlineUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -258,12 +258,12 @@
 /* Begin PBXTargetDependency section */
 		38131005302AE10900286EBC /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 38130FF5302AE10800286EBC /* CodexInNotch */;
+			target = 38130FF5302AE10800286EBC /* Notchline */;
 			targetProxy = 38131004302AE10900286EBC /* PBXContainerItemProxy */;
 		};
 		3813100F302AE10900286EBC /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 38130FF5302AE10800286EBC /* CodexInNotch */;
+			target = 38130FF5302AE10800286EBC /* Notchline */;
 			targetProxy = 3813100E302AE10900286EBC /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -408,7 +408,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.CodexInNotch;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.Notchline;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -441,7 +441,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.CodexInNotch;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.Notchline;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -462,14 +462,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.CodexInNotchTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.NotchlineTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CodexInNotch.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CodexInNotch";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Notchline.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Notchline";
 			};
 			name = Debug;
 		};
@@ -482,14 +482,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.CodexInNotchTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.NotchlineTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CodexInNotch.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CodexInNotch";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Notchline.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Notchline";
 			};
 			name = Release;
 		};
@@ -500,14 +500,14 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.CodexInNotchUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.NotchlineUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = CodexInNotch;
+				TEST_TARGET_NAME = Notchline;
 			};
 			name = Debug;
 		};
@@ -518,21 +518,21 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.CodexInNotchUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.NotchlineUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = CodexInNotch;
+				TEST_TARGET_NAME = Notchline;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		38130FF1302AE10800286EBC /* Build configuration list for PBXProject "CodexInNotch" */ = {
+		38130FF1302AE10800286EBC /* Build configuration list for PBXProject "Notchline" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				38131015302AE10900286EBC /* Debug */,
@@ -541,7 +541,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		38131017302AE10900286EBC /* Build configuration list for PBXNativeTarget "CodexInNotch" */ = {
+		38131017302AE10900286EBC /* Build configuration list for PBXNativeTarget "Notchline" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				38131018302AE10900286EBC /* Debug */,
@@ -550,7 +550,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		3813101A302AE10900286EBC /* Build configuration list for PBXNativeTarget "CodexInNotchTests" */ = {
+		3813101A302AE10900286EBC /* Build configuration list for PBXNativeTarget "NotchlineTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3813101B302AE10900286EBC /* Debug */,
@@ -559,7 +559,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		3813101D302AE10900286EBC /* Build configuration list for PBXNativeTarget "CodexInNotchUITests" */ = {
+		3813101D302AE10900286EBC /* Build configuration list for PBXNativeTarget "NotchlineUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3813101E302AE10900286EBC /* Debug */,

@@ -1,13 +1,13 @@
 //
-//  CodexInNotchUITests.swift
-//  CodexInNotchUITests
+//  NotchlineUITests.swift
+//  NotchlineUITests
 //
 //  Created by Yinfeng Lu on 8/10/26.
 //
 
 import XCTest
 
-final class CodexInNotchUITests: XCTestCase {
+final class NotchlineUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.

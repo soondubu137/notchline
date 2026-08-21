@@ -18,7 +18,7 @@
 
 这是既有约束 2「无内容可说的区域被移除，不是变暗」第一次被应用到矩阵自身：单产品时它不必成立，因为那个产品就是全部；两个产品之后，为用户从不打开的那一个长期变暗，就成了替别人的工具做广告。约束 1 因此多出第三个通道——**在场表示产品是否打开**，色相与亮度的分工不变。
 
-**本文描述的双产品界面已实现**（矩阵成对与色相、行归属三选项与其设置、页脚三条规则、齿轮移入顶栏），与在场制一同落地。Claude Code 行的内容预览（[#34](https://github.com/soondubu137/codex-in-notch/issues/34)）也已落地——来源是官方 Hook `MessageDisplay`，两个产品的行现在是同样的三行。导航（[#31](https://github.com/soondubu137/codex-in-notch/issues/31)）也已落地：Claude Code 行按进程祖先链找到宿主并唤起它，行上不加任何标记，差别只在点击后的那句反馈里。
+**本文描述的双产品界面已实现**（矩阵成对与色相、行归属三选项与其设置、页脚三条规则、齿轮移入顶栏），与在场制一同落地。Claude Code 行的内容预览（[#34](https://github.com/soondubu137/notchline/issues/34)）也已落地——来源是官方 Hook `MessageDisplay`，两个产品的行现在是同样的三行。导航（[#31](https://github.com/soondubu137/notchline/issues/31)）也已落地：Claude Code 行按进程祖先链找到宿主并唤起它，行上不加任何标记，差别只在点击后的那句反馈里。
 
 判断每个方案时使用的既有约束，均来自当前已发布的界面：
 
@@ -200,14 +200,14 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 | 事项 | 状态 |
 | --- | --- |
-| 展开态顶栏状态名是否附带产品名 | 待定，构建前重新评估（随 [#35](https://github.com/soondubu137/codex-in-notch/issues/35) 一并决定） |
+| 展开态顶栏状态名是否附带产品名 | 待定，构建前重新评估（随 [#35](https://github.com/soondubu137/notchline/issues/35) 一并决定） |
 | 是否超出四个状态（`StopFailure` 带 `error`） | **已定：保持四态。** 只有 Claude Code 能观察到的状态会让这套共享词汇在 Codex 上说谎——用户无法区分「没有失败」与「无法观察到失败」。失败作为终态原因随行，行上的标记不变。字段名是 `error` 而非 `error_type`（CLI 2.1.233 实测） |
 | `dailyUsageBuckets.tokens` 与 CLI `total_tokens` 是否同口径 | 待验证，低优先级；不阻塞任何布局 |
-| 同名目录的两个检出如何消歧 | 未定（[#25](https://github.com/soondubu137/codex-in-notch/issues/25) 遗留项） |
+| 同名目录的两个检出如何消歧 | 未定（[#25](https://github.com/soondubu137/notchline/issues/25) 遗留项） |
 | Claude Code hook 注册由谁写入 | **已定：用户自己写。** 本应用只读 `~/.claude/settings.json`、显示待粘贴内容、报告注册是否完整，永不写入。Codex 侧维持自动写入 `~/.codex/hooks.json`。见 [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) |
 | 产品改名 | 候选见 Figma §07；`Baton` 为推荐项 |
 | `Disconnected` 这个词是否保留 | **语义已定**（[`figma-design.md`](figma-design.md) §6.7：没有任何智能体**已连接**）。词本身待定，备选 `No agents`、`Nothing running`，上屏后判断 |
-| 双产品无刘海紧凑标签由哪一状态定宽 | **已被在场制吸收，见下。** 成因仍记录在 [#29](https://github.com/soondubu137/codex-in-notch/issues/29) |
+| 双产品无刘海紧凑标签由哪一状态定宽 | **已被在场制吸收，见下。** 成因仍记录在 [#29](https://github.com/soondubu137/notchline/issues/29) |
 
 降级导航已确认并接受，且已实现：Claude Code 行只能唤起 Claude Desktop 或聚焦终端，行内不为此增加任何标记。**「聚焦终端」在实现里又分了一层**，也同样不加标记：终端能报出 tty 的（Terminal.app、iTerm2）选中那一个标签页，报不出的（Ghostty 有完整脚本字典却没有 tty，kitty / WezTerm / Alacritty 没有字典）只激活应用。三种结果都由 `NavigationOutcome` 的那句话区分，界面上一个像素都不差——因为一行只带一个标记，而那个标记是计时。
 
@@ -215,7 +215,7 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 **紧凑标签定宽状态在双产品下换人。** 单 Codex 时最宽的紧凑状态是 `Approval`，它靠同时占用标签与计时槽取胜，任何不计时的状态都追不上它。加入 Claude Code 后冠军变成一个**不计时**的状态：`Update Claude Code` 比 `Approval` 加计时槽更长。本机实测 13pt Light：`Approval` + 12 + `1:02:03` = 112.3，`Update Claude Code` = 124.8，无刘海药丸宽度因此从 189 变为 202。
 
-**成因后来查清了**：`updateAgent` 这个状态对 Claude Code **根本不可达**——它存在是因为 Codex Desktop 可能版本过旧，而 Claude Code 是用户自己装的 CLI，没有版本门槛。宽度折叠不区分「哪个产品能到哪个状态」，于是为一个画不出来的标签预留了位置。见 [#29](https://github.com/soondubu137/codex-in-notch/issues/29)。
+**成因后来查清了**：`updateAgent` 这个状态对 Claude Code **根本不可达**——它存在是因为 Codex Desktop 可能版本过旧，而 Claude Code 是用户自己装的 CLI，没有版本门槛。宽度折叠不区分「哪个产品能到哪个状态」，于是为一个画不出来的标签预留了位置。见 [#29](https://github.com/soondubu137/notchline/issues/29)。
 
 **这条已被在场制吸收。** `Update Claude Code` 随 `Update Codex`、`Unsupported Version` 一起退出收起态（[`figma-design.md`](figma-design.md) §6.6），不再参与定宽；同时单产品工作集合改为共用固定宽度 `220`（§6.4），而 `Update Claude Code` 本机实测 `124.77`，撑到 `24 + 16.62 + 12 + 124.77 + 24 = 201.4`，本来就在 `220` 之内。也就是说即便日后它回到收起态，也不会再改变任何宽度。`PanelMetrics.fixedCompactWidth` 的按产品折叠因此**整个去掉了**：工作集合里已经没有任何一条紧凑标签会指名产品，加宽的理由从「第二个产品的词汇更长」变成「多画了一个矩阵」。它现在按 `(status, matrixCount)` 取值。
 
