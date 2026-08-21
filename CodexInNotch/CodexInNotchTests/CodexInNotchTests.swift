@@ -12211,6 +12211,264 @@ for line in sys.stdin:
         #expect(turn.promptPreview == nil)
     }
 
+    /// A tool result too big to forward does not take its event down with it.
+    ///
+    /// This is the worst shape CR-030 had, and the one the four-state model can
+    /// least absorb. `PostToolUse` carries the tool result — a `Read` of a large
+    /// file, a long `Bash` stdout — and the whole payload used to be measured
+    /// against the transport's cap, so an oversized result dropped the event.
+    /// The wait that `PermissionRequest` opened against `call-1` then never
+    /// closed on its own id, and this product reports its own denials, which
+    /// deliberately removes the borrowed-approval inference that would have
+    /// cleared it on other activity. The row sat on *Approval needed* until the
+    /// turn's `Stop`.
+    ///
+    /// The four fields the reducer wants out of that payload total a few
+    /// hundred bytes, and nothing about the size of a tool result is evidence
+    /// about the turn — so the assertion is simply that the size makes no
+    /// difference at all.
+    @Test @MainActor
+    func anOversizedToolResultStillClosesTheWaitItBelongsTo() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-oversize-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let repository = HookEventRepository(
+            paths: HookIntegrationPaths(
+                supportDirectory: root.appendingPathComponent("AS"),
+                hooksConfiguration: root.appendingPathComponent("settings.json"),
+                agent: .claudeCode
+            ),
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let listener = AgentHookListener { body, receivedAt in
+            repository.deliver(body, at: receivedAt)
+        }
+        defer { listener.stop() }
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
+
+        try send(to: socket, body: [
+            "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt_id": "p-1"
+        ])
+        try send(to: socket, body: [
+            "hook_event_name": "PreToolUse", "session_id": "s-1", "prompt_id": "p-1",
+            "tool_name": "Bash", "tool_use_id": "call-1"
+        ])
+        try send(to: socket, body: [
+            "hook_event_name": "PermissionRequest", "session_id": "s-1", "prompt_id": "p-1",
+            "tool_name": "Bash"
+        ])
+        let waiting = await waitForReducedTurns(repository, count: 1)
+        #expect(waiting.first?.status == .approvalNeeded)
+
+        // Twice what the transport used to accept for a whole payload.
+        try send(to: socket, body: [
+            "hook_event_name": "PostToolUse", "session_id": "s-1", "prompt_id": "p-1",
+            "tool_name": "Bash", "tool_use_id": "call-1",
+            "tool_response": String(repeating: "a", count: 2 << 20)
+        ])
+        let closed = await holds {
+            await repository.drainDeliveredEvents().turns.first?.status == .running
+        }
+        #expect(closed)
+    }
+
+    /// A prompt bigger than the transport used to carry still opens its turn,
+    /// and still reads as what the user typed.
+    ///
+    /// The second half of CR-030: `UserPromptSubmit` carries `prompt`, and a
+    /// pasted file or transcript gets there. Losing it is worse than losing a
+    /// `PostToolUse` — `.toolCallOpened` opens no turn, so no later event in
+    /// that turn would open the row either, and it appeared for the first time
+    /// as *Completed* when `Stop` arrived.
+    ///
+    /// Multi-byte on purpose. The text is cut to a bound so the row's two lines
+    /// cannot be paid for in megabytes, and a cut taken anywhere but a
+    /// character boundary would leave bytes no decoder accepts — which would
+    /// lose the whole payload again, for a new reason.
+    @Test @MainActor
+    func aPromptTooBigToForwardStillOpensItsTurnAndStillReadsAsItself() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-oversize-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let repository = HookEventRepository(
+            paths: HookIntegrationPaths(
+                supportDirectory: root.appendingPathComponent("AS"),
+                hooksConfiguration: root.appendingPathComponent("settings.json"),
+                agent: .codex
+            ),
+            vocabulary: CodexHookVocabulary()
+        )
+        let listener = AgentHookListener { body, receivedAt in
+            repository.deliver(body, at: receivedAt)
+        }
+        defer { listener.stop() }
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
+
+        let opening = "Here is the transcript you asked about: "
+        try send(to: socket, body: [
+            "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "turn_id": "t-1",
+            "prompt": opening + String(repeating: "一段很长的记录 ", count: 200_000)
+        ])
+
+        let turns = await waitForReducedTurns(repository, count: 1)
+        let turn = try #require(turns.first)
+        #expect(turn.threadID == "s-1")
+        #expect(turn.turnID == "t-1")
+        #expect(turn.promptPreview?.hasPrefix(opening) == true)
+    }
+
+    /// Past the ceiling the connection is cut, and what arrived whole still
+    /// lands.
+    ///
+    /// The ceiling exists to bound the read queue's time per event, not to have
+    /// an opinion about payloads, so this pins the behaviour at it: the fields
+    /// that arrived before the cut are the event, and the tool result that
+    /// caused the cut was never read by anything. Dropping the connection
+    /// wholesale is what CR-030 was.
+    ///
+    /// The identity is written before the result deliberately — that is where
+    /// both products put it, and it is the only reason there is anything to
+    /// salvage. A payload that buries its identity behind a 16 MiB value is
+    /// past what this can do, and it is not a shape either product produces.
+    @Test @MainActor
+    func aConnectionPastTheCeilingIsCutAndKeepsWhatArrivedWhole() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-ceiling-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let repository = HookEventRepository(
+            paths: HookIntegrationPaths(
+                supportDirectory: root.appendingPathComponent("AS"),
+                hooksConfiguration: root.appendingPathComponent("settings.json"),
+                agent: .claudeCode
+            ),
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let listener = AgentHookListener { body, receivedAt in
+            repository.deliver(body, at: receivedAt)
+        }
+        defer { listener.stop() }
+        let socket = root.appendingPathComponent("hook.sock")
+        #expect(listener.start(socketURL: socket))
+
+        var payload = Data(#"{"hook_event_name":"Stop","session_id":"s-1","prompt_id":"p-1","tool_response":""#.utf8)
+        payload.append(contentsOf: Array(repeating: UInt8(ascii: "a"), count: AgentHookListener.maximumBodyBytes))
+        payload.append(contentsOf: Array(#""}"#.utf8))
+        try sendRaw(to: socket, bytes: payload)
+
+        let turns = await waitForReducedTurns(repository, count: 1)
+        let turn = try #require(turns.first)
+        #expect(turn.threadID == "s-1")
+        #expect(turn.turnID == "p-1")
+        #expect(turn.status == .completed)
+    }
+
+    /// Selecting fields before the decode reads the same as decoding it all.
+    ///
+    /// The distiller decides which bytes `JSONDecoder` sees and nothing else,
+    /// so the property that matters is that it never changes the answer. The
+    /// cases are the ones a hand-written scan gets wrong: a brace inside a
+    /// string, an escaped quote, nesting, every scalar kind, a key repeated,
+    /// whitespace anywhere it is allowed, and an object with nothing in it.
+    @Test @MainActor
+    func selectingFieldsReadsTheSameAsDecodingTheWholePayload() throws {
+        let payloads = [
+            #"{"hook_event_name":"Stop","session_id":"s-1","prompt_id":"p-1"}"#,
+            #"{ "hook_event_name" : "Stop" ,\#n  "session_id" : "s-1" }"#,
+            #"{"tool_input":{"command":"echo \"}\" # }{"},"session_id":"s-2","hook_event_name":"PreToolUse","tool_use_id":"call-1"}"#,
+            #"{"tool_response":[1,2,{"a":[{"b":"},{"}]}],"session_id":"s-3"}"#,
+            #"{"prompt":"a\ttab, an \"escape\", é and 😀","session_id":"s-4","turn_id":"t-4"}"#,
+            #"{"index":-1.5e10,"final":true,"cancelled":false,"reason":null,"session_id":"s-5"}"#,
+            #"{"session_id":"first","session_id":"second"}"#,
+            #"{"cwd":"/tmp/a b/c","tool_use_id":"call-1","permission_mode":"acceptEdits"}"#,
+            #"{}"#,
+            // Not objects, or not finished ones: refused by both readings.
+            #"[{"session_id":"s"}]"#,
+            #"{"session_id":"s" "prompt_id":"p"}"#,
+            #"{"session_id":"s",}"#,
+            "not json at all"
+        ]
+        for text in payloads {
+            let body = Data(text.utf8)
+            let whole = try? JSONDecoder().decode(HookPayload.self, from: body)
+            #expect(HookPayload.distilled(from: body) == whole, "\(text)")
+        }
+    }
+
+    /// An identity too long to be one is left out rather than cut short.
+    ///
+    /// Text may be shortened and still be the same answer. An identity may not:
+    /// the reducer consumes payloads by exact identity, so half a `session_id`
+    /// is a different session — a row that is not this one, or a turn resurrected
+    /// under a name nothing else uses. Leaving it out drops the payload, which
+    /// is the fail-closed answer (`AGENTS.md` §6.2).
+    @Test @MainActor
+    func anIdentityTooLongToBeOneIsLeftOutRatherThanCutShort() throws {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "Stop",
+            "session_id": String(repeating: "s", count: HookPayloadDistiller.maximumIdentityBytes),
+            "prompt_id": "p-1"
+        ])
+        let payload = try #require(HookPayload.distilled(from: body))
+        #expect(payload.hookEventName == "Stop")
+        #expect(payload.turnID == "p-1")
+        #expect(payload.sessionID == nil)
+    }
+
+    /// A text field is cut only where a JSON string can be cut.
+    ///
+    /// A cut inside `é`, between the halves of `😀`, or in the
+    /// middle of a multi-byte character leaves a string no decoder accepts —
+    /// and since the field sits inside the payload, that would lose the whole
+    /// event for a new reason. The prompt is padded one byte at a time so the
+    /// cut sweeps across every offset within the repeated unit, which is what
+    /// puts it inside each of those in turn.
+    @Test @MainActor
+    func aTextFieldIsCutOnlyWhereAJSONStringCanBeCut() throws {
+        // Twelve bytes for the pair written as escapes, two for the accented
+        // character, four for the emoji written as itself, two for the tab.
+        let unit = #"\ud83d\ude00é😀\t"#
+        for padding in 0 ..< unit.utf8.count {
+            let prompt = String(repeating: "p", count: padding)
+                + String(repeating: unit, count: 2_000)
+            let body = Data(
+                (#"{"hook_event_name":"UserPromptSubmit","session_id":"s","turn_id":"t","prompt":"#
+                    + "\"\(prompt)\"}").utf8
+            )
+            let whole = try #require(
+                try JSONDecoder().decode(HookPayload.self, from: body).prompt
+            )
+            let carried = try #require(HookPayload.distilled(from: body)?.prompt)
+            #expect(carried.count < whole.count)
+            #expect(whole.hasPrefix(carried), "cut at \(padding) is not a prefix")
+        }
+    }
+
+    /// A payload that stops part way through keeps the fields that arrived
+    /// whole.
+    ///
+    /// Two things produce one: the transport's ceiling, and a client that
+    /// connected and then stopped making progress for longer than the receive
+    /// timeout. Both used to reach `JSONDecoder` as truncated JSON and be
+    /// dropped in full. A field is emitted only once its value has closed, so
+    /// what survives is whole fields or none — never half of one.
+    @Test @MainActor
+    func aPayloadThatStopsPartWayThroughKeepsTheFieldsThatArrivedWhole() throws {
+        let whole = #"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_use_id":"call-1","tool_response":"aaaaaaaaaa"}"#
+        let cut = Data(whole.dropLast(15).utf8)
+        let payload = try #require(HookPayload.distilled(from: cut))
+        #expect(payload.hookEventName == "PostToolUse")
+        #expect(payload.sessionID == "s-1")
+        #expect(payload.toolUseID == "call-1")
+    }
+
     /// The socket is this user's alone, and rubbish on it is dropped.
     ///
     /// This replaced a test that asserted `403` for a wrong bearer token and
@@ -12697,6 +12955,19 @@ for line in sys.stdin:
             }
         }
         try #require(connected == 0)
+        // The listener cuts a connection off at its ceiling, so a test that
+        // deliberately writes past it is writing to a descriptor whose peer has
+        // gone. Unhandled, that is `SIGPIPE` and the end of the test process.
+        // `nc` in the real helper has the same thing happen and dies quietly,
+        // and the helper's `exit 0` covers it.
+        var noSignal: Int32 = 1
+        setsockopt(
+            descriptor,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &noSignal,
+            socklen_t(MemoryLayout<Int32>.size)
+        )
         // Holding the line open before writing is what a client descheduled
         // between connecting and sending looks like, and it is the case the
         // accept used to drop -- see
@@ -12704,7 +12975,17 @@ for line in sys.stdin:
         if connectedPause > 0 {
             Thread.sleep(forTimeInterval: connectedPause)
         }
-        _ = bytes.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
+        // One `write` does not necessarily take a large payload, so it is
+        // written out in full -- or until the listener stops reading it, which
+        // is a case this has to be able to provoke rather than crash on.
+        bytes.withUnsafeBytes { raw in
+            var written = 0
+            while written < raw.count {
+                let count = write(descriptor, raw.baseAddress! + written, raw.count - written)
+                guard count > 0 else { break }
+                written += count
+            }
+        }
         shutdown(descriptor, SHUT_WR)
 
         // Wait for the listener to close its end, which it does only after

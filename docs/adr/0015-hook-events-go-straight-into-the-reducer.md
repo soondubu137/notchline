@@ -38,9 +38,16 @@ listener 的串行读取队列保证 `deliver` 按 payload 落地的顺序被调
 ## 代价
 
 - **没有崩溃缓冲。** 队列是「事件到达与被 reduce 之间」唯一能扛住崩溃的地方。这个窗口不值钱：内存里的轮次状态会在同一次崩溃里一起消失，而本设计本来就丢弃启动之前写下的一切。
-- **一份 payload 超过 1 MB 会被丢弃而不是截断。** 半份 payload 解不出有用的东西，只会被当成无法识别报出来。
+- ~~**一份 payload 超过 1 MB 会被丢弃而不是截断。**~~ **这一条判断错了，已由 CR-030 改掉。** 原来的理由——「半份 payload 解不出有用的东西」——只对**整份解码**成立，而这条路径恰恰不该整份解码。reducer 要读的字段一共几百字节，大起来的全是它不读的那些：`PostToolUse` 带 `tool_response`（一次大文件 `Read`、一条长 stdout、一次宽 `Grep`），`UserPromptSubmit` 带 `prompt`（用户粘进去的东西）。拿「整份 payload 的大小」去决定「这个生命周期事件听不听得见」，等于把工具结果的大小当成了轮次的证据；丢掉的那一份里最难受的是 `PostToolUse`——它不关掉自己 `tool_use_id` 上的等待，而 Claude Code 这边 `reportsApprovalDenials = true` 特意拿掉了借用推断，于是那一行停在 *Approval needed* 直到本轮 `Stop`。
+
+  现在字段选择发生在解码**之前**：`HookPayloadDistiller` 在字节上走一趟，只取 `HookPayload.CodingKeys` 认识的键，其余的值跳过——不拷贝、不解码、不测量——`JSONDecoder` 拿到的是一个几百字节的小对象。它仍然是「字段是什么意思」的唯一权威，这一趟只决定它能看见哪些字节。于是 transport 上的上限只约束**读队列的时间**，不再约束 reducer 能被告知什么。
+
+  代价换了形状，没有消失：
+  - **正文截断在 16 KiB，身份不截断。** 行上只画 240 字符，短一点的正文还是同一个答案；半个 `session_id` 却是另一个会话，所以过长的身份是整个字段不要，payload 随之丢掉——fail closed 的那一侧（`AGENTS.md` §6.2）。
+  - **超过 16 MiB 的连接被切断，切断之前已经完整到达的字段照常生效。** 切在哪个字段之后由 payload 自己的字段顺序决定，而字段顺序不是任何一方的契约；同一条也覆盖「客户端连上之后不再写」的那种半份 payload。
+  - **小 payload 每个事件贵 3 µs。** Release 实测：1.4 KB 的 `PostToolUse`，整份解码 5.0 µs、选择加解码 8.0–9.7 µs，对照这条路径本身的 2.06 ms/事件。**1 MB 上下反而快 4.7 倍**（976 KB：416 µs → 89 µs），因为 `JSONDecoder` 不再看那个工具结果；8.8 MB 时选择比整份解码慢 1.4 倍（3.6 ms → 5.2 ms），那是逐字节扫描在出了 L2 之后受内存带宽限制——而那个尺寸此前的结果是整份丢弃，所以那里没有回归，只有以前不存在的工作。
 - **连接关闭在交接之后。** 早几微秒关会拿掉这条路径上唯一的背压：同一个会话的两份 payload 会同时在途，而读取队列存在的那个顺序会改由调度器决定。
 
 ## 状态
 
-已实施。`AgentHookListener` 只做 transport（绑定、accept、读一份 payload、交出去），`HookEventRepository` 持有 reducer、正文与投递证据。`HookPreviewChannel.swift` 已删除。测试：`payloadsAreReducedInTheOrderTheyLanded`、`theStoreSignalsWhatIsDrawnAndNothingElse`、`nothingAThirdPartyCouldReplayIsEverWrittenDown`、`theListenerHandsOverOnePayloadPerConnection`、`aPayloadWrittenAfterTheConnectionIsAcceptedStillArrives`、`messageDisplayTextIsHeldInMemoryAndReducesNothing`、`aPreviewArrivingWhereThereWasNoneAsksToBeDrawn`。
+已实施。`AgentHookListener` 只做 transport（绑定、accept、读一份 payload、交出去），`HookEventRepository` 持有 reducer、正文与投递证据。`HookPreviewChannel.swift` 已删除。测试：`anOversizedToolResultStillClosesTheWaitItBelongsTo`、`aPromptTooBigToForwardStillOpensItsTurnAndStillReadsAsItself`、`aConnectionPastTheCeilingIsCutAndKeepsWhatArrivedWhole`、`selectingFieldsReadsTheSameAsDecodingTheWholePayload`、`anIdentityTooLongToBeOneIsLeftOutRatherThanCutShort`、`aTextFieldIsCutOnlyWhereAJSONStringCanBeCut`、`aPayloadThatStopsPartWayThroughKeepsTheFieldsThatArrivedWhole`、`payloadsAreReducedInTheOrderTheyLanded`、`theStoreSignalsWhatIsDrawnAndNothingElse`、`nothingAThirdPartyCouldReplayIsEverWrittenDown`、`theListenerHandsOverOnePayloadPerConnection`、`aPayloadWrittenAfterTheConnectionIsAcceptedStillArrives`、`messageDisplayTextIsHeldInMemoryAndReducesNothing`、`aPreviewArrivingWhereThereWasNoneAsksToBeDrawn`。

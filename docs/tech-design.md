@@ -497,7 +497,7 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 
 ### 9.2 身份准入与请求配对
 
-- 所有会改变 Turn 状态的 Hook 必须包含非空 `session_id` 和 `turn_id`（Claude Code 把后者拼作 `prompt_id`，字段选择在 `HookPayload` 里合流）。不得回退到当前 Turn、`"unknown"`、时间邻近或 Thread 更新时间；缺少身份的 payload 只写诊断并丢弃——没有可以被隔离到的地方，这也是 `.invalid` 文件不再堆积的原因（本机曾累计 155 个）。
+- 所有会改变 Turn 状态的 Hook 必须包含非空 `session_id` 和 `turn_id`（Claude Code 把后者拼作 `prompt_id`，字段选择在 `HookPayload` 里合流）。不得回退到当前 Turn、`"unknown"`、时间邻近或 Thread 更新时间；缺少身份的 payload 只写诊断并丢弃——没有可以被隔离到的地方，这也是 `.invalid` 文件不再堆积的原因（本机曾累计 155 个）。**过长的身份等同于缺少身份**：正文可以截短，身份不能——半个 `session_id` 是另一个会话——所以超过 `HookPayloadDistiller.maximumIdentityBytes`（1 KiB）的身份字段整个不要，payload 随之丢掉（CR-030）。
 - repository 没有该 Thread 时，受支持事件可以用自身的精确身份建立 Turn。已有当前 Turn 时，顺序更新且从未被该 Thread 淘汰过的 `UserPromptSubmit` 可以建立下一 Turn；Desktop 中断后继续执行时可能不再发送 `UserPromptSubmit`，因此更晚到达的实时 `PermissionRequest`、`PreToolUse`、`PostToolUse` 或 `Stop` 也可以用新的、未退休的精确 `turn_id` 接管同一 Thread。接管时旧 Turn id 立即进入 `retiredTurnIDs`，保留原始开始时间与 prompt preview，清空旧等待证据；事件本身再决定 Running、Input needed 或 Completed。任何退休 Turn 的迟到事件都不能复活旧身份。
 - `PreToolUse(request_user_input)` 只有在包含非空 `tool_use_id` 时才建立 Input pending；`PostToolUse` 只有 `turn_id` 和 `tool_use_id` 都与该 pending 完全相同时才能清除它。未匹配结果保持原状态。
 - `PermissionRequest` 没有自己的 `tool_use_id`，因此不能独立成为 Approval evidence；但它携带 `tool_name`，而被审批的调用已经由紧邻的 `PreToolUse` announce 过。reducer 因此为每个 Turn 记录"当前仍打开的工具调用"（`openToolUse`：`PreToolUse` 写入，同 `tool_use_id` 的 `PostToolUse` 清除），`PermissionRequest` 借用该 id 建立 Approval pending。没有打开的调用可配对，或 `tool_name` 与打开的调用不一致时，保持原状态——绝不建立无法关闭的等待。自动放行的请求在同一批事件内开合，不会滞留成假等待。`PostToolUse` 自身仍不得用来猜测审批状态。
@@ -548,13 +548,13 @@ Input needed
 
 ### 正文如何到达本进程（Codex）
 
-**正文和它所属的那个事件一起到达，走同一条连接。** helper 把 stdin 原样转发进 `hook.sock`，不做任何过滤；字段选择、截断和事件命名都在 Swift 里（`HookPayload` 与 `HookSessionPreviewStore.normalized`），而不是一个只有一条集成测试跑得到的 Python 字符串字面量。`UserPromptSubmit` 带 `prompt`，`Stop` 带 `last_assistant_message`，两者都是 reducer 已经要处理的那个事件。
+**正文和它所属的那个事件一起到达，走同一条连接。** helper 把 stdin 原样转发进 `hook.sock`，不做任何过滤；字段选择、截断和事件命名都在 Swift 里（`HookPayloadDistiller`、`HookPayload` 与 `HookSessionPreviewStore.normalized`），而不是一个只有一条集成测试跑得到的 Python 字符串字面量。**选择发生在解码之前**：大起来的全是本 app 不读的字段（`tool_response`、粘进来的 `prompt`），所以扫一趟只把认识的键挑出来，`JSONDecoder` 拿到的是一个几百字节的小对象，工具结果的大小不再决定这个生命周期事件听不听得见（CR-030、[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。`UserPromptSubmit` 带 `prompt`，`Stop` 带 `last_assistant_message`，两者都是 reducer 已经要处理的那个事件。
 
 **没有第二条 socket，也没有 `event_id` 接合。** `preview.sock`、`claimPreview` 与未认领预览的保留上限全部只因为「正文不许进事件文件」而存在；一条 socket 带整份 payload 就没有这个拆分（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。
 
 正文仍然不落盘，但这现在是构造使然而不是一条要守的规则：整条路径上没有文件。没有监听者时 helper 直接丢掉，结果是「没有预览」而不是「过时的预览」。
 
-**connect 与 write 之间，应用可能已经 accept。** 监听 socket 是非阻塞的，好让 accept handler 一次排空 backlog 而不是停在下一个连接上；Darwin 的 `accept` 会把这个标志一并交给它返回的连接。接收循环于是从「已连接、但写还没落地」的客户端读到 `EAGAIN`，而它无法把 `EAGAIN` 与消息结束区分开——payload 被永久丢弃，而不是等一下再读。250 ms 接收超时本来正是为这一步设的，但它在非阻塞描述符上不约束任何东西，所以「从未触发」并不是余量充足的证据。`receivePayload` 先清掉该标志，超时才真正生效（CC-023/CC-024）。这个坑最初是在 `preview.sock` 上发现的；它是 accept 的性质，所以跟着搬进了两个产品现在共用的那条 transport。
+**connect 与 write 之间，应用可能已经 accept。** 监听 socket 是非阻塞的，好让 accept handler 一次排空 backlog 而不是停在下一个连接上；Darwin 的 `accept` 会把这个标志一并交给它返回的连接。接收循环于是从「已连接、但写还没落地」的客户端读到 `EAGAIN`，而它无法把 `EAGAIN` 与消息结束区分开——payload 被永久丢弃，而不是等一下再读。250 ms 接收超时本来正是为这一步设的，但它在非阻塞描述符上不约束任何东西，所以「从未触发」并不是余量充足的证据。`receivePayload` 先清掉该标志，超时才真正生效（CC-023/CC-024）。同一个读循环里还有一个更小的同形问题：`read` 因信号返回 `EINTR` 与 payload 结束也长得一样，所以它单独重试，剩下的答案（写方关闭的 0、以及超时的 `EAGAIN`）才结束这一次读——读到多少就是多少，由字段选择决定剩下什么（CR-030）。这个坑最初是在 `preview.sock` 上发现的；它是 accept 的性质，所以跟着搬进了两个产品现在共用的那条 transport。
 
 不能改用 `thread.preview` 代替：实测它是**线程的首条用户消息**，不随轮次前进（17 轮的线程仍返回第 1 轮的文本），因此它满足不了 PRD 2.7 的「当前内容预览」。
 
@@ -573,7 +573,7 @@ Input needed
 1. **在进 reducer 之前转向。** `deliver` 认出 `MessageDisplay` 后折进内存并直接返回：不排队、不 reduce、不唤醒面板。此前它还要避开一个文件目录——三次每秒写一个文件、再由 reducer 读一个删一个，是这条路径最贵的做法；那个目录已经不存在了。
 2. **一条串行读取队列，保序而不是抢快。** 连接按到达顺序 accept，交给同一条串行队列，所以 `record(_:)` 看到的顺序就是 payload 落地的顺序。这一条现在要单独说，因为 `command` schema **有** `async` 这个键（`http` schema 没有，2026-08-18 读 schema 证实，此前本文档以为写得进去的 `async: true` 会被 settings 解析器直接丢掉）。实测 2.1.237：`async: true` 会让同一个 `tool_use_id` 的 `PreToolUse` 与 `PostToolUse` 互相超车，并且在 `-p` 下**整个丢掉 `Stop`**——进程在后台 hook 跑完之前就退出了。所以注册是同步的，代价是每个事件 6.3 ms 落在会话上（对照：Codex 那边的 Python helper 一直是 30 ms）。
 3. **只留每条消息的头部 240 字符。** 内存由常数决定，而不是由模型说了多少决定：头写满之后，后续 delta 在被扫描进任何保留结构之前就停下。
-4. **一趟扫完，只扫新 delta。** 折叠函数以已规范化的头部为种子往下写，长度用 `Int` 随行。此前的写法是重建 `carried + delta` 再在每个字符后取 `.count`——`String.count` 要走一遍字素边界，于是相对截断长度是平方级，还额外整份拷贝了 delta（上限 `maximumBodyBytes`，1 MB）。现在超长 delta 与普通 delta 同价。
+4. **一趟扫完，只扫新 delta。** 折叠函数以已规范化的头部为种子往下写，长度用 `Int` 随行。此前的写法是重建 `carried + delta` 再在每个字符后取 `.count`——`String.count` 要走一遍字素边界，于是相对截断长度是平方级，还额外整份拷贝了 delta（那时的上限是 `maximumBodyBytes`，1 MB；现在 delta 作为正文字段在选择这一步就被截在 `HookPayloadDistiller.maximumTextBytes`，16 KiB）。现在超长 delta 与普通 delta 同价。
 
 `delta` 的官方措辞是「**newly completed lines**」，实测确实如此，而且**是增量、不是累计**：同一条消息的相邻 delta 依次以 `1. `、`2. `、`3. ` 开头，各自从上一个停下的地方开始——若是累计，逐块追加会把整条消息重复一遍。除最后一个之外，**每个 delta 都以换行结束**，规范化后塌成一个尾随空格，所以下一个 delta 直接接上去，分隔符不需要被发明；`pendingSpace` 的种子只为消息的最后一个 delta 而存在，那一个才停在行中间。`-p` 非交互是另一种形状：一次交付、`index: 0`、`final: true`，多行消息带着换行整份到达。
 

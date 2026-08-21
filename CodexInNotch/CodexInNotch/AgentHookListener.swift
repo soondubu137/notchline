@@ -50,8 +50,23 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
         category: "AgentHookListener"
     )
 
-    /// A payload larger than this is dropped rather than read to the end.
-    static let maximumBodyBytes = 1 << 20
+    /// How much of one connection is read before it is cut off.
+    ///
+    /// It bounds the read queue's time per event, and nothing else — in
+    /// particular it is not a bound on what the reducer can be told. Field
+    /// selection happens in ``HookPayloadDistiller`` on the way into the store,
+    /// so the fields that arrived whole before the cut still land: an event is
+    /// no longer lost because the tool result attached to it was large
+    /// (CR-030).
+    ///
+    /// Sixteen mebibytes because the point is to stop a client that has stopped
+    /// making sense, not to have an opinion about payload sizes. What it has to
+    /// stay inside is the helper's own `nc -w 1`, which is in turn inside the
+    /// registration's `timeout: 3`; measured on a Release build, a payload at
+    /// the ceiling costs 55–75 ms from the client's first write to the
+    /// hand-off, so the innermost of the three bounds is still the one that
+    /// fires first.
+    static let maximumBodyBytes = 16 << 20
 
     /// How long one connection may take to deliver its payload.
     ///
@@ -241,9 +256,12 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
     /// `nc` waits for this end to close, and a talking turn waits three times a
     /// second. Nothing this app does may sit on a user's session, and there is
     /// no configuration doing that for us — what keeps it off the critical path
-    /// is that the work between the read and the close is bounded to one decode
-    /// and, for a delta, a scan that stops at the head's cap. Measured at
-    /// 2.06 ms per event, indifferent to a 60 KB delta.
+    /// is that the work between the read and the close is bounded to one pass
+    /// selecting the fields, one decode of the few hundred bytes that leaves,
+    /// and for a delta a scan that stops at the head's cap. Measured at 2.06 ms
+    /// per event, indifferent to a 60 KB delta; selection moved that by 3 µs
+    /// for an ordinary payload and took 4.7× off a payload near a megabyte,
+    /// which no longer has its tool result decoded (CR-030).
     ///
     /// Closing first would be a few microseconds cheaper and would cost the
     /// only back-pressure in the path: two payloads from one session could then
@@ -254,11 +272,13 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
 
         var body = Data()
         readBody(on: descriptor, into: &body)
-        // Over the cap is dropped rather than truncated: a half payload decodes
-        // to nothing useful and would be reported as unrecognised.
-        guard !body.isEmpty, body.count <= Self.maximumBodyBytes else {
-            return
-        }
+        // A body that reached the ceiling is handed over rather than dropped.
+        // It used to be dropped, on the reasoning that half a payload decodes
+        // to nothing useful -- which was true while the whole payload had to
+        // decode. Selection now takes whole fields off the front, so the half
+        // that arrived is worth something and the half that did not was a tool
+        // result nobody reads (CR-030).
+        guard !body.isEmpty else { return }
         deliver(body, clock.now())
     }
 
@@ -287,10 +307,21 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
         )
 
         var buffer = [UInt8](repeating: 0, count: 16 * 1_024)
-        while payload.count <= Self.maximumBodyBytes {
-            let readCount = read(descriptor, &buffer, buffer.count)
-            guard readCount > 0 else { break }
-            payload.append(contentsOf: buffer[0 ..< readCount])
+        while payload.count < Self.maximumBodyBytes {
+            let wanted = min(buffer.count, Self.maximumBodyBytes - payload.count)
+            let readCount = read(descriptor, &buffer, wanted)
+            if readCount > 0 {
+                payload.append(contentsOf: buffer[0 ..< readCount])
+                continue
+            }
+            // A signal delivered mid-read is not the end of the payload, and
+            // treating it as one would drop an event for a reason that has
+            // nothing to do with the client. Every other answer -- zero for the
+            // writer's close, and the receive timeout's `EAGAIN` for a client
+            // that stopped making progress -- ends the read; what arrived is
+            // then whatever it is, and selection decides what survives.
+            if readCount < 0, errno == EINTR { continue }
+            break
         }
     }
 }

@@ -979,7 +979,7 @@ struct HookStateSnapshot: Sendable {
 /// turn identity are accepted: Codex calls it `turn_id`, Claude Code calls it
 /// `prompt_id` and documents it as "a UUID correlating a user prompt with all
 /// subsequent events until the next prompt".
-nonisolated struct HookPayload: Sendable, Decodable {
+nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     let hookEventName: String?
     let sessionID: String?
     let turnID: String?
@@ -992,7 +992,7 @@ nonisolated struct HookPayload: Sendable, Decodable {
     let messageID: String?
     let delta: String?
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case hookEventName = "hook_event_name"
         case sessionID = "session_id"
         case turnID = "turn_id"
@@ -1005,6 +1005,18 @@ nonisolated struct HookPayload: Sendable, Decodable {
         case lastAssistantMessage = "last_assistant_message"
         case messageID = "message_id"
         case delta
+
+        /// Whether this field is the row's text rather than an identity.
+        ///
+        /// Text may be cut short and still be the same answer; an identity may
+        /// not, so only these three are ever shortened (see
+        /// ``HookPayloadDistiller``).
+        nonisolated var carriesText: Bool {
+            switch self {
+            case .prompt, .lastAssistantMessage, .delta: return true
+            default: return false
+            }
+        }
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1024,6 +1036,360 @@ nonisolated struct HookPayload: Sendable, Decodable {
         )
         messageID = try container.decodeIfPresent(String.self, forKey: .messageID)
         delta = try container.decodeIfPresent(String.self, forKey: .delta)
+    }
+
+    /// The payload the reducer will see, out of the bytes that landed.
+    ///
+    /// Field selection happens before the decode rather than after it, because
+    /// the fields nobody reads are the ones that get big — see
+    /// ``HookPayloadDistiller``. `JSONDecoder` is still what reads a field; it
+    /// just never sees a tool result.
+    nonisolated static func distilled(from body: Data) -> HookPayload? {
+        guard let selected = HookPayloadDistiller.distilled(from: body) else { return nil }
+        return try? JSONDecoder().decode(HookPayload.self, from: selected)
+    }
+}
+
+/// Reduces one arriving payload to the fields the reducer reads.
+///
+/// **Why this exists.** The helper forwards stdin unchanged, so what lands on
+/// the socket is the agent's whole payload — and the fields this app never
+/// reads are the ones that get big. `PostToolUse` carries the tool result: a
+/// `Read` of a large file, a long `Bash` stdout, a broad `Grep`. Codex's
+/// `UserPromptSubmit` carries `prompt`, which is whatever the user pasted. The
+/// handful of fields the reducer wants out of either total a few hundred bytes.
+///
+/// Until this existed the transport's cap applied to the whole payload, so one
+/// oversized tool result took the lifecycle event down with it — silently, and
+/// worst where the four-state model can least absorb it: a `PostToolUse` that
+/// never closes the wait its `tool_use_id` opened leaves the row on *Approval
+/// needed* until the turn's `Stop` (CR-030). **Nothing about the size of a tool
+/// result is evidence about the turn**, so it must not decide whether the turn
+/// is heard.
+///
+/// **What it does.** One pass over the bytes, top level only: a value under a
+/// key ``HookPayload/CodingKeys`` names is kept verbatim, everything else is
+/// stepped over without being copied or decoded. What comes out is a small JSON
+/// object for `JSONDecoder`, which stays the authority on what a field *means*
+/// — this only decides which bytes it gets to see. Two properties are the whole
+/// design:
+///
+/// - **A cut is never half a field.** Only completed values are emitted, so a
+///   payload that ends early — the transport's ceiling, or a client that
+///   stopped writing — yields the fields that arrived whole rather than
+///   nothing at all. A payload that is *malformed* rather than short is still
+///   refused outright: fields do not get salvaged out of bytes that were never
+///   the object they claimed to be (`AGENTS.md` §6.2).
+/// - **An identity is never cut.** ``maximumTextBytes`` shortens the row's
+///   text, where a shorter answer is the same answer; an identity longer than
+///   ``maximumIdentityBytes`` is left out instead, because half a `session_id`
+///   is a different session and the reducer keys on exact identity.
+nonisolated enum HookPayloadDistiller {
+    /// How much of one text field is carried.
+    ///
+    /// A row shows the first 240 characters after normalisation
+    /// (``HookSessionPreviewStore/maximumCharacters``), so this is two orders
+    /// of magnitude of headroom for leading whitespace and escapes, and still
+    /// small enough that a pasted transcript never reaches the reducer.
+    nonisolated static let maximumTextBytes = 16 * 1_024
+
+    /// How long a value that is an identity may be before it is refused.
+    ///
+    /// Session and turn ids are UUIDs, tool call ids are short strings, `cwd`
+    /// is a path. Anything past this is none of those.
+    nonisolated static let maximumIdentityBytes = 1_024
+
+    /// The fields worth carrying, out of the bytes that landed, or `nil` if
+    /// this never was a JSON object.
+    nonisolated static func distilled(from body: Data) -> Data? {
+        body.withUnsafeBytes { raw in
+            var scan = PayloadScan(bytes: raw)
+            return scan.selectedFields()
+        }
+    }
+
+    /// The keys worth carrying, and whether a long one may be cut short.
+    ///
+    /// Read off ``HookPayload/CodingKeys`` rather than listed a second time, so
+    /// a field added to the payload cannot become one this drops on the floor.
+    private static let selectedKeys: [String: Bool] = Dictionary(
+        uniqueKeysWithValues: HookPayload.CodingKeys.allCases.map {
+            ($0.rawValue, $0.carriesText)
+        }
+    )
+
+    /// One pass over one payload's top level.
+    ///
+    /// A hand-written scan rather than a JSON library because the point is to
+    /// *not* decode the large values: `JSONSerialization` would materialise the
+    /// tool result this exists to step over, and by the time it had, the cost
+    /// this avoids has already been paid.
+    private struct PayloadScan {
+        let bytes: UnsafeRawBufferPointer
+        var index = 0
+
+        static let quote: UInt8 = 0x22
+        static let backslash: UInt8 = 0x5C
+        static let openBrace: UInt8 = 0x7B
+        static let closeBrace: UInt8 = 0x7D
+        static let openBracket: UInt8 = 0x5B
+        static let closeBracket: UInt8 = 0x5D
+        static let colon: UInt8 = 0x3A
+        static let comma: UInt8 = 0x2C
+        static let lowercaseU: UInt8 = 0x75
+
+        /// What one value turned out to be, and where it sat.
+        ///
+        /// `isComplete` is false only when the bytes ran out inside it, which
+        /// is the one failure this salvages from.
+        struct ScannedValue {
+            let range: Range<Int>
+            let isString: Bool
+            let isComplete: Bool
+        }
+
+        mutating func selectedFields() -> Data? {
+            skipWhitespace()
+            guard index < bytes.count, bytes[index] == Self.openBrace else { return nil }
+            index += 1
+
+            var selected = Data([Self.openBrace])
+            var isFirstCarried = true
+            var isFirstMember = true
+            while true {
+                skipWhitespace()
+                guard index < bytes.count else { break }
+                if bytes[index] == Self.closeBrace { break }
+                if !isFirstMember {
+                    // Separators are checked rather than stepped over, so that
+                    // what this accepts is JSON objects and not merely things
+                    // shaped like one.
+                    guard bytes[index] == Self.comma else { return nil }
+                    index += 1
+                    skipWhitespace()
+                    guard index < bytes.count else { break }
+                    // `JSONDecoder` accepts a trailing comma, so this does too.
+                    // Where the two could disagree, the decoder is right by
+                    // definition: this decides which bytes it sees and must
+                    // never decide what they say.
+                    if bytes[index] == Self.closeBrace { break }
+                }
+                isFirstMember = false
+                guard bytes[index] == Self.quote else { return nil }
+                guard let key = scanKey() else { break }
+                skipWhitespace()
+                guard index < bytes.count else { break }
+                guard bytes[index] == Self.colon else { return nil }
+                index += 1
+                skipWhitespace()
+                guard index < bytes.count else { break }
+
+                let value = scanValue()
+                if let carriesText = HookPayloadDistiller.selectedKeys[key],
+                   let carried = carry(value, carriesText: carriesText) {
+                    if !isFirstCarried { selected.append(Self.comma) }
+                    isFirstCarried = false
+                    selected.append(contentsOf: Array("\"\(key)\":".utf8))
+                    selected.append(carried)
+                }
+                guard value.isComplete else { break }
+            }
+            selected.append(Self.closeBrace)
+            return selected
+        }
+
+        /// The bytes to emit for one selected value, or `nil` to leave the
+        /// field out entirely.
+        private func carry(_ value: ScannedValue, carriesText: Bool) -> Data? {
+            let limit = carriesText
+                ? HookPayloadDistiller.maximumTextBytes
+                : HookPayloadDistiller.maximumIdentityBytes
+            if value.isComplete, value.range.count <= limit {
+                return Data(UnsafeRawBufferPointer(rebasing: bytes[value.range]))
+            }
+            // Only a string can be shortened and still be itself, and only
+            // where the field is the row's text rather than an identity.
+            guard value.isString, carriesText else { return nil }
+            let start = value.range.lowerBound + 1
+            let end = value.isComplete ? value.range.upperBound - 1 : value.range.upperBound
+            guard start <= end else { return nil }
+            return Self.shortened(
+                UnsafeRawBufferPointer(rebasing: bytes[start ..< end]),
+                to: limit
+            )
+        }
+
+        /// The key's raw bytes, as written.
+        ///
+        /// An escape inside a key is left as it was written and simply fails to
+        /// match, which is right: no key this app reads contains one, so a key
+        /// that spells itself with `s` is not one of ours.
+        private mutating func scanKey() -> String? {
+            let start = index
+            guard skipString() else { return nil }
+            let content = (start + 1) ..< (index - 1)
+            guard content.lowerBound <= content.upperBound else { return nil }
+            return String(
+                decoding: UnsafeRawBufferPointer(rebasing: bytes[content]),
+                as: UTF8.self
+            )
+        }
+
+        private mutating func scanValue() -> ScannedValue {
+            let start = index
+            let first = bytes[index]
+            if first == Self.quote {
+                let complete = skipString()
+                return ScannedValue(range: start ..< index, isString: true, isComplete: complete)
+            }
+            if first == Self.openBrace || first == Self.openBracket {
+                let complete = skipStructure()
+                return ScannedValue(range: start ..< index, isString: false, isComplete: complete)
+            }
+            let complete = skipScalar()
+            return ScannedValue(range: start ..< index, isString: false, isComplete: complete)
+        }
+
+        /// Steps over a string, starting on its opening quote.
+        private mutating func skipString() -> Bool {
+            index += 1
+            while index < bytes.count {
+                let byte = bytes[index]
+                if byte == Self.backslash {
+                    index = min(index + 2, bytes.count)
+                    continue
+                }
+                index += 1
+                if byte == Self.quote { return true }
+            }
+            return false
+        }
+
+        /// Steps over an object or an array, braces inside strings included.
+        private mutating func skipStructure() -> Bool {
+            var depth = 0
+            while index < bytes.count {
+                let byte = bytes[index]
+                if byte == Self.quote {
+                    guard skipString() else { return false }
+                    continue
+                }
+                index += 1
+                if byte == Self.openBrace || byte == Self.openBracket {
+                    depth += 1
+                } else if byte == Self.closeBrace || byte == Self.closeBracket {
+                    depth -= 1
+                    if depth == 0 { return true }
+                }
+            }
+            return false
+        }
+
+        /// Steps over a number, `true`, `false` or `null`.
+        ///
+        /// Running out of bytes here is not completion: `12` and `128` are
+        /// different numbers, and only the delimiter says which one arrived.
+        private mutating func skipScalar() -> Bool {
+            while index < bytes.count {
+                let byte = bytes[index]
+                if byte == Self.comma || byte == Self.closeBrace
+                    || byte == Self.closeBracket || Self.isWhitespace(byte) {
+                    return true
+                }
+                index += 1
+            }
+            return false
+        }
+
+        private mutating func skipWhitespace() {
+            while index < bytes.count, Self.isWhitespace(bytes[index]) {
+                index += 1
+            }
+        }
+
+        private static func isWhitespace(_ byte: UInt8) -> Bool {
+            byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+        }
+
+        /// The longest prefix of a string's content that is still a whole
+        /// string, quoted back up.
+        ///
+        /// A JSON string cannot be cut just anywhere: a cut inside `\"` leaves
+        /// a dangling escape, a cut inside a multi-byte character leaves bytes
+        /// no decoder accepts, and a cut between the halves of a surrogate pair
+        /// leaves a code point missing its other half. Any of the three makes
+        /// the *whole* payload undecodable, which is the outcome this file
+        /// exists to prevent — so the content is walked one character at a time
+        /// and the cut taken at the last boundary that fits.
+        static func shortened(_ content: UnsafeRawBufferPointer, to limit: Int) -> Data {
+            var index = 0
+            var safe = 0
+            while index < content.count {
+                guard let length = elementLength(in: content, at: index),
+                      index + length <= limit else { break }
+                index += length
+                safe = index
+            }
+            var value = Data([quote])
+            value.append(contentsOf: UnsafeRawBufferPointer(rebasing: content[0 ..< safe]))
+            value.append(quote)
+            return value
+        }
+
+        /// How many bytes the character at `index` occupies, or `nil` where
+        /// there is no boundary to be had after it.
+        private static func elementLength(
+            in content: UnsafeRawBufferPointer,
+            at index: Int
+        ) -> Int? {
+            let byte = content[index]
+            if byte == backslash {
+                guard index + 1 < content.count else { return nil }
+                guard content[index + 1] == lowercaseU else { return 2 }
+                guard let scalar = hexEscape(in: content, at: index) else { return nil }
+                if (0xDC00 ... 0xDFFF).contains(scalar) { return nil }
+                guard (0xD800 ... 0xDBFF).contains(scalar) else { return 6 }
+                // A high surrogate is not a character on its own; the pair is
+                // the boundary, and a half with no other half is not one.
+                guard let low = hexEscape(in: content, at: index + 6),
+                      (0xDC00 ... 0xDFFF).contains(low) else { return nil }
+                return 12
+            }
+            let length: Int
+            switch byte {
+            case 0x00 ... 0x7F: length = 1
+            case 0xC2 ... 0xDF: length = 2
+            case 0xE0 ... 0xEF: length = 3
+            case 0xF0 ... 0xF4: length = 4
+            default: return nil
+            }
+            guard index + length <= content.count else { return nil }
+            return length
+        }
+
+        private static func hexEscape(
+            in content: UnsafeRawBufferPointer,
+            at index: Int
+        ) -> Int? {
+            guard index + 6 <= content.count,
+                  content[index] == backslash,
+                  content[index + 1] == lowercaseU else { return nil }
+            var value = 0
+            for offset in (index + 2) ..< (index + 6) {
+                guard let digit = hexDigit(content[offset]) else { return nil }
+                value = value << 4 | digit
+            }
+            return value
+        }
+
+        private static func hexDigit(_ byte: UInt8) -> Int? {
+            switch byte {
+            case 0x30 ... 0x39: return Int(byte - 0x30)
+            case 0x41 ... 0x46: return Int(byte - 0x41) + 10
+            case 0x61 ... 0x66: return Int(byte - 0x61) + 10
+            default: return nil
+            }
+        }
     }
 }
 
@@ -1388,11 +1754,17 @@ actor HookEventRepository {
     /// Takes one payload off the transport, in arrival order.
     ///
     /// Runs on the listener's serial read queue, so everything here has to be
-    /// bounded: one decode, and for a delta a scan that stops at the head's
-    /// cap. Reduction itself happens on the actor, from a snapshot of the inbox
-    /// that preserves this order.
+    /// bounded: one pass to select the fields, one decode of what that leaves,
+    /// and for a delta a scan that stops at the head's cap. Reduction itself
+    /// happens on the actor, from a snapshot of the inbox that preserves this
+    /// order.
+    ///
+    /// **The size of the payload decides nothing.** Selection happens before
+    /// the decode, so a `PostToolUse` carrying a megabyte of tool result is the
+    /// same event as one carrying none (CR-030); what the transport hands over
+    /// is bounded, what the reducer is told is not the same thing at all.
     nonisolated func deliver(_ body: Data, at receivedAt: Date) {
-        guard let payload = try? JSONDecoder().decode(HookPayload.self, from: body),
+        guard let payload = HookPayload.distilled(from: body),
               let eventName = payload.hookEventName,
               payload.sessionID != nil else {
             return
