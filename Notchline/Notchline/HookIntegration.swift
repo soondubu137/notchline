@@ -458,7 +458,6 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             ManagedHookDefinition(event: "PermissionDenied", matcher: nil),
             ManagedHookDefinition(event: "Elicitation", matcher: nil),
             ManagedHookDefinition(event: "ElicitationResult", matcher: nil),
-            ManagedHookDefinition(event: "Notification", matcher: nil),
             // The row's third line (CC-015). Officially "While assistant
             // message text is displayed", and absent from the exploration
             // document's table of events — which is why the first pass at this
@@ -467,6 +466,44 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             ManagedHookDefinition(event: "MessageDisplay", matcher: nil),
             ManagedHookDefinition(event: "Stop", matcher: nil),
             ManagedHookDefinition(event: "StopFailure", matcher: nil)
+            // Notification is deliberately absent, and it was registered until
+            // the types it carries had been measured (CC-011). Measured against
+            // 2.1.238, seven interactive sessions under a pty, `--settings` and
+            // `--setting-sources project` only:
+            //
+            // * `permission_prompt` does fire -- five dialogs, five
+            //   notifications -- but on a **6 s timer** rather than on the
+            //   dialog opening: 6.01s, 6.03s and 6.05s after
+            //   `PermissionRequest`, and pushed out to 16.50s by a keystroke
+            //   4.5s in, because the dialog notifies only once the keyboard has
+            //   been idle that long. Which is why nobody had ever seen it: a
+            //   human who answers in under six seconds never produces one. It
+            //   carries `session_id`, `cwd`, `prompt_id` and a message, and no
+            //   `tool_use_id` and no `tool_name` -- while `PermissionRequest`
+            //   opened the same wait six seconds earlier *with* a call id to
+            //   borrow. Nothing closes it either: approving produced
+            //   `PostToolUse` and `Stop`, refusing produced nothing at all, and
+            //   no notification type means "resolved".
+            // * `idle_prompt` arrives 60 s after the last message (the
+            //   `messageIdleNotifThresholdMs` setting), four times at
+            //   60.07--60.08s after `Stop`, and only while no turn is in flight
+            //   and no dialog is open -- so it cannot misreport Running as a
+            //   wait, because by the time it arrives the turn has already
+            //   reached Completed. It is also suppressed for that turn once the
+            //   user touches the keyboard after the last message, which is what
+            //   the CC-019 sitting ran into.
+            // * `agent_needs_input` and `agent_completed` describe a background
+            //   agent's band change rather than this turn, and the payload is
+            //   stamped with the current session's id and not the agent's -- so
+            //   a wait opened on one would land on the wrong row. Two probes
+            //   with real background subagents produced neither.
+            //
+            // Every type is therefore either duplicated by an event that
+            // carries an id, out of scope, or later than the state it would
+            // report, and the registration only cost a process launch per
+            // notification. The mapping below stays: a user who has not
+            // repaired an older registration still collects no diagnostic.
+            //
             // SessionEnd is deliberately absent, and for a measured reason
             // rather than the one it was first excluded on. The case for it was
             // that it would retire a dead session's row sooner than the
@@ -521,10 +558,11 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
         case ("ElicitationResult", _):
             .toolCallClosed
         case ("Notification", _):
-            // Registered so its types can be measured, and inert until they
-            // are. Every wait this product can open is already covered by an
-            // event that carries an id, and a notification carries none --
-            // opening a wait nothing can close would be worse than ignoring it.
+            // No longer registered, and consumed rather than reported so that a
+            // user who has not repaired an older registration does not collect
+            // a diagnostic per notification. Inert by measurement now rather
+            // than pending one: see `managedDefinitions` for what each type was
+            // measured to mean.
             .inert
         case (Self.messageDisplayEventName, _):
             // Folded into the session preview before the reducer is reached;

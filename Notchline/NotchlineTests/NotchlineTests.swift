@@ -14289,6 +14289,28 @@ for line in sys.stdin:
         #expect(CodexHookVocabulary().managedDefinitions.count == 5)
     }
 
+    /// Notification is not registered either, and its types are why (CC-011).
+    ///
+    /// It was registered so they could be measured, and measuring them (2.1.238,
+    /// seven interactive sessions under a pty) retired the registration rather
+    /// than promoting it: `permission_prompt` arrives on a six-second keyboard-
+    /// idle timer, six seconds *after* the `PermissionRequest` that opened the
+    /// same wait with a call id to borrow, and carries no id of its own;
+    /// `idle_prompt` arrives sixty seconds after the turn already reached
+    /// Completed; `agent_needs_input` and `agent_completed` describe a
+    /// background agent but are stamped with the current session's id, so a
+    /// wait opened on one would land on the wrong row. Nothing closes any of
+    /// them — no notification type means "resolved".
+    ///
+    /// The mapping stays inert rather than absent, so the one user still
+    /// carrying an older registration collects no diagnostic per notification.
+    @Test @MainActor
+    func claudeCodeDoesNotRegisterNotification() {
+        let vocabulary = ClaudeCodeHookVocabulary()
+        #expect(!vocabulary.managedDefinitions.map(\.event).contains("Notification"))
+        #expect(vocabulary.signal(forEvent: "Notification", toolName: nil) == .inert)
+    }
+
     /// A product that reports its refusals does not get the inference, and
     /// unordered delivery is why.
     ///
