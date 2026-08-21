@@ -33,21 +33,37 @@ nonisolated protocol DesktopActivationReporting: Sendable {
 final class DesktopActivationWatcher: DesktopActivationReporting, @unchecked Sendable {
     private let lock = NSLock()
     private let clock: any MonitorClock
+    private let notifications: NotificationCenter
     nonisolated(unsafe) private var lastActivatedAt: Date?
     nonisolated(unsafe) private var observer: NSObjectProtocol?
     nonisolated(unsafe) private var continuations: [
         UUID: AsyncStream<Void>.Continuation
     ] = [:]
 
+    /// - Parameter notifications: Where activations are heard. The default is
+    ///   the workspace's own centre, and the parameter exists for the same
+    ///   reason it does on ``DesktopReadingWatcher``: that centre is
+    ///   process-wide, so a test posting a staged activation into it is heard
+    ///   by every watcher alive at that moment, and a test that stages one
+    ///   somewhere private can then assert without waiting.
     nonisolated init(
         bundleIdentifier: String,
-        clock: any MonitorClock = SystemMonitorClock()
+        clock: any MonitorClock = SystemMonitorClock(),
+        notifications: NotificationCenter =
+            NSWorkspace.shared.notificationCenter
     ) {
         self.clock = clock
-        observer = NSWorkspace.shared.notificationCenter.addObserver(
+        self.notifications = notifications
+        // Delivered wherever it was posted rather than hopped onto the main
+        // queue, which matters more here than it looks: this stream exists so
+        // that a row waiting on an activation does not have to wait out a
+        // re-check, and the hop put the main queue's backlog in front of
+        // exactly that. The state behind it is a `Date?` under a lock, read
+        // from whichever executor asks.
+        observer = notifications.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let application = notification.userInfo?[
                 NSWorkspace.applicationUserInfoKey
@@ -61,7 +77,7 @@ final class DesktopActivationWatcher: DesktopActivationReporting, @unchecked Sen
 
     deinit {
         if let observer {
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            notifications.removeObserver(observer)
         }
         lock.lock()
         let continuations = Array(self.continuations.values)

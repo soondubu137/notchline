@@ -9242,24 +9242,43 @@ for line in sys.stdin:
     /// activation ever *arrives* is one notification name and one `userInfo`
     /// key, and getting either wrong fails silently — the row would simply
     /// never leave, which is exactly the bug this route exists to fix.
+    ///
+    /// **The centre is the test's own, and the post is not waited on.** This
+    /// used to post into the workspace's own centre and then sleep 200 ms for
+    /// the main queue to drain it, which is two problems in one line: that
+    /// centre is process-wide and this suite runs in parallel, so the staged
+    /// activation was heard by whatever else was listening, and the pause was
+    /// an assertion about how quickly a queue this test does not own gets
+    /// round to it (CC-024). A private centre delivers on the posting thread,
+    /// so the assertion below is about the notification and nothing else.
+    ///
+    /// The instant is now checked rather than merely its presence: a watcher
+    /// that recorded the *arrival* of any notification instead of its own
+    /// application's activation would have satisfied `!= nil` just as well.
     @Test @MainActor
     func desktopActivationWatcherHearsOnlyItsOwnApplication() async throws {
         let current = try #require(NSRunningApplication.current.bundleIdentifier)
-        let mine = DesktopActivationWatcher(bundleIdentifier: current)
+        let workspace = NotificationCenter()
+        let clock = ParkedMonitorClock()
+        let mine = DesktopActivationWatcher(
+            bundleIdentifier: current,
+            clock: clock,
+            notifications: workspace
+        )
         let somebodyElse = DesktopActivationWatcher(
-            bundleIdentifier: "com.example.not-this-one"
+            bundleIdentifier: "com.example.not-this-one",
+            clock: clock,
+            notifications: workspace
         )
         #expect(await mine.lastActivation() == nil)
 
-        NSWorkspace.shared.notificationCenter.post(
+        workspace.post(
             name: NSWorkspace.didActivateApplicationNotification,
             object: NSWorkspace.shared,
             userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current]
         )
-        // Delivered on the main queue, so let it drain.
-        try await Task.sleep(nanoseconds: 200_000_000)
 
-        #expect(await mine.lastActivation() != nil)
+        #expect(await mine.lastActivation() == clock.now())
         #expect(await somebodyElse.lastActivation() == nil)
     }
 
