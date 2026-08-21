@@ -988,6 +988,19 @@ final class MonitorStore: ObservableObject {
         displays.first { $0.id == selectedDisplayID } ?? displays.first
     }
 
+    /// The chosen display as AppKit's own object, for the windows that have to
+    /// land on the screen the component is on.
+    ///
+    /// Matched by identifier, not by frame: a frame is not an identity — two
+    /// displays swap origins the moment the user rearranges them in System
+    /// Settings — and the identifier is the same string the preference is
+    /// stored under. `nil` only while that display is gone and
+    /// ``refreshDisplays()`` has not caught up with it yet.
+    var selectedScreen: NSScreen? {
+        guard let id = selectedDisplay?.id else { return nil }
+        return NSScreen.screens.first { DisplayOption.identifier(for: $0) == id }
+    }
+
     var geometry: DisplayGeometry {
         selectedDisplay?.geometry ?? .noNotch
     }

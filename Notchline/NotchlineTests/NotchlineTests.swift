@@ -917,45 +917,28 @@ struct NotchlineTests {
         )
     }
 
-    /// Settings is only moved when it is on a display other than the one with
-    /// the focus.
+    /// Settings goes to the display the component is on, so the store has to be
+    /// able to name that display as an `NSScreen` and not only as an option.
     ///
-    /// A window the user has dragged somewhere on the screen they are already
-    /// looking at has been positioned, and re-centring it there would be the
-    /// app overruling that. Ownership is by overlap rather than by origin: a
-    /// window straddling two displays belongs to the one showing more of it,
-    /// and an origin can land in the gap between two frames of unequal height.
-    @Test
-    func theSettingsWindowKnowsWhichDisplayItIsAlreadyOn() {
-        let builtIn = NSRect(x: 0, y: 0, width: 1512, height: 982)
-        let external = NSRect(x: 1512, y: 0, width: 2560, height: 1440)
-        let screens = [builtIn, external]
-        let size = NSSize(width: 580, height: 700)
+    /// Every attached screen, one after another, because the answer has to hold
+    /// for whichever one the user picked — and by identity (`===`), because
+    /// "the right screen" here means the object the window will be placed on,
+    /// not another one that happens to describe the same rectangle.
+    @Test @MainActor
+    func theStoreNamesTheScreenTheComponentIsOn() {
+        let screens = NSScreen.screens
+        // Nothing to place a window on: a headless runner, and there is no
+        // weaker claim left to make.
+        guard !screens.isEmpty else { return }
 
-        #expect(
-            SettingsWindowPlacement.index(
-                holding: NSRect(origin: NSPoint(x: 2000, y: 400), size: size),
-                among: screens
-            ) == 1
-        )
-        // 100 pt of it on the built-in display, 480 on the external one.
-        #expect(
-            SettingsWindowPlacement.index(
-                holding: NSRect(origin: NSPoint(x: 1412, y: 400), size: size),
-                among: screens
-            ) == 1
-        )
-        // Last closed on a display that has since been unplugged: on no screen
-        // at all, which is when it most needs putting somewhere.
-        #expect(
-            SettingsWindowPlacement.index(
-                holding: NSRect(origin: NSPoint(x: 5000, y: 3000), size: size),
-                among: screens
-            ) == nil
-        )
+        let store = MonitorStore(services: [])
+        for screen in screens {
+            store.selectDisplay(id: DisplayOption.identifier(for: screen))
+            #expect(store.selectedScreen === screen)
+        }
     }
 
-    /// Where it lands when it is moved: centred across the screen, high.
+    /// Where it lands, every time it opens: centred across the screen, high.
     @Test
     func theSettingsWindowLandsCentredAndAboveTheMiddle() {
         let visible = NSRect(x: 1512, y: 0, width: 2560, height: 1400)

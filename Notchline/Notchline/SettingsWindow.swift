@@ -689,8 +689,8 @@ struct SettingsWindowChrome: NSViewRepresentable {
 
 // MARK: - Presentation
 
-/// Puts the Settings window in front of the user, on the display the user is
-/// working on.
+/// Puts the Settings window in front of the user, centred on the display
+/// Notchline itself is on.
 ///
 /// The `Settings` scene does neither on its own, and for this app both matter.
 /// Its only permanent surface is in the notch, so the request almost always
@@ -700,24 +700,26 @@ struct SettingsWindowChrome: NSViewRepresentable {
 /// it was last closed on — on a second display, that is behind the user rather
 /// than in front of them.
 ///
-/// So: activate, and place the window on the screen that has the focus. Placing
-/// is only done when that is a *different* screen. A window the user has moved
-/// somewhere on the screen they are already on has been positioned, and moving
-/// it back to the middle would be this app overruling that.
+/// So: activate, and centre the window on the screen the component is on. That
+/// screen rather than the one holding the keyboard focus, because it is the
+/// screen this window is *about* — every control in it changes something the
+/// user can only see in the notch, and one of them chooses which display the
+/// notch is on, so the change and the thing it changes stay in one glance. It is
+/// also an answer that does not move while the window is being ordered, which
+/// the focused screen never was: read a moment too late and the focused window
+/// is Settings itself.
+///
+/// Every open, not only the opens that cross a screen boundary. Placing the
+/// window does discard a position the user dragged it to, which is a real cost
+/// and the one this deliberately pays: a window that is sometimes centred and
+/// sometimes wherever it was left is a window the user has to go and find.
 @MainActor
 enum SettingsWindowPresenter {
     private static weak var window: NSWindow?
     private static var visibility: NSKeyValueObservation?
 
-    /// The screen a request named, held until there is a window to put on it.
-    ///
-    /// The first `openSettings()` of a launch has no window yet — the scene
-    /// builds one — so the answer has to outlive the call that knew it.
-    private static var pendingScreen: NSScreen?
-
-    /// Opens Settings frontmost, on the screen that has the focus.
+    /// Opens Settings frontmost, centred on Notchline's display.
     static func present(using openSettings: () -> Void) {
-        pendingScreen = focusedScreen()
         openSettings()
         DispatchQueue.main.async { reveal() }
     }
@@ -737,87 +739,38 @@ enum SettingsWindowPresenter {
         visibility = window.observe(\.isVisible, options: [.old, .new]) { _, change in
             guard change.oldValue == false, change.newValue == true else { return }
             // KVO is delivered on the thread that ordered the window, which is
-            // the main one. The screen is read *here*, synchronously, because
-            // ordering runs before the window takes key: a moment later the
-            // focused window is this one and the answer is its own screen —
-            // the question restated rather than answered. The move itself waits
-            // for the next turn, so nothing re-enters AppKit's ordering.
+            // the main one. The move waits for the next turn, so nothing
+            // re-enters AppKit while it is still ordering.
             MainActor.assumeIsolated {
-                pendingScreen = pendingScreen ?? focusedScreen()
                 DispatchQueue.main.async { reveal() }
             }
         }
         reveal()
     }
 
-    /// The screen holding the window with the keyboard focus.
-    ///
-    /// Read before this app activates and before the window is ordered, for the
-    /// reason above. The pointer is the fallback rather than the rule: the gear
-    /// that opens this window lives in the notch, so the pointer is on the
-    /// built-in display whenever it is used, and it would answer "the notch's
-    /// screen" every time no matter where the user was working.
-    static func focusedScreen() -> NSScreen? {
-        if let focused = NSScreen.main { return focused }
-        let pointer = NSEvent.mouseLocation
-        return NSScreen.screens.first { $0.frame.contains(pointer) }
-            ?? NSScreen.screens.first
-    }
-
     private static func reveal() {
         guard let window else { return }
 
-        if let target = pendingScreen, !isShowing(window, on: target) {
+        // `NSScreen.main` only as the answer of last resort: the chosen display
+        // has been unplugged since the store last looked, and a window with
+        // nowhere of its own to go still has to be somewhere.
+        if let screen = MonitorStore.shared.selectedScreen ?? NSScreen.main {
             window.setFrameOrigin(
                 SettingsWindowPlacement.origin(
                     for: window.frame.size,
-                    on: target.visibleFrame
+                    on: screen.visibleFrame
                 )
             )
         }
-        pendingScreen = nil
 
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
-    }
-
-    /// Whether the window is already on `screen`.
-    ///
-    /// `false` when it is on no screen at all — never placed, or last closed on
-    /// a display that has since been unplugged — which is exactly when it most
-    /// needs putting somewhere.
-    private static func isShowing(_ window: NSWindow, on screen: NSScreen) -> Bool {
-        let screens = NSScreen.screens
-        guard let index = SettingsWindowPlacement.index(
-            holding: window.frame,
-            among: screens.map(\.frame)
-        ) else {
-            return false
-        }
-        return screens[index] === screen
     }
 }
 
 /// The arithmetic of putting the Settings window on a screen, kept apart from
 /// the window itself so it can be checked without one.
 nonisolated enum SettingsWindowPlacement {
-    /// Which of `frames` a window at `frame` is on: the one it covers most of.
-    ///
-    /// Overlap rather than the window's origin, because a window straddling two
-    /// displays belongs to the one showing more of it — and because an origin
-    /// can sit in the gap between two frames that are not the same height.
-    static func index(holding frame: NSRect, among frames: [NSRect]) -> Int? {
-        var best: (index: Int, area: CGFloat)?
-        for (index, candidate) in frames.enumerated() {
-            let overlap = candidate.intersection(frame)
-            guard !overlap.isNull else { continue }
-            let area = overlap.width * overlap.height
-            guard area > 0, area > (best?.area ?? 0) else { continue }
-            best = (index, area)
-        }
-        return best?.index
-    }
-
     /// Centred across `visibleFrame`, with a third of the leftover height above
     /// it — where macOS itself puts a window it is asked to centre, and higher
     /// than the true middle because a window sitting on the optical centre of a

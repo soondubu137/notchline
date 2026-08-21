@@ -289,8 +289,8 @@ private struct SettingsButton: View {
         Button {
             // Not `openSettings()` on its own: the click arrives while another
             // app is active, so the window it orders comes up behind that app,
-            // and on the display it was last closed on. See
-            // ``SettingsWindowPresenter``.
+            // and on the display it was last closed on rather than on the one
+            // this gear is drawn on. See ``SettingsWindowPresenter``.
             SettingsWindowPresenter.present { openSettings() }
         } label: {
             Image(systemName: "gearshape")
