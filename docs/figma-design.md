@@ -346,13 +346,22 @@ Input needed
 
 ## 7. 首次安装引导
 
-`08 — Onboarding`（`232:95`）由三个 `580 × 640` 的 macOS 窗口组成：
+现行设计是 `08 — Onboarding` 上的 `First run — one window`（`750:2`），**一个 `580` 宽的窗口**，浅色与深色是同一批节点。`232:95` 的三窗口流程保留为 v1 参考，不再是验收对象。
 
-1. **Welcome**：Notch 预览、实时监视价值、人工请求优先级和精确会话返回。
-2. **Connect to Codex**：列出受支持的本地元数据与额度读取，说明本地、最小、可逆；只有用户点击 `Set Up Integration` 后才改变配置。
-3. **Ready**：确认实时状态与精确导航，提醒预览默认开启并可在设置中关闭。
+三个窗口各自只承载一个决定：价值、同意、确认。但同意就是那个开关，确认就是那一行变绿——另外两个窗口是围着两个控件说的话。合成一页之后，腾出的位置留给了这个流程从来没讲过的东西：刘海到底画了什么。
 
-引导窗口使用标准 macOS 视觉层级：交通灯、单列内容、底部主操作。它不请求用户允许辅助功能或屏幕录制，也不承诺静默绕过 Codex 信任。
+窗口用的是设置窗口的全部形状（§8.0：`22` 组间距、`8` 组标题到卡片、卡片圆角 `12`、行内边距 `14 × 11`、胶囊按钮），因为它**就会变成**设置窗口——同一个 scene 在 `hasCompletedOnboarding` 前后分别显示 `OnboardingView` 与 `AppSettingsView`，第二次打开时不该有任何东西移动过位置。标题栏写 `Welcome to Notchline`，内容区不再有第二个标题。
+
+自上而下：
+
+1. **Hero**：应用图标 `52` 加一句话，不重复窗口标题。
+2. **`Connect your agents`**：`ProductConnectionRows`——与设置窗口**同一个视图**，不是它的副本。Codex 一个 switch，Claude Code 一个 `Set Up…`，两行并排正是 [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) 的不对称唯一被看见的地方。脚注写清开关写进 `~/.codex/hooks.json` 的五项定义可逆、不动用户自己的 hooks，尾部是 `Recheck`：开关打开还不是终点，Codex 按定义在文件里的位置记信任，要用户在 `/hooks` 里信任之后跑过一轮，这一行才会说 `Connected`。
+3. **`Reading the notch`**：四个规格件加四个状态名，**没有解释句**——一个叫 `Running` 的状态不需要一句话说明有一轮正在跑。规格件按 `PanelMetrics.statusMatrixSize`（`16.6`）画在一小块黑底上，是实物而不是示意图，并且**是活的**：轨道是 render server 上的图层动画，`Connected` 自己就不动（它的 state 没有 period）。
+4. **颜色键**：两个单色规格件加两个产品名，落在与上面四列相同的栅格上。
+
+**规格件按 mark 的对角线切成两色**（Codex 在上、Claude Code 在下），这是引导独有的画法：刘海上每个矩阵只属于一个产品，因为色相正是用来分辨两个矩阵的。切开是为了让一行四个讲完四种图案，而不是两行八个——那会说成图案随产品而变，而它并不变。实现见 `NotchPalette.MatrixSplit` 与 `MatrixIndicatorView.trailingHalf`；接缝方向由 `theSplitMatrixCutsOnTheSameDiagonalAsTheMark` 锁定，因为四种图案上下都对称，`isFlipped` 画反了没有任何别的东西会发现。
+
+窗口不请求辅助功能或屏幕录制，也不承诺静默绕过 Codex 信任。底部一行是那句只读声明加主按钮 `Start`，**不设门槛**：一个产品都没连也可以进去，刘海会照实说 `Disconnected`。
 
 ## 8. 设置
 
@@ -393,7 +402,7 @@ Input needed
 - **说明行下面还可以再有一行，写该产品自己报出的失败，板上没有，这是实现与板不一致的第三处。** 例如 `Ignored 2 hook payloads that could not be read.`、`Claude Code is not running the PreToolUse hook, so Input needed and Approval needed cannot be shown.` 它**只在有话说的时候出现**：一行为了不存在的失败常驻的空行，读起来就像那个失败正在发生。这一行是本窗口里唯一为「报告失败」而存在的东西——集成失败在本产品里天然安静，界面会照旧写着 `Connected`——所以它按本次运行累计、而不是报一次就清（[`PRD.md`](PRD.md) 第 12 节、CR-029）。它与 `Quota reading transcripts` 那一行的「卡片会自己长出一行」是同一个代价，区别在于这一行长出来的时候，用户正需要它。
 - Codex 行右侧是一个原生 macOS switch，启停该产品所需的 lifecycle event 定义；切换进行中 disabled。
 - **Claude Code 行没有 switch，这是实现与板上不一致的一处，且是刻意的。** [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) 决定本应用永不写 `~/.claude/settings.json`，因此那一行给不出一个能兑现的开关。它的尾部是胶囊按钮 `Set Up…`，展开卡片内的一段：粘贴目标路径、可选中的 JSON 片段、`Copy` 与 `Reveal Settings File`。两行并排正是这个不对称唯一被看见的地方——把它藏进另一个流程，只会让它读起来像疏漏而不是决定。板上的双 switch 保留为「若日后恢复写入能力」的形态。
-- 卡片下方脚注说明开关只安装 Codex in Notch 需要的六项定义，关闭时移除，用户其他 hooks 不受影响，并写明 Claude Code 由用户自己注册。
+- 卡片下方脚注说明开关只安装 Notchline 需要的**五项**定义，关闭时移除，用户其他 hooks 不受影响，并写明 Claude Code 由用户自己注册。这里此前写的是「六项」，与实现不符：`CodexHookVocabulary.managedDefinitions` 注册的是 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`Stop` 五项，`SessionEnd` 是**故意不注册**的。Claude Code 那边是十二项。
 - **卡片里还多一行 `Quota reading transcripts`，板上没有，这是实现与板不一致的第二处。** 读取 Claude Code 额度的每一次调用都是一个真实会话，因而在 Claude Code 自己的 project 目录里留下一份约 `3 KB` 的 transcript，没有任何东西会清掉它们。这一行报出它们的总大小（`43.2 MB`），尾部是胶囊按钮 `Reveal in Finder`。**只报大小，不报个数。** 曾经写作 `43.2 MB · 1,284 files`，而个数那一半回答的是没人会问的问题：这一行存在是为了让人判断这堆残留值不值得去清，散落在多少个文件里并不改变那个判断；真想数的人离那个目录只有一个按钮。
   **这一行从第一次刷新起就在，哪怕那时还没有数字可写。** 那个目录不是推导出来的而是找出来的——要等一次额度读取跑完（几秒的子进程）才知道它在哪。在此之前这一行原本根本不存在，于是卡片会在用户刚把窗口打开时自己长出一行来。现在改为把状态画出来：数字的位置写 `Calculating…`，`Reveal in Finder` 同时置灰（此刻它没有地方可去，一个揭示不了任何东西的按钮比一个明显还没准备好的按钮更糟）；读取落地后换成数字并恢复可点。读取已经跑完却仍未找到目录——机器上没有 `claude` 就是这种情况——写 `Unavailable` 而不是继续写 `Calculating…`：后者是一句关于正在进行的工作的话，而那件工作已经结束了（CC-020）。
   **只报不删，这是决定而不是省事。** Claude Code 给 project 目录起名的规则未公开，且压平分隔符与空格后并非一一对应（实测 `…/a b` 与 `…/a-b` 同属一个目录），因此那个目录里可能同时躺着用户真实项目的会话记录。把数字摆在用户眼前、并把门打开，比替他们删要正确。这一行与 `Display` 分组同类：既有行为在新形状里的安置，不是往设置里塞新功能。
