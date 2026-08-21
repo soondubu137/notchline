@@ -12,9 +12,22 @@ final class OverlayPanelController {
     private var pendingFrameUpdate: DispatchWorkItem?
     private var pendingFrameUpdateShouldAnimate: Bool?
     private var hasShownPanel = false
+    private let concealmentWatcher: OverlayConcealmentWatcher
+    /// Why the panel is off screen, or nil while it belongs there.
+    ///
+    /// Held here rather than on ``MonitorStore`` on purpose. Concealment is not
+    /// something the panel *draws* — the view tree is identical either side of
+    /// it — so publishing it would re-evaluate the whole overlay to change
+    /// nothing, which is the cost `AGENTS.md` §7 exists to keep out. The only
+    /// effect is `orderOut`/`orderFrontRegardless` on this window.
+    private var concealment: OverlayConcealmentReason?
 
-    init(store: MonitorStore) {
+    init(
+        store: MonitorStore,
+        concealmentWatcher: OverlayConcealmentWatcher? = nil
+    ) {
         self.store = store
+        self.concealmentWatcher = concealmentWatcher ?? OverlayConcealmentWatcher()
         self.panel = OverlayPanel(
             contentRect: NSRect(
                 origin: .zero,
@@ -29,6 +42,7 @@ final class OverlayPanelController {
         bindStore()
         installEventMonitors()
         observeScreenChanges()
+        observeConcealment()
     }
 
     deinit {
@@ -43,8 +57,8 @@ final class OverlayPanelController {
 
     func show() {
         updatePanelFrame(animated: false)
-        panel.orderFrontRegardless()
         hasShownPanel = true
+        orderPanelToMatchConcealment()
     }
 
     private func configurePanel() {
@@ -115,6 +129,25 @@ final class OverlayPanelController {
                 self?.schedulePanelFrameUpdate(animated: false)
             }
             .store(in: &cancellables)
+
+        // The overlay follows the menu bar of the display it is actually on, so
+        // a full-screen film on one screen leaves the other two alone. Both
+        // publishers can move the panel to a different display, and @Published
+        // emits from willSet, so the new selection is read a turn later.
+        Publishers.Merge(
+            store.$selectedDisplayID.map { _ in () },
+            store.$displays.map { _ in () }
+        )
+        .dropFirst(2)
+        .sink { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.concealmentWatcher.observe(
+                    displayID: self.store.selectedDisplay?.displayID
+                )
+            }
+        }
+        .store(in: &cancellables)
     }
 
     private func schedulePanelFrameUpdate(animated: Bool) {
@@ -163,7 +196,10 @@ final class OverlayPanelController {
         guard animated, hasShownPanel else {
             panel.setFrame(targetFrame, display: true)
             panel.contentView?.layoutSubtreeIfNeeded()
-            if hasShownPanel {
+            // A concealed panel still tracks its frame — it has to be in the
+            // right place the moment it comes back — but re-ordering it here
+            // would put it back on screen behind Mission Control's back.
+            if hasShownPanel, concealment == nil {
                 panel.orderFrontRegardless()
             }
             return
@@ -196,6 +232,35 @@ final class OverlayPanelController {
 
             return event
         }
+    }
+
+    private func observeConcealment() {
+        concealmentWatcher.observe(displayID: store.selectedDisplay?.displayID)
+        concealmentWatcher.start { [weak self] reason in
+            guard let self else { return }
+            self.concealment = reason
+            self.orderPanelToMatchConcealment()
+        }
+    }
+
+    /// Put the panel where the current concealment says it belongs.
+    ///
+    /// Collapsing on the way out is not tidiness. The panel expands on pointer
+    /// dwell and collapses on pointer exit, and a window ordered out from under
+    /// the pointer never gets the exit — so an overlay hidden while expanded
+    /// comes back expanded, over nothing, until the pointer visits and leaves
+    /// again.
+    private func orderPanelToMatchConcealment() {
+        guard hasShownPanel else { return }
+
+        guard concealment == nil else {
+            store.collapse()
+            panel.orderOut(nil)
+            return
+        }
+
+        updatePanelFrame(animated: false)
+        panel.orderFrontRegardless()
     }
 
     private func observeScreenChanges() {

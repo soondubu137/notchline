@@ -20,6 +20,14 @@ enum DisplayGeometry: String, CaseIterable, Identifiable {
 
 struct DisplayOption: Identifiable {
     let id: String
+    /// The window server's own handle for this display, when it has one.
+    ///
+    /// `id` above is a string because it is also a defaults key, and it falls
+    /// back to a frame description on a screen that reports no display number.
+    /// This is the unfalsified value, and `nil` where that fallback was taken —
+    /// ``OverlayConcealment`` needs the display's bounds in window-server
+    /// coordinates and has no way to derive them from `frame`.
+    let displayID: CGDirectDisplayID?
     let ordinal: Int
     let name: String
     let frame: NSRect
@@ -84,6 +92,7 @@ struct DisplayOption: Identifiable {
         NSScreen.screens.enumerated().map { index, screen in
             DisplayOption(
                 id: identifier(for: screen),
+                displayID: screen.cgDirectDisplayID,
                 ordinal: index + 1,
                 name: screen.localizedName,
                 frame: screen.frame,

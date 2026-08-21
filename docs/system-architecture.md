@@ -395,7 +395,8 @@ flowchart LR
 | 精确导航（Codex） | `CodexDesktopNavigator` | 预检目标并使用官方 deep link 打开同一 Thread | [`CodexDesktopNavigator.swift`](../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift) |
 | 导航分发 | `AgentNavigationRouter` | 按产品把整行交给它自己的导航器；没有注册导航器的产品报自己的名字失败，而不是被交给表里第一个 | [`CodexDesktopNavigator.swift`](../CodexInNotch/CodexInNotch/CodexDesktopNavigator.swift) |
 | 宿主唤起（Claude Code） | `ClaudeCodeNavigator`、`ProcessAncestryHostResolver`、`AppleEventsTerminalTabFocuser` | 点击时向 `ClaudeCodeMonitorService` 问该会话此刻的 pid（会话已结束就失败，这就是点击前的重新确认），用 `sysctl(KERN_PROC_PID)` 的 `e_ppid` 与 `proc_pidpath` 向上走进程祖先链判定宿主：祖先里有 Claude Desktop 就激活它，否则最近的那个 `.app` 就是宿主终端。终端能报出 tty 的（Terminal.app、iTerm2）用它自己的公开脚本字典选中该标签页，报不出的只激活应用（见 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)） | [`ClaudeCodeNavigator.swift`](../CodexInNotch/CodexInNotch/ClaudeCodeNavigator.swift) |
-| 窗体 | `OverlayPanelController` | NSPanel 生命周期、目标显示器、顶部吸附、尺寸和动画 | [`OverlayPanelController.swift`](../CodexInNotch/CodexInNotch/OverlayPanelController.swift) |
+| 窗体 | `OverlayPanelController` | NSPanel 生命周期、目标显示器、顶部吸附、尺寸和动画；并持有「此刻该不该在屏幕上」——遮蔽状态**不进 store**，因为面板两侧画的是同一棵视图树，发布它等于为了什么都不改而重算整个叠层（见第 6 节） | [`OverlayPanelController.swift`](../CodexInNotch/CodexInNotch/OverlayPanelController.swift) |
+| 面板该不该在屏幕上 | `OverlayConcealment`、`OverlayConcealmentWatcher` | 回答目标显示器此刻是不是还归用户的桌面：**菜单栏没画**（该屏有窗口全屏、或菜单栏设成自动隐藏）或 **Mission Control 盖住了它**。两条分开，因为信号分开——Mission Control **不隐藏菜单栏**。判据只读窗口列表里的 owner、layer 与 bounds 三个字段（都不受 Screen Recording 权限遮蔽，`kCGWindowName` 才受），纯函数可断言；watcher 只报边沿，且给每次取样发号，让路上被后取样超过的旧读数作废 | [`OverlayConcealment.swift`](../CodexInNotch/CodexInNotch/OverlayConcealment.swift) |
 | 视图 | `NotchOverlayView` | 只渲染 `MonitorStore`，不解析协议、不读文件；终态行上盖一层只认领次要点击的 `SecondaryClickCatcher`，发出的仍然只是意图（`tech-design.md` §17） | [`NotchOverlayView.swift`](../CodexInNotch/CodexInNotch/NotchOverlayView.swift) |
 | 设置窗口 | `AppSettingsView`、`ProductSettingsCopy`、`MacOSWindowColor` | macOS 26 单面板设置：分组卡片自绘，控件全用原生；`Color / macOS Window` 两模式 token（见 `figma-design.md` §8）。产品行说的那几句话是一个值（`ProductSettingsCopy`）而不是四个 view 上的计算属性——那一行下方的失败报告是本窗口里唯一为报告失败而存在的东西，值可以被断言，`body` 不能（CR-029） | [`SettingsWindow.swift`](../CodexInNotch/CodexInNotch/SettingsWindow.swift) |
 | 常驻动效 | `NotchStatusMatrix`、`SearchlightLabel`、`SessionRowText` | 用 CALayer 承载持续动画，使叠层不必逐帧重渲染（见第 6 节） | [`NotchStatusMatrix.swift`](../CodexInNotch/CodexInNotch/NotchStatusMatrix.swift) |
@@ -446,6 +447,25 @@ flowchart LR
 轨迹数值、循环周期、颜色、尺寸、格子比例、辉光层数与半径、新增状态、标签文案与字体——改这些都**不需要重做优化**。标签文案尤其是免费的：它用 `PanelMetrics` 预留宽度时的同一套 `NSFont` 度量来测量，面板宽度会自动跟上。
 
 需要重新评估的只有一种情况：动效不再是**固定循环 + 可动画的 layer 属性**，而是每帧依赖实时数据（流式进度、波形）、需要逐帧重绘（粒子、shader），或字形每帧都变。
+
+### 唯一一个允许存在的轮询：面板该不该在屏幕上
+
+叠层跟着菜单栏走（PRD §9.2.1），而**这件事没有任何东西发布**。在 macOS 26.5 上逐个量过，进程问到的都是自己的状态，不是系统的：
+
+| 信号 | 别的应用全屏时 | Mission Control 时 |
+| --- | --- | --- |
+| `NSApp.currentSystemPresentationOptions` | `0`，不变 | `0`，不变 |
+| `NSMenu.menuBarVisible()` | `true`，不变 | `true`，不变 |
+| `NSScreen` 的 `visibleFrame` / `safeAreaInsets` / `auxiliaryTopLeftArea` | 不变 | 不变 |
+| `NSWorkspace.activeSpaceDidChangeNotification` | 不触发 | 不触发 |
+| Window Server 自己的菜单栏窗口 | **离开在屏列表** | 还在 |
+| Dock 在 dock 层以下、铺满整屏的窗口 | 没有 | **每屏一个** |
+
+只有后两行会动，所以判据读窗口列表；而**前四行同时也是「试过哪些订阅」的清单**——边沿触发版本根本不会触发，于是这里只能轮询。这条最后一行也是对需求前提的更正：**Mission Control 并不隐藏菜单栏**，只写「跟着菜单栏」会把最初要修的那个场景漏掉。
+
+它不违反第 7 节，因为**下游不重渲染**：取样在 utility 队列上做，回到主 actor 只做一次比较，相同就丢掉；不同也只是 `orderOut` / `orderFrontRegardless` 一个窗口。store 和任何 SwiftUI 视图都看不见这个节拍。
+
+代价与选择：Release 下一次 `CGWindowListCopyWindowInfo` 屏上 61 个窗口时 723µs，加 `.excludeDesktopElements` 后 583µs（两个判据要读的窗口都还在）。间隔 250ms 是**延迟预算而不是采样率**——它是 Mission Control 开始展开之后面板最多还能留多久，取两个场景里更紧的那个（缩放约 350ms，菜单栏自己的淡出比它慢）。合计 0.1%–0.3% `%cpu`，按累计 CPU 时间差算 0.25%，稳态法与累计法在这里一致。
 
 ### 有限的过渡不算持续动效
 
