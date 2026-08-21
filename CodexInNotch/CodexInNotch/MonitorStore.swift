@@ -635,28 +635,53 @@ final class MonitorStore: ObservableObject {
     static let integrationCardAgent = AgentKind.codex
     private static let liveService = LiveCodexMonitorService()
     private static let claudeCodeService = ClaudeCodeMonitorService()
-    static let shared = MonitorStore(
-        // Claude Code contributes nothing until its hooks are registered: an
-        // unregistered product reports setupRequired, which loses to any
-        // product that is ready and to any product that has a row. A user who
-        // only runs Codex sees exactly what they saw before.
-        services: [liveService, claudeCodeService],
-        navigator: AgentNavigationRouter([
-            .codex: CodexDesktopNavigator(targetChecker: liveService),
-            // Raises the host rather than reopening the session, which is the
-            // declared boundary rather than a fallback -- see ADR 0004 and
-            // ``ClaudeCodeNavigator``.
-            .claudeCode: ClaudeCodeNavigator(sessions: claudeCodeService)
-        ]),
-        initialSnapshot: .connecting,
-        preferences: .standard,
-        // Every provider's "ask me again" edges on one stream, so a late
-        // answer from any of them wakes the loop.
-        refreshEvents: DirectoryChangeWatcher.merged([
-            liveService.stateChangeEvents,
-            claudeCodeService.stateChangeEvents
-        ])
-    )
+    static let shared = makeShared()
+
+    /// The store the product runs on, and nothing at all when this process is
+    /// only hosting the test bundle.
+    ///
+    /// **The empty branch is the point.** A unit-test bundle is injected into a
+    /// host application and this app is its own host, so `xcodebuild test`
+    /// launches the product beside the copy the developer is already running --
+    /// which then bound the same hook sockets and drew a second overlay in the
+    /// same notch (see ``AppProcess``). The services are `static let`s and
+    /// Swift builds those on first use, so a branch that never names them is a
+    /// branch in which no watcher is attached, no socket is bound, no
+    /// subprocess is started and no file of the user's is read.
+    ///
+    /// It costs the suite nothing: no test reaches for this store. Every one of
+    /// them builds a ``MonitorStore`` of its own, over paths under `/tmp`.
+    private static func makeShared() -> MonitorStore {
+        guard !AppProcess.isHostingTests else {
+            return MonitorStore(
+                services: [],
+                initialSnapshot: .connecting,
+                preferences: .standard
+            )
+        }
+        return MonitorStore(
+            // Claude Code contributes nothing until its hooks are registered: an
+            // unregistered product reports setupRequired, which loses to any
+            // product that is ready and to any product that has a row. A user who
+            // only runs Codex sees exactly what they saw before.
+            services: [liveService, claudeCodeService],
+            navigator: AgentNavigationRouter([
+                .codex: CodexDesktopNavigator(targetChecker: liveService),
+                // Raises the host rather than reopening the session, which is the
+                // declared boundary rather than a fallback -- see ADR 0004 and
+                // ``ClaudeCodeNavigator``.
+                .claudeCode: ClaudeCodeNavigator(sessions: claudeCodeService)
+            ]),
+            initialSnapshot: .connecting,
+            preferences: .standard,
+            // Every provider's "ask me again" edges on one stream, so a late
+            // answer from any of them wakes the loop.
+            refreshEvents: DirectoryChangeWatcher.merged([
+                liveService.stateChangeEvents,
+                claudeCodeService.stateChangeEvents
+            ])
+        )
+    }
 
     @Published private(set) var displays: [DisplayOption]
     @Published private(set) var selectedDisplayID: String
@@ -751,6 +776,16 @@ final class MonitorStore: ObservableObject {
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
+    /// Whether this store is watching anything at all.
+    ///
+    /// Read by one test, and it is the one worth being able to ask: the shared
+    /// store is built with no services when this process is only hosting the
+    /// test bundle, and "no services" is what stops a test run from binding the
+    /// user's hook sockets and drawing a second overlay over their notch. It is
+    /// a fact about the store rather than a hook for the suite -- `services` is
+    /// private, and a decision this load-bearing should not rest on nobody
+    /// being able to see it.
+    var isWatching: Bool { !services.isEmpty }
     private let navigator: (any AgentNavigating)?
     private var integrationService: (any AgentMonitoring)? {
         services.first { $0.agent == Self.integrationCardAgent }

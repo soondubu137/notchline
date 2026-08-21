@@ -415,9 +415,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 availability: .disconnected,
                 sessions: [],
                 setupStatus: status,
-                diagnostic: "Cannot open the hook helper or its socket in "
-                    + "this app's support folder; check that the folder is "
-                    + "writable, then reopen Settings."
+                diagnostic: "Cannot open the hook helper or bind its socket in "
+                    + "this app's support folder. Either the folder is not "
+                    + "writable, or another copy of this app is already running "
+                    + "and receiving the events — only one copy can."
             )
         }
 

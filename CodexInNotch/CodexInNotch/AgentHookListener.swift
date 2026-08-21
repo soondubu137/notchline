@@ -93,6 +93,19 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
     private var listeningDescriptor: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var boundSocketURL: URL?
+    /// Which file the bound socket actually *is*, rather than what it is
+    /// called.
+    ///
+    /// A path is a name, and a name can come to mean something else while this
+    /// process holds the thing it used to mean. That is not hypothetical: a
+    /// second copy of this app binds the same path, and binding starts by
+    /// unlinking whatever is there -- so the first copy goes on holding a
+    /// perfectly good listening socket that no helper can reach any more, and
+    /// says nothing, because it is still listening. Recording the node is what
+    /// lets ``start(socketURL:)`` tell "already bound" from "bound to a name
+    /// somebody else has taken", and ``stop()`` tell its own socket from the
+    /// one that replaced it.
+    private var boundSocketNode: SocketNode?
 
     private let acceptQueue = DispatchQueue(
         label: "com.yinfenglu.CodexInNotch.hook-listener.accept"
@@ -113,6 +126,12 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
         self.deliver = deliver
     }
 
+    /// One file, identified the way the filesystem identifies it.
+    private struct SocketNode: Equatable {
+        let device: dev_t
+        let inode: ino_t
+    }
+
     deinit {
         stop()
     }
@@ -130,10 +149,20 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
     /// report it in the settings card, and every failure here has the same
     /// consequence — the helper the registration names has nothing to hand its
     /// payloads to.
+    /// - Note: **Bound is checked against the file, not against the name.** It
+    ///   used to be enough that this listener held a descriptor and remembered
+    ///   the same path, which is true of a listener whose socket somebody else
+    ///   has since replaced -- and that listener is deaf, permanently, while
+    ///   reporting itself healthy. The caller re-binds on every refresh
+    ///   precisely so that a support folder emptied under the running app is
+    ///   repaired; until now that promise covered the helper and not the socket
+    ///   the helper writes to.
     @discardableResult
     func start(socketURL: URL) -> Bool {
         socketLock.lock()
-        let alreadyBound = listeningDescriptor >= 0 && boundSocketURL == socketURL
+        let alreadyBound = listeningDescriptor >= 0
+            && boundSocketURL == socketURL
+            && boundSocketNode == Self.node(at: socketURL.path)
         socketLock.unlock()
         if alreadyBound { return true }
         stop()
@@ -153,6 +182,22 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        // Somebody is already answering here. That is one case and one case
+        // only -- a second copy of this app, launched beside the one already
+        // running -- and taking the socket from it is how this app used to
+        // leave *both* copies deaf: the first goes on holding an unlinked
+        // socket no helper can reach, and this one inherits a registration it
+        // will lose again the moment the first is asked to re-bind. Standing
+        // down says so instead. A crashed copy leaves a socket nothing answers
+        // on, which is refused rather than accepted, so this cannot mistake
+        // litter for a live listener.
+        if Self.isBeingServed(at: socketURL) {
+            Self.log.error(
+                "another copy of this app is already receiving hook payloads here; not taking the socket from it"
+            )
+            return false
+        }
+
         // A socket left behind by a crash keeps `bind` from succeeding, and it
         // is ours by construction -- it lives in a directory this app owns.
         unlink(socketURL.path)
@@ -211,23 +256,77 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
         listeningDescriptor = descriptor
         acceptSource = source
         boundSocketURL = socketURL
+        // Read after `bind`, so it names the socket this descriptor is: a
+        // successful bind is what created the file.
+        boundSocketNode = Self.node(at: socketURL.path)
         socketLock.unlock()
 
         source.resume()
         return true
     }
 
+    /// Stops accepting, and takes down the socket **this** listener put there.
+    ///
+    /// The qualification is the whole of it. Removing whatever happens to be at
+    /// the path is how one copy of this app used to leave another deaf on its
+    /// way out: the departing copy unlinked a socket the copy still running had
+    /// bound, and that copy never noticed, because it was still holding a
+    /// perfectly good descriptor.
     func stop() {
         socketLock.lock()
         let source = acceptSource
         let url = boundSocketURL
+        let node = boundSocketNode
         acceptSource = nil
         listeningDescriptor = -1
         boundSocketURL = nil
+        boundSocketNode = nil
         socketLock.unlock()
 
         source?.cancel()
-        if let url { unlink(url.path) }
+        if let url, Self.node(at: url.path) == node {
+            unlink(url.path)
+        }
+    }
+
+    /// Which file this path names, or nil when it names none.
+    private static func node(at path: String) -> SocketNode? {
+        var attributes = stat()
+        guard stat(path, &attributes) == 0 else { return nil }
+        return SocketNode(device: attributes.st_dev, inode: attributes.st_ino)
+    }
+
+    /// Whether something is accepting connections on this path right now.
+    ///
+    /// A connect and an immediate close, which is what the helper does anyway
+    /// -- the listener on the other end reads an empty body and reports it, and
+    /// that report is a truer thing to say than nothing at all. `ENOENT` and
+    /// `ECONNREFUSED` both answer no: a path with no file, and a socket file
+    /// whose owner has gone, are the two ordinary shapes of "free".
+    private static func isBeingServed(at socketURL: URL) -> Bool {
+        let pathBytes = Array(socketURL.path.utf8)
+        guard pathBytes.count < MemoryLayout<sockaddr_un>.size
+            - MemoryLayout<UInt8>.size * 2 else {
+            return false
+        }
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { raw in
+            raw.copyBytes(from: pathBytes)
+        }
+        address.sun_len = UInt8(
+            MemoryLayout<sockaddr_un>.size - MemoryLayout.size(ofValue: address.sun_path)
+                + pathBytes.count
+        )
+        return withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        } == 0
     }
 
     private func acceptPendingConnections() {

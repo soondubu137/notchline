@@ -13337,6 +13337,155 @@ for line in sys.stdin:
         #expect(delivered["tool_use_id"] as? String == "call-1")
     }
 
+    /// Hosting the test bundle is not running the product.
+    ///
+    /// **This suite runs inside the application it tests.** A macOS unit-test
+    /// bundle has no executable of its own; it is injected into a host, and the
+    /// project names this very binary as that host. So every `xcodebuild test`
+    /// used to launch the product on the developer's machine beside the copy
+    /// already running there -- drawing a second overlay in the same notch,
+    /// binding the same hook sockets, reading the same folders of the user's.
+    /// From the outside that is a notch that blinks for the length of a test
+    /// run, a row that freezes mid-turn, and a session started afterwards that
+    /// never appears.
+    ///
+    /// Both halves are asserted here, because the guard is only as good as the
+    /// signal under it and neither half can be seen from anywhere else: this
+    /// process really is recognised as a test host, and the shared store really
+    /// is watching nothing.
+    @Test @MainActor
+    func hostingTheTestBundleStartsNoneOfTheProduct() {
+        #expect(AppProcess.isHostingTests)
+        #expect(MonitorStore.shared.isWatching == false)
+    }
+
+    /// A socket that goes away under a running listener is bound again, rather
+    /// than left held and deaf.
+    ///
+    /// **How a listener ends up holding a socket nothing can reach.** Binding
+    /// starts by unlinking whatever is at the path, so a second copy of this
+    /// app -- most cheaply, `xcodebuild test`, whose bundle this very
+    /// application hosts -- takes the name away from the copy already running.
+    /// That copy keeps a perfectly good listening descriptor and goes on
+    /// reporting itself started, while every helper the user's registration
+    /// runs connects to a name that is now somebody else's or nothing at all.
+    /// Nothing in the product notices, because being started was the only
+    /// question anybody asked.
+    ///
+    /// The service re-binds on every refresh precisely so that a support folder
+    /// emptied under the running app is repaired. This is that promise made
+    /// true for the socket, which is the half of it that carries the events.
+    @Test @MainActor
+    func aSocketTakenFromTheListenerIsBoundAgainRatherThanHeldDeaf() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-sock-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let socketURL = root.appendingPathComponent("hook.sock")
+
+        let recorder = RecordedHookDelivery()
+        let listener = AgentHookListener(deliver: recorder.deliver)
+        defer { listener.stop() }
+        #expect(listener.start(socketURL: socketURL))
+
+        // What a departing second copy leaves behind: the name is gone, and
+        // this listener is still holding the socket it used to mean.
+        unlink(socketURL.path)
+
+        // The refresh path calls this every cycle. It used to answer "already
+        // bound" here and hand back a listener nothing could reach.
+        #expect(listener.start(socketURL: socketURL))
+
+        try send(to: socketURL, body: [
+            "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt_id": "p-1"
+        ])
+        let arrived = await holds { recorder.sessions.contains("s-1") }
+        #expect(arrived)
+    }
+
+    /// A second listener does not take the socket from the one already serving
+    /// it, and does not take it down on its way out either.
+    ///
+    /// Two copies of this app cannot both receive the events, so the only
+    /// question is which failure they share. Taking the socket used to leave
+    /// *both* deaf: the copy already running went on holding an unlinked
+    /// socket, and the copy that took the name unlinked it again when it
+    /// stopped -- after which nothing was listening on a path the user's
+    /// registration still names, and neither copy would ever look again.
+    @Test @MainActor
+    func aSecondListenerStandsDownRatherThanTakingASocketInUse() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-sock-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let socketURL = root.appendingPathComponent("hook.sock")
+
+        let serving = RecordedHookDelivery()
+        let first = AgentHookListener(deliver: serving.deliver)
+        defer { first.stop() }
+        #expect(first.start(socketURL: socketURL))
+
+        let intruder = RecordedHookDelivery()
+        let second = AgentHookListener(deliver: intruder.deliver)
+        #expect(second.start(socketURL: socketURL) == false)
+        // And leaving takes nothing with it.
+        second.stop()
+
+        try send(to: socketURL, body: [
+            "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt_id": "p-1"
+        ])
+        let arrived = await holds { serving.sessions.contains("s-1") }
+        #expect(arrived)
+        #expect(intruder.sessions.isEmpty)
+    }
+
+    /// A socket left by a copy that crashed is litter, not a listener.
+    ///
+    /// The rule above has to tell "somebody is answering here" from "a file is
+    /// here", or a single crash would leave the registration pointing at a name
+    /// this app refuses to bind for the rest of the machine's life.
+    @Test @MainActor
+    func aSocketNobodyAnswersOnIsTakenOverRatherThanRespected() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-sock-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let socketURL = root.appendingPathComponent("hook.sock")
+
+        // Bound, then abandoned without being unlinked -- which is what a
+        // `SIGKILL` leaves.
+        let abandoned = socket(AF_UNIX, SOCK_STREAM, 0)
+        try #require(abandoned >= 0)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketURL.path.utf8)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+        address.sun_len = UInt8(
+            MemoryLayout<sockaddr_un>.size - MemoryLayout.size(ofValue: address.sun_path)
+                + pathBytes.count
+        )
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(abandoned, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        try #require(bound == 0)
+        // Never listened on, so a connect is refused exactly as it is for a
+        // socket whose owner has gone.
+        close(abandoned)
+
+        let recorder = RecordedHookDelivery()
+        let listener = AgentHookListener(deliver: recorder.deliver)
+        defer { listener.stop() }
+        #expect(listener.start(socketURL: socketURL))
+
+        try send(to: socketURL, body: [
+            "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt_id": "p-1"
+        ])
+        let arrived = await holds { recorder.sessions.contains("s-1") }
+        #expect(arrived)
+    }
+
     /// A path with a quote in it is still one word to the shell.
     ///
     /// The socket path is under the user's home directory, and a home

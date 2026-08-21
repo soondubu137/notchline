@@ -8,11 +8,44 @@
 import AppKit
 import SwiftUI
 
+/// What this process is: the product, or a host for the product's own tests.
+///
+/// **A macOS unit-test bundle has no executable.** It is injected into a host
+/// application, and this app is its own host — `TEST_HOST` in the project file
+/// names this very binary. So every `xcodebuild test` run *is* a launch of the
+/// product, on the developer's own machine, beside whatever copy is already
+/// running there. Nothing about the suite asks for that: every test builds its
+/// own store, on its own paths under `/tmp`.
+///
+/// What the second copy did instead was take the running one apart. It drew its
+/// own overlay in the notch over the one already there; it bound the live hook
+/// sockets, which ``AgentHookListener`` did by unlinking whatever was at the
+/// path — so the running copy went on holding a socket no helper could reach,
+/// for the rest of its life. From the outside that is a notch that blinks, a
+/// row that freezes mid-turn and never moves again, and a session started
+/// afterwards that never appears at all.
+///
+/// The two readings are the documented one and a belt to its braces:
+/// `XCTestConfigurationFilePath` is what XCTest puts in a host process's
+/// environment, and the framework itself is loaded into that process either
+/// way.
+nonisolated enum AppProcess {
+    static let isHostingTests: Bool = {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }()
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayController: OverlayPanelController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hosting the test bundle is not running the product — see
+        // ``AppProcess``. The store answers the same way (it is built with no
+        // services at all), so this is the surface half of one decision rather
+        // than a second one.
+        guard !AppProcess.isHostingTests else { return }
         overlayController = OverlayPanelController(store: .shared)
         overlayController?.show()
     }
@@ -22,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        guard !AppProcess.isHostingTests else { return }
         MonitorStore.shared.stopMonitoring()
     }
 }
