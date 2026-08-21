@@ -8321,6 +8321,151 @@ for line in sys.stdin:
         #expect(await counter.todayTokens() == 14)
     }
 
+    /// A pass reads at most its budget, and says so by reporting no figure.
+    ///
+    /// The three savings in the counter -- the mtime skip, the resumed offset,
+    /// the `usage` test -- are all proportional to how much Claude Code wrote
+    /// today, and nothing bounds that (CC-009). The budget is the bound. What
+    /// it must not do is show the part it reached: a sum over half the
+    /// transcripts is a small wrong number, and a small wrong number looks like
+    /// a quiet day.
+    @Test @MainActor
+    func todayTokensStopAtTheirBudgetAndReportNoFigureRatherThanAPartialOne() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        // Four transcripts of about 40 KB each, one countable record apiece.
+        let padding = String(repeating: "x", count: 40 << 10)
+        for index in 0 ..< 4 {
+            let record: [String: Any] = [
+                "type": "assistant",
+                "timestamp": "2026-08-16T12:00:00.000Z",
+                "padding": padding,
+                "message": ["role": "assistant", "usage": ["output_tokens": 1]]
+            ]
+            let line = String(
+                decoding: try JSONSerialization.data(withJSONObject: record),
+                as: UTF8.self
+            )
+            try Data((line + "\n").utf8)
+                .write(to: project.appendingPathComponent("s-\(index).jsonl"))
+        }
+
+        let clock = TestClock(now: ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!)
+        let counter = ClaudeCodeTokenCounter(
+            projectsDirectory: root,
+            clock: clock,
+            passByteBudget: 64 << 10
+        )
+
+        // One file fits in the budget; the rest do not, so the pass halts.
+        #expect(await counter.todayTokens() == nil)
+        // Each further pass costs nothing for what is already scanned, so the
+        // backlog drains rather than restarting. Four files, four passes at
+        // most, and the figure that finally appears is the whole of it.
+        var answer: Int64?
+        for _ in 0 ..< 4 where answer == nil {
+            answer = await counter.todayTokens()
+        }
+        #expect(answer == 4)
+    }
+
+    /// A record longer than the whole budget is still counted, not re-read for
+    /// ever.
+    ///
+    /// The budget stops the read between chunks, and a chunk with no newline in
+    /// it leaves the offset where it was. Without an exception for a file that
+    /// has produced nothing whole yet, one oversized record -- a megabyte of
+    /// tool output on one line is ordinary -- would be re-read by every pass
+    /// and counted by none of them.
+    @Test @MainActor
+    func todayTokensCountARecordLongerThanTheWholeBudget() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        let record: [String: Any] = [
+            "type": "assistant",
+            "timestamp": "2026-08-16T12:00:00.000Z",
+            "padding": String(repeating: "x", count: 3 << 20),
+            "message": ["role": "assistant", "usage": ["output_tokens": 9]]
+        ]
+        let line = String(
+            decoding: try JSONSerialization.data(withJSONObject: record),
+            as: UTF8.self
+        )
+        try Data((line + "\n").utf8)
+            .write(to: project.appendingPathComponent("s-1.jsonl"))
+
+        let clock = TestClock(now: ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!)
+        let counter = ClaudeCodeTokenCounter(
+            projectsDirectory: root,
+            clock: clock,
+            passByteBudget: 1 << 20
+        )
+        // The read overshoots by one line rather than stalling, so the record
+        // is counted on the pass that meets it.
+        #expect(await counter.todayTokens() == 9)
+        // And is not counted again by the next one.
+        #expect(await counter.todayTokens() == 9)
+    }
+
+    /// Which files can hold today's records is decided on the same UTC day the
+    /// records are bucketed by, not on the local one.
+    ///
+    /// The two disagree by the timezone offset in both directions, and each
+    /// direction is a different fault. East of UTC the local day starts first,
+    /// and a file written in the hours between the two midnights was skipped
+    /// while holding records dated today -- an undercount with no symptom.
+    /// West of UTC the local day starts first in the other sense, and the skip
+    /// admits files that cannot hold a record dated today at all: measured here
+    /// at 00:20 UTC, 277 files and 23.7 MB where the UTC line admits 72 and
+    /// 4.3 MB. Both assertions below state the same contract; which one would
+    /// have caught the old behaviour depends on the offset the test runs at.
+    @Test @MainActor
+    func todayTokensChooseFilesByTheUTCDayTheyBucketBy() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tok-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("-a-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        func write(_ name: String, output: Int, modifiedAt: Date) throws {
+            let record: [String: Any] = [
+                "type": "assistant",
+                "timestamp": "2026-08-16T00:30:00.000Z",
+                "message": ["role": "assistant", "usage": ["output_tokens": output]]
+            ]
+            let line = String(
+                decoding: try JSONSerialization.data(withJSONObject: record),
+                as: UTF8.self
+            )
+            let url = project.appendingPathComponent(name)
+            try Data((line + "\n").utf8).write(to: url)
+            try FileManager.default.setAttributes(
+                [.modificationDate: modifiedAt], ofItemAtPath: url.path
+            )
+        }
+
+        let utcMidnight = ISO8601DateFormatter().date(from: "2026-08-16T00:00:00Z")!
+        // Written a minute into the UTC day: it holds today's records and is
+        // read, whatever the machine's own midnight has to say about it.
+        try write("inside.jsonl", output: 11, modifiedAt: utcMidnight.addingTimeInterval(60))
+        // Last written a minute before the UTC day began. A file cannot hold a
+        // record written after the last time it was written, so the record
+        // dated today inside it is a fiction and the file is never opened.
+        try write("before.jsonl", output: 5, modifiedAt: utcMidnight.addingTimeInterval(-60))
+
+        let clock = TestClock(now: ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!)
+        let counter = ClaudeCodeTokenCounter(projectsDirectory: root, clock: clock)
+        #expect(await counter.todayTokens() == 11)
+    }
+
     /// A directory that cannot be read is no figure, not a figure of zero.
     ///
     /// Zero is a true answer — the transcripts were read and today has nothing

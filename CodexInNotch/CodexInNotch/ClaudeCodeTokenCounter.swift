@@ -18,6 +18,20 @@ import os
 /// that work: a file untouched since before today cannot hold today's records
 /// and is never opened; a file already scanned is read only from where the last
 /// pass stopped; and a line without the word `usage` in it is never decoded.
+///
+/// **None of the three is a ceiling** — all three are proportional to how much
+/// Claude Code wrote today, and nothing bounds that (CC-009). So a pass also
+/// carries a byte budget, and a pass that exhausts it stops where it is, keeps
+/// what it counted, and reports *no figure* rather than the part it reached.
+/// The next pass continues from there, so a backlog drains over a few passes
+/// instead of one long one. Priced on this machine's transcripts (`-O`, warm):
+/// the whole pipeline — `read(2)`, `memchr`, the `usage` test and the decode of
+/// the lines that pass it — runs at 600 MB/s, and the read alone at 1.0 GB/s
+/// with the page cache bypassed (`F_NOCACHE`), so the cold first scan is not
+/// the expense it was assumed to be: 163 MB of *all* transcripts ever written
+/// costs 0.16 s of I/O. The budget is therefore set in bytes and converted:
+/// 128 MiB is about 0.2 s of one core, and about four times the heaviest day
+/// measured here (33 MB written on 2026-08-20).
 actor ClaudeCodeTokenCounter {
     private static let log = Logger(
         subsystem: "com.yinfenglu.CodexInNotch",
@@ -25,6 +39,23 @@ actor ClaudeCodeTokenCounter {
     )
 
     private static let chunkBytes = 1 << 20
+    /// The most one pass will read. See the note above for how it was priced.
+    static let defaultPassByteBudget: UInt64 = 128 << 20
+
+    /// Today is the UTC day, because the records' timestamps are.
+    ///
+    /// This is the same calendar the bucket key uses, and it has to be: the
+    /// mtime test decides which files can hold today's records, so a local
+    /// midnight would move that line away from the one the records are sorted
+    /// by. East of UTC the local day starts first, and every file written
+    /// between the two midnights — the first eight hours of the UTC day in
+    /// `+08` — would have been skipped while holding records dated today.
+    private static let utcCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }()
+
     /// The marker a line must carry before it is worth decoding.
     ///
     /// Held rather than built, because it is built once per line otherwise --
@@ -37,25 +68,35 @@ actor ClaudeCodeTokenCounter {
         var tokens: Int64
     }
 
+    /// What a pass managed. Only a complete one is worth a number.
+    private enum PassOutcome {
+        case complete
+        /// Nothing could be listed. The one reason to report no figure at all.
+        case unreadable
+        /// The budget ran out with files still unread. What was counted stays
+        /// counted, and the next pass carries on from there.
+        case halted
+    }
+
     private let projectsDirectory: URL
     private let clock: any MonitorClock
-    private let calendar: Calendar
     private let fileManager: FileManager
+    private let passByteBudget: UInt64
     private var day: String?
     private var progress: [String: FileProgress] = [:]
 
     init(
         projectsDirectory: URL? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
-        calendar: Calendar = .current,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        passByteBudget: UInt64 = ClaudeCodeTokenCounter.defaultPassByteBudget
     ) {
         self.projectsDirectory = projectsDirectory
             ?? fileManager.homeDirectoryForCurrentUser
                 .appendingPathComponent(".claude/projects", isDirectory: true)
         self.clock = clock
-        self.calendar = calendar
         self.fileManager = fileManager
+        self.passByteBudget = passByteBudget
     }
 
     /// Today's total, or nil when nothing could be read.
@@ -66,7 +107,7 @@ actor ClaudeCodeTokenCounter {
     /// day.
     func todayTokens() -> Int64? {
         let now = clock.now()
-        let today = Self.dayKey(for: now, calendar: calendar)
+        let today = Self.dayKey(for: now)
         if day != today {
             // A new day invalidates every running total, not the files.
             day = today
@@ -83,20 +124,36 @@ actor ClaudeCodeTokenCounter {
         // every `attributesOfItem` -- and all of it autoreleased. Measured
         // against this machine's 480-odd transcripts that is 0.93 MB per pass,
         // and this pass runs whether or not a single byte has been appended.
-        let listed = autoreleasepool {
+        let outcome = autoreleasepool {
             scanTranscripts(now: now, today: today)
         }
-        guard listed else { return nil }
-
-        return progress.values.reduce(0) { $0 + $1.tokens }
+        switch outcome {
+        case .unreadable:
+            return nil
+        case .halted:
+            // Everything read so far is still counted and still remembered;
+            // what is missing is the rest of the list. A sum over part of the
+            // transcripts is a small wrong number, so it is not offered.
+            Self.log.notice(
+                "Today's token scan reached its \(self.passByteBudget, privacy: .public) byte budget with transcripts left unread; reporting no figure until a pass finishes."
+            )
+            return nil
+        case .complete:
+            return progress.values.reduce(0) { $0 + $1.tokens }
+        }
     }
 
-    /// One pass over the transcripts. False only when nothing could be listed,
-    /// which is the one reason to report no figure at all.
-    private func scanTranscripts(now: Date, today: String) -> Bool {
-        guard let transcripts = transcripts() else { return false }
-        let startOfDay = calendar.startOfDay(for: now)
+    /// One pass over the transcripts, within one pass's worth of reading.
+    ///
+    /// The budget is spent only on bytes actually read: a file already scanned
+    /// to its current size costs a `stat` and nothing else, so a pass that
+    /// halted resumes at the first file it did not finish rather than paying
+    /// again for the ones it did.
+    private func scanTranscripts(now: Date, today: String) -> PassOutcome {
+        guard let transcripts = transcripts() else { return .unreadable }
+        let startOfDay = Self.utcCalendar.startOfDay(for: now)
         var buffer: [UInt8] = []
+        var budget = passByteBudget
 
         for url in transcripts {
             guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
@@ -106,9 +163,11 @@ actor ClaudeCodeTokenCounter {
             let modifiedAt = (attributes[.modificationDate] as? Date) ?? .distantPast
             let key = url.path
 
-            // Untouched since before today, so it cannot hold today's records.
-            // This is what keeps the usual pass down to the few files actually
-            // in use rather than every transcript ever written.
+            // Untouched since this UTC day began, so it cannot hold a record
+            // dated today. This is what keeps the usual pass down to the few
+            // files actually in use rather than every transcript ever written:
+            // measured here at 00:20 UTC, 72 of 516 files and 4.3 MB of 163 MB
+            // -- and 72 rather than the 277 the local midnight used to admit.
             guard modifiedAt >= startOfDay else { continue }
 
             var entry = progress[key] ?? FileProgress(scannedBytes: 0, tokens: 0)
@@ -122,6 +181,8 @@ actor ClaudeCodeTokenCounter {
                 continue
             }
 
+            guard budget > 0 else { return .halted }
+
             if buffer.isEmpty {
                 // Allocated on the first file that actually needs reading, and
                 // reused by every one after it. Most passes find nothing to
@@ -132,13 +193,15 @@ actor ClaudeCodeTokenCounter {
                 url,
                 from: entry.scannedBytes,
                 today: today,
+                limit: budget,
                 buffer: &buffer
             )
+            budget -= min(budget, result.bytesRead)
             entry.tokens += result.tokens
             entry.scannedBytes = result.scannedTo
             progress[key] = entry
         }
-        return true
+        return .complete
     }
 
     private func transcripts() -> [URL]? {
@@ -161,6 +224,9 @@ actor ClaudeCodeTokenCounter {
     private struct ScanResult {
         let tokens: Int64
         let scannedTo: UInt64
+        /// What this cost the pass's budget, which is not `scannedTo - offset`:
+        /// the half-written tail was read too, and is read again next time.
+        let bytesRead: UInt64
     }
 
     /// Reads forward from `offset`, in chunks, stopping on the last whole line.
@@ -178,17 +244,27 @@ actor ClaudeCodeTokenCounter {
     /// The app's memory was the day's transcripts, one megabyte of footprint
     /// per megabyte ever read -- which is why it settled tens of megabytes
     /// higher after a heavy day of Claude Code than after a quiet one.
+    ///
+    /// `limit` is what is left of the pass's budget. A file longer than that
+    /// is read as far as the budget goes and picked up next pass -- except
+    /// while nothing whole has come out of it yet, because the offset only
+    /// advances to a newline and a record longer than the entire budget would
+    /// otherwise be re-read by every pass and counted by none of them. The
+    /// overshoot is therefore one line, never one file.
     private func scan(
         _ url: URL,
         from offset: UInt64,
         today: String,
+        limit: UInt64,
         buffer: inout [UInt8]
     ) -> ScanResult {
         let descriptor = open(url.path, O_RDONLY)
-        guard descriptor >= 0 else { return ScanResult(tokens: 0, scannedTo: offset) }
+        guard descriptor >= 0 else {
+            return ScanResult(tokens: 0, scannedTo: offset, bytesRead: 0)
+        }
         defer { close(descriptor) }
         guard lseek(descriptor, off_t(offset), SEEK_SET) >= 0 else {
-            return ScanResult(tokens: 0, scannedTo: offset)
+            return ScanResult(tokens: 0, scannedTo: offset, bytesRead: 0)
         }
 
         var tokens: Int64 = 0
@@ -196,8 +272,11 @@ actor ClaudeCodeTokenCounter {
         // The tail of a line that ran past the end of a chunk. Empty except at
         // a chunk boundary, and the one place a very long record is held whole.
         var pending = Data()
+        // Whether anything whole has come out of this file yet. Until it has,
+        // the budget cannot stop the read -- see the note above.
+        var completedALine = false
 
-        while true {
+        while read < limit || !completedALine {
             let count = buffer.withUnsafeMutableBytes {
                 Darwin.read(descriptor, $0.baseAddress, Self.chunkBytes)
             }
@@ -236,6 +315,7 @@ actor ClaudeCodeTokenCounter {
                     )
                     if !pending.isEmpty { pending = Data() }
                     start = index + 1
+                    completedALine = true
                 }
                 if start < count {
                     pending.append(Data(bytes: base + start, count: count - start))
@@ -246,7 +326,8 @@ actor ClaudeCodeTokenCounter {
         // half-written line, and the next pass starts at it.
         return ScanResult(
             tokens: tokens,
-            scannedTo: offset + read - UInt64(pending.count)
+            scannedTo: offset + read - UInt64(pending.count),
+            bytesRead: read
         )
     }
 
@@ -299,7 +380,7 @@ actor ClaudeCodeTokenCounter {
     /// The day a record's timestamp starts with. Records carry UTC, so the
     /// bucket is UTC too -- comparing a UTC prefix against a local calendar day
     /// would move the boundary by the timezone offset.
-    nonisolated private static func dayKey(for date: Date, calendar: Calendar) -> String {
+    nonisolated private static func dayKey(for date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
