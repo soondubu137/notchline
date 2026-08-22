@@ -425,6 +425,7 @@ reducer 另外用「只见 `PostToolUse` 不见 `PreToolUse`」作为失信状�
 
 ```text
 launch
+→ ignore SIGPIPE
 → bind hook.sock; write hook.sh if its bytes differ from the bundled one
 → read install.json (lastEventAt only); initialize an empty in-memory reducer
 → compute registration once from ~/.codex/hooks.json
@@ -436,6 +437,10 @@ launch
 ```
 
 五秒内连接成功则不显示中间错误；超时后根据原因进入 Update required、Version unsupported 或 Disconnected。Codex 未运行时不自动启动。
+
+**启动做的第一件事是忽略 `SIGPIPE`。** 本进程唯一写入的管道是 `codex app-server` 子进程的 stdin，而子进程一旦消失（崩溃、被强制退出、Codex 更新替换了可执行文件），它的读端立刻关闭。`SIGPIPE` 的默认处置是**终止进程**，并且它同步送达发起 `write(2)` 的那个线程，抛错的 `FileHandle.write(contentsOf:)` 根本没有机会看到 `EPIPE`。从子进程消失到 termination handler 到达 actor、写句柄被置空之间，任何一次进入的请求——后台元数据循环、额度读取、watcher 触发的刷新——都会写进这条已经断掉的管道，Notchline 就地消失，用户既没有诊断也没有可用的崩溃报告（CR-Fable-006）。忽略之后写入以 `EPIPE` 失败，落回既有的 `disconnected` 路径重连。
+
+处置属于**进程**而不是传输层，因此装在 `NotchlineApp.init()`：它早于 SwiftUI 建立 store（也就是早于 App Server 传输被拉起），也早于 `applicationDidFinishLaunching(_:)`。测试套件里 hook socket 的写入是同一类风险，那里用的 `SO_NOSIGPIPE` 是按描述符的补救，对管道并不适用。
 
 **helper 的升级只发生在启动与安装两处，不在刷新路径上。** 安装器把磁盘上的 helper 与本版本内置的字符串直接比较，不同就覆写；`hooks.json` 一个字节都不动，用户不需要重新信任（[ADR 0014](adr/0014-the-codex-hook-definition-is-never-rewritten.md)）。**没有安装标记**：它当初只用来区分「本应用装的旧 helper，该升级」与「本应用从没装过的文件，不该悄悄替换」，而这个区分不值一个文件——两边的处置是同一个，写下当前脚本。它也从来没有提供防篡改能力，旧代码自己的注释已经承认：能改脚本的东西也能改它旁边的标记。
 

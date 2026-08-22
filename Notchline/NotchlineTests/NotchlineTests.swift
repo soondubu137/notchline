@@ -5869,6 +5869,96 @@ for line in sys.stdin:
         #expect(launchCount == "1")
     }
 
+    /// A request written to an App Server that stopped reading fails -- and
+    /// this process is still here to see it fail.
+    ///
+    /// **Unguarded, the write below ends the process rather than throwing.**
+    /// `SIGPIPE` is delivered synchronously to the writing thread and its
+    /// default disposition is *terminate*, so `write(contentsOf:)` never gets
+    /// as far as `EPIPE`. In the product that is Notchline disappearing with no
+    /// diagnostic whenever the App Server crashes, is force-quit or is replaced
+    /// by a Codex update while a request is in flight -- and the requests are
+    /// frequent: the background metadata loop, quota reads, watcher-driven
+    /// refreshes (CR-Fable-006).
+    ///
+    /// The fake server here stops reading **while staying alive**, which is the
+    /// same broken pipe a server that exited would leave behind, minus the
+    /// termination the client would notice. That is what makes this
+    /// deterministic rather than a race against ``serverTerminated``: the write
+    /// handle is still in place, so the request is guaranteed to reach the
+    /// pipe. Failing this test does not look like a failed expectation; it
+    /// looks like the whole suite dying here.
+    @Test @MainActor
+    func aRequestWrittenAfterTheAppServerStopsReadingFailsInsteadOfKillingTheProcess() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotchlineBrokenPipeTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let executable = root.appendingPathComponent("fake_app_server.py")
+        let closedMarker = executable.appendingPathExtension("closed")
+        let source = #"""
+#!/usr/bin/python3
+import json
+import os
+import sys
+import time
+
+# Answer requests until the handshake's `initialized` notification arrives,
+# then close stdin for good and stay alive.
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+    except Exception:
+        continue
+    if "id" in request:
+        print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+    else:
+        break
+
+os.close(0)
+with open(os.path.abspath(__file__) + ".closed", "w", encoding="utf-8") as handle:
+    handle.write("closed")
+time.sleep(30)
+"""#
+        try source.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+
+        let client = CodexAppServerClient(
+            executableURL: executable,
+            requestTimeoutNanoseconds: 2_000_000_000
+        )
+        try await client.connect()
+
+        // The pipe is broken only once the child has actually let go of its end.
+        for _ in 0 ..< 250
+        where !FileManager.default.fileExists(atPath: closedMarker.path) {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try #require(FileManager.default.fileExists(atPath: closedMarker.path))
+
+        do {
+            _ = try await client.request(
+                method: "thread/list",
+                params: nil,
+                timeoutNanoseconds: 1_000_000_000
+            )
+            Issue.record("Expected the write to fail on the broken pipe")
+        } catch let error as CodexAppServerError {
+            // `EPIPE` reaches the caller as the transport's own disconnect, and
+            // not as the request timing out: the failure is immediate.
+            #expect(error == .disconnected)
+        }
+
+        await client.disconnect()
+    }
+
     @Test @MainActor
     func failedLivenessProbeResetsUnresponsiveAppServer() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -13927,6 +14017,20 @@ for line in sys.stdin:
     func hostingTheTestBundleStartsNoneOfTheProduct() {
         #expect(AppProcess.isHostingTests)
         #expect(MonitorStore.shared.isWatching == false)
+    }
+
+    /// Launching this application is what makes it survive a broken pipe.
+    ///
+    /// The behaviour is pinned by
+    /// ``aRequestWrittenAfterTheAppServerStopsReadingFailsInsteadOfKillingTheProcess``,
+    /// which cannot report a regression as a failure -- it dies with the
+    /// process instead. This one names the cause: the disposition read back
+    /// from the kernel here belongs to a process whose only setup was
+    /// ``NotchlineApp/init()``, so deleting that call fails a test rather than
+    /// the run.
+    @Test @MainActor
+    func launchingTheProductIgnoresTheBrokenPipeSignal() {
+        #expect(BrokenPipeSignal.isIgnored)
     }
 
     /// A socket that goes away under a running listener is bound again, rather

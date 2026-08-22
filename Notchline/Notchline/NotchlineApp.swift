@@ -36,6 +36,49 @@ nonisolated enum AppProcess {
     }()
 }
 
+/// Turns a write to a pipe nobody is reading any more into a thrown error,
+/// rather than the end of this process.
+///
+/// `SIGPIPE` is delivered synchronously to the thread that called `write(2)`,
+/// and its default disposition is **terminate**. The throwing
+/// `FileHandle.write(contentsOf:)` never gets as far as seeing `EPIPE`.
+///
+/// The one pipe this app writes to is the `codex app-server` subprocess's
+/// stdin, and the child's read end closes the instant it goes away -- a crash,
+/// a force-quit, a Codex update replacing the binary underneath it. Between
+/// that instant and the termination handler reaching
+/// ``CodexAppServerClient`` and dropping the write handle, every request that
+/// enters -- the background metadata loop, a quota read, a watcher-driven
+/// refresh -- writes into a broken pipe, and Notchline died there: no
+/// diagnostic, no crash report the user could act on, and most likely against
+/// exactly the server that had just been crashing (CR-Fable-006).
+///
+/// Ignoring the signal is the standard remedy for any process doing pipe or
+/// socket I/O, and it belongs to the **process** rather than to the transport:
+/// the disposition is process-wide, the suite's hook-socket writes have the
+/// same hazard, and `SO_NOSIGPIPE` -- the per-descriptor remedy used there --
+/// does not apply to a pipe at all. With it installed the write fails with
+/// `EPIPE`, which the transport already reads as a disconnect and reconnects
+/// from.
+nonisolated enum BrokenPipeSignal {
+    /// Installs the disposition. Idempotent, and one syscall.
+    static func ignore() {
+        signal(SIGPIPE, SIG_IGN)
+    }
+
+    /// Whether this process would survive that write.
+    ///
+    /// Read back from the kernel rather than from a flag ``ignore()`` set: an
+    /// installer that answers questions about its own installation can only
+    /// report that it ran, which is not the thing that has to be true.
+    static var isIgnored: Bool {
+        var current = sigaction()
+        guard sigaction(SIGPIPE, nil, &current) == 0 else { return false }
+        return unsafeBitCast(current.__sigaction_u.__sa_handler, to: UInt.self)
+            == unsafeBitCast(SIG_IGN, to: UInt.self)
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayController: OverlayPanelController?
@@ -71,6 +114,17 @@ struct NotchlineApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = MonitorStore.shared
+
+    /// Here rather than in the delegate, because this runs first.
+    ///
+    /// The store is what starts the App Server transport, and SwiftUI builds it
+    /// when it first evaluates the scenes below -- which is after this
+    /// initialiser and before `applicationDidFinishLaunching(_:)`. Nothing in
+    /// this process may write to a pipe before ``BrokenPipeSignal/ignore()``
+    /// has run, and this is the earliest point that is true of.
+    init() {
+        BrokenPipeSignal.ignore()
+    }
 
     var body: some Scene {
         // A single `Window` rather than a `WindowGroup`, and suppressed at
