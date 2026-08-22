@@ -15855,6 +15855,25 @@ private final class ClaudeCodeHarness {
     private let activationStub = StubDesktopActivation()
     private let readingStub = StubDesktopReading()
     private let terminalStub = StubControllingTerminalGestures()
+    private let screenStub = StubScreenAvailability()
+
+    /// Whether the machine has a screen the user could read anything on.
+    ///
+    /// `true` unless a test says otherwise, which is the state a machine
+    /// somebody is sitting at is in. Left with the real reading, every test
+    /// that asserts a re-check deadline would pass or fail depending on whether
+    /// the developer's screen happened to be locked while the suite ran.
+    var screenIsAvailable: Bool {
+        get { screenStub.isAvailable() }
+        set { screenStub.available = newValue }
+    }
+
+    /// The edge the real watcher posts when the display wakes or the screen
+    /// unlocks.
+    func announceScreenAvailable() {
+        screenStub.available = true
+        screenStub.announce()
+    }
 
     /// When the user was last at a session's terminal, keyed by the process it
     /// runs as. A pid with no entry is a session with no controlling terminal
@@ -15864,14 +15883,16 @@ private final class ClaudeCodeHarness {
     /// Setting through here says the terminal's application was *also* in front
     /// of the user, because that is what "the user was at that terminal" means.
     /// The half where it was not is the bug this pairing exists for, and it is
-    /// written explicitly by ``setTerminalGesture(_:forPID:hostIsInFront:)``.
+    /// written explicitly by
+    /// ``setTerminalGesture(_:forPID:hostIsInFront:hostCanEverBeInFront:)``.
     var lastTerminalGestureByPID: [Int32: Date] {
         get { terminalStub.readingByPID.mapValues(\.lastGesture) }
         set {
             terminalStub.readingByPID = newValue.mapValues {
                 ControllingTerminalReading(
                     lastGesture: $0,
-                    hostIsInFrontOfTheUser: true
+                    hostIsInFrontOfTheUser: true,
+                    hostCanEverBeInFrontOfTheUser: true
                 )
             }
         }
@@ -15879,14 +15900,22 @@ private final class ClaudeCodeHarness {
 
     /// A gesture at a terminal whose application may or may not be the one the
     /// user is in.
+    ///
+    /// - Parameter hostCanEverBeInFront: Whether that application exists at
+    ///   all. `false` is a session under `tmux`, `screen` or `ssh`: it has a
+    ///   device, so every other reading here answers, but its ancestry runs to
+    ///   `launchd` and no gesture at it can ever coincide with a front it does
+    ///   not have.
     func setTerminalGesture(
         _ at: Date,
         forPID pid: Int32,
-        hostIsInFront: Bool
+        hostIsInFront: Bool,
+        hostCanEverBeInFront: Bool = true
     ) {
         terminalStub.readingByPID[pid] = ControllingTerminalReading(
             lastGesture: at,
-            hostIsInFrontOfTheUser: hostIsInFront
+            hostIsInFrontOfTheUser: hostIsInFront,
+            hostCanEverBeInFrontOfTheUser: hostCanEverBeInFront
         )
     }
 
@@ -16056,6 +16085,10 @@ private final class ClaudeCodeHarness {
             // would be answering with whichever tty the developer last typed
             // into.
             terminalGestures: terminalStub,
+            // And once more: the real one reads whether this machine's display
+            // is awake and its screen unlocked, so a suite left with it would
+            // report on the developer's lock screen rather than on the code.
+            screenAvailability: screenStub,
             sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true),
             ownsSessionRecord: { ownedSessionRecords.contains($0) }
         )
@@ -16316,6 +16349,45 @@ private final class StubControllingTerminalGestures:
         forProcessIdentifier pid: Int32
     ) async -> ControllingTerminalReading? {
         readingByPID[pid]
+    }
+}
+
+/// Stands in for the machine's display and lock state.
+private final class StubScreenAvailability:
+    ScreenAvailabilityReporting, @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var stored = true
+    nonisolated(unsafe) private var continuations: [
+        UUID: AsyncStream<Void>.Continuation
+    ] = [:]
+
+    var available: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+
+    func isAvailable() -> Bool { available }
+
+    func changeEvents() -> AsyncStream<Void> {
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let identifier = UUID()
+            lock.lock()
+            continuations[identifier] = continuation
+            lock.unlock()
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                lock.lock()
+                continuations.removeValue(forKey: identifier)
+                lock.unlock()
+            }
+        }
+    }
+
+    func announce() {
+        lock.lock()
+        let continuations = Array(self.continuations.values)
+        lock.unlock()
+        continuations.forEach { $0.yield(()) }
     }
 }
 
@@ -17030,5 +17102,427 @@ private final class RecordedHookDelivery: @unchecked Sendable {
 
     var sessions: [String] {
         payloads.compactMap { $0["session_id"] as? String }
+    }
+}
+
+// MARK: - Deadlines nothing can clear
+
+/// Three routes by which a finished row booked a one-second re-check for a
+/// question no refresh reachable from that state could ever answer. They are
+/// one bug wearing three coats: `nextRefreshDeadline()` may only report an
+/// instant a refresh can actually advance, and each of these reported one it
+/// could not.
+///
+/// - CR-Fable-001: the Codex gate is only ever pruned on the live-hook branch,
+///   so losing Desktop freezes its entries and re-issues `now + 1s` forever.
+/// - CR-Fable-018: the re-check runs through a sleeping display and a locked
+///   screen, where every route that could retire the row is knowably shut.
+/// - CR-Fable-036: a `tmux` or `ssh` session has a controlling terminal but no
+///   host that can ever hold the front, so its verdict is permanently false.
+extension NotchlineTests {
+    /// A row waiting on the user books nothing while there is no screen to read
+    /// it on.
+    ///
+    /// The row is right to stay listed -- nobody has read it -- but the sample
+    /// that would ask again is not a sample of anything: every route to "read"
+    /// requires the display awake and the session unlocked, so the answer is
+    /// known before any work is done. Left ungated this was a wake-up a second,
+    /// all night, on battery.
+    @Test
+    func terminalGateBooksNothingForARowWaitingOnAUserWithNoScreen() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
+        let start = Date(timeIntervalSince1970: 1_000)
+        let unread = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: ["thread"],
+            source: .current
+        )
+
+        let now = start.addingTimeInterval(600)
+        let displayed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: unread, now: now
+        )
+        #expect(displayed, "a locked screen must not retire anything")
+        #expect(
+            gate.nextDeadline(now: now, screenIsAvailable: false) == nil,
+            "a re-check nothing can answer is a busy loop with a deadline's face"
+        )
+        // And the moment there is a screen again, it asks as it always did.
+        #expect(
+            gate.nextDeadline(now: now, screenIsAvailable: true)
+                == now.addingTimeInterval(1)
+        )
+    }
+
+    /// A row waiting on a *file* still books its re-check through a locked
+    /// screen.
+    ///
+    /// The two halves of "waiting cannot hide this" are not the same wait, and
+    /// collapsing them would be the mirror of the bug. An unreadable unread
+    /// state becomes legible when the other application rewrites it, which
+    /// happens whether or not anybody is at this machine.
+    @Test
+    func terminalGateStillWatchesAnUnreadableStateThroughALockedScreen() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
+        let start = Date(timeIntervalSince1970: 1_000)
+        let unreadable = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: [],
+            source: .lastKnownGood
+        )
+
+        let now = start.addingTimeInterval(600)
+        _ = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: unreadable, now: now
+        )
+        #expect(
+            gate.nextDeadline(now: now, screenIsAvailable: false)
+                == now.addingTimeInterval(1),
+            "this row waits on the file, not on the user"
+        )
+    }
+
+    /// And a row waiting on *time* still clears on time.
+    ///
+    /// The settling window is the one deadline here that a refresh advances by
+    /// itself. Deferring it for a dark screen would leave the row on the notch
+    /// until somebody came back to a machine that had already finished with it.
+    @Test
+    func terminalGateStillClearsItsSettlingWindowThroughALockedScreen() {
+        var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
+        let start = Date(timeIntervalSince1970: 1_000)
+        let read = DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+
+        _ = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: start, unreadState: read, now: start
+        )
+        #expect(
+            gate.nextDeadline(now: start, screenIsAvailable: false)
+                == start.addingTimeInterval(2)
+        )
+    }
+}
+
+extension NotchlineTests {
+    /// A session under a multiplexer has a terminal and no host.
+    ///
+    /// Both chains below end at `launchd` and neither has the front, so the
+    /// reading that only asks "is the host in front" cannot tell them apart --
+    /// which is how a `tmux` session's permanent "no" was read as an ordinary
+    /// "not yet". What separates them is what the chain passes *through*: an
+    /// `.app` bundle for the emulator, a daemonised server for the multiplexer.
+    @Test
+    func aTerminalWhoseAncestryHasNoApplicationCanNeverBeInFront() async throws {
+        // claude -> zsh -> tmux server -> launchd, and claude -> zsh -> login
+        // -> Ghostty -> launchd. Nothing here is the frontmost process.
+        let ancestry: [Int32: Int32] = [
+            100: 200, 200: 300, 300: 1,
+            400: 500, 500: 600, 600: 700, 700: 1
+        ]
+        let executables: [Int32: String] = [
+            200: "/bin/zsh",
+            300: "/opt/homebrew/bin/tmux",
+            500: "/bin/zsh",
+            600: "/usr/bin/login",
+            700: "/Applications/Ghostty.app/Contents/MacOS/ghostty"
+        ]
+        let reader = ControllingTerminalGestureReader(
+            controllingTerminalPath: { _ in "/dev/ttys009" },
+            lastAccess: { _ in Date(timeIntervalSince1970: 500) },
+            parentProcessIdentifier: { ancestry[$0] },
+            executablePath: { executables[$0] },
+            frontmostProcessIdentifier: { 9_999 },
+            screenIsAvailable: { true }
+        )
+
+        let multiplexed = try #require(await reader.reading(forProcessIdentifier: 100))
+        #expect(!multiplexed.hostIsInFrontOfTheUser)
+        #expect(
+            !multiplexed.hostCanEverBeInFrontOfTheUser,
+            """
+            nothing in this chain is an application, so no gesture at it can \
+            ever coincide with its host holding the front
+            """
+        )
+
+        let hosted = try #require(await reader.reading(forProcessIdentifier: 400))
+        #expect(!hosted.hostIsInFrontOfTheUser, "another application is in front")
+        #expect(
+            hosted.hostCanEverBeInFrontOfTheUser,
+            "a terminal on another display is a question worth asking again"
+        )
+    }
+
+    /// The application being in front is still answered, and still needs a
+    /// screen.
+    ///
+    /// The walk now runs even when the front cannot count, because "can this
+    /// host ever be in front" has to be answered either way. This is the guard
+    /// that stops that restructuring from quietly retiring rows behind a locked
+    /// screen.
+    @Test
+    func aTerminalInFrontOfALockedScreenIsNotInFrontOfAnybody() async throws {
+        let ancestry: [Int32: Int32] = [100: 200, 200: 300, 300: 1]
+        let executables: [Int32: String] = [
+            200: "/bin/zsh",
+            300: "/Applications/Ghostty.app/Contents/MacOS/ghostty"
+        ]
+        func reader(screenIsAvailable: Bool) -> ControllingTerminalGestureReader {
+            ControllingTerminalGestureReader(
+                controllingTerminalPath: { _ in "/dev/ttys009" },
+                lastAccess: { _ in Date(timeIntervalSince1970: 500) },
+                parentProcessIdentifier: { ancestry[$0] },
+                executablePath: { executables[$0] },
+                frontmostProcessIdentifier: { 300 },
+                screenIsAvailable: { screenIsAvailable }
+            )
+        }
+
+        let lit = try #require(
+            await reader(screenIsAvailable: true).reading(forProcessIdentifier: 100)
+        )
+        #expect(lit.hostIsInFrontOfTheUser)
+
+        let dark = try #require(
+            await reader(screenIsAvailable: false).reading(forProcessIdentifier: 100)
+        )
+        #expect(!dark.hostIsInFrontOfTheUser, "a locked screen shows nobody anything")
+        #expect(
+            dark.hostCanEverBeInFrontOfTheUser,
+            "the host still exists; it is the screen that is off"
+        )
+    }
+}
+
+extension NotchlineTests {
+    /// A `tmux` or `ssh` session's finished row stays, and books nothing.
+    ///
+    /// Both halves matter and the second is the one that was wrong. The row is
+    /// correct to stay listed: nothing can say whether it has been read, so it
+    /// leaves the way a terminal row always did — on the next submission, when
+    /// the session goes away, or when the user removes it. But it used to enter
+    /// the unread gate on the strength of *having a device*, where its verdict
+    /// was false on every look, and that booked a full two-product refresh once
+    /// a second for the life of the session. `ssh` is a first-class way to run
+    /// this tool, so that was an ordinary evening, not an edge.
+    @Test @MainActor
+    func aSessionUnderAMultiplexerBooksNoRecheckForItsFinishedRow() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "cli", cwd: cwd, pid: 4_242)]
+
+        // A real device, read before the Turn ended, under a host that runs to
+        // `launchd` without passing through an application.
+        harness.setTerminalGesture(
+            Date(timeIntervalSince1970: 100),
+            forPID: 4_242,
+            hostIsInFront: false,
+            hostCanEverBeInFront: false
+        )
+
+        let snapshot = await harness.service.fetchSnapshot()
+        #expect(snapshot.sessions.count == 1, "the row is right to stay listed")
+        let deadline = await harness.service.nextRefreshDeadline()
+        #expect(
+            (deadline?.timeIntervalSinceNow ?? .infinity) > 2,
+            "a question with no possible answer must book no re-check"
+        )
+
+        // The same session in a terminal that *could* come to the front is the
+        // case the gate exists for, and still asks.
+        harness.setTerminalGesture(
+            Date(timeIntervalSince1970: 100),
+            forPID: 4_242,
+            hostIsInFront: false,
+            hostCanEverBeInFront: true
+        )
+        _ = await harness.service.fetchSnapshot()
+        let asking = await harness.service.nextRefreshDeadline()
+        #expect((asking?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+    }
+
+    /// A locked screen stops the re-check, and coming back restarts it.
+    ///
+    /// The row is not abandoned — it stays listed, because nobody has read it —
+    /// but nothing wakes for it until there is a screen it could be read on.
+    /// The second half is what makes the first safe: without an edge for the
+    /// display waking, the row would sit until the heartbeat at exactly the
+    /// moment the user is most likely to be looking at the notch.
+    @Test @MainActor
+    func aLockedScreenStopsTheRecheckAndComingBackRestartsIt() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "cli", cwd: cwd, pid: 4_242)]
+        // At its terminal before the Turn ended, so the row is unread and
+        // waiting on the user coming back.
+        harness.lastTerminalGestureByPID = [4_242: Date(timeIntervalSince1970: 100)]
+
+        let lit = await harness.service.fetchSnapshot()
+        #expect(lit.sessions.count == 1)
+        let asking = await harness.service.nextRefreshDeadline()
+        #expect((asking?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+
+        harness.screenIsAvailable = false
+        let dark = await harness.service.fetchSnapshot()
+        #expect(dark.sessions.count == 1, "a locked screen retires nothing")
+        let quiet = await harness.service.nextRefreshDeadline()
+        #expect(
+            (quiet?.timeIntervalSinceNow ?? .infinity) > 2,
+            """
+            nothing can retire this row until there is a screen, so nothing \
+            should wake for it
+            """
+        )
+
+        // The display comes back on. The edge is what re-arms the row; the
+        // deadline is what bounds how late it can leave after that.
+        let triggers = harness.service.stateChangeEvents
+        let observer = Task {
+            for await _ in triggers { return true }
+            return false
+        }
+        harness.announceScreenAvailable()
+        let signalled = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await observer.value }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        observer.cancel()
+        #expect(signalled, "the screen coming back has to wake the loop")
+
+        _ = await harness.service.fetchSnapshot()
+        let askingAgain = await harness.service.nextRefreshDeadline()
+        #expect((askingAgain?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+    }
+}
+
+/// Holds a value a `@Sendable` closure has to be able to read after a test has
+/// changed it. A captured `var` cannot cross that boundary.
+private final class MutableDesktopProcessIdentifier: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: pid_t?
+
+    init(_ value: pid_t?) { stored = value }
+
+    var value: pid_t? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
+extension NotchlineTests {
+    /// Losing Desktop must not leave the Codex gate frozen at 1 Hz.
+    ///
+    /// The gate's entries are only ever hidden or pruned inside
+    /// `sessions(from:)`, which only the live-hook branch reaches. Every other
+    /// branch — no hook observation, setup required, and each error — used to
+    /// return without touching it, so an entry for an unread row froze in place
+    /// and went on re-issuing a deadline one second forward from now, forever.
+    /// The store's stuck-deadline filter cannot catch that: it suppresses a
+    /// *repeated identical* overdue instant, and this one moves on every call.
+    ///
+    /// The user's version of it: finish a turn, do not read it, quit Codex
+    /// Desktop. Nothing is on screen, and the app wakes once a second for the
+    /// rest of the day.
+    @Test @MainActor
+    func losingHookObservationPrunesTheCodexUnreadGate() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        for event in ["UserPromptSubmit", "Stop"] {
+            try JSONSerialization.data(withJSONObject: [
+                "received_at": Date().timeIntervalSince1970,
+                "hook_event_name": event,
+                "session_id": "thread-frozen",
+                "turn_id": "turn-frozen"
+            ]).deliver(to: repository)
+        }
+
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-frozen"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "updatedAt": .number(Date().timeIntervalSince1970),
+                "name": .string("Frozen")
+            ])],
+            loadedListResults: []
+        )
+        // Desktop still reports the finished thread unread, which is what puts
+        // it in the gate and keeps it there.
+        let unreadState = DesktopUnreadStateStub(
+            DesktopUnreadStateSnapshot(
+                unreadThreadIDs: ["thread-frozen"],
+                source: .current
+            )
+        )
+        let desktop = MutableDesktopProcessIdentifier(4_242)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            unreadState: unreadState,
+            desktopProcessIdentifierProvider: { desktop.value }
+        )
+        defer { Task { await service.disconnect() } }
+
+        var listed = false
+        for _ in 0 ..< 100 {
+            let snapshot = await service.fetchSnapshot()
+            if snapshot.sessions.first?.status == .completed {
+                listed = true
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(listed, "an unread finished row is listed")
+        let asking = await service.nextRefreshDeadline()
+        #expect(
+            (asking?.timeIntervalSinceNow ?? .infinity) <= 1.1,
+            "while it is on screen, the row asks to be looked at again"
+        )
+
+        // The user quits Codex Desktop. Hook observation is lost, this branch
+        // publishes no rows at all, and the entry the gate is holding can never
+        // be evaluated again.
+        desktop.value = nil
+        let quiet = await service.fetchSnapshot()
+        #expect(quiet.sessions.isEmpty, "nothing is on screen any more")
+        let deadline = await service.nextRefreshDeadline()
+        #expect(
+            (deadline?.timeIntervalSinceNow ?? .infinity) > 1.5,
+            """
+            a branch that cannot evaluate a row must not book a re-check for \
+            one: this is the 1 Hz that ran with an empty notch
+            """
+        )
     }
 }

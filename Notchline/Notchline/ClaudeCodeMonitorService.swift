@@ -165,6 +165,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// each Turn's own last moment -- see
     /// ``ClaudeCodeReadStateSnapshot/readState(forSession:terminalBoundaryAt:)``.
     private var terminalReadMembershipGate: TerminalUnreadMembershipGate
+    /// Whether there is a screen the user could read a finished answer on.
+    ///
+    /// Read where the gate books its re-check, not inside the verdicts -- those
+    /// already make the same reading for themselves. See
+    /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
+    nonisolated private let screenAvailability: any ScreenAvailabilityReporting
     private let clock: any MonitorClock
     private var lastDiagnostic: String?
 
@@ -181,6 +187,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         reading: (any DesktopReadingReporting)? = nil,
         displayed: (any DesktopDisplayedSessionReporting)? = nil,
         terminalGestures: (any ControllingTerminalGestureReporting)? = nil,
+        screenAvailability: (any ScreenAvailabilityReporting)? = nil,
         sessionsDirectory: URL? = nil,
         /// Which entries of that directory belong to a `claude` this app
         /// launched. Injected only so the rule can be tested without launching
@@ -257,13 +264,20 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             clock: clock
         )
         self.activations = resolvedActivations
-        // No change stream of its own, deliberately. Waking a display and
-        // unlocking a screen do have notifications, but the front, the lock and
-        // the display are three states that have to agree, and a row waiting on
-        // the user already books a re-check every
-        // ``MonitorTiming/terminalUnreadRecheckInterval``. That second is the
-        // cadence this reading is sampled at and the bound on how late the row
-        // leaves; nothing listed means nothing sampled.
+        // No change stream of its own: the front, the lock and the display are
+        // three states that have to agree, so a notification for any one of
+        // them says nothing on its own, and the reading is sampled at the
+        // re-check a row waiting on the user books every
+        // ``MonitorTiming/terminalUnreadRecheckInterval``.
+        //
+        // It used to say the notifications were not needed at all. They are:
+        // the re-check is now deferred while the display is asleep or the
+        // screen locked, because every route out of that state needs a screen
+        // the user can see, and a sample taken through a locked screen is not
+        // a sample of anything (CR-Fable-018). ``ScreenAvailabilityWatcher``
+        // carries those edges -- one stream for the moment the answer could
+        // have become yes, rather than three states this reading would have to
+        // re-derive.
         self.reading = reading ?? DesktopReadingWatcher(
             bundleIdentifier: Self.desktopBundleIdentifier
         )
@@ -284,6 +298,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // one `stat` per listed terminal row per second, and nothing at all
         // when no such row is listed.
         self.terminalGestures = terminalGestures ?? ControllingTerminalGestureReader()
+        let resolvedScreenAvailability = screenAvailability
+            ?? ScreenAvailabilityWatcher()
+        self.screenAvailability = resolvedScreenAvailability
         self.terminalReadMembershipGate = TerminalUnreadMembershipGate(
             settlingInterval: timing.terminalReadSettlingInterval,
             unreadRecheckInterval: timing.terminalUnreadRecheckInterval
@@ -346,6 +363,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // to be read should leave on the gesture that reads it, not on the
             // next re-check after it.
             resolvedActivations.changeEvents(),
+            // The display waking or the screen unlocking. A row waiting on the
+            // user books no re-check while neither is true, because every route
+            // that could retire it needs a screen somebody can see; this is the
+            // edge that starts the re-checks again. Without it such a row would
+            // sit until the heartbeat, at the one moment the user is most
+            // likely to be looking.
+            resolvedScreenAvailability.changeEvents(),
             quotaUpdates
         ])
     }
@@ -1034,11 +1058,23 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             }
             // Whether a reading that cannot be a generation behind is what
             // decides this row -- see where the two snapshots are built.
-            // A session whose device could be read *can* be asked, whatever
-            // the answer was. A terminal nobody is in front of answers "not
-            // read" rather than "cannot say", so the row belongs in the gate
-            // and gets looked at again a second later.
-            let terminalCanSpeak = terminalReadingByThreadID[row.threadID] != nil
+            // A terminal nobody is in front of answers "not read" rather than
+            // "cannot say", so that row belongs in the gate and gets looked at
+            // again a second later.
+            //
+            // Having a device is not enough to be asked, though, and reading it
+            // that way was CR-Fable-036. A session under `tmux`, `screen` or
+            // `ssh` has a controlling terminal -- so it answers non-nil -- while
+            // its ancestry runs to `launchd` without passing through an
+            // application, so its host can never hold the front and the verdict
+            // is permanently false. That is a question with no possible answer
+            // wearing the clothes of one that merely has not been answered yet,
+            // and it booked a full two-product refresh once a second for the
+            // life of the session. The predicate has to ask what the comment
+            // below says: not "is there a device" but "is there a host that
+            // could ever say yes".
+            let terminalCanSpeak = terminalReadingByThreadID[row.threadID]?
+                .hostCanEverBeInFrontOfTheUser == true
             let terminalSaysRead = wereAtItsTerminal(row.threadID, since: boundary)
             switch state {
             case .unknown:
@@ -1047,9 +1083,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 // it evidence of reading rather than of having been there at
                 // some point — the same shape as every rule above.
                 guard terminalCanSpeak else {
-                    // Nothing anywhere can speak for it. Kept out of the gate
-                    // entirely rather than reported unread, so it books no
-                    // re-check for a question with no possible answer.
+                    // Nothing anywhere can speak for it -- no device at all, or
+                    // a device whose host is `launchd` and so can never be in
+                    // front. Kept out of the gate entirely rather than reported
+                    // unread, so it books no re-check for a question with no
+                    // possible answer. Such a row leaves the way a terminal row
+                    // always did: on the next submission, when the session goes
+                    // away, or when the user removes it.
                     shown.append(row)
                     break
                 }
@@ -1138,9 +1178,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// waits on the user rather than on time, so its deadline is a floor under
     /// the account-folder watcher and not a sampling cadence -- the same
     /// reasoning, and the same numbers, as
-    /// ``TerminalUnreadMembershipGate/nextDeadline(now:)`` on the Codex side.
-    /// A row nothing can ever clear never reaches the gate, so it never books
-    /// one of these.
+    /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``
+    /// on the Codex side. A row nothing can ever clear never reaches the gate,
+    /// so it never books one of these -- and neither does one waiting on a user
+    /// who has no screen to read it on.
     ///
     /// Two of the routes to "read" do turn that floor into a sampling cadence,
     /// and only for as long as a row is standing. `isInFrontOfThem` reads three
@@ -1152,7 +1193,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     func nextRefreshDeadline() async -> Date? {
         [
             await usage.nextReadDeadline(),
-            terminalReadMembershipGate.nextDeadline(now: clock.now())
+            terminalReadMembershipGate.nextDeadline(
+                now: clock.now(),
+                screenIsAvailable: screenAvailability.isAvailable()
+            )
         ]
         .compactMap { $0 }
         .min()

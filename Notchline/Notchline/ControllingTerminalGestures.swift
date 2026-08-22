@@ -12,10 +12,37 @@ nonisolated struct ControllingTerminalReading: Sendable, Equatable {
     /// Whether the application hosting that terminal held the front, on a
     /// screen somebody could be looking at, when `lastGesture` was read.
     let hostIsInFrontOfTheUser: Bool
+    /// Whether this session is hosted by something that could hold the front
+    /// **at all**, on any future look.
+    ///
+    /// The distinction the reading above cannot make. "Not in front right now"
+    /// is a question worth asking again in a second, and a terminal on another
+    /// display answers it differently the moment the user clicks into it.
+    /// "Never in front" is not a question at all: a session under `tmux`,
+    /// `screen` or `ssh` has a controlling terminal, so it answers everything
+    /// else here, but its ancestry runs to `launchd` without passing through an
+    /// application, and no gesture at it can ever coincide with that host
+    /// holding the front.
+    ///
+    /// Reported so a caller can tell the two apart. Treating them alike put a
+    /// `tmux` session's finished row into the unread gate with a permanently
+    /// false verdict, which booked a full two-product refresh once a second for
+    /// the life of the session (CR-Fable-036). `ssh` and `tmux` are first-class
+    /// ways to run this tool, so that was an ordinary workflow, not an edge.
+    ///
+    /// Answered by the ancestry alone, and so unaffected by what is in front or
+    /// whether the screen is on: this is a property of how the session was
+    /// started, and it does not change while it runs.
+    let hostCanEverBeInFrontOfTheUser: Bool
 
-    nonisolated init(lastGesture: Date, hostIsInFrontOfTheUser: Bool) {
+    nonisolated init(
+        lastGesture: Date,
+        hostIsInFrontOfTheUser: Bool,
+        hostCanEverBeInFrontOfTheUser: Bool
+    ) {
         self.lastGesture = lastGesture
         self.hostIsInFrontOfTheUser = hostIsInFrontOfTheUser
+        self.hostCanEverBeInFrontOfTheUser = hostCanEverBeInFrontOfTheUser
     }
 }
 
@@ -124,7 +151,10 @@ nonisolated protocol ControllingTerminalGestureReporting: Sendable {
 /// only keystrokes, so a row waits for the user's next key instead of for them
 /// coming back to the tab. A session under `tmux`, `screen` or `ssh` has no
 /// ancestor that is ever the frontmost application, so its host never holds the
-/// front and its row waits for the next submission instead. A session with no
+/// front and its row waits for the next submission instead; that case is
+/// reported as ``ControllingTerminalReading/hostCanEverBeInFrontOfTheUser``
+/// rather than left to look like an ordinary "not right now", because the
+/// caller has to keep such a row out of the unread gate. A session with no
 /// controlling terminal at all (`-p` with its output piped, or a session Claude
 /// Desktop hosts) answers `nil`. All three fail towards keeping the row, which
 /// is the failure this product prefers.
@@ -150,6 +180,7 @@ final class ControllingTerminalGestureReader:
     private let controllingTerminalPath: @Sendable (Int32) -> String?
     private let lastAccess: @Sendable (String) -> Date?
     private let parentProcessIdentifier: @Sendable (Int32) -> Int32?
+    private let executablePath: @Sendable (Int32) -> String?
     private let frontmostProcessIdentifier: @Sendable () -> Int32?
     private let screenIsAvailable: @Sendable () -> Bool
     nonisolated(unsafe) private var observer: NSObjectProtocol?
@@ -158,8 +189,12 @@ final class ControllingTerminalGestureReader:
     ///   - controllingTerminalPath: Which device a process is attached to.
     ///   - lastAccess: When that device was last read from.
     ///   - parentProcessIdentifier: Which process spawned a process.
+    ///   - executablePath: What a process is running, by absolute path. Read
+    ///     only to ask whether an ancestor sits inside an application bundle,
+    ///     which is what separates a host that is not in front from one that
+    ///     never can be.
     ///   - frontmostProcessIdentifier: Which application holds the front, or
-    ///     `nil` to track it from the workspace. All four are injected so a
+    ///     `nil` to track it from the workspace. All five are injected so a
     ///     test can put a session on a terminal it controls under an
     ///     application it names, rather than on whichever one the developer
     ///     happens to be typing into.
@@ -180,6 +215,9 @@ final class ControllingTerminalGestureReader:
             ControllingTerminalGestureReader
                 .systemParentProcessIdentifier(forProcessIdentifier: $0)
         },
+        executablePath: @escaping @Sendable (Int32) -> String? = {
+            ProcessAncestryHostResolver.systemExecutablePath(ofProcess: $0)
+        },
         frontmostProcessIdentifier: (@Sendable () -> Int32?)? = nil,
         screenIsAvailable: @escaping @Sendable () -> Bool =
             DesktopReadingWatcher.systemScreenIsAvailable
@@ -187,6 +225,7 @@ final class ControllingTerminalGestureReader:
         self.controllingTerminalPath = controllingTerminalPath
         self.lastAccess = lastAccess
         self.parentProcessIdentifier = parentProcessIdentifier
+        self.executablePath = executablePath
         self.screenIsAvailable = screenIsAvailable
         if let frontmostProcessIdentifier {
             self.frontmostProcessIdentifier = frontmostProcessIdentifier
@@ -238,36 +277,84 @@ final class ControllingTerminalGestureReader:
               let at = lastAccess(path) else {
             return nil
         }
+        let host = host(ofSession: pid)
         return ControllingTerminalReading(
             lastGesture: at,
-            hostIsInFrontOfTheUser: hostIsInFrontOfTheUser(ofSession: pid)
+            hostIsInFrontOfTheUser: host.isInFront,
+            hostCanEverBeInFrontOfTheUser: host.canEverBeInFront
         )
     }
 
+    /// What the session's ancestry says about the application hosting its
+    /// terminal.
+    nonisolated private struct Host {
+        /// The frontmost process is one of this session's ancestors, on a
+        /// screen somebody could be looking at.
+        let isInFront: Bool
+        /// Some ancestor is an application at all, so holding the front is a
+        /// thing this host could do on some later look.
+        let canEverBeInFront: Bool
+    }
+
     /// Whether the application this session's terminal belongs to is the one in
-    /// front of the user.
+    /// front of the user -- and, separately, whether it has one.
     ///
-    /// Answered by identity rather than by name: walk the session's ancestors
-    /// and see whether the frontmost application is among them. That needs no
-    /// list of terminal emulators, no bundle identifier, and no judgement about
-    /// which ancestor is "the application" -- a chain that reaches the frontmost
-    /// process is a chain hosted by it, whatever it happens to be.
-    nonisolated private func hostIsInFrontOfTheUser(ofSession pid: Int32) -> Bool {
-        guard let front = frontmostProcessIdentifier(), front > 1,
-              screenIsAvailable() else {
-            return false
-        }
+    /// **Being in front is answered by identity rather than by name:** walk the
+    /// session's ancestors and see whether the frontmost application is among
+    /// them. That needs no list of terminal emulators, no bundle identifier,
+    /// and no judgement about which ancestor is "the application" -- a chain
+    /// that reaches the frontmost process is a chain hosted by it, whatever it
+    /// happens to be.
+    ///
+    /// **Having one is answered by the same walk**, asking whether any ancestor
+    /// sits inside an `.app` bundle. Every chain ends at `launchd`, so where it
+    /// ends says nothing; what separates a Ghostty session from a `tmux` one is
+    /// what it passes through on the way. Measured on this machine: `claude` ->
+    /// `-/bin/zsh` -> `/usr/bin/login` -> `/Applications/Ghostty.app/...`,
+    /// against `claude` -> `-/bin/zsh` -> `/opt/homebrew/bin/tmux` -> `launchd`
+    /// for a session under a multiplexer, whose server is daemonised and so is
+    /// reparented away from whatever terminal started it. `ssh` has the same
+    /// shape through `sshd`.
+    ///
+    /// The bundle is recognised by path alone -- ``ProcessAncestryHostResolver``
+    /// already spells out that rule, and this borrows it rather than restating
+    /// it. Nothing is opened and no `Info.plist` is read: the question here is
+    /// only whether something in the chain *is* an application, not which.
+    ///
+    /// **An unreadable ancestor answers "cannot be in front"**, which keeps the
+    /// row and books nothing -- the same direction every other failure in this
+    /// file takes.
+    nonisolated private func host(ofSession pid: Int32) -> Host {
+        let front = frontmostProcessIdentifier()
+        // Read once, before the walk: a front held through a sleeping display
+        // or a locked screen is not a front anybody is looking at.
+        let frontCounts = (front ?? 0) > 1 && screenIsAvailable()
+        var isInFront = false
+        var canEverBeInFront = false
         var current = pid
         for _ in 0 ..< Self.maximumAncestryDepth {
             guard let parent = parentProcessIdentifier(current), parent > 1 else {
-                // `launchd` or an unreadable record. Either way nothing above
-                // this is the terminal's application.
-                return false
+                // `launchd` or an unreadable record. Either way there is
+                // nothing above this to be the terminal's application.
+                break
             }
-            if parent == front { return true }
+            if frontCounts, parent == front { isInFront = true }
+            if !canEverBeInFront,
+               let path = executablePath(parent),
+               ProcessAncestryHostResolver
+                   .enclosingApplicationBundlePath(ofExecutable: path) != nil {
+                canEverBeInFront = true
+            }
+            if isInFront, canEverBeInFront { break }
             current = parent
         }
-        return false
+        return Host(
+            isInFront: isInFront,
+            // An application unbundled enough to escape the check above can
+            // still be made frontmost through `TransformProcessType`, and one
+            // that *is* in front has answered the question by being there.
+            canEverBeInFront: canEverBeInFront || isInFront
+        )
     }
 
     /// The device a process is attached to, or nil when it is attached to none.

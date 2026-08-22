@@ -100,9 +100,11 @@ nonisolated struct MonitorTiming: Sendable {
     /// This is the floor under the unread watcher, not a sampling cadence: the
     /// watcher normally answers first and this never comes due. It exists
     /// because the row it governs has no other bounded signal -- see
-    /// ``TerminalUnreadMembershipGate/nextDeadline(now:)``. One snapshot costs
-    /// 1-7ms measured in Release on the live app, so the state this covers runs
-    /// under 1% of a core and only while such a row is actually listed.
+    /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
+    /// One snapshot costs 1-7ms measured in Release on the live app, so the
+    /// state this covers runs under 1% of a core and only while such a row is
+    /// actually listed -- and only while there is a screen it could be read on,
+    /// which is what stops it running through a locked night.
     var terminalUnreadRecheckInterval: TimeInterval = 1
     /// Trailing debounce on the Desktop state directory.
     ///

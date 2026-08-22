@@ -70,8 +70,19 @@ struct TerminalUnreadMembershipGate: Sendable {
         /// as time passing.
         ///
         /// This decides *which* deadline the row reports, not whether it
-        /// reports one -- see ``nextDeadline(now:)``.
+        /// reports one -- see ``nextDeadline(now:screenIsAvailable:)``.
         var canHideByWaiting: Bool
+        /// Whether the *user* is the only thing that can hide this row.
+        ///
+        /// The complement of `canHideByWaiting` splits in two, and the halves
+        /// wait on different things. A row Desktop reports unread waits on
+        /// somebody reading it, which needs a screen they can see. A row whose
+        /// unread state could not be read waits on that file becoming legible,
+        /// which happens whatever the screen is doing.
+        ///
+        /// Only the first may be deferred for an unusable screen -- see
+        /// ``nextDeadline(now:screenIsAvailable:)``.
+        var waitsOnTheUser: Bool
     }
 
     private let settlingInterval: TimeInterval
@@ -103,7 +114,8 @@ struct TerminalUnreadMembershipGate: Sendable {
             terminalObservedAt: terminalBoundaryAt,
             hasObservedUnread: false,
             isHidden: false,
-            canHideByWaiting: false
+            canHideByWaiting: false,
+            waitsOnTheUser: false
         )
         // Whether a *newer* Turn has ended than the one this entry describes,
         // which is the only thing allowed to bring a hidden row back -- see
@@ -126,6 +138,8 @@ struct TerminalUnreadMembershipGate: Sendable {
         let isCurrentlyUnread = unreadState.unreadThreadIDs.contains(threadID)
         entry.canHideByWaiting = unreadState.source.isAuthoritative
             && !isCurrentlyUnread
+        entry.waitsOnTheUser = unreadState.source.isAuthoritative
+            && isCurrentlyUnread
 
         guard unreadState.source.isAuthoritative else {
             entries[sessionID] = entry
@@ -182,13 +196,44 @@ struct TerminalUnreadMembershipGate: Sendable {
     /// floor, and no refresh can move it -- a busy loop wearing a deadline's
     /// clothes. A re-check measured from `now` is clearable by construction:
     /// the refresh at that instant either hides the row or books the next look.
-    nonisolated func nextDeadline(now: Date) -> Date? {
+    ///
+    /// - Parameter screenIsAvailable: Whether the display is awake and the
+    ///   login session unlocked and on the console. A row waiting on the *user*
+    ///   books nothing while that is false, because every route that could
+    ///   retire it requires the same thing: Claude Code's `isInFrontOfThem` and
+    ///   its terminal-gesture route both fail
+    ///   ``DesktopReadingWatcher/systemScreenIsAvailable()`` outright, and a
+    ///   Codex thread is marked read by somebody opening it in Desktop. The
+    ///   defence of the one-second sample above is a good one, and it is made
+    ///   for a screen somebody might be looking at; through a locked screen the
+    ///   answer is knowably "no" before the work is done, so the sample is not
+    ///   a sample of anything. Left ungated this ran all night -- a wake-up a
+    ///   second, on battery, for a row nobody could see (CR-Fable-018).
+    ///
+    ///   The row is not abandoned: it waits on
+    ///   ``ScreenAvailabilityReporting/changeEvents()`` instead, which fires
+    ///   when the screen comes back, ahead of anything the user could then do.
+    ///
+    ///   Defaults to `true` so a test of the deadline logic states only what it
+    ///   is about. Both callers in the product pass the live reading.
+    ///
+    ///   A row waiting on an unreadable *file* is unaffected: that becomes
+    ///   legible whether or not anybody is at the machine.
+    nonisolated func nextDeadline(
+        now: Date,
+        screenIsAvailable: Bool = true
+    ) -> Date? {
         entries.values
             .filter { !$0.isHidden }
-            .map { entry in
-                entry.canHideByWaiting
-                    ? entry.terminalObservedAt.addingTimeInterval(settlingInterval)
-                    : now.addingTimeInterval(unreadRecheckInterval)
+            .compactMap { entry -> Date? in
+                if entry.canHideByWaiting {
+                    return entry.terminalObservedAt
+                        .addingTimeInterval(settlingInterval)
+                }
+                guard screenIsAvailable || !entry.waitsOnTheUser else {
+                    return nil
+                }
+                return now.addingTimeInterval(unreadRecheckInterval)
             }
             .min()
     }

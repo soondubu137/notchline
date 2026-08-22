@@ -71,6 +71,13 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     nonisolated private let hookListener: AgentHookListener
     private let projectMetadata: any DesktopProjectMetadataProviding
     private let unreadState: any DesktopUnreadStateProviding
+    /// Whether there is a screen the user could read a thread on.
+    ///
+    /// Only the gate's re-check consults it: a row Desktop still reports unread
+    /// is cleared by somebody opening it in Desktop, which a locked screen
+    /// makes impossible. See
+    /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
+    nonisolated private let screenAvailability: any ScreenAvailabilityReporting
     nonisolated let stateChangeEvents: AsyncStream<Void>
     nonisolated private let snapshotInvalidations: AsyncStream<Void>.Continuation
     private let desktopProcessIdentifierProvider: @MainActor @Sendable () -> pid_t?
@@ -114,6 +121,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             CodexDesktopProjectMetadataRepository(),
         unreadState: any DesktopUnreadStateProviding =
             CodexDesktopUnreadStateRepository(),
+        screenAvailability: any ScreenAvailabilityReporting =
+            ScreenAvailabilityWatcher(),
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
         desktopProcessIdentifierProvider: @escaping @MainActor @Sendable () -> pid_t? = {
@@ -135,6 +144,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         }
         self.projectMetadata = projectMetadata
         self.unreadState = unreadState
+        self.screenAvailability = screenAvailability
         // Background reads land after the snapshot that started them has already
         // been published, so their results need a trigger of their own. The
         // one-second poll used to supply that by accident.
@@ -156,6 +166,12 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             // installation health on a 60-second cadence.
             hookRegistrar.changeEvents(),
             unreadState.changeEvents(),
+            // The screen coming back. A row waiting on the user books no
+            // re-check while there is no screen to read it on, so this is what
+            // re-arms it -- without it the row would wait out the heartbeat
+            // after an unlock, which is the one moment the user is most likely
+            // to be looking at the notch.
+            screenAvailability.changeEvents(),
             invalidations
         ])
         self.terminalUnreadMembershipGate = TerminalUnreadMembershipGate(
@@ -171,6 +187,27 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         // was already running has them loaded -- so the socket has to be bound
         // by then, not after.
         await prepareTransport()
+        // Every branch below that returns without evaluating rows has to say so,
+        // because the gate is the one piece of state here that a refresh must
+        // *touch* to keep honest. Its entries are pruned and hidden inside
+        // `sessions(from:)`, which only the live-hook branch reaches; left
+        // alone by the others they freeze in place, unhidden, and go on
+        // re-issuing a re-check one second forward from now. Nothing can clear
+        // them, because no refresh reachable from those branches evaluates a
+        // row -- so losing Desktop with one unread row left the app waking at
+        // 1 Hz forever, with nothing on screen (CR-Fable-050).
+        //
+        // Written as a `defer` over one flag rather than a `reset()` at each
+        // `return`: the branches here are the ones that exist today, and the
+        // failure was a branch added later that nobody remembered to teach.
+        // The Claude Code service does the same thing at each of its two early
+        // returns, which is the same rule with a smaller surface.
+        var didEvaluateRows = false
+        defer {
+            if !didEvaluateRows {
+                terminalUnreadMembershipGate.reset()
+            }
+        }
         var hookState = await hookEvents.drainDeliveredEvents()
         let hookDiagnostic = hookState.diagnostic
         let desktopProcessIdentifier = await desktopProcessIdentifierProvider()
@@ -258,6 +295,11 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     projectMetadata: projectSnapshot,
                     unreadState: unreadSnapshot
                 )
+                // The one branch that looked at every listed row and pruned the
+                // gate to match. Anything it hid or dropped is hidden or
+                // dropped; anything still in there is there because this pass
+                // put it there.
+                didEvaluateRows = true
                 scheduleQuotaRefreshIfNeeded()
                 return remember(
                     AgentSnapshot(
@@ -425,7 +467,10 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         // is the one deadline here measured partly forward from now rather than
         // from when its work became due, because the row it covers is waiting
         // on the user and not on an interval that started somewhere.
-        if let terminal = terminalUnreadMembershipGate.nextDeadline(now: clock.now()) {
+        if let terminal = terminalUnreadMembershipGate.nextDeadline(
+            now: clock.now(),
+            screenIsAvailable: screenAvailability.isAvailable()
+        ) {
             deadlines.append(terminal)
         }
         return deadlines.min()
