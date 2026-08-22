@@ -13272,6 +13272,83 @@ for line in sys.stdin:
         #expect(ClaudeCodeSessionRegistry.sessions(in: Data("no list here".utf8)) == nil)
     }
 
+    /// A bracketed log prefix does not take Claude Code off the notch.
+    ///
+    /// The span used to run from the first `[` to the last `]`, on the argument
+    /// that a span taken that way is never a line printed before or after the
+    /// array. It is not: `[INFO] …`, `[2026-08-21T…] …` and `[server] …` are
+    /// the ordinary shape of a log line, and one above the array starts the
+    /// span inside log text while one below it ends the span past the array.
+    /// Every read then fails to decode — which at this boundary is
+    /// indistinguishable from a command that never answered, so after the trust
+    /// ceiling the mark leaves the notch and every row is withheld while the
+    /// sessions are still running (CR-Fable-039). The array is now found by
+    /// offering each balanced span to the decoder, which is the only thing that
+    /// can say where it starts.
+    @Test @MainActor
+    func aBracketedLogPrefixDoesNotHideTheSessionList() {
+        let prefixed = Data("""
+        [INFO] mcp-server: starting
+        [2026-08-21T09:14:04.634Z] Client.listTools() called - returning empty list
+        [
+          {
+            "pid": 11115,
+            "cwd": "/Users/someone/Projects/thing",
+            "kind": "interactive",
+            "startedAt": 1786919144634,
+            "sessionId": "s-1",
+            "name": "thing-21"
+          }
+        ]
+        [server] shutting down
+        """.utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: prefixed)?.map(\.sessionID) == ["s-1"])
+
+        // Brackets are structure outside strings and text inside them, and the
+        // in-string state ends at every newline because a JSON string can never
+        // hold a raw one. Both halves are load-bearing here: the unpaired quote
+        // in the log line must not swallow the array below it, and the `]` in a
+        // working directory's name must not close the array early.
+        let quoted = Data("""
+        [INFO] mcp-server: no handler for "list_tools
+        [{"pid": 3, "cwd": "/Users/someone/Projects/archive]2025",
+          "startedAt": 1786919144634, "sessionId": "s-2"}]
+        """.utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: quoted)?.map(\.sessionID) == ["s-2"])
+
+        // An opening bracket nothing ever closes is skipped, rather than taking
+        // the rest of the stream — the array included — with it.
+        let unclosed = Data("""
+        [INFO unterminated
+        [{"pid": 5, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "s-4"}]
+        """.utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: unclosed)?.map(\.sessionID) == ["s-4"])
+    }
+
+    /// An empty span in somebody's log line does not empty the session list.
+    ///
+    /// `[]` is a plausible thing for a log line to carry, and of every span
+    /// that decodes it is the one that costs the most: an empty list is a
+    /// *known*-empty list at this boundary, so it reports the product closed
+    /// and takes every row with it. It is therefore the last answer taken and
+    /// never the first (CR-Fable-039).
+    @Test @MainActor
+    func anEmptySpanInALogLineDoesNotEmptyTheSessionList() {
+        let emptyAbove = Data("""
+        [INFO] mcp-server: advertised tools []
+        [{"pid": 4, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "s-3"}]
+        """.utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: emptyAbove)?.map(\.sessionID) == ["s-3"])
+
+        // A list that really is empty is still read as empty — that answer is
+        // what says the product is closed, and it is not being guessed away.
+        let genuinelyEmpty = Data("""
+        [INFO] mcp-server: advertised tools []
+        []
+        """.utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: genuinelyEmpty)?.isEmpty == true)
+    }
+
     /// The command reports what a session is doing, and one word this app does
     /// not know is no report at all.
     ///

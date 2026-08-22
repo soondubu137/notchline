@@ -726,8 +726,8 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// screen locked (CR-Fable-002). It is not a cheap command: 0.26-0.33s of
     /// CPU measured here (`/usr/bin/time -p`, user + sys, reaped children
     /// included), and it **starts the user's MCP servers** on the way -- which
-    /// is why ``bracketedSpan`` exists -- so each spawn is a process tree, not
-    /// a process. At one every 30-60 seconds that is 0.4%-1.1% of a core
+    /// is why ``arraySpans(in:)`` exists -- so each spawn is a process tree,
+    /// not a process. At one every 30-60 seconds that is 0.4%-1.1% of a core
     /// forever, the single largest steady-state cost in a product whose bar is
     /// "barely noticeable".
     ///
@@ -910,7 +910,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// so somebody else's log line does not merely cost one reading — it ages
     /// this product towards `Disconnected` and takes its mark off the notch.
     /// The line-by-line trick used for the quota does not transfer, because
-    /// this array is pretty-printed across many lines; the bracketed span does.
+    /// this array is pretty-printed across many lines; ``arraySpans(in:)`` does.
     ///
     /// Made `static` and non-private so the rule can be tested against captured
     /// bytes rather than by running anything, exactly as the quota's parser is.
@@ -922,10 +922,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         in data: Data,
         observedAt: Date = .distantPast
     ) -> [ClaudeCodeSession]? {
-        let decoder = JSONDecoder()
-        let reported = (try? decoder.decode([Reported].self, from: data))
-            ?? bracketedSpan(in: data).flatMap { try? decoder.decode([Reported].self, from: $0) }
-        guard let reported else { return nil }
+        guard let reported = reportedEntries(in: data) else { return nil }
         return reported.compactMap { entry in
             guard let sessionID = entry.sessionId, !sessionID.isEmpty,
                   let pid = entry.pid,
@@ -951,15 +948,83 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         }
     }
 
-    /// From the first `[` to the last `]`, which is the array and whatever the
-    /// array itself contains -- never a line printed before or after it.
-    nonisolated private static func bracketedSpan(in data: Data) -> Data? {
-        guard let start = data.firstIndex(of: UInt8(ascii: "[")),
-              let end = data.lastIndex(of: UInt8(ascii: "]")),
-              start < end else {
-            return nil
+    /// The entries the command reported, taken from wherever in the stream its
+    /// array happens to be.
+    ///
+    /// **The decoder decides where the array starts, because nothing else can.**
+    /// This used to take one span, from the first `[` to the last `]`, on the
+    /// argument that a span taken that way is never a line printed before or
+    /// after the array. That only holds while no surrounding line contains a
+    /// bracket -- true of the single pollutant that was measured, and false of
+    /// the shape log lines usually have: `[INFO] ...`, `[2026-08-21T...] ...`,
+    /// `[server] ...`. One of those above the array starts the span inside log
+    /// text, one below it ends the span past the array, and either way the
+    /// decode fails -- which at this boundary is not one lost reading but the
+    /// product ageing into `Disconnected` with its sessions still running
+    /// (CR-Fable-039). The defence held against the pollutant it was written
+    /// from and gave way to the commonest form of the same thing.
+    ///
+    /// So every balanced `[ ... ]` is offered to the decoder in the order they
+    /// open, and the first one that is a session list is the answer.
+    ///
+    /// **An empty decode is the last answer taken, never the first.** `[]` is a
+    /// plausible thing for a log line to carry, and it is the one answer that
+    /// costs everything: an empty list is a *known*-empty list here, so it
+    /// reports the product closed and takes every row with it. A non-empty span
+    /// lower down therefore wins over an empty one above it, and an empty
+    /// answer is returned only when the stream offered nothing else.
+    nonisolated private static func reportedEntries(in data: Data) -> [Reported]? {
+        let decoder = JSONDecoder()
+        // The ordinary case: nothing else wrote to this stdout.
+        if let whole = try? decoder.decode([Reported].self, from: data) { return whole }
+        var empty: [Reported]?
+        for span in arraySpans(in: data) {
+            guard let entries = try? decoder.decode([Reported].self, from: Data(data[span]))
+            else { continue }
+            if !entries.isEmpty { return entries }
+            if empty == nil { empty = entries }
         }
-        return Data(data[start ... end])
+        return empty
+    }
+
+    /// Every balanced `[ ... ]` in the stream, in the order they open.
+    ///
+    /// Brackets inside a JSON string do not count -- a working directory may be
+    /// named `~/Projects/[wip]`, and counting the one in it would close the
+    /// array early. The in-string state is dropped at every newline, because a
+    /// JSON string can never contain a raw one: an odd quote in somebody's log
+    /// line therefore cannot swallow the array printed below it.
+    ///
+    /// An opening bracket nothing ever closes is simply never offered, rather
+    /// than taking the rest of the stream with it.
+    nonisolated private static func arraySpans(in data: Data) -> [ClosedRange<Data.Index>] {
+        var open: [Data.Index] = []
+        var spans: [ClosedRange<Data.Index>] = []
+        var inString = false
+        var escaped = false
+        for index in data.indices {
+            if escaped {
+                escaped = false
+                continue
+            }
+            switch data[index] {
+            case UInt8(ascii: "\n"):
+                inString = false
+            case UInt8(ascii: "\\") where inString:
+                escaped = true
+            case UInt8(ascii: "\""):
+                inString.toggle()
+            case UInt8(ascii: "[") where !inString:
+                open.append(index)
+            case UInt8(ascii: "]") where !inString:
+                if let start = open.popLast() { spans.append(start ... index) }
+            default:
+                break
+            }
+        }
+        // Recorded as they close, which puts an inner array ahead of the one
+        // holding it; the outermost is the one worth offering first.
+        return spans.sorted { $0.lowerBound < $1.lowerBound }
     }
 
     /// Runs the documented command and returns its stdout.
