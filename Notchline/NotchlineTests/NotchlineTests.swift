@@ -9941,6 +9941,103 @@ for line in sys.stdin:
         #expect(await harness.service.fetchSnapshot().sessions.isEmpty)
     }
 
+    /// A session leaving the list is forgotten, not merely left off the screen.
+    ///
+    /// The test above pins what the *user* sees, and that was always right. What
+    /// was wrong is behind it: the row gate only skips a turn whose session is
+    /// unlisted, so the entry itself stayed in the reducer until the app quit
+    /// (CR-Fable-008). Two hot paths scale with the dictionary rather than with
+    /// the rows -- one string built and sorted per held turn on every reduced
+    /// batch of events, and every turn sorted again on every refresh -- so a
+    /// menu-bar app left running for a month ends up doing most of that work on
+    /// sessions that ended weeks ago.
+    ///
+    /// Asserted against the reducer rather than against the snapshot on
+    /// purpose: a snapshot assertion cannot tell "pruned" from "hidden", which
+    /// is exactly the difference this is about.
+    @Test @MainActor
+    func aSessionLeavingTheListIsForgottenByTheReducer() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        let cwd = "/Users/someone/Projects/thing"
+        harness.live = [
+            harness.session(id: "s-old", cwd: cwd, pid: 4_242),
+            harness.session(id: "s-live", cwd: cwd, pid: 4_243)
+        ]
+        try harness.queue(event: "UserPromptSubmit", session: "s-old", turn: "p-1", at: 300)
+        try harness.queue(event: "Stop", session: "s-old", turn: "p-1", at: 400)
+        try harness.queue(event: "UserPromptSubmit", session: "s-live", turn: "q-1", at: 500)
+        _ = await harness.service.fetchSnapshot()
+        #expect(await harness.repository.observedState().turns.count == 2)
+
+        // `/clear` under the same pid, which is the route that makes this grow
+        // faster than a count of sessions would suggest: the process lives on
+        // and the id it is listed under changes, so every clear of the context
+        // leaves one more entry behind.
+        harness.live = [
+            harness.session(id: "s-new", cwd: cwd, pid: 4_242),
+            harness.session(id: "s-live", cwd: cwd, pid: 4_243)
+        ]
+        _ = await harness.service.fetchSnapshot()
+        #expect(
+            await harness.repository.observedState().turns.map(\.threadID) == ["s-live"],
+            "the turn of a session no list names is held for the life of the process"
+        )
+    }
+
+    /// And it is forgotten only where the list is evidence about it.
+    ///
+    /// Deleting state is the one thing a wrong list cannot be allowed to do, so
+    /// the pruning is held to the same two questions the rest of this file
+    /// asks: could this reading have seen the Turn, and did anybody answer at
+    /// all. Both failure modes are real and neither is visible in a snapshot --
+    /// a row withheld looks the same as a row that can never come back.
+    @Test @MainActor
+    func aTurnIsForgottenOnlyWhereTheListCanSpeakForIt() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        let cwd = "/Users/someone/Projects/thing"
+        harness.live = [harness.session(id: "s-listed", cwd: cwd, pid: 4_243)]
+
+        // A session born after the reading began -- a desktop-hosted one is
+        // created *by* its first prompt, so its record can arrive after a list
+        // that is already out. The reading cannot have seen it, so it is not
+        // evidence that it is gone.
+        harness.listReadStartedAt = Date(timeIntervalSince1970: 350)
+        try harness.queue(event: "UserPromptSubmit", session: "s-younger", turn: "p-1", at: 400)
+        _ = await harness.service.fetchSnapshot()
+        #expect(
+            await harness.repository.observedState().turns
+                .contains { $0.threadID == "s-younger" },
+            "a reading taken before the event cannot prove the session that sent it ended"
+        )
+
+        // A reading that postdates it can, and does.
+        harness.listReadStartedAt = Date(timeIntervalSince1970: 500)
+        _ = await harness.service.fetchSnapshot()
+        #expect(
+            await harness.repository.observedState().turns
+                .allSatisfy { $0.threadID != "s-younger" }
+        )
+
+        // Presence `unknown` is `claude` having failed to answer for long
+        // enough that its last list expired. The rows go either way, but a list
+        // nobody confirmed is the absence of evidence, and only evidence may
+        // delete anything (`AGENTS.md` §6.2).
+        harness.presence = .unknown
+        try harness.queue(event: "UserPromptSubmit", session: "s-ghost", turn: "p-2", at: 300)
+        _ = await harness.service.fetchSnapshot()
+        #expect(
+            await harness.repository.observedState().turns
+                .contains { $0.threadID == "s-ghost" },
+            "a list that has stopped being answered for is not proof a session ended"
+        )
+    }
+
     /// A session coming or going wakes the product and tells the list.
     ///
     /// Two failures met here, and either one alone was enough to lose a whole

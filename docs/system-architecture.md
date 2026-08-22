@@ -517,6 +517,28 @@ flowchart LR
 
 倒数第二行是那条内存边界的直接验证：60 KB 的 delta 与 120 字节的 delta 同价，因为折叠函数只扫新 delta 且在头部写满时立刻停下——正文的长度不进入代价。最后一行是「不为 delta 写文件」这条设计的直接验证。
 
+### 事件代价的另一个维度：reducer 里还留着多少个 Turn（CR-Fable-008）
+
+上表量的是**每个事件**的代价，而它只在 reducer 是空的时候成立。真正随时间涨的是另一维：`HookEventRepository` 每消费一批事件就把**当前持有的每个 Turn** 拼成一个字符串并整体排序（`renderedProjection()`，用来判断渲染投影变没变），每次刷新再把所有 Turn 排序拷贝一遍（`snapshot()`）。两者都按持有量算，不按屏幕上的行数算。
+
+Release 实测（`ENABLE_TESTABILITY=YES`，同一台机器，300 次采样取中位数，每个条目带一条 240 字符——即上限——的 prompt 预览）：
+
+| reducer 里的 Turn 数 | 一个事件走完刷新路径的 drain | 其中 `snapshot()` 一次 |
+| --- | --- | --- |
+| 0 | 13.7 µs | 6.0 µs |
+| 100 | 236.8 µs | 152.4 µs |
+| 500 | 1.28 ms | 0.87 ms |
+| 2000 | 5.26 ms | 3.62 ms |
+| 5000 | 11.42 ms | 7.67 ms |
+
+干净的线性：约 **2.2 µs／持有的 Turn／事件**，其中排序快照约 1.5 µs、渲染投影约 0.7 µs。参照上一节，传输那一端是 2.06 ms／事件——**到 2000 个条目时，reducer 自己比传输还贵 2.5 倍**。
+
+问题不在这几个函数，而在于 Claude Code 侧从来没有东西**删除**过条目。预览（`retainPreviews`）和 transcript 缓存（`transcripts.retain`）都在同一次刷新里按活会话列表裁剪，reducer 条目却只是在建行时被 `guard let session = liveByID[turn.threadID]` 挡掉——屏幕始终是对的，涨的是屏幕背后的工作。而且涨得比「一天开几个会话」快：`/clear` 与会话内 `/resume` 会**原地**换掉 session id，所以一个长命的 CLI 进程每清一次上下文就多留一个死条目。内存本身不大（估算每周 100 KB–1 MB），但没有上限，而一个菜单栏应用的正常状态就是连开一个月。
+
+修法是在同一次刷新里、按同一个集合，调两侧共用的 `removeThreads(notIn:snapshotStartedAt:)`，并且带着和 Codex 侧一样的护栏：读数开始得比某个 Turn 的最后一个事件还早，就说明它看不到那个事件报告的东西，不能作为「该会话没了」的证据；再加一个 `newTurnReconciliationGrace` 的宽限，覆盖「prompt hook 比会话记录先到」——桌面端会话正是被它的第一个 prompt 创建的。第三条护栏是 Claude Code 独有的：presence 为 `unknown` 时**不裁剪**。那是 `claude` 连续失败到信任上限之后的状态，此时列表不是「答出来的空」而是「没人回答」，行照样不画，但没人回答不构成删除状态的证据（`AGENTS.md` §6.2）。
+
+**没有被这次修改覆盖的一处**：`HookTurnState.retiredTurnIDs` 仍然按该线程每个轮次涨一个 id。它的上限是那个线程自己的寿命，不是进程的寿命——一个还被列出的会话，它的条目本来就还需要——所以它是另一个问题，不在这次的范围里。
+
 ### 启动瞬间的 CPU：今日 token 的第一遍扫描
 
 启动后头几秒 `%cpu` 冲到 100% 上下、随后归零，全部来自 `ClaudeCodeTokenCounter.scan` 的第一遍。进程刚起来时 `progress` 是空的，**当天被写过的每个 transcript 都要从第 0 字节读一遍**（实测机器 42 MB）；此后每 60 秒一次的复扫只读新追加的字节，不在这一档成本里。
@@ -590,7 +612,7 @@ flowchart LR
 ## 7. 保持 clean and neat 的架构约束
 
 1. **只有一个编排中心**：跨数据源的决策集中在 `LiveCodexMonitorService`；UI、文件适配器和 transport 不互相拼状态。
-2. **只有一个 Turn reducer**：Hook 事件只进入 `HookEventRepository`；历史回放、乱序、重复和精确身份规则不散落在视图层。第二个来源可以**退休**一个 Turn，但只能在这个 actor 里、带顺序护栏，并且**不得开启、命名或描述**一个 Turn：Codex 侧的 `removeThreads(notIn:snapshotStartedAt:)` 与 Claude Code 侧的 `endTurnsForStoppedSessions(_:)`、`endInterruptedTurns(_:)` 是仅有的三处，后两者见 [ADR 0011](adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md)。这一条此前写作「不得携带 Turn 身份」，而那是把当时唯一一份证据的性质写成了规则：会话状态那份读数里确实没有轮次身份。桌面端会话的中断记录里有——它就是 hook 的 `prompt_id`——**证据带着身份反而更严**：它只能结束它指名的那个轮次，指到一个 reducer 没在持有的轮次就什么也不做，而不像不带身份的读数那样只能对「此刻开着的那个」发话。因此规则改成对能力的约束（只能退休），不再是对证据形状的约束。
+2. **只有一个 Turn reducer**：Hook 事件只进入 `HookEventRepository`；历史回放、乱序、重复和精确身份规则不散落在视图层。第二个来源可以**退休**一个 Turn，但只能在这个 actor 里、带顺序护栏，并且**不得开启、命名或描述**一个 Turn：两侧共用的 `removeThreads(notIn:snapshotStartedAt:)` 与 Claude Code 侧的 `endTurnsForStoppedSessions(_:)`、`endInterruptedTurns(_:)` 是仅有的三处，后两者见 [ADR 0011](adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md)。第一处此前只有 Codex 侧在调，Claude Code 侧因此从不删除任何 reducer 条目（CR-Fable-008，代价见 §6）；它现在由两侧在**同一次**裁剪预览与缓存的刷新里各调一次，判据也仍是同一条——列表只有在它真能替一个 Turn 说话时才可以结束它。这一条此前写作「不得携带 Turn 身份」，而那是把当时唯一一份证据的性质写成了规则：会话状态那份读数里确实没有轮次身份。桌面端会话的中断记录里有——它就是 hook 的 `prompt_id`——**证据带着身份反而更严**：它只能结束它指名的那个轮次，指到一个 reducer 没在持有的轮次就什么也不做，而不像不带身份的读数那样只能对「此刻开着的那个」发话。因此规则改成对能力的约束（只能退休），不再是对证据形状的约束。
 3. **只有一个 UI 数据契约**：上层只接收 `MonitorSnapshot`；availability、sessions、quota 与 diagnostic 来自同一快照输入。
 4. **私有依赖停在边界**：`.codex-global-state.json` 的 schema 只存在于两个只读 repository；领域层只看到 Project resolution 和带权威性标记的 unread 集合。
 5. **恢复逻辑不伪造业务状态**：timeout、探活、缓存和断开宽限只决定保留或重建连接，不用计时器猜测 Running、Approval、已读或 Project。（ADR 0012 的第三条判定不是这一条的例外：它读的是三个当下的状态——哪个应用持有前台、显示器醒着没有、屏幕锁着没有——没有一个是计时器，等待本身也不会让任何一行消失。它确实推翻了同一份 ADR 里「只用跃迁」的写法，理由与代价写在那里。同 ADR 的终端判定更不是例外：它读的是内核记下的一次已经发生的动作，等待本身同样不产生它——一台没人的机器上那个时刻永远不动。）

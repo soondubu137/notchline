@@ -2053,21 +2053,43 @@ actor HookEventRepository {
         turnsByThreadID[threadID] = turn
     }
 
+    /// Forgets the threads a listing of what exists no longer names.
+    ///
+    /// The reducer's own bound, and the only one it has: nothing else here ever
+    /// removes a thread, so without this every thread the process has ever
+    /// heard from is still being projected and sorted long after its rows
+    /// stopped being drawn. Both products call it, from the same refresh that
+    /// prunes their previews and caches against the same list.
+    ///
+    /// **A list is allowed to end a thread only where it can speak for it**,
+    /// which is what the two exemptions below are. What "no longer named" means
+    /// differs by product and does not have to be spelled out here: a Codex
+    /// thread is archived or deleted, a Claude Code session exits or has its id
+    /// rotated in place by `/clear`. Either way the caller has read which ones
+    /// exist and this is held to that reading.
+    ///
+    /// - Parameters:
+    ///   - listedThreadIDs: Every thread the reading named.
+    ///   - snapshotStartedAt: When that reading *began*. A reading that started
+    ///     before a Turn's last event cannot have seen what that event
+    ///     reported, so it is not evidence against it.
     func removeThreads(
-        notIn unarchivedThreadIDs: Set<String>,
+        notIn listedThreadIDs: Set<String>,
         snapshotStartedAt: Date
     ) -> HookStateSnapshot {
         let now = clock.now()
         turnsByThreadID = turnsByThreadID.filter {
-            if unarchivedThreadIDs.contains($0.key) {
+            if listedThreadIDs.contains($0.key) {
                 return true
             }
             // A list request that began before the latest Hook boundary cannot
-            // prove that the new Turn was archived or deleted.
+            // prove that the new Turn is gone.
             if snapshotStartedAt < $0.value.lastEventAt {
                 return true
             }
-            // A prompt hook can arrive just before the state DB is updated.
+            // A prompt hook can arrive just before the record that would have
+            // listed its thread is written -- Codex's state DB, or the
+            // `~/.claude/sessions` entry a desktop-hosted session is born with.
             // Keep a short grace period so reconciliation does not erase a new turn.
             return now.timeIntervalSince($0.value.startedAt)
                 < timing.newTurnReconciliationGrace

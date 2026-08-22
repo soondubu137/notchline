@@ -522,13 +522,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // launch every refresh. And what an invalidation costs is the
         // registry's decision, not this one's: ``edgeFloor`` holds the extra
         // reading to one every two seconds however many events arrive.
-        let readStartedAt = await sessions.listReadStartedAt()
+        var readStartedAt = await sessions.listReadStartedAt()
         let heardFromAnUnlistedSession = consumed.turns.contains { turn in
             liveByID[turn.threadID] == nil && turn.lastEventAt > readStartedAt
         }
         if heardFromAnUnlistedSession {
             await sessions.invalidate()
             (presence, live, liveByID) = await readSessions()
+            // Re-asked so this stays the reading `liveByID` actually came from.
+            // It is the left-hand side of the pruning below as well as of the
+            // test above, and a list re-read on the spot can speak for
+            // everything up to the moment it started -- which is the whole
+            // point of having asked for it again.
+            readStartedAt = await sessions.listReadStartedAt()
         }
 
         // The events are drained first and this is applied to what they left,
@@ -599,10 +605,47 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // it, whether or not a turn also ended in the same one.
         let hookDiagnostic = MonitorDiagnostics.combined(consumed.diagnostic, hookState.diagnostic)
 
-        await transcripts.retain(sessionIDs: Set(liveByID.keys))
+        // What this refresh's reading of the list says exists. Three things
+        // are held to it below, and "the same set" is meant literally.
+        let listedSessionIDs = Set(liveByID.keys)
+        await transcripts.retain(sessionIDs: listedSessionIDs)
         // Text belonging to a session that has ended does not outlive the row
         // that showed it. Pruned against the same set as the titles.
-        hookEvents.retainPreviews(forSessions: Set(liveByID.keys))
+        hookEvents.retainPreviews(forSessions: listedSessionIDs)
+        // And the turns behind both of them, against that same set.
+        //
+        // This was the one pruning missing (CR-Fable-008). Rows were right
+        // without it -- a turn whose session is not listed draws nothing, which
+        // is the gate a few lines below -- so what grew was not the panel but
+        // the work behind it: `HookEventRepository` builds and sorts one string
+        // per held turn on *every* reduced batch of events, and sorts them all
+        // again on every refresh. Both therefore scaled with everything the
+        // process had ever seen rather than with what was on screen, and each
+        // dead entry also held its two previews and a `retiredTurnIDs` set for
+        // the life of the app. Measured under Release at ~2.2 µs per held turn
+        // per event, which puts one event at 5.3 ms once 2000 entries have
+        // collected -- 2.5x what CC-015 priced the whole transport at
+        // (`system-architecture.md` §6).
+        //
+        // A session count understates how fast that arrives here. `/clear` and
+        // an in-session `/resume` rotate the session id in place, so a single
+        // long-lived CLI mints a fresh dead entry every time the user clears
+        // context -- the same behaviour the unlisted-session check above exists
+        // for, seen from the other end.
+        //
+        // **Only where the list is knowledge.** Presence `unknown` is `claude`
+        // having failed to answer past the trust ceiling, and a list nobody has
+        // confirmed is not evidence that a session ended (`AGENTS.md` §6.2) --
+        // it is the reading that is missing, not the session. `closed` is the
+        // opposite and prunes like any other answer: it is the command saying
+        // nothing is running. The rows are withheld either way, and the
+        // difference is that only one of the two may also *forget*.
+        if presence != .unknown {
+            hookState = await hookEvents.removeThreads(
+                notIn: listedSessionIDs,
+                snapshotStartedAt: readStartedAt
+            )
+        }
 
         func title(for session: ClaudeCodeSession) async -> String? {
             await transcripts.title(

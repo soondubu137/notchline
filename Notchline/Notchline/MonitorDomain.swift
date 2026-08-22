@@ -45,9 +45,16 @@ enum AgentPresence: String, CaseIterable, Codable, Sendable {
     case closed
     /// No trustworthy evidence either way — the only source has been failing
     /// long enough that its last answer has expired. It joins `closed` in every
-    /// decision; it stays a separate value because the reason differs, and
-    /// because a source that can never say this is a source that believes a
-    /// stale answer forever.
+    /// decision about what to *draw*; it stays a separate value because the
+    /// reason differs, and because a source that can never say this is a source
+    /// that believes a stale answer forever.
+    ///
+    /// Where the decision is what to **forget**, the two part company, and that
+    /// is the one place the distinction earns its keep. `closed` is the source
+    /// answering that nothing is running, so a Turn it does not name has ended;
+    /// this is nobody having answered at all, which is not evidence about any
+    /// session and may not delete state — see
+    /// ``ClaudeCodeMonitorService`` pruning the Hook reducer.
     case unknown
 
     /// Only `open` is presence. Unknown is not a weak yes.
