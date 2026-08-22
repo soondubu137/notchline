@@ -70,8 +70,9 @@ struct AppSettingsView: View {
             SettingsFootnote(
                 "Each switch adds only the lifecycle events Notchline needs, and takes "
                     + "them out again when it is off; your own settings and hooks are left "
-                    + "alone. Before each change to ~/.claude/settings.json, the file is "
-                    + "copied to settings.json.notchline-backup beside it."
+                    + "alone. Before each change to either file, it is copied beside "
+                    + "itself as hooks.json.notchline-backup or "
+                    + "settings.json.notchline-backup."
             ) {
                 Button("Recheck") {
                     store.refreshNow()
@@ -246,7 +247,10 @@ struct ProductConnectionRows: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .disabled(store.isIntegrationBusy(for: .codex))
-                .help("Installs or removes the five Codex lifecycle definitions together.")
+                .help(
+                    "Installs or removes the five Codex lifecycle definitions together, "
+                        + "after copying ~/.codex/hooks.json to hooks.json.notchline-backup."
+                )
         }
 
         SettingsSeparator()

@@ -215,7 +215,7 @@ The line worth calling out is the refresh row. Today `fetchSnapshot()` calls `up
 
 ## 11. What is kept, unchanged
 
-- **`ManagedHooksConfiguration` and `ManagedHooksFileEditor`.** Refuse rather than coerce, byte-compare before writing, read back to verify, keep one recovery copy from before the first edit. This is the good part of the current implementation, it edits a file the app does not own, and it gets stricter treatment under this design rather than less.
+- **`ManagedHooksConfiguration` and `ManagedHooksFileEditor`.** Refuse rather than coerce, byte-compare before writing, read back to verify, keep a recovery copy of what is about to be replaced. (Written when this doc was drafted as "one recovery copy from before the first edit" — [ADR 0016](../../adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md) refreshes it on every write instead, for both products.) This is the good part of the current implementation, it edits a file the app does not own, and it gets stricter treatment under this design rather than less.
 - **The reducer's rules.** Four states with sticky `Completed`; `request_user_input` and `request_permissions` as waits that own their `tool_use_id`; `PermissionRequest` borrowing the still-open call's id; a borrowed wait closing on activity against any *other* call. That last one is not tidiness — `system-architecture.md` §3 records that a denied Bash approval produces no event at all for that call, 67 seconds of silence and then the turn's `Stop`.
 - **`AgentHookVocabulary`.** Separating "what happened" from "what this product calls it" is right, and it is what lets one store serve both products.
 - **`timeout: 3` and synchronous execution.** Ordering is worth more than the milliseconds.

@@ -10,10 +10,11 @@ import Foundation
 /// this app's own keys are touched, anything it cannot positively identify is
 /// refused rather than coerced, the bytes are proved unchanged across the
 /// read-modify-write, and the result is read back before success is reported.
-/// One thing is added for this file in particular: the copy at
-/// ``HookIntegrationPaths/hooksBackup`` is refreshed immediately before every
-/// write, so `settings.json.notchline-backup` always holds the file as it was
-/// just before this app last changed it.
+/// The copy at ``HookIntegrationPaths/hooksBackup`` is refreshed immediately
+/// before every write, so `settings.json.notchline-backup` always holds the
+/// file as it was just before this app last changed it — the same rule the
+/// Codex file gets, for reasons that turned out to apply there at least as
+/// strongly (``ManagedHooksFileEditor``).
 ///
 /// The asymmetry ADR 0010 recorded is therefore gone. It cost one thing only —
 /// installation friction on the product whose users are least likely to accept

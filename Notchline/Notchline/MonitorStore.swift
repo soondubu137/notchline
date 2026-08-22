@@ -1689,8 +1689,13 @@ final class MonitorStore: ObservableObject {
     ///
     /// Per product because the next step is: Codex keys trust to each
     /// definition's place in the file and will not run one until the user says
-    /// so, while Claude Code runs what is registered and the only thing worth
-    /// pointing at is the copy of their file this app just put beside it.
+    /// so, while Claude Code runs what is registered.
+    ///
+    /// Both products get the copy beside their file, and only Claude Code's
+    /// message names it — not because the Codex one is not made, but because
+    /// that message has a required action to carry and a second sentence would
+    /// compete with it. The disclosure that has to land is the one *before* the
+    /// switch is flipped, and both footnotes name both files.
     nonisolated private static func installedMessage(for agent: AgentKind) -> String {
         switch agent {
         case .codex:

@@ -180,13 +180,15 @@ nonisolated struct HookIntegrationPaths: Sendable {
             ].map { supportDirectory.appendingPathComponent($0) }
     }
 
-    /// The copy of the product's settings file kept beside it.
+    /// The copy of the product's configuration file kept beside it.
     ///
     /// Refreshed immediately before every change this app makes to that file,
     /// so it always holds the version being replaced —
-    /// `settings.json.notchline-backup` next to `settings.json`. See
-    /// ``ManagedHooksFileEditor`` for why it is refreshed rather than written
-    /// once.
+    /// `hooks.json.notchline-backup` next to `~/.codex/hooks.json`, and
+    /// `settings.json.notchline-backup` next to `~/.claude/settings.json`. Both
+    /// products, on the same rule: see ``ManagedHooksFileEditor`` for why it is
+    /// refreshed rather than written once, and why the Codex file is the one
+    /// where a stale copy does the most damage.
     var hooksBackup: URL {
         hooksConfiguration.appendingPathExtension("notchline-backup")
     }

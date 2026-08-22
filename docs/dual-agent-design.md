@@ -227,7 +227,7 @@ Figma §09 的 `Codex integration` 卡片围绕一个开关：拨动它，应用
 
 ~~这里原本需要一张 Figma 未画过的卡片：行内展开，里面是「不编辑你的设置文件」的说明、一段可选中的 `Configuration to add`、以及 `Copy` / `Reveal Settings File` 两个按钮。~~ 那张卡片随 ADR 0010 一起删除了，连同它渲染的片段和复制按钮。**两行并排现在没有不对称可看**，两条产品行的区别只剩脚注里的一句：两个开关写的是不同的文件，而且只有 Codex 那个后面还跟着一步信任。
 
-**新增一句必须出现在脚注里**：改动 `~/.claude/settings.json` 之前，本应用会把它复制成同目录的 `settings.json.notchline-backup`。用户没要过这个文件，它是这个决定的价格，所以要在用户拨开关之前就看见它的名字。
+**新增一句必须出现在脚注里**：改动任一文件之前，本应用会把它复制到同目录——`~/.claude/settings.json` 复制成 `settings.json.notchline-backup`，`~/.codex/hooks.json` 复制成 `hooks.json.notchline-backup`。用户没要过这两个文件，它们是这个决定的价格，所以要在用户拨开关之前就看见它们的名字。**两个都要写**：副本一直是共享编辑器的行为，两个产品同时在做，而脚注此前只提了 Claude Code 那一个。
 
 状态仍是四种，第二种仍是重点：
 

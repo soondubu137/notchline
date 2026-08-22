@@ -148,21 +148,37 @@ nonisolated struct ManagedHooksFileEditor: Sendable {
 
     /// Keeps a copy of the file as it was immediately before this write.
     ///
-    /// **Refreshed on every write, not kept from the first one.** The copy used
-    /// to be written once and never again, on the argument that a state
-    /// predating every edit of ours is the only one worth keeping. That is true
-    /// of `~/.codex/hooks.json`, which holds hooks and little else, and it is
-    /// the wrong trade for `~/.claude/settings.json`. A user who turned this on
-    /// months ago and has since kept their theme, permissions, environment and
-    /// MCP servers in that file would find `settings.json.notchline-backup`
-    /// holding a version predating all of it — and restoring it would be a data
-    /// loss this app caused. Everything of *ours* in the live file can be taken
-    /// back out by turning the switch off; months of their own edits cannot be
-    /// recovered from anywhere.
+    /// **Refreshed on every write, not kept from the first one, for both
+    /// products.** The copy used to be written once and never again, on the
+    /// argument that a state predating every edit of ours is the only one worth
+    /// keeping. That argument was made when this type only edited
+    /// `~/.codex/hooks.json`, and it does not survive either file.
     ///
-    /// So the copy means exactly one thing, and refreshing is what keeps that
-    /// meaning true: the user's file as it was immediately before this app's
-    /// most recent change to it.
+    /// It fails on `~/.claude/settings.json` because that file holds the whole
+    /// of a user's Claude Code install: somebody who turned this on months ago
+    /// and has since kept their theme, permissions, environment and MCP servers
+    /// there would find `settings.json.notchline-backup` predating all of it,
+    /// and restoring it would be a data loss this app caused.
+    ///
+    /// It fails on `~/.codex/hooks.json` for a sharper reason, and this is why
+    /// the rule is not split per product. Codex keys hook trust by
+    /// `<path>:<event>:<group index>:<handler index>` — the same measurement
+    /// that makes ``ManagedHooksConfiguration`` append at the tail. Restoring a
+    /// copy taken before this app's first edit does not merely lose the
+    /// definitions the user has added since; it renumbers the groups of the
+    /// ones that remain, so their trust silently stops applying and Codex stops
+    /// running their hooks with nothing anywhere reporting it. A stale copy of
+    /// that file is more dangerous than a stale copy of the other one, not
+    /// less. On a file this app created the once-only rule was not even
+    /// coherent: it skipped the write that created the file and then froze on
+    /// the state before this app's *second* edit, which is a version nothing
+    /// can name.
+    ///
+    /// So the copy means exactly one thing, in both files, and refreshing is
+    /// what keeps that meaning true: the user's file as it was immediately
+    /// before this app's most recent change to it. An older copy left by a
+    /// build that wrote once is replaced by the newer meaning on the next
+    /// write, deliberately.
     ///
     /// The bytes are the ones ``write(_:replacing:)`` has just read and compared,
     /// rather than a `copyItem` of the path — one less read, and no window in

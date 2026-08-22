@@ -101,9 +101,10 @@ private struct OnboardingView: View {
                 "The switches install the lifecycle definitions Notchline "
                     + "needs in ~/.codex/hooks.json and ~/.claude/settings.json, "
                     + "and remove them again when they are off; your own "
-                    + "settings and hooks are untouched. Your Claude Code "
-                    + "settings are copied to settings.json.notchline-backup "
-                    + "before each change."
+                    + "settings and hooks are untouched. Before each change, "
+                    + "the file is copied beside itself as "
+                    + "hooks.json.notchline-backup or "
+                    + "settings.json.notchline-backup."
             ) {
                 Button("Recheck") {
                     store.refreshNow()

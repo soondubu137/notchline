@@ -6862,6 +6862,126 @@ for line in sys.stdin:
         #expect(FileManager.default.fileExists(atPath: paths.hookHelper.path))
     }
 
+    /// The user's Codex hooks are copied beside themselves before every
+    /// change, and the copy is the version being replaced.
+    ///
+    /// The same invariant as
+    /// ``theUsersSettingsAreCopiedBesideThemselvesBeforeEveryChange``, pinned
+    /// on the other product because the rule is one rule and this side had no
+    /// test for it at all. It is the side where a stale copy does the most
+    /// damage, too: Codex keys hook trust by
+    /// `<path>:<event>:<group index>:<handler index>`, so restoring a copy from
+    /// before this app's first edit would renumber the groups of whatever the
+    /// user has added since and silently drop the trust on their own
+    /// definitions — the failure the append-at-the-tail rule exists to avoid,
+    /// arrived at through the recovery file instead.
+    @Test @MainActor
+    func theUsersCodexHooksAreCopiedBesideThemselvesBeforeEveryChange() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: paths.hooksConfiguration.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let manager = FileManager.default
+        let hooks = paths.hooksConfiguration
+        let backup = paths.hooksBackup
+
+        // A file this app creates has no earlier version, so it leaves no copy.
+        try await CodexHookRegistrar(paths: paths).install()
+        #expect(!manager.fileExists(atPath: backup.path))
+        try await CodexHookRegistrar(paths: paths).uninstall()
+        try? manager.removeItem(at: hooks)
+
+        // Now a file that was theirs first.
+        let theirs = """
+            {
+              "hooks" : {
+                "Stop" : [
+                  {
+                    "hooks" : [
+                      { "command" : "/usr/bin/true", "type" : "command" }
+                    ]
+                  }
+                ]
+              }
+            }
+            """
+        try Data(theirs.utf8).write(to: hooks)
+
+        try await CodexHookRegistrar(paths: paths).install()
+        #expect(String(decoding: try Data(contentsOf: backup), as: UTF8.self) == theirs)
+
+        // They add a definition of their own and trust it in `/hooks`. The next
+        // change this app makes must copy *this* version -- the copy that still
+        // held the pre-install file would, if it were ever restored, take their
+        // new group out and renumber what was left.
+        var current = try #require(
+            try JSONSerialization.jsonObject(with: try Data(contentsOf: hooks))
+                as? [String: Any]
+        )
+        var currentHooks = try #require(current["hooks"] as? [String: Any])
+        var stopGroups = try #require(currentHooks["Stop"] as? [[String: Any]])
+        stopGroups.append([
+            "hooks": [["type": "command", "command": "/usr/bin/theirs"]]
+        ])
+        currentHooks["Stop"] = stopGroups
+        current["hooks"] = currentHooks
+        try JSONSerialization
+            .data(withJSONObject: current, options: [.prettyPrinted, .sortedKeys])
+            .write(to: hooks)
+        let beforeRemoval = try Data(contentsOf: hooks)
+
+        try await CodexHookRegistrar(paths: paths).uninstall()
+
+        #expect(try Data(contentsOf: backup) == beforeRemoval)
+        let restoredHooks = try #require(
+            (try JSONSerialization.jsonObject(with: try Data(contentsOf: backup))
+                as? [String: Any])?["hooks"] as? [String: Any]
+        )
+        let restoredCommands = (restoredHooks["Stop"] as? [[String: Any]] ?? [])
+            .flatMap { group in
+                (group["hooks"] as? [[String: Any]] ?? []).compactMap {
+                    $0["command"] as? String
+                }
+            }
+        #expect(restoredCommands.contains("/usr/bin/theirs"))
+    }
+
+    /// A refused install leaves no copy either.
+    ///
+    /// The copy is written from inside the write, so a configuration this app
+    /// stops at never reaches it. Pinned because the opposite would be worse
+    /// than useless: a file named for a change that did not happen, sitting in
+    /// the user's `~/.codex` next to a file it is identical to.
+    @Test @MainActor
+    func aRefusedCodexInstallLeavesNeitherAnEditNorACopy() async throws {
+        for hostile in Self.hostileHookConfigurations {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            try FileManager.default.createDirectory(
+                at: paths.hooksConfiguration.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data(hostile.json.utf8).write(to: paths.hooksConfiguration)
+
+            _ = try? await CodexHookRegistrar(paths: paths).install()
+
+            #expect(
+                !FileManager.default.fileExists(atPath: paths.hooksBackup.path),
+                "a refused install left a copy when \(hostile.name)"
+            )
+        }
+    }
+
     /// Everything outside the six managed definitions survives a round trip.
     @Test @MainActor
     func installAndUninstallPreserveEverythingTheyDoNotManage() async throws {
@@ -12691,14 +12811,16 @@ for line in sys.stdin:
     /// The user's settings are copied beside themselves before every change,
     /// and the copy is the version being replaced.
     ///
-    /// **Refreshed, not written once.** The Codex side kept one copy from
-    /// before this app's first edit, on the argument that a pre-Notchline state
-    /// is the only one worth keeping. That argument inverts on this file: a
-    /// user who switched the integration on months ago and has since kept their
-    /// theme, permissions and MCP servers here would find the copy predating
-    /// all of it, and restoring it would be a data loss this app caused.
-    /// Everything of ours in the live file comes back out by switching off; the
-    /// months of their own edits are recoverable from nowhere.
+    /// **Refreshed, not written once**, and the same is now pinned for Codex
+    /// in ``theUsersCodexHooksAreCopiedBesideThemselvesBeforeEveryChange``. The
+    /// editor used to keep one copy from before this app's first edit, on the
+    /// argument that a pre-Notchline state is the only one worth keeping. That
+    /// argument inverts on this file: a user who switched the integration on
+    /// months ago and has since kept their theme, permissions and MCP servers
+    /// here would find the copy predating all of it, and restoring it would be
+    /// a data loss this app caused. Everything of ours in the live file comes
+    /// back out by switching off; the months of their own edits are recoverable
+    /// from nowhere.
     @Test @MainActor
     func theUsersSettingsAreCopiedBesideThemselvesBeforeEveryChange() async throws {
         let harness = try ClaudeCodeHarness()
