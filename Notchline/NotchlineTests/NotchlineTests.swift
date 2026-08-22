@@ -9895,6 +9895,48 @@ for line in sys.stdin:
         #expect(ClaudeCodeUsageReader.usageText(in: Data(noise.utf8)) == nil)
     }
 
+    /// A JSON line that is not the answer cannot be taken for the answer.
+    ///
+    /// The line-by-line read above accepted the first line that *decoded*, and
+    /// every field of the envelope is optional -- so it decoded `{}`, and
+    /// therefore decoded any JSON object at all. One JSON line ahead of the
+    /// object, from an MCP server or a future `claude`, and the empty envelope
+    /// won: no `result`, so a reading that had in fact answered correctly was
+    /// counted a failure -- every time, until the trust ceiling blanked the
+    /// windows the command was answering perfectly well (CR-Fable-040).
+    @Test @MainActor
+    func aStrayJSONLineAheadOfTheUsageAnswerIsNotTheAnswer() throws {
+        let answer = #"{"type":"result","is_error":false,"#
+            + #""result":"Current session: 20% used","session_id":"s-1"}"#
+        let noise = #"{"level":"debug","message":"connected"}"#
+
+        #expect(
+            ClaudeCodeUsageReader.usageText(in: Data("\(noise)\n\(answer)\n".utf8))
+                == "Current session: 20% used"
+        )
+        // The empty object is the whole point: it is what any object decodes
+        // as once every field is optional, so "it parsed" tests nothing.
+        #expect(ClaudeCodeUsageReader.envelope(in: Data("{}".utf8)) == nil)
+        #expect(
+            ClaudeCodeUsageReader.usageText(in: Data("{}\n\(answer)".utf8))
+                == "Current session: 20% used"
+        )
+        // And the session named is the reading's own, which is the landmark
+        // that finds the transcript it just left behind. A line that carries
+        // only a session id is still preferred over nothing, and still loses to
+        // the line carrying the answer.
+        let named = #"{"session_id":"not-this-one"}"#
+        let envelope = try #require(
+            ClaudeCodeUsageReader.envelope(in: Data("\(named)\n\(answer)".utf8))
+        )
+        #expect(envelope.sessionID == "s-1")
+        #expect(envelope.result == "Current session: 20% used")
+        #expect(
+            ClaudeCodeUsageReader.envelope(in: Data(named.utf8))?.sessionID
+                == "not-this-one"
+        )
+    }
+
     /// One failed reading keeps the last windows; a run of them gives up.
     ///
     /// The split is the session registry's, for the registry's reason.

@@ -374,7 +374,10 @@ actor ClaudeCodeUsageReader {
     }
 
     /// What `--output-format json` prints around the answer.
-    private struct Envelope: Decodable {
+    ///
+    /// Internal for the same reason ``usageText(in:)`` is: it is a rule about
+    /// someone else's output, so it is tested against captured bytes.
+    struct Envelope: Decodable {
         let result: String?
         let isError: Bool?
         /// Names the transcript this reading wrote, which is how the pile of
@@ -386,6 +389,17 @@ actor ClaudeCodeUsageReader {
             case isError = "is_error"
             case sessionID = "session_id"
         }
+
+        /// Whether this object is the answer rather than something that merely
+        /// parsed.
+        ///
+        /// Every field here is optional, because the object drops fields
+        /// depending on how the command ended -- and a synthesized `Decodable`
+        /// whose fields are all optional decodes `{}`, and therefore decodes
+        /// **any** JSON object at all. So "it decoded" is not a test of
+        /// anything, and the line-by-line read below needs one: an object that
+        /// carries none of these fields is somebody else's line.
+        var isAnswer: Bool { result != nil || sessionID != nil }
     }
 
     /// Runs the reading, pinned to a directory of its own.
@@ -450,17 +464,38 @@ actor ClaudeCodeUsageReader {
         return envelope.result
     }
 
-    nonisolated private static func envelope(in data: Data) -> Envelope? {
+    /// The answer object in a stream that may hold more than it.
+    ///
+    /// Taking the first line that *decodes* was the whole test until
+    /// CR-Fable-040, and it tested nothing: ``Envelope/isAnswer`` says why an
+    /// empty object passes it. One JSON line ahead of the answer -- an MCP
+    /// server's, or a future `claude` build's -- and the empty envelope won:
+    /// no `result`, so the caller counted a reading that had in fact answered
+    /// correctly as a failure, escalated the retry interval, and blanked the
+    /// windows once the trust ceiling passed. No `session_id` either, so the
+    /// transcript that reading had just left behind was never named and the
+    /// disk-footprint row never got a figure.
+    ///
+    /// `result` is what the reading is for, so a line carrying it wins outright
+    /// over one that merely names a session -- `--output-format stream-json`
+    /// stamps `session_id` on every line it writes, and a stream that somehow
+    /// arrived in that shape must not have its answer outranked by its own
+    /// preamble.
+    nonisolated static func envelope(in data: Data) -> Envelope? {
         let decoder = JSONDecoder()
-        var envelope = try? decoder.decode(Envelope.self, from: data)
-        if envelope == nil {
-            for line in data.split(separator: UInt8(ascii: "\n")) {
-                if let decoded = try? decoder.decode(Envelope.self, from: Data(line)) {
-                    envelope = decoded
-                    break
-                }
-            }
+        if let whole = try? decoder.decode(Envelope.self, from: data),
+           whole.isAnswer {
+            return whole
         }
-        return envelope
+        var named: Envelope?
+        for line in data.split(separator: UInt8(ascii: "\n")) {
+            guard let decoded = try? decoder.decode(Envelope.self, from: Data(line)),
+                  decoded.isAnswer else {
+                continue
+            }
+            if decoded.result != nil { return decoded }
+            if named == nil { named = decoded }
+        }
+        return named
     }
 }
