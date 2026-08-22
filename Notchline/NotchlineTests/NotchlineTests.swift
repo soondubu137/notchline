@@ -15738,6 +15738,196 @@ for line in sys.stdin:
         #expect(Date().timeIntervalSince(started) < 2)
     }
 
+    // MARK: - Raising a host that is on another desktop
+
+    /// A host whose windows are all on another desktop is hidden before it is
+    /// activated, and that order is the whole fix.
+    ///
+    /// Activation on its own hands the application the menu bar and leaves
+    /// every window where it was (measured 2026-08-22 for `activate()`,
+    /// `activate(options: .activateAllWindows)`, an `activate` Apple Event and
+    /// `NSWorkspace.openApplication`, with the Mission Control preference both
+    /// unset and on). Coming back from hidden is what makes the application
+    /// order its own windows front, and the window server follows the front
+    /// window to its Space.
+    @Test @MainActor
+    func aHostOnAnotherDesktopIsHiddenSoTheClickChangesDesktop() async {
+        let application = FakeRaisableApplication()
+        let activator = AppKitHostApplicationActivator(
+            occupancy: OccupancyStub(false),
+            applications: { _ in [application] },
+            settle: {}
+        )
+
+        let raised = await activator.activate(Self.ghosttyHost())
+
+        #expect(raised)
+        #expect(application.calls == [.hide, .activate])
+    }
+
+    /// A host that already has a window in front of the user is never hidden.
+    ///
+    /// There is no desktop to change, so hiding it would buy nothing and cost
+    /// the user a blink of every window that application has open.
+    @Test @MainActor
+    func aHostAlreadyInFrontOfTheUserIsNeverHidden() async {
+        let application = FakeRaisableApplication()
+        let activator = AppKitHostApplicationActivator(
+            occupancy: OccupancyStub(true),
+            applications: { _ in [application] },
+            settle: {}
+        )
+
+        let raised = await activator.activate(Self.ghosttyHost())
+
+        #expect(raised)
+        #expect(application.calls == [.activate])
+    }
+
+    /// An activation that never arrives gives the host back.
+    ///
+    /// `activate` answers whether the request went out, not whether the system
+    /// honoured it, and a refusal cannot be seen from here — measured once
+    /// against an application holding a full-screen Space, which answered
+    /// `true` and never came forward. Without this, such a click would not
+    /// merely fail: it would take the user's window away.
+    @Test @MainActor
+    func aHostHiddenForAnActivationThatNeverArrivesIsPutBack() async {
+        let application = FakeRaisableApplication(activationArrives: false)
+        let activator = AppKitHostApplicationActivator(
+            occupancy: OccupancyStub(false),
+            applications: { _ in [application] },
+            settle: {}
+        )
+
+        _ = await activator.activate(Self.ghosttyHost())
+
+        let restored = await holds { application.calls.contains(.unhide) }
+        #expect(restored)
+        #expect(!application.isHidden)
+    }
+
+    /// A host that does come forward is left alone.
+    ///
+    /// Coming forward clears `isHidden` itself, so the safety net has nothing
+    /// to do — and doing it anyway would order the windows a second time.
+    @Test @MainActor
+    func aHostThatComesForwardIsNotUnhiddenAgain() async {
+        let application = FakeRaisableApplication()
+        let activator = AppKitHostApplicationActivator(
+            occupancy: OccupancyStub(false),
+            applications: { _ in [application] },
+            settle: {}
+        )
+
+        _ = await activator.activate(Self.ghosttyHost())
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(application.calls == [.hide, .activate])
+    }
+
+    /// An application the user hid themselves is not hidden again, and a click
+    /// that fails does not unhide it on their behalf.
+    ///
+    /// Activating a hidden application unhides it, which is the same step that
+    /// carries the desktop — so nothing is lost by leaving it hidden here. What
+    /// would be lost by unhiding it is the user's own decision.
+    @Test @MainActor
+    func aHostTheUserHidThemselvesIsLeftAsTheyLeftIt() async {
+        let application = FakeRaisableApplication(
+            isHidden: true,
+            activationArrives: false
+        )
+        let activator = AppKitHostApplicationActivator(
+            occupancy: OccupancyStub(false),
+            applications: { _ in [application] },
+            settle: {}
+        )
+
+        _ = await activator.activate(Self.ghosttyHost())
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(application.calls == [.activate])
+        #expect(application.isHidden)
+    }
+
+    /// A refused activation with nothing left to try puts the host back at
+    /// once, rather than leaving it hidden for the safety net to notice.
+    @Test @MainActor
+    func aRefusedActivationWithNoBundleToOpenPutsTheHostBack() async {
+        let application = FakeRaisableApplication(
+            bundleURL: nil,
+            activationArrives: false,
+            activationRequestSent: false
+        )
+        let activator = AppKitHostApplicationActivator(
+            occupancy: OccupancyStub(false),
+            applications: { _ in [application] },
+            settle: {}
+        )
+
+        let raised = await activator.activate(Self.ghosttyHost())
+
+        #expect(!raised)
+        #expect(application.calls == [.hide, .activate, .unhide])
+        #expect(!application.isHidden)
+    }
+
+    /// Only a window the user could actually see answers "the host is here".
+    ///
+    /// The on-screen list already excludes windows that are closed, minimised
+    /// or never ordered in, so what is left to rule out is a status item
+    /// (layer 3 — Claude Desktop and Ghostty each keep one) and a fully
+    /// transparent window. Reading either as the host being in front of the
+    /// user would leave the click on the wrong desktop, which is the defect.
+    @Test
+    func onlyAWindowTheUserCanSeeCountsAsTheHostBeingHere() {
+        func reporter(_ windows: [[String: Any]]?) -> WindowServerOccupancyReporter {
+            WindowServerOccupancyReporter(windows: { windows })
+        }
+        func window(
+            pid: Int32,
+            layer: Int = 0,
+            alpha: Double = 1
+        ) -> [String: Any] {
+            [
+                kCGWindowOwnerPID as String: pid,
+                kCGWindowLayer as String: layer,
+                kCGWindowAlpha as String: alpha
+            ]
+        }
+
+        #expect(
+            reporter([window(pid: 665)])
+                .hasWindowOnActiveSpace(processIdentifier: 665)
+        )
+        // Somebody else's window on this desktop is not this host being here.
+        #expect(
+            !reporter([window(pid: 24_014)])
+                .hasWindowOnActiveSpace(processIdentifier: 665)
+        )
+        #expect(
+            !reporter([window(pid: 665, layer: 3)])
+                .hasWindowOnActiveSpace(processIdentifier: 665)
+        )
+        #expect(
+            !reporter([window(pid: 665, alpha: 0)])
+                .hasWindowOnActiveSpace(processIdentifier: 665)
+        )
+        // A list that could not be read answers "not here", which sends the
+        // click down the route that works either way.
+        #expect(!reporter(nil).hasWindowOnActiveSpace(processIdentifier: 665))
+    }
+
+    /// The host a Ghostty-hosted row resolves to, as the ancestry answers it.
+    private static func ghosttyHost() -> HostApplication {
+        HostApplication(
+            bundleIdentifier: "com.mitchellh.ghostty",
+            displayName: "Ghostty",
+            processIdentifier: 665
+        )
+    }
+
     /// The tree measured on this machine on 2026-08-19 for a desktop-hosted
     /// session: `claude` inside its own bundle, a helper of Claude Desktop's,
     /// then Claude Desktop.
@@ -17405,6 +17595,64 @@ private final class HostActivatorSpy: HostApplicationActivating {
         raised.append(application)
         return succeeds
     }
+}
+
+/// An application that is written down rather than running.
+@MainActor
+private final class FakeRaisableApplication: RaisableApplication {
+    enum Call: Equatable { case hide, unhide, activate }
+
+    let processIdentifier: Int32
+    let bundleURL: URL?
+    private(set) var isHidden: Bool
+    private(set) var calls: [Call] = []
+    /// Whether the activation lands. A real one unhides the application as it
+    /// comes forward; a refused one leaves it exactly where it was, and answers
+    /// `true` all the same.
+    private let activationArrives: Bool
+    private let activationRequestSent: Bool
+
+    init(
+        processIdentifier: Int32 = 665,
+        bundleURL: URL? = URL(fileURLWithPath: "/Applications/Host.app"),
+        isHidden: Bool = false,
+        activationArrives: Bool = true,
+        activationRequestSent: Bool = true
+    ) {
+        self.processIdentifier = processIdentifier
+        self.bundleURL = bundleURL
+        self.isHidden = isHidden
+        self.activationArrives = activationArrives
+        self.activationRequestSent = activationRequestSent
+    }
+
+    func hide() -> Bool {
+        calls.append(.hide)
+        isHidden = true
+        // False even when it hides, as every host measured on 2026-08-22
+        // answered.
+        return false
+    }
+
+    func unhide() -> Bool {
+        calls.append(.unhide)
+        isHidden = false
+        return true
+    }
+
+    func activate(options: NSApplication.ActivationOptions) -> Bool {
+        calls.append(.activate)
+        if activationArrives { isHidden = false }
+        return activationRequestSent
+    }
+}
+
+private struct OccupancyStub: ActiveSpaceOccupancyReporting {
+    private let answer: Bool
+
+    init(_ answer: Bool) { self.answer = answer }
+
+    func hasWindowOnActiveSpace(processIdentifier: Int32) -> Bool { answer }
 }
 
 @MainActor

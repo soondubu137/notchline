@@ -486,39 +486,210 @@ private final class FirstAnswer: @unchecked Sendable {
 
 @MainActor
 protocol HostApplicationActivating: AnyObject {
-    /// Raises an application that is already running. `false` when there was
-    /// nothing to raise.
+    /// Raises an application that is already running, taking the user to the
+    /// desktop its windows are on. `false` when there was nothing to raise.
     func activate(_ application: HostApplication) async -> Bool
 }
 
+/// Whether an application has a window on a Space the user can see right now.
+///
+/// Raising a host asks this first, and asks the window server nothing else: an
+/// application that already has a window in front of the user is brought
+/// forward by activation alone, and one that does not needs the extra step in
+/// ``AppKitHostApplicationActivator``.
+///
+/// **This is a question about placement, not about identity.** It does not
+/// decide which window the click was about, does not read a window title and
+/// does not match a session to a window; the pid is one the process tree
+/// already answered, and so is the yes or no. The PRD's ban on guessing a
+/// navigation target from window geometry is about naming a target, and this
+/// names nothing.
+nonisolated protocol ActiveSpaceOccupancyReporting: Sendable {
+    func hasWindowOnActiveSpace(processIdentifier: Int32) -> Bool
+}
+
+/// Reads the answer out of the window server's on-screen window list.
+///
+/// `.optionOnScreenOnly` *is* the question: that list holds the windows on the
+/// Spaces showing right now, so an application whose windows all sit on the
+/// desktop the user left is simply absent from it. `.excludeDesktopElements`
+/// drops the wallpaper, as it does in ``OverlayConcealment``.
+///
+/// Only `kCGWindowOwnerPID`, `kCGWindowLayer` and `kCGWindowAlpha` are read.
+/// None of the three is redacted without Screen Recording permission —
+/// `kCGWindowName` is, and nothing here reads it.
+struct WindowServerOccupancyReporter: ActiveSpaceOccupancyReporting {
+    private let windows: @Sendable () -> [[String: Any]]?
+
+    /// - Parameter windows: The on-screen list. Injected for the same reason
+    ///   ``ProcessAncestryHostResolver`` injects its readers: the filtering
+    ///   below is the part with rules in it, and it should be tested against a
+    ///   list that is written down rather than against whatever is on screen
+    ///   while the tests run.
+    nonisolated init(
+        windows: @escaping @Sendable () -> [[String: Any]]? = {
+            CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements],
+                kCGNullWindowID
+            ) as? [[String: Any]]
+        }
+    ) {
+        self.windows = windows
+    }
+
+    nonisolated func hasWindowOnActiveSpace(processIdentifier: Int32) -> Bool {
+        let listed = windows()
+
+        // A list that cannot be read answers "not here", which sends the click
+        // down the route that works either way: being wrong in that direction
+        // costs one hide the user may see, and being wrong in the other
+        // direction is exactly the defect this exists to fix.
+        return (listed ?? []).contains { entry in
+            guard let owner = entry[kCGWindowOwnerPID as String] as? Int32,
+                  owner == processIdentifier,
+                  let layer = entry[kCGWindowLayer as String] as? Int,
+                  layer == 0 else {
+                return false
+            }
+            // Layer 0 and a visible alpha are what "the user can see it" means
+            // here. A status item is layer 3 — Claude Desktop and Ghostty each
+            // keep one — and a fully transparent window is not something
+            // anybody is looking at. Windows that are closed, minimised or
+            // never ordered in are already absent from an on-screen list.
+            let alpha = entry[kCGWindowAlpha as String] as? Double ?? 0
+            return alpha > 0
+        }
+    }
+}
+
+/// The part of `NSRunningApplication` that raising a host uses.
+///
+/// It is a protocol so that the sequence below can be tested against an
+/// application that is written down, rather than against whichever applications
+/// this machine happens to be running. `NSRunningApplication` satisfies it as
+/// it stands.
+@MainActor
+protocol RaisableApplication: AnyObject {
+    var processIdentifier: Int32 { get }
+    var bundleURL: URL? { get }
+    /// Whether the application is hidden — the state ``hide()`` produces and
+    /// coming forward clears.
+    var isHidden: Bool { get }
+    @discardableResult func hide() -> Bool
+    @discardableResult func unhide() -> Bool
+    @discardableResult func activate(options: NSApplication.ActivationOptions) -> Bool
+}
+
+extension NSRunningApplication: RaisableApplication {}
+
+/// Raises a host, and changes desktop when the host is on another one.
+///
+/// **Activation on its own never changes desktop, and that is why this is more
+/// than one line.** Measured 2026-08-22 against an application whose windows
+/// were all on another Space: `NSRunningApplication.activate()`,
+/// `activate(options: .activateAllWindows)`, an `activate` Apple Event and
+/// `NSWorkspace.openApplication` each handed the application the menu bar and
+/// left every window exactly where it was — with the Mission Control preference
+/// "When switching to an application, switch to a Space with open windows for
+/// the application" both unset and on. The user was left looking at their own
+/// desktop with somebody else's menu bar, which is the defect this fixes.
+///
+/// **Accessibility could not stand in for them, so the choice never arose.** An
+/// application's `AXWindows` does not list windows on other Spaces at all
+/// (measured: zero windows for Xcode with three open, and `AXMainWindow`
+/// answering `kAXErrorNoValue`), so there is nothing there to raise. The PRD's
+/// exclusion of Accessibility and GUI automation therefore costs this nothing.
+///
+/// **What does move the user is the application raising its own window**, and
+/// hiding it first is the public way to ask for that: coming back, it orders
+/// its own windows front and the window server follows the front window to its
+/// Space. Measured the same day across three hosts built on very different
+/// stacks — Xcode (AppKit), Ghostty (its own AppKit layer) and Claude Desktop
+/// (Electron) — all three landed the user on the window's desktop, both from a
+/// background caller and with the host already frontmost.
 @MainActor
 final class AppKitHostApplicationActivator: HostApplicationActivating {
+    private let occupancy: any ActiveSpaceOccupancyReporting
+    private let applications: @MainActor (HostApplication) -> [any RaisableApplication]
+    private let settle: @Sendable () async -> Void
+
+    /// - Parameters:
+    ///   - occupancy: Whether the host is already where the user is looking.
+    ///   - applications: The running applications a host may be raised through,
+    ///     nearest answer first.
+    ///   - settle: How long to leave an activation before deciding it never
+    ///     arrived. Only a hidden application waits on this, and only to be put
+    ///     back; nothing about the click is delayed by it.
+    init(
+        occupancy: any ActiveSpaceOccupancyReporting = WindowServerOccupancyReporter(),
+        applications: (@MainActor (HostApplication) -> [any RaisableApplication])? = nil,
+        settle: (@Sendable () async -> Void)? = nil
+    ) {
+        self.occupancy = occupancy
+        self.applications = applications ?? { AppKitHostApplicationActivator.systemApplications(for: $0) }
+        self.settle = settle ?? { try? await Task.sleep(for: .seconds(2)) }
+    }
+
     func activate(_ application: HostApplication) async -> Bool {
-        if let running = NSRunningApplication(
-            processIdentifier: application.processIdentifier
-        ), running.bundleIdentifier == application.bundleIdentifier,
-           await raise(running) {
-            return true
-        }
-        // The ancestor is not always the application: iTerm2's shells hang off
-        // a helper process, and the identifier is the only way back to the
-        // window that can actually be raised.
-        for running in NSWorkspace.shared.runningApplications
-        where running.bundleIdentifier == application.bundleIdentifier {
+        for running in applications(application) {
             if await raise(running) { return true }
         }
         return false
     }
 
-    /// Cooperative activation first, Launch Services second.
+    /// The process the ancestry named, then anything else running the same
+    /// bundle.
     ///
-    /// `activate()` is the cheap one and it can be declined — an app that is
-    /// not the current front app has a say in whether it yields. Opening the
-    /// bundle is the same route ``AppKitCodexWorkspace`` uses and does not
-    /// launch a second copy of an application that is already running.
-    private func raise(_ running: NSRunningApplication) async -> Bool {
-        if running.activate() { return true }
-        guard let bundleURL = running.bundleURL else { return false }
+    /// The ancestor is not always the application: iTerm2's shells hang off a
+    /// helper process, and the identifier is the only way back to the window
+    /// that can actually be raised.
+    nonisolated static func systemApplications(
+        for application: HostApplication
+    ) -> [any RaisableApplication] {
+        let named = NSRunningApplication(
+            processIdentifier: application.processIdentifier
+        ).flatMap { $0.bundleIdentifier == application.bundleIdentifier ? $0 : nil }
+
+        let others = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == application.bundleIdentifier
+                && $0.processIdentifier != named?.processIdentifier
+        }
+        return ([named].compactMap { $0 } + others)
+    }
+
+    /// Hide first when the desktop has to change, then cooperative activation,
+    /// then Launch Services.
+    ///
+    /// `activate` is the cheap one and it can be declined — an app that is not
+    /// the current front app has a say in whether it yields. Opening the bundle
+    /// is the same route ``AppKitCodexWorkspace`` uses and does not launch a
+    /// second copy of an application that is already running.
+    private func raise(_ running: any RaisableApplication) async -> Bool {
+        // Hidden only when the click has a desktop to change. A host with a
+        // window in front of the user is raised by activation alone, and hiding
+        // it first would make its windows blink for no reason at all.
+        let mustFollow = !occupancy.hasWindowOnActiveSpace(
+            processIdentifier: running.processIdentifier
+        )
+        // An application the user hid themselves is left hidden: activation
+        // unhides it, and unhiding it is the same thing that carries the Space.
+        let hidden = mustFollow && !running.isHidden
+        if hidden {
+            // The result is deliberately ignored. `hide()` reports whether the
+            // request was sent, and it answered false on every host measured
+            // while `isHidden` went true immediately afterwards.
+            running.hide()
+        }
+
+        if running.activate(options: []) {
+            if hidden { restoreIfActivationNeverArrives(running) }
+            return true
+        }
+
+        guard let bundleURL = running.bundleURL else {
+            if hidden { running.unhide() }
+            return false
+        }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         do {
@@ -526,9 +697,29 @@ final class AppKitHostApplicationActivator: HostApplicationActivating {
                 at: bundleURL,
                 configuration: configuration
             )
+            if hidden { restoreIfActivationNeverArrives(running) }
             return true
         } catch {
+            if hidden { running.unhide() }
             return false
+        }
+    }
+
+    /// Puts back an application that was hidden for a raise that never landed.
+    ///
+    /// `activate` answers whether the request went out, not whether the system
+    /// honoured it, and a refusal is invisible from here — measured once
+    /// against an app holding a full-screen Space, where activation was
+    /// declined and answered `true` all the same. Without this, that click
+    /// would not merely fail: it would take the user's window away.
+    ///
+    /// Coming forward clears `isHidden` itself, so still being hidden after the
+    /// wait is the refusal. Nothing about the click waits on this.
+    private func restoreIfActivationNeverArrives(_ running: any RaisableApplication) {
+        Task { [settle] in
+            await settle()
+            guard running.isHidden else { return }
+            running.unhide()
         }
     }
 }

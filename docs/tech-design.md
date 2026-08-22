@@ -688,7 +688,27 @@ ADR 0004 的精确导航门槛只约束 Codex：目前没有任何受支持的�
    > “Notchline.app” wants access to control “Terminal.app”. Allowing control will provide access to documents and data in “Terminal.app”, and to perform actions within that app. Codex in Notch uses this to bring the terminal tab running a Claude Code session to the front when you click its row.
 
    两点值得记下来。其一，**用途说明确实会显示**，所以那句话是用户看到的文案而不只是一个必填字段。其二，弹窗里的应用名是 **`Notchline.app`**——带 `.app` 后缀、没有空格，因为它取自 bundle 的文件名而不是 `CFBundleName`；产品叫「Codex in Notch」，这句不好看。改它要动 `PRODUCT_NAME`，牵连 scheme、二进制名与 bundle 名，不在本次范围内。
-6. 不读 `~/.claude/sessions/<pid>.json`：它确实带 `entrypoint`，但那是私有 schema，而祖先链是内核公开的事实。该文件只作为二者不一致时的旁证。
+6. **激活必须跟着窗口换桌面，否则点击等于什么也没发生。** 宿主的窗口全在别的 Space 上时，把它设为前台只换了菜单栏：用户仍然盯着自己那个桌面，屏幕上没有任何东西动过。2026-08-22 对着一个三扇窗全在另一个 Space 的应用逐条实测：
+
+   | 手段 | 结果 |
+   | --- | --- |
+   | `NSRunningApplication.activate()` | 应用拿到前台，窗口一扇没动 |
+   | `activate(options: .activateAllWindows)` | 同上 |
+   | AppleScript `tell application "X" to activate` | 同上 |
+   | `NSWorkspace.openApplication`（`activates = true`）与 `open -a` | 同上 |
+   | 把 Mission Control 的「切换到应用时，切换到含有该应用打开窗口的空间」打开后重测上面四条 | 同上——这个偏好管的是用户自己切换应用，不管程序发出的激活 |
+   | Accessibility：应用的 `AXWindows` / `AXMainWindow` | 另一个 Space 上的窗口**根本不在里面**（Xcode 开着三扇窗答 0 扇，`AXMainWindow` 答 `kAXErrorNoValue`），没有可抬的东西——PRD 排除辅助功能因此没有让这条少任何能力 |
+   | `hide()` 之后 `activate()` | **桌面跟着换**，那扇窗回到最前 |
+
+   最后一条是唯一成立的，原因也只有一个：**能把用户带过去的不是激活，是应用自己把窗口 order front**，而在公开 API 里请求它这么做的方式就是先让它隐藏。三种实现栈上都成立——Xcode（AppKit）、Ghostty（自己的 AppKit 层）、Claude Desktop（Electron）；调用方是后台进程时成立（本应用的面板是 `nonactivatingPanel`，点击时它从来不是前台），宿主已经是前台应用而窗口在别的 Space 时也成立。
+
+   四个细节：其一，**只在要换桌面时才 hide**。`WindowServerOccupancyReporter` 先问窗口服务器该 pid 在当前 Space 有没有 layer 0、alpha 大于 0 的窗口（`.optionOnScreenOnly` 的列表正好只装当前可见 Space 上的窗口，只读 `kCGWindowOwnerPID`、`kCGWindowLayer`、`kCGWindowAlpha`，三个都不受 Screen Recording 遮蔽）；已经在眼前的宿主直接激活，否则用户会看着它所有窗口闪一下。列表读不出来时答「不在」，因为往这个方向错只多闪一次，往另一个方向错就是这个缺陷本身。一次点击一次，中位 **554µs**、p90 582µs、最大 694µs（`-O`，屏上 43 扇窗），与 `OverlayConcealment` 那次 583µs 同量级。其二，**`hide()` 的返回值不看**：三种宿主都答 `false`，而 `isHidden` 紧接着就是 `true`——它报的是「请求有没有发出去」，不是结果。其三，**安全网**：`activate` 同样只报请求发出去了，实测过一次被拒（前台是一个全屏应用）却仍然答 `true`；因此被本应用隐藏过的宿主在 2 秒后若仍然 `isHidden`，就 `unhide()` 放回去——没有这一步，一次失败的点击不只是没导航，而是把用户的窗口拿走了。用户自己隐藏的应用不重复 hide，也不替他 unhide——实测激活一个本来就隐藏、窗口又在别的 Space 的应用同样会带着换桌面，这条不损失任何能力。其四，**标签页那条路不额外做这件事**：Terminal.app 与 iTerm2 的脚本本来就是让应用自己把那扇窗排到最前（与 Ghostty 的 `activate window` 同形，后者实测会带着用户换 Space）。
+
+   端到端在真机 Release 上验过（宿主 Ghostty，会话行由真实点击触发）：用户在另一个桌面时，点击后当前 Space 换成宿主窗口那个、Ghostty 成为前台、面板收起；宿主就在当前桌面时，点击期间 6 秒内每 30ms 采样一次窗口数，164 次采样全是 2，**一次都没归零**——不 hide，也就不闪。
+
+   仍然存在的边界没有变：Ghostty 这类报不出 tty 的宿主，抬起来的是它自己最近的那扇窗，不一定是会话那一扇。差别仍然只由 `NavigationOutcome` 的那句话说出来。
+
+7. 不读 `~/.claude/sessions/<pid>.json`：它确实带 `entrypoint`，但那是私有 schema，而祖先链是内核公开的事实。该文件只作为二者不一致时的旁证。
 
 禁止：按窗口标题或工作目录匹配标签页、Accessibility 点击、GUI 自动化、连接 `/tmp/cc-socks/*.sock`。
 
