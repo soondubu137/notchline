@@ -9865,22 +9865,63 @@ for line in sys.stdin:
             withIntermediateDirectories: true
         )
         _ = await harness.service.fetchSnapshot()
+        // Counted from here, not from zero: the directory did not exist when
+        // the service was built, so that refresh attached the watcher to it and
+        // reported the list out of date for that reason alone — an edge of its
+        // own, asserted in its own test below.
+        let baseline = harness.invalidations
 
         let own = harness.sessionsDirectory.appendingPathComponent("4242.json")
         try Data("{}".utf8).write(to: own)
-        #expect(await harness.invalidationsRise(above: 0, within: 1) == false)
+        #expect(await harness.invalidationsRise(above: baseline, within: 1) == false)
 
         // And its removal is not news either, which is the edge that actually
         // cost the launch a subprocess.
         try FileManager.default.removeItem(at: own)
-        #expect(await harness.invalidationsRise(above: 0, within: 1) == false)
+        #expect(await harness.invalidationsRise(above: baseline, within: 1) == false)
 
         // A record this app cannot claim still reports the list out of date,
         // from the same directory and through the same edge.
         try Data("{}".utf8).write(
             to: harness.sessionsDirectory.appendingPathComponent("99.json")
         )
-        #expect(await harness.invalidationsRise(above: 0))
+        #expect(await harness.invalidationsRise(above: baseline))
+    }
+
+    /// The sessions directory appearing is itself news about the list.
+    ///
+    /// `~/.claude/sessions` does not exist until Claude Code has run once, so a
+    /// user who registers the hooks first launches this app with nothing to
+    /// watch, and the watcher only attaches on some later refresh. Until then
+    /// the empty list the registry is holding was read blind — and holding it
+    /// is exactly what this app now does rather than re-running `claude agents
+    /// --json` every wake (CR-Fable-002), so the moment it stops being blind has
+    /// to be reported. The very first session a user ever starts is the one
+    /// that creates this directory, and without this it would go unlisted until
+    /// it happened to fire a hook.
+    ///
+    /// The watcher cannot deliver this itself: attaching bumps its change count
+    /// but there is no file-system event to yield to a stream.
+    @Test @MainActor
+    func theSessionsDirectoryAppearingReportsTheListOutOfDate() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        // Nothing to watch yet, and nothing to say about it.
+        _ = await harness.service.fetchSnapshot()
+        #expect(harness.invalidations == 0)
+
+        try FileManager.default.createDirectory(
+            at: harness.sessionsDirectory,
+            withIntermediateDirectories: true
+        )
+        _ = await harness.service.fetchSnapshot()
+        #expect(harness.invalidations == 1)
+
+        // Once attached it is not re-reported: this is an edge, not a state.
+        _ = await harness.service.fetchSnapshot()
+        #expect(harness.invalidations == 1)
     }
 
     /// Text arriving for a row that has none wakes the product on its own.
@@ -12726,23 +12767,139 @@ for line in sys.stdin:
         #expect(await registry.liveSessions().count == 1)
     }
 
-    /// An empty list is only `closed` when the list is known to be empty.
+    /// An empty list is only `closed` when the list is known to be empty, and
+    /// it stays `closed` until something contradicts it.
+    ///
+    /// The ceiling bounds *failing* reads, not elapsed time. An answer this
+    /// registry deliberately did not re-ask for is uncontradicted rather than
+    /// stale — ageing it into `unknown` would be reporting that we do not know
+    /// something we do know and simply chose not to buy again (CR-Fable-002).
+    /// So it takes an edge, plus a command that cannot answer it, before an
+    /// empty list expires.
     @Test @MainActor
-    func anEmptySessionListIsClosedOnlyWhenItWasActuallyRead() async {
+    func anEmptySessionListStaysClosedUntilSomethingContradictsIt() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
         let responses = ResponseQueue(items: [Data("[]".utf8)])
         let registry = ClaudeCodeSessionRegistry(
             clock: clock,
             freshness: 30,
+            edgeFloor: 2,
             trustCeiling: 90,
             read: { await responses.next() }
         )
 
         #expect(await registry.presence() == .closed)
         await clock.advance(by: 200)
-        // The same empty list, now unreadable: absence of evidence stops being
-        // evidence of absence.
+        // Long past the ceiling and still closed: nothing has said a session
+        // appeared, and nothing bought a command to hear the same answer again.
+        #expect(await registry.presence() == .closed)
+
+        // Now something does say so, and the command cannot answer it. The
+        // ceiling is counted from the last answer, which is 200 seconds old.
+        await registry.invalidate()
         #expect(await registry.presence() == .unknown)
+    }
+
+    /// A known-empty list is held; a listed one is still re-read on the clock.
+    ///
+    /// This is the whole of CR-Fable-002. Every store wake asked for the
+    /// session list, `freshness` had always lapsed by the time one landed, and
+    /// so `claude agents --json` was spawned every 30–60 seconds for the life
+    /// of the process — on an idle machine, with no session open and the screen
+    /// locked. It is not a cheap command: a Node process measured at ~0.4s of a
+    /// core that starts the user's MCP servers on the way, so each spawn is a
+    /// process tree. What it bought, overwhelmingly, was a re-confirmation that
+    /// an empty list was still empty.
+    ///
+    /// The two halves are asserted together because only the pair is safe. A
+    /// session appearing always reports itself — its record is *created* in
+    /// `~/.claude/sessions`, and a create fires a directory event where the
+    /// in-place rewrites do not — but a session *disappearing* does not always:
+    /// a `SIGKILL`ed session leaves its record behind, and only the command's
+    /// own `pid` + `procStart` check can tell that row is a ghost. So the clock
+    /// still paces the case where a row could have to be retired.
+    @Test @MainActor
+    func aKnownEmptySessionListIsHeldWhileAListedOneIsStillReRead() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let counter = ReadCounter(answer: Data("[]".utf8))
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            edgeFloor: 2,
+            read: { await counter.read() }
+        )
+
+        #expect(await registry.liveSessions().isEmpty)
+        #expect(await counter.count == 1)
+
+        // An hour of wake-ups at the fastest cadence the store has. The
+        // command is not run again for any of them.
+        for _ in 0 ..< 120 {
+            await clock.advance(by: 30)
+            #expect(await registry.presence() == .closed)
+            #expect(await registry.liveSessions().isEmpty)
+        }
+        #expect(await counter.count == 1)
+
+        // A session record appearing is what says otherwise, and it is
+        // answered inside `edgeFloor` rather than waited out.
+        await counter.respond(with: Data("""
+        [{"pid": 1, "cwd": "/a", "kind": "interactive",
+          "startedAt": 1000, "sessionId": "s-1"}]
+        """.utf8))
+        await registry.invalidate()
+        #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        #expect(await counter.count == 2)
+
+        // ...and from there the clock paces it again, because this list now
+        // has a row in it that may have to be retired.
+        await clock.advance(by: 31)
+        #expect(await registry.liveSessions().count == 1)
+        #expect(await counter.count == 3)
+    }
+
+    /// A read that fails does not leave the registry holding its silence.
+    ///
+    /// The hold above keys on an answer, never on the list simply being empty:
+    /// "`claude` said nothing is running" and "nobody answered at all" look
+    /// identical in the cache and mean opposite things. Held, the second one
+    /// would stop the retry that either recovers or reaches `trustCeiling`, and
+    /// a `claude` that was uninstalled would leave the product reporting
+    /// `closed` for the life of the process instead of `unknown`.
+    @Test @MainActor
+    func anEmptyCacheWithNoAnswerBehindItKeepsRetryingOnTheClock() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let counter = ReadCounter(answer: nil)
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            trustCeiling: 90,
+            read: { await counter.read() }
+        )
+
+        // Nobody has answered, so the empty cache is ignorance rather than
+        // knowledge and the command keeps being run.
+        #expect(await registry.presence() == .unknown)
+        #expect(await counter.count == 1)
+        await clock.advance(by: 31)
+        #expect(await registry.presence() == .unknown)
+        #expect(await counter.count == 2)
+
+        // Once it does answer, the same empty list is held.
+        await counter.respond(with: Data("[]".utf8))
+        await clock.advance(by: 31)
+        #expect(await registry.presence() == .closed)
+        #expect(await counter.count == 3)
+        await clock.advance(by: 300)
+        #expect(await registry.presence() == .closed)
+        #expect(await counter.count == 3)
+
+        // ...and stops being held the moment an attempt fails again, which is
+        // what puts the ceiling back in charge of an answer 300 seconds old.
+        await counter.respond(with: nil)
+        await registry.invalidate()
+        #expect(await registry.presence() == .unknown)
+        #expect(await counter.count == 4)
     }
 
     /// A registry that has never had a successful read knows nothing.
@@ -16003,9 +16160,10 @@ private final class ClaudeCodeHarness {
 
     /// Waits for the service to report the list out of date again.
     ///
-    /// The count, rather than the change stream: only the two watchers call
-    /// ``ClaudeCodeSessionListing/invalidate()``, so a rise here is proof one
-    /// of them fired. The stream carries hook and quota edges too, and it
+    /// The count, rather than the change stream: the only callers of
+    /// ``ClaudeCodeSessionListing/invalidate()`` are the two directory watchers
+    /// and the refresh that first attaches one of them, so a rise here is proof
+    /// one of those fired. The stream carries hook and quota edges too, and it
     /// buffers, so a wake-up on it proves nothing about which source caused it.
     func invalidationsRise(above count: Int, within seconds: Double = 3) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
@@ -16441,7 +16599,7 @@ private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sen
 /// Counts how many times the session list was actually read.
 private actor ReadCounter {
     private(set) var count = 0
-    private let answer: Data?
+    private var answer: Data?
 
     init(answer: Data? = nil) { self.answer = answer }
 
@@ -16449,6 +16607,11 @@ private actor ReadCounter {
         count += 1
         return answer
     }
+
+    /// Changes what every read from here on answers, for the tests that have
+    /// to make a list stop being empty — or stop being readable — without
+    /// giving up the running count.
+    func respond(with data: Data?) { answer = data }
 }
 
 /// Hands back a prepared sequence of text responses, one per read.

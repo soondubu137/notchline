@@ -417,6 +417,15 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// When the command was last *run*, answer or none. Decides when it is run
     /// again, which is a different question -- see ``liveSessions()``.
     private var attemptedAt: Date?
+    /// Whether the last attempt came back with a list this registry could read.
+    ///
+    /// Separates the two ways of holding an empty list, which look identical in
+    /// ``cached`` and mean opposite things: one is `claude` having answered
+    /// "nothing is running", the other is nobody having answered at all. The
+    /// first is knowledge and is held until something contradicts it; the
+    /// second is ignorance and has to keep asking. See ``liveSessions()`` and
+    /// ``presence()``.
+    private var lastAttemptAnswered = false
     /// How many times something has said the held answer is wrong.
     ///
     /// Counted rather than flagged, and answered against ``answeredInvalidation``
@@ -520,13 +529,30 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// cache past its ceiling knows nothing, and unknown is not a weak "closed"
     /// -- it lands on `Disconnected` by the plain meaning of the word (§6.7):
     /// we have no working connection to report on.
+    ///
+    /// **The ceiling bounds failing reads, not elapsed time**, and it is
+    /// spelled that way here because those stopped being the same thing. An
+    /// answer this registry has deliberately not re-asked for -- see
+    /// ``liveSessions()`` -- is not stale evidence, it is uncontradicted
+    /// evidence: nothing has failed, and every route by which it could have
+    /// become wrong reports an edge. Ageing it out would be reporting that we
+    /// do not know something we do know and simply chose not to buy again. Once
+    /// an attempt does fail the ceiling applies exactly as it always did, and
+    /// with the same arithmetic behind it: three consecutive failures a
+    /// ``freshness`` apart.
     func presence() async -> AgentPresence {
         let sessions = await liveSessions()
-        guard let readAt,
-              clock.now().timeIntervalSince(readAt) <= trustCeiling else {
-            return .unknown
-        }
+        guard lastAttemptAnswered || isWithinTrustCeiling else { return .unknown }
         return sessions.isEmpty ? .closed : .open
+    }
+
+    /// Whether the last answer is still recent enough to decide presence.
+    ///
+    /// False when there has never been one, which is the fail-closed end of the
+    /// same rule: a registry that has never been answered knows nothing.
+    private var isWithinTrustCeiling: Bool {
+        guard let readAt else { return false }
+        return clock.now().timeIntervalSince(readAt) <= trustCeiling
     }
 
     /// The list, re-read when the last *attempt* has gone stale.
@@ -554,13 +580,50 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// Waiting out a guess after receiving the report is what made a session
     /// that is *born with its first prompt* invisible for its whole first turn
     /// -- see ``invalidate()``.
+    ///
+    /// **And a known-empty list is not re-read at all.** ``freshness`` is a
+    /// ceiling on how stale an answer may get, never a reason to buy one
+    /// nobody asked for: the store wakes at least every
+    /// ``MonitorTiming/heartbeatInterval``, that window has always lapsed by
+    /// the time it does, and so this command ran every 30-60 seconds for the
+    /// life of the process -- on an idle machine, with no session open and the
+    /// screen locked (CR-Fable-002). It is not a cheap command: 0.26-0.33s of
+    /// CPU measured here (`/usr/bin/time -p`, user + sys, reaped children
+    /// included), and it **starts the user's MCP servers** on the way -- which
+    /// is why ``bracketedSpan`` exists -- so each spawn is a process tree, not
+    /// a process. At one every 30-60 seconds that is 0.4%-1.1% of a core
+    /// forever, the single largest steady-state cost in a product whose bar is
+    /// "barely noticeable".
+    ///
+    /// What it bought was a re-confirmation of an empty list, and every route
+    /// out of empty already reports itself: a session's record appears in
+    /// `~/.claude/sessions` when it starts (a create fires a directory event --
+    /// measured, unlike the in-place rewrites that do not), and a hook event
+    /// naming a session the list does not have is itself proof that session
+    /// exists. So an answered-empty list is held until something says
+    /// otherwise, and the clock keeps pacing every other case:
+    ///
+    /// - **listed sessions** are re-read on ``freshness``, because a row can
+    ///   have to be *retired* and one route there raises no edge at all -- a
+    ///   `SIGKILL`ed session leaves its record behind, and only the command's
+    ///   own `pid` + `procStart` check can see that it is a ghost;
+    /// - **a failed or unreadable attempt** is retried on ``freshness``, which
+    ///   is the cadence ``trustCeiling`` counts its three failures in;
+    /// - **an edge** is answered no sooner than ``edgeFloor``, empty or not.
     func liveSessions() async -> [ClaudeCodeSession] {
-        if let attemptedAt,
-           clock.now().timeIntervalSince(attemptedAt)
-            < (isKnownStale ? edgeFloor : freshness) {
-            return cached
-        }
+        guard isDueForReading else { return cached }
         return await refresh()
+    }
+
+    /// Whether the command is run for the caller now standing at the door.
+    private var isDueForReading: Bool {
+        guard let attemptedAt else { return true }
+        let waited = clock.now().timeIntervalSince(attemptedAt)
+        if isKnownStale { return waited >= edgeFloor }
+        // Nothing has reported this wrong, and there is nothing in it that
+        // could go wrong quietly. Holding it is the whole of the fix.
+        if lastAttemptAnswered, cached.isEmpty { return false }
+        return waited >= freshness
     }
 
     /// Whether something has reported this list wrong since it was last read.
@@ -649,6 +712,10 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         // one failed read become a run of them.
         attemptedAt = clock.now()
         answeredInvalidation = max(answeredInvalidation, answering)
+        // Cleared before either failure below can return, so an attempt that
+        // did not answer puts this registry back on the retry cadence however
+        // long it had been holding a quiet answer.
+        lastAttemptAnswered = false
         guard let data else {
             // Keep the last good answer rather than reporting that every
             // session vanished: a failed read is not evidence of absence, and
@@ -659,6 +726,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
             Self.log.error("could not decode the session list; keeping the last one")
             return cached
         }
+        lastAttemptAnswered = true
 
         cached = sessions.filter { !isOwnReading($0) }
         readAt = clock.now()

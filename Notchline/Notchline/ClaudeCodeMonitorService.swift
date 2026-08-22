@@ -173,6 +173,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     nonisolated private let screenAvailability: any ScreenAvailabilityReporting
     private let clock: any MonitorClock
     private var lastDiagnostic: String?
+    /// Whether ``sessionsWatcher`` was attached at the end of the last refresh.
+    ///
+    /// Only ever used to spot it becoming attached, which is an edge the
+    /// watcher has no way to deliver -- see ``fetchSnapshot()``.
+    private var wasWatchingSessionsDirectory: Bool
 
     init(
         paths: HookIntegrationPaths = .liveClaudeCode(),
@@ -318,6 +323,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             debounceInterval: timing.unreadStateDebounceInterval
         )
         self.sessionsWatcher = sessionsWatcher
+        // Seeded from the attach `init` has just attempted, so an ordinary
+        // launch -- the directory already there -- does not report an edge for
+        // a watcher that was never off.
+        self.wasWatchingSessionsDirectory = sessionsWatcher.isAttached
         let recordWatcher = ClaudeCodeSessionRecordWatcher(
             directory: watched,
             debounceInterval: timing.unreadStateDebounceInterval
@@ -419,7 +428,21 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // hooks first. Retried here, on work this refresh was doing anyway, for
         // the reason the Hook queue's watcher is: nothing else would ever ask
         // again, and one failed `open` per refresh is cheaper than a timer.
-        sessionsWatcher.attachIfNeeded()
+        //
+        // **Attaching is itself an edge**, and it has to be reported as one
+        // now that a known-empty session list is held rather than re-read on a
+        // cadence (CR-Fable-002). Until this moment nothing was watching the
+        // directory, so the emptiness the registry is holding was read blind:
+        // the very first Claude Code session a user ever starts is the one
+        // that *creates* this directory, and it would otherwise go unlisted
+        // until it fired a hook. The watcher itself cannot deliver this --
+        // attaching bumps its change count but yields nothing to a stream that
+        // had no event -- so the transition is noticed here.
+        let watchingSessionsDirectory = sessionsWatcher.attachIfNeeded()
+        if watchingSessionsDirectory, !wasWatchingSessionsDirectory {
+            await sessions.invalidate()
+        }
+        wasWatchingSessionsDirectory = watchingSessionsDirectory
 
         // Install the helper the registration names, and bind the socket it
         // hands payloads to. Both are this app's own files in this app's own

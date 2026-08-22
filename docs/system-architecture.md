@@ -219,6 +219,8 @@ sequenceDiagram
 
 **心跳只是兜底，不承担任何延迟指标。** 它存在的唯一理由是本仓库已知的两类静默失效：`DirectoryChangeWatcher` 在 `open(O_EVTONLY)` 失败或目录被替换后不会重新挂载（CR-018），而到期唤醒同样可能因为任务被取消或 deadline 算错而无声丢失。任何"更新太慢"的问题都不得通过缩短心跳来解决。
 
+**但一次唤醒本身不是重读的理由（CR-Fable-002）。** 上面那条心跳，加上 Codex 侧 30 秒到期一次的账号读数，意味着这个进程无论如何每 30–60 秒会醒一次，并在那一次里向**所有**服务各要一次快照。于是任何「缓存超过 N 秒就重读」的数据源，只要 N 小于这个间隔，实际行为就是按这个间隔无条件采样——`ClaudeCodeSessionRegistry` 的 30 秒新鲜度正是如此，`claude agents --json` 因此在一台空闲机器上（一个 Claude Code 都没开、屏幕锁着）每 30–60 秒被启动一次，永远。新鲜度是「一个答案最陈旧能到什么程度」的上限，不是「没人问也要买一份新的」的理由。规则因此写成：**没有边沿报告过变化、屏幕上也没有任何一行依赖它的时候，缓存里那个答案直接算数**——前提是那个答案真的是答出来的，而不是没人回答时留下的空壳。这与上面终态行那条"没有行在等的时候一次也不问"是同一条规则的两个方向：一个说没人等就不预约到期，一个说醒了也不代表要花钱。成本与实测见 §6，判定见 `tech-design.md` §15.1。
+
 安装健康度同理：注册完整度回答的是一个只在本应用写 `hooks.json`、用户主动 Recheck 或该文件在我们脚下被改动时才变化的问题，因此它同样不按节拍重算。`CodexHookRegistrar.registration()` 缓存上一次读数，前两者直接失效缓存，外部编辑则在读取时比对 watcher 的 `changeCount` 认出来——**没有兜底的上限节拍**（`tech-design.md` §442）。**轮询配置本来就无法回答真正会出问题的那一维**——Codex 按定义内容哈希记录信任，扫描通过并不意味着 hook 会被执行（见第 8 节）。
 
 事件消费**每轮只发生一次**。`drainDeliveredEvents` 把 inbox 整体取走并推进 Turn 状态，取走是原子的，因此第二次读取只会把第一次本该被告知的证据据为己有；它只出现在快照路径上。`hookSetupStatus` 改为只读持久化信任标记，集成健康度随 `MonitorSnapshot.setupStatus` 一并返回，上层不再二次询问。
@@ -387,7 +389,7 @@ flowchart LR
 | 核心编排 | `LiveCodexMonitorService` | 协调 Hook、App Server、Project、未读、缓存、成员集合与降级 | [`LiveCodexMonitorService.swift`](../Notchline/Notchline/LiveCodexMonitorService.swift) |
 | Turn reducer 与正文 | `HookEventRepository` | 两个产品共用的唯一 store：payload 先由 `HookPayloadDistiller` 在解码之前选出字段（大起来的都是本 app 不读的字段，所以工具结果的大小不再决定事件听不听得见，见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)），再用精确身份消费、拒绝回放复活、维护内存 `HookTurnState`，并持有每个会话的流式正文（头部 240 字符）与投递证据；读不懂的 payload、放不下的事件、以及「注册了却不触发」的探测按本次运行累计成一句诊断，经 `AgentSnapshot.diagnostic` 交给 Settings 的产品行（CR-029）。**只在渲染投影变化时**发变更信号——状态、轮次身份、或行上那句正文——而不是每个事件一次；delta 只在**从没有到有**且该会话被上次刷新列出时报一个边沿（见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)） | [`HookIntegration.swift`](../Notchline/Notchline/HookIntegration.swift) |
 | Hook transport（两个产品） | `AgentHookListener` | 只做传输：绑定 0600 Unix domain socket、accept、读一份 payload、盖到达戳交给 store。一次连接一条 payload，写方关闭即帧尾；**串行读取队列保序**，交接完成后才关闭连接（唯一的背压）。一条连接最多读到 16 MiB 为止，这个上限只约束读队列每个事件的时间，不约束 reducer 能被告知什么——字段选择在 store 里、在解码之前，所以切断之前完整到达的字段照常生效。不做字段选择、不写任何文件 | [`AgentHookListener.swift`](../Notchline/Notchline/AgentHookListener.swift) |
-| 会话身份（Claude Code） | `ClaudeCodeSessionRegistry` | 按节拍运行 `claude agents --json` 并对读取单飞；新鲜度从**上一次尝试**起算，失败保留上一次列表；**会话目录的变更可以把新鲜度窗口截断**（`invalidate()`，不低于 `edgeFloor`，读取途中到达的边沿不被该次读取消费）；在 stdout 里定位数组而不假定它独占该流；**排除本应用自己的额度读取会话**（见 `tech-design.md` §15.1） | [`ClaudeCodeSessionRegistry.swift`](../Notchline/Notchline/ClaudeCodeSessionRegistry.swift) |
+| 会话身份（Claude Code） | `ClaudeCodeSessionRegistry` | 运行 `claude agents --json` 并对读取单飞；**一份「读出来是空的」列表被扣住，不按时钟重读**，只有边沿、非空列表与失败的尝试才按节拍走（CR-Fable-002）；新鲜度从**上一次尝试**起算，失败保留上一次列表；**会话目录的变更可以把新鲜度窗口截断**（`invalidate()`，不低于 `edgeFloor`，读取途中到达的边沿不被该次读取消费）；在 stdout 里定位数组而不假定它独占该流；**排除本应用自己的额度读取会话**（见 `tech-design.md` §15.1） | [`ClaudeCodeSessionRegistry.swift`](../Notchline/Notchline/ClaudeCodeSessionRegistry.swift) |
 | Hook 注册（Codex） | `CodexHookRegistrar` | 写 `hook.sh`、在用户的 `hooks.json` 里增删本应用管理的**五**条定义，并回答注册完整度（`absent` / `mismatched` / `complete`）。**定义写下之后不再改写**（[ADR 0014](adr/0014-the-codex-hook-definition-is-never-rewritten.md)）；注册健康度由自己写文件与 FSEvents 边沿触发重算，不按节拍轮询；边沿在读的时候比计数，不订阅（CR-028） | [`HookIntegration.swift`](../Notchline/Notchline/HookIntegration.swift) |
 | 用户配置编辑 | `ManagedHooksConfiguration` | 在用户拥有的配置里严格增删本应用的定义；看不懂的结构一律不改，必须改才能继续时整体拒绝 | [`ManagedHooksConfiguration.swift`](../Notchline/Notchline/ManagedHooksConfiguration.swift) |
 | 公开协议边界 | `CodexAppServerClient` | 子进程、stdio JSON-RPC、握手、请求关联、超时、探活与传输重建 | [`CodexAppServerClient.swift`](../Notchline/Notchline/CodexAppServerClient.swift) |
@@ -572,6 +574,18 @@ flowchart LR
 - **本应用自己的用量读数不再让会话列表作废。** `claude -p "/usage"` 是一个真会话，进出各写／删一次 `~/.claude/sessions/<pid>.json`；两条边沿都告诉注册表「列表错了」，于是每次读数买回一次 `claude agents --json`——一个 Node 进程、约 0.4 s。实测启动后 3.5 s 那一次就是它。现在目录边沿先比一遍**条目名**：进出的名字如果全部属于本应用自己启动的 `claude`（pid 是自己 `Process` 给的，不读任何文件），就不作废；其余情况——名字没动、名字不认得、目录读不出来——一律照旧作废。实测：启动后那次多余的 `claude` 消失。
 
 一处代价要写下来：主窗口从 `WindowGroup` 换成 `Window(id: "main")` 之后，AppKit 记住窗口位置的 key 跟着变，用户上一次摆的位置会丢一次。
+
+### 稳态的 CPU：一棵每 30–60 秒重跑一次的进程树（CR-Fable-002）
+
+上面那两条都是**启动瞬间**。稳态里最大的一项是另一回事，而且它不在本应用的进程里，所以 `ps %cpu` 看本应用永远看不到：`claude agents --json` 在进程的余生里每 30–60 秒被启动一次——机器空闲、一个 Claude Code 会话都没开、屏幕锁着，照跑。
+
+原因是 §2 那条：注册表的新鲜度（30 秒）比这个进程最慢的唤醒间隔（心跳 60 秒；Codex 集成在跑时是账号读数的 30 秒）还短，于是每一次唤醒落下来的时候窗口都已经过期，「按新鲜度重读」等价于「按唤醒节拍无条件采样」。
+
+它不便宜。本机实测（`/usr/bin/time -p`，user + sys，含被回收的子进程；工作目录取 `/`，与本应用启动子进程时一致）：**单次 0.26–0.33 s CPU**，三次分别 0.33 / 0.27 / 0.26。而且这条命令会**拉起用户的 MCP server**——`ClaudeCodeSessionRegistry.bracketedSpan` 存在的唯一理由就是扛住那些 server 往它 stdout 上写的东西——所以每一次是一棵进程树，不是一个进程，MCP 配置越重越贵。按 30–60 秒一次折算，**0.4%–1.1% 的一个核，永远**，外加 fork/exec 与 Node 的换页，让整个包一直进不了深度空闲。
+
+它买回来的，绝大多数时候是「空列表仍然是空的」这一句重复。而从空变成非空的每一条路径本来就会自己报告：会话开始时它那份 `~/.claude/sessions/<pid>.json` 是被**新建**出来的，新建触发目录事件（原地重写不会，见 `tech-design.md` §15.1），而一条指名着列表里没有的会话的 hook 事件，本身就是那个会话存在的证据。因此**一份已经答出来是空的列表被扣住**，其余每一种情况仍然按时钟走：非空列表要按新鲜度重读（被 `SIGKILL` 的会话留着自己的记录、不产生任何边沿，只有那条命令自己的 `pid` + `procStart` 校验看得出它是幽灵），失败的尝试要按新鲜度重试（那正是 `trustCeiling` 数它三次失败所用的节拍），边沿则一律不早于 `edgeFloor` 作答。空闲机器上的稳态启动次数因此是**零**。
+
+两处代价写下来。其一，这条路径现在真的压在 `~/.claude/sessions` 的目录边沿上，而不是拿它当延迟优化——watcher 静默失效时，一个开着但一次提示都没提交过的会话不会点亮刘海上的标记，要等它第一次提交（那条 hook 事件会把列表作废）。其二，额度读数不在此列：`claude -p "/usage"` 仍然每 5 分钟跑一次（约 0.9 s），那是另一条命令、另一个理由，与本条无关。
 
 ## 7. 保持 clean and neat 的架构约束
 
