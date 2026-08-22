@@ -393,12 +393,19 @@ enum NotchMatrixState: Equatable {
     }
 }
 
-/// Per-cell opacity tracks, transcribed verbatim from the `<animate values="…">`
-/// lists in `running.svg`, `need-approval.svg` and `completed.svg`.
+/// Per-cell opacity tracks, taken from the `<animate values="…">` lists in
+/// `running.svg`, `need-approval.svg` and `completed.svg`.
 ///
 /// They are sampled rather than approximated with a sine so the code and the
 /// design file keep describing the same motion — `needsAttention` in particular
 /// is a hold-then-flash that no simple curve reproduces.
+///
+/// Two tracks deviate from the file on purpose, and both deviate in the same
+/// direction: ``attentionRing`` and ``completed`` reach `0.100` where the SVG
+/// stops at `0.200`. The SVG had every dim cell resting at one level, which
+/// left a mark waiting on the user and a mark with nothing running equally
+/// dark. Those two are the states the eye has to catch, so they now go darker
+/// than rest rather than level with it; the design file owes an update.
 private enum MatrixTrack {
     static let runningEven: [Double] = [
         0.500, 0.371, 0.250, 0.146, 0.067, 0.017, 0.000, 0.017,
@@ -410,12 +417,14 @@ private enum MatrixTrack {
         0.743, 0.622, 0.492, 0.363, 0.243, 0.141, 0.063, 0.015,
         0.000, 0.019, 0.071, 0.152, 0.257, 0.378, 0.508, 0.637
     ]
-    /// The ring holds at ``inactiveLevel`` rather than at nothing: an unlit
-    /// cell is the same darkness here as it is on a connected matrix, so the
-    /// two readouts stay one family and only the flash tells them apart.
+    /// The ring holds at half ``inactiveLevel``. It used to hold at exactly
+    /// that level, which made a mark waiting on the user as dark between
+    /// flashes as a mark with nothing running at all; sitting below it says
+    /// the darkness itself belongs to a live session, and it lengthens the
+    /// climb the flash makes, so the flash reads from further away.
     static let attentionRing: [Double] = [
-        0.200, 0.200, 0.200, 0.200, 0.200, 0.200, 0.200, 0.200,
-        0.200, 0.200, 0.200, 0.200, 0.200, 0.200, 0.200, 0.200,
+        0.100, 0.100, 0.100, 0.100, 0.100, 0.100, 0.100, 0.100,
+        0.100, 0.100, 0.100, 0.100, 0.100, 0.100, 0.100, 0.100,
         1.000, 0.981, 0.963, 0.944, 0.925, 0.906, 0.887, 0.869
     ]
     static let attentionCentre: [Double] = [
@@ -423,12 +432,21 @@ private enum MatrixTrack {
         0.850, 0.831, 0.813, 0.794, 0.775, 0.756, 0.738, 0.719,
         0.700, 0.681, 0.663, 0.644, 0.625, 0.606, 0.588, 0.569
     ]
+    /// The same raised cosine the SVG draws, rescaled about its peak so the
+    /// breath bottoms out at `0.100` instead of at ``inactiveLevel``: a
+    /// finished turn is darker at its dimmest than a mark at rest, which is
+    /// what makes the breath read as motion rather than as a lit mark.
     static let completed: [Double] = [
-        0.600, 0.704, 0.800, 0.883, 0.946, 0.986, 1.000, 0.986,
-        0.946, 0.883, 0.800, 0.704, 0.600, 0.496, 0.400, 0.317,
-        0.254, 0.214, 0.200, 0.214, 0.254, 0.317, 0.400, 0.496
+        0.550, 0.667, 0.775, 0.868, 0.939, 0.984, 1.000, 0.984,
+        0.939, 0.868, 0.775, 0.667, 0.550, 0.433, 0.325, 0.232,
+        0.161, 0.116, 0.100, 0.116, 0.161, 0.232, 0.325, 0.433
     ]
-    /// Connected and disconnected hold the resting floor of the completed breath.
+    /// Connected and disconnected hold the brightest dim level on the surface.
+    ///
+    /// It is a floor for the states that are *not* doing anything: the two
+    /// that are — the attention ring between flashes, the completed breath at
+    /// its trough — dip below it, so "dark" alone tells a live mark from a
+    /// resting one.
     static let inactiveLevel = 0.200
 }
 
