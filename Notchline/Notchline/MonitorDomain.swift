@@ -236,7 +236,15 @@ enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         switch (self, signal) {
         case (_, .running):
             return .running
-        case (.running, .inputNeeded), (.inputNeeded, .inputNeeded):
+        // Approval gives way to input. A denied approval is never closed by
+        // Codex -- no event ever names that `tool_use_id` again (tech-design
+        // §9.2) -- so the wait that follows it is the only thing that proves
+        // the human answered. Without this pair the row keeps saying Approval
+        // needed while the agent is asking a question, which is the one fact
+        // the product exists to get right, and aggregation ranks it below the
+        // Input it actually is (PRD §6.2).
+        case (.running, .inputNeeded), (.inputNeeded, .inputNeeded),
+             (.approvalNeeded, .inputNeeded):
             return .inputNeeded
         case (.running, .approvalNeeded), (.approvalNeeded, .approvalNeeded):
             return .approvalNeeded

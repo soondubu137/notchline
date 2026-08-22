@@ -2081,14 +2081,24 @@ struct NotchlineTests {
     }
 
     @Test
-    func sessionStatusMachineAllowsOnlyTheFourDesignedTransitions() {
+    func sessionStatusMachineAllowsOnlyTheDesignedTransitions() {
         #expect(SessionStatus.running.transitioned(on: .inputNeeded) == .inputNeeded)
         #expect(SessionStatus.inputNeeded.transitioned(on: .inputNeeded) == .inputNeeded)
-        #expect(SessionStatus.inputNeeded.transitioned(on: .approvalNeeded) == .inputNeeded)
         #expect(SessionStatus.inputNeeded.transitioned(on: .running) == .running)
         #expect(SessionStatus.running.transitioned(on: .approvalNeeded) == .approvalNeeded)
-        #expect(SessionStatus.approvalNeeded.transitioned(on: .inputNeeded) == .approvalNeeded)
+        #expect(SessionStatus.approvalNeeded.transitioned(on: .approvalNeeded) == .approvalNeeded)
         #expect(SessionStatus.approvalNeeded.transitioned(on: .running) == .running)
+
+        // The two waits are not symmetric, and the asymmetry is the design.
+        //
+        // Approval gives way to input, because a denied approval is the one
+        // wait no product ever closes: the question that follows it is the
+        // only evidence the human answered, and the row has to name the answer
+        // now owed. Input does not give way to approval -- an input wait is
+        // always closed by its own `PostToolUse`, so it is never stale, and
+        // Input outranks Approval when both are somehow outstanding (PRD §6.2).
+        #expect(SessionStatus.approvalNeeded.transitioned(on: .inputNeeded) == .inputNeeded)
+        #expect(SessionStatus.inputNeeded.transitioned(on: .approvalNeeded) == .inputNeeded)
 
         for status in SessionStatus.allCases {
             #expect(status.transitioned(on: .completed) == .completed)
@@ -4143,6 +4153,60 @@ struct NotchlineTests {
         #expect(await client.disconnectCount() == 0)
     }
 
+    /// A kept snapshot keeps the *observation* and nothing else.
+    ///
+    /// Presence and registration health were both measured by the same refresh
+    /// -- presence off the running-application list, which cannot time out,
+    /// and setup off the registrar, which never asked the App Server anything
+    /// -- so neither is in doubt when a `thread/list` blips. Letting the
+    /// initialiser's defaults answer instead put a Connected mark on a Codex
+    /// Desktop the user had quit (PRD §6.3, §12) and reported a healthy
+    /// integration over the `reviewRequired` the Settings row exists to show.
+    @Test @MainActor
+    func aKeptSnapshotDoesNotClaimAQuitDesktopIsConnected() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let client = CodexAppServerStub(listedThreads: [], loadedListResults: [])
+        let clock = TestClock()
+        let desktop = MutableDesktopProcessIdentifier(4_242)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookRegistrar: installer,
+            clock: clock,
+            desktopProcessIdentifierProvider: { desktop.value }
+        )
+        defer { Task { await service.disconnect() } }
+
+        // Registered but never yet heard from, which is exactly the state a
+        // default of `.active` would paper over.
+        let trusted = await service.fetchSnapshot()
+        #expect(trusted.availability == .ready)
+        #expect(trusted.presence == .open)
+        #expect(trusted.setupStatus == .reviewRequired)
+
+        // The user quits Codex Desktop, and the next list times out.
+        desktop.value = nil
+        await client.setThreadListError(.timeout(method: "thread/list"))
+        await clock.advance(by: 60)
+
+        let kept = await service.fetchSnapshot()
+
+        #expect(kept.availability == .ready)
+        #expect(kept.diagnostic?.contains("most recent state has been kept") == true)
+        #expect(kept.presence == .closed)
+        #expect(kept.setupStatus == .reviewRequired)
+        // The mark the user can check against their own Dock.
+        #expect(kept.isConnected == false)
+    }
+
     @Test @MainActor
     func idleToRunningDoesNotWaitForSlowThreadList() async throws {
         let paths = makeTemporaryHookPaths()
@@ -5180,6 +5244,41 @@ struct NotchlineTests {
                 as? CABasicAnimation
         )
         #expect(reduced.duration == PanelMotion.reducedDuration)
+    }
+
+    /// The store is the only writer any of that motion has.
+    ///
+    /// Every reduced path above -- the dissolve, the matrix keyframes, the
+    /// panel's spring -- reads `MonitorStore.reduceMotion` and nothing else,
+    /// and it was declared `false` and never assigned, so all of them were
+    /// dead in production while tests that hand the flag straight to a view
+    /// went on passing. This one fails if the property loses its writer.
+    @Test @MainActor
+    func reduceMotionIsReadFromTheSystemAndFollowsItsChanges() async {
+        let accessibility = NotificationCenter()
+        let systemSetting = MutableFlag(true)
+        let store = MonitorStore(
+            services: [],
+            systemReduceMotion: { systemSetting.value },
+            accessibilityNotifications: accessibility
+        )
+
+        // Read at construction, because this is a state rather than an event:
+        // a user who already had Reduce Motion on never posts a change for it.
+        #expect(store.reduceMotion)
+
+        systemSetting.value = false
+        accessibility.post(
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
+        // The workspace posts one notification for the whole accessibility
+        // group and the store re-reads; the hop to the main actor is what
+        // these yields are waiting on.
+        for _ in 0 ..< 24 where store.reduceMotion {
+            await Task.yield()
+        }
+        #expect(store.reduceMotion == false)
     }
 
     private static func alphaExtremes(
@@ -7462,6 +7561,82 @@ for line in sys.stdin:
         ], 4)
         status = await repository.drainDeliveredEvents().turns.first?.status
         #expect(status == .running)
+    }
+
+    /// Denying and then being asked a question. The denied approval is never
+    /// closed, so the input wait is the only thing that says the human has
+    /// moved on -- and the row has to say *which* answer is owed now, which is
+    /// the product's single job. `approvalNeeded -> inputNeeded` used to be
+    /// absent from the transition table, so the wait cleared the approval and
+    /// the row kept the word `Approval` for the whole of the question.
+    @Test
+    func denialFollowedByAQuestionAsksForInput() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let timestamp = Date().timeIntervalSince1970
+        let repository = HookEventRepository(paths: paths)
+
+        func write(_ event: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
+        }
+
+        try write([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ])
+        try write([
+            "received_at": timestamp + 1,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ])
+        try write([
+            "received_at": timestamp + 2,
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash"
+        ])
+        var turn = await repository.drainDeliveredEvents().turns.first
+        #expect(turn?.status == .approvalNeeded)
+
+        // Denied, and the agent asks how to proceed instead.
+        try write([
+            "received_at": timestamp + 30,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "request_user_input",
+            "tool_use_id": "ask-1"
+        ])
+        turn = await repository.drainDeliveredEvents().turns.first
+        #expect(turn?.status == .inputNeeded)
+        // The three have to agree: an abandoned approval, an open question,
+        // and a word that names the question.
+        #expect(turn?.pendingApproval == nil)
+        #expect(turn?.pendingInputToolUseID == "ask-1")
+
+        // Answering it returns the turn to Running without resurrecting the
+        // approval the human already refused.
+        try write([
+            "received_at": timestamp + 45,
+            "hook_event_name": "PostToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "request_user_input",
+            "tool_use_id": "ask-1"
+        ])
+        turn = await repository.drainDeliveredEvents().turns.first
+        #expect(turn?.status == .running)
     }
 
     /// An approval that owns its `tool_use_id` always gets a closing event, so
@@ -16103,7 +16278,7 @@ private actor NavigationTargetCheckerStub: CodexNavigationTargetChecking {
 private actor CodexAppServerStub: CodexAppServerCommunicating {
     private let listedThreads: [JSONValue]
     private let connectResult: Result<Void, CodexAppServerError>
-    private let threadListError: CodexAppServerError?
+    private var threadListError: CodexAppServerError?
     private var threadListDelayNanoseconds: UInt64
     private var threadReadDelayNanoseconds: UInt64 = 0
     private var loadedListResults: [Result<JSONValue, CodexAppServerError>]
@@ -16218,6 +16393,12 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
 
     func disconnect() async {
         disconnects += 1
+    }
+
+    /// Starts or stops `thread/list` failing part-way through a test, which is
+    /// what a transient App Server fault looks like from here.
+    func setThreadListError(_ error: CodexAppServerError?) {
+        threadListError = error
     }
 
     func requestedMethods() -> [String] {
@@ -17926,6 +18107,19 @@ extension NotchlineTests {
 
 /// Holds a value a `@Sendable` closure has to be able to read after a test has
 /// changed it. A captured `var` cannot cross that boundary.
+/// A boolean a test can flip while something else is reading it.
+private final class MutableFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Bool
+
+    init(_ value: Bool) { stored = value }
+
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
 private final class MutableDesktopProcessIdentifier: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: pid_t?

@@ -355,6 +355,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     sessions: [],
                     quota: .unavailable,
                     diagnostic: error.localizedDescription,
+                    setupStatus: setupStatus,
                     presence: presence
                 )
             }
@@ -366,10 +367,15 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                         sessions: [],
                         quota: .unavailable,
                         diagnostic: "The Codex App Server is not responding: \(error.localizedDescription)",
+                        setupStatus: setupStatus,
                         presence: presence
                     )
                 }
-                return snapshotPreservingTrustedState(after: error)
+                return snapshotPreservingTrustedState(
+                    after: error,
+                    setupStatus: setupStatus,
+                    presence: presence
+                )
             }
             if error.requiresConnectionReset {
                 await client.disconnect()
@@ -379,6 +385,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 sessions: [],
                 quota: .unavailable,
                 diagnostic: error.localizedDescription,
+                setupStatus: setupStatus,
                 presence: presence
             )
         } catch {
@@ -388,6 +395,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 sessions: [],
                 quota: .unavailable,
                 diagnostic: error.localizedDescription,
+                setupStatus: setupStatus,
                 presence: presence
             )
         }
@@ -568,7 +576,9 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 availability: snapshot.availability,
                 sessions: [],
                 quota: snapshot.quota,
-                diagnostic: snapshot.diagnostic
+                diagnostic: snapshot.diagnostic,
+                setupStatus: snapshot.setupStatus,
+                presence: snapshot.presence
             )
         }
     }
@@ -950,8 +960,22 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         return MonitorDiagnostics.combined(metadata.diagnostic, unresolvedDiagnostic)
     }
 
+    /// Keeps the last trusted *observation* while a request is transiently
+    /// failing -- and only that.
+    ///
+    /// Presence and registration health are not part of what failed. Both were
+    /// measured by this same refresh: presence from the running-application
+    /// list, which is kernel truth and cannot time out, and setup from the
+    /// registrar, which never asked the App Server anything. So both are
+    /// passed in and used rather than inherited from the kept snapshot or left
+    /// to the initialiser's defaults -- which claim `.open` and `.active`, and
+    /// would have this branch draw a Connected mark for a Codex Desktop the
+    /// user can see is not running (PRD §6.3, §12), and report a healthy
+    /// integration over a `reviewRequired` the Settings row exists to surface.
     private func snapshotPreservingTrustedState(
-        after error: CodexAppServerError
+        after error: CodexAppServerError,
+        setupStatus: HookSetupStatus,
+        presence: AgentPresence
     ) -> AgentSnapshot {
         let diagnostic = "An App Server request failed for the moment; the most recent state has been kept: \(error.localizedDescription)"
         guard let lastTrustedSnapshot else {
@@ -959,7 +983,9 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 availability: .connecting,
                 sessions: [],
                 quota: cachedQuota,
-                diagnostic: diagnostic
+                diagnostic: diagnostic,
+                setupStatus: setupStatus,
+                presence: presence
             )
         }
 
@@ -970,7 +996,9 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             availability: lastTrustedSnapshot.availability,
             sessions: lastTrustedSnapshot.sessions,
             quota: quota,
-            diagnostic: diagnostic
+            diagnostic: diagnostic,
+            setupStatus: setupStatus,
+            presence: presence
         )
     }
 

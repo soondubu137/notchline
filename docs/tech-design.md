@@ -341,6 +341,8 @@ struct TurnEvidence: Equatable {
 - **Codex**：`NSRunningApplication.runningApplications(withBundleIdentifier:)`，内核事实，因此永不为未知。
 - **Claude Code**：`ClaudeCodeSessionListing.presence()`，由活跃会话列表是否非空回答。列表是缓存的，所以只有它能报告未知——见第 15 节的可信上限。
 
+**在场与注册健康度必须来自本次刷新，任何分支都不例外。** 两者都在 `fetchSnapshot` 顶部量过：在场来自运行应用列表，不会超时也不会陈旧；注册健康度来自 registrar，根本没问过 App Server。所以请求失败时保住的只是**观测**（availability、行、配额），这两项照样按本次量到的值写入——不得从被保住的旧快照继承，更不得留给 `AgentSnapshot` 初始化器的默认值 `.open` / `.active` 去回答：那会让一次 `thread/list` 超时给一个用户明明已经退出的 Codex Desktop 画上 Connected 标记（违反 PRD §6.3、§12），并把 Settings 那一行本该显示的 `reviewRequired` 报成健康（CR-Fable-005）。
+
 `ClaudeCodeSessionListing` 的两个方法回答两个不同的问题，不得合并：`liveSessions()` 回答「有哪些会话」，Turn reducer 回答「它们在做什么」。**在场画出矩阵，reducer 点亮它。** 一个没有轮次在跑的会话仍然是一个打开着的 Claude Code。
 
 **一个例外，只有这一个：会话自己会说它还在不在工作。** `claude agents --json` 除身份之外还给出 `status`（`busy` / `waiting` / `idle` / `shell`）与 `waitingFor`——本文档与代码注释此前都写着那份输出「不管会话在做什么都一字不差」，2026-08-18 对 2.1.235 实测证明那是错的。该读数进入 `ClaudeCodeSession.activity`，并且**只能做一件事**：结束 reducer 手里已经开着的那个轮次。它不携带轮次身份，所以永远不许开启、命名或描述一个轮次。
@@ -500,7 +502,9 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 | Turn active 且无等待请求 | Running |
 | `Stop` 或 terminal `completed` / `failed` / `interrupted` | Completed |
 
-状态机只有以下合法流转：`Running ↔ Input needed`、`Running ↔ Approval needed`、`Running → Completed`。Running 是起点，Completed 是不可逆终点；没有合法新信号时保持当前状态。终态到达后清空该 Turn 的 pending request，旧 Turn 的晚到事件不能改变新 Turn。
+状态机只有以下合法流转：`Running ↔ Input needed`、`Running ↔ Approval needed`、`Approval needed → Input needed`、`Running → Completed`。Running 是起点，Completed 是不可逆终点；没有合法新信号时保持当前状态。终态到达后清空该 Turn 的 pending request，旧 Turn 的晚到事件不能改变新 Turn。
+
+`Approval needed → Input needed` 是唯一一条不经 Running 的等待间流转，它存在的理由就在 §9.2 的最后一条：被拒绝的借用 id 等待永远收不到关闭事件，随后那次 `PreToolUse(request_user_input)` 既是「人工已回答」的证据，也是新的等待本身。少了这条流转，`resolveInferredApproval` 清掉了 pending approval，行却还写着 Approval needed——聚合按 §6.2 又把 Input 排在 Approval 之前，于是收起态连紧急程度都低报了（CR-Fable-009）。反向不成立：Input pending 必然由自己的 `PostToolUse` 关闭，不会滞留，两个等待同时存在时按 §6.2 显示 Input。
 
 ### 9.2 身份准入与请求配对
 

@@ -486,7 +486,7 @@ flowchart LR
 这次交接连带定死了三件事，都是「布局在动、内容也在换」时才会暴露的：
 
 1. **字形层按自己的光栅尺寸定框，永远不按 `bounds`。** `CALayer` 的 `contentsGravity` 默认是拉伸，而收起时 `bounds` 正在从 `Approval needed` 的宽度收到 `Approval` 的宽度——按 `bounds` 定框，短字形就会被拉到旧宽度、再随动画挤回自己。`ElapsedReadoutView` 与 `SessionRowTextView` 一直是按光栅定框的，只有状态名这一个没有，而它恰好是唯一一个宽度会被动画的标签。
-2. **曲线只声明一处。** `PanelMotion`（`NotchStatusMatrix.swift`）给出 `200 ms` / `cubic-bezier(0.22, 1, 0.36, 1)`（Reduce Motion 为 `80 ms` / ease-out）的 SwiftUI 与 Core Animation 两种形式。窗口（`OverlayPanelController`）、顶栏（`NotchOverlayView`）与标签的淡出原先各写各的，三处一致纯属人工维持；淡化必须与它下面正在收的宽度同时结束，所以这里不能有第二种意见。
+2. **曲线只声明一处。** `PanelMotion`（`NotchStatusMatrix.swift`）给出 `200 ms` / `cubic-bezier(0.22, 1, 0.36, 1)`（Reduce Motion 为 `80 ms` / ease-out）的 SwiftUI 与 Core Animation 两种形式。窗口（`OverlayPanelController`）、顶栏（`NotchOverlayView`）与标签的淡出原先各写各的，三处一致纯属人工维持；淡化必须与它下面正在收的宽度同时结束，所以这里不能有第二种意见。**Reduce Motion 这个输入同样只有一个来源**：`MonitorStore.reduceMotion` 在构造时读 `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion`，之后跟随 `accessibilityDisplayOptionsDidChangeNotification`；矩阵关键帧、扫光与面板弹簧都只读它。它曾经声明成 `false` 常量而没有任何写入方，于是上面这一整套降级在生产里全是死代码，而把标志直接传给视图的测试照样通过——失败是完全无声的（CR-Fable-015）。
 3. **扫光不再每次布局重装。** 过渡期间这个视图每帧都被 layout，而扫光的几何只跟字形尺寸有关——`SessionRowTextView` 早就按这条写了，状态名现在跟上。（未做新的性能实测，也不宣称一个数字：这里改的是每帧一次 `CATransaction` 提交的结构，不是已量过的稳态成本。）
 
 一个读数是另一个的前缀时（`Approval` / `Approval needed`），新读数**不淡入**：共有的字形是同一批像素、同一个位置，两层叠加只会让一个没动过的词暗下去一趟。只有真正不同的读数才双向交叉淡化。文案规则见 `figma-design.md` §9.1。
