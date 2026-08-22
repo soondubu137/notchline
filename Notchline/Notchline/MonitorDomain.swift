@@ -326,20 +326,6 @@ enum MonitorAvailability: Equatable, Sendable {
     }
 }
 
-/// What a user has to do by hand to register a product's hooks.
-///
-/// Only exists for a product this app will not set up for them, which today is
-/// Claude Code alone: its settings file holds their whole install, and the
-/// blast radius of a bad edit is why the app reads that file and never writes
-/// it (ADR 0010).
-nonisolated struct AgentManualSetup: Sendable, Equatable {
-    let agent: AgentKind
-    /// The file to edit.
-    let settingsURL: URL
-    /// The block to add to it.
-    let configurationSnippet: String
-}
-
 /// What a product's monitoring has left lying on disk.
 ///
 /// Reported, never acted on. Only a product whose monitoring writes files the
@@ -543,9 +529,9 @@ struct AgentSnapshot: Equatable, Sendable {
     /// Whether this product counts as connected: open *and* observable.
     ///
     /// The two halves are independent facts that can contradict each other.
-    /// ADR 0010 leaves Claude Code's hook registration to the user, so "open
-    /// but not reachable" is an ordinary first run rather than an edge case,
-    /// and it reads as disconnected — which is what the word means. You cannot
+    /// Neither product is registered until the user turns its switch on, so
+    /// "open but not reachable" is an ordinary first run rather than an edge
+    /// case, and it reads as disconnected — which is what the word means. You cannot
     /// be disconnected from something you never opened; you certainly are from
     /// something open that you cannot reach.
     ///

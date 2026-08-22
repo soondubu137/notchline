@@ -1,31 +1,16 @@
 import Foundation
 
-/// Why an integration cannot be switched on from inside the app.
-enum AgentSetupError: LocalizedError, Equatable {
-    /// This product's registration is made by the user, by hand.
-    case manualRegistrationRequired(AgentKind)
-
-    var errorDescription: String? {
-        switch self {
-        case let .manualRegistrationRequired(agent):
-            "\(agent.displayName) hooks have to be registered by writing to the "
-                + "settings file yourself; this app only shows what to paste, and "
-                + "never edits that file."
-        }
-    }
-}
-
 /// Watches Claude Code, and is one of the products the notch summarises.
 ///
-/// Deliberately much smaller than the Codex service. Two of the things that one
-/// has to do are simply absent here: there is no app-server subprocess to run
-/// and keep alive, because session identity comes from a documented command;
-/// and there is no helper script to install and upgrade, because the product
-/// posts to this app directly.
+/// Deliberately smaller than the Codex service. The biggest of that one's jobs
+/// is simply absent here: there is no app-server subprocess to run and keep
+/// alive, because session identity comes from a documented command.
 ///
-/// What replaces the two is one thing the Codex side never has to think about:
-/// this product's registration belongs to the user. The app reads it, reports
-/// on it, and cannot repair it — see ADR 0010.
+/// Hook registration is no longer a difference between the two. It once was —
+/// ADR 0010 left `~/.claude/settings.json` to the user — and ADR 0016 took that
+/// back: both products install and remove their own definitions, through the
+/// same strict editor, and this one keeps a copy of the user's file beside it
+/// before each change.
 ///
 /// The startup boundary, though, is the same on both sides: nothing that
 /// happened before this app launched is ever shown. Claude Code's transcript
@@ -1309,24 +1294,18 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     }
 
 
-    func manualSetup() async -> AgentManualSetup? {
-        AgentManualSetup(
-            agent: agent,
-            settingsURL: setup.settingsURL,
-            configurationSnippet: await setup.configurationSnippet()
-        )
-    }
-
-    /// Registration is the user's to make, so this always refuses.
+    /// Writes this build's definitions into `~/.claude/settings.json`.
     ///
-    /// Refusing loudly rather than doing nothing: a switch that silently
-    /// achieves nothing is worse than one that explains why it is not a switch.
+    /// A copy of that file as it was goes beside it first — see
+    /// ``ManagedHooksFileEditor`` and ADR 0016. Nothing here is Claude Code
+    /// specific: the switch in Settings is the same switch Codex has, and it
+    /// converges through the same path in ``MonitorStore``.
     func installHooks() async throws {
-        throw AgentSetupError.manualRegistrationRequired(agent)
+        try await setup.install()
     }
 
     func removeHooks() async throws {
-        throw AgentSetupError.manualRegistrationRequired(agent)
+        try await setup.uninstall()
     }
 
     func clearSessions() async {

@@ -4,7 +4,7 @@ Claude Code 的生命周期事件此前由 `type: "http"` handler POST 到 `127.
 
 ## 为什么换
 
-端口有两个毛病，**都不是注册能修的**，因为本应用不写用户的 `settings.json`（[ADR 0010](0010-never-write-the-users-claude-code-settings.md)）。
+端口有两个毛病，**都不是注册能修的**——当时本应用还不写用户的 `settings.json`（[ADR 0010](0010-never-write-the-users-claude-code-settings.md)，后被 [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md) 取代）。写入能力收回来之后这两个毛病仍然不是注册能修的：它们是端口本身的性质，换成 helper 才消失。
 
 **一、本应用没开的时候，端口不属于任何人，于是每个事件都在用户会话里打一行。** 实测 CLI 2.1.237，pty 驱动的交互式会话，同一句提示、两次工具调用：指向无人监听端口的 `http` 注册打出 **9 行** `<event> hook error / connect ECONNREFUSED`。渲染处只对 `Stop` 与 `SubagentStop` 返回 `null`，其余一律打印，且**没有任何设置或环境变量可以关掉**（查过 `suppressHook` / `hideHook` / `HOOK_SILENT` / `DISABLE_HOOK` / `quietHooks`，都不存在；`suppressOutput` 是 hook **回复**里的字段，连接被拒时根本够不着）。这条就是 §9 那条 NO-GO——「`http` hook 在应用未运行时对用户会话产生任何可见影响」——它对**所有**事件成立，不只是 `SessionEnd`。
 
@@ -45,6 +45,8 @@ helper 两个毛病都没有：它无论本应用开没开都 `exit 0` 且两条
 **依赖 `/usr/bin/nc` 带 `-U`。** macOS 自带，不是私有依赖，但它是这条通道唯一的外部件。helper 的三层超时由内向外是 `SO_RCVTIMEO` 250 ms（本应用读一条 payload）、`nc -w 1`（对端 accept 了却不读的情况）、注册里的 `timeout: 3`。
 
 **已经装过的用户要重贴。** 旧的 `http` handler 留在他们文件里，本应用删不掉（ADR 0010）。所以 `ManagedHooksConfiguration` 把旧的 URL path `/codex-in-notch/hook` 当作 legacy identity marker：认得出来，于是状态报 `repairRequired`（「这不是本版本要的注册，请重贴」）而不是 `notInstalled`（「你还没装」）——后者会让用户在旧的旁边再贴一份。
+
+> **这一段的结论已随 [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md) 变了，marker 本身没变。** 本应用现在删得掉那段死 handler：安装时 `installing(into:isNewFile:)` 用同一个 legacy marker 把它剥掉，再写当前形状。用户要做的从「回去重贴」变成「拨一下开关」，而 `repairRequired` 仍然要单独报——在他们去拨之前，notch 照样一直空着且任何地方都不报错。
 
 ## 连带
 

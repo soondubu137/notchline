@@ -20,13 +20,6 @@ protocol AgentMonitoring: Sendable {
     /// quiet monitor does no work at all and a due window is served exactly when
     /// it comes due.
     func nextRefreshDeadline() async -> Date?
-    /// Non-nil when this product's registration is the user's to make rather
-    /// than the app's.
-    ///
-    /// A product that installs its own hooks answers nil and gets a switch; one
-    /// that does not answers with the file to edit and the text to put in it,
-    /// and gets instructions instead. See ADR 0010 for why the two differ.
-    func manualSetup() async -> AgentManualSetup?
     /// What this product's monitoring has left on disk, or why there is not a
     /// figure for it yet.
     ///
@@ -51,8 +44,6 @@ extension AgentMonitoring {
 
 actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     nonisolated let agent = AgentKind.codex
-    /// Codex's hooks are installed by this app, so there is nothing to instruct.
-    func manualSetup() async -> AgentManualSetup? { nil }
 
     /// Thread-level metadata cached for one thread.
     ///

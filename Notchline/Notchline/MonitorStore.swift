@@ -635,13 +635,14 @@ struct ConnectionStabilityGate {
 
 @MainActor
 final class MonitorStore: ObservableObject {
-    /// Which product the single integration card in Settings belongs to.
+    /// Which product an integration call means when it does not say.
     ///
-    /// There is one card today, and it is Codex's. The second product's card
-    /// arrives with the two-product settings surface; naming the owner here
-    /// means installing or removing one product's hooks can never move the
-    /// other product's switch.
-    static let integrationCardAgent = AgentKind.codex
+    /// Every switch in this store is per product (ADR 0016 gave Claude Code one
+    /// too), and none of the state below is shared between them: installing or
+    /// removing one product's hooks can never move the other product's switch.
+    /// This default exists so the no-argument spelling still reads as Codex,
+    /// which is what it has always meant.
+    static let defaultIntegrationAgent = AgentKind.codex
     private static let liveService = LiveCodexMonitorService()
     private static let claudeCodeService = ClaudeCodeMonitorService()
     static let shared = makeShared()
@@ -711,9 +712,6 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var presenceMarks: [PresenceMark] = [
         PresenceMark(agent: nil, status: .disconnected)
     ]
-    /// Instructions for every product whose registration the user makes by
-    /// hand. Absent for a product this app sets up itself.
-    @Published private(set) var manualSetups: [AgentKind: AgentManualSetup] = [:]
     /// What each product's monitoring has left on disk, for the products that
     /// leave anything. Shown in Settings; never acted on.
     ///
@@ -748,8 +746,20 @@ final class MonitorStore: ObservableObject {
 
     /// The instant the readouts are currently showing.
     var timerNow: Date { elapsedTick.value }
-    @Published private(set) var hookSetupStatus: HookSetupStatus = .notInstalled
-    @Published private(set) var integrationSwitchIsOn = false
+    /// How far along each product's registration is.
+    ///
+    /// Published because the settings rows read it, and written only when it
+    /// actually changes -- one publish here re-evaluates the whole overlay
+    /// (`AGENTS.md` §7), and a refresh re-states the same status every second.
+    @Published private(set) var setupStatusByAgent: [AgentKind: HookSetupStatus] = [:]
+    /// Where each product's switch is sitting.
+    ///
+    /// Held apart from ``setupStatusByAgent`` because the two disagree for as
+    /// long as a convergence is in flight: the switch shows where the user put
+    /// it, the status shows what the file says.
+    @Published private(set) var integrationSwitchIsOnByAgent: [AgentKind: Bool] = [:]
+    /// The products whose hooks are being written or removed right now.
+    @Published private(set) var integrationBusyAgents: Set<AgentKind> = []
     @Published var isExpanded = false
     /// Whether the user has asked the system to reduce motion.
     ///
@@ -783,8 +793,6 @@ final class MonitorStore: ObservableObject {
         }
     }
     @Published private(set) var lastIntegrationMessage: String
-    @Published private(set) var isInstallingIntegration = false
-    @Published private(set) var isRemovingIntegration = false
     @Published private(set) var isClearingSessions = false
     @Published private(set) var hasCompletedOnboarding: Bool
 
@@ -804,8 +812,8 @@ final class MonitorStore: ObservableObject {
     /// being able to see it.
     var isWatching: Bool { !services.isEmpty }
     private let navigator: (any AgentNavigating)?
-    private var integrationService: (any AgentMonitoring)? {
-        services.first { $0.agent == Self.integrationCardAgent }
+    private func integrationService(for agent: AgentKind) -> (any AgentMonitoring)? {
+        services.first { $0.agent == agent }
     }
     /// Where every persisted preference is read and written. `nil` in tests,
     /// which is what keeps them off the running user's real defaults.
@@ -822,9 +830,12 @@ final class MonitorStore: ObservableObject {
     private let refreshEvents: AsyncStream<Void>?
     private var refreshGate = SingleFlightGate()
     private var refreshTask: Task<Void, Never>?
-    /// The switch's desired state, which the convergence task reads each pass.
-    private var desiredIntegrationEnabled: Bool?
-    private var integrationTask: Task<Void, Never>?
+    /// Each switch's desired state, which that product's convergence task reads
+    /// on every pass.
+    private var desiredIntegrationEnabled: [AgentKind: Bool] = [:]
+    /// One convergence task per product, so a slow write on one side cannot
+    /// hold the other side's switch.
+    private var integrationTasks: [AgentKind: Task<Void, Never>] = [:]
     private var isNavigationInFlight = false
     private var dismissedSessionIDs: Set<String> = []
     /// The latest answer from each product, kept so the merge can be recomputed
@@ -834,11 +845,6 @@ final class MonitorStore: ObservableObject {
     /// One gate per product. Sharing one made a Codex blip suppress a Claude
     /// Code publish, and made the grace period's wake-up a shared resource.
     private var stabilityGates: [AgentKind: ConnectionStabilityGate] = [:]
-    /// Integration health per product. The expanded panel shows one card today;
-    /// keeping this per product is what stops one product's absence from
-    /// switching another product's integration off.
-    private var setupStatusByAgent: [AgentKind: HookSetupStatus] = [:]
-    private var manualSetupTask: Task<Void, Never>?
     private var diskFootprintTask: Task<Void, Never>?
     /// Deadlines a provider reported and then failed to clear. A provider that
     /// keeps naming the same overdue instant is not going to advance it, and
@@ -943,7 +949,9 @@ final class MonitorStore: ObservableObject {
         pendingHoverTask?.cancel()
         elapsedTickTask?.cancel()
         refreshTask?.cancel()
-        integrationTask?.cancel()
+        for task in integrationTasks.values {
+            task.cancel()
+        }
         diskFootprintTask?.cancel()
     }
 
@@ -1505,13 +1513,14 @@ final class MonitorStore: ObservableObject {
         return hookSetupStatus
     }
 
-    func installIntegrationHooks() {
+    func installIntegrationHooks(for agent: AgentKind = MonitorStore.defaultIntegrationAgent) {
         Task { [weak self] in
-            _ = await self?.installIntegrationHooksAndWait()
+            _ = await self?.installIntegrationHooksAndWait(for: agent)
         }
     }
 
-    /// Records where the user wants the integration, and converges to it.
+    /// Records where the user wants one product's integration, and converges to
+    /// it.
     ///
     /// The switch used to read its own guard flags before the task that sets
     /// them had started, so flipping it twice quickly could queue an install
@@ -1520,88 +1529,103 @@ final class MonitorStore: ObservableObject {
     /// ending where they left the switch (CR-017).
     ///
     /// Intent and execution are now separate. This records the desired state
-    /// and returns; a single convergence task applies it, re-reading the
-    /// desired state after each step so the last flip is the one that decides
-    /// where things end up. Intermediate flips are collapsed rather than
+    /// and returns; a single convergence task per product applies it, re-reading
+    /// the desired state after each step so the last flip is the one that
+    /// decides where things end up. Intermediate flips are collapsed rather than
     /// replayed -- nobody wants three installs because the switch was tapped
     /// three times.
-    func setIntegrationEnabled(_ isEnabled: Bool) {
-        guard isEnabled != desiredIntegrationEnabled ?? integrationSwitchIsOn else {
+    func setIntegrationEnabled(
+        _ isEnabled: Bool,
+        for agent: AgentKind = MonitorStore.defaultIntegrationAgent
+    ) {
+        guard isEnabled != desiredIntegrationEnabled[agent]
+            ?? integrationSwitchIsOn(for: agent) else {
             return
         }
 
-        desiredIntegrationEnabled = isEnabled
-        integrationSwitchIsOn = isEnabled
-        startIntegrationConvergenceIfNeeded()
+        desiredIntegrationEnabled[agent] = isEnabled
+        setSwitch(isEnabled, for: agent)
+        startIntegrationConvergenceIfNeeded(for: agent)
     }
 
     /// Applies the desired integration state, and waits for it to settle.
     @discardableResult
-    func setIntegrationEnabledAndWait(_ isEnabled: Bool) async -> Bool {
-        setIntegrationEnabled(isEnabled)
-        await integrationTask?.value
-        return integrationSwitchIsOn == isEnabled
+    func setIntegrationEnabledAndWait(
+        _ isEnabled: Bool,
+        for agent: AgentKind = MonitorStore.defaultIntegrationAgent
+    ) async -> Bool {
+        setIntegrationEnabled(isEnabled, for: agent)
+        await integrationTasks[agent]?.value
+        return integrationSwitchIsOn(for: agent) == isEnabled
     }
 
-    /// Starts the convergence loop unless one is already running.
+    /// Starts one product's convergence loop unless one is already running.
     ///
     /// No revision gate here on purpose. ``desiredIntegrationEnabled`` already
-    /// records that work is outstanding -- the loop runs until it is nil -- so
-    /// a gate alongside it would be a second, redundant copy of the same fact,
-    /// and two sources of truth for "is more work pending" is worse than one.
+    /// records that work is outstanding -- the loop runs until that product's
+    /// entry is gone -- so a gate alongside it would be a second, redundant copy
+    /// of the same fact, and two sources of truth for "is more work pending" is
+    /// worse than one.
     ///
     /// A plain task handle is safe because both the check and the clear happen
     /// on the main actor with no suspension between the loop's last read of
     /// the desired state and the handle being released.
-    private func startIntegrationConvergenceIfNeeded() {
-        guard integrationService != nil, integrationTask == nil else { return }
-        integrationTask = Task { [weak self] in
+    private func startIntegrationConvergenceIfNeeded(for agent: AgentKind) {
+        guard integrationService(for: agent) != nil,
+              integrationTasks[agent] == nil else {
+            return
+        }
+        integrationTasks[agent] = Task { [weak self] in
             guard let self else { return }
-            while self.desiredIntegrationEnabled != nil {
-                await self.convergeIntegrationOnce()
+            while self.desiredIntegrationEnabled[agent] != nil {
+                await self.convergeIntegrationOnce(for: agent)
             }
-            self.integrationTask = nil
+            self.integrationTasks[agent] = nil
         }
     }
 
-    private func convergeIntegrationOnce() async {
-        guard let desired = desiredIntegrationEnabled else { return }
+    private func convergeIntegrationOnce(for agent: AgentKind) async {
+        guard let desired = desiredIntegrationEnabled[agent] else { return }
 
         let succeeded = desired
-            ? await installIntegrationHooksAndWait()
-            : await removeIntegrationAndWait()
+            ? await installIntegrationHooksAndWait(for: agent)
+            : await removeIntegrationAndWait(for: agent)
 
         // Someone flipped it again while this was running; that flip owns the
         // switch now, so this outcome must not write over it.
-        guard desiredIntegrationEnabled == desired else { return }
-        desiredIntegrationEnabled = nil
+        guard desiredIntegrationEnabled[agent] == desired else { return }
+        desiredIntegrationEnabled.removeValue(forKey: agent)
 
         if succeeded {
             // Re-read health rather than trusting the requested value: the
             // install may have landed in reviewRequired rather than active.
-            if let service = integrationService {
+            if let service = integrationService(for: agent) {
                 let status = await service.hookSetupStatus()
-                hookSetupStatus = status
-                integrationSwitchIsOn = status.isIntegrationEnabled
+                setSetupStatus(status, for: agent)
+                setSwitch(status.isIntegrationEnabled, for: agent)
             }
         } else {
-            integrationSwitchIsOn = !desired
+            setSwitch(!desired, for: agent)
         }
     }
 
     @discardableResult
-    func installIntegrationHooksAndWait() async -> Bool {
-        guard let service = integrationService, !isInstallingIntegration else {
+    func installIntegrationHooksAndWait(
+        for agent: AgentKind = MonitorStore.defaultIntegrationAgent
+    ) async -> Bool {
+        guard let service = integrationService(for: agent),
+              !integrationBusyAgents.contains(agent) else {
             return false
         }
-        isInstallingIntegration = true
-        defer { isInstallingIntegration = false }
+        integrationBusyAgents.insert(agent)
+        defer { integrationBusyAgents.remove(agent) }
 
         do {
             try await service.installHooks()
-            hookSetupStatus = await service.hookSetupStatus()
-            integrationSwitchIsOn = hookSetupStatus.isIntegrationEnabled
-            lastIntegrationMessage = "Hooks installed; open /hooks in Codex and trust the new definitions."
+            let status = await service.hookSetupStatus()
+            setSetupStatus(status, for: agent)
+            setSwitch(status.isIntegrationEnabled, for: agent)
+            lastIntegrationMessage = Self.installedMessage(for: agent)
             return true
         } catch {
             lastIntegrationMessage = "Could not install the hooks: \(error.localizedDescription)"
@@ -1609,33 +1633,81 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    func removeIntegration() {
+    func removeIntegration(for agent: AgentKind = MonitorStore.defaultIntegrationAgent) {
         Task { [weak self] in
-            _ = await self?.removeIntegrationAndWait()
+            _ = await self?.removeIntegrationAndWait(for: agent)
         }
     }
 
     @discardableResult
-    func removeIntegrationAndWait() async -> Bool {
-        guard let service = integrationService, !isRemovingIntegration else {
+    func removeIntegrationAndWait(
+        for agent: AgentKind = MonitorStore.defaultIntegrationAgent
+    ) async -> Bool {
+        guard let service = integrationService(for: agent),
+              !integrationBusyAgents.contains(agent) else {
             return false
         }
-        isRemovingIntegration = true
-        defer { isRemovingIntegration = false }
+        integrationBusyAgents.insert(agent)
+        defer { integrationBusyAgents.remove(agent) }
 
         do {
             try await service.removeHooks()
-            sessions = []
-            quota = .unavailable
-            availability = .setupRequired
-            status = .setupRequired
-            hookSetupStatus = .notInstalled
-            integrationSwitchIsOn = false
-            lastIntegrationMessage = "The hooks managed by Notchline have been removed."
+            // Only this product's half of the merge is dropped. It used to be
+            // the whole of it -- sessions, quota and availability cleared
+            // outright -- which was harmless while one product had a switch and
+            // is not now that both do: turning Claude Code off would have taken
+            // Codex's rows off the notch with it.
+            //
+            // Replaced rather than removed, and with exactly what that product
+            // will report on its own next refresh: an unregistered product
+            // answers `setupRequired` with no rows and nothing to say about
+            // quota. Removing the key instead would let a store with one
+            // product fall through to `disconnected`, which is not what
+            // "you just switched this off" means.
+            record(
+                AgentSnapshot(
+                    agent: agent,
+                    availability: .setupRequired,
+                    sessions: [],
+                    quota: .unavailable,
+                    diagnostic: nil,
+                    setupStatus: .notInstalled,
+                    presence: latestByAgent[agent]?.presence ?? .unknown
+                ),
+                observedAt: clock.now()
+            )
+            setSwitch(false, for: agent)
+            lastIntegrationMessage = Self.removedMessage(for: agent)
             return true
         } catch {
             lastIntegrationMessage = "Could not remove the integration: \(error.localizedDescription)"
             return false
+        }
+    }
+
+    /// What to say once a product's definitions are in its file.
+    ///
+    /// Per product because the next step is: Codex keys trust to each
+    /// definition's place in the file and will not run one until the user says
+    /// so, while Claude Code runs what is registered and the only thing worth
+    /// pointing at is the copy of their file this app just put beside it.
+    nonisolated private static func installedMessage(for agent: AgentKind) -> String {
+        switch agent {
+        case .codex:
+            "Hooks installed; open /hooks in Codex and trust the new definitions."
+        case .claudeCode:
+            "Hooks written to ~/.claude/settings.json. Your file as it was is beside "
+                + "it, as settings.json.notchline-backup."
+        }
+    }
+
+    nonisolated private static func removedMessage(for agent: AgentKind) -> String {
+        switch agent {
+        case .codex:
+            "The hooks managed by Notchline have been removed from ~/.codex/hooks.json."
+        case .claudeCode:
+            "The hooks managed by Notchline have been removed from ~/.claude/settings.json; "
+                + "nothing else in it was touched."
         }
     }
 
@@ -1841,8 +1913,7 @@ final class MonitorStore: ObservableObject {
         }
 
         latestByAgent[agent] = snapshot
-        setupStatusByAgent[agent] = snapshot.setupStatus
-        refreshManualSetupIfNeeded(for: agent)
+        setSetupStatus(snapshot.setupStatus, for: agent)
         refreshDiskFootprintIfNeeded(for: agent)
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
         applyIntegrationHealth(for: agent)
@@ -1856,6 +1927,41 @@ final class MonitorStore: ObservableObject {
     /// How far along a product's registration is.
     func setupStatus(for agent: AgentKind) -> HookSetupStatus {
         setupStatusByAgent[agent] ?? .notInstalled
+    }
+
+    /// The Codex registration, which is what the no-argument spelling has
+    /// always meant.
+    var hookSetupStatus: HookSetupStatus {
+        setupStatus(for: Self.defaultIntegrationAgent)
+    }
+
+    /// Where one product's switch is sitting.
+    func integrationSwitchIsOn(for agent: AgentKind) -> Bool {
+        integrationSwitchIsOnByAgent[agent] ?? false
+    }
+
+    var integrationSwitchIsOn: Bool {
+        integrationSwitchIsOn(for: Self.defaultIntegrationAgent)
+    }
+
+    /// Whether that product's hooks are being written or removed right now, and
+    /// therefore whether its switch should refuse a second answer.
+    func isIntegrationBusy(for agent: AgentKind) -> Bool {
+        integrationBusyAgents.contains(agent)
+    }
+
+    /// Both writes go through here so the published dictionaries move only when
+    /// the value in them actually changes. A refresh restates the same status
+    /// every second, and one publish on this store re-evaluates the whole
+    /// overlay (`AGENTS.md` §7).
+    private func setSetupStatus(_ status: HookSetupStatus, for agent: AgentKind) {
+        guard setupStatusByAgent[agent] != status else { return }
+        setupStatusByAgent[agent] = status
+    }
+
+    private func setSwitch(_ isOn: Bool, for agent: AgentKind) {
+        guard integrationSwitchIsOnByAgent[agent] != isOn else { return }
+        integrationSwitchIsOnByAgent[agent] = isOn
     }
 
     /// What went wrong on this product's side, if anything did.
@@ -1902,40 +2008,19 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Re-reads the instructions when a product answers.
+    /// Keeps one product's switch in step with what its file actually says.
     ///
-    /// Not inline in the refresh: rendering the snippet reads the user's
-    /// settings file, and an open panel does not need that once a second.
-    private func refreshManualSetupIfNeeded(for agent: AgentKind) {
-        guard manualSetupTask == nil,
-              let service = services.first(where: { $0.agent == agent }) else {
+    /// Skipped while that product's own install or removal is in flight: the
+    /// switch is showing where the user just put it, and a refresh landing
+    /// mid-write would flick it back to the state the write is on its way to
+    /// leaving. Another product being busy is none of this one's business,
+    /// which is the whole reason the flag is a set rather than two booleans.
+    private func applyIntegrationHealth(for agent: AgentKind) {
+        guard let refreshed = setupStatusByAgent[agent],
+              !integrationBusyAgents.contains(agent) else {
             return
         }
-        manualSetupTask = Task { [weak self] in
-            let setup = await service.manualSetup()
-            guard let self else { return }
-            self.manualSetupTask = nil
-            guard self.manualSetups[agent] != setup else { return }
-            if let setup {
-                self.manualSetups[agent] = setup
-            } else {
-                self.manualSetups.removeValue(forKey: agent)
-            }
-        }
-    }
-
-    /// Keeps the integration card in step with the product it belongs to.
-    private func applyIntegrationHealth(for agent: AgentKind) {
-        guard agent == Self.integrationCardAgent,
-              let refreshed = setupStatusByAgent[agent] else { return }
-        if hookSetupStatus != refreshed {
-            hookSetupStatus = refreshed
-        }
-        if !isInstallingIntegration,
-           !isRemovingIntegration,
-           integrationSwitchIsOn != refreshed.isIntegrationEnabled {
-            integrationSwitchIsOn = refreshed.isIntegrationEnabled
-        }
+        setSwitch(refreshed.isIntegrationEnabled, for: agent)
     }
 
     /// Each provider's next deadline, with providers that cannot advance their

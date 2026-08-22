@@ -2042,6 +2042,47 @@ struct NotchlineTests {
         #expect(await service.removeCount() == 1)
     }
 
+    /// Each product's switch is its own, and turning one off leaves the other
+    /// product exactly where it was.
+    ///
+    /// The switch state used to be a single pair of booleans belonging to
+    /// Codex, because Codex had the only switch (ADR 0010). ADR 0016 gave
+    /// Claude Code one too, and the failure that shape would have produced is
+    /// the one worth pinning: switching Claude Code off would have cleared the
+    /// merged session list, taking Codex's live rows off the notch with it.
+    @Test @MainActor
+    func eachProductsIntegrationSwitchMovesOnlyItsOwnProduct() async {
+        let codex = IntegrationMonitoringStub(
+            agent: .codex,
+            rows: [makeSession(agent: .codex, threadID: "codex-1", status: .running)]
+        )
+        let claude = IntegrationMonitoringStub(
+            agent: .claudeCode,
+            rows: [makeSession(agent: .claudeCode, threadID: "cc-1", status: .running)]
+        )
+        let store = MonitorStore(services: [codex, claude])
+
+        #expect(await store.setIntegrationEnabledAndWait(true, for: .codex))
+        #expect(await store.setIntegrationEnabledAndWait(true, for: .claudeCode))
+        #expect(store.integrationSwitchIsOn(for: .codex))
+        #expect(store.integrationSwitchIsOn(for: .claudeCode))
+        await store.refreshAndWaitForTesting()
+        #expect(store.sessions.count == 2)
+
+        #expect(await store.setIntegrationEnabledAndWait(false, for: .claudeCode))
+
+        #expect(!store.integrationSwitchIsOn(for: .claudeCode))
+        #expect(store.setupStatus(for: .claudeCode) == .notInstalled)
+        // Untouched: its switch, its registration, and its row.
+        #expect(store.integrationSwitchIsOn(for: .codex))
+        #expect(store.setupStatus(for: .codex) == .reviewRequired)
+        #expect(store.sessions.map(\.threadID) == ["codex-1"])
+        #expect(await claude.removeCount() == 1)
+        #expect(await codex.removeCount() == 0)
+
+        store.stopMonitoring()
+    }
+
     @Test
     func statusDomainsSeparateSystemAndSessionStates() {
         // The session states are the contract; the system states are not
@@ -8954,35 +8995,43 @@ for line in sys.stdin:
         // names a product it sizes itself off the cut-out alone.
     }
 
-    /// The settings card only exists for a product the app will not set up.
+    /// Both products install their own registration, which is what lets both
+    /// rows in Settings carry the same switch.
     ///
-    /// Codex answers nil because it installs its own hooks and gets a switch;
-    /// Claude Code answers with the file to edit and the text to put in it, and
-    /// gets instructions. The card is driven off that answer rather than off a
-    /// product name, so a third product picks its own side by saying so.
+    /// This replaces the test that pinned the opposite. It used to assert that
+    /// Claude Code answered `manualSetup()` with a file and a block to paste
+    /// while Codex answered nil, and that the card was driven off that answer
+    /// rather than off a product name. ADR 0016 removed the answer along with
+    /// the card, so what is worth pinning is the invariant underneath it: the
+    /// registration this app writes names every event the reducer understands
+    /// and no event it does not, and it comes back out again.
     @Test @MainActor
-    func onlyAProductThisAppWillNotSetUpOffersInstructions() async throws {
+    func bothProductsInstallTheirOwnRegistration() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
 
-        let claude = try #require(await harness.service.manualSetup())
-        #expect(claude.agent == .claudeCode)
-        #expect(claude.settingsURL == harness.paths.hooksConfiguration)
-        // The instructions are the events the reducer understands, so a user
-        // cannot paste a block that leaves one out by following them.
-        let block = try #require(
+        #expect(await harness.service.hookSetupStatus() == .notInstalled)
+
+        try await harness.service.installHooks()
+        #expect(await harness.service.hookSetupStatus() == .active)
+
+        let root = try #require(
             try JSONSerialization.jsonObject(
-                with: Data(claude.configurationSnippet.utf8)
+                with: Data(contentsOf: harness.paths.hooksConfiguration)
             ) as? [String: Any]
         )
-        let hooks = try #require(block["hooks"] as? [String: Any])
+        let hooks = try #require(root["hooks"] as? [String: Any])
         #expect(
             Set(hooks.keys)
                 == Set(ClaudeCodeHookVocabulary().managedDefinitions.map(\.event))
         )
+        // Nothing invented at the root. Claude Code validates this file's keys,
+        // and the `description` the Codex side stamps on a file it creates
+        // would be the first unrecognised thing in it.
+        #expect(root["description"] == nil)
 
-        // A product that installs itself has nothing to instruct.
-        #expect(await LiveCodexMonitorService().manualSetup() == nil)
+        try await harness.service.removeHooks()
+        #expect(await harness.service.hookSetupStatus() == .notInstalled)
     }
 
     /// The store carries each product's registration state separately, which is
@@ -12639,111 +12688,213 @@ for line in sys.stdin:
         #expect(snapshot.diagnostic != nil)
     }
 
-    /// Switching the integration on is refused, loudly.
+    /// The user's settings are copied beside themselves before every change,
+    /// and the copy is the version being replaced.
     ///
-    /// The app cannot write this product's registration (ADR 0010), and a
-    /// switch that silently achieves nothing is worse than one that explains
-    /// why it is not a switch.
+    /// **Refreshed, not written once.** The Codex side kept one copy from
+    /// before this app's first edit, on the argument that a pre-Notchline state
+    /// is the only one worth keeping. That argument inverts on this file: a
+    /// user who switched the integration on months ago and has since kept their
+    /// theme, permissions and MCP servers here would find the copy predating
+    /// all of it, and restoring it would be a data loss this app caused.
+    /// Everything of ours in the live file comes back out by switching off; the
+    /// months of their own edits are recoverable from nowhere.
     @Test @MainActor
-    func claudeCodeRefusesToInstallItsOwnHooks() async throws {
+    func theUsersSettingsAreCopiedBesideThemselvesBeforeEveryChange() async throws {
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
 
-        await #expect(throws: AgentSetupError.manualRegistrationRequired(.claudeCode)) {
-            try await harness.service.installHooks()
-        }
-        await #expect(throws: AgentSetupError.manualRegistrationRequired(.claudeCode)) {
-            try await harness.service.removeHooks()
-        }
-    }
+        let settings = harness.paths.hooksConfiguration
+        let backup = harness.paths.hooksBackup
 
-    /// The product never writes the user's Claude Code settings.
-    ///
-    /// The Codex side edits `~/.codex/hooks.json` itself, and that file holds
-    /// hooks and little else. `~/.claude/settings.json` holds a user's whole
-    /// install, so this product only ever reads it and tells the user what to
-    /// add. The asymmetry will look like an oversight one day; this is the test
-    /// that says it is not.
-    @Test @MainActor
-    func claudeCodeSetupOnlyEverReadsTheUsersSettings() async throws {
-        let root = URL(fileURLWithPath: "/tmp")
-            .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let settings = root.appendingPathComponent("settings.json")
-        let paths = HookIntegrationPaths(
-            supportDirectory: root.appendingPathComponent("AS"),
-            hooksConfiguration: settings,
-            agent: .claudeCode
-        )
+        // A file this app creates has no earlier version, so it leaves no copy.
+        // An empty one would only be misleading.
+        try await harness.service.installHooks()
+        #expect(!FileManager.default.fileExists(atPath: backup.path))
+        try await harness.service.removeHooks()
+        try? FileManager.default.removeItem(at: settings)
 
         let theirs = "{\n  \"theme\" : \"auto\"\n}\n"
         try Data(theirs.utf8).write(to: settings)
 
-        let setup = ClaudeCodeHookSetup(paths: paths)
-        #expect(await setup.status() == .notInstalled)
+        try await harness.service.installHooks()
+        #expect(String(decoding: try Data(contentsOf: backup), as: UTF8.self) == theirs)
 
-        // Everything the panel can do with an un-registered install: read the
-        // state and render instructions.
-        let snippet = await setup.configurationSnippet()
-        #expect(await setup.status() == .notInstalled)
-
-        // After all of that, their file has not been touched at all.
-        #expect(String(decoding: try Data(contentsOf: settings), as: UTF8.self) == theirs)
-
-        // The snippet is a whole hooks block naming every event the reducer
-        // understands, and no event it does not.
-        let block = try #require(
-            try JSONSerialization.jsonObject(with: Data(snippet.utf8)) as? [String: Any]
+        // They keep working in that file. The next change this app makes must
+        // copy *this* version, not the one from before the install.
+        var current = try #require(
+            try JSONSerialization.jsonObject(with: try Data(contentsOf: settings))
+                as? [String: Any]
         )
-        let hooks = try #require(block["hooks"] as? [String: Any])
+        current["theme"] = "dark"
+        current["model"] = "opus"
+        try JSONSerialization
+            .data(withJSONObject: current, options: [.sortedKeys])
+            .write(to: settings)
+        let beforeRemoval = try Data(contentsOf: settings)
+
+        try await harness.service.removeHooks()
+
+        #expect(try Data(contentsOf: backup) == beforeRemoval)
+        let restored = try #require(
+            try JSONSerialization.jsonObject(with: try Data(contentsOf: backup))
+                as? [String: Any]
+        )
+        #expect(restored["model"] as? String == "opus")
+    }
+
+    /// The registration goes in beside the user's own settings, and nothing
+    /// else in the file moves.
+    ///
+    /// This is what replaced `claudeCodeSetupOnlyEverReadsTheUsersSettings`.
+    /// That test asserted the file was never written at all, which was ADR 0010
+    /// and is no longer true; the invariant that actually protects the user
+    /// survives it and is stronger — **only this app's own keys may change.**
+    /// Everything else in the document, including the user's own hooks under
+    /// the same events, has to come back out of the round trip untouched.
+    @Test @MainActor
+    func installingTouchesOnlyThisAppsOwnKeysInTheUsersSettings() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+
+        let settings = harness.paths.hooksConfiguration
+        // A hook of their own on an event this app also registers, plus the
+        // rest of a real install. The user's group must survive both the
+        // install and the removal, and must not be renumbered around.
+        let theirs: [String: Any] = [
+            "theme": "dark",
+            "env": ["FOO": "bar"],
+            "permissions": ["allow": ["Bash(ls:*)"]],
+            "hooks": [
+                "PreToolUse": [
+                    [
+                        "matcher": "Bash",
+                        "hooks": [["type": "command", "command": "/usr/local/bin/mine.sh"]]
+                    ]
+                ],
+                "SessionEnd": [
+                    ["hooks": [["type": "command", "command": "/usr/local/bin/bye.sh"]]]
+                ]
+            ]
+        ]
+        try JSONSerialization
+            .data(withJSONObject: theirs, options: [.sortedKeys])
+            .write(to: settings)
+        let before = try Data(contentsOf: settings)
+
+        try await harness.service.installHooks()
+
+        let installed = try #require(
+            try JSONSerialization.jsonObject(with: try Data(contentsOf: settings))
+                as? [String: Any]
+        )
+        #expect(installed["theme"] as? String == "dark")
+        #expect(installed["env"] as? [String: String] == ["FOO": "bar"])
         #expect(
-            Set(hooks.keys)
-                == Set(ClaudeCodeHookVocabulary().managedDefinitions.map(\.event))
+            (installed["permissions"] as? NSDictionary)
+                == (theirs["permissions"] as? NSDictionary)
         )
-        #expect(!hooks.keys.contains("SessionEnd"))
 
-        // Rendering the block created the helper it names. Showing a user a
-        // path that does not exist would hand them a registration whose every
-        // event prints `ENOENT: ... posix_spawn` -- the same line the move off
-        // a port was made to remove.
-        #expect(FileManager.default.isExecutableFile(atPath: paths.hookHelper.path))
-
-        // It names this app's own helper and nothing else. No port, no token,
-        // no host: the two faults CC-021 is about were both properties of the
-        // loopback URL that used to be here, and neither can be expressed in
-        // what replaced it.
-        #expect(snippet.contains(paths.hookHelper.path))
-        #expect(!snippet.contains("127.0.0.1"))
-        #expect(!snippet.contains("Bearer"))
-        #expect(!snippet.contains("\"url\""))
-
+        let hooks = try #require(installed["hooks"] as? [String: Any])
+        // Their own event, which this app does not register, is untouched.
+        #expect(
+            (hooks["SessionEnd"] as? NSArray)
+                == ((theirs["hooks"] as? [String: Any])?["SessionEnd"] as? NSArray)
+        )
+        // Their group on a shared event is still there, still first, and ours
+        // was appended after it -- appending at the tail is what keeps a
+        // group's index, and anything keyed by it, where it was.
+        let preToolUse = try #require(hooks["PreToolUse"] as? [[String: Any]])
+        #expect(preToolUse.count == 2)
+        #expect(preToolUse[0]["matcher"] as? String == "Bash")
+        let ours = try #require(preToolUse[1]["hooks"] as? [[String: Any]])
+        #expect(ours.count == 1)
+        #expect(ours[0]["command"] as? String == harness.paths.hookHelper.path)
         // Exec form: `args` present means the CLI resolves the command as an
         // executable and spawns it directly rather than through a shell.
-        let group = try #require((hooks["Stop"] as? [[String: Any]])?.first)
-        let handler = try #require((group["hooks"] as? [[String: Any]])?.first)
-        #expect(handler["type"] as? String == "command")
-        #expect(handler["command"] as? String == paths.hookHelper.path)
-        #expect(handler["args"] as? [String] == [])
+        #expect(ours[0]["type"] as? String == "command")
+        #expect(ours[0]["args"] as? [String] == [])
         // Deliberately no `async`. Claude Code's command schema does have that
         // key, unlike its HTTP one, and using it was measured to reorder a
         // `PreToolUse` against its own `PostToolUse` and to lose `Stop`
         // entirely under `-p`.
-        #expect(handler["async"] == nil)
+        #expect(ours[0]["async"] == nil)
 
-        // Nothing is minted, so a user cannot be told two different things to
-        // paste for the same install.
-        #expect(await setup.configurationSnippet() == snippet)
+        // Writing the registration created the helper it names. A registration
+        // naming a script that is not there prints `ENOENT: ... posix_spawn`
+        // once per event -- the same line the move off a port was made to
+        // remove, arrived at from the other side.
+        #expect(FileManager.default.isExecutableFile(atPath: harness.paths.hookHelper.path))
+        // No port, no token, no host: the two faults CC-021 is about were both
+        // properties of the loopback URL that used to be here, and neither can
+        // be expressed in what replaced it.
+        let written = String(decoding: try Data(contentsOf: settings), as: UTF8.self)
+        #expect(!written.contains("127.0.0.1"))
+        #expect(!written.contains("Bearer"))
+        #expect(!written.contains("\"url\""))
+
+        // Installing again over a correct registration writes nothing at all:
+        // a rewrite would reformat a file this app does not own and renumber
+        // groups the user's own trust may be keyed by.
+        let afterInstall = try Data(contentsOf: settings)
+        try await harness.service.installHooks()
+        #expect(try Data(contentsOf: settings) == afterInstall)
+
+        try await harness.service.removeHooks()
+
+        // The round trip is exact once the serialiser's own formatting is taken
+        // out of it: same document, none of ours left in it.
+        let after = try #require(
+            try JSONSerialization.jsonObject(with: try Data(contentsOf: settings))
+                as? [String: Any]
+        )
+        let original = try #require(
+            try JSONSerialization.jsonObject(with: before) as? [String: Any]
+        )
+        #expect((after as NSDictionary) == (original as NSDictionary))
     }
 
-    /// Adding an event to the vocabulary asks the user to paste again.
+    /// A settings file whose shape this app cannot read is refused, not coerced.
     ///
-    /// The app cannot repair this product's registration (ADR 0010), so a
-    /// registration that predates a new event is *incomplete*, not *active* —
-    /// and it has to say so, because the missing event raises no error and
-    /// simply never arrives. `MessageDisplay` is the first event to exercise
-    /// this: everyone registered before CC-015 has the other eleven and needs
-    /// to re-paste before a row grows its third line.
+    /// The whole of ADR 0010's safety argument now rests here. Every one of
+    /// these is valid JSON that a write could plausibly have flattened: a root
+    /// that is not an object, a `hooks` that is not an object, and an event
+    /// holding something other than an array of groups. The edit must stop
+    /// before writing and the file must come back byte for byte.
+    @Test @MainActor
+    func aSettingsShapeThisAppCannotReadIsRefusedRatherThanOverwritten() async throws {
+        let documents = [
+            "[1, 2, 3]",
+            "{\"hooks\": 7}",
+            "{\"hooks\": {\"PreToolUse\": \"every-one-of-them\"}}"
+        ]
+        for document in documents {
+            let harness = try ClaudeCodeHarness()
+            defer { harness.tearDown() }
+            let settings = harness.paths.hooksConfiguration
+            try Data(document.utf8).write(to: settings)
+
+            await #expect(throws: (any Error).self) {
+                try await harness.service.installHooks()
+            }
+            #expect(
+                String(decoding: try Data(contentsOf: settings), as: UTF8.self) == document
+            )
+            // And no copy was taken either: nothing was replaced, so there is
+            // nothing to keep a version of.
+            #expect(!FileManager.default.fileExists(atPath: harness.paths.hooksBackup.path))
+        }
+    }
+
+    /// Adding an event to the vocabulary asks for the switch to be cycled.
+    ///
+    /// Nothing re-runs on upgrade, so a registration that predates a new event
+    /// is *incomplete*, not *active* — and it has to say so, because the
+    /// missing event raises no error and simply never arrives. `MessageDisplay`
+    /// is the first event to exercise this: everyone registered before CC-015
+    /// has the other eleven and needs the block rewritten before a row grows
+    /// its third line. ADR 0016 made that a switch rather than a paste; it did
+    /// not make the state go away.
     @Test @MainActor
     func aRegistrationMissingANewlyAddedEventAsksToBeRepaired() async throws {
         let harness = try ClaudeCodeHarness()
@@ -12776,8 +12927,9 @@ for line in sys.stdin:
     /// right, and this is the failure that proved it. A paste from an older
     /// build of this app registers all the same events, under the same URL and
     /// the same token, and used to report `active` — while carrying a handler
-    /// this build would no longer install. The app cannot repair the file
-    /// (ADR 0010), so noticing and saying so is the whole of what it can do.
+    /// this build would no longer install. Noticing is still the load-bearing
+    /// half: ADR 0016 lets the app rewrite the file, but only once something
+    /// has said the registration is wrong.
     ///
     /// The shape used here is the real one: `async: true`, which this app wrote
     /// until it was measured to be no key of Claude Code's — dropped from the
@@ -12857,10 +13009,11 @@ for line in sys.stdin:
     /// test below means; what is there is the `http` handler naming a port,
     /// which this build neither installs nor listens on. Reported as
     /// `notInstalled` it would read as "you have not set this up", and the user
-    /// would paste a second block beside the first. `repairRequired` is the
-    /// honest answer, and reaching it is the whole job of the legacy marker —
-    /// this app cannot take the old handler out of their file (ADR 0010), so
-    /// recognising it is all it can do.
+    /// would end up with a second block beside the first. `repairRequired` is
+    /// the honest answer, and reaching it is the whole job of the legacy
+    /// marker. Since ADR 0016 that marker does a second job as well: it is what
+    /// lets the install strip the dead `http` handler out on its way to writing
+    /// the current one.
     @Test @MainActor
     func anHTTPEraRegistrationAsksToBeRepairedRatherThanReadingAsAbsent() async throws {
         let harness = try ClaudeCodeHarness()
@@ -12879,34 +13032,39 @@ for line in sys.stdin:
     }
 
     /// Half a registration is worse than none, because the gap is silent.
+    ///
+    /// Still reachable now that this app writes the file: an install from an
+    /// older build registered fewer events, and nothing re-runs on upgrade. The
+    /// missing event raises no error anywhere — that transition simply never
+    /// arrives — so it has to be reported apart from "off", which is what puts
+    /// the repair sentence on the row.
     @Test @MainActor
-    func aPartiallyPastedRegistrationReportsThatItNeedsRepair() async throws {
-        let root = URL(fileURLWithPath: "/tmp")
-            .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let settings = root.appendingPathComponent("settings.json")
-        let paths = HookIntegrationPaths(
-            supportDirectory: root.appendingPathComponent("AS"),
-            hooksConfiguration: settings,
-            agent: .claudeCode
-        )
-        let setup = ClaudeCodeHookSetup(paths: paths)
+    func aPartialRegistrationReportsThatItNeedsRepair() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        let settings = harness.paths.hooksConfiguration
 
-        let snippet = await setup.configurationSnippet()
+        try await harness.service.installHooks()
+        #expect(await harness.setup.status() == .active)
+
         var document = try #require(
-            try JSONSerialization.jsonObject(with: Data(snippet.utf8)) as? [String: Any]
+            try JSONSerialization.jsonObject(with: try Data(contentsOf: settings))
+                as? [String: Any]
         )
         var hooks = try #require(document["hooks"] as? [String: Any])
-        // A paste that dropped one event: the notch would simply never learn
-        // about that transition, with nothing anywhere reporting an error.
         hooks.removeValue(forKey: "Stop")
         document["hooks"] = hooks
         try JSONSerialization
             .data(withJSONObject: document, options: [.withoutEscapingSlashes])
             .write(to: settings)
 
-        #expect(await setup.status() == .repairRequired)
+        #expect(await harness.setup.status() == .repairRequired)
+
+        // And switching on again repairs it, which is the half ADR 0010 could
+        // not do: the missing event is written back without the user editing
+        // anything.
+        try await harness.service.installHooks()
+        #expect(await harness.setup.status() == .active)
     }
 
     /// A settings file this app cannot parse is reported, never rewritten.
@@ -13417,10 +13575,10 @@ for line in sys.stdin:
     /// Presence and observability are independent, and both are required.
     ///
     /// `docs/figma-design.md` §6.7: `Disconnected` means no agent is *connected*,
-    /// not that no agent is open. ADR 0010 leaves Claude Code's hook
-    /// registration to the user, so "open but not reachable" is an ordinary
-    /// first run — and it has to read as disconnected without inventing a third
-    /// state to say so.
+    /// not that no agent is open. Neither product is registered until its
+    /// switch is turned on, so "open but not reachable" is an ordinary first
+    /// run — and it has to read as disconnected without inventing a third state
+    /// to say so.
     @Test @MainActor
     func onlyAProductThatIsBothOpenAndReachableCountsAsConnected() {
         func merged(
@@ -14227,9 +14385,11 @@ for line in sys.stdin:
     /// runtime signal it keeps is "three tool calls closed and none opened".
     /// That signal is computed by a reducer both products share, and the
     /// sentence it produced named Codex and `/hooks` — advice that is wrong for
-    /// Claude Code, whose registration is the user's own file and cannot lose
-    /// trust by hash (ADR 0010). The repair belongs to the vocabulary, which is
-    /// where everything else a product spells differently already lives.
+    /// Claude Code, which has no trust step and cannot lose trust by hash. The
+    /// repair belongs to the vocabulary, which is where everything else a
+    /// product spells differently already lives, and it moved again with
+    /// ADR 0016: Claude Code's sentence now names the switch rather than the
+    /// file, because the app writes that file itself.
     @Test @MainActor
     func theReportOfADefinitionThatStoppedFiringNamesItsOwnProduct() async throws {
         func diagnosticAfterThreeClosesWithNoOpens(
@@ -14262,9 +14422,10 @@ for line in sys.stdin:
         #expect(claudeCode.contains("Claude Code is not running the PreToolUse hook"))
         #expect(claudeCode.contains("~/.claude/settings.json"))
         // The advice that belongs to the other product must not follow this one
-        // around: there is no `/hooks` to run here, and this app never writes
-        // that file for the user.
+        // around: there is no `/hooks` to run here, and the repair is a switch
+        // in this app rather than anything the user types into Claude Code.
         #expect(!claudeCode.contains("/hooks"))
+        #expect(claudeCode.contains("Switch Claude Code off and on"))
         #expect(!claudeCode.contains("Codex"))
     }
 
@@ -16267,7 +16428,6 @@ for line in sys.stdin:
 private actor OnDemandDeadlineMonitoringStub: AgentMonitoring {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
-    func manualSetup() async -> AgentManualSetup? { nil }
 
     private var deadline: Date?
     private var snapshots = 0
@@ -16309,7 +16469,6 @@ private actor OnDemandDeadlineMonitoringStub: AgentMonitoring {
 private actor StuckDeadlineMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
-    func manualSetup() async -> AgentManualSetup? { nil }
 
     private let deadline: Date
     private var snapshots = 0
@@ -16379,7 +16538,6 @@ private final class PreviewWakeUpCounter: @unchecked Sendable {
 private actor GatedMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
-    func manualSetup() async -> AgentManualSetup? { nil }
 
     private var observedSnapshots = 0
     private var status: HookSetupStatus = .reviewRequired
@@ -16454,9 +16612,17 @@ private actor GatedMonitoringStub: AgentMonitoring {
 }
 
 private actor IntegrationMonitoringStub: AgentMonitoring {
-    nonisolated let agent = AgentKind.codex
+    nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
-    func manualSetup() async -> AgentManualSetup? { nil }
+
+    /// The rows this product reports while its integration is on. Empty unless
+    /// a test needs to see whose rows a removal takes off the notch.
+    private let rows: [MonitoredSession]
+
+    init(agent: AgentKind = .codex, rows: [MonitoredSession] = []) {
+        self.agent = agent
+        self.rows = rows
+    }
 
     // Nothing to schedule: the stub's output never changes on its own.
     func nextRefreshDeadline() async -> Date? { nil }
@@ -16467,12 +16633,14 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
 
     func fetchSnapshot() async -> AgentSnapshot {
         AgentSnapshot(
+            agent: agent,
             availability: setupStatus.isIntegrationEnabled
-                ? .connecting
+                ? .ready
                 : .setupRequired,
-            sessions: [],
+            sessions: setupStatus.isIntegrationEnabled ? rows : [],
             quota: .unavailable,
-            diagnostic: nil
+            diagnostic: nil,
+            setupStatus: setupStatus
         )
     }
 
@@ -17477,7 +17645,6 @@ private actor DiskFootprintMonitoringStub: AgentMonitoring {
 
     func diskFootprint() async -> AgentDiskFootprintReport { report }
 
-    func manualSetup() async -> AgentManualSetup? { nil }
     func hookSetupStatus() async -> HookSetupStatus { .active }
     func installHooks() async throws {}
     func removeHooks() async throws {}
@@ -17520,7 +17687,6 @@ private actor ResponseQueue {
 private actor HoldableMonitoringStub: AgentMonitoring {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
-    func manualSetup() async -> AgentManualSetup? { nil }
 
     private let snapshot: AgentSnapshot
     private let deadline: Date?

@@ -1,5 +1,7 @@
 # 不写用户的 Claude Code 设置文件
 
+> **已被 [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md) 取代。** 本应用现在直接写 `~/.claude/settings.json`，写之前把原文件复制到同目录的 `settings.json.notchline-backup`；Claude Code 那一行拿到和 Codex 一样的开关，粘贴卡片与 `configurationSnippet()` 已删除。下文保留为当时的论证记录——尤其是最后一段，它当时就写着「需要的是产品决策而不是新代码」，而 0016 做的正是这个决策。翻案的直接原因是这一条自己列在代价里的第一项和最后一项：安装摩擦是唯一一处 Claude Code 比 Codex 难上手的地方，而「粘贴不完整」与「形状过时」这两种失效**都不报错**，本应用看得见却修不动。
+
 Claude Code 的 hook 注册由**用户自己**加入 `~/.claude/settings.json`：本应用只读取该文件、显示需要粘贴的内容、并报告注册是否完整。它永远不写这个文件。
 
 Codex 侧维持现状——本应用继续直接编辑 `~/.codex/hooks.json`。**这个不对称是刻意的**，日后一定会被误读成疏漏，所以记在这里：理由不是技术上做不到（写入版本已经实现并通过测试），而是一次错误编辑的影响范围。`~/.codex/hooks.json` 除 hooks 外几乎不含别的东西；`~/.claude/settings.json` 装着用户整个 Claude Code 安装——主题、环境变量、权限、MCP 服务器、他们自己的 hooks。这两个文件不对等，对它们的授权也不该对等。

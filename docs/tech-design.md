@@ -833,7 +833,9 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - Expanded footer 齿轮：调用系统 `openSettings` 打开现有 Settings scene；不安装集成、不修改偏好，也不在 panel 中创建第二份设置 UI。
 - `Display`：立即将组件移动到所选显示器；目标临时不可用时回退，并在重新连接后恢复用户偏好。
 - `Recheck`：重新运行只读能力检查，不静默改配置。
-- `Codex integration` 总开关：On 安装或修复五条必需事件定义，Off 只移除本应用管理的配置片段并清空 repository；关闭后 Settings 保持可达。切换期间控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。窗口里它是 `Products` 卡片中 Codex 那一行的 switch；Claude Code 那一行按 ADR 0010 给的是 `Set Up…` 而不是开关（`figma-design.md` §8.1）。
+- 集成开关：**每个产品一个**，都在 `Products` 卡片里自己那一行的尾部（`figma-design.md` §8.1）。On 安装或修复该产品必需的事件定义，Off 只移除本应用管理的配置片段；关闭后 Settings 保持可达。切换期间**只有那一行的**控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。状态、开关位置、进行中标记与 convergence task 在 `MonitorStore` 里一律按产品分开（`setupStatusByAgent`、`integrationSwitchIsOnByAgent`、`integrationBusyAgents`、`integrationTasks`），因此关掉一个产品不会动另一个产品的开关，也不会从合并列表里带走它的行。
+  - Codex：写 `~/.codex/hooks.json` 的五条定义。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。
+  - Claude Code：写 `~/.claude/settings.json`（[ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)；~~此前按 ADR 0010 给的是 `Set Up…` 而不是开关~~）。**每次写入之前**先把该文件复制到同目录的 `settings.json.notchline-backup`，副本的语义固定为「本应用最近一次改动它之前的样子」。写入只碰本应用自己的键，形状不认识一律拒绝而非强转，写前比对字节、写后回读校验；`install()` 先写 helper，写不出来就整个拒绝。没有信任步骤。
 - `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。单行的对应动作是在终态行上右键（§17），两者共用同一个 `dismissedSessionIDs`。
 - `Quota reading transcripts`：报出本应用的额度读取在 Claude Code 自己的 project 目录里留下的 transcript 总大小，尾部 `Reveal in Finder` 打开那个目录（**只报大小**：个数那一半回答的是没人会问的问题，判断值不值得去清只看大小）；**只统计不删除**，理由见 `ClaudeCodeUsageTranscripts`。**这一行有三种读数，而不是「有数字」与「没有行」两种。** 目录靠一次已经发生的读取反查出来，因此第一次读取落地之前无从计数：那时写 `Calculating…` 并把按钮置灰；量到了写 `43.2 MB` 并恢复按钮；读取已经跑完却仍未找到目录时写 `Unavailable`。判据是「有没有跑完过一次读取」（`ClaudeCodeUsageReader.attemptedAt`）而不是失败次数——`session_id` 在 `read` 内部就已记下，所以一次跑完的读取找到的目录不会还被报成在路上；而机器上没有 `claude` 时那件「正在进行的工作」已经停了，再写 `Calculating…` 就是一句不再成立的进度声明。产品若根本不留文件（Codex）则整行不存在——把它和「还没量出来」用同一个 nil 表示，正是 CC-020 里卡片自己长出一行的成因。按钮的置灰由「有没有目录」这一个来源决定，不设第二个标志位，两者因此不可能互相矛盾。
 - `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。

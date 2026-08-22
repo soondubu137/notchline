@@ -54,11 +54,10 @@ struct AppSettingsView: View {
 
     /// Both products are rows in one card, not two groups.
     ///
-    /// A third product costs a row, not a pane. The switch belongs to Codex
-    /// alone: ADR 0010 says this app never writes `~/.claude/settings.json`, so
-    /// Claude Code's row carries the setup it actually has instead of a switch
-    /// it cannot honour. The asymmetry is the decision, not an oversight, and
-    /// putting the two rows side by side is what makes it visible.
+    /// A third product costs a row, not a pane. Both rows now carry a switch:
+    /// ADR 0016 lets this app write `~/.claude/settings.json` the way it has
+    /// always written `~/.codex/hooks.json`, so there is no longer a product
+    /// whose registration it can describe but not make.
     private var productsGroup: some View {
         SettingsGroup(header: "Products") {
             ProductConnectionRows()
@@ -69,9 +68,10 @@ struct AppSettingsView: View {
             }
         } footnote: {
             SettingsFootnote(
-                "The switch installs only the five lifecycle events Notchline needs, "
-                    + "and removes them again when it is off. Claude Code is registered by "
-                    + "hand — this app reads that file and never writes it."
+                "Each switch adds only the lifecycle events Notchline needs, and takes "
+                    + "them out again when it is off; your own settings and hooks are left "
+                    + "alone. Before each change to ~/.claude/settings.json, the file is "
+                    + "copied to settings.json.notchline-backup beside it."
             ) {
                 Button("Recheck") {
                     store.refreshNow()
@@ -222,14 +222,16 @@ struct AppSettingsView: View {
 /// The two connections the app needs, as the two rows that ask for them.
 ///
 /// Shared by first run and Settings rather than drawn twice. Both windows ask
-/// for exactly the same thing, and the pair is the one place ADR 0010's
-/// asymmetry is visible — a switch for Codex, a paste-it-yourself button for
-/// Claude Code. A second copy would be a second place for that asymmetry to be
-/// quietly evened out.
+/// for exactly the same thing, and since ADR 0016 they ask for it in exactly
+/// the same shape on both rows: one switch each. The asymmetry these rows used
+/// to make visible — a switch for Codex, a paste-it-yourself card for Claude
+/// Code — is gone, and with it the card, the snippet and the copy button.
+///
+/// What is left of the difference is in the footnote each window draws under
+/// this view, because the two switches write different files and only one of
+/// them is followed by a trust step.
 struct ProductConnectionRows: View {
     @EnvironmentObject private var store: MonitorStore
-    @State private var isShowingClaudeCodeSetup = false
-    @State private var didCopyClaudeCodeSnippet = false
 
     var body: some View {
         SettingsRow(
@@ -240,81 +242,33 @@ struct ProductConnectionRows: View {
                 text: codexCopy.status
             )
         ) {
-            Toggle("Codex integration", isOn: integrationSelection)
+            Toggle("Codex integration", isOn: integrationSelection(for: .codex))
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .disabled(store.isInstallingIntegration || store.isRemovingIntegration)
+                .disabled(store.isIntegrationBusy(for: .codex))
                 .help("Installs or removes the five Codex lifecycle definitions together.")
         }
 
-        if let setup = store.manualSetups[.claudeCode] {
-            SettingsSeparator()
+        SettingsSeparator()
 
-            SettingsRow(
-                title: "Claude Code",
-                caption: claudeCodeCopy.diagnostic,
-                status: SettingsRowStatus(
-                    color: claudeCodeCopy.color,
-                    text: claudeCodeCopy.status
-                )
-            ) {
-                Button(isShowingClaudeCodeSetup ? "Hide Setup" : "Set Up…") {
-                    isShowingClaudeCodeSetup.toggle()
-                    didCopyClaudeCodeSnippet = false
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-            }
-
-            if isShowingClaudeCodeSetup {
-                SettingsSeparator()
-                claudeCodeSetup(setup)
-            }
-        }
-    }
-
-    /// The paste-it-yourself half of ADR 0010, inside the row it belongs to.
-    private func claudeCodeSetup(_ setup: AgentManualSetup) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Add this block to \(setup.settingsURL.path) yourself.")
-                .font(.system(size: 11))
-                .foregroundStyle(MacOSWindowColor.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-
-            ScrollView {
-                Text(setup.configurationSnippet)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(MacOSWindowColor.secondaryText)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-            }
-            .frame(height: 132)
-            .background(
-                MacOSWindowColor.wellBackground,
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        SettingsRow(
+            title: "Claude Code",
+            caption: claudeCodeCopy.diagnostic,
+            status: SettingsRowStatus(
+                color: claudeCodeCopy.color,
+                text: claudeCodeCopy.status
             )
-
-            HStack(spacing: 8) {
-                Button(didCopyClaudeCodeSnippet ? "Copied" : "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(
-                        setup.configurationSnippet,
-                        forType: .string
-                    )
-                    didCopyClaudeCodeSnippet = true
-                }
-                Button("Reveal Settings File") {
-                    NSWorkspace.shared.activateFileViewerSelecting([setup.settingsURL])
-                }
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
+        ) {
+            Toggle("Claude Code integration", isOn: integrationSelection(for: .claudeCode))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(store.isIntegrationBusy(for: .claudeCode))
+                .help(
+                    "Writes the lifecycle definitions into ~/.claude/settings.json, "
+                        + "after copying that file to settings.json.notchline-backup."
+                )
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
     }
-
 
     private var codexCopy: ProductSettingsCopy {
         .codex(
@@ -332,10 +286,10 @@ struct ProductConnectionRows: View {
         )
     }
 
-    private var integrationSelection: Binding<Bool> {
+    private func integrationSelection(for agent: AgentKind) -> Binding<Bool> {
         Binding(
-            get: { store.integrationSwitchIsOn },
-            set: { store.setIntegrationEnabled($0) }
+            get: { store.integrationSwitchIsOn(for: agent) },
+            set: { store.setIntegrationEnabled($0, for: agent) }
         )
     }
 }
@@ -406,6 +360,13 @@ struct ProductSettingsCopy: Equatable {
     /// event to a port nothing listens on, which is a line in the user's
     /// session each time and nothing at all in the notch. Neither reports an
     /// error anywhere.
+    ///
+    /// It survives ADR 0016 rather than being folded into "off". The app can
+    /// repair it now, and the switch already reads off in this state — so the
+    /// sentence says to turn it on, which strips the stale handler and writes
+    /// the current one. Until somebody does, the notch stays empty and nothing
+    /// anywhere reports an error, which is why this cannot share a line with
+    /// "the integration is off".
     static func claudeCode(
         setup: HookSetupStatus,
         availability: MonitorAvailability?,
@@ -421,10 +382,10 @@ struct ProductSettingsCopy: Equatable {
             status = "Connected · hooks installed"
             color = MacOSWindowColor.statusHealthy
         case .repairRequired:
-            status = "Registration is out of date · nothing here reports an error"
+            status = "Registration is out of date · turn the switch on to rewrite it"
             color = MacOSWindowColor.statusWarning
         default:
-            status = "Not registered yet"
+            status = "Integration is off"
             color = MacOSWindowColor.statusIdle
         }
         return Self(status: status, color: color, diagnostic: diagnostic)

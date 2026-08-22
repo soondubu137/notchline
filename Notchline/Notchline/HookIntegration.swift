@@ -131,10 +131,8 @@ nonisolated struct HookIntegrationPaths: Sendable {
 
     /// The helper the product runs once per event.
     ///
-    /// A file of this app's own, in this app's own directory, and therefore
-    /// nothing ADR 0010 speaks to — that decision is about `settings.json`,
-    /// which still belongs to the user and is still never written. Both
-    /// products run the same four lines; only the socket path differs.
+    /// A file of this app's own, in this app's own directory. Both products run
+    /// the same four lines; only the socket path differs.
     var hookHelper: URL {
         agentDirectory.appendingPathComponent("hook.sh")
     }
@@ -182,6 +180,13 @@ nonisolated struct HookIntegrationPaths: Sendable {
             ].map { supportDirectory.appendingPathComponent($0) }
     }
 
+    /// The copy of the product's settings file kept beside it.
+    ///
+    /// Refreshed immediately before every change this app makes to that file,
+    /// so it always holds the version being replaced —
+    /// `settings.json.notchline-backup` next to `settings.json`. See
+    /// ``ManagedHooksFileEditor`` for why it is refreshed rather than written
+    /// once.
     var hooksBackup: URL {
         hooksConfiguration.appendingPathExtension("notchline-backup")
     }
@@ -425,10 +430,11 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
 /// observation, not a reading of the documentation.
 nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     nonisolated let agent: AgentKind = .claudeCode
-    /// ADR 0010: this app never writes that file, so the repair is the user's
-    /// to make and the sentence says where.
+    /// ADR 0016: this app writes that file now, so the repair is a switch
+    /// rather than an edit, and the sentence says which one.
     nonisolated let restoreDefinitionAdvice =
-        "Check that PreToolUse is still registered in ~/.claude/settings.json."
+        "Switch Claude Code off and on in Notchline's settings to write the "
+            + "hooks back into ~/.claude/settings.json."
     /// `PermissionDenied` carries the refused call's `tool_use_id`, so a
     /// refusal closes exactly. This is the one place Claude Code is plainly
     /// better than Codex, and it is what lets the reducer drop an inference

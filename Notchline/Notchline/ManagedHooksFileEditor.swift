@@ -4,15 +4,17 @@ import Foundation
 /// own.
 ///
 /// Every rule here was written for `~/.codex/hooks.json` and every one of them
-/// matters more for `~/.claude/settings.json`, because that file is where a
-/// user keeps everything else about their Claude Code install — theme,
-/// environment, permissions, their own hooks. The read-modify-write below
-/// touches only this app's own keys, refuses rather than coerces anything it
-/// does not understand, proves the file has not moved underneath it, and reads
+/// matters more for `~/.claude/settings.json`, which this type now also edits
+/// (ADR 0016), because that file is where a user keeps everything else about
+/// their Claude Code install — theme, environment, permissions, their own
+/// hooks. The read-modify-write below touches only this app's own keys, refuses
+/// rather than coerces anything it does not understand, proves the file has not
+/// moved underneath it, keeps a copy of what it is about to replace, and reads
 /// back to check before reporting success.
 nonisolated struct ManagedHooksFileEditor: Sendable {
     let url: URL
-    /// Where the file is copied once, before this app first changes it.
+    /// Where the file is copied, immediately before every change this app
+    /// makes to it.
     let recoveryCopyURL: URL
     let configuration: ManagedHooksConfiguration
     let fileManager: FileManager
@@ -136,7 +138,7 @@ nonisolated struct ManagedHooksFileEditor: Sendable {
             throw ManagedHooksConfigurationError.changedWhileEditing
         }
 
-        try preserveRecoveryCopyIfNeeded()
+        try preserveRecoveryCopy(of: currentBytes)
         try data.write(to: url, options: .atomic)
         try fileManager.setAttributes(
             [.posixPermissions: 0o600],
@@ -144,16 +146,37 @@ nonisolated struct ManagedHooksFileEditor: Sendable {
         )
     }
 
-    /// Keeps one copy of the file as it was before this app first touched it.
+    /// Keeps a copy of the file as it was immediately before this write.
     ///
-    /// Written once and never refreshed: its value is that it predates every
-    /// edit of ours, so overwriting it with a later state would destroy the
-    /// only version worth keeping.
-    private func preserveRecoveryCopyIfNeeded() throws {
-        guard fileManager.fileExists(atPath: url.path),
-              !fileManager.fileExists(atPath: recoveryCopyURL.path) else {
-            return
-        }
-        try fileManager.copyItem(at: url, to: recoveryCopyURL)
+    /// **Refreshed on every write, not kept from the first one.** The copy used
+    /// to be written once and never again, on the argument that a state
+    /// predating every edit of ours is the only one worth keeping. That is true
+    /// of `~/.codex/hooks.json`, which holds hooks and little else, and it is
+    /// the wrong trade for `~/.claude/settings.json`. A user who turned this on
+    /// months ago and has since kept their theme, permissions, environment and
+    /// MCP servers in that file would find `settings.json.notchline-backup`
+    /// holding a version predating all of it — and restoring it would be a data
+    /// loss this app caused. Everything of *ours* in the live file can be taken
+    /// back out by turning the switch off; months of their own edits cannot be
+    /// recovered from anywhere.
+    ///
+    /// So the copy means exactly one thing, and refreshing is what keeps that
+    /// meaning true: the user's file as it was immediately before this app's
+    /// most recent change to it.
+    ///
+    /// The bytes are the ones ``write(_:replacing:)`` has just read and compared,
+    /// rather than a `copyItem` of the path — one less read, and no window in
+    /// which the copy could catch a different version than the one being
+    /// replaced. Written atomically, so a crash mid-write leaves the previous
+    /// copy intact rather than no copy at all.
+    private func preserveRecoveryCopy(of currentBytes: Data?) throws {
+        // Nothing there yet: this write creates the file, so there is no
+        // earlier version to keep and an empty copy would only be misleading.
+        guard let currentBytes else { return }
+        try currentBytes.write(to: recoveryCopyURL, options: .atomic)
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: recoveryCopyURL.path
+        )
     }
 }

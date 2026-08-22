@@ -87,19 +87,23 @@ private struct OnboardingView: View {
 
     /// The two connections, in the rows Settings uses for the same job.
     ///
-    /// `Recheck` sits in the footnote rather than beside the switch because
-    /// turning the switch on is not the end of it: Codex keys hook trust to
+    /// `Recheck` sits in the footnote rather than beside the switches because
+    /// turning the Codex one on is not the end of it: Codex keys hook trust to
     /// each definition's place in the file and asks before it will run one, so
-    /// the row only says Connected once a trusted event has actually arrived.
+    /// that row only says Connected once a trusted event has actually arrived.
+    /// Claude Code has no such step — its row answers as soon as the file is
+    /// written.
     private var connectGroup: some View {
         SettingsGroup(header: "Connect your agents") {
             ProductConnectionRows()
         } footnote: {
             SettingsFootnote(
-                "The switch installs five lifecycle definitions in "
-                    + "~/.codex/hooks.json and removes them again when it is "
-                    + "off; your own hooks are untouched. Claude Code is "
-                    + "registered by hand — Notchline never writes that file."
+                "The switches install the lifecycle definitions Notchline "
+                    + "needs in ~/.codex/hooks.json and ~/.claude/settings.json, "
+                    + "and remove them again when they are off; your own "
+                    + "settings and hooks are untouched. Your Claude Code "
+                    + "settings are copied to settings.json.notchline-backup "
+                    + "before each change."
             ) {
                 Button("Recheck") {
                     store.refreshNow()

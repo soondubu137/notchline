@@ -41,7 +41,7 @@ nonisolated enum ManagedHooksConfigurationError: LocalizedError, Equatable {
         case .changedWhileEditing:
             "Another program changed the hook configuration during this write; the write was abandoned rather than overwrite their edit. Please try again."
         case .verificationFailed:
-            "The hook configuration failed verification after being written; please check ~/.codex/hooks.json."
+            "The hook configuration failed verification after being written; please check the settings file for that product."
         }
     }
 }
@@ -83,14 +83,21 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     let legacyIdentityMarkers: [String]
     let definitions: [ManagedHookDefinition]
     /// Written into a file this app creates, and never into one it did not.
-    let descriptionForNewFiles: String
+    ///
+    /// `nil` for a product whose settings file has a schema of its own.
+    /// `~/.codex/hooks.json` holds hooks and nothing else, so a `description`
+    /// at its root is a courtesy to whoever opens it; `~/.claude/settings.json`
+    /// is validated by Claude Code against a known set of keys, and stamping an
+    /// invented one into a file this app just created for the user would be
+    /// this app's first act being to put something unrecognised in it.
+    let descriptionForNewFiles: String?
 
     nonisolated init(
         managedHandler: [String: Any],
         identityMarker: String,
         legacyIdentityMarkers: [String] = [],
         definitions: [ManagedHookDefinition],
-        descriptionForNewFiles: String = "User-level agent lifecycle hooks."
+        descriptionForNewFiles: String? = "User-level agent lifecycle hooks."
     ) {
         self.managedHandler = managedHandler
         self.identityMarker = identityMarker
@@ -118,7 +125,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         arguments: [String]? = nil,
         legacyCommands: [String] = [],
         definitions: [ManagedHookDefinition],
-        descriptionForNewFiles: String = "User-level Codex lifecycle hooks."
+        descriptionForNewFiles: String? = "User-level Codex lifecycle hooks."
     ) -> ManagedHooksConfiguration {
         var handler: [String: Any] = [
             "type": "command",
@@ -135,24 +142,6 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
             definitions: definitions,
             descriptionForNewFiles: descriptionForNewFiles
         )
-    }
-
-    /// The `hooks` block on its own, for showing a user what to add.
-    ///
-    /// Built from the same definitions the reducer consumes, so instructions
-    /// cannot drift from the events this app actually understands — a snippet
-    /// that named an event the reducer ignored would look installed and report
-    /// nothing.
-    nonisolated func hooksBlock() -> [String: Any] {
-        var hooks: [String: Any] = [:]
-        for definition in definitions {
-            var group: [String: Any] = ["hooks": [managedHandler]]
-            if let matcher = definition.matcher {
-                group["matcher"] = matcher
-            }
-            hooks[definition.event] = [group]
-        }
-        return hooks
     }
 
     // MARK: - Install
@@ -188,10 +177,10 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         }
 
         root["hooks"] = hooks
-        // Only ever stamped on a file this app just created. Adding a
-        // description to a file somebody else owns is outside the boundary,
-        // however harmless it looks.
-        if isNewFile, root["description"] == nil {
+        // Only ever stamped on a file this app just created, and only for a
+        // product that wants one. Adding a description to a file somebody else
+        // owns is outside the boundary, however harmless it looks.
+        if isNewFile, let descriptionForNewFiles, root["description"] == nil {
             root["description"] = descriptionForNewFiles
         }
         return root
@@ -250,11 +239,14 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// longer install — an older shape still fires, and fires wrongly.
     ///
     /// The second condition used to be missing here, and the gap had teeth on
-    /// the Claude Code side, where the app cannot repair the file itself
-    /// (ADR 0010) and a registration is whatever the user once pasted. A paste
-    /// whose `timeout` had since changed was reported `active`, and the events
-    /// then waited longer than they should while the notch simply stayed
-    /// empty. The app had no way to say so, because identity here is
+    /// the Claude Code side, where a registration was whatever the user had
+    /// once pasted and the app could not repair it (ADR 0010, since reversed by
+    /// ADR 0016). A paste whose `timeout` had since changed was reported
+    /// `active`, and the events then waited longer than they should while the
+    /// notch simply stayed empty. Being able to rewrite the file does not make
+    /// this condition redundant — it is what turns a stale registration into a
+    /// row that asks to be switched off and on. The app had no way to say so,
+    /// because identity here is
     /// deliberately just a marker — it has to stay loose enough to recognise
     /// shapes this app no longer writes — and a marker cannot tell a current
     /// handler from a stale one.

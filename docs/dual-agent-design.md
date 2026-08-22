@@ -204,7 +204,7 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 | 是否超出四个状态（`StopFailure` 带 `error`） | **已定：保持四态。** 只有 Claude Code 能观察到的状态会让这套共享词汇在 Codex 上说谎——用户无法区分「没有失败」与「无法观察到失败」。失败作为终态原因随行，行上的标记不变。字段名是 `error` 而非 `error_type`（CLI 2.1.233 实测） |
 | `dailyUsageBuckets.tokens` 与 CLI `total_tokens` 是否同口径 | 待验证，低优先级；不阻塞任何布局 |
 | 同名目录的两个检出如何消歧 | 未定（[#25](https://github.com/soondubu137/notchline/issues/25) 遗留项） |
-| Claude Code hook 注册由谁写入 | **已定：用户自己写。** 本应用只读 `~/.claude/settings.json`、显示待粘贴内容、报告注册是否完整，永不写入。Codex 侧维持自动写入 `~/.codex/hooks.json`。见 [ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md) |
+| Claude Code hook 注册由谁写入 | **已定：本应用写。** 与 Codex 同形：一个开关，写 `~/.claude/settings.json`，关掉再取出来；每次写入前把原文件复制到同目录的 `settings.json.notchline-backup`。见 [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)。~~原为「用户自己粘贴，本应用永不写入」（[ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md)）~~——翻案理由是那条自己列的代价：粘贴不完整与形状过时都不报错，本应用看得见却修不动 |
 | 产品改名 | 候选见 Figma §07；`Baton` 为推荐项 |
 | `Disconnected` 这个词是否保留 | **语义已定**（[`figma-design.md`](figma-design.md) §6.7：没有任何智能体**已连接**）。词本身待定，备选 `No agents`、`Nothing running`，上屏后判断 |
 | 双产品无刘海紧凑标签由哪一状态定宽 | **已被在场制吸收，见下。** 成因仍记录在 [#29](https://github.com/soondubu137/notchline/issues/29) |
@@ -221,28 +221,26 @@ Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因�
 
 **后续：展开态也不再指名产品，`configuredAgents` 因此整个消失。** 上一段留给展开面板的那条尾巴——「展开面板仍然会说 `Update Claude Code` 这类指名产品的整句」——已经收掉了。四条指名产品的整句（`Connecting to [产品]`、`Update [产品]`、`[产品] version unsupported`、`[产品] disconnected`）一律改回不指名的通用说法：`Connecting`、`Update required`、`Version unsupported`、`Disconnected`。理由是这四句提供的信息并非必需——**哪个**产品不健康，设置窗口的产品行本来就逐个列着，而刘海不是读这件事的地方。代价是一次点击，收益是展开面板的定宽折叠随之消失：最宽的整句从 `Claude Code version unsupported`（`204.43`）变成 `Version unsupported`（`124.88`），单侧从 `253.03` 收到 `173.48`，装了 Claude Code 的用户每一次展开都少占 `79` 点。`PanelMetrics.expandedWidth` 因此只剩 `centerOcclusionWidth` 一个参数，`MonitorStore.configuredAgents` 与快照上的 `availabilityAgent`、`statusAgent` 一并删除——它们存在的唯一理由就是让标签说出产品名。
 
-## 6.1 Claude Code 集成卡片（新增面）
+## 6.1 Claude Code 产品行（新增面）
 
-Figma §09 的 `Codex integration` 卡片围绕一个开关：拨动它，应用写 `~/.codex/hooks.json`。Claude Code 没有开关可拨（[ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md)），因此需要一张 Figma 未画过的卡片。
+Figma §09 的 `Codex integration` 卡片围绕一个开关：拨动它，应用写 `~/.codex/hooks.json`。**Claude Code 那一行现在是同一个形状**（[ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)）：同一张卡片里的第二行，同样一个开关，拨动它，应用写 `~/.claude/settings.json`。
 
-**位置：紧挨 Codex 卡片，同一列表内的行内展开。** 两个产品在机制上不同，这个不同值得被看见；把它藏进另一条流程，会让这处不对称显得像疏漏，而不是一个决定。
+~~这里原本需要一张 Figma 未画过的卡片：行内展开，里面是「不编辑你的设置文件」的说明、一段可选中的 `Configuration to add`、以及 `Copy` / `Reveal Settings File` 两个按钮。~~ 那张卡片随 ADR 0010 一起删除了，连同它渲染的片段和复制按钮。**两行并排现在没有不对称可看**，两条产品行的区别只剩脚注里的一句：两个开关写的是不同的文件，而且只有 Codex 那个后面还跟着一步信任。
 
-卡片内容：状态圆点与一句话、"不编辑你的设置文件"的说明加上文件路径、一个可展开的 `Configuration to add`（等宽、可选中、可滚动）、以及 `Copy` / `Reveal Settings File` / `Recheck` 三个按钮。
+**新增一句必须出现在脚注里**：改动 `~/.claude/settings.json` 之前，本应用会把它复制成同目录的 `settings.json.notchline-backup`。用户没要过这个文件，它是这个决定的价格，所以要在用户拨开关之前就看见它的名字。
 
-状态有四种，第二种是重点：
+状态仍是四种，第二种仍是重点：
 
 | 状态 | 文案 | 颜色 |
 | --- | --- | --- |
-| 未注册 | Not registered yet. | 灰 |
-| **注册与本版本不符** | Registration is out of date. Nothing here reports an error. | 橙 |
-| 已注册且在收事件 | Registered and receiving events. | 绿 |
+| 未注册 | Integration is off. | 灰 |
+| **注册与本版本不符** | Registration is out of date · turn the switch on to rewrite it. | 橙 |
+| 已注册且在收事件 | Connected · hooks installed. | 绿 |
 | 已注册但 helper 装不上 | Registered · the hook helper could not be set up. | 绿点＋该句 |
 
-**这一态必须单独存在**，不能与"未注册"合并：它是手工粘贴唯一没有症状的失败方式，而且有两种形状。漏掉一个事件不会报错，Claude Code 只是永远不推送那一类迁移。**事件齐全但 handler 形状过时也算**——最重要的一种就是 [ADR 0013](adr/0013-claude-code-hooks-run-a-helper-not-a-port.md) 之前那份 `type: "http"` 的粘贴：事件一个不少，却全都 POST 给一个没人听的端口，于是**每个事件在用户会话里打一行**，而 notch 上什么都不出现。因此判定不能只看"我们的 handler 在不在"，而要看"在的那个是不是本版本会装的那个"：identity marker 必须宽到认得出本应用写过的所有形状（旧的那段 URL path 至今留着就是为此），而一个宽到这个地步的标记分不出当前与过时。
+**第二态必须单独存在**，不能与「关着」合并。它原先是手工粘贴唯一没有症状的失败方式；本应用现在修得动它了，但**在用户去拨那个开关之前它照样没有症状**——notch 一直空着，任何地方都不报错。它有两种形状：漏掉一个事件不会报错，Claude Code 只是永远不推送那一类迁移；**事件齐全但 handler 形状过时也算**——最重要的一种就是 [ADR 0013](adr/0013-claude-code-hooks-run-a-helper-not-a-port.md) 之前那份 `type: "http"` 的注册，事件一个不少，却全都 POST 给一个没人听的端口，于是**每个事件在用户会话里打一行**，而 notch 上什么都不出现。因此判定不能只看「我们的 handler 在不在」，而要看「在的那个是不是本版本会装的那个」：identity marker 必须宽到认得出本应用写过的所有形状（旧的那段 URL path 至今留着就是为此，现在它还多一个用途——让安装把那段死 handler 顺手删掉），而一个宽到这个地步的标记分不出当前与过时。**唯一变的是这一态的出路**：从「请你回去重贴」变成「把开关打开」——这一态下开关本来就显示为关（`isIntegrationEnabled` 对 `repairRequired` 为假），打开它就会把旧 handler 剥掉、写下当前形状。
 
-第四态换了内容但没有换理由：现在不再有端口可被占，能失败的是**helper 或它的 socket 装不上**（support 目录不可写）。同样要说出来，而且理由更硬——用户粘贴的那段指着一个不存在的脚本，Claude Code 会为每个事件打一行 `ENOENT`。
-
-粘贴内容由 reducer 认识的事件列表渲染，因此说明与实现无法漂移；一个测试固定了这一点。
+第四态换了内容但没有换理由：现在不再有端口可被占，能失败的是**helper 或它的 socket 装不上**（support 目录不可写）。同样要说出来，而且理由更硬——写下去的注册指着一个不存在的脚本，Claude Code 会为每个事件打一行 `ENOENT`。所以 `install()` 先写 helper，写不出来就整个拒绝，不留下那样一份注册。
 
 ## 9. 与既有文档的关系
 
