@@ -1308,10 +1308,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         try await setup.uninstall()
     }
 
-    func clearSessions() async {
-        await hookEvents.clearTurnsPreservingObservation()
-    }
-
     func disconnect() async {
         listener.stop()
     }

@@ -1574,8 +1574,9 @@ struct NotchlineTests {
     /// leaves the session it belongs to alone.
     ///
     /// The dismissed set is keyed by Turn, so the same thread's next Turn is a
-    /// new row and lists as usual -- the same rule `Clear the session list`
-    /// already obeys, applied to one row instead of all of them.
+    /// new row and lists as usual. This is the only route rows have out of the
+    /// list at the user's asking; the `Clear the session list` button that
+    /// dismissed all of them at once is gone.
     @Test @MainActor
     func dismissingAFinishedRowHidesThatTurnButAllowsTheNext() {
         let finished = MonitoredSession(
@@ -1805,65 +1806,6 @@ struct NotchlineTests {
             )!
         )
         #expect(pressed.value == 1)
-    }
-
-    @Test @MainActor
-    func clearingSessionListHidesCurrentTurnsButAllowsNewTurns() async {
-        let currentTurn = MonitoredSession(
-            threadID: "thread",
-            turnID: "turn-1",
-            projectName: "Chats",
-            title: "Current turn",
-            preview: nil,
-            status: .completed,
-            startedAt: Date()
-        )
-        let store = MonitorStore(
-            initialSnapshot: AgentSnapshot(
-                availability: .ready,
-                sessions: [currentTurn],
-                quota: .unavailable,
-                diagnostic: nil
-            )
-        )
-
-        let didClear = await store.clearSessionsAndWait()
-
-        #expect(didClear)
-        #expect(store.sessions.isEmpty)
-        #expect(store.status == .connected)
-        #expect(store.lastIntegrationMessage.contains("no Codex sessions were deleted"))
-
-        store.applyForTesting(
-            AgentSnapshot(
-                availability: .ready,
-                sessions: [currentTurn],
-                quota: .unavailable,
-                diagnostic: nil
-            )
-        )
-        #expect(store.sessions.isEmpty)
-
-        let nextTurn = MonitoredSession(
-            threadID: "thread",
-            turnID: "turn-2",
-            projectName: "Chats",
-            title: "Next turn",
-            preview: nil,
-            status: .running,
-            startedAt: Date()
-        )
-        store.applyForTesting(
-            AgentSnapshot(
-                availability: .ready,
-                sessions: [currentTurn, nextTurn],
-                quota: .unavailable,
-                diagnostic: nil
-            )
-        )
-
-        #expect(store.sessions == [nextTurn])
-        #expect(store.status == .running)
     }
 
     /// Recheck must report what is true now, not what was true before.
@@ -7970,12 +7912,6 @@ for line in sys.stdin:
         #expect(restoredSnapshot.hasObservedEvent)
         #expect(!restoredSnapshot.hasObservedLiveEvent)
         #expect(restoredSnapshot.turns.isEmpty)
-
-        await restored.clearTurnsPreservingObservation()
-        let cleared = HookEventRepository(paths: paths)
-        let clearedSnapshot = await cleared.drainDeliveredEvents()
-        #expect(clearedSnapshot.hasObservedEvent)
-        #expect(clearedSnapshot.turns.isEmpty)
     }
 
     @Test @MainActor
@@ -16580,7 +16516,6 @@ private actor OnDemandDeadlineMonitoringStub: AgentMonitoring {
     func hookSetupStatus() async -> HookSetupStatus { .active }
     func installHooks() async throws {}
     func removeHooks() async throws {}
-    func clearSessions() async {}
     func disconnect() async {}
 }
 
@@ -16616,7 +16551,6 @@ private actor StuckDeadlineMonitoringStub: AgentMonitoring {
     func hookSetupStatus() async -> HookSetupStatus { .reviewRequired }
     func installHooks() async throws {}
     func removeHooks() async throws {}
-    func clearSessions() async {}
     func disconnect() async {}
 }
 
@@ -16717,7 +16651,6 @@ private actor GatedMonitoringStub: AgentMonitoring {
         isApplyingIntegrationChange = false
     }
 
-    func clearSessions() async {}
     func disconnect() async {}
 
     func setStatus(_ status: HookSetupStatus) { self.status = status }
@@ -16780,7 +16713,6 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
         setupStatus = .notInstalled
     }
 
-    func clearSessions() async {}
 
 
     func disconnect() async {}
@@ -17770,7 +17702,6 @@ private actor DiskFootprintMonitoringStub: AgentMonitoring {
     func hookSetupStatus() async -> HookSetupStatus { .active }
     func installHooks() async throws {}
     func removeHooks() async throws {}
-    func clearSessions() async {}
     func disconnect() async {}
 }
 
@@ -17854,7 +17785,6 @@ private actor HoldableMonitoringStub: AgentMonitoring {
     func hookSetupStatus() async -> HookSetupStatus { snapshot.setupStatus }
     func installHooks() async throws {}
     func removeHooks() async throws {}
-    func clearSessions() async {}
     func disconnect() async {}
 }
 

@@ -67,7 +67,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 3. 只解析 `local` host 的字符串集合，同时校验所有 host 名称、空 id 与重复 id。读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、异常 JSON 与不兼容 schema；不记录原始 JSON 或 Thread id。
 4. 主文件失败时读取 `.bak`，两者失败时保留进程内 last-known-good。但 backup 和 last-known-good 只用于保留数据与诊断，只有 `source == current` 的主文件快照可以做新的隐藏决定；解析失败绝不能解释为空集合。
 5. 活动、Input、Approval 始终显示并清除该 Turn 的终态 gate。终态首次出现且主文件暂未包含 unread 时保留 2 秒，覆盖 Desktop 约 500 ms 的持久化延迟；已经观察过 unread 后再从权威主快照消失则立即隐藏。隐藏 gate 在临时解析失败时保持隐藏，避免 UI 闪回；新终态在失败期间继续显示。
-6. `MonitorStore` 同时消费目录变化流和原有轮询；统一的 in-flight gate 合并并发刷新。停止监视、关闭集成或清空列表时清除终态 gate。
+6. `MonitorStore` 同时消费目录变化流和原有轮询；统一的 in-flight gate 合并并发刷新。停止监视或关闭集成时清除终态 gate（~~清空列表~~ 该动作已删除，见 §16.2）。
 
 适配器已经覆盖成功、缺失、损坏、backup、last-known-good、schema 不兼容、原子替换和终态竞态 fixture；Desktop 更新后仍必须执行真实 read/unread 与完成/阅读竞态矩阵。目标是 p95 同步不超过 1.5 秒、p99 不超过 2 秒，且任意错误都不提前移除终态行。当前 Developer ID 非沙箱构建可读取该路径；Mac App Store sandbox 仍需要用户选择目录与 security-scoped bookmark，未经实现不得声称支持。
 
@@ -96,7 +96,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 
 ### 1.5 Claude Code 已读适配器（已实现）
 
-Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次提交、会话消失或手动清空退出（CC-013）。它现在分成两半，**证据来源完全不同**：Desktop 托管的会话读 Claude Desktop 的私有记录（下文 1–7），终端里的会话读内核记的控制终端访问时间（下文 §1.5.1，不涉及任何私有 schema）。产品语义与两半的分工见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)；这里只记实现。
+Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次提交、会话消失或用户手动移除该行退出（CC-013）。它现在分成两半，**证据来源完全不同**：Desktop 托管的会话读 Claude Desktop 的私有记录（下文 1–7），终端里的会话读内核记的控制终端访问时间（下文 §1.5.1，不涉及任何私有 schema）。产品语义与两半的分工见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)；这里只记实现。
 
 对 Claude Desktop `1.32885.1`、CLI `2.1.235` 的只读核验（2026-08-19）表明：
 
@@ -121,7 +121,7 @@ Claude Code 一侧此前没有任何已读来源，终态行只能靠下一次�
    激活信号来自公开的 `NSWorkspace.didActivateApplicationNotification`（`DesktopActivationWatcher`），按 bundle identifier 过滤，只记录**跃迁**的时刻、从不记录「此刻是否在前台」，且只知道本应用启动之后发生的激活。
    「在不在人眼前」来自 `DesktopReadingWatcher`：同一个公开通知维护「那个应用此刻是否持有前台」（构造时从 `NSWorkspace.frontmostApplication` 读一次种子，之后只由通知驱动），再减去三种持有前台但等于没有的状态——`CGDisplayIsAsleep` 显示器休眠、`CGSessionCopyCurrentDictionary` 报告锁屏或不在 console、公开的 `com.apple.screensaver.didstart` / `didstop` 报告屏保在跑。三者全部公开、无需 entitlement、实测不弹授权；会话字典读不出来时答 `false`，即朝保留的方向倒。隐藏应用不单列（隐藏会交出前台）；**最小化、另一块显示器、另一个 Space 无法分辨**，落在这三种状态里的行会被没人看见地撤掉，这是被接受的代价而不是缺口。
    曾经上线过一版用「一次按键或滚动」当证据的实现（`c1052bb`，`CGEventSource.secondsSinceLastEventType` 取 `.keyDown` 与 `.scrollWheel`），它更安全但答不了「坐着看完、什么都不做」，已被本条取代；细节与它的一处硬伤记在 ADR 0012 的拒绝清单里。
-5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**问不出来的行根本不进 gate**（既无 Desktop 记录、也无控制终端），因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动移除（在该行上右键，或清空整张列表）。**gate 收到的未读快照按行分成两份**：Desktop 判出来的那些带 Desktop 读数的 source（`unavailable` 时不得隐藏任何行），终端判出来的那些带 `.current`。这一分不是修饰——从没开过 Claude Desktop 的用户整棵树都不存在，读数恒为 `unavailable`，让终端结论借用它就等于在最需要这条路径的机器上把它整个关掉。它同时是诚实的：Desktop 的 source 存在是因为读数可能落后一个 generation（解析失败后保留的快照带着旧的 focus 时刻），而设备访问时间不可能落后——它在用到它的那一次刷新里现读，读失败答 `nil` 并把该行**移出** gate，而不是带着陈旧结论进去。
+5. 复用 Codex 侧的 `TerminalUnreadMembershipGate`：每次刷新由服务把判定结果折成一个未读集合交给它，settling window、"观察过未读后立即隐藏"和 `retain` 规则完全一致。**问不出来的行根本不进 gate**（既无 Desktop 记录、也无控制终端），因此不会为一个没有答案的问题每秒复查一次；它们的退出条件仍是下一次提交、会话消失或手动移除（在该行上右键；~~或清空整张列表~~ 全清已删除，见 §16.2）。**gate 收到的未读快照按行分成两份**：Desktop 判出来的那些带 Desktop 读数的 source（`unavailable` 时不得隐藏任何行），终端判出来的那些带 `.current`。这一分不是修饰——从没开过 Claude Desktop 的用户整棵树都不存在，读数恒为 `unavailable`，让终端结论借用它就等于在最需要这条路径的机器上把它整个关掉。它同时是诚实的：Desktop 的 source 存在是因为读数可能落后一个 generation（解析失败后保留的快照带着旧的 focus 时刻），而设备访问时间不可能落后——它在用到它的那一次刷新里现读，读失败答 `nil` 并把该行**移出** gate，而不是带着陈旧结论进去。
 6. 边沿有两个：Claude Desktop 写记录，以及它回到前台。后者直接来自激活通知，因此「切回去读」这个手势与行离开 notch 是同一件事，不需要等 gate 的 1 秒复查。**`isInFrontOfThem` 没有边沿**：它要三个状态同时成立（前台、显示器、锁屏），因此在 gate 已经为等待中的行预约的 1 秒复查上采样，那个 1 秒同时是它的上界；没有行在等的时候不产生任何采样。**但显示器与锁屏这两个状态为假时，这一秒连采样都不再发生**：那时三个状态里已有一个恒假，答案在做任何工作之前就已经知道（CR-Fable-018）。用户点亮屏幕或解锁之后行的消失改由 `ScreenAvailabilityWatcher` 的边沿驱动——那是这两个状态唯一一次由假变真的时刻，赶在用户能做任何事之前到达——之后才回到这一秒。前者来自 `PathSetChangeWatcher`——一个可以随时替换被监听路径集合的 watcher，`ClaudeCodeSessionRecordWatcher` 与本适配器共用它。适配器监听状态根目录加每个发现到的账户目录；账户目录在第一次读取时才被发现，新账户由根目录的边沿或心跳发现。
 7. 失败一律 fail closed：树不存在（纯终端用户的常态）是 `unavailable` 且**不产生诊断**；单份记录读不出只让那个会话答 unknown；**全部记录都读不出**才判定为 schema 不兼容，发出诊断并保留 last-known-good，此时不做任何新的隐藏。
 8. **列表里没有 `.completed` 行时，上面这一整遍都不问**（CR-Fable-041）。gate 对非终态行一律直接放行并丢掉它的条目，所以这份读数——整棵账号树、Desktop 的焦点日志、激活时刻、每行一次的终端 `stat`——只可能改变终态行的去留；原来的写法在看 `rows` 之前就先取它，于是一份全是 Running 行的列表每次刷新都白读一遍，而只要机器上还有任何一行终态行把刷新钉在 1 Hz，这一遍就是每秒一次。跳过的那一次仍然把两处账目做掉：屏幕成员关系与 gate 条目都清空——原来的那一遍对这样一份列表也正是把它们逐行清掉。**诊断跟着读数一起省掉**：那句诊断说的是「终态行已经替你保留」，而此刻一行都没有。判据用的是 `TerminalUnreadMembershipGate.isTerminal`，不是就地再写一次 `== .completed`——gate 将来放宽它的定义时，这里不能悄悄漏掉新增的那一种。
@@ -836,9 +836,9 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 - 集成开关：**每个产品一个**，都在 `Products` 卡片里自己那一行的尾部（`figma-design.md` §8.1）。On 安装或修复该产品必需的事件定义，Off 只移除本应用管理的配置片段；关闭后 Settings 保持可达。切换期间**只有那一行的**控件 disabled；失败恢复切换前显示状态并给出非破坏性错误。状态、开关位置、进行中标记与 convergence task 在 `MonitorStore` 里一律按产品分开（`setupStatusByAgent`、`integrationSwitchIsOnByAgent`、`integrationBusyAgents`、`integrationTasks`），因此关掉一个产品不会动另一个产品的开关，也不会从合并列表里带走它的行。
   - Codex：写 `~/.codex/hooks.json` 的五条定义。首次安装或定义变化后仍由用户在 Codex `/hooks` 中审核，应用不得改写信任状态。
   - Claude Code：写 `~/.claude/settings.json`（[ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)；~~此前按 ADR 0010 给的是 `Set Up…` 而不是开关~~）。**每次写入之前**先把该文件复制到同目录的 `settings.json.notchline-backup`，副本的语义固定为「本应用最近一次改动它之前的样子」。这条规则在共享的 `ManagedHooksFileEditor` 上，**Codex 侧同样适用**——`~/.codex/hooks.json` 每次写入前也复制成同目录的 `hooks.json.notchline-backup`，理由见 ADR 0016：Codex 按 group 序号记信任，一份过时的副本被还原会静默挪掉用户自己定义上的信任。写入只碰本应用自己的键，形状不认识一律拒绝而非强转，写前比对字节、写后回读校验；`install()` 先写 helper，写不出来就整个拒绝。没有信任步骤。
-- `Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。单行的对应动作是在终态行上右键（§17），两者共用同一个 `dismissedSessionIDs`。
+- ~~`Clear the session list`：只清空本应用的行，不删除任何 Codex 会话；列表为空时 disabled。~~ **这个功能已整体删除**，不只是从卡片上撤下：`MonitorStore.clearSessions()` / `clearSessionsAndWait()` / `isClearingSessions`、`AgentMonitoring.clearSessions()` 及两个产品的实现、以及只为它存在的 `HookEventRepository.clearTurnsPreservingObservation()` 一并删掉。用户手动移除一行的动作只剩一个：在终态行上右键（§17）。两者原本共用 `dismissedSessionIDs`，剩下的那一个继续用它；区别在于右键是在用户看着那一行的时候给出的，而「全清」要先打开设置窗口，然后对一批用户此刻没有在看的行动手——其中可能有一行是他还没读的答案。
 - `Quota reading transcripts`：报出本应用的额度读取在 Claude Code 自己的 project 目录里留下的 transcript 总大小，尾部 `Reveal in Finder` 打开那个目录（**只报大小**：个数那一半回答的是没人会问的问题，判断值不值得去清只看大小）；**只统计不删除**，理由见 `ClaudeCodeUsageTranscripts`。**这一行有三种读数，而不是「有数字」与「没有行」两种。** 目录靠一次已经发生的读取反查出来，因此第一次读取落地之前无从计数：那时写 `Calculating…` 并把按钮置灰；量到了写 `43.2 MB` 并恢复按钮；读取已经跑完却仍未找到目录时写 `Unavailable`。判据是「有没有跑完过一次读取」（`ClaudeCodeUsageReader.attemptedAt`）而不是失败次数——`session_id` 在 `read` 内部就已记下，所以一次跑完的读取找到的目录不会还被报成在路上；而机器上没有 `claude` 时那件「正在进行的工作」已经停了，再写 `Calculating…` 就是一句不再成立的进度声明。产品若根本不留文件（Codex）则整行不存在——把它和「还没量出来」用同一个 nil 表示，正是 CC-020 里卡片自己长出一行的成因。按钮的置灰由「有没有目录」这一个来源决定，不设第二个标志位，两者因此不可能互相矛盾。
-- `Quit Codex in Notch`：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。
+- `Quit`（~~`Quit Codex in Notch`~~：按钮就在应用自己的设置窗口里，标题栏已经写着应用名，重复一遍只是把这枚按钮撑宽）：窗口最后一行的胶囊按钮，调用 `NSApp.terminate`，收起态组件随之从菜单栏消失。它不属于任何分组——不是设置，而是这个窗口唯一能提供的应用级动作：叠层没有自己的窗口，关掉 Settings 也不会让它退出。
 
 ## 17. SwiftUI 接入边界
 

@@ -34,7 +34,7 @@ struct AppSettingsView: View {
                 )
                 .settingsFootnote(MacOSWindowColor.tertiaryText)
 
-                Button("Quit Notchline") {
+                Button("Quit") {
                     NSApp.terminate(nil)
                 }
                 .buttonStyle(.bordered)
@@ -131,6 +131,11 @@ struct AppSettingsView: View {
     /// component appears on exactly one display and the user picks which. Kept
     /// in the same shape rather than dropped, and recorded in `figma-design.md`
     /// §8.4 so the board and the window can be reconciled deliberately.
+    ///
+    /// No footnote. The row's own caption already names the display's geometry
+    /// and menu bar height for the display that is actually selected; a
+    /// standing sentence about cut-outs and pills only said the same thing in
+    /// the abstract, under a card one popup high.
     private var displayGroup: some View {
         SettingsGroup(header: "Display") {
             SettingsRow(
@@ -152,11 +157,6 @@ struct AppSettingsView: View {
                     .fixedSize()
                 }
             }
-        } footnote: {
-            SettingsFootnote(
-                "The component takes the menu bar of the display you choose, and its "
-                    + "geometry with it — a cut-out to wrap, or a pill where there is none."
-            )
         }
     }
 
@@ -176,20 +176,6 @@ struct AppSettingsView: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .fixedSize()
-            }
-
-            SettingsSeparator()
-
-            SettingsRow(
-                title: "Clear the session list",
-                caption: "Removes rows from Notchline. No Codex chat is deleted."
-            ) {
-                Button(store.isClearingSessions ? "Clearing…" : "Clear") {
-                    store.clearSessions()
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .disabled(store.sessions.isEmpty || store.isClearingSessions)
             }
         } footnote: {
             // Visible with one product too. A preference you cannot find until a
@@ -435,6 +421,16 @@ struct SettingsGroup<Content: View, Footnote: View>: View {
 
     private var cardShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
+    }
+}
+
+/// A group whose card says everything, with no consequence left to footnote.
+///
+/// `EmptyView` is dropped from the stack rather than laid out, so the group
+/// closes at the card and the `22` between groups is the only gap under it.
+extension SettingsGroup where Footnote == EmptyView {
+    init(header: String, @ViewBuilder content: @escaping () -> Content) {
+        self.init(header: header, content: content, footnote: { EmptyView() })
     }
 }
 

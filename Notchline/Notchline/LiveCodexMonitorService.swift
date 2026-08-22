@@ -31,7 +31,6 @@ protocol AgentMonitoring: Sendable {
     func hookSetupStatus() async -> HookSetupStatus
     func installHooks() async throws
     func removeHooks() async throws
-    func clearSessions() async
     func disconnect() async
 }
 
@@ -557,21 +556,6 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         pendingMetadataThreadIDs.removeAll()
         lastTrustedSnapshot = nil
         terminalUnreadMembershipGate.reset()
-    }
-
-    func clearSessions() async {
-        await hookEvents.clearTurnsPreservingObservation()
-        terminalUnreadMembershipGate.reset()
-        if let snapshot = lastTrustedSnapshot {
-            lastTrustedSnapshot = AgentSnapshot(
-                availability: snapshot.availability,
-                sessions: [],
-                quota: snapshot.quota,
-                diagnostic: snapshot.diagnostic,
-                setupStatus: snapshot.setupStatus,
-                presence: snapshot.presence
-            )
-        }
     }
 
     /// Binds the socket, and writes the helper on the two occasions it can be

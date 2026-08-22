@@ -177,7 +177,7 @@ PRD 8.2 与技术设计第 12 节已明确权威时间语义、等待/睡眠行�
 
 ### 5.1 成员语义
 
-一行代表一个可导航根 Thread。Running、Input needed、Approval needed 始终显示；Completed 只在该产品的桌面端仍认为用户没看过时显示，桌面端已读、归档、删除或失去可导航性后自动移除。**终端里的 Claude Code 会话没有已读可读**，它的 Completed 行留到该会话的下一次提交、会话消失或用户手动移除（右键该行或清空列表）为止（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）——注释卡必须写出这条差异，否则设计稿看起来像是所有行都会自己消失。
+一行代表一个可导航根 Thread。Running、Input needed、Approval needed 始终显示；Completed 只在该产品的桌面端仍认为用户没看过时显示，桌面端已读、归档、删除或失去可导航性后自动移除。**终端里的 Claude Code 会话没有已读可读**，它的 Completed 行留到该会话的下一次提交、会话消失或用户手动移除（在该行上右键；~~清空列表~~ 全清已删除，见 §8.2）为止（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）——注释卡必须写出这条差异，否则设计稿看起来像是所有行都会自己消失。
 
 列表覆盖当前 Desktop 账户所有 Project 与 `Chats`，不跟随侧边栏选择，不展示子智能体，也不承担历史浏览。
 
@@ -415,7 +415,7 @@ Input needed
 
 弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`／`Colour bar`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品都已连接时有效果（不要求两个产品此刻都有会话，见 [`dual-agent-design.md`](dual-agent-design.md) §4）；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
 
-卡片里还有第二行 `Clear the session list`，尾部胶囊按钮 `Clear`，列表为空时 disabled。它在 v1 是 Codex 卡片里的一枚破坏性按钮；产品分组现在只讲产品，而这个动作的对象是会话列表，它属于这里。板上没有这一行，因为板只画了三个已确认的**设置**，而这是一个动作。
+**卡片只有这一行。** ~~卡片里还有第二行 `Clear the session list`，尾部胶囊按钮 `Clear`，列表为空时 disabled。它在 v1 是 Codex 卡片里的一枚破坏性按钮；产品分组现在只讲产品，而这个动作的对象是会话列表，它属于这里。板上没有这一行，因为板只画了三个已确认的**设置**，而这是一个动作。~~ 在终态行上右键移除单行（§17）之后这一行被删掉，**功能本身也一并删除，而不是只把入口撤走**（`tech-design.md` §16.2 记了删掉的符号）：两者本就共用 `dismissedSessionIDs`，而右键是在用户看着那一行的时候给出的；一个设置窗口里的「全清」要先把窗口打开，然后对一批用户此刻没有在看的行动手，其中可能有一行是他还没读的答案。卡片因此回到板上的形状——只有 `Distinguish products` 一行。
 
 ### 8.3 Privacy（已删除）
 
@@ -425,7 +425,7 @@ Input needed
 
 板上没有这一组，实现里有，位置在 `Products` 与 `Session list` 之间。
 
-`Show Codex in Notch on` 是一个已经存在的控件：组件只出现在一台显示器上，由用户选定，说明行报出该显示器的形态与真实菜单栏高度（`Notch display · 39 pt menu bar`）。删掉它会拿走一个真实功能，所以它按同一形状留下——小标题、一张卡片、一行脚注。
+`Show Codex in Notch on` 是一个已经存在的控件：组件只出现在一台显示器上，由用户选定，说明行报出该显示器的形态与真实菜单栏高度（`Notch display · 39 pt menu bar`）。删掉它会拿走一个真实功能，所以它按同一形状留下——小标题、一张卡片。**没有脚注**：~~脚注写的是「组件占用所选显示器的菜单栏，并随之取得它的几何——一处要绕开的缺口，或者没有缺口时的一枚胶囊」。~~说明行已经就当前选中的那台显示器报出了形态与菜单栏高度，脚注只是把同一件事抽象地再说一遍，挂在一张只有一个弹出菜单高的卡片下面。
 
 这不是「加入尚未确认的功能」的例外：下面那条禁止的是把没定过的功能塞进设置，而这一项是既有功能在新形状里的安置。板与窗口的差异记在这里，等板更新时一起消掉。
 
@@ -499,7 +499,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] Claude Code 在场的第二条校正：为陈旧缓存设上限（`90` 秒 = 三次连续失败），超过后在场为未知并落到 `Disconnected`。`freshness` 与 `trustCeiling` 现在是两个参数。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
-- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift)），六处与板不一致均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、产品行说明行下多一行失败报告（§8.1）、多一个 `Display` 分组与一行 `Clear the session list`（§8.4、§8.2）、少一个 `Privacy` 分组（§8.3）。
+- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift)），与板不一致之处均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、产品行说明行下多一行失败报告（§8.1）、多一个 `Display` 分组（§8.4）、少一个 `Privacy` 分组（§8.3）。~~多一行 `Clear the session list`（§8.2）~~ 这一处已经消掉：那一行被右键移除单行取代后删除。
 - [ ] 在装有 SF Pro 的 Figma 桌面端打开 `609:2`，确认字形正常渲染、多行脚注的换行落位与预期一致。
 - [ ] 同一次打开时，把 `closing note` 的四条 Inter 文字（`665:3`、`665:5`、`667:3`、`667:5`）重新键入为 SF Pro Regular，原因见 §3.1。
 - [x] 会话行已同步 Running／等待人工／Completed 三种计时表现，一行只有一个标记。

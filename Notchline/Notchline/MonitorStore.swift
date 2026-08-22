@@ -793,7 +793,6 @@ final class MonitorStore: ObservableObject {
         }
     }
     @Published private(set) var lastIntegrationMessage: String
-    @Published private(set) var isClearingSessions = false
     @Published private(set) var hasCompletedOnboarding: Bool
 
     private static let productAttributionDefaultsKey = "productAttribution"
@@ -1447,9 +1446,8 @@ final class MonitorStore: ObservableObject {
     /// the whole of what the row was still there to say.
     ///
     /// **What it does not do.** Nothing is deleted, in either product: the
-    /// thread, its Turn and its transcript are untouched, exactly as
-    /// ``clearSessionsAndWait()`` leaves them. Nor is it a claim that the user
-    /// read the answer — the read routes decide that from the products' own
+    /// thread, its Turn and its transcript are untouched. Nor is it a claim
+    /// that the user read the answer — the read routes decide that from the products' own
     /// evidence, and this one is the user saying they are done with the row,
     /// which needs no evidence beyond their having asked.
     ///
@@ -1459,11 +1457,14 @@ final class MonitorStore: ObservableObject {
     /// because the set is intersected with what the products still report on
     /// every refresh, the entry costs nothing once the row is gone upstream.
     ///
-    /// This is the only exit a terminal Claude Code row has that does not take
-    /// the whole list with it: read state is not a question those rows can be
-    /// asked (see [ADR 0012](../../docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)),
-    /// so before this the user's choices were the next prompt or
-    /// `Clear the session list`.
+    /// This is the only way a user can take a terminal Claude Code row off the
+    /// list: read state is not a question those rows can be asked (see
+    /// [ADR 0012](../../docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)),
+    /// so what is left to them otherwise is the next prompt or the session
+    /// ending. It used to have company — a `Clear the session list` button in
+    /// Settings that dismissed every row at once — and that is gone: it acted
+    /// on rows the user was not looking at, from a window they had to open
+    /// first, to do in bulk what this does in place.
     @discardableResult
     func dismiss(_ session: MonitoredSession) -> Bool {
         guard session.status == .completed else { return false }
@@ -1477,33 +1478,6 @@ final class MonitorStore: ObservableObject {
         // agreement. Editing the array alone would leave a dismissed row still
         // lighting its product's mark.
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
-        return true
-    }
-
-    func clearSessions() {
-        Task { [weak self] in
-            _ = await self?.clearSessionsAndWait()
-        }
-    }
-
-    @discardableResult
-    func clearSessionsAndWait() async -> Bool {
-        guard !isClearingSessions else { return false }
-
-        isClearingSessions = true
-        defer { isClearingSessions = false }
-
-        dismissedSessionIDs.formUnion(sessions.map(\.id))
-        sessions = []
-        status = MonitorAggregation.status(
-            agents: Array(latestByAgent.values),
-            sessions: []
-        )
-        lastIntegrationMessage = "Cleared the Notchline session list; no Codex sessions were deleted."
-
-        for service in services {
-            await service.clearSessions()
-        }
         return true
     }
 

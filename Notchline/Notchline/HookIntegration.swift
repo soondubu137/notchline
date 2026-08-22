@@ -2106,11 +2106,6 @@ actor HookEventRepository {
         return snapshot()
     }
 
-    func clearTurnsPreservingObservation() {
-        turnsByThreadID.removeAll()
-        signalIfProjectionChanged()
-    }
-
     func resetIntegrationObservation(clearTurns: Bool) {
         hasObservedEvent = false
         hasObservedLiveEvent = false
