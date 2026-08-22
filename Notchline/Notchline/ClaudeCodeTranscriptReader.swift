@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Reads what Claude Code writes about a session in its own transcript.
@@ -82,9 +83,7 @@ actor ClaudeCodeTranscriptReader {
 
         // A transcript is appended to constantly, so re-reading one that has
         // not grown is pure waste on every refresh of every row.
-        let attributes = try? fileManager.attributesOfItem(atPath: url.path)
-        let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
-        let modifiedAt = (attributes?[.modificationDate] as? Date) ?? .distantPast
+        let (size, modifiedAt) = Self.revision(of: url)
         if let cached = cache[sessionID],
            cached.size == size, cached.modifiedAt == modifiedAt {
             return cached.title
@@ -152,9 +151,7 @@ actor ClaudeCodeTranscriptReader {
 
         // A transcript that has not changed cannot have gained a record, and
         // this is asked once per refresh for every Turn still going.
-        let attributes = try? fileManager.attributesOfItem(atPath: url.path)
-        let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
-        let modifiedAt = (attributes?[.modificationDate] as? Date) ?? .distantPast
+        let (size, modifiedAt) = Self.revision(of: url)
         let interruption: Interruption?
         if let cached = interruptions[sessionID],
            cached.size == size, cached.modifiedAt == modifiedAt {
@@ -229,6 +226,36 @@ actor ClaudeCodeTranscriptReader {
     }
 
     // MARK: - Reading
+
+    /// The size and modification date the caches above are keyed by, from one
+    /// `stat`.
+    ///
+    /// `FileManager.attributesOfItem` answers the same two, and gets there by
+    /// listing the file's extended attributes and reading each one back,
+    /// resolving the owner and group through Directory Services, and bridging
+    /// a dictionary of around twenty values. That is roughly fifty times the
+    /// work of the call below, and it is bought once per listed row per
+    /// refresh -- once a second while a finished row waits to be read.
+    ///
+    /// A file that cannot be stat'ed answers `(0, .distantPast)`, which is what
+    /// the unreadable case answered before: no cache entry matches it, so the
+    /// reading below is attempted and fails on its own terms.
+    nonisolated private static func revision(of url: URL) -> (Int, Date) {
+        var status = stat()
+        let read = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return lstat(path, &status)
+        }
+        guard read == 0 else { return (0, .distantPast) }
+        let modified = status.st_mtimespec
+        return (
+            Int(status.st_size),
+            Date(
+                timeIntervalSince1970: TimeInterval(modified.tv_sec)
+                    + TimeInterval(modified.tv_nsec) / 1_000_000_000
+            )
+        )
+    }
 
     private func readTitle(at url: URL, size: Int) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }

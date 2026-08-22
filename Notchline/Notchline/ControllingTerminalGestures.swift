@@ -367,6 +367,18 @@ final class ControllingTerminalGestureReader:
     /// `devname_r` answers out of a cache keyed by device number, so a name
     /// that has since been reused would otherwise report some other terminal's
     /// gestures as this session's. A mismatch answers nil, which keeps the row.
+    ///
+    /// **That check is also what makes remembering the answer safe**, and
+    /// remembering it is what this asks for. `devname_r`'s own cache is built
+    /// by walking `/dev` -- a `readdir` over every entry and an `lstat` on each
+    /// until the device number matches -- and it is rebuilt whenever the name
+    /// it is asked for is not the one it happens to be holding. Measured in
+    /// Release with a listed finished row: that walk was a fifth of the app's
+    /// whole steady-state cost, bought once per listed row per second. A name
+    /// this app has already verified is re-verified by the same `stat` it would
+    /// do anyway, so a device number reused for another terminal is caught
+    /// exactly as before -- by the name no longer naming it -- and the walk is
+    /// bought once per device rather than once per look.
     nonisolated static func systemControllingTerminalPath(
         forProcessIdentifier pid: Int32
     ) -> String? {
@@ -376,6 +388,10 @@ final class ControllingTerminalGestureReader:
         // `NODEV`, which is a cast macro and so does not reach Swift by name.
         let device = process.kp_eproc.e_tdev
         guard device != -1 else { return nil }
+        if let remembered = deviceNames.path(forDevice: device),
+           isCharacterDevice(remembered, numbered: device) {
+            return remembered
+        }
         var name = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         guard devname_r(device, S_IFCHR, &name, Int32(MAXPATHLEN)) != nil else {
             return nil
@@ -383,13 +399,51 @@ final class ControllingTerminalGestureReader:
         let resolved = String(cString: name)
         guard !resolved.isEmpty else { return nil }
         let path = "/dev/" + resolved
-        var attributes = stat()
-        guard stat(path, &attributes) == 0,
-              attributes.st_mode & S_IFMT == S_IFCHR,
-              attributes.st_rdev == device else {
-            return nil
-        }
+        guard isCharacterDevice(path, numbered: device) else { return nil }
+        deviceNames.remember(path, forDevice: device)
         return path
+    }
+
+    /// Whether this path is still the character device with that number.
+    nonisolated private static func isCharacterDevice(
+        _ path: String,
+        numbered device: dev_t
+    ) -> Bool {
+        var attributes = stat()
+        return stat(path, &attributes) == 0
+            && attributes.st_mode & S_IFMT == S_IFCHR
+            && attributes.st_rdev == device
+    }
+
+    /// The device names this app has verified, keyed by device number.
+    ///
+    /// Process-wide because the mapping is the system's rather than any one
+    /// reader's, and tiny: one entry per terminal a monitored session has ever
+    /// been attached to. It is emptied rather than aged when it grows past a
+    /// bound no real machine reaches, so a long-running app cannot accumulate
+    /// names for ttys that are gone.
+    nonisolated private static let deviceNames = DeviceNames()
+
+    nonisolated private final class DeviceNames: @unchecked Sendable {
+        /// Far more terminals than a user has open, and small enough that
+        /// starting over costs one `/dev` walk per live session.
+        private static let capacity = 64
+
+        private let lock = NSLock()
+        nonisolated(unsafe) private var paths: [dev_t: String] = [:]
+
+        func path(forDevice device: dev_t) -> String? {
+            lock.lock()
+            defer { lock.unlock() }
+            return paths[device]
+        }
+
+        func remember(_ path: String, forDevice device: dev_t) {
+            lock.lock()
+            defer { lock.unlock() }
+            if paths.count >= Self.capacity { paths.removeAll() }
+            paths[device] = path
+        }
     }
 
     /// The process that spawned this one, or nil when it cannot be read.
