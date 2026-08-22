@@ -98,13 +98,11 @@ private struct OnboardingView: View {
             ProductConnectionRows()
         } footnote: {
             SettingsFootnote(
-                "The switches install the lifecycle definitions Notchline "
-                    + "needs in ~/.codex/hooks.json and ~/.claude/settings.json, "
-                    + "and remove them again when they are off; your own "
-                    + "settings and hooks are untouched. Before each change, "
-                    + "the file is copied beside itself as "
-                    + "hooks.json.notchline-backup or "
-                    + "settings.json.notchline-backup."
+                "The switches install the lifecycle definitions Notchline needs "
+                    + "in ~/.codex/hooks.json and ~/.claude/settings.json and take "
+                    + "them out again when they are off; your own settings and hooks "
+                    + "are left alone. Each file is copied beside itself as a "
+                    + ".notchline-backup file first."
             ) {
                 Button("Recheck") {
                     store.refreshNow()

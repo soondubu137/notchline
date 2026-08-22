@@ -68,11 +68,10 @@ struct AppSettingsView: View {
             }
         } footnote: {
             SettingsFootnote(
-                "Each switch adds only the lifecycle events Notchline needs, and takes "
-                    + "them out again when it is off; your own settings and hooks are left "
-                    + "alone. Before each change to either file, it is copied beside "
-                    + "itself as hooks.json.notchline-backup or "
-                    + "settings.json.notchline-backup."
+                "Each switch adds only the lifecycle events Notchline needs and takes "
+                    + "them out again when it is off; your own settings and hooks are "
+                    + "left alone. Each file is copied beside itself as a "
+                    + ".notchline-backup file first."
             ) {
                 Button("Recheck") {
                     store.refreshNow()
