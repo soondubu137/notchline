@@ -408,7 +408,7 @@ flowchart LR
 | 导航分发 | `AgentNavigationRouter` | 按产品把整行交给它自己的导航器；没有注册导航器的产品报自己的名字失败，而不是被交给表里第一个 | [`CodexDesktopNavigator.swift`](../Notchline/Notchline/CodexDesktopNavigator.swift) |
 | 宿主唤起（Claude Code） | `ClaudeCodeNavigator`、`ProcessAncestryHostResolver`、`AppleEventsTerminalTabFocuser` | 点击时向 `ClaudeCodeMonitorService` 问该会话此刻的 pid（会话已结束就失败，这就是点击前的重新确认），用 `sysctl(KERN_PROC_PID)` 的 `e_ppid` 与 `proc_pidpath` 向上走进程祖先链判定宿主：祖先里有 Claude Desktop 就激活它，否则最近的那个 `.app` 就是宿主终端。终端能报出 tty 的（Terminal.app、iTerm2）用它自己的公开脚本字典选中该标签页，报不出的只激活应用（见 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)） | [`ClaudeCodeNavigator.swift`](../Notchline/Notchline/ClaudeCodeNavigator.swift) |
 | 窗体 | `OverlayPanelController` | NSPanel 生命周期、目标显示器、顶部吸附、尺寸和动画；并持有「此刻该不该在屏幕上」——遮蔽状态**不进 store**，因为面板两侧画的是同一棵视图树，发布它等于为了什么都不改而重算整个叠层（见第 6 节） | [`OverlayPanelController.swift`](../Notchline/Notchline/OverlayPanelController.swift) |
-| 面板该不该在屏幕上 | `OverlayConcealment`、`OverlayConcealmentWatcher` | 回答目标显示器此刻是不是还归用户的桌面：**菜单栏没画**（该屏有窗口全屏、或菜单栏设成自动隐藏）或 **Mission Control 盖住了它**。两条分开，因为信号分开——Mission Control **不隐藏菜单栏**。判据只读窗口列表里的 owner、layer 与 bounds 三个字段（都不受 Screen Recording 权限遮蔽，`kCGWindowName` 才受），纯函数可断言；watcher 只报边沿，且给每次取样发号，让路上被后取样超过的旧读数作废 | [`OverlayConcealment.swift`](../Notchline/Notchline/OverlayConcealment.swift) |
+| 面板该不该在屏幕上 | `OverlayConcealment`、`OverlayConcealmentWatcher` | 回答目标显示器此刻是不是还归用户的桌面，只判一条：**菜单栏没画**（该屏有应用或视频全屏、或菜单栏设成自动隐藏）。Mission Control **不隐藏菜单栏**，因此它自然落在「留在屏幕上」这一侧，这是产品要的（`PRD.md` §9.2.1），窗口列表里那一层 Dock 铺屏窗口存在但不读。判据只读窗口列表里的 owner、layer 与 bounds 三个字段（都不受 Screen Recording 权限遮蔽，`kCGWindowName` 才受），纯函数可断言；watcher 只报边沿，且给每次取样发号，让路上被后取样超过的旧读数作废 | [`OverlayConcealment.swift`](../Notchline/Notchline/OverlayConcealment.swift) |
 | 视图 | `NotchOverlayView` | 只渲染 `MonitorStore`，不解析协议、不读文件；终态行上盖一层只认领次要点击的 `SecondaryClickCatcher`，发出的仍然只是意图（`tech-design.md` §17） | [`NotchOverlayView.swift`](../Notchline/Notchline/NotchOverlayView.swift) |
 | 设置窗口 | `AppSettingsView`、`ProductSettingsCopy`、`MacOSWindowColor` | macOS 26 单面板设置：分组卡片自绘，控件全用原生；`Color / macOS Window` 两模式 token（见 `figma-design.md` §8）。产品行说的那几句话是一个值（`ProductSettingsCopy`）而不是四个 view 上的计算属性——那一行下方的失败报告是本窗口里唯一为报告失败而存在的东西，值可以被断言，`body` 不能（CR-029）。窗口**怎么出现**归 `SettingsWindowPresenter`：每次打开都把窗口居中放到**组件所在的那块屏**上（`MonitorStore.selectedScreen`，按显示器标识符匹配 `NSScreen`；见 `PRD.md` §11），再激活本应用并把窗口排到最前。取组件那块屏而不是有焦点的那块，一是这扇窗改的东西只在刘海里看得见，二是这个答案在排窗过程中不会变——焦点那块屏晚读一步就变成 Settings 自己那块。落点算法是纯函数 `SettingsWindowPlacement.origin`，可断言。**摆放只在窗口看不见时发生**，这是这条路的形状所在：`SettingsWindowTracker` 用一个 `viewDidMoveToWindow` 的 `NSView` 同步交出窗口——`makeNSView` 时还没有窗口，而晚一跳 SwiftUI 已经把窗口排上屏，那一跳就是用户看见的闪（实测：窗口先在上次关掉的那块屏出现，约 50 ms 后跳过来）；presenter 再观察 `isVisible` 的**两个**方向，隐藏那一次才是主力——它把窗口摆到当前该去的那块屏，于是下一次显示的第一帧就已经对了。`⌘,` 走的是 SwiftUI 自己的菜单项、本应用看不见，这条 `isVisible` 观察同时也是它的入口 | [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift) |
 | 常驻动效 | `NotchStatusMatrix`、`SearchlightLabel`、`SessionRowText` | 用 CALayer 承载持续动画，使叠层不必逐帧重渲染（见第 6 节） | [`NotchStatusMatrix.swift`](../Notchline/Notchline/NotchStatusMatrix.swift) |
@@ -471,13 +471,13 @@ flowchart LR
 | `NSScreen` 的 `visibleFrame` / `safeAreaInsets` / `auxiliaryTopLeftArea` | 不变 | 不变 |
 | `NSWorkspace.activeSpaceDidChangeNotification` | 不触发 | 不触发 |
 | Window Server 自己的菜单栏窗口 | **离开在屏列表** | 还在 |
-| Dock 在 dock 层以下、铺满整屏的窗口 | 没有 | **每屏一个** |
+| Dock 在 dock 层以下、铺满整屏的窗口 | 没有 | 每屏一个 |
 
-只有后两行会动，所以判据读窗口列表；而**前四行同时也是「试过哪些订阅」的清单**——边沿触发版本根本不会触发，于是这里只能轮询。这条最后一行也是对需求前提的更正：**Mission Control 并不隐藏菜单栏**，只写「跟着菜单栏」会把最初要修的那个场景漏掉。
+只有后两行会动，所以判据读窗口列表；而**前四行同时也是「试过哪些订阅」的清单**——边沿触发版本根本不会触发，于是这里只能轮询。后两行里也只有菜单栏那一行被读：**Mission Control 并不隐藏菜单栏**，于是「跟着菜单栏」这一条规则把 Mission Control 判成留在屏幕上，而这正是产品要的结果（`PRD.md` §9.2.1）。最后一行留在表里，是因为它是曾经据以隐藏 Mission Control 的那个信号，也是唯一能看见 Mission Control 的信号——将来若要再判它，从这里开始，别再去试上面四行。
 
 它不违反第 7 节，因为**下游不重渲染**：取样在 utility 队列上做，回到主 actor 只做一次比较，相同就丢掉；不同也只是 `orderOut` / `orderFrontRegardless` 一个窗口。store 和任何 SwiftUI 视图都看不见这个节拍。
 
-代价与选择：Release 下一次 `CGWindowListCopyWindowInfo` 屏上 61 个窗口时 723µs，加 `.excludeDesktopElements` 后 583µs（两个判据要读的窗口都还在）。间隔 250ms 是**延迟预算而不是采样率**——它是 Mission Control 开始展开之后面板最多还能留多久，取两个场景里更紧的那个（缩放约 350ms，菜单栏自己的淡出比它慢）。合计 0.1%–0.3% `%cpu`，按累计 CPU 时间差算 0.25%，稳态法与累计法在这里一致。
+代价与选择：Release 下一次 `CGWindowListCopyWindowInfo` 屏上 61 个窗口时 723µs，加 `.excludeDesktopElements` 后 583µs（判据要读的菜单栏窗口还在）。间隔 250ms 是**延迟预算而不是采样率**——它是菜单栏开始离开之后面板最多还能留多久。这个数当初是按 Mission Control 的展开取的（缩放约 350ms，是两个场景里更紧的那个；菜单栏自己的淡出比它慢），如今只剩菜单栏这一条，预算比需要的更紧；不放宽是因为一次取样只要 583µs，省下来也换不到什么。合计 0.1%–0.3% `%cpu`，按累计 CPU 时间差算 0.25%，稳态法与累计法在这里一致。
 
 ### 有限的过渡不算持续动效
 

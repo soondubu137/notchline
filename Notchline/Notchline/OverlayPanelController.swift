@@ -13,14 +13,14 @@ final class OverlayPanelController {
     private var pendingFrameUpdateShouldAnimate: Bool?
     private var hasShownPanel = false
     private let concealmentWatcher: OverlayConcealmentWatcher
-    /// Why the panel is off screen, or nil while it belongs there.
+    /// Whether the panel is off screen because its display's menu bar is.
     ///
     /// Held here rather than on ``MonitorStore`` on purpose. Concealment is not
     /// something the panel *draws* — the view tree is identical either side of
     /// it — so publishing it would re-evaluate the whole overlay to change
     /// nothing, which is the cost `AGENTS.md` §7 exists to keep out. The only
     /// effect is `orderOut`/`orderFrontRegardless` on this window.
-    private var concealment: OverlayConcealmentReason?
+    private var isConcealed = false
 
     init(
         store: MonitorStore,
@@ -198,8 +198,9 @@ final class OverlayPanelController {
             panel.contentView?.layoutSubtreeIfNeeded()
             // A concealed panel still tracks its frame — it has to be in the
             // right place the moment it comes back — but re-ordering it here
-            // would put it back on screen behind Mission Control's back.
-            if hasShownPanel, concealment == nil {
+            // would put it back on screen over the full-screen window that
+            // took the menu bar away.
+            if hasShownPanel, !isConcealed {
                 panel.orderFrontRegardless()
             }
             return
@@ -236,9 +237,9 @@ final class OverlayPanelController {
 
     private func observeConcealment() {
         concealmentWatcher.observe(displayID: store.selectedDisplay?.displayID)
-        concealmentWatcher.start { [weak self] reason in
+        concealmentWatcher.start { [weak self] isConcealed in
             guard let self else { return }
-            self.concealment = reason
+            self.isConcealed = isConcealed
             self.orderPanelToMatchConcealment()
         }
     }
@@ -253,7 +254,7 @@ final class OverlayPanelController {
     private func orderPanelToMatchConcealment() {
         guard hasShownPanel else { return }
 
-        guard concealment == nil else {
+        guard !isConcealed else {
             store.collapse()
             panel.orderOut(nil)
             return

@@ -13,25 +13,14 @@ nonisolated struct ChromeWindow: Equatable, Sendable {
     let bounds: CGRect
 }
 
-/// Why the overlay is off screen, or `nil` when it belongs on screen.
-nonisolated enum OverlayConcealmentReason: Equatable, Sendable {
-    /// The display's menu bar is not drawn: a full-screen window has taken the
-    /// whole display, or the user has the menu bar set to hide automatically.
-    case menuBarHidden
-    /// Mission Control — or one of its relatives, App Exposé and the Spaces
-    /// switcher — has covered the display.
-    case missionControl
-}
-
 /// Whether the overlay should be on a given display right now.
 ///
 /// The overlay sits at `.statusBar`, one level above the menu bar, so the
 /// window server never takes it away: it stayed in the notch over full-screen
-/// video and floated over Mission Control's zoomed-out desktops. The rule the
-/// product wants is "be present exactly where the menu bar is present", and it
-/// has to be enforced here because **nothing publishes it**. Every obvious API
-/// was measured on macOS 26.5 and reports the asking process's own state, not
-/// the system's:
+/// video. The rule the product wants is "be present exactly where the menu bar
+/// is present", and it has to be enforced here because **nothing publishes
+/// it**. Every obvious API was measured on macOS 26.5 and reports the asking
+/// process's own state, not the system's:
 ///
 /// | Signal | Another app full-screen | Mission Control |
 /// | --- | --- | --- |
@@ -40,38 +29,39 @@ nonisolated enum OverlayConcealmentReason: Equatable, Sendable {
 /// | `NSScreen.visibleFrame` / `.safeAreaInsets` / `.auxiliaryTopLeftArea` | unchanged | unchanged |
 /// | `NSWorkspace.activeSpaceDidChangeNotification` | never fired | never fired |
 /// | Window Server's own menu bar window | **leaves the on-screen list** | present |
-/// | Dock's full-display covers below dock level | absent | **appear, one per display** |
+/// | Dock's full-display covers below dock level | absent | appear, one per display |
 ///
-/// The last two rows are the only two that move, which is why this reads the
-/// window list. The right-hand column is also the correction to the premise:
-/// **Mission Control does not hide the menu bar.** It is drawn over the zoomed
-/// desktops exactly as usual, so a rule written only as "follow the menu bar"
-/// leaves the overlay floating over Mission Control — the case that prompted
-/// the change. It gets its own clause.
+/// Only the last two rows move, which is why this reads the window list; of the
+/// two, only the menu bar row is consulted. The right-hand column says why the
+/// last row is not: **Mission Control does not hide the menu bar.** It is drawn
+/// over the zoomed-out desktops exactly as usual, and the product wants the
+/// overlay drawn there with it — Mission Control is a place the user goes to
+/// look at what is running, which is what this overlay is for. So this is one
+/// clause, not two: the overlay follows the menu bar, and nothing else.
 nonisolated enum OverlayConcealment {
     /// The window server's own process, as it names itself in the window list.
     static let windowServerOwner = "Window Server"
-    static let dockOwner = "Dock"
-    /// `24` and `20`. The menu bar window sits at the level named for it; the
-    /// Dock's own backing window sits at the Dock's.
+    /// `24`. The menu bar window sits at the level named for it.
     static let menuBarLayer = Int(CGWindowLevelForKey(.mainMenuWindow))
-    static let dockLayer = Int(CGWindowLevelForKey(.dockWindow))
     /// Point tolerance when matching a window against a display.
     ///
     /// These rects come from the same window server that placed the display, so
     /// they agree exactly; this only absorbs a fractional scale conversion.
     static let matchTolerance: CGFloat = 1
 
-    static func reason(
+    /// `true` when the display's menu bar is not drawn: a full-screen window
+    /// has taken the whole display, or the user has the menu bar set to hide
+    /// automatically and it is currently away.
+    static func isConcealed(
         onDisplay displayBounds: CGRect,
         windows: [ChromeWindow]
-    ) -> OverlayConcealmentReason? {
+    ) -> Bool {
         // Fail open. A display with no usable bounds is one this cannot judge,
         // and of the two ways to be wrong — an overlay that lingers over a
         // film, and an overlay that is simply gone with no way to ask for it
         // back — only the second loses the product.
         guard displayBounds.width >= 1, displayBounds.height >= 1 else {
-            return nil
+            return false
         }
 
         let hasMenuBar = windows.contains { window in
@@ -85,29 +75,7 @@ nonisolated enum OverlayConcealment {
                     <= matchTolerance
         }
 
-        guard hasMenuBar else { return .menuBarHidden }
-
-        // Mission Control lays one Dock-owned window over each display, below
-        // the Dock's own level (measured at 18, which has no name in
-        // `CGWindowLevelKey`). The bound is written as "under the Dock" rather
-        // than as that number because the Dock's *own* window is the one thing
-        // that has to be excluded here: it is also Dock-owned and also the size
-        // of its display, and it is there the whole time.
-        let isCovered = windows.contains { window in
-            window.owner == dockOwner
-                && window.layer > 0
-                && window.layer < dockLayer
-                && matches(
-                    origin: window.bounds,
-                    displayBounds: displayBounds
-                )
-                && abs(window.bounds.width - displayBounds.width)
-                    <= matchTolerance
-                && abs(window.bounds.height - displayBounds.height)
-                    <= matchTolerance
-        }
-
-        return isCovered ? .missionControl : nil
+        return !hasMenuBar
     }
 
     private static func matches(
@@ -121,8 +89,8 @@ nonisolated enum OverlayConcealment {
     /// The on-screen windows, as this process can see them.
     ///
     /// `.excludeDesktopElements` drops the wallpaper and backstop windows,
-    /// which neither clause consults; it costs 583µs against 723µs for the
-    /// unfiltered list, measured in Release with 61 windows on screen.
+    /// which the menu bar clause does not consult; it costs 583µs against 723µs
+    /// for the unfiltered list, measured in Release with 61 windows on screen.
     ///
     /// This reads only `kCGWindowOwnerName`, `kCGWindowLayer` and
     /// `kCGWindowBounds`. None of the three is redacted without Screen
@@ -159,8 +127,9 @@ nonisolated enum OverlayConcealment {
 ///
 /// **It polls because there is nothing to subscribe to.** The table on
 /// ``OverlayConcealment`` is also a list of the notifications that were tried:
-/// no workspace, distributed or application notification fires for either
-/// transition, so an edge-triggered version of this would simply never fire.
+/// no workspace, distributed or application notification fires when another
+/// app takes the display full-screen, so an edge-triggered version of this
+/// would simply never fire.
 ///
 /// The cost is one `CGWindowListCopyWindowInfo` per interval, on a utility
 /// queue, and **nothing downstream re-renders**: the report is compared against
@@ -172,10 +141,12 @@ final class OverlayConcealmentWatcher {
     /// 250 ms.
     ///
     /// This is a latency budget, not a sampling rate: it is how long the
-    /// overlay may still be on screen after Mission Control starts to open —
-    /// the tighter of the two cases, since its zoom-out runs about 350 ms and
-    /// the menu bar's own fade is slower than that. At 583µs a sample it costs
-    /// 0.23% of one core, measured in Release.
+    /// overlay may still be on screen after the menu bar starts to go. It was
+    /// picked against Mission Control's 350 ms zoom-out, the tighter of the two
+    /// cases when Mission Control was still judged here; the menu bar's own
+    /// fade is slower than that, so the budget is now looser than it needs to
+    /// be. It is kept because a sample costs 583µs — 0.23% of one core,
+    /// measured in Release — and there is nothing to buy by spending less.
     nonisolated static let defaultInterval: TimeInterval = 0.25
 
     private let interval: TimeInterval
@@ -188,9 +159,9 @@ final class OverlayConcealmentWatcher {
 
     private var timer: DispatchSourceTimer?
     private var observedDisplayID: CGDirectDisplayID?
-    private var lastReported: OverlayConcealmentReason?
+    private var lastReported = false
     private var hasReported = false
-    private var onChange: ((OverlayConcealmentReason?) -> Void)?
+    private var onChange: ((Bool) -> Void)?
 
     /// Sequence numbers handed out when a sample is *taken*, so that a sample
     /// which was overtaken on its way to the main actor is discarded instead of
@@ -206,7 +177,7 @@ final class OverlayConcealmentWatcher {
     private nonisolated(unsafe) var issuedTickets = 0
     private var lastConsumedTicket = 0
 
-    private(set) var reason: OverlayConcealmentReason?
+    private(set) var isConcealed = false
 
     init(
         interval: TimeInterval = OverlayConcealmentWatcher.defaultInterval,
@@ -227,14 +198,15 @@ final class OverlayConcealmentWatcher {
 
     /// Which display the overlay is on. A display this cannot identify — the
     /// fallback path in ``DisplayOption/identifier(for:)`` — reports revealed,
-    /// per the fail-open rule on ``OverlayConcealment/reason(onDisplay:windows:)``.
+    /// per the fail-open rule on
+    /// ``OverlayConcealment/isConcealed(onDisplay:windows:)``.
     func observe(displayID: CGDirectDisplayID?) {
         guard observedDisplayID != displayID else { return }
         observedDisplayID = displayID
         sampleNow()
     }
 
-    func start(onChange: @escaping (OverlayConcealmentReason?) -> Void) {
+    func start(onChange: @escaping (Bool) -> Void) {
         guard timer == nil else { return }
         self.onChange = onChange
         // A handler that has never been told anything is not "unchanged": the
@@ -294,17 +266,17 @@ final class OverlayConcealmentWatcher {
         guard ticket > lastConsumedTicket else { return }
         lastConsumedTicket = ticket
 
-        let reason = observedDisplayID.flatMap { displayID in
-            OverlayConcealment.reason(
+        let isConcealed = observedDisplayID.map { displayID in
+            OverlayConcealment.isConcealed(
                 onDisplay: boundsOfDisplay(displayID),
                 windows: windows
             )
-        }
+        } ?? false
 
-        guard !hasReported || reason != lastReported else { return }
+        guard !hasReported || isConcealed != lastReported else { return }
         hasReported = true
-        lastReported = reason
-        self.reason = reason
-        onChange?(reason)
+        lastReported = isConcealed
+        self.isConcealed = isConcealed
+        onChange?(isConcealed)
     }
 }

@@ -8002,6 +8002,13 @@ for line in sys.stdin:
     /// origin cannot pass by matching only on size.
     private static let externalDisplay = CGRect(x: 1_800, y: -721, width: 3_360, height: 1_890)
 
+    /// The Dock's own process and window level, as the window list reports
+    /// them. Neither is a constant on ``OverlayConcealment`` any more: the
+    /// predicate reads only the menu bar window, and these exist here to build
+    /// the Dock windows it has to keep ignoring.
+    private static let dockOwner = "Dock"
+    private static let dockLayer = Int(CGWindowLevelForKey(.dockWindow))
+
     private static func menuBar(of display: CGRect) -> ChromeWindow {
         ChromeWindow(
             owner: OverlayConcealment.windowServerOwner,
@@ -8019,8 +8026,8 @@ for line in sys.stdin:
     /// size of the display it is on -- present the entire time.
     private static func dockBacking(of display: CGRect) -> ChromeWindow {
         ChromeWindow(
-            owner: OverlayConcealment.dockOwner,
-            layer: OverlayConcealment.dockLayer,
+            owner: Self.dockOwner,
+            layer: Self.dockLayer,
             bounds: display
         )
     }
@@ -8030,17 +8037,16 @@ for line in sys.stdin:
     /// no name for.
     private static func missionControlCover(of display: CGRect) -> ChromeWindow {
         ChromeWindow(
-            owner: OverlayConcealment.dockOwner,
-            layer: OverlayConcealment.dockLayer - 2,
+            owner: Self.dockOwner,
+            layer: Self.dockLayer - 2,
             bounds: display
         )
     }
 
     /// The overlay is present exactly where the menu bar is present.
     ///
-    /// The two clauses are separate because the signals are: a full-screen
-    /// window takes the menu bar window off the list, and Mission Control does
-    /// not -- it leaves the menu bar drawn and covers the display instead.
+    /// One clause, one signal: a full-screen window takes the menu bar window
+    /// off the on-screen list, and that is the only thing asked.
     @Test
     func overlayFollowsTheMenuBarOfItsOwnDisplay() {
         let builtIn = Self.builtInDisplay
@@ -8052,10 +8058,10 @@ for line in sys.stdin:
         ]
 
         #expect(
-            OverlayConcealment.reason(onDisplay: builtIn, windows: resting) == nil
+            !OverlayConcealment.isConcealed(onDisplay: builtIn, windows: resting)
         )
         #expect(
-            OverlayConcealment.reason(onDisplay: external, windows: resting) == nil
+            !OverlayConcealment.isConcealed(onDisplay: external, windows: resting)
         )
 
         // A film full-screen on the external display takes that display's menu
@@ -8063,75 +8069,83 @@ for line in sys.stdin:
         // easy reading of "the menu bar is hidden" and it is the wrong one.
         let externalFullScreen = resting.filter { $0 != Self.menuBar(of: external) }
         #expect(
-            OverlayConcealment.reason(
+            OverlayConcealment.isConcealed(
                 onDisplay: external,
                 windows: externalFullScreen
-            ) == .menuBarHidden
+            )
         )
         #expect(
-            OverlayConcealment.reason(
+            !OverlayConcealment.isConcealed(
                 onDisplay: builtIn,
                 windows: externalFullScreen
-            ) == nil
-        )
-
-        // Mission Control: the menu bar is still there, and the overlay still
-        // has to go.
-        let missionControl = resting + [
-            Self.missionControlCover(of: builtIn),
-            Self.missionControlCover(of: external)
-        ]
-        #expect(
-            OverlayConcealment.reason(
-                onDisplay: builtIn,
-                windows: missionControl
-            ) == .missionControl
+            )
         )
     }
 
-    /// The two windows that must not be mistaken for the ones that matter.
+    /// Mission Control leaves the overlay alone.
     ///
-    /// The Dock's own window is Dock-owned and display-sized and never goes
-    /// away, so a cover test written only as "a Dock window over this display"
-    /// hides the overlay permanently. A menu bar belonging to a neighbouring
-    /// display is the same trap from the other side.
+    /// It is the one covered case that does *not* conceal, and it is a case the
+    /// window list can see: the Dock lays a display-sized cover over every
+    /// display below its own level. The predicate deliberately does not look at
+    /// it -- Mission Control is where the user goes to see what is running,
+    /// which is what this overlay says -- so this pins that the menu bar, still
+    /// drawn under the cover, is the only thing consulted.
     @Test
-    func concealmentIgnoresTheDockAndOtherDisplaysMenuBars() {
+    func missionControlLeavesTheOverlayOnScreen() {
+        let builtIn = Self.builtInDisplay
+        let external = Self.externalDisplay
+        let missionControl = [
+            Self.menuBar(of: builtIn),
+            Self.menuBar(of: external),
+            Self.dockBacking(of: builtIn),
+            Self.missionControlCover(of: builtIn),
+            Self.missionControlCover(of: external)
+        ]
+
+        #expect(
+            !OverlayConcealment.isConcealed(
+                onDisplay: builtIn,
+                windows: missionControl
+            )
+        )
+        #expect(
+            !OverlayConcealment.isConcealed(
+                onDisplay: external,
+                windows: missionControl
+            )
+        )
+
+        // Mission Control opened from a full-screen app is still a display
+        // whose menu bar is gone, and the cover changes nothing about that.
+        #expect(
+            OverlayConcealment.isConcealed(
+                onDisplay: external,
+                windows: missionControl.filter { $0 != Self.menuBar(of: external) }
+            )
+        )
+    }
+
+    /// The menu bar of a neighbouring display must not be mistaken for this
+    /// display's own -- the same trap as hiding every display for one film,
+    /// seen from the other side.
+    @Test
+    func concealmentIgnoresOtherDisplaysMenuBars() {
         let builtIn = Self.builtInDisplay
         let external = Self.externalDisplay
 
         #expect(
-            OverlayConcealment.reason(
+            !OverlayConcealment.isConcealed(
                 onDisplay: builtIn,
                 windows: [Self.menuBar(of: builtIn), Self.dockBacking(of: builtIn)]
-            ) == nil
+            )
         )
 
         // Only the neighbour's menu bar is listed.
         #expect(
-            OverlayConcealment.reason(
+            OverlayConcealment.isConcealed(
                 onDisplay: builtIn,
                 windows: [Self.menuBar(of: external)]
-            ) == .menuBarHidden
-        )
-
-        // A Dock window that covers only part of the display -- the Dock itself
-        // on a display where it is not full height -- is not Mission Control.
-        let partialCover = ChromeWindow(
-            owner: OverlayConcealment.dockOwner,
-            layer: OverlayConcealment.dockLayer - 2,
-            bounds: CGRect(
-                x: builtIn.minX,
-                y: builtIn.minY,
-                width: builtIn.width,
-                height: builtIn.height / 2
             )
-        )
-        #expect(
-            OverlayConcealment.reason(
-                onDisplay: builtIn,
-                windows: [Self.menuBar(of: builtIn), partialCover]
-            ) == nil
         )
     }
 
@@ -8144,13 +8158,13 @@ for line in sys.stdin:
     @Test
     func anUnplaceableDisplayLeavesTheOverlayAlone() {
         #expect(
-            OverlayConcealment.reason(onDisplay: .zero, windows: []) == nil
+            !OverlayConcealment.isConcealed(onDisplay: .zero, windows: [])
         )
         #expect(
-            OverlayConcealment.reason(
+            !OverlayConcealment.isConcealed(
                 onDisplay: CGRect(x: 0, y: 0, width: 0, height: 1_169),
                 windows: []
-            ) == nil
+            )
         )
     }
 
@@ -8176,28 +8190,30 @@ for line in sys.stdin:
             boundsOfDisplay: { id in id == displayID ? display : .zero }
         )
 
-        var reported: [OverlayConcealmentReason?] = []
+        var reported: [Bool] = []
         watcher.observe(displayID: displayID)
         watcher.start { reported.append($0) }
-        #expect(reported == [nil])
+        #expect(reported == [false])
 
         // Three samples, one state.
         watcher.sampleNow()
         watcher.sampleNow()
-        #expect(reported == [nil])
+        #expect(reported == [false])
 
         listed = []
         watcher.sampleNow()
         watcher.sampleNow()
-        #expect(reported == [nil, .menuBarHidden])
-
-        listed = [Self.menuBar(of: display), Self.missionControlCover(of: display)]
-        watcher.sampleNow()
-        #expect(reported == [nil, .menuBarHidden, .missionControl])
+        #expect(reported == [false, true])
 
         listed = [Self.menuBar(of: display)]
         watcher.sampleNow()
-        #expect(reported == [nil, .menuBarHidden, .missionControl, nil])
+        #expect(reported == [false, true, false])
+
+        // Mission Control opening is not an edge, so it is not a report and
+        // not a window order.
+        listed = [Self.menuBar(of: display), Self.missionControlCover(of: display)]
+        watcher.sampleNow()
+        #expect(reported == [false, true, false])
 
         watcher.stop()
     }
@@ -8221,10 +8237,10 @@ for line in sys.stdin:
             boundsOfDisplay: { _ in display }
         )
 
-        var reported: [OverlayConcealmentReason?] = []
+        var reported: [Bool] = []
         watcher.observe(displayID: displayID)
         watcher.start { reported.append($0) }
-        #expect(reported == [nil])
+        #expect(reported == [false])
 
         // A reading taken before the menu bar went away, delivered after one
         // taken later: the stale answer must not be the last word.
@@ -8233,11 +8249,11 @@ for line in sys.stdin:
 
         listed = []
         watcher.sampleNow()
-        #expect(reported == [nil, .menuBarHidden])
+        #expect(reported == [false, true])
 
         watcher.consume(staleWindows, ticket: stale)
-        #expect(reported == [nil, .menuBarHidden])
-        #expect(watcher.reason == .menuBarHidden)
+        #expect(reported == [false, true])
+        #expect(watcher.isConcealed)
 
         watcher.stop()
     }
@@ -8252,13 +8268,13 @@ for line in sys.stdin:
             boundsOfDisplay: { _ in Self.builtInDisplay }
         )
 
-        var reported: [OverlayConcealmentReason?] = []
+        var reported: [Bool] = []
         watcher.observe(displayID: nil)
         watcher.start { reported.append($0) }
         watcher.sampleNow()
 
-        #expect(reported == [nil])
-        #expect(watcher.reason == nil)
+        #expect(reported == [false])
+        #expect(!watcher.isConcealed)
         watcher.stop()
     }
 
