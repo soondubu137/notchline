@@ -382,6 +382,20 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
     }
 
     func snapshot() async -> ClaudeCodeReadStateSnapshot {
+        // The whole pass is pooled, exactly as the token counter's is and for
+        // the same reason. Listing the account folders bridges an `NSURL` per
+        // entry, `resourceValues` and `attributesOfItem` bridge a dictionary
+        // apiece for every record that has changed since the last reading, and
+        // `JSONDecoder` builds one more; all of it is autoreleased, and none of
+        // it is drained inside a synchronous actor method.
+        //
+        // The exposure is what makes it worth doing here. The token counter
+        // runs once a minute; this runs once per refresh, which is once a
+        // second for as long as any finished row is listed (CR-Fable-041).
+        autoreleasepool { currentSnapshot() }
+    }
+
+    private func currentSnapshot() -> ClaudeCodeReadStateSnapshot {
         guard let accountDirectories = accountDirectories() else {
             // No tree at all. That is the ordinary state for a user who runs
             // Claude Code only from a terminal, so it carries no diagnostic:

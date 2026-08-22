@@ -867,6 +867,31 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         boundaryByRowID: [String: Date],
         processIdentifierByThreadID: [String: Int32]
     ) async -> (rows: [MonitoredSession], diagnostic: String?) {
+        // Nothing below can withhold a row whose Turn is not over, so none of
+        // it runs unless one is: ``TerminalUnreadMembershipGate`` shows every
+        // other row outright and drops its entry. A list with no finished row
+        // in it was still paying for a full read of Claude Desktop's account
+        // tree, its log, the workspace's activation record and a `stat` per
+        // row -- once per refresh, which is once a second for as long as any
+        // finished row anywhere is listed -- to arrive at "show all of them"
+        // (CR-Fable-041).
+        //
+        // The bookkeeping the skipped pass would have done is done here
+        // instead, and both halves collapse to emptying: every listed row is
+        // unfinished, so each would have dropped its on-screen membership and
+        // its gate entry, and the retain that follows would have dropped
+        // whatever was left over from rows no longer listed.
+        //
+        // The diagnostic goes with the reading that produced it. It says
+        // finished rows have been kept to be safe, and there are none to keep.
+        guard rows.contains(where: {
+            TerminalUnreadMembershipGate.isTerminal($0.status)
+        }) else {
+            sessionsSeenOnScreenSinceTheirTurnEnded.removeAll()
+            terminalReadMembershipGate.reset()
+            return (rows, nil)
+        }
+
         let readState = await readState.snapshot()
         let activatedAt = await activations.lastActivation()
         let desktopIsInFrontOfTheUser = await reading.isInFrontOfTheUser()

@@ -609,6 +609,28 @@ Release 实测（`ENABLE_TESTABILITY=YES`，同一台机器，300 次采样取�
 
 两处代价写下来。其一，这条路径现在真的压在 `~/.claude/sessions` 的目录边沿上，而不是拿它当延迟优化——watcher 静默失效时，一个开着但一次提示都没提交过的会话不会点亮刘海上的标记，要等它第一次提交（那条 hook 事件会把列表作废）。其二，额度读数不在此列：`claude -p "/usage"` 仍然每 5 分钟跑一次（约 0.9 s），那是另一条命令、另一个理由，与本条无关。
 
+### 稳态里另一遍白读：没人会用的已读读数（CR-Fable-041）
+
+Claude Desktop 的已读读数（`ClaudeCodeDesktopReadStateRepository.snapshot()`）**只可能改变终态行的去留**——`TerminalUnreadMembershipGate` 对非终态行一律直接放行并丢掉条目。而 `rowsStillWorthShowing` 在看 `rows` 之前就先取它，于是一份全是 Running 行的列表，每次刷新照样读一遍整棵账号树、Desktop 的焦点日志、激活记录和每行一次的终端 `stat`，只为得到「全都显示」。刷新在有终态行时是 1 Hz（那是复查节拍），CR-Fable-036 那种被 `tmux` 会话钉住的情况下会一直是。
+
+Release 实测（`ENABLE_TESTABILITY=YES`，同一台机器，合成账号树，稳态法）：
+
+| 记录数 | 全命中缓存的一遍 | 冷读（每份都打开）一遍 |
+| --- | --- | --- |
+| 41（本机量级） | 0.28 ms | 3.2–4.1 ms |
+| 512（上限） | 2.40 ms | 39–41 ms |
+
+这一遍现在整体包在 `autoreleasepool` 里，和 `ClaudeCodeTokenCounter.todayTokens()` 一样。**稳态下量不出差别**——目录名与三个数字改由 `getattrlistbulk` 一次取回之后（`tech-design.md` §1.5 第 3 条），命中缓存的一遍不再逐份 `attributesOfItem`，几乎不产生桥接对象；差别全在**打开了记录的那一遍**：
+
+| 场景 | 未包 pool 的驻留增长 | 包了 pool |
+| --- | --- | --- |
+| 512 份冷读一遍 | +176–192 KB | 0 KB |
+| 41 份树、每遍改写 8 份、跑 200 遍 | +288 KB | +16 KB |
+
+时间上两者同价（0.278 对 0.278 ms；2.40 对 2.40 ms），所以 pool 是白拿的。**真正省下代价的是另一半**：没有终态行时那一整遍不再跑，那也是列表最常见的样子。
+
+一句写在别处会走样的账：跳过的那一次仍然要把屏幕成员关系与 gate 条目清空，因为原来的那一遍对这样一份列表正是把它们逐行清掉的；判据取自 `TerminalUnreadMembershipGate.isTerminal` 而不是就地再写一次 `== .completed`，免得 gate 将来放宽定义时这里悄悄漏掉一种。
+
 ## 7. 保持 clean and neat 的架构约束
 
 1. **只有一个编排中心**：跨数据源的决策集中在 `LiveCodexMonitorService`；UI、文件适配器和 transport 不互相拼状态。

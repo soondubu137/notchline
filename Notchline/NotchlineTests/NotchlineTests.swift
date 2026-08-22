@@ -10497,6 +10497,41 @@ for line in sys.stdin:
         #expect(regained.sessions.count == 1)
     }
 
+    /// The account tree is read only when a row could be decided by it.
+    ///
+    /// Every refresh used to walk Claude Desktop's whole tree -- every org,
+    /// every account, every `local_*.json` -- read its focus log, its
+    /// activation record and a `stat` per row, before it looked at what was
+    /// listed. None of that can withhold a row whose Turn is still running:
+    /// the gate shows those outright. So a list of running rows paid for the
+    /// full reading to arrive at "show all of them", once a second for as long
+    /// as any finished row anywhere kept the refresh at 1 Hz (CR-Fable-041).
+    @Test @MainActor
+    func theClaudeReadStateIsNotReadWhileNoRowHasFinished() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+
+        let running = await harness.service.fetchSnapshot()
+        #expect(try #require(running.sessions.first).status == .running)
+        #expect(harness.readStateReadings == 0)
+
+        // Still nothing to decide, however many times it is asked.
+        _ = await harness.service.fetchSnapshot()
+        #expect(harness.readStateReadings == 0)
+
+        // The Turn ends, and now the reading is the thing that says whether the
+        // row stays.
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 101)
+        let finished = await harness.service.fetchSnapshot()
+        #expect(try #require(finished.sessions.first).status == .completed)
+        #expect(harness.readStateReadings > 0)
+    }
+
     /// Reading the answer in Claude Desktop takes the row off the notch.
     ///
     /// The Codex half of this has always worked, off Desktop's blue dot. Claude
@@ -16575,6 +16610,9 @@ private final class ClaudeCodeHarness {
     /// longer exists.
     let repository: HookEventRepository
     private let listing = StubSessionListing()
+    /// The read-state adapter, wrapped so a test can see whether the service
+    /// asked it anything at all.
+    private let readState: CountingClaudeReadState
     private let activationStub = StubDesktopActivation()
     private let readingStub = StubDesktopReading()
     private let terminalStub = StubControllingTerminalGestures()
@@ -16641,6 +16679,10 @@ private final class ClaudeCodeHarness {
             hostCanEverBeInFrontOfTheUser: hostCanEverBeInFront
         )
     }
+
+    /// How many readings of Claude Desktop's account tree this harness's
+    /// service has asked for.
+    var readStateReadings: Int { readState.readings }
 
     /// When Claude Desktop last came to the front, as this harness's service
     /// sees it. `nil` is the state a freshly launched app is in.
@@ -16754,6 +16796,15 @@ private final class ClaudeCodeHarness {
             agent: .claudeCode
         )
         setup = ClaudeCodeHookSetup(paths: paths)
+        readState = CountingClaudeReadState(
+            wrapping: ClaudeCodeDesktopReadStateRepository(
+                stateDirectoryURL: root.appendingPathComponent(
+                    "claude-code-sessions",
+                    isDirectory: true
+                ),
+                changeDebounceInterval: 0.01
+            )
+        )
         let store = HookEventRepository(
             paths: paths,
             vocabulary: ClaudeCodeHookVocabulary()
@@ -16781,13 +16832,7 @@ private final class ClaudeCodeHarness {
             // for the same reason the usage reader is: the default one reads
             // the machine's actual Claude Desktop state, so a test would be
             // answering with whatever the developer happens to have open.
-            readState: ClaudeCodeDesktopReadStateRepository(
-                stateDirectoryURL: root.appendingPathComponent(
-                    "claude-code-sessions",
-                    isDirectory: true
-                ),
-                changeDebounceInterval: 0.01
-            ),
+            readState: readState,
             activations: activationStub,
             // Injected for the same reason as the two above: the real one reads
             // whether Claude Desktop is in front on the developer's machine, so
@@ -17113,6 +17158,29 @@ private final class StubScreenAvailability:
         lock.unlock()
         continuations.forEach { $0.yield(()) }
     }
+}
+
+/// The real read-state adapter, counting what is asked of it.
+///
+/// A reading that was skipped and one that ran and changed nothing produce
+/// exactly the same rows, so the count is the only thing that can tell them
+/// apart -- which is what ``theClaudeReadStateIsNotReadWhileNoRowHasFinished``
+/// is about.
+private final class CountingClaudeReadState: ClaudeCodeReadStateProviding,
+                                             @unchecked Sendable {
+    private let wrapped: ClaudeCodeDesktopReadStateRepository
+    var readings = 0
+
+    init(wrapping wrapped: ClaudeCodeDesktopReadStateRepository) {
+        self.wrapped = wrapped
+    }
+
+    func snapshot() async -> ClaudeCodeReadStateSnapshot {
+        readings += 1
+        return await wrapped.snapshot()
+    }
+
+    nonisolated func changeEvents() -> AsyncStream<Void> { wrapped.changeEvents() }
 }
 
 private final class StubDesktopReading: DesktopReadingReporting, @unchecked Sendable {

@@ -246,7 +246,14 @@ struct TerminalUnreadMembershipGate: Sendable {
         entries.removeAll()
     }
 
-    nonisolated private static func isTerminal(_ status: SessionStatus) -> Bool {
+    /// Whether this gate has anything to say about a row in this status.
+    ///
+    /// Internal because a caller that reads nothing else has a reason to ask:
+    /// assembling the read state a verdict needs is expensive, and a list with
+    /// no such row in it cannot be changed by any of it. One definition, so
+    /// that widening it here cannot leave that caller skipping work it now
+    /// needs.
+    nonisolated static func isTerminal(_ status: SessionStatus) -> Bool {
         status == .completed
     }
 }
