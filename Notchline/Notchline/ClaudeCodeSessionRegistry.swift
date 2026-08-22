@@ -205,6 +205,17 @@ enum ClaudeExecutableLocator {
 /// returned -- the quota froze at its last value, the staleness ceiling never
 /// got to fire because nothing ever completed, and only relaunching the app
 /// recovered it.
+///
+/// **The deadline is therefore on the read, not on the child** (CR-Fable-038).
+/// Killing the child does not end `readToEnd`, because EOF is not the child's
+/// to give: it arrives when the *last* copy of the write end closes, and
+/// anything the child started that inherited its stdout holds one. A deadline
+/// that stops at the child left the original symptom exactly where it was for
+/// that case, and left it worse -- the session list single-flights its read,
+/// so one orphan wedged every later caller in *both* products behind a read
+/// that was never going to finish. Reading now stops at EOF, or a
+/// ``drainGrace`` after the child is gone, or at a ``readGrace`` past the
+/// child's own deadline, whichever comes first.
 enum ClaudeCommand {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
@@ -220,6 +231,34 @@ enum ClaudeCommand {
 
     /// How long after `SIGTERM` to stop being polite.
     private static let killGrace: TimeInterval = 2
+
+    /// How long stdout is still read after the child itself has gone.
+    ///
+    /// Everything the child wrote is already in the pipe by the time it exits,
+    /// so this is a margin for reading that out rather than a wait for more.
+    /// Whoever is still holding the write end afterwards is not the process
+    /// this app asked a question of, and waiting for them to close it is
+    /// waiting for nothing -- for ever, in the case this exists for, and for
+    /// the whole of `timeout` even once ``readGrace`` bounds it, which at ten
+    /// and thirty seconds is long enough on its own to make the product look
+    /// frozen.
+    private static let drainGrace: TimeInterval = 0.25
+
+    /// How long past the child's own deadline stdout is still read.
+    ///
+    /// Only ever reached when the two rules above have both failed to end the
+    /// read: the child is signalled at its deadline and killed a ``killGrace``
+    /// later, and a dead child closes the window above. What is left is a
+    /// child that outlives `SIGKILL` or a death this process is never told
+    /// about -- neither of which is a thing to have no bound for, since the
+    /// bound is the whole point of the exercise.
+    private static let readGrace: TimeInterval = killGrace + 1
+
+    /// The longest `poll` may sleep while the child is still running.
+    ///
+    /// Purely so that the child going away is noticed promptly. The pipe
+    /// closing wakes `poll` on its own and needs no slicing.
+    private static let pollSlice: Int32 = 250
 
     /// How long a finished child's pid is still remembered as this app's own.
     ///
@@ -283,9 +322,11 @@ enum ClaudeCommand {
     /// - Parameters:
     ///   - timeout: How long the child may take before it is killed. A killed
     ///     child reports failure, which is a thing every caller here already
-    ///     knows how to degrade to.
-    ///   - executable: Overridden only by the test that has to watch a command
-    ///     outstay its deadline, which needs one that reliably does.
+    ///     knows how to degrade to. Reading its stdout is bounded separately
+    ///     and can end sooner -- see ``drain(_:of:until:)``.
+    ///   - executable: Overridden only by the tests that have to watch a
+    ///     command outstay a deadline or leave its stdout open behind it,
+    ///     which need ones that reliably do.
     static func run(
         _ arguments: [String],
         in directory: URL? = nil,
@@ -369,14 +410,109 @@ enum ClaudeCommand {
         queue.asyncAfter(deadline: .now() + timeout, execute: expire)
         defer { expire.cancel() }
 
-        // Pooled: the `Data` off the pipe is autoreleased, and on this queue
-        // nothing would ever drain it.
-        let data = autoreleasepool {
-            try? output.fileHandleForReading.readToEnd()
+        let (data, outcome) = drain(
+            output.fileHandleForReading,
+            of: process,
+            until: .now() + timeout + readGrace
+        )
+        switch outcome {
+        case .endOfFile:
+            break
+        case .outlivedByPipe:
+            // Not a failure. The child answered and exited; something it
+            // started is holding the pipe it no longer needs. Whether the
+            // answer is usable is the parser's question, exactly as it is
+            // when the pipe closes tidily.
+            log.error("claude \(arguments.first ?? "") left its stdout open behind it")
+        case .deadline:
+            log.error("claude \(arguments.first ?? "") outlived its read deadline; abandoning it")
+            // `expire` runs on this same queue and may not have got there.
+            // Nothing below this line is bounded while the child is alive.
+            let pid = process.processIdentifier
+            if process.isRunning, pid > 0 { kill(pid, SIGKILL) }
         }
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         return data
+    }
+
+    /// Why a read of the child's stdout stopped.
+    private enum ReadOutcome {
+        /// Every copy of the write end is closed, so the answer is complete.
+        case endOfFile
+        /// The child is gone and the pipe is not: something it started
+        /// inherited stdout and is still holding it. What the child wrote is
+        /// already here.
+        case outlivedByPipe
+        /// Neither the child nor the pipe finished in time.
+        case deadline
+    }
+
+    /// Reads the child's stdout, under a deadline of its own.
+    ///
+    /// `FileHandle.readToEnd()` cannot be given one, and the thing it waits
+    /// for is not the child -- see this type's own documentation, and
+    /// ``drainGrace`` and ``readGrace`` for the two ways out of here that are
+    /// not EOF.
+    ///
+    /// Read straight off the descriptor into one reused buffer, which is also
+    /// why the `autoreleasepool` this used to need has gone: nothing on this
+    /// path hands back an autoreleased `Data` any more, for the same reason
+    /// ``ClaudeCodeTokenCounter`` reads its chunks this way.
+    private static func drain(
+        _ handle: FileHandle,
+        of process: Process,
+        until deadline: DispatchTime
+    ) -> (data: Data, outcome: ReadOutcome) {
+        let descriptor = handle.fileDescriptor
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        // Armed the first time the child is seen to have gone, and pushed back
+        // by anything that arrives after that.
+        var quiet: DispatchTime?
+
+        while true {
+            if quiet == nil, !process.isRunning { quiet = .now() + drainGrace }
+            let now = DispatchTime.now()
+            if now >= deadline { return (data, .deadline) }
+            if let quiet, now >= quiet { return (data, .outlivedByPipe) }
+
+            // Sliced while the child is alive so its exit is noticed; once it
+            // is gone there is nothing left to notice but bytes, and `poll`
+            // reports those itself.
+            let stop = min(quiet ?? deadline, deadline)
+            var waiting = Int32(
+                clamping: (stop.uptimeNanoseconds - now.uptimeNanoseconds) / 1_000_000 + 1
+            )
+            if quiet == nil { waiting = min(waiting, pollSlice) }
+
+            var watched = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&watched, 1, waiting)
+            if ready == 0 { continue }
+            if ready < 0 {
+                if errno == EINTR { continue }
+                // A descriptor this app opened itself does not fail `poll` for
+                // anything a retry would mend, so what is in hand is the
+                // answer -- and the child's exit status still has to agree
+                // before any caller is given it.
+                return (data, .endOfFile)
+            }
+
+            let count = buffer.withUnsafeMutableBytes {
+                read(descriptor, $0.baseAddress, $0.count)
+            }
+            if count > 0 {
+                data.append(contentsOf: buffer[..<count])
+                // A child that filled the pipe before exiting is read out
+                // however many passes that takes; ``readGrace`` is what bounds
+                // a holder that goes on writing.
+                if quiet != nil { quiet = .now() + drainGrace }
+            } else if count == 0 {
+                return (data, .endOfFile)
+            } else if errno != EINTR, errno != EAGAIN {
+                return (data, .endOfFile)
+            }
+        }
     }
 }
 
@@ -685,14 +821,28 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// their own. One refresh asks twice by design -- once for the rows and
     /// once for the mark -- so that was not a rare interleaving but the
     /// ordinary path.
+    ///
+    /// **The read clears the claim itself**, rather than leaving it to
+    /// whoever is waiting on it. The claim outliving its read is the worst
+    /// failure this file has: every later caller is sent to `await` a task
+    /// that has already stopped being able to answer, and `fetchSnapshot`
+    /// waits on this and on ``presence()`` together, so the refresh loop
+    /// stops -- for Codex as well (CR-Fable-038). ``ClaudeCommand`` is what
+    /// makes that unreachable now, by bounding the read; this is here so that
+    /// the invariant is held where it can be read, and not by an argument
+    /// about a caller two types away.
     @discardableResult
     func refresh() async -> [ClaudeCodeSession] {
         if let inFlight { return await inFlight.value }
         readGeneration += 1
         let generation = readGeneration
-        let task = Task { await self.performRead() }
+        let task = Task { await self.readClearingClaim(generation: generation) }
         inFlight = task
-        let sessions = await task.value
+        return await task.value
+    }
+
+    private func readClearingClaim(generation: Int) async -> [ClaudeCodeSession] {
+        let sessions = await performRead()
         if readGeneration == generation { inFlight = nil }
         return sessions
     }

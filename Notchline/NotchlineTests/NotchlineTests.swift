@@ -9618,6 +9618,55 @@ for line in sys.stdin:
         #expect(Date().timeIntervalSince(started) < 15)
     }
 
+    /// A command whose stdout outlives it is read anyway, and promptly.
+    ///
+    /// EOF is not the child's to give: it arrives when the *last* copy of the
+    /// write end closes, and anything the child started that inherited its
+    /// stdout is holding one. So killing the child at its deadline does not
+    /// end the read -- and this read is single-flighted, so one orphan left
+    /// the claim held for ever and sent every later caller to wait on a read
+    /// that was never going to finish. `fetchSnapshot` awaits the list and
+    /// presence together, so the notch then stopped refreshing Codex too, and
+    /// only relaunching the app recovered it (CR-Fable-038).
+    ///
+    /// `sh` plays `claude` here: it answers, exits cleanly, and leaves
+    /// something behind holding the pipe. Its own deadline is six seconds and
+    /// the orphan lives ten, so finishing in under four says the read stopped
+    /// when the *child* did rather than when either of them ran out.
+    @Test @MainActor
+    func aCommandWhoseStdoutOutlivesItIsStillRead() async {
+        let started = Date()
+        let data = await ClaudeCommand.run(
+            ["-c", "echo notch; sleep 10 &"],
+            timeout: 6,
+            executable: URL(fileURLWithPath: "/bin/sh")
+        )
+        // The child said its piece and exited 0. Nothing about somebody else
+        // holding the pipe makes that answer less of one.
+        #expect(data.map { String(decoding: $0, as: UTF8.self) } == "notch\n")
+        #expect(Date().timeIntervalSince(started) < 4)
+    }
+
+    /// A killed command is still a failure when its output outlives it.
+    ///
+    /// The other half of the rule above, and the one that is easy to lose
+    /// while fixing it: abandoning the read must not turn whatever bytes
+    /// happened to arrive first into an answer. Here `sh` ignores `SIGTERM`,
+    /// so it takes the `SIGKILL` that follows, and the `echo` it managed
+    /// before that is not a reading -- it is half of one.
+    @Test @MainActor
+    func aKilledCommandIsAFailureEvenWithBytesAlreadyOnTheStream() async {
+        let started = Date()
+        let data = await ClaudeCommand.run(
+            ["-c", "trap '' TERM; echo notch; sleep 12 & wait"],
+            timeout: 0.5,
+            executable: URL(fileURLWithPath: "/bin/sh")
+        )
+        #expect(data == nil)
+        // The orphan lives twelve seconds and is not waited for.
+        #expect(Date().timeIntervalSince(started) < 10)
+    }
+
     /// A reset printed on the hour carries no minutes, and still parses.
     ///
     /// This is what the weekly window looks like almost every time it is read:
