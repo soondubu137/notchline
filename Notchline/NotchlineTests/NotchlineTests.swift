@@ -291,6 +291,86 @@ struct NotchlineTests {
         #expect(!half.contains(CGPoint(x: edge * 0.1, y: edge * 0.5)))
     }
 
+    /// Two marks showing the same pattern show it in sync.
+    ///
+    /// The two products start their turns whenever they start them, so a Codex
+    /// session going Running and a Claude Code one going Running some seconds
+    /// later used to leave two identical curves running against each other:
+    /// the same wave twice, out of step, which reads as two unrelated things
+    /// flickering rather than as one state said about two products. Phase came
+    /// from the moment the layers happened to be built.
+    ///
+    /// It comes from the clock instead, so it is a property of *when it is*
+    /// rather than of when each mark was made. Two marks in the same state
+    /// therefore differ by a whole number of periods, which is the same phase.
+    @Test @MainActor
+    func marksShowingTheSamePatternShowItInSync() async throws {
+        /// How far a phase is from the nearest whole-period boundary.
+        ///
+        /// Not `phase % period == 0`: a period of `1.2` has no exact binary
+        /// representation, so a boundary lands either just above zero or just
+        /// below a whole period, and only the distance to the nearer end is
+        /// the same claim at both.
+        func offGrid(_ phase: CFTimeInterval, _ period: TimeInterval) -> Double {
+            let remainder = phase.truncatingRemainder(dividingBy: period)
+            return min(remainder, period - remainder)
+        }
+
+        func beginTimes(of state: NotchMatrixState, ink: NotchPalette.MatrixInk)
+            throws -> [CFTimeInterval]
+        {
+            let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
+            view.apply(state: state, size: 16, isAnimated: true, ink: ink)
+            let cells = try #require(view.layer?.sublayers).flatMap { $0.sublayers ?? [] }
+            return cells.compactMap {
+                $0.animation(forKey: "notch.matrix.opacity")?.beginTime
+            }
+        }
+
+        // One mark first, then the other a beat later — the sequence that used
+        // to desynchronise them.
+        let builtCodexAt = CACurrentMediaTime()
+        let codex = try beginTimes(of: .running, ink: NotchPalette.codexInk)
+        try await Task.sleep(for: .milliseconds(120))
+        let builtClaudeAt = CACurrentMediaTime()
+        let claudeCode = try beginTimes(of: .running, ink: NotchPalette.claudeCodeInk)
+
+        // Every lit cell in a mark is anchored together, as it always was.
+        #expect(codex.count == 9 * 4)
+        #expect(claudeCode.count == codex.count)
+        let codexPhase = try #require(codex.first)
+        let claudePhase = try #require(claudeCode.first)
+        #expect(codex.allSatisfy { $0 == codexPhase })
+        #expect(claudeCode.allSatisfy { $0 == claudePhase })
+
+        // Each mark is anchored to the clock as it read when the mark was
+        // built: on the period grid, and within one period behind that
+        // reading. This is what the default `beginTime` of 0 fails — 0 is on
+        // every grid, but it is however long the process has been up behind
+        // the clock, which is exactly the "phase records when it was built"
+        // the fix removes.
+        let period = try #require(NotchMatrixState.running.period)
+        for (phase, builtAt) in [(codexPhase, builtCodexAt), (claudePhase, builtClaudeAt)] {
+            #expect(offGrid(phase, period) < 1e-9)
+            #expect(phase <= builtAt)
+            #expect(builtAt - phase < period)
+        }
+
+        // So the two marks differ by whole periods, which is the same point of
+        // the same curve. Before the fix this gap was the 120ms wait.
+        #expect(offGrid(claudePhase - codexPhase, period) < 1e-9)
+
+        // The anchor itself: the last whole-period boundary at or before now,
+        // never ahead of it, never a full period behind. Both periods the
+        // states use, because 1.2 is the one floating point rounds.
+        for period in [1.0, 1.2] {
+            let anchor = MatrixIndicatorView.phaseAnchor(for: period, now: 10.7)
+            #expect(anchor <= 10.7)
+            #expect(10.7 - anchor < period)
+            #expect(offGrid(anchor, period) < 1e-9)
+        }
+    }
+
     /// One mark per connected product, in `AgentKind` order, never by urgency.
     @Test @MainActor
     func theMarksAreOnePerConnectedProductInAFixedOrder() throws {

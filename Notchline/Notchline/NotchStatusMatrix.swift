@@ -773,8 +773,28 @@ final class MatrixIndicatorView: NSView {
         return triangle.intersection(cell)
     }
 
-    /// Every cell's animation is added in one pass, so they share a `beginTime`
-    /// and stay in phase with each other for as long as they run.
+    /// Phase comes from the clock, not from the moment of installation.
+    ///
+    /// Left at the default `beginTime` of 0, Core Animation starts the loop
+    /// when the animation is added, so a mark's phase records when its layers
+    /// were last built. Two products reaching the same state at different
+    /// moments -- a Codex turn starting, then a Claude Code one a few seconds
+    /// later -- then breathe against each other, and two marks side by side
+    /// running the same curve out of step read as noise rather than as one
+    /// state said twice. A rebuild for a reason the eye should not see (a
+    /// window change, a backing-scale change) restarted the loop too.
+    ///
+    /// Anchoring `beginTime` to the last whole multiple of the period fixes
+    /// both: every mark in a given state lands on the same grid, so marks
+    /// showing the same pattern show it in sync no matter when each started,
+    /// and a rebuild resumes the phase the mark already had. Same trick, same
+    /// reason, as ``NotchTextRaster/installSweep(on:width:period:)``.
+    ///
+    /// The grid is per-period, so the states that share a period -- attention
+    /// and completed, both `1.2` -- also sync with each other, while running's
+    /// `1.0` keeps its own grid. Within one mark every cell's animation is
+    /// added in the same pass with the same anchor, so the cells stay in phase
+    /// with each other as they always did.
     private static func trackAnimation(
         track: [Double],
         period: TimeInterval
@@ -785,7 +805,20 @@ final class MatrixIndicatorView: NSView {
         animation.calculationMode = .linear
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
+        animation.beginTime = phaseAnchor(for: period)
         return animation
+    }
+
+    /// The most recent whole-period boundary on the layer clock.
+    ///
+    /// A cell layer is built fresh with default timing under a superlayer with
+    /// default timing, so its local time is `CACurrentMediaTime()` and the
+    /// anchor can be expressed in that clock directly.
+    static func phaseAnchor(
+        for period: TimeInterval,
+        now: CFTimeInterval = CACurrentMediaTime()
+    ) -> CFTimeInterval {
+        now - now.truncatingRemainder(dividingBy: period)
     }
 }
 
