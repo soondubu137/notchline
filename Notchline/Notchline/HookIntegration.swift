@@ -205,6 +205,29 @@ nonisolated struct HookIntegrationPaths: Sendable {
         )
     }
 
+    /// The paths one product's live monitoring is actually built over, chosen
+    /// by kind.
+    ///
+    /// The two spellings that already exist answer for one product each —
+    /// ``live(agent:fileManager:)`` for Codex and
+    /// ``liveClaudeCode(fileManager:)`` for Claude Code — so a caller holding
+    /// an ``AgentKind`` and nothing else has no way through them. Settings is
+    /// that caller: its Products card offers to open the folder each product's
+    /// hooks are registered in, for a product it knows only by kind. Routed to
+    /// those two rather than spelling either path a second time, so a file that
+    /// moves moves for the button as well as for the writer.
+    nonisolated static func live(
+        for agent: AgentKind,
+        fileManager: FileManager = .default
+    ) -> HookIntegrationPaths {
+        switch agent {
+        case .codex:
+            HookIntegrationPaths.live(fileManager: fileManager)
+        case .claudeCode:
+            HookIntegrationPaths.liveClaudeCode(fileManager: fileManager)
+        }
+    }
+
     nonisolated static func supportDirectory(fileManager: FileManager) -> URL {
         fileManager.urls(
             for: .applicationSupportDirectory,

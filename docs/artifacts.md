@@ -28,7 +28,7 @@ Hook 事件的 payload 完全不会写入磁盘——它们会直接进入内存
 
 每次额度读取都是一个真实的 Claude Code 会话，因此 Claude Code 会在自己的项目树中为每次读取保存一份约 3.4 KB 的 `.jsonl` transcript。每 5 分钟读取一次（`freshness: 300`）——应用运行期间每天大约产生 **1 MB**。目前这台机器上共有 **214 个文件，占用 852 KB**。
 
-Notchline 会统计这些文件的大小，但绝不会删除它们——文件夹命名规则会同时扁平化路径分隔符和空格，所以 `…/a b` 与 `…/a-b` 会落入同一个目录，而这个文件夹也可能包含用户的真实工作内容。设置页会显示其大小，并提供 `Reveal in Finder` 按钮；是否处理由用户自行决定（`ClaudeCodeUsageTranscripts.swift`、`SettingsWindow.swift:99`）。
+Notchline 会统计这些文件的大小，但绝不会删除它们——文件夹命名规则会同时扁平化路径分隔符和空格，所以 `…/a b` 与 `…/a-b` 会落入同一个目录，而这个文件夹也可能包含用户的真实工作内容。设置页会显示其大小，并提供 `Show in Finder` 文件夹图标按钮（tooltip 即 `Show in Finder`）；是否处理由用户自行决定（`ClaudeCodeUsageTranscripts.swift`、`SettingsWindow.swift`）。
 
 Codex 一侧不会留下同类文件——它通过 `codex app-server` 的只读 `account/*` RPC 获取额度，不会创建对话。
 

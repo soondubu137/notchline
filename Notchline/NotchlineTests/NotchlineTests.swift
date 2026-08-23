@@ -1272,6 +1272,64 @@ struct NotchlineTests {
         #expect(clamped.y == visible.minY)
     }
 
+    /// `Show in Finder` opens something in all three of its states.
+    ///
+    /// The button is drawn on rows whose file may not exist — a product whose
+    /// switch has never been on has never had `hooks.json` or `settings.json`
+    /// written — and `activateFileViewerSelecting` on a path with no file at
+    /// the end of it does nothing at all, silently. So the fallback to the
+    /// enclosing folder is the case this pins, not a nicety.
+    @Test
+    func showInFinderFallsBackToTheFolderWhenTheFileIsNotThereYet() throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? manager.removeItem(at: root) }
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let file = root.appendingPathComponent("hooks.json")
+        // Nothing written yet: the folder is there, the file is not, so the
+        // button opens the folder rather than greying out.
+        #expect(FinderRevealTarget.revealing(file) == .open(root))
+
+        try Data("{}".utf8).write(to: file)
+        // Written: the folder opens with the file picked out in it.
+        #expect(FinderRevealTarget.revealing(file) == .select(file))
+
+        // Neither — the product has never run on this machine — is the one
+        // state with nowhere to go, and the only one that greys the button.
+        let absent = root
+            .appendingPathComponent("never-created", isDirectory: true)
+            .appendingPathComponent("hooks.json")
+        #expect(FinderRevealTarget.revealing(absent) == nil)
+    }
+
+    /// The button and the writer point at one file each, not two.
+    ///
+    /// Settings knows a product only by kind, so it resolves the file through
+    /// ``HookIntegrationPaths`` rather than spelling either path again. This
+    /// pins that the by-kind spelling lands on the same two files the live
+    /// services are built over.
+    @Test
+    func settingsResolvesEachProductsHookFileByKind() {
+        #expect(
+            HookIntegrationPaths.live(for: .codex).hooksConfiguration
+                == HookIntegrationPaths.live().hooksConfiguration
+        )
+        #expect(
+            HookIntegrationPaths.live(for: .claudeCode).hooksConfiguration
+                == HookIntegrationPaths.liveClaudeCode().hooksConfiguration
+        )
+        #expect(
+            HookIntegrationPaths.live(for: .codex).hooksConfiguration.lastPathComponent
+                == "hooks.json"
+        )
+        #expect(
+            HookIntegrationPaths.live(for: .claudeCode).hooksConfiguration.lastPathComponent
+                == "settings.json"
+        )
+    }
+
     /// A preference written before the rail existed still reads back.
     @Test @MainActor
     func anUnknownAttributionStyleFallsBackToTheDefault() {

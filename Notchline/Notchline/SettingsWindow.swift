@@ -111,13 +111,7 @@ struct AppSettingsView: View {
                     .foregroundStyle(MacOSWindowColor.secondaryText)
                     .monospacedDigit()
 
-                Button("Reveal in Finder") {
-                    guard let directory = report.directory else { return }
-                    NSWorkspace.shared.activateFileViewerSelecting([directory])
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .disabled(report.directory == nil)
+                ShowInFinderButton(target: report.directory.map(FinderRevealTarget.select))
             }
         }
     }
@@ -279,14 +273,18 @@ struct ProductConnectionRows: View {
                 text: codexCopy.status
             )
         ) {
-            Toggle("Codex integration", isOn: integrationSelection(for: .codex))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .disabled(store.isIntegrationBusy(for: .codex))
-                .help(
-                    "Installs or removes the five Codex lifecycle definitions together, "
-                        + "after copying ~/.codex/hooks.json to hooks.json.notchline-backup."
-                )
+            HStack(spacing: 10) {
+                Toggle("Codex integration", isOn: integrationSelection(for: .codex))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(store.isIntegrationBusy(for: .codex))
+                    .help(
+                        "Installs or removes the five Codex lifecycle definitions together, "
+                            + "after copying ~/.codex/hooks.json to hooks.json.notchline-backup."
+                    )
+
+                ShowInFinderButton(target: hookConfigurationTarget(for: .codex))
+            }
         }
 
         SettingsSeparator()
@@ -299,15 +297,28 @@ struct ProductConnectionRows: View {
                 text: claudeCodeCopy.status
             )
         ) {
-            Toggle("Claude Code integration", isOn: integrationSelection(for: .claudeCode))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .disabled(store.isIntegrationBusy(for: .claudeCode))
-                .help(
-                    "Writes the lifecycle definitions into ~/.claude/settings.json, "
-                        + "after copying that file to settings.json.notchline-backup."
-                )
+            HStack(spacing: 10) {
+                Toggle("Claude Code integration", isOn: integrationSelection(for: .claudeCode))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(store.isIntegrationBusy(for: .claudeCode))
+                    .help(
+                        "Writes the lifecycle definitions into ~/.claude/settings.json, "
+                            + "after copying that file to settings.json.notchline-backup."
+                    )
+
+                ShowInFinderButton(target: hookConfigurationTarget(for: .claudeCode))
+            }
         }
+    }
+
+    /// The folder that holds the file this product's hooks are registered in.
+    ///
+    /// Asked of ``HookIntegrationPaths`` rather than spelled here, so this
+    /// button and the writer that edits the file can never end up pointing at
+    /// two different places.
+    private func hookConfigurationTarget(for agent: AgentKind) -> FinderRevealTarget? {
+        .revealing(HookIntegrationPaths.live(for: agent).hooksConfiguration)
     }
 
     private var codexCopy: ProductSettingsCopy {
@@ -331,6 +342,130 @@ struct ProductConnectionRows: View {
             get: { store.integrationSwitchIsOn(for: agent) },
             set: { store.setIntegrationEnabled($0, for: agent) }
         )
+    }
+}
+
+/// The one-glyph way into a folder a row is about.
+///
+/// **A glyph rather than the words, because there are now three of them.** Each
+/// row in the Products card names a place on disk — the file each product's
+/// hooks are registered in, and the folder this app's quota readings leave
+/// transcripts in — and a capsule reading `Reveal in Finder` on all three is
+/// the same sentence written out three times down one card, beside the switch
+/// that is what each product row is actually about. The folder glyph carries
+/// the same action in a quarter of the width, and the words move to the tooltip.
+///
+/// They also stay in the accessibility label — `.accessibilityLabel` on the
+/// glyph — so VoiceOver reads `Show in Finder` and not the name of an SF
+/// Symbol.
+///
+/// **No border until the pointer is on it.** A bordered capsule around a
+/// single glyph is a second shape competing with the switch beside it, on a
+/// row where the switch is the control. Bare, the glyph reads as what it is —
+/// a way through to somewhere — and the background that says it can be pressed
+/// arrives on hover, which is when the question is being asked. The `22 × 22`
+/// square is the click target rather than the drawing: the glyph is `12 × 12`
+/// measured, and a target the size of the drawing would be a thing you aim at.
+///
+/// **Last in the row, after the switch.** Every row in the Products card ends
+/// with one, so they line up on the trailing edge in a single column — which
+/// only works if nothing else follows them. It puts the switches a fixed step
+/// inboard of that edge; they stay a column of their own, and a glyph with no
+/// border of its own is not the thing that reads as the row's control.
+struct ShowInFinderButton: View {
+    /// Where a press goes, and `nil` when there is nowhere for it to go —
+    /// which is what greys the button out. Same rule the `Reveal in Finder`
+    /// capsule was held to: a button that reveals nothing is worse than one
+    /// that is plainly not ready (CC-020).
+    let target: FinderRevealTarget?
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            target?.reveal()
+        } label: {
+            // Drawn to a measured `12 × 12` rather than set in a 12-point
+            // font. A symbol at `.system(size: 12)` is sized to sit beside
+            // 12-point *text*, not to be 12 points: `folder` under that
+            // configuration measures `17 × 13`. `resizable` fits the glyph's
+            // own box to the frame instead, so the number here is the size on
+            // screen — measured off a screenshot at `12 × 9.5`, the second
+            // figure being the folder's own aspect inside a square box.
+            Image(systemName: "folder")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 12, height: 12)
+                // The words the `Label` used to carry. VoiceOver still reads
+                // `Show in Finder` rather than the name of an SF Symbol.
+                .accessibilityLabel("Show in Finder")
+                .foregroundStyle(
+                    target == nil
+                        ? MacOSWindowColor.tertiaryText
+                        : MacOSWindowColor.secondaryText
+                )
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isHovering ? MacOSWindowColor.hoverBackground : .clear)
+                )
+                // The whole square takes the click, not just the glyph's own
+                // strokes — a `folder` is mostly empty inside.
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(target == nil)
+        // Nothing lights up under a button that cannot be pressed, so the
+        // hover state is refused rather than drawn and then ignored.
+        .onHover { isHovering = $0 && target != nil }
+        .help("Show in Finder")
+    }
+}
+
+/// Where a ``ShowInFinderButton`` press goes.
+///
+/// A value rather than a closure per row, for the reason ``ProductSettingsCopy``
+/// is one: nothing in this window has a test that can press a button, but which
+/// folder a press would open is a plain answer a test can assert.
+nonisolated enum FinderRevealTarget: Equatable {
+    /// Open the enclosing folder with this item selected.
+    case select(URL)
+    /// Open this folder itself, because the item the button points at is not
+    /// in it yet.
+    case open(URL)
+
+    /// What revealing `url` should do, and `nil` when there is nothing on disk
+    /// to reveal.
+    ///
+    /// **The file may not be there, and that is the ordinary case rather than
+    /// an error.** Neither `~/.codex/hooks.json` nor `~/.claude/settings.json`
+    /// exists until somebody — this app or the user — has put something in it,
+    /// so a row whose switch has never been on points at a path with no file
+    /// at the end of it, and `activateFileViewerSelecting` on one of those does
+    /// nothing at all, silently. So the file is selected when it is there, the
+    /// folder that would hold it is opened when it is not, and only a product
+    /// with neither greys the button out.
+    static func revealing(_ url: URL, fileManager: FileManager = .default) -> Self? {
+        if fileManager.fileExists(atPath: url.path) {
+            return .select(url)
+        }
+        let directory = url.deletingLastPathComponent()
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+        return .open(directory)
+    }
+
+    @MainActor
+    func reveal() {
+        switch self {
+        case .select(let url):
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        case .open(let directory):
+            NSWorkspace.shared.open(directory)
+        }
     }
 }
 
@@ -600,6 +735,15 @@ enum MacOSWindowColor {
     static let separator = dynamic(
         light: 0x00_00_00, lightAlpha: 0.09,
         dark: 0xFF_FF_FF, darkAlpha: 0.11
+    )
+    /// What appears under a borderless glyph while the pointer is on it.
+    ///
+    /// Lighter than ``wellBackground``: that one is a recess something sits
+    /// in permanently, this one is a control saying it can be pressed and has
+    /// to stay quieter than the switch on the same row.
+    static let hoverBackground = dynamic(
+        light: 0x00_00_00, lightAlpha: 0.07,
+        dark: 0xFF_FF_FF, darkAlpha: 0.10
     )
     /// The recessed well the Claude Code snippet sits in.
     static let wellBackground = dynamic(
