@@ -1067,9 +1067,9 @@ struct NotchlineTests {
     /// inboard of everything it is read against — the status matrix above it
     /// and the quota rules below it, both on `12` — and a mark that is nearly
     /// but not quite on a line reads as a mistake. Drawn, the block takes the
-    /// full `12` and the row's `6` of padding stays put, so the text steps in
-    /// behind the rail rather than moving with it. Half the row tall keeps the
-    /// stroke clear of the block's own corners.
+    /// full `12`, and the padding behind the stroke is the rail's own `8`
+    /// rather than the row's `6`: that gap is clearance between a `2pt` line
+    /// and the words, not an inset from a panel edge.
     @Test @MainActor
     func theAttributionRailLandsOnThePanelsOwnMargin() {
         #expect(
@@ -1077,12 +1077,39 @@ struct NotchlineTests {
                 == PanelMetrics.expandedHorizontalPadding
         )
         #expect(PanelMetrics.sessionRowRailGutter == 12)
+        #expect(PanelMetrics.sessionRowRailPadding == 8)
         #expect(PanelMetrics.sessionRowPadding == 6)
         #expect(PanelMetrics.sessionRowRailWidth < PanelMetrics.sessionRowRailGutter)
         #expect(PanelMetrics.sessionRowRailWidth == 2)
-        #expect(PanelMetrics.sessionRowRailHeight == 40)
+    }
+
+    /// The rail is as tall as the text it marks, and no taller.
+    ///
+    /// From the top of the Project caption to the bottom of the last line —
+    /// so it reads as that block's own leading edge. Half the row (`40`) was a
+    /// shape rather than a measurement: it stopped short of the caption above
+    /// and the preview below and marked the row's middle instead. A row with no
+    /// preview is genuinely shorter, and the rail shortens with it rather than
+    /// overhanging by `10` at each end.
+    @Test @MainActor
+    func theAttributionRailSpansTheRowsTextExactly() {
+        let threeLines = PanelMetrics.sessionRowCaptionHeight
+            + PanelMetrics.sessionRowLineSpacing
+            + PanelMetrics.sessionRowTitleHeight
+            + PanelMetrics.sessionRowLineSpacing
+            + PanelMetrics.sessionRowPreviewHeight
+        #expect(threeLines == 53)
+        #expect(PanelMetrics.sessionRowRailHeight(hasPreview: true) == threeLines)
+        #expect(PanelMetrics.sessionRowRailHeight(hasPreview: false) == 33)
         #expect(
-            PanelMetrics.sessionRowRailHeight < PanelMetrics.sessionRowHeight
+            PanelMetrics.sessionRowRailHeight(hasPreview: true)
+                < PanelMetrics.sessionRowHeight
+        )
+        // It is the row's text it spans, not the row: the block's own 12pt
+        // corners stay clear at either end.
+        #expect(
+            PanelMetrics.sessionRowHeight - threeLines
+                > PanelMetrics.sessionRowRailRadius * 2
         )
     }
 
@@ -1100,15 +1127,23 @@ struct NotchlineTests {
         store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
         #expect(!store.showsSessionRowRail)
         #expect(store.sessionRowGutter == PanelMetrics.sessionRowGutter)
+        #expect(store.sessionRowPadding == PanelMetrics.sessionRowPadding)
+        // Unmarked, the two are still one margin split in two.
+        #expect(
+            store.sessionRowGutter + store.sessionRowPadding
+                == PanelMetrics.expandedHorizontalPadding
+        )
 
         store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
         #expect(store.showsSessionRowRail)
         #expect(store.sessionRowGutter == PanelMetrics.sessionRowRailGutter)
+        #expect(store.sessionRowPadding == PanelMetrics.sessionRowRailPadding)
 
         // Two products and any other style: no rail, so no wider margin either.
         store.productAttribution = .nameAndColour
         #expect(!store.showsSessionRowRail)
         #expect(store.sessionRowGutter == PanelMetrics.sessionRowGutter)
+        #expect(store.sessionRowPadding == PanelMetrics.sessionRowPadding)
     }
 
     /// Settings goes to the display the component is on, so the store has to be

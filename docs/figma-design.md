@@ -82,7 +82,7 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 | Session row | `508 × 80` |
 | Thin expanded state | `520 × 94` |
 | Horizontal Panel padding | `12` |
-| Session row gutter / padding | `6` + `6`；画 `Colour bar` 时 `12` + `6`，见下 |
+| Session row gutter / padding | `6` + `6`；画 `Colour bar` 时 `12` + `8`，见下 |
 | Status dot | `8 × 8` |
 | Usage ring | `18 × 18`, stroke `2` |
 | Row badge | `24` 高 |
@@ -91,7 +91,7 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 
 **会话行比面板其余部分宽两个 `6`。** 行块从面板边缘缩进 `6` 而不是 `12`，好让 hover 的填充不撞到边；行自己再补回 `6`，于是行内文字仍然落在 `12`——与 header 里的状态矩阵、页脚里的额度规则同一条边距上。两个数因此是互相定义的（`PanelMetrics.sessionRowGutter` 与 `sessionRowPadding = expandedHorizontalPadding − sessionRowGutter`），不是两个各写死的 `6`；`aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` 锁定这条关系。行块 `520 − 6 − 6 = 508`，内容盒 `520 − 12 − 12 = 496`。
 
-**画 `Colour bar` 竖条时缩进改为 `12` + `6`。** 竖条就画在行块前缘，所以行块的缩进就是竖条的位置：留在 `6` 上，它比上方状态矩阵、下方额度规则都朝里半个 `12`，差一点对齐比不对齐更像做错。因此只在竖条**画出来的时候**（两个产品都在，见 [`dual-agent-design.md`](dual-agent-design.md) §4）行块让出整 `12`，行内边距仍是 `6`，行内文字退到 `18` 站到竖条后面而不是骑在上面；行块此时 `520 − 12 − 12 = 496`，与内容盒同宽。单产品时没有竖条，行块回到 `6`，文字仍落在 `12`。这条几何由 `MonitorStore.sessionRowGutter` 提供，`theAttributionRailLandsOnThePanelsOwnMargin` 与 `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn` 锁定。
+**画 `Colour bar` 竖条时缩进改为 `12` + `6`。** 竖条就画在行块前缘，所以行块的缩进就是竖条的位置：留在 `6` 上，它比上方状态矩阵、下方额度规则都朝里半个 `12`，差一点对齐比不对齐更像做错。因此只在竖条**画出来的时候**（两个产品都在，见 [`dual-agent-design.md`](dual-agent-design.md) §4）行块让出整 `12`，行内边距同时由 `6` 改为 `8`——它此时不再是「离面板边多远」而是「离那条 `2pt` 线多远」，`6` 会让线和字读成一个东西——行内文字因此落在 `20`，站到竖条后面而不是骑在上面；行块此时 `520 − 12 − 12 = 496`，与内容盒同宽。单产品时没有竖条，行块回到 `6` + `6`，文字仍落在 `12`。这条几何由 `MonitorStore.sessionRowGutter` 与 `sessionRowPadding` 提供，`theAttributionRailLandsOnThePanelsOwnMargin` 与 `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn` 锁定。
 
 目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。例如无刘海 `24` 高菜单栏的展开参考尺寸为 `520 × 280`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed`、`Version unsupported` 等最长状态名完整位于可显示区域。状态名不再指名产品（§6.6），因此这条加宽只取决于遮挡宽度，与用户装了哪些产品无关：单侧为 `12 + 16.6 + 12 + 124.88 + 8 = 173.48`，`520` 的基线要到遮挡超过 `173` 才被顶开。
 
@@ -520,7 +520,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [ ] 会话行里的 `alpha fade mask` 仍是 `273` 定宽。行从 `472` 一路走到 `508`、内边距又从 `16` 收到 `6` 之后，渐隐的收尾离右缘比原先远了 `56`；遮罩应该跟着行走，或改为距右缘定距。
 - [x] 会话行的边距拆成 `6` 行块缩进 + `6` 行内边距，行内文字因此与状态矩阵、额度规则同落在 `12`（§3.3）；由 `aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` 锁定。
 - [x] 折叠额度块（[`dual-agent-design.md`](dual-agent-design.md) §5.4，Figma §09）：折叠后页脚 `28`、面板恒为 `520 × 314`；`quota fold` 控件 `16 × 16`，两个状态由同一枚 chevron 旋转 `180°` 得到。**已实现**；点击区就是 chevron 那 `16 × 16`（悬停铺 `12%` 白底、圆角 `4`），状态存于 `quotaFolded`。
-- [x] `Colour bar` 作为第四个 `Distinguish products` 选项（[`dual-agent-design.md`](dual-agent-design.md) §4，Figma §06）：`2 × 40` 竖条、圆角 `1`，行内 `x = 0`。**已实现**；`Distinguish products` 弹出菜单现在是四项。画竖条的那一形态里行块缩进为 `12`（§3.3），竖条因此与状态矩阵、额度规则同落一条边距。
+- [x] `Colour bar` 作为第四个 `Distinguish products` 选项（[`dual-agent-design.md`](dual-agent-design.md) §4，Figma §06）：`2` 宽竖条、圆角 `1`，行内 `x = 0`，高度取该行文字的实高（三行 `53`、无预览行 `33`），不再是行高的一半 `40`。**已实现**；`Distinguish products` 弹出菜单现在是四项。画竖条的那一形态里行块缩进为 `12`、行内边距为 `8`（§3.3），竖条因此与状态矩阵、额度规则同落一条边距。
 - [ ] §3.3 的三条 compact 参考基线（`348 × 46`、`168 × 46`、`200 × 46`）在这次改动前就与文件里的组件不一致，本次未一并修正；组件当前是 `237`（刘海静息）、`285`（刘海计时）与 `165`（无刘海）。
 - [ ] `Disconnected` 这个词是否保留（备选 `No agents`、`Nothing running`），上屏后判断。
 - [x] ~~Claude Code 在场的第一条校正：按 `pid` + `procStart` 成对过滤幽灵会话。~~ **实测后撤销：`claude agents --json` 自己就是这么校验的**，而且它不输出 `procStart`，自己重做只能改读私有 schema。见 §6.5。

@@ -166,19 +166,57 @@ enum PanelMetrics {
     /// is where the rail lands — and at the shared `6` it landed half the
     /// panel's inset short of everything it is read against, the status matrix
     /// above and the quota rules below. Widening the margin to the full
-    /// `expandedHorizontalPadding` puts the stroke on that same line. The row's
-    /// padding does not follow it: the two stop being one margin split in two,
-    /// and the row's text steps in behind the rail at `12 + 6` rather than
-    /// sitting on top of it. This applies only while the rail is drawn — with
-    /// one product connected there is no rail, and the row keeps the `6 + 6`
-    /// that lands its text on the panel's own margin.
+    /// `expandedHorizontalPadding` puts the stroke on that same line. The two
+    /// stop being one margin split in two: the padding behind the stroke is the
+    /// rail's own (``sessionRowRailPadding``), and the row's text steps in
+    /// behind the rail rather than sitting on top of it. This applies only
+    /// while the rail is drawn — with one product connected there is no rail,
+    /// and the row keeps the `6 + 6` that lands its text on the panel's own
+    /// margin.
     static let sessionRowRailGutter: CGFloat = expandedHorizontalPadding
+    /// The gap between the rail and the text it marks.
+    ///
+    /// Wider than the row's ordinary `6`, because this one is doing different
+    /// work: the ordinary padding is the row's inset from a panel edge, and
+    /// this is the clearance between a `2pt` stroke and the words beside it.
+    /// At `6` the two read as one object.
+    static let sessionRowRailPadding: CGFloat = 8
     /// The `Colour bar` attribution rail, flush with the row block's leading
     /// edge. It is narrower than the margin it sits on, so it marks the row
     /// without crowding the block's own corner.
     static let sessionRowRailWidth: CGFloat = 2
-    static let sessionRowRailHeight = sessionRowHeight / 2
     static let sessionRowRailRadius: CGFloat = 1
+    /// The row's three text lines, as the row lays them out.
+    ///
+    /// They live here rather than as literals in the view because the rail is
+    /// measured against them: it spans the row's text exactly, so a line height
+    /// that changed in the view and not here would leave the stroke running
+    /// past the words or stopping short of them.
+    static let sessionRowCaptionHeight: CGFloat = 14
+    /// The `Badge` caption is a point taller than the text line it replaces.
+    /// The rail never meets it — one style or the other — but the row does.
+    static let sessionRowBadgeCaptionHeight: CGFloat = 16
+    static let sessionRowTitleHeight: CGFloat = 17
+    static let sessionRowPreviewHeight: CGFloat = 18
+    static let sessionRowLineSpacing: CGFloat = 2
+
+    /// The rail spans the row's text: the top of the Project caption to the
+    /// bottom of the last line, and nothing beyond it.
+    ///
+    /// Half the row tall was a shape rather than a measurement — it marked the
+    /// row's middle and stopped short of both the caption above and the preview
+    /// below, so it read as a tick beside the row instead of as the row's own
+    /// edge. It takes the row's actual content because a row without a preview
+    /// is genuinely shorter: a fixed three-line stroke would overhang a
+    /// two-line row by `10` at each end, which is the same not-quite-aligned
+    /// mistake the gutter change just fixed.
+    static func sessionRowRailHeight(hasPreview: Bool) -> CGFloat {
+        let head = sessionRowCaptionHeight
+            + sessionRowLineSpacing
+            + sessionRowTitleHeight
+        guard hasPreview else { return head }
+        return head + sessionRowLineSpacing + sessionRowPreviewHeight
+    }
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
     /// Single-Codex footer: one rule and one inline caption, as today.
@@ -1292,6 +1330,17 @@ final class MonitorStore: ObservableObject {
         showsSessionRowRail
             ? PanelMetrics.sessionRowRailGutter
             : PanelMetrics.sessionRowGutter
+    }
+
+    /// The row's own horizontal padding, which the rail widens to clear itself.
+    ///
+    /// Unmarked, it is the other half of the panel's margin. Marked, it stops
+    /// being a margin at all and becomes the gap between the stroke and the
+    /// words — see ``PanelMetrics/sessionRowRailPadding``.
+    var sessionRowPadding: CGFloat {
+        showsSessionRowRail
+            ? PanelMetrics.sessionRowRailPadding
+            : PanelMetrics.sessionRowPadding
     }
 
     /// One rule block per connected product, in display order.

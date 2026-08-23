@@ -598,7 +598,7 @@ private struct SessionRowContent: View {
                 .fill(backgroundColor)
 
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                     SessionRowCaption(
                         session: session,
                         style: store.productAttribution,
@@ -609,7 +609,7 @@ private struct SessionRowContent: View {
                         text: session.title,
                         font: .systemFont(ofSize: 13, weight: .medium),
                         color: NotchPalette.sessionTitleDrawingColor,
-                        lineHeight: 17
+                        lineHeight: PanelMetrics.sessionRowTitleHeight
                     )
 
                     if let preview = session.preview {
@@ -617,7 +617,7 @@ private struct SessionRowContent: View {
                             text: preview,
                             font: .systemFont(ofSize: 13, weight: .light),
                             color: NotchPalette.labelDrawingColor,
-                            lineHeight: 18
+                            lineHeight: PanelMetrics.sessionRowPreviewHeight
                         )
                     }
                 }
@@ -626,14 +626,15 @@ private struct SessionRowContent: View {
                 SessionStatusControl(session: session)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, PanelMetrics.sessionRowPadding)
+            .padding(.horizontal, store.sessionRowPadding)
         }
         // Flush with the block's leading edge, so it reads as a mark beside the
-        // row rather than as a fifth thing inside it. Half the row tall, which
-        // keeps it clear of the block's own 12 pt corners. The block's margin
-        // widens to `12` while the rail is drawn (`MonitorStore.sessionRowGutter`),
-        // so the stroke lands on the same line as the matrix and the quota
-        // rules; the row's text steps in behind it rather than moving with it.
+        // row rather than as a fifth thing inside it. The block's margin widens
+        // to `12` while the rail is drawn (`MonitorStore.sessionRowGutter`), so
+        // the stroke lands on the same line as the matrix and the quota rules;
+        // the row's text steps in behind it rather than moving with it. It runs
+        // the height of that text — caption to last line — so it reads as the
+        // row's own edge rather than as a tick beside its middle.
         .overlay(alignment: .leading) {
             if drawsRail {
                 RoundedRectangle(
@@ -643,7 +644,9 @@ private struct SessionRowContent: View {
                 .fill(NotchPalette.ink(for: session.agent).on)
                 .frame(
                     width: PanelMetrics.sessionRowRailWidth,
-                    height: PanelMetrics.sessionRowRailHeight
+                    height: PanelMetrics.sessionRowRailHeight(
+                        hasPreview: session.preview != nil
+                    )
                 )
             }
         }
@@ -764,7 +767,11 @@ private struct SessionRowCaption: View {
         // The badge is a point taller than the text line, so the caption's own
         // height moves 14 -> 16 with it. The row height does not: the content
         // block absorbs it.
-        .frame(height: showsAttribution && style == .badge ? 16 : 14)
+        .frame(
+            height: showsAttribution && style == .badge
+                ? PanelMetrics.sessionRowBadgeCaptionHeight
+                : PanelMetrics.sessionRowCaptionHeight
+        )
     }
 
     /// One `Text`, two runs: the product prefix and the Project.
