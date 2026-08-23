@@ -523,6 +523,12 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     )
 
     /// The shape `claude agents --json` prints.
+    ///
+    /// Every field is optional because the schema is Claude Code's to change
+    /// and a field this app has never seen must not cost it the whole list.
+    /// That tolerance is exactly why ``identity`` has to exist: a type this
+    /// permissive decodes *any* JSON object, so a successful decode says
+    /// nothing about what was decoded -- see ``reportedEntries(in:)``.
     private struct Reported: Decodable {
         let pid: Int32?
         let cwd: String?
@@ -534,6 +540,24 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         /// drives the CLI over `stream-json` with no terminal UI, and the
         /// terminal UI is what publishes this (#41). Absent is not `idle`.
         let status: String?
+
+        /// The four fields without which an entry cannot be a session at all.
+        ///
+        /// Asked in one place because two callers ask it for opposite reasons:
+        /// ``reportedEntries(in:)`` to decide whether a decoded array *is* a
+        /// session list, ``sessions(in:)`` to build the rows from one that is.
+        /// Two spellings of the same question could drift, and the shape that
+        /// drift takes is an entry that passes the gate and then quietly
+        /// vanishes from the answer -- which is the bug the gate is for.
+        var identity: (sessionID: String, pid: Int32, cwd: String, startedAt: Double)? {
+            guard let sessionId, !sessionId.isEmpty,
+                  let pid,
+                  let cwd, !cwd.isEmpty,
+                  let startedAt else {
+                return nil
+            }
+            return (sessionId, pid, cwd, startedAt)
+        }
     }
 
     private let read: @Sendable () async -> Data?
@@ -923,19 +947,18 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         observedAt: Date = .distantPast
     ) -> [ClaudeCodeSession]? {
         guard let reported = reportedEntries(in: data) else { return nil }
+        // Total, not selective: ``reportedEntries(in:)`` has already refused
+        // any array holding an entry without an identity, so nothing is
+        // dropped here. It is written as a `compactMap` only because the
+        // compiler cannot know that.
         return reported.compactMap { entry in
-            guard let sessionID = entry.sessionId, !sessionID.isEmpty,
-                  let pid = entry.pid,
-                  let cwd = entry.cwd, !cwd.isEmpty,
-                  let startedAt = entry.startedAt else {
-                return nil
-            }
+            guard let identity = entry.identity else { return nil }
             return ClaudeCodeSession(
-                sessionID: sessionID,
-                processIdentifier: pid,
-                workingDirectory: URL(fileURLWithPath: cwd),
+                sessionID: identity.sessionID,
+                processIdentifier: identity.pid,
+                workingDirectory: URL(fileURLWithPath: identity.cwd),
                 // Reported in milliseconds.
-                startedAt: Date(timeIntervalSince1970: startedAt / 1000),
+                startedAt: Date(timeIntervalSince1970: identity.startedAt / 1000),
                 name: entry.name,
                 // A word this app does not know is no activity at all. The
                 // vocabulary is Claude Code's and it can grow; guessing which
@@ -973,18 +996,95 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// reports the product closed and takes every row with it. A non-empty span
     /// lower down therefore wins over an empty one above it, and an empty
     /// answer is returned only when the stream offered nothing else.
+    ///
+    /// **Decoding is not evidence; identity is.** ``Reported`` makes every
+    /// field optional, so it decodes any JSON object whatsoever -- and the
+    /// preference above then hands the answer to the *first* non-empty array
+    /// in the stream, session list or not. An MCP server logging
+    /// `tools: [{"name": "read_file"}]`, or any object array printed above the
+    /// real one, was therefore accepted as the reading: every entry fell out
+    /// of ``sessions(in:)`` for want of a `sessionId`, and the empty list left
+    /// behind is a *known*-empty one, so the product was reported closed with
+    /// its sessions still running and that answer held until an edge arrived
+    /// (CR-Codex-001). CR-Fable-039 taught this rule where an array begins; it
+    /// did not make a candidate prove it is the array we came for.
+    ///
+    /// So a candidate is taken only when every entry in it carries a
+    /// ``Reported/identity``. All of them, not most: an array that is part
+    /// session and part something else is not a session list that lost a few
+    /// rows, it is a span this code has misread, and dropping the entries it
+    /// cannot explain would omit live sessions from an answer still marked
+    /// trusted. Refusing costs one reading -- ``performRead()`` keeps the last
+    /// list and retries on the cadence -- and that is the affordable half of
+    /// the trade in a way that reporting the product closed is not.
+    ///
+    /// **And an empty answer must be a document, not a fragment.** The rule
+    /// above sends every unproven candidate down to the last-resort empty span,
+    /// which is the answer that costs everything -- so `tools: []` inside a log
+    /// line, or the `[]` nested in a lone `[{"tools": []}]`, would report the
+    /// product closed by the back door the identity gate just shut. An empty
+    /// span is therefore taken only where it stands by itself: the whole stream
+    /// is `[]`, or `[]` is alone on its line, which is how a command printing
+    /// JSON writes it and is not how a value appears inside a sentence.
+    ///
+    /// The price is that an entry kind Claude Code invents without a `pid`,
+    /// `cwd`, `sessionId` or `startedAt` would take the whole list down with
+    /// it, where today it would be skipped. That direction is survivable:
+    /// refusal ages into `unknown`, which says we do not know, rather than
+    /// into `closed`, which says we do.
     nonisolated private static func reportedEntries(in data: Data) -> [Reported]? {
         let decoder = JSONDecoder()
-        // The ordinary case: nothing else wrote to this stdout.
-        if let whole = try? decoder.decode([Reported].self, from: data) { return whole }
+        // The ordinary case: nothing else wrote to this stdout. Still gated --
+        // a lone `[{"tools": []}]` from a server that outlived a `claude` which
+        // printed nothing at all reaches this line as the whole stream.
+        if let whole = try? decoder.decode([Reported].self, from: data),
+           isSessionList(whole) {
+            return whole
+        }
         var empty: [Reported]?
         for span in arraySpans(in: data) {
-            guard let entries = try? decoder.decode([Reported].self, from: Data(data[span]))
+            guard let entries = try? decoder.decode([Reported].self, from: Data(data[span])),
+                  isSessionList(entries)
             else { continue }
             if !entries.isEmpty { return entries }
-            if empty == nil { empty = entries }
+            if empty == nil, standsAlone(span, in: data) { empty = entries }
         }
         return empty
+    }
+
+    /// Whether a span has nothing but blank space around it on its own line.
+    ///
+    /// Only asked of an empty span, and only because that is the one answer
+    /// taken on no evidence but its own shape -- see ``reportedEntries(in:)``.
+    /// A `[]` written as somebody's value has a key or a sentence beside it; a
+    /// `[]` that is the command's whole answer has nothing.
+    nonisolated private static func standsAlone(
+        _ span: ClosedRange<Data.Index>,
+        in data: Data
+    ) -> Bool {
+        func isBlank(_ range: Range<Data.Index>) -> Bool {
+            data[range].allSatisfy {
+                $0 == UInt8(ascii: " ") || $0 == UInt8(ascii: "\t")
+                    || $0 == UInt8(ascii: "\r") || $0 == UInt8(ascii: "\n")
+            }
+        }
+        let lineStart = data[..<span.lowerBound]
+            .lastIndex(of: UInt8(ascii: "\n"))
+            .map(data.index(after:)) ?? data.startIndex
+        let afterSpan = data.index(after: span.upperBound)
+        let lineEnd = data[afterSpan...]
+            .firstIndex(of: UInt8(ascii: "\n")) ?? data.endIndex
+        return isBlank(lineStart ..< span.lowerBound) && isBlank(afterSpan ..< lineEnd)
+    }
+
+    /// Whether a decoded array can be the list `claude agents --json` prints.
+    ///
+    /// An empty array passes, and has to: `[]` is the one answer that says the
+    /// product is closed, and there is nothing in it left to check. Which span
+    /// an empty answer may be taken from is a separate question, and
+    /// ``reportedEntries(in:)`` answers it.
+    nonisolated private static func isSessionList(_ entries: [Reported]) -> Bool {
+        entries.allSatisfy { $0.identity != nil }
     }
 
     /// Every balanced `[ ... ]` in the stream, in the order they open.

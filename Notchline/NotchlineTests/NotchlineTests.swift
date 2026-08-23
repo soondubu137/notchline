@@ -14088,10 +14088,19 @@ for line in sys.stdin:
         )
     }
 
-    /// Entries missing anything that makes them addressable are dropped rather
-    /// than filled in.
+    /// Nothing that makes an entry addressable is ever filled in, and an array
+    /// holding one that cannot be is refused whole.
+    ///
+    /// This used to assert that the addressable entry survived while the rest
+    /// were dropped. Half of that is still right — nothing is guessed at — but
+    /// keeping the remainder is not tolerance, it is the failure: an array of
+    /// objects that are not sessions at all then read as an *answered empty*
+    /// list, which reports the product closed and is held until an edge arrives
+    /// (CR-Codex-001), and the milder version of the same thing is an answer
+    /// short by a live session with nothing anywhere saying so. An entry this
+    /// code cannot explain means the span was misread, so the span goes.
     @Test @MainActor
-    func theSessionListRefusesEntriesItCannotAddress() async {
+    func theSessionListRefusesAnArrayHoldingAnEntryItCannotAddress() async {
         let responses = ResponseQueue(items: [
             Data("""
             [{"pid": 1, "cwd": "/a", "startedAt": 1000, "sessionId": "keep"},
@@ -14099,11 +14108,18 @@ for line in sys.stdin:
              {"pid": 3, "startedAt": 1000, "sessionId": "no-cwd"},
              {"cwd": "/d", "startedAt": 1000, "sessionId": "no-pid"},
              {"pid": 5, "cwd": "/e", "sessionId": "no-start"}]
+            """.utf8),
+            Data("""
+            [{"pid": 1, "cwd": "/a", "startedAt": 1000, "sessionId": "keep"},
+             {"pid": 2, "cwd": "/b", "startedAt": 1000, "sessionId": "also"}]
             """.utf8)
         ])
         let registry = ClaudeCodeSessionRegistry(read: { await responses.next() })
-        let sessions = await registry.refresh()
-        #expect(sessions.map(\.sessionID) == ["keep"])
+        #expect(await registry.refresh().isEmpty)
+
+        // The same array with every identity complete is read in full, so what
+        // was refused above is the missing field rather than the entry's shape.
+        #expect(await registry.refresh().map(\.sessionID) == ["keep", "also"])
     }
 
     /// This app's own quota reading is not one of the user's sessions.
@@ -14270,6 +14286,135 @@ for line in sys.stdin:
         []
         """.utf8)
         #expect(ClaudeCodeSessionRegistry.sessions(in: genuinelyEmpty)?.isEmpty == true)
+
+        // With no list under it at all, that same log line is not an answer of
+        // any kind. An empty span counts only where it stands by itself, which
+        // is how a command printing JSON writes one and is not how a value
+        // appears inside a sentence (CR-Codex-001).
+        let onlyNoise = Data("[INFO] mcp-server: advertised tools []".utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: onlyNoise) == nil)
+    }
+
+    /// An object array that is not a session list is not read as one.
+    ///
+    /// `Reported` makes every field optional, so it decodes any JSON object at
+    /// all — and the "non-empty span wins" rule then handed the answer to the
+    /// first one in the stream. An MCP server logging its tools above the real
+    /// list was therefore taken as the reading: every entry fell out for want
+    /// of a `sessionId`, and the empty list left behind is a *known*-empty one,
+    /// so the product was reported closed with its sessions still running and
+    /// that answer was held until an edge arrived (CR-Codex-001).
+    ///
+    /// A candidate now has to prove it is a session list, and the proof is that
+    /// every entry carries the four fields that identify one.
+    @Test @MainActor
+    func anObjectArrayThatIsNotASessionListIsRefusedRatherThanReadAsEmpty() {
+        // Nothing else in the stream: refused outright, which keeps the last
+        // list rather than reporting the product closed.
+        #expect(ClaudeCodeSessionRegistry.sessions(in: Data("[{}]".utf8)) == nil)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: Data("[{\"tools\": []}]".utf8)) == nil)
+
+        // And the shape it was measured in: a server's own array printed above
+        // the command's. The noise opens first and would have won.
+        let noiseAbove = Data("""
+        [mcp] tools: [{"name": "read_file"}, {"name": "write_file"}]
+        [
+          {
+            "pid": 11115,
+            "cwd": "/Users/someone/Projects/thing",
+            "kind": "interactive",
+            "startedAt": 1786919144634,
+            "sessionId": "s-1",
+            "name": "thing-21"
+          }
+        ]
+        """.utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: noiseAbove)?.map(\.sessionID) == ["s-1"])
+    }
+
+    /// Part of a session list is not a session list.
+    ///
+    /// Dropping the entries this code cannot explain and keeping the rest looks
+    /// like tolerance and is not: the answer that comes back is short by a live
+    /// session and still marked trusted, so a row disappears from the notch
+    /// with nothing anywhere reporting that anything went wrong. A mixed array
+    /// is a span misread, and the whole span is refused — one lost reading,
+    /// retried on the cadence, against a silently wrong one held.
+    @Test @MainActor
+    func aMixedArrayIsRefusedRatherThanQuietlyLosingASession() {
+        let mixed = Data("""
+        [
+          {
+            "pid": 11115,
+            "cwd": "/Users/someone/Projects/thing",
+            "startedAt": 1786919144634,
+            "sessionId": "s-1"
+          },
+          { "note": "spawned by the runner" }
+        ]
+        """.utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: mixed) == nil)
+
+        // The same bytes with the entry completed decode as both sessions, so
+        // what is being refused above is the missing identity and not the
+        // fields nobody promised.
+        let whole = Data("""
+        [
+          {
+            "pid": 11115,
+            "cwd": "/Users/someone/Projects/thing",
+            "startedAt": 1786919144634,
+            "sessionId": "s-1"
+          },
+          {
+            "pid": 11116,
+            "cwd": "/Users/someone/Projects/other",
+            "startedAt": 1786919144999,
+            "sessionId": "s-2",
+            "note": "spawned by the runner"
+          }
+        ]
+        """.utf8)
+        #expect(ClaudeCodeSessionRegistry.sessions(in: whole)?.map(\.sessionID) == ["s-1", "s-2"])
+    }
+
+    /// A refused list keeps the rows on the notch instead of retiring them.
+    ///
+    /// The parser test above says what is decoded; this says what it costs. A
+    /// candidate the registry will not vouch for has to leave ``performRead()``
+    /// down the same road a command that never answered takes — last list kept,
+    /// attempt unanswered, cadence resumed — because the alternative is the
+    /// bug: an answered empty list is a known-empty one, it reports the product
+    /// closed, and it is then held until something invalidates it.
+    @Test @MainActor
+    func aReadPollutedByAnObjectArrayKeepsTheSessionsItAlreadyHad() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let real = Data("""
+        [{"pid": 11115, "cwd": "/w", "startedAt": 1786919144634, "sessionId": "s-1"}]
+        """.utf8)
+        let counter = ReadCounter(answer: real)
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            trustCeiling: 90,
+            read: { await counter.read() }
+        )
+
+        #expect(await registry.presence() == .open)
+        #expect(await registry.liveSessions().map(\.sessionID) == ["s-1"])
+
+        // The next read comes back as somebody else's array, with the real list
+        // nowhere in it.
+        await counter.respond(with: Data("[{\"tools\": []}]".utf8))
+        await clock.advance(by: 31)
+        #expect(await registry.presence() == .open)
+        #expect(await registry.liveSessions().map(\.sessionID) == ["s-1"])
+
+        // And because the attempt counts as unanswered, the command is retried
+        // on the cadence rather than the answer being held.
+        await clock.advance(by: 31)
+        _ = await registry.presence()
+        #expect(await counter.count == 3)
     }
 
     /// The command reports what a session is doing, and one word this app does
