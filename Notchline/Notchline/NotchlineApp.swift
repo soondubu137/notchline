@@ -91,6 +91,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !AppProcess.isHostingTests else { return }
         overlayController = OverlayPanelController(store: .shared)
         overlayController?.show()
+
+        // The one launch that opens a window is also the one that has to ask
+        // for the foreground.
+        //
+        // `LSUIElement` makes this an accessory application, and the third
+        // thing that buys — after no Dock tile and no menu bar — is **no
+        // activation at launch**. A regular app comes up frontmost and the
+        // window the `Window` scene presents is key; an accessory one comes up
+        // behind whatever the user was already doing, so onboarding would
+        // arrive with an inactive title bar under someone else's window and
+        // `Start` would not take the Return it declares. Every launch after
+        // that wants the accessory behaviour exactly as it is: the overlay is
+        // a non-activating panel, and taking the foreground to put it up would
+        // be a bug.
+        //
+        // `ignoringOtherApps:` rather than the cooperative `NSApp.activate()`
+        // that ``SettingsWindowPresenter`` uses, because **the cooperative one
+        // is refused here** — measured, with Chrome frontmost and this app
+        // launched by `open`: the foreground stayed with Chrome, both when the
+        // call was made from this method and when it was deferred a turn to
+        // let SwiftUI put the window up first. The gear keeps the cooperative
+        // call and keeps working, because there the activation is answering a
+        // click the user has just made.
+        guard !MonitorStore.shared.hasCompletedOnboarding else { return }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -139,8 +164,10 @@ struct NotchlineApp: App {
         // window triggers, is **half of the launch's CPU** (`0.62 s -> 0.32 s`
         // of a Release launch, peak `%cpu` `55 -> 33`; see
         // `system-architecture.md` §6). Nothing asked for that window: the
-        // product is the overlay, and the same view is one `⌘,` away in the
-        // `Settings` scene below.
+        // product is the overlay, and the same view is one click on the
+        // overlay's gear away, through the `Settings` scene below. (It is not
+        // also a `⌘,` away any more — an `LSUIElement` app has no menu bar
+        // for that item to live in; see ``AppDelegate``.)
         //
         // There is exactly one launch that does want it, and that is the
         // first: onboarding has to appear without being sent for.
@@ -154,8 +181,9 @@ struct NotchlineApp: App {
         )
 
         // The tracker hands this scene's window to ``SettingsWindowPresenter``,
-        // which is what makes `⌘,` land in front of the user on the display
-        // they are working on rather than wherever the window was last closed.
+        // which is what makes the gear land in front of the user on the
+        // display they are working on rather than wherever the window was
+        // last closed.
         Settings {
             AppSettingsView()
                 .environmentObject(store)

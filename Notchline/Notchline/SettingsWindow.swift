@@ -695,9 +695,12 @@ enum SettingsWindowPresenter {
     /// Takes the window the `Settings` scene has just built, before it is on
     /// screen.
     ///
-    /// Also the hook for every *other* way this window opens — `⌘,` and the
-    /// app menu go through SwiftUI's own item, which this app does not see.
-    /// Those are caught by watching the window cross between hidden and shown.
+    /// Also the hook for any *other* way this window opens. `⌘,` and the app
+    /// menu used to be one — they go through SwiftUI's own item, which this
+    /// app does not see — and are now gone entirely, because an `LSUIElement`
+    /// app has no menu bar to put that item in. Watching the window cross
+    /// between hidden and shown catches whatever is left, and is what places
+    /// the window anyway.
     static func track(_ window: NSWindow) {
         guard window !== Self.window else { return }
         Self.window = window
