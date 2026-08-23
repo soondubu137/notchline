@@ -1312,7 +1312,8 @@ enum CodexSnapshotParser {
             title: title,
             preview: preview,
             status: status,
-            startedAt: state.startedAt
+            startedAt: state.startedAt,
+            runningSubagentCount: state.runningSubagentIDs.count
         )
     }
 

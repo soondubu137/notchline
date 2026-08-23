@@ -296,6 +296,16 @@ nonisolated enum HookSignal: Sendable, Equatable {
     case toolCallClosed
     /// The turn reached its terminal.
     case turnEnded
+    /// A subagent this thread spawned began working.
+    ///
+    /// Not a turn boundary and deliberately not treated as one. A subagent runs
+    /// in a thread of its own with a turn id of its own, and outlives the turn
+    /// that spawned it -- measured 2026-08-22, the parent's `Stop` at 22:20:10
+    /// and the subagent's finish at 22:21:41. It is a fact about the *thread*,
+    /// so it names no turn and ends none.
+    case subagentStarted
+    /// A subagent this thread spawned finished.
+    case subagentStopped
     /// Recognised and consumed, with nothing to say about turn state.
     case inert
 }
@@ -363,18 +373,28 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated let carriesTurnText = true
     nonisolated let messageDeltaEventName: String? = nil
 
-    /// Five definitions, and this exact set is the contract §4.2 freezes.
+    /// Seven definitions, and this exact set is the contract §4.2 freezes.
     ///
     /// `SessionEnd` is deliberately absent, and it was registered until this
-    /// design. It cost one process launch per session end and a sixth
+    /// design. It cost one process launch per session end and one more
     /// definition for the user to trust, and it bought nothing: it reduced to
     /// exactly what an unrecognised-but-ours event reduces to, which is
     /// nothing. A thread whose session is gone is already retired by App Server
     /// membership reconciliation.
+    ///
+    /// `SubagentStart` and `SubagentStop` are the two newest, and they are the
+    /// only events that can answer whether a thread still has work in flight
+    /// after its own turn has ended. Nothing else can: the subagent's
+    /// tool calls arrive stamped with the parent's `session_id`, so they cannot
+    /// be told apart from the main agent's by identity alone, and the tool that
+    /// spawns one returns immediately, so its `PostToolUse` proves only that
+    /// the spawn was accepted.
     nonisolated var managedDefinitions: [ManagedHookDefinition] {
         [
             ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
             ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
+            ManagedHookDefinition(event: "SubagentStart", matcher: nil),
+            ManagedHookDefinition(event: "SubagentStop", matcher: nil),
             // Deliberately unmatched. Registering an exact tool-name regex here
             // means a naming detail decides whether a wait is ever observed, and
             // a miss is silent. It would cut ~90% of the event volume and it
@@ -412,7 +432,14 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
         case ("PostToolUse", _):
             .toolCallClosed
         case ("Stop", _):
+            // The main agent's terminal, and only the main agent's: the
+            // official `stop.command.input` schema carries no `agent_id`, while
+            // `subagent-stop.command.input` requires one.
             .turnEnded
+        case ("SubagentStart", _):
+            .subagentStarted
+        case ("SubagentStop", _):
+            .subagentStopped
         case ("SessionEnd", _):
             // Not registered by this build, and consumed rather than reported
             // so that a user who has not yet repaired an older registration
@@ -994,6 +1021,16 @@ struct HookTurnState: Sendable {
     var retiredTurnIDs: Set<String>
     var promptPreview: String?
     var assistantPreview: String?
+    /// Subagents this thread has started and not yet seen stop.
+    ///
+    /// **A fact about the thread, carried on whichever turn it currently
+    /// holds.** A subagent outlives the turn that spawned it, so it is copied
+    /// across every turn boundary rather than reset by one -- a user replying
+    /// while a subagent is still working must not make it disappear. Keyed by
+    /// `agent_id`, which is the only identity both `SubagentStart` and
+    /// `SubagentStop` carry; their `turn_id` is the subagent's own and names
+    /// nothing this reducer holds.
+    var runningSubagentIDs: Set<String> = []
 
     nonisolated var status: SessionStatus {
         sessionStatus
@@ -1047,6 +1084,17 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     let hookEventName: String?
     let sessionID: String?
     let turnID: String?
+    /// The subagent that produced this event, when one did.
+    ///
+    /// Codex stamps a subagent's hooks with its **parent's** identity: the
+    /// subagent's own rollout records `session_id` as the parent thread, and
+    /// its stop hooks resolve the parent's transcript path (measured
+    /// 2026-08-22, CLI `0.149.0-alpha.4.1`). So `session_id` alone cannot say
+    /// which agent is speaking, and this is the field that can -- it is
+    /// present on `PreToolUse`, `PostToolUse`, `PermissionRequest` and
+    /// `UserPromptSubmit` only when a subagent produced them, and required on
+    /// `SubagentStart` and `SubagentStop`.
+    let agentID: String?
     let toolName: String?
     let toolUseID: String?
     let permissionMode: String?
@@ -1061,6 +1109,7 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         case sessionID = "session_id"
         case turnID = "turn_id"
         case promptID = "prompt_id"
+        case agentID = "agent_id"
         case toolName = "tool_name"
         case toolUseID = "tool_use_id"
         case permissionMode = "permission_mode"
@@ -1089,6 +1138,7 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         sessionID = try container.decodeIfPresent(String.self, forKey: .sessionID)
         turnID = try container.decodeIfPresent(String.self, forKey: .turnID)
             ?? container.decodeIfPresent(String.self, forKey: .promptID)
+        agentID = try container.decodeIfPresent(String.self, forKey: .agentID)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolUseID = try container.decodeIfPresent(String.self, forKey: .toolUseID)
         permissionMode = try container.decodeIfPresent(String.self, forKey: .permissionMode)
@@ -2176,6 +2226,37 @@ actor HookEventRepository {
             return true
         }
 
+        // Both subagent signals are facts about the thread and name no turn
+        // this reducer holds, so they answer before the turn identity gate.
+        switch signal {
+        case .subagentStarted, .subagentStopped:
+            guard let agentID = stableIdentifier(event.agentID) else { return false }
+            reduceSubagentBoundary(signal, agentID: agentID, threadID: threadID)
+            return true
+        default:
+            break
+        }
+
+        // **An event a subagent produced is not evidence about the thread's
+        // turn, and must not be allowed to become one.** Codex stamps a
+        // subagent's hooks with the parent's `session_id` but the subagent's
+        // own `turn_id`, so before this gate existed a subagent's first
+        // `PreToolUse` was adopted as a continuation of the row's turn -- which
+        // retired the real turn id, and the parent's own `Stop` was then
+        // rejected as late. Nothing could end what was left: no hook names that
+        // turn id again, the thread is still listed so membership
+        // reconciliation keeps the row, and Codex has no activity read to
+        // settle it. The row said *Running* until the user resumed the thread
+        // or dismissed it by hand.
+        //
+        // Dropped whole rather than half: `PreToolUse` and `PostToolUse` go
+        // together, or the counters behind
+        // ``undeliveredPreToolUseDiagnostic`` would see closes without opens
+        // and report a definition that has lost trust.
+        if stableIdentifier(event.agentID) != nil {
+            return true
+        }
+
         guard let turnID = stableIdentifier(event.turnID) else {
             return false
         }
@@ -2192,6 +2273,9 @@ actor HookEventRepository {
         switch signal {
         case .turnStarted:
             var retiredTurnIDs = Set<String>()
+            // A subagent is not ended by the user typing again, so it survives
+            // the turn boundary that its spawning turn does not.
+            let runningSubagentIDs = turnsByThreadID[threadID]?.runningSubagentIDs ?? []
             if let current = turnsByThreadID[threadID] {
                 if current.turnID == turnID {
                     guard receivedAt >= current.lastEventAt else { return true }
@@ -2218,7 +2302,8 @@ actor HookEventRepository {
                 promptPreview: carriesText
                     ? HookSessionPreviewStore.normalized(event.prompt)
                     : nil,
-                assistantPreview: nil
+                assistantPreview: nil,
+                runningSubagentIDs: runningSubagentIDs
             )
         case .approvalWaitInferred:
             mutateExactTurn(
@@ -2375,11 +2460,43 @@ actor HookEventRepository {
                 $0.pendingApproval = nil
                 $0.assistantPreview = assistantPreview
             }
-        case .inert:
-            // Answered above, before the turn identity gate.
+        case .subagentStarted, .subagentStopped, .inert:
+            // All three are answered above, before the turn identity gate.
             break
         }
         return true
+    }
+
+    /// Records a subagent starting or stopping on a thread.
+    ///
+    /// **Deliberately not routed through
+    /// ``mutateExactTurn(threadID:turnID:at:createWith:adoptContinuationWith:mutation:)``.**
+    /// That function's whole job is exact turn identity, and these two events
+    /// carry the *subagent's* turn id -- a value this reducer has never held
+    /// and must never adopt. What they carry that is useful is `agent_id`,
+    /// which pairs a start with its stop across a parent turn boundary.
+    ///
+    /// It attaches to a turn the thread already has and never creates one: a
+    /// subagent is something a turn spawned, so a thread with no turn open has
+    /// no row for the mark to appear on. The arrival stamp is deliberately not
+    /// taken -- this is not activity by the turn, so it must not move
+    /// `lastEventAt`, where it would let a subagent's chatter fend off the
+    /// membership reconciliation that is the reducer's only bound.
+    private func reduceSubagentBoundary(
+        _ signal: HookSignal,
+        agentID: String,
+        threadID: String
+    ) {
+        guard var turn = turnsByThreadID[threadID] else { return }
+        switch signal {
+        case .subagentStarted:
+            turn.runningSubagentIDs.insert(agentID)
+        case .subagentStopped:
+            turn.runningSubagentIDs.remove(agentID)
+        default:
+            return
+        }
+        turnsByThreadID[threadID] = turn
     }
 
     /// Ends an inferred approval as soon as another call shows any activity.
@@ -2441,7 +2558,8 @@ actor HookEventRepository {
                     lastEventAt: date,
                     retiredTurnIDs: retiredTurnIDs,
                     promptPreview: current.promptPreview,
-                    assistantPreview: nil
+                    assistantPreview: nil,
+                    runningSubagentIDs: current.runningSubagentIDs
                 )
             }
         } else {
@@ -2490,7 +2608,10 @@ actor HookEventRepository {
                     turn.turnID,
                     String(describing: turn.sessionStatus),
                     turn.promptPreview ?? "",
-                    turn.assistantPreview ?? ""
+                    turn.assistantPreview ?? "",
+                    // The row draws how many, so a second one starting is a
+                    // change the panel has to be woken for.
+                    String(turn.runningSubagentIDs.count)
                 ].joined(separator: "\u{1}")
             }
             .sorted()

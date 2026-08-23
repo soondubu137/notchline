@@ -406,6 +406,16 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     let preview: String?
     let status: SessionStatus
     let startedAt: Date?
+    /// Subagents this thread started that have not been seen to stop.
+    ///
+    /// **Row data, not a fifth state.** It follows the terminal reason exactly
+    /// (`CONTEXT.md`'s 终态原因): the row's one mark stays the timer, and what
+    /// qualifies it is said in words instead. A subagent outlives the turn that spawned it,
+    /// so a Completed row can still have one in flight — that is the case the
+    /// count exists for, and the row would otherwise read as finished while the
+    /// thread is still working. Zero for every product but Codex: nothing else
+    /// reports a subagent boundary this app registers.
+    let runningSubagentCount: Int
 
     nonisolated init(
         agent: AgentKind = .codex,
@@ -415,7 +425,8 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         title: String,
         preview: String?,
         status: SessionStatus,
-        startedAt: Date?
+        startedAt: Date?,
+        runningSubagentCount: Int = 0
     ) {
         self.agent = agent
         self.threadID = threadID
@@ -425,6 +436,25 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.preview = preview
         self.status = status
         self.startedAt = startedAt
+        self.runningSubagentCount = runningSubagentCount
+    }
+
+    /// Whether the row says work is still in flight beside its own turn.
+    nonisolated var hasRunningSubagent: Bool { runningSubagentCount > 0 }
+
+    /// What the row says once its own turn has stopped but the thread has not.
+    ///
+    /// `nil` while the turn is still timing. The row's one mark is the elapsed
+    /// readout and this does not displace it: a running row already says the
+    /// thread is working, so the count would only be a second mark saying the
+    /// same thing. Once the clock stops, the slot the timer had is where this
+    /// goes — a finished row that draws nothing there reads as finished, and
+    /// with a subagent still working that is not what happened.
+    nonisolated var runningSubagentSummary: String? {
+        guard !status.keepsTiming, hasRunningSubagent else { return nil }
+        return runningSubagentCount == 1
+            ? "1 subagent"
+            : "\(runningSubagentCount) subagents"
     }
 
     /// The row's identity, and the key for the dismissed set, the terminal

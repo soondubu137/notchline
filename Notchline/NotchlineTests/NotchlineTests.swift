@@ -7871,6 +7871,240 @@ for line in sys.stdin:
         #expect(turns.first?.status == .approvalNeeded)
     }
 
+    /// A subagent outliving its turn leaves the row finished, and still working.
+    ///
+    /// **The measured shape, 2026-08-22, Codex Desktop against CLI
+    /// `0.149.0-alpha.4.1`.** Thread `01a02d08-bace…` spawned
+    /// `01a02d0d-e6f6…` at 22:18:01 through the `spawn_agent` tool, the main
+    /// agent's turn ended at 22:20:10, and the subagent finished at 22:21:41 —
+    /// 91 seconds later.
+    ///
+    /// Two facts make that sequence dangerous. Codex stamps a subagent's hooks
+    /// with the **parent's** `session_id` (its rollout records the parent as
+    /// `session_id`, and its stop hooks resolve the parent's transcript path),
+    /// and it stamps them with the **subagent's own** `turn_id`. So a
+    /// subagent's first `PreToolUse` used to be adopted as a continuation of
+    /// the row's turn, which retired the real turn id; the parent's own `Stop`
+    /// was then rejected as late, and nothing could ever end what was left —
+    /// no hook names that turn id again, the thread is still listed so
+    /// membership reconciliation keeps the row, and Codex has no activity read
+    /// to settle it. The row said *Running* for good.
+    @Test @MainActor
+    func aSubagentOutlivingItsTurnLeavesTheRowFinishedAndStillWorking() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
+        let repository = HookEventRepository(paths: paths)
+
+        let parent = "01a02d08-bace"
+        let parentTurn = "01a02d0d-4be5"
+        let subagentTurn = "01a02d0d-e72c"
+        var clock = Date(timeIntervalSince1970: 0)
+        func send(_ body: [String: Any], after seconds: TimeInterval) async {
+            clock = clock.addingTimeInterval(seconds)
+            repository.deliver(
+                try! JSONSerialization.data(withJSONObject: body),
+                at: clock
+            )
+            _ = await repository.drainDeliveredEvents()
+        }
+
+        await send([
+            "hook_event_name": "UserPromptSubmit", "session_id": parent,
+            "turn_id": parentTurn, "prompt": "draft the PRD"
+        ], after: 1)
+
+        // The spawn is the main agent's own call: no `agent_id`, and it returns
+        // immediately, so its close proves only that the spawn was accepted.
+        await send([
+            "hook_event_name": "PreToolUse", "session_id": parent,
+            "turn_id": parentTurn, "tool_name": "spawn_agent",
+            "tool_use_id": "call-spawn"
+        ], after: 1)
+        await send([
+            "hook_event_name": "PostToolUse", "session_id": parent,
+            "turn_id": parentTurn, "tool_name": "spawn_agent",
+            "tool_use_id": "call-spawn"
+        ], after: 1)
+        await send([
+            "hook_event_name": "SubagentStart", "session_id": parent,
+            "turn_id": parentTurn, "agent_id": "agent-1",
+            "agent_type": "tikzcd_syntax_audit"
+        ], after: 1)
+
+        // The subagent's own work, under the parent's session and its own turn.
+        for id in ["call-a", "call-b"] {
+            await send([
+                "hook_event_name": "PreToolUse", "session_id": parent,
+                "turn_id": subagentTurn, "agent_id": "agent-1",
+                "tool_name": "shell", "tool_use_id": id
+            ], after: 1)
+            await send([
+                "hook_event_name": "PostToolUse", "session_id": parent,
+                "turn_id": subagentTurn, "agent_id": "agent-1",
+                "tool_name": "shell", "tool_use_id": id
+            ], after: 1)
+        }
+
+        var turns = await repository.observedState().turns
+        // The row's turn is still the one the user started. Nothing a subagent
+        // did was allowed to become the thread's turn.
+        #expect(turns.first?.turnID == parentTurn)
+        #expect(turns.first?.status == .running)
+
+        await send([
+            "hook_event_name": "Stop", "session_id": parent,
+            "turn_id": parentTurn,
+            "last_assistant_message": "Seven decisions to confirm."
+        ], after: 1)
+
+        turns = await repository.observedState().turns
+        var turn = try #require(turns.first)
+        // The main agent's `Stop` lands, and lands on the turn it names.
+        #expect(turn.turnID == parentTurn)
+        #expect(turn.status == .completed)
+        #expect(turn.assistantPreview == "Seven decisions to confirm.")
+        #expect(turn.runningSubagentIDs == ["agent-1"])
+
+        var session = try #require(CodexSnapshotParser.session(
+            from: turn, thread: nil, projectName: "tikzcd-editor"
+        ))
+        // Finished, and saying what is still in flight beside it.
+        #expect(session.status == .completed)
+        #expect(session.runningSubagentSummary == "1 subagent")
+
+        // 91 seconds later on the measurement, and the terminal it arrives with
+        // is `SubagentStop` -- `Stop` carries no `agent_id` and never describes
+        // a subagent.
+        await send([
+            "hook_event_name": "SubagentStop", "session_id": parent,
+            "turn_id": subagentTurn, "agent_id": "agent-1",
+            "last_assistant_message": "Audit complete."
+        ], after: 91)
+
+        turn = try #require(await repository.observedState().turns.first)
+        #expect(turn.runningSubagentIDs.isEmpty)
+        // The subagent's own closing text is not the row's: the row reports its
+        // turn, and its turn ended with the main agent's answer.
+        #expect(turn.assistantPreview == "Seven decisions to confirm.")
+        session = try #require(CodexSnapshotParser.session(
+            from: turn, thread: nil, projectName: "tikzcd-editor"
+        ))
+        #expect(session.status == .completed)
+        #expect(session.runningSubagentSummary == nil)
+    }
+
+    /// A subagent that is still working while its parent turn is not finished
+    /// does not get a mark of its own.
+    ///
+    /// The row carries one mark and it is the elapsed readout (PRD §10). A
+    /// running row is already saying the thread is working, so the count would
+    /// be a second mark repeating it; the slot only has something else to say
+    /// once the turn's own clock has stopped. Counting is separate from
+    /// drawing, so the reducer keeps the set either way.
+    @Test @MainActor
+    func aRunningRowKeepsTheTimerAsItsOnlyMark() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
+        let repository = HookEventRepository(paths: paths)
+
+        var clock = Date(timeIntervalSince1970: 0)
+        func send(_ body: [String: Any]) async {
+            clock = clock.addingTimeInterval(1)
+            repository.deliver(
+                try! JSONSerialization.data(withJSONObject: body),
+                at: clock
+            )
+            _ = await repository.drainDeliveredEvents()
+        }
+
+        await send([
+            "hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "t"
+        ])
+        await send([
+            "hook_event_name": "SubagentStart", "session_id": "s",
+            "turn_id": "t", "agent_id": "a1"
+        ])
+        await send([
+            "hook_event_name": "SubagentStart", "session_id": "s",
+            "turn_id": "t", "agent_id": "a2"
+        ])
+
+        var turn = try #require(await repository.observedState().turns.first)
+        #expect(turn.runningSubagentIDs == ["a1", "a2"])
+        var session = try #require(CodexSnapshotParser.session(
+            from: turn, thread: nil, projectName: "P"
+        ))
+        #expect(session.status == .running)
+        #expect(session.runningSubagentCount == 2)
+        #expect(session.runningSubagentSummary == nil)
+
+        await send([
+            "hook_event_name": "Stop", "session_id": "s", "turn_id": "t"
+        ])
+        turn = try #require(await repository.observedState().turns.first)
+        session = try #require(CodexSnapshotParser.session(
+            from: turn, thread: nil, projectName: "P"
+        ))
+        #expect(session.runningSubagentSummary == "2 subagents")
+
+        // A subagent is not ended by the user typing again, so it survives the
+        // turn boundary that the turn it was spawned by does not.
+        await send([
+            "hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "t2"
+        ])
+        turn = try #require(await repository.observedState().turns.first)
+        #expect(turn.turnID == "t2")
+        #expect(turn.runningSubagentIDs == ["a1", "a2"])
+    }
+
+    /// A subagent boundary never opens, names or ends a turn.
+    ///
+    /// Both events carry the *subagent's* `turn_id`, which is a value this
+    /// reducer has never held. Routing them through the exact-turn rule would
+    /// adopt it -- which is the whole defect -- so they attach to a turn the
+    /// thread already has and create none.
+    @Test @MainActor
+    func aSubagentBoundaryNeverOpensOrEndsATurn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
+        let repository = HookEventRepository(paths: paths)
+
+        repository.deliver(
+            try JSONSerialization.data(withJSONObject: [
+                "hook_event_name": "SubagentStart", "session_id": "s",
+                "turn_id": "sub-turn", "agent_id": "a1"
+            ]),
+            at: Date(timeIntervalSince1970: 1)
+        )
+        // Recognised and consumed -- not a payload the store failed to place --
+        // and it left no row behind.
+        var state = await repository.drainDeliveredEvents()
+        #expect(state.turns.isEmpty)
+        #expect(state.diagnostic == nil)
+
+        repository.deliver(
+            try JSONSerialization.data(withJSONObject: [
+                "hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "t"
+            ]),
+            at: Date(timeIntervalSince1970: 2)
+        )
+        repository.deliver(
+            try JSONSerialization.data(withJSONObject: [
+                "hook_event_name": "SubagentStop", "session_id": "s",
+                "turn_id": "sub-turn", "agent_id": "a1"
+            ]),
+            at: Date(timeIntervalSince1970: 3)
+        )
+        state = await repository.drainDeliveredEvents()
+        let turn = try #require(state.turns.first)
+        #expect(turn.turnID == "t")
+        #expect(turn.status == .running)
+        // A stop for a subagent this reducer never saw start removes nothing
+        // and ends nothing.
+        #expect(turn.runningSubagentIDs.isEmpty)
+        #expect(state.diagnostic == nil)
+    }
+
     @Test @MainActor
     func registrationMergesAtTheTailAndAnAlreadyCorrectInstallWritesNothing() async throws {
         let paths = makeTemporaryHookPaths()
@@ -7935,12 +8169,15 @@ for line in sys.stdin:
             .compactMap { $0["command"] as? String }
         #expect(lastGroupCommands == [managedCommand])
 
-        // Five definitions, and `SessionEnd` is not one of them. It was
+        // Seven definitions, and `SessionEnd` is not one of them. It was
         // registered until this design and reduced to nothing: one process
-        // launch per session end, and a sixth definition for the user to trust.
+        // launch per session end, and one more definition for the user to
+        // trust. The two subagent boundaries earn theirs -- see
+        // ``aSubagentOutlivingItsTurnLeavesTheRowFinishedAndStillWorking``.
         #expect(
             Set(hooks.keys) == [
                 "UserPromptSubmit", "PermissionRequest",
+                "SubagentStart", "SubagentStop",
                 "PreToolUse", "PostToolUse", "Stop"
             ]
         )
@@ -9508,6 +9745,20 @@ for line in sys.stdin:
                 == .approvalWaitOpened
         )
         #expect(vocabulary.signal(forEvent: "PreToolUse", toolName: "shell") == .toolCallOpened)
+        // The two subagent boundaries, and the terminal that is not one of
+        // them. `stop.command.input` carries no `agent_id` and
+        // `subagent-stop.command.input` requires one, so a subagent's finish
+        // never arrives spelled `Stop` -- reading it as the turn's terminal
+        // would end a row while its own turn was still working.
+        #expect(vocabulary.signal(forEvent: "SubagentStart", toolName: nil) == .subagentStarted)
+        #expect(vocabulary.signal(forEvent: "SubagentStop", toolName: nil) == .subagentStopped)
+        #expect(vocabulary.signal(forEvent: "Stop", toolName: nil) == .turnEnded)
+        // Claude Code's subagents share their parent's `prompt_id` (ADR 0013),
+        // so they are already the same turn and it registers neither event.
+        #expect(
+            ClaudeCodeHookVocabulary().signal(forEvent: "SubagentStop", toolName: nil)
+                == nil
+        )
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
 
@@ -16085,10 +16336,10 @@ for line in sys.stdin:
             ClaudeCodeHookVocabulary().signal(forEvent: "SessionEnd", toolName: nil)
                 == nil
         )
-        // Five, and this exact set is what the frozen-definition contract
+        // Seven, and this exact set is what the frozen-definition contract
         // pins: change it and Codex stops running the changed definition until
         // the user re-trusts it, silently.
-        #expect(CodexHookVocabulary().managedDefinitions.count == 5)
+        #expect(CodexHookVocabulary().managedDefinitions.count == 7)
     }
 
     /// Notification is not registered either, and its types are why (CC-011).

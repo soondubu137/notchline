@@ -575,8 +575,12 @@ private struct SessionRow: View {
         // time. The row draws the elapsed value, so the label must carry it too.
         let elapsed = store.spokenElapsedText(for: session).map { ", running for \($0)" }
             ?? ""
+        // The drawn form is a bare count in the slot the timer had; spoken, it
+        // has to say what is still running and not just how many.
+        let subagents = session.runningSubagentSummary
+            .map { ", \($0) still running" } ?? ""
         return "\(session.projectName), \(session.title), "
-            + "\(session.status.displayName)\(elapsed)\(preview)"
+            + "\(session.status.displayName)\(elapsed)\(subagents)\(preview)"
     }
 }
 
@@ -674,6 +678,14 @@ private struct SessionStatusControl: View {
     // colours left on it. A row that wants the user counts in bright white; a
     // running row counts dim; a finished row shows nothing, because its still
     // body and absent timer already say so and the dot was a redundant third.
+    //
+    // A finished row with a subagent still working is the one exception, and it
+    // does not break the rule: the slot the timer had is not empty yet, it says
+    // what is still in flight. The turn's own clock has stopped — it really did
+    // end — but the thread has not, and a row that showed nothing there would
+    // read as finished while work it started was still running. It is
+    // drawn in the running treatment rather than the bright one because nobody
+    // is being asked for anything.
     var body: some View {
         if let startedAt = store.elapsedStart(for: session) {
             ElapsedReadout(
@@ -682,6 +694,12 @@ private struct SessionStatusControl: View {
                 tint: tint,
                 weight: weight
             )
+        } else if let subagents = session.runningSubagentSummary {
+            Text(subagents)
+                .font(.system(size: 13, weight: .light))
+                .foregroundStyle(NotchPalette.label)
+                .fixedSize()
+                .accessibilityHidden(true)
         } else if session.status.keepsTiming {
             // Unfinished but its start was never observed — unreachable with
             // hook-sourced data, and it must not be left unmarked when previews
