@@ -112,7 +112,7 @@ nonisolated static func effectiveStatus(of session: MonitoredSession) -> Session
 
 分隔符取 `U+2502`（BOX DRAWINGS LIGHT VERTICAL），两侧各一个普通空格。SF Pro 里它与 ASCII 竖线同宽、几乎同形，取它是因为它是一条分隔规则而不是一个字符。整串画在同一个 raster 上（`ElapsedReadout` 的 `prefix`），因为一秒一变的只是它的计时那一半，而面板宽度必须由**一次**测量得出。
 
-代价照第 5 节记着，并且已经明写进 PRD §6.2 与非公开集成登记表：`SubagentStop` 永久丢失时，收起态会长期停在 `Running` 并写着一个不会归零的数字，直到该 Thread 离开列表或用户右键移除该行。
+代价照第 5 节记着，并且已经明写进 PRD §6.2 与非公开集成登记表，另有 [#102](https://github.com/soondubu137/notchline/issues/102)（CR-033）单独跟踪：`SubagentStop` 永久丢失时，收起态会长期停在 `Running` 并写着一个不会归零的数字，直到该 Thread 离开列表或用户右键移除该行。
 
 ## 6. 二期：子智能体的审批（本次不做）
 
