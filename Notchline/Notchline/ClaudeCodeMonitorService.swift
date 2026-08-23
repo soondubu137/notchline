@@ -1496,7 +1496,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // in flight -- measured 2026-08-23 against CLI 2.1.241, with the
             // parent's `Stop` naming that subagent in `background_tasks` and
             // its `SubagentStop` arriving afterwards.
-            runningSubagentCount: turn.runningSubagentIDs.count
+            runningSubagentCount: turn.runningSubagentIDs.count,
+            // No routing to subtract here: this product has no equivalent of
+            // Codex's automatic reviewer on the path a hook can see, so a
+            // `PermissionRequest` that opened over one of this thread's
+            // subagents is a person being asked.
+            subagentsAwaitingApproval: turn.subagentsAwaitingApproval
         )
     }
 

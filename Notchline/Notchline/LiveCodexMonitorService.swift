@@ -1312,6 +1312,15 @@ enum CodexSnapshotParser {
         let status = approvalsReachTheUser || state.status != .approvalNeeded
             ? state.status
             : .running
+        // The same subtraction, for the same reason, on the thread's subagents.
+        // A subagent inherits the thread's reviewer: measured 2026-08-23 over
+        // the 119 rollouts on one machine, every one of the 72 subagent
+        // rollouts whose parent was also on disk carried the parent's
+        // `approvals_reviewer` as it stood when the subagent was spawned, with
+        // both values represented. So on a thread Codex reviews itself, a
+        // subagent's `PermissionRequest` is not a person being asked either.
+        let subagentsAwaitingApproval =
+            approvalsReachTheUser && state.subagentsAwaitingApproval
         let preview = status == .completed
             ? normalizedPreview(state.assistantPreview)
             : normalizedPreview(state.promptPreview)
@@ -1324,7 +1333,8 @@ enum CodexSnapshotParser {
             preview: preview,
             status: status,
             startedAt: state.startedAt,
-            runningSubagentCount: state.runningSubagentIDs.count
+            runningSubagentCount: state.runningSubagentIDs.count,
+            subagentsAwaitingApproval: subagentsAwaitingApproval
         )
     }
 

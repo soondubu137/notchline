@@ -418,6 +418,22 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// Claude Code through its `Agent` tool, whose call returns as soon as the
     /// subagent is launched.
     let runningSubagentCount: Int
+    /// Whether one of those subagents is sitting on a permission prompt.
+    ///
+    /// **The one thing a subagent can do that this product exists to report.**
+    /// A count says work is in flight, which is a hint; this says the product
+    /// is stopped and waiting for the person, which is the state everything
+    /// else here is built around. Measured on both products on 2026-08-23: a
+    /// subagent's `PermissionRequest` reaches the thread's hooks with the
+    /// subagent's `agent_id`, and it can arrive either side of the parent
+    /// turn's terminal — so this is true of finished rows and running ones
+    /// alike.
+    ///
+    /// A `Bool` and not a count on purpose. The trailing slot already says how
+    /// many subagents there are; how many of them are blocked is a second
+    /// number nothing draws, and the answer the user acts on — *go and look* —
+    /// is the same at one as at three.
+    let subagentsAwaitingApproval: Bool
 
     nonisolated init(
         agent: AgentKind = .codex,
@@ -428,7 +444,8 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         preview: String?,
         status: SessionStatus,
         startedAt: Date?,
-        runningSubagentCount: Int = 0
+        runningSubagentCount: Int = 0,
+        subagentsAwaitingApproval: Bool = false
     ) {
         self.agent = agent
         self.threadID = threadID
@@ -439,6 +456,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.status = status
         self.startedAt = startedAt
         self.runningSubagentCount = runningSubagentCount
+        self.subagentsAwaitingApproval = subagentsAwaitingApproval
     }
 
     /// Whether the row says work is still in flight beside its own turn.
@@ -837,7 +855,16 @@ enum MonitorAggregation {
     nonisolated static func effectiveStatus(
         of session: MonitoredSession
     ) -> SessionStatus {
-        session.status == .completed && session.hasRunningSubagent
+        // Someone is being asked something, which outranks whether anything is
+        // still working — a thread can be both at once, and only one of them
+        // needs the user. Input still outranks approval, exactly as it does
+        // within a turn (`PRD.md` §6.2, and `SessionStatus.transitioned`):
+        // a refused approval is never closed by either product, so the question
+        // that follows it is the more current fact.
+        if session.subagentsAwaitingApproval, session.status != .inputNeeded {
+            return .approvalNeeded
+        }
+        return session.status == .completed && session.hasRunningSubagent
             ? .running
             : session.status
     }

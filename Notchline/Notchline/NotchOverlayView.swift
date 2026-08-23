@@ -613,8 +613,15 @@ private struct SessionRow: View {
         // has to say what is still running and not just how many.
         let subagents = session.runningSubagentSummary
             .map { ", \($0) still running" } ?? ""
+        // Brightness cannot be read out, so the thing it is saying has to be
+        // said. It goes on any row with a blocked subagent, timed or not: a
+        // running row draws its timer bright and would otherwise say nothing
+        // about why.
+        let blocked = session.subagentsAwaitingApproval
+            ? ", a subagent is waiting for approval"
+            : ""
         return "\(session.projectName), \(session.title), "
-            + "\(session.status.displayName)\(elapsed)\(subagents)\(preview)"
+            + "\(session.status.displayName)\(elapsed)\(subagents)\(blocked)\(preview)"
     }
 }
 
@@ -721,9 +728,15 @@ private struct SessionStatusControl: View {
     // does not break the rule: the slot the timer had is not empty yet, it says
     // what is still in flight. The turn's own clock has stopped — it really did
     // end — but the thread has not, and a row that showed nothing there would
-    // read as finished while work it started was still running. It is
-    // drawn in the running treatment rather than the bright one because nobody
-    // is being asked for anything.
+    // read as finished while work it started was still running.
+    //
+    // **That count has both brightnesses, and which one it gets is the whole
+    // difference between two very different situations.** Dim, it means work is
+    // in flight and nobody is needed. Bright, it means one of those subagents is
+    // stopped on a permission prompt and the product is waiting for the person —
+    // measured on both products, and reachable on a Completed row because a
+    // subagent's dialog can open after the parent turn's terminal. The row's own
+    // state is untouched either way; see ``wantsAttention``.
     var body: some View {
         if let startedAt = store.elapsedStart(for: session) {
             ElapsedReadout(
@@ -734,8 +747,8 @@ private struct SessionStatusControl: View {
             )
         } else if let subagents = session.runningSubagentSummary {
             Text(subagents)
-                .font(.system(size: 13, weight: .light))
-                .foregroundStyle(NotchPalette.label)
+                .font(.system(size: 13, weight: textWeight))
+                .foregroundStyle(textTint)
                 .fixedSize()
                 .accessibilityHidden(true)
         } else if session.status.keepsTiming {
@@ -749,8 +762,20 @@ private struct SessionStatusControl: View {
         }
     }
 
+    /// Whether this row wants the person, from either of the two places that
+    /// can want them.
+    ///
+    /// The turn's own state is the first. The second is a subagent of this
+    /// thread sitting on a permission prompt, which is not the turn's state and
+    /// must not be turned into one: the row stays Completed, its clock stays
+    /// stopped, its preview stays the final answer, and it stays dismissable.
+    /// Only the brightness changes — which is what this surface says everything
+    /// with, and it is exactly the difference between `1 subagent` meaning
+    /// "still working" and meaning "stopped, waiting for you".
     private var wantsAttention: Bool {
-        session.status == .inputNeeded || session.status == .approvalNeeded
+        session.status == .inputNeeded
+            || session.status == .approvalNeeded
+            || session.subagentsAwaitingApproval
     }
 
     private var tint: NSColor {
@@ -758,6 +783,17 @@ private struct SessionStatusControl: View {
         wantsAttention
             ? NotchPalette.spotlightDrawingColor
             : NotchPalette.labelDrawingColor
+    }
+
+    /// The same two treatments for the count, which is drawn as text rather
+    /// than into the readout's own raster and so needs SwiftUI's spelling of
+    /// them.
+    private var textTint: Color {
+        wantsAttention ? NotchPalette.spotlight : NotchPalette.label
+    }
+
+    private var textWeight: Font.Weight {
+        wantsAttention ? .medium : .light
     }
 
     private var weight: NSFont.Weight {

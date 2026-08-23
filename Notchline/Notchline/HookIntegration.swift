@@ -464,11 +464,32 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     nonisolated let restoreDefinitionAdvice =
         "Switch Claude Code off and on in Notchline's settings to write the "
             + "hooks back into ~/.claude/settings.json."
-    /// `PermissionDenied` carries the refused call's `tool_use_id`, so a
-    /// refusal closes exactly. This is the one place Claude Code is plainly
-    /// better than Codex, and it is what lets the reducer drop an inference
-    /// that unordered delivery would otherwise be able to fool.
-    nonisolated let reportsApprovalDenials = true
+    /// **`PermissionDenied` is not what its name suggests, and this used to
+    /// say `true` because of that.** It carries the refused call's
+    /// `tool_use_id`, so where it fires a refusal does close exactly -- but
+    /// measured 2026-08-23 against CLI 2.1.241, it has exactly one emit site in
+    /// the binary and that site is gated on
+    /// `decisionReason.classifier == "auto-mode"`. It reports the *automatic
+    /// classifier* refusing, never a human. Two interactive sittings confirmed
+    /// it: selecting `No` on a dialog produced no `PermissionDenied`, no
+    /// `PostToolUse`, and no `Stop` -- a human's refusal aborts the turn, and
+    /// there is no hook for an abort.
+    ///
+    /// So this product is as silent about a real refusal as Codex is, and a
+    /// borrowed wait needs the same rescue. The old value left a row saying
+    /// `Approval needed` from the moment the user said no until the session
+    /// status reading retired the turn (ADR 0011, up to one 30 s poll away),
+    /// and left desktop-hosted sessions waiting on their transcript instead.
+    ///
+    /// The reason it was set that way is gone too. It was a `Stop` measured
+    /// arriving ahead of its own subagent's `PermissionRequest` under the same
+    /// `prompt_id`, which unordered delivery would let close a wait the human
+    /// was still looking at -- but that was never disorder. It is what an
+    /// asynchronous subagent looks like: the `Agent` call returns at once, the
+    /// turn ends, and the subagent asks afterwards. Those two events now land
+    /// in different slots (``AgentWaitSlots``), so neither can reach the
+    /// other's wait.
+    nonisolated let reportsApprovalDenials = false
     /// PRD §7: one source for all four states, and it is not the prompt.
     nonisolated let carriesTurnText = false
     nonisolated let messageDeltaEventName: String? = Self.messageDisplayEventName
@@ -1021,6 +1042,32 @@ struct OpenToolUse: Sendable, Equatable {
     let name: String?
 }
 
+/// What one agent has open, and what it is waiting for.
+///
+/// **A Turn used to hold exactly one of these, inline, and that was the whole
+/// reason a subagent's events had to be thrown away.** Both products announce a
+/// call and then ask about it in a second event that carries no id of its own
+/// (`PermissionRequest`, measured on Codex `0.149.0-alpha.4.1` and Claude Code
+/// `2.1.241` on 2026-08-23), so a wait can only be pinned to the call that is
+/// still open. With one slot on the turn, a subagent's calls would be a second
+/// stream through it: its `PreToolUse` would displace the main agent's open
+/// call, and the main agent's `PostToolUse` would close the subagent's wait.
+/// One per agent is what makes both streams safe, and it is all that makes them
+/// safe.
+nonisolated struct AgentWaitSlots: Sendable, Equatable {
+    /// `tool_use_id` of an open `request_user_input` call, if any.
+    var pendingInputToolUseID: String?
+    /// The call the human is being asked to approve, if any.
+    var pendingApproval: PendingApproval?
+    /// The most recent call this agent opened and has not yet closed.
+    var openToolUse: OpenToolUse?
+
+    /// Whether this agent has anything at all left in it.
+    var isEmpty: Bool {
+        pendingInputToolUseID == nil && pendingApproval == nil && openToolUse == nil
+    }
+}
+
 struct HookTurnState: Sendable {
     let threadID: String
     let turnID: String
@@ -1076,9 +1123,38 @@ struct HookTurnState: Sendable {
     /// A thread-level fact like the set it stamps, so it survives every turn
     /// boundary the set survives.
     var lastSubagentBoundaryAt: Date?
+    /// What each of this thread's subagents has open, keyed by `agent_id`.
+    ///
+    /// A thread-level fact carried across turn boundaries, exactly like
+    /// ``runningSubagentIDs`` and for the same measured reason: a subagent's
+    /// permission prompt can open *after* the parent's `Stop` (Claude Code
+    /// 2026-08-23, `Stop` at +4.21 s and the dialog at +4.75 s), so a slot reset
+    /// by the turn boundary would forget a dialog the user is still looking at.
+    ///
+    /// Nothing in here decides turn identity. These events carry the
+    /// subagent's own `turn_id` on Codex and the parent's `prompt_id` on Claude
+    /// Code, and this table reads neither.
+    var subagentSlots: [String: AgentWaitSlots] = [:]
 
     nonisolated var status: SessionStatus {
         sessionStatus
+    }
+
+    /// Whether a subagent of this thread is sitting on a permission prompt.
+    ///
+    /// **Capped by the running set on purpose.** Both products stamp `agent_id`
+    /// on events from agents that never announced themselves — Claude Code's
+    /// own TUI background agents, and the reviewer Codex spawns for
+    /// `--approve-for-me`, which is a nested agent with no `SubagentStart` of
+    /// its own (both measured 2026-08-23). A slot is therefore never evidence
+    /// that this thread has a subagent; only ``runningSubagentIDs`` is. The
+    /// cap also means this flag can never outlive the count that draws it: what
+    /// clears one clears the other, so the stuck-state risk stays the single
+    /// one already accepted in `PRD.md` §6.2.
+    nonisolated var subagentsAwaitingApproval: Bool {
+        subagentSlots.contains { agentID, slots in
+            runningSubagentIDs.contains(agentID) && slots.pendingApproval != nil
+        }
     }
 
     /// The instant a finished row's settling window is measured from.
@@ -2324,38 +2400,33 @@ actor HookEventRepository {
         }
 
         // **An event a subagent produced is not evidence about the thread's
-        // turn, and must not be allowed to become one.** Codex stamps a
-        // subagent's hooks with the parent's `session_id` but the subagent's
-        // own `turn_id`, so before this gate existed a subagent's first
-        // `PreToolUse` was adopted as a continuation of the row's turn -- which
-        // retired the real turn id, and the parent's own `Stop` was then
-        // rejected as late. Nothing could end what was left: no hook names that
-        // turn id again, the thread is still listed so membership
-        // reconciliation keeps the row, and Codex has no activity read to
-        // settle it. The row said *Running* until the user resumed the thread
-        // or dismissed it by hand.
+        // turn, and must never be allowed to become one** -- which is why it
+        // goes to a slot of the subagent's own rather than through the turn.
+        // Codex stamps a subagent's hooks with the parent's `session_id` but
+        // the subagent's own `turn_id`, so before these events were separated a
+        // subagent's first `PreToolUse` was adopted as a continuation of the
+        // row's turn: that retired the real turn id, the parent's own `Stop`
+        // was then rejected as late, and nothing could end what was left. The
+        // row said *Running* until the user resumed the thread or dismissed it
+        // by hand. `reduceSubagentToolEvent` never touches turn identity, so
+        // that shape cannot come back.
         //
-        // Dropped whole rather than half: `PreToolUse` and `PostToolUse` go
-        // together, or the counters behind
-        // ``undeliveredPreToolUseDiagnostic`` would see closes without opens
-        // and report a definition that has lost trust.
-        //
-        // **On Claude Code the same rule holds for a different reason, and it
-        // costs something different.** Its subagent events carry the parent's
-        // `prompt_id` as well as the parent's `session_id` (measured
-        // 2026-08-23, CLI 2.1.241), so they name the turn that is already open
-        // and no takeover is possible -- the gate is not what protects turn
-        // identity there. What it protects is the pairing: `openToolUse` and
-        // `pendingApproval` are one slot each on the turn, and a subagent's
-        // calls would be a second stream through them. The cost is that a
-        // subagent's own `PermissionRequest` does not reach the row, and on
-        // this product that is not merely a lost hint -- the `Agent` call the
-        // parent is waiting on really is blocked, so the row says Running, or
-        // `N subagents`, while Claude Code is sitting on a dialog. Tracked
-        // separately, because letting those events in means giving the turn a
-        // slot per agent rather than one; see the exploration under
-        // `docs/technical-explorations/subagent-row-consistency/`.
-        if stableIdentifier(event.agentID) != nil {
+        // These events were dropped outright until 2026-08-23, and what that
+        // cost was the one state this product exists to report: a subagent's
+        // own `PermissionRequest` never reached the row, so the row said
+        // Running -- or `N subagents` -- while the product sat on a dialog.
+        // Measured on both products the same day, and the arrival pattern is
+        // identical: `PreToolUse` carrying a `tool_use_id`, then
+        // `PermissionRequest` 20-30 ms later carrying `tool_name` and no id at
+        // all. See `docs/technical-explorations/subagent-row-consistency/`
+        // §6.1 and §6.3.
+        if let agentID = stableIdentifier(event.agentID) {
+            reduceSubagentToolEvent(
+                signal,
+                agentID: agentID,
+                threadID: threadID,
+                event: event
+            )
             return true
         }
 
@@ -2380,6 +2451,9 @@ actor HookEventRepository {
             let runningSubagentIDs = turnsByThreadID[threadID]?.runningSubagentIDs ?? []
             let lastSubagentBoundaryAt = turnsByThreadID[threadID]?
                 .lastSubagentBoundaryAt
+            // And neither is the dialog one of them is sitting on: the user
+            // typing again does not answer it.
+            let subagentSlots = turnsByThreadID[threadID]?.subagentSlots ?? [:]
             if let current = turnsByThreadID[threadID] {
                 if current.turnID == turnID {
                     guard receivedAt >= current.lastEventAt else { return true }
@@ -2408,7 +2482,8 @@ actor HookEventRepository {
                     : nil,
                 assistantPreview: nil,
                 runningSubagentIDs: runningSubagentIDs,
-                lastSubagentBoundaryAt: lastSubagentBoundaryAt
+                lastSubagentBoundaryAt: lastSubagentBoundaryAt,
+                subagentSlots: subagentSlots
             )
         case .approvalWaitInferred:
             mutateExactTurn(
@@ -2457,7 +2532,9 @@ actor HookEventRepository {
                 adoptContinuationWith: .running
             ) {
                 Self.resolveInferredApproval(
-                    &$0, activityOn: toolUseID, whenInferring: infersDenials
+                    &$0.pendingApproval,
+                    activityOn: toolUseID,
+                    whenInferring: infersDenials
                 )
                 $0.pendingInputToolUseID = toolUseID
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
@@ -2476,7 +2553,9 @@ actor HookEventRepository {
                 adoptContinuationWith: .running
             ) {
                 Self.resolveInferredApproval(
-                    &$0, activityOn: toolUseID, whenInferring: infersDenials
+                    &$0.pendingApproval,
+                    activityOn: toolUseID,
+                    whenInferring: infersDenials
                 )
                 $0.pendingApproval = PendingApproval(
                     toolUseID: toolUseID,
@@ -2503,7 +2582,9 @@ actor HookEventRepository {
                 adoptContinuationWith: .running
             ) {
                 Self.resolveInferredApproval(
-                    &$0, activityOn: toolUseID, whenInferring: infersDenials
+                    &$0.pendingApproval,
+                    activityOn: toolUseID,
+                    whenInferring: infersDenials
                 )
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 if $0.pendingInputToolUseID == nil, $0.pendingApproval == nil {
@@ -2529,7 +2610,9 @@ actor HookEventRepository {
                     $0.pendingApproval = nil
                 } else {
                     Self.resolveInferredApproval(
-                        &$0, activityOn: toolUseID, whenInferring: infersDenials
+                        &$0.pendingApproval,
+                        activityOn: toolUseID,
+                        whenInferring: infersDenials
                     )
                 }
                 if $0.openToolUse?.id == toolUseID {
@@ -2601,6 +2684,14 @@ actor HookEventRepository {
             turn.runningSubagentIDs.insert(agentID)
         case .subagentStopped:
             turn.runningSubagentIDs.remove(agentID)
+            // The slot goes with it, and this is the rule that guarantees
+            // nothing is ever left waiting. A *refused* call closes with no
+            // event of its own on either product -- Codex measured 2026-08-15
+            // (67 seconds of silence), Claude Code measured 2026-08-23, where
+            // `PermissionDenied` turns out to fire only for the auto-mode
+            // classifier's own refusals and never for a human's. After a
+            // refusal this was the only event that arrived at all.
+            turn.subagentSlots.removeValue(forKey: agentID)
         default:
             return
         }
@@ -2610,6 +2701,116 @@ actor HookEventRepository {
             turn.lastSubagentBoundaryAt ?? receivedAt,
             receivedAt
         )
+        turnsByThreadID[threadID] = turn
+    }
+
+    /// Records what one subagent has open, and what it is waiting for.
+    ///
+    /// **The same five signals the turn understands, in a slot of the
+    /// subagent's own.** It exists because a subagent's approval is a fact the
+    /// row has to report -- the product is sitting on a dialog -- and because
+    /// routing it through the turn's single slot would let two streams close
+    /// each other's waits.
+    ///
+    /// It borrows nothing from turn identity and gives nothing back to it. Like
+    /// ``reduceSubagentBoundary(_:agentID:threadID:at:)`` it attaches to a turn
+    /// the thread already has and never creates one, and it deliberately does
+    /// not move `lastEventAt`: a subagent's chatter must not fend off the
+    /// membership reconciliation that is this reducer's only bound. It does
+    /// not move ``HookTurnState/lastSubagentBoundaryAt`` either -- that stamp
+    /// belongs to the two boundaries, because what it dates is when this
+    /// thread stopped working, and a call in the middle of a subagent's life
+    /// says nothing about that.
+    private func reduceSubagentToolEvent(
+        _ signal: HookSignal,
+        agentID: String,
+        threadID: String,
+        event: HookPayload
+    ) {
+        guard var turn = turnsByThreadID[threadID] else { return }
+        var slots = turn.subagentSlots[agentID] ?? AgentWaitSlots()
+
+        // **Always infer, whichever product this is.** The turn-level rule asks
+        // `reportsApprovalDenials`, and for a subagent the honest answer is
+        // "no" on both products: measured 2026-08-23, a human's refusal
+        // produces no event whatsoever on Claude Code (its `PermissionDenied`
+        // is gated on the auto-mode classifier), which is the shape Codex was
+        // already known to have. The reason Claude Code switched the inference
+        // off does not reach here either: that was a `Stop` arriving ahead of
+        // its own subagent's `PermissionRequest`, and those two now land in
+        // different slots, so one stream's activity can no longer end the
+        // other's wait.
+        let infersDenials = true
+
+        switch signal {
+        case .toolCallOpened, .inputWaitOpened, .approvalWaitOpened:
+            observedPreToolUseCount += 1
+            guard let toolUseID = stableIdentifier(event.toolUseID) else { break }
+            Self.resolveInferredApproval(
+                &slots.pendingApproval,
+                activityOn: toolUseID,
+                whenInferring: infersDenials
+            )
+            slots.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
+            switch signal {
+            case .inputWaitOpened:
+                // Tracked so the pairing is right, and deliberately not drawn:
+                // whether a subagent's question reaches the user at all has not
+                // been measured, and a hint this product cannot stand behind is
+                // worse than no hint.
+                slots.pendingInputToolUseID = toolUseID
+            case .approvalWaitOpened:
+                slots.pendingApproval = PendingApproval(
+                    toolUseID: toolUseID,
+                    isInferred: false
+                )
+            default:
+                break
+            }
+        case .approvalWaitInferred:
+            // The subagent's own open call, never the row's. Measured on both
+            // products: `PermissionRequest` carries `tool_name` and no
+            // `tool_use_id`, 20-30 ms after the `PreToolUse` that announced the
+            // call it is asking about.
+            guard let openToolUse = slots.openToolUse else { break }
+            guard event.toolName == nil
+                || openToolUse.name == nil
+                || event.toolName == openToolUse.name else {
+                break
+            }
+            slots.pendingApproval = PendingApproval(
+                toolUseID: openToolUse.id,
+                isInferred: true
+            )
+        case .toolCallClosed:
+            observedPostToolUseCount += 1
+            guard let toolUseID = stableIdentifier(event.toolUseID) else { break }
+            if slots.pendingInputToolUseID == toolUseID {
+                slots.pendingInputToolUseID = nil
+            }
+            if slots.pendingApproval?.toolUseID == toolUseID {
+                slots.pendingApproval = nil
+            } else {
+                Self.resolveInferredApproval(
+                    &slots.pendingApproval,
+                    activityOn: toolUseID,
+                    whenInferring: infersDenials
+                )
+            }
+            if slots.openToolUse?.id == toolUseID {
+                slots.openToolUse = nil
+            }
+        case .turnStarted, .turnEnded, .subagentStarted, .subagentStopped, .inert:
+            // A subagent's own turn boundary names nothing this reducer holds,
+            // and the two subagent boundaries answered before this was reached.
+            return
+        }
+
+        if slots.isEmpty {
+            turn.subagentSlots.removeValue(forKey: agentID)
+        } else {
+            turn.subagentSlots[agentID] = slots
+        }
         turnsByThreadID[threadID] = turn
     }
 
@@ -2626,18 +2827,20 @@ actor HookEventRepository {
     /// Codex emits nothing at all while a turn is genuinely blocked on the
     /// prompt. An approval that owns its `tool_use_id` needs none of this and is
     /// left strictly alone: it always gets its closing event.
+    /// Takes the wait itself rather than the turn, because a subagent's slot
+    /// needs exactly this rule and has no turn of its own to pass.
     nonisolated private static func resolveInferredApproval(
-        _ state: inout HookTurnState,
+        _ pendingApproval: inout PendingApproval?,
         activityOn toolUseID: String,
         whenInferring infersDenials: Bool
     ) {
         guard infersDenials,
-              let pending = state.pendingApproval,
+              let pending = pendingApproval,
               pending.isInferred,
               pending.toolUseID != toolUseID else {
             return
         }
-        state.pendingApproval = nil
+        pendingApproval = nil
     }
 
     private func mutateExactTurn(
@@ -2674,7 +2877,8 @@ actor HookEventRepository {
                     promptPreview: current.promptPreview,
                     assistantPreview: nil,
                     runningSubagentIDs: current.runningSubagentIDs,
-                    lastSubagentBoundaryAt: current.lastSubagentBoundaryAt
+                    lastSubagentBoundaryAt: current.lastSubagentBoundaryAt,
+                    subagentSlots: current.subagentSlots
                 )
             }
         } else {
@@ -2726,7 +2930,10 @@ actor HookEventRepository {
                     turn.assistantPreview ?? "",
                     // The row draws how many, so a second one starting is a
                     // change the panel has to be woken for.
-                    String(turn.runningSubagentIDs.count)
+                    String(turn.runningSubagentIDs.count),
+                    // And whether one of them is waiting on a human, which
+                    // changes the collapsed summary as well as the row.
+                    String(turn.subagentsAwaitingApproval)
                 ].joined(separator: "\u{1}")
             }
             .sorted()

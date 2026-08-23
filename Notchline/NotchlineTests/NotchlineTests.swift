@@ -9326,7 +9326,8 @@ for line in sys.stdin:
         threadID: String = "thread",
         status: SessionStatus,
         startedAt: Date?,
-        runningSubagentCount: Int = 0
+        runningSubagentCount: Int = 0,
+        subagentsAwaitingApproval: Bool = false
     ) -> MonitoredSession {
         MonitoredSession(
             agent: agent,
@@ -9337,7 +9338,8 @@ for line in sys.stdin:
             preview: nil,
             status: status,
             startedAt: startedAt,
-            runningSubagentCount: runningSubagentCount
+            runningSubagentCount: runningSubagentCount,
+            subagentsAwaitingApproval: subagentsAwaitingApproval
         )
     }
 
@@ -16529,21 +16531,29 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "Notification", toolName: nil) == .inert)
     }
 
-    /// A product that reports its refusals does not get the inference, and
-    /// unordered delivery is why.
+    /// Neither product reports a human's refusal, so both have to infer it.
     ///
-    /// Codex sends nothing when a human refuses, so a borrowed wait there has
-    /// to end on activity against any other call — the turn carrying on is the
-    /// only evidence available. That inference is only sound while events
-    /// arrive in the order they were fired, and Claude Code's are not: they go
-    /// out fire-and-forget over loopback, and a Stop was measured arriving
-    /// ahead of its own subagent's PermissionRequest under one prompt_id.
+    /// **This test used to assert the opposite for Claude Code, and it was
+    /// wrong.** The claim was that `PermissionDenied` names the call it
+    /// refused, so that product needed no inference and must not have one —
+    /// the delivery order being untrustworthy, since a `Stop` had been
+    /// measured arriving ahead of its own subagent's `PermissionRequest` under
+    /// one `prompt_id`.
     ///
-    /// Applying the Codex rule there would let an unrelated event that arrived
-    /// early clear an approval the human is still being asked for. It is not
-    /// needed either, because PermissionDenied names the call it refused.
+    /// Both halves fell over on 2026-08-23. `PermissionDenied` has exactly one
+    /// emit site in CLI 2.1.241 and it is gated on
+    /// `decisionReason.classifier == "auto-mode"`: it reports the automatic
+    /// classifier refusing, never a person. Two interactive sittings confirmed
+    /// that answering `No` produces no event of any kind. And the delivery that
+    /// looked unordered was not — that is simply what an asynchronous subagent
+    /// looks like, and its events now land in a slot of their own
+    /// (``AgentWaitSlots``) where they cannot reach the turn's wait at all.
+    ///
+    /// So the rule is one rule: a borrowed wait ends on activity against any
+    /// other call, on both products. What `PermissionDenied` still does is
+    /// close exactly where it does fire, which is the third case below.
     @Test @MainActor
-    func aProductThatReportsRefusalsDoesNotInferThemFromUnrelatedActivity() async throws {
+    func neitherProductReportsAHumanRefusalSoBothInferIt() async throws {
         func waitStatus(
             vocabulary: any AgentHookVocabulary,
             trailingEvent: [String: Any]
@@ -16593,15 +16603,16 @@ for line in sys.stdin:
                 trailingEvent: unrelated
             ) == .running
         )
-        // Claude Code must not: the event may simply have overtaken the one
-        // that would have closed the wait properly.
+        // And Claude Code has none either, for the same reason: measured, a
+        // person saying no there sends nothing at all.
         #expect(
             try await waitStatus(
                 vocabulary: ClaudeCodeHookVocabulary(),
                 trailingEvent: unrelated
-            ) == .approvalNeeded
+            ) == .running
         )
-        // What does close it there is a refusal that names the call.
+        // What closes it exactly, where it fires, is the classifier's own
+        // refusal — which names the call it refused.
         #expect(
             try await waitStatus(
                 vocabulary: ClaudeCodeHookVocabulary(),
@@ -21083,5 +21094,558 @@ extension NotchlineTests {
             repository.preview(forSession: "s") == "Reading note.txt for you.",
             "the row reports its own turn, not what a subagent is saying"
         )
+    }
+}
+
+// MARK: - A subagent's own approval
+
+/// The state this product exists to report, arriving from a subagent.
+///
+/// Measured on both products on 2026-08-23 and written up in
+/// `docs/technical-explorations/subagent-row-consistency/` §6.1 and §6.3. The
+/// events these tests replay are the measured ones, not invented shapes: a
+/// `PreToolUse` carrying a `tool_use_id`, then a `PermissionRequest` carrying
+/// `tool_name` and no id at all, both stamped with the subagent's `agent_id`.
+extension NotchlineTests {
+    /// Where a subagent's approval lands, and what it changes.
+    ///
+    /// The parent's `Stop` really did arrive first — measured at +4.21 s with
+    /// the dialog at +4.75 s — so this is a Completed row whose thread is
+    /// stopped waiting for the person. The row keeps saying Completed, and the
+    /// answer to "does anything here need me" changes.
+    @Test @MainActor
+    func aSubagentsApprovalReachesTheRowItBelongsTo() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let thread = "586df4ed-e1db-4405-bfd4-e9977957b132"
+        let prompt = "5fd735f7-7fbb-4c25-9b2b-5861fa0e1305"
+        let agent = "a28a63c7"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": prompt
+        ])
+        try deliver([
+            "received_at": 102.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": prompt,
+            "tool_name": "Agent", "tool_use_id": "toolu_0182"
+        ])
+        try deliver([
+            "received_at": 103.0, "hook_event_name": "SubagentStart",
+            "session_id": thread, "prompt_id": prompt,
+            "agent_id": agent, "agent_type": "general-purpose"
+        ])
+        try deliver([
+            "received_at": 104.0, "hook_event_name": "Stop",
+            "session_id": thread, "prompt_id": prompt
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .completed)
+        #expect(turn.subagentsAwaitingApproval == false)
+
+        // The dialog opens: the subagent announces a call, and 20 ms later the
+        // approval that carries no id of its own.
+        try deliver([
+            "received_at": 105.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "tool_name": "Bash", "tool_use_id": "toolu_015Z"
+        ])
+        try deliver([
+            "received_at": 105.02, "hook_event_name": "PermissionRequest",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "tool_name": "Bash"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.subagentsAwaitingApproval)
+        // The row's own turn is untouched, all four ways.
+        #expect(turn.turnID == prompt)
+        #expect(turn.status == .completed)
+        #expect(turn.pendingApproval == nil)
+        #expect(
+            turn.lastEventAt == Date(timeIntervalSince1970: 104),
+            "a subagent's dialog must not fend off membership reconciliation"
+        )
+
+        let waiting = MonitoredSession(
+            agent: .claudeCode,
+            threadID: turn.threadID,
+            turnID: turn.turnID,
+            projectName: "notchline",
+            title: "Untitled",
+            preview: nil,
+            status: turn.status,
+            startedAt: turn.startedAt,
+            runningSubagentCount: turn.runningSubagentIDs.count,
+            subagentsAwaitingApproval: turn.subagentsAwaitingApproval
+        )
+        #expect(waiting.status == .completed, "the row still reports its own turn")
+        #expect(waiting.runningSubagentSummary == "1 subagent")
+        #expect(MonitorAggregation.effectiveStatus(of: waiting) == .approvalNeeded)
+
+        // Approved. `PostToolUse` names the same call and the same agent, which
+        // is the only exact close either product offers.
+        try deliver([
+            "received_at": 112.0, "hook_event_name": "PostToolUse",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "tool_name": "Bash", "tool_use_id": "toolu_015Z"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.subagentsAwaitingApproval == false)
+        #expect(turn.runningSubagentIDs == [agent], "it is still working")
+        // Opens and closes stayed in step, so the trust probe stays quiet.
+        #expect(await repository.drainDeliveredEvents().diagnostic == nil)
+    }
+
+    /// Being asked outranks being busy, and being asked a question outranks
+    /// being asked for approval.
+    @Test @MainActor
+    func aSubagentsApprovalOutranksTheRunningItAlsoIs() {
+        let finishedButAsking = makeSession(
+            threadID: "asking",
+            status: .completed,
+            startedAt: Date(timeIntervalSince1970: 100),
+            runningSubagentCount: 2,
+            subagentsAwaitingApproval: true
+        )
+        #expect(
+            MonitorAggregation.effectiveStatus(of: finishedButAsking) == .approvalNeeded,
+            "two subagents are working and one of them is stopped on a dialog"
+        )
+
+        // A running turn with a blocked subagent is the shape the first pass at
+        // this missed: it is not a Completed-row phenomenon. Measured with the
+        // dialog at +4.02 s and the parent's `Stop` at +4.17 s.
+        let runningAndAsking = makeSession(
+            threadID: "running",
+            status: .running,
+            startedAt: Date(timeIntervalSince1970: 100),
+            runningSubagentCount: 1,
+            subagentsAwaitingApproval: true
+        )
+        #expect(MonitorAggregation.effectiveStatus(of: runningAndAsking) == .approvalNeeded)
+
+        // The turn's own question wins. A refused approval is never closed by
+        // either product, so the wait that follows it is the more current fact.
+        let askedAQuestion = makeSession(
+            threadID: "input",
+            status: .inputNeeded,
+            startedAt: Date(timeIntervalSince1970: 100),
+            runningSubagentCount: 1,
+            subagentsAwaitingApproval: true
+        )
+        #expect(MonitorAggregation.effectiveStatus(of: askedAQuestion) == .inputNeeded)
+
+        let running = makeSession(
+            threadID: "plain",
+            status: .running,
+            startedAt: Date(timeIntervalSince1970: 200)
+        )
+        #expect(
+            MonitorAggregation.rowOrder(finishedButAsking, running),
+            "a finished row with a blocked subagent sorts above a running one"
+        )
+    }
+
+    /// Two streams, two slots, and neither can reach the other.
+    ///
+    /// This is the whole reason these events were thrown away before: with one
+    /// slot on the turn, the subagent's `PreToolUse` would displace the main
+    /// agent's open call and the subagent's `PostToolUse` would close the main
+    /// agent's approval — on Codex, where a denial is silent, leaving a row
+    /// that says Running while a human is still being asked.
+    @Test @MainActor
+    func aSubagentsApprovalNeverTouchesTheTurnsOwnSlots() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+        let thread = "01a03064-fd1b-70f3-9133-527d067719c8"
+        let turnID = "01a03064-fd1c-70f3-9133-527d067719c8"
+        let agent = "01a03065-0ff5-7442-acd8-e5ea27d83054"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "turn_id": turnID
+        ])
+        // The main agent is itself being asked about a call of its own.
+        try deliver([
+            "received_at": 101.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "turn_id": turnID,
+            "tool_name": "Bash", "tool_use_id": "call-main"
+        ])
+        try deliver([
+            "received_at": 101.03, "hook_event_name": "PermissionRequest",
+            "session_id": thread, "turn_id": turnID, "tool_name": "Bash"
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .approvalNeeded)
+        #expect(turn.pendingApproval?.toolUseID == "call-main")
+
+        // A subagent's whole cycle runs past it, carrying its own `turn_id` —
+        // which on this product is not the row's, and must not become it.
+        try deliver([
+            "received_at": 102.0, "hook_event_name": "SubagentStart",
+            "session_id": thread, "turn_id": "01a03065-100a", "agent_id": agent,
+            "agent_type": "default"
+        ])
+        try deliver([
+            "received_at": 103.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "turn_id": "01a03065-100a", "agent_id": agent,
+            "tool_name": "Bash", "tool_use_id": "exec-sub"
+        ])
+        try deliver([
+            "received_at": 104.0, "hook_event_name": "PostToolUse",
+            "session_id": thread, "turn_id": "01a03065-100a", "agent_id": agent,
+            "tool_name": "Bash", "tool_use_id": "exec-sub"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.turnID == turnID, "the subagent's turn id was never adopted")
+        #expect(
+            turn.pendingApproval?.toolUseID == "call-main",
+            "a subagent finishing a call is not the human answering the row's dialog"
+        )
+        #expect(turn.openToolUse?.id == "call-main")
+        #expect(turn.status == .approvalNeeded)
+        #expect(turn.lastEventAt == Date(timeIntervalSince1970: 101.03))
+
+        // And the row's own answer still closes the row's own wait.
+        try deliver([
+            "received_at": 105.0, "hook_event_name": "PostToolUse",
+            "session_id": thread, "turn_id": turnID,
+            "tool_name": "Bash", "tool_use_id": "call-main"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.pendingApproval == nil)
+        #expect(turn.status == .running)
+    }
+
+    /// A refusal closes nothing, so the subagent carrying on has to.
+    ///
+    /// Neither product sends anything when a human says no: Codex measured
+    /// 2026-08-15 (67 seconds of silence), Claude Code measured 2026-08-23,
+    /// where `PermissionDenied` turns out to fire only for the auto-mode
+    /// classifier. What does arrive is the subagent's next call, and in the
+    /// measured Codex stream a subagent really does open more than one.
+    @Test @MainActor
+    func aRefusedSubagentCallStopsSayingApprovalNeeded() async throws {
+        for vocabulary in [
+            AnyHookVocabularyCase.codex, .claudeCode
+        ] {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            let repository = HookEventRepository(
+                paths: paths,
+                vocabulary: vocabulary.vocabulary
+            )
+            let thread = "thread-1"
+            let turnID = "turn-1"
+            let agent = "agent-1"
+            let key = vocabulary.turnKey
+
+            func deliver(_ body: [String: Any]) throws {
+                try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+            }
+
+            try deliver([
+                "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+                "session_id": thread, key: turnID
+            ])
+            try deliver([
+                "received_at": 101.0, "hook_event_name": "SubagentStart",
+                "session_id": thread, key: turnID, "agent_id": agent,
+                "agent_type": "general-purpose"
+            ])
+            try deliver([
+                "received_at": 102.0, "hook_event_name": "PreToolUse",
+                "session_id": thread, key: turnID, "agent_id": agent,
+                "tool_name": "Bash", "tool_use_id": "call-1"
+            ])
+            try deliver([
+                "received_at": 102.03, "hook_event_name": "PermissionRequest",
+                "session_id": thread, key: turnID, "agent_id": agent,
+                "tool_name": "Bash"
+            ])
+            var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+            #expect(
+                turn.subagentsAwaitingApproval,
+                "\(vocabulary.name): the dialog is open"
+            )
+
+            // The human says no. Nothing at all arrives for `call-1` — ever.
+            // The subagent tries something else instead, and that is the proof
+            // it is no longer blocked.
+            try deliver([
+                "received_at": 140.0, "hook_event_name": "PreToolUse",
+                "session_id": thread, key: turnID, "agent_id": agent,
+                "tool_name": "Bash", "tool_use_id": "call-2"
+            ])
+            turn = try #require(await repository.drainDeliveredEvents().turns.first)
+            #expect(
+                turn.subagentsAwaitingApproval == false,
+                "\(vocabulary.name): the human answered, whatever they answered"
+            )
+            #expect(turn.runningSubagentIDs == [agent])
+        }
+    }
+
+    /// Whatever else happens, a subagent stopping ends everything it was
+    /// waiting on. This is the rule that makes a stuck bright row impossible
+    /// without also being the stuck count `PRD.md` §6.2 already accepts.
+    @Test @MainActor
+    func aSubagentStopClearsWhateverThatAgentWasWaitingOn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+        let thread = "thread-1"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "turn_id": "turn-1"
+        ])
+        try deliver([
+            "received_at": 101.0, "hook_event_name": "SubagentStart",
+            "session_id": thread, "turn_id": "sub-turn", "agent_id": "agent-1",
+            "agent_type": "default"
+        ])
+        try deliver([
+            "received_at": 102.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "turn_id": "sub-turn", "agent_id": "agent-1",
+            "tool_name": "Bash", "tool_use_id": "call-1"
+        ])
+        try deliver([
+            "received_at": 102.03, "hook_event_name": "PermissionRequest",
+            "session_id": thread, "turn_id": "sub-turn", "agent_id": "agent-1",
+            "tool_name": "Bash"
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.subagentsAwaitingApproval)
+
+        try deliver([
+            "received_at": 150.0, "hook_event_name": "SubagentStop",
+            "session_id": thread, "turn_id": "sub-turn", "agent_id": "agent-1",
+            "agent_type": "default"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.runningSubagentIDs.isEmpty)
+        #expect(turn.subagentsAwaitingApproval == false)
+        #expect(turn.subagentSlots.isEmpty, "the slot goes with the subagent")
+        // And the settling window still starts at the boundary, not at the
+        // call in the middle of it.
+        #expect(turn.terminalBoundaryAt == Date(timeIntervalSince1970: 150))
+    }
+
+    /// An agent that never announced itself is not a subagent of this thread.
+    ///
+    /// Both products stamp `agent_id` on agents the user never spawned: Claude
+    /// Code's own TUI background agents (three `SubagentStop`s with an empty
+    /// `agent_type` and no matching start, plus an agent-stamped `PreToolUse`,
+    /// measured 2026-08-23), and the reviewer Codex spawns for
+    /// `--approve-for-me`, which has a rollout of its own and no
+    /// `SubagentStart` at all.
+    @Test @MainActor
+    func anInternalAgentsCallIsNotASubagent() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+        let thread = "thread-1"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "turn_id": "turn-1"
+        ])
+        try deliver([
+            "received_at": 101.0, "hook_event_name": "SubagentStart",
+            "session_id": thread, "turn_id": "sub-turn", "agent_id": "announced",
+            "agent_type": "default"
+        ])
+        // An agent nothing announced, doing exactly what a real one does.
+        try deliver([
+            "received_at": 102.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "turn_id": "sub-turn", "agent_id": "internal",
+            "tool_name": "Bash", "tool_use_id": "call-1"
+        ])
+        try deliver([
+            "received_at": 102.03, "hook_event_name": "PermissionRequest",
+            "session_id": thread, "turn_id": "sub-turn", "agent_id": "internal",
+            "tool_name": "Bash"
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(
+            turn.subagentsAwaitingApproval == false,
+            "a slot is not evidence that this thread has a subagent"
+        )
+        #expect(turn.runningSubagentIDs == ["announced"])
+
+        // And its stop, which arrives without a start ever having done, changes
+        // neither the count nor anyone else's slot.
+        try deliver([
+            "received_at": 103.0, "hook_event_name": "SubagentStop",
+            "session_id": thread, "turn_id": "sub-turn", "agent_id": "internal"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.runningSubagentIDs == ["announced"])
+        #expect(turn.subagentsAwaitingApproval == false)
+    }
+
+    /// The manual exit survives the new state.
+    ///
+    /// The row is Completed even while the collapsed surface says `Approval
+    /// needed` for it, and `PRD.md` §9.3 keeps the secondary click on exactly
+    /// that: what the user has decided they are done with outranks anything
+    /// this app knows.
+    @Test @MainActor
+    func aRowWithASubagentAwaitingApprovalIsStillDismissable() async throws {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(
+                    status: .completed,
+                    startedAt: clock.now().addingTimeInterval(-60),
+                    runningSubagentCount: 1,
+                    subagentsAwaitingApproval: true
+                )
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(store.status == .approvalNeeded)
+        #expect(store.compactTrailingText == "1", "no turn is being timed")
+
+        let waiting = try #require(store.sessions.first)
+        #expect(waiting.status == .completed)
+        #expect(store.dismiss(waiting))
+        #expect(store.sessions.isEmpty)
+        // With the row gone the surface reports presence again, and the slot it
+        // was writing the count into is empty.
+        #expect(store.status == .connected)
+        #expect(store.compactTrailingText == nil)
+    }
+
+    /// The same silence, on the main thread, where it was being trusted not to
+    /// exist.
+    ///
+    /// `ClaudeCodeHookVocabulary.reportsApprovalDenials` said this product
+    /// reported its own refusals, on the strength of `PermissionDenied`
+    /// carrying a `tool_use_id`. Measured 2026-08-23: that event has one emit
+    /// site and it is gated on the auto-mode classifier, so a human's `No`
+    /// produces nothing whatsoever — and the row went on saying `Approval
+    /// needed` until the session-status reading retired the turn, up to a
+    /// 30-second poll later, or never for a desktop-hosted session.
+    @Test @MainActor
+    func aRefusedMainThreadCallStopsSayingApprovalNeeded() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let thread = "session-1"
+        let prompt = "prompt-1"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": prompt
+        ])
+        try deliver([
+            "received_at": 101.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": prompt,
+            "tool_name": "Bash", "tool_use_id": "call-1"
+        ])
+        try deliver([
+            "received_at": 101.03, "hook_event_name": "PermissionRequest",
+            "session_id": thread, "prompt_id": prompt, "tool_name": "Bash"
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .approvalNeeded)
+        #expect(turn.pendingApproval?.isInferred == true)
+
+        // Refused. Nothing names `call-1` again, ever. The turn carries on, and
+        // the next thing it does is the only evidence there will be.
+        try deliver([
+            "received_at": 160.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": prompt,
+            "tool_name": "Read", "tool_use_id": "call-2"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.pendingApproval == nil)
+        #expect(turn.status == .running)
+    }
+}
+
+/// The two vocabularies, and the one payload key they spell differently.
+private enum AnyHookVocabularyCase {
+    case codex
+    case claudeCode
+
+    var vocabulary: any AgentHookVocabulary {
+        switch self {
+        case .codex: CodexHookVocabulary()
+        case .claudeCode: ClaudeCodeHookVocabulary()
+        }
+    }
+
+    /// Codex calls the turn identity `turn_id`; Claude Code calls it
+    /// `prompt_id`. Nothing else in these tests differs between them, which is
+    /// the point of running both through the same events.
+    var turnKey: String {
+        switch self {
+        case .codex: "turn_id"
+        case .claudeCode: "prompt_id"
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .codex: "Codex"
+        case .claudeCode: "Claude Code"
+        }
     }
 }
