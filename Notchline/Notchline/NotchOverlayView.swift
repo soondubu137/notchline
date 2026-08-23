@@ -344,7 +344,7 @@ private struct ExpandedPanelContent: View {
                 }
                 .frame(
                     width: store.currentPanelSize.width
-                        - PanelMetrics.sessionRowGutter * 2,
+                        - store.sessionRowGutter * 2,
                     height: PanelMetrics.sessionViewportHeight(
                         forSessionCount: store.sessions.count
                     )
@@ -630,7 +630,10 @@ private struct SessionRowContent: View {
         }
         // Flush with the block's leading edge, so it reads as a mark beside the
         // row rather than as a fifth thing inside it. Half the row tall, which
-        // keeps it clear of the block's own 12 pt corners.
+        // keeps it clear of the block's own 12 pt corners. The block's margin
+        // widens to `12` while the rail is drawn (`MonitorStore.sessionRowGutter`),
+        // so the stroke lands on the same line as the matrix and the quota
+        // rules; the row's text steps in behind it rather than moving with it.
         .overlay(alignment: .leading) {
             if drawsRail {
                 RoundedRectangle(
@@ -654,9 +657,7 @@ private struct SessionRowContent: View {
 
     /// The rail is drawn on the same terms as every other attribution: only
     /// while two products are connected and there is something to tell apart.
-    private var drawsRail: Bool {
-        store.showsProductAttribution && store.productAttribution == .colourBar
-    }
+    private var drawsRail: Bool { store.showsSessionRowRail }
 
     private var backgroundColor: Color {
         if isPressed {

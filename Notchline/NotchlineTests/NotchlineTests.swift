@@ -1060,19 +1060,55 @@ struct NotchlineTests {
         }
     }
 
-    /// The rail is a mark in the gutter, not a fifth element inside the row.
+    /// The rail lands on the panel's own margin, not half of it.
     ///
-    /// It lives in the `6` the row gave back, so it costs no caption room and
-    /// moves no text — the whole reason it is worth a stroke. Half the row tall
-    /// keeps it clear of the block's own corners.
+    /// The stroke sits on the row block's leading edge, so the block's margin
+    /// is the rail's position. At the row's ordinary `6` it stood half an inset
+    /// inboard of everything it is read against — the status matrix above it
+    /// and the quota rules below it, both on `12` — and a mark that is nearly
+    /// but not quite on a line reads as a mistake. Drawn, the block takes the
+    /// full `12` and the row's `6` of padding stays put, so the text steps in
+    /// behind the rail rather than moving with it. Half the row tall keeps the
+    /// stroke clear of the block's own corners.
     @Test @MainActor
-    func theAttributionRailFitsInTheGutterWithoutMovingAnything() {
-        #expect(PanelMetrics.sessionRowRailWidth < PanelMetrics.sessionRowGutter)
+    func theAttributionRailLandsOnThePanelsOwnMargin() {
+        #expect(
+            PanelMetrics.sessionRowRailGutter
+                == PanelMetrics.expandedHorizontalPadding
+        )
+        #expect(PanelMetrics.sessionRowRailGutter == 12)
+        #expect(PanelMetrics.sessionRowPadding == 6)
+        #expect(PanelMetrics.sessionRowRailWidth < PanelMetrics.sessionRowRailGutter)
         #expect(PanelMetrics.sessionRowRailWidth == 2)
         #expect(PanelMetrics.sessionRowRailHeight == 40)
         #expect(
             PanelMetrics.sessionRowRailHeight < PanelMetrics.sessionRowHeight
         )
+    }
+
+    /// Only a drawn rail moves the row block; the picker alone does not.
+    ///
+    /// The wider margin is the rail's own room. Choosing `Colour bar` with one
+    /// product connected draws no rail — attribution is keyed to there being
+    /// two products to tell apart — so a row that took the wider margin then
+    /// would have indented every row for a stroke that is not there.
+    @Test @MainActor
+    func theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn() {
+        let store = MonitorStore(services: [])
+        store.productAttribution = .colourBar
+
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
+        #expect(!store.showsSessionRowRail)
+        #expect(store.sessionRowGutter == PanelMetrics.sessionRowGutter)
+
+        store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
+        #expect(store.showsSessionRowRail)
+        #expect(store.sessionRowGutter == PanelMetrics.sessionRowRailGutter)
+
+        // Two products and any other style: no rail, so no wider margin either.
+        store.productAttribution = .nameAndColour
+        #expect(!store.showsSessionRowRail)
+        #expect(store.sessionRowGutter == PanelMetrics.sessionRowGutter)
     }
 
     /// Settings goes to the display the component is on, so the store has to be

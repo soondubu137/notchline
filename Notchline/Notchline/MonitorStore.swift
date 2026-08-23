@@ -154,13 +154,28 @@ enum PanelMetrics {
     /// are written against each other instead of both being spelled `6`: a row's
     /// text lands on `expandedHorizontalPadding` — the same margin as the matrix
     /// above it and the quota rules below it — whatever that value becomes.
+    ///
+    /// The `Colour bar` attribution is the one exception, and it moves the
+    /// gutter rather than the padding — see ``sessionRowRailGutter``.
     static let sessionRowGutter: CGFloat = 6
     static let sessionRowPadding: CGFloat = expandedHorizontalPadding
         - sessionRowGutter
+    /// The row block's margin while the `Colour bar` rail is drawn.
+    ///
+    /// The rail is flush with the block's leading edge, so the block's margin
+    /// is where the rail lands — and at the shared `6` it landed half the
+    /// panel's inset short of everything it is read against, the status matrix
+    /// above and the quota rules below. Widening the margin to the full
+    /// `expandedHorizontalPadding` puts the stroke on that same line. The row's
+    /// padding does not follow it: the two stop being one margin split in two,
+    /// and the row's text steps in behind the rail at `12 + 6` rather than
+    /// sitting on top of it. This applies only while the rail is drawn — with
+    /// one product connected there is no rail, and the row keeps the `6 + 6`
+    /// that lands its text on the panel's own margin.
+    static let sessionRowRailGutter: CGFloat = expandedHorizontalPadding
     /// The `Colour bar` attribution rail, flush with the row block's leading
-    /// edge. It sits in the gutter the row just gave back, so it marks the row
-    /// without moving anything: the caption keeps its full width and the text
-    /// stays on `expandedHorizontalPadding`.
+    /// edge. It is narrower than the margin it sits on, so it marks the row
+    /// without crowding the block's own corner.
     static let sessionRowRailWidth: CGFloat = 2
     static let sessionRowRailHeight = sessionRowHeight / 2
     static let sessionRowRailRadius: CGFloat = 1
@@ -1254,6 +1269,29 @@ final class MonitorStore: ObservableObject {
     /// identify itself, whatever presence now says.
     var showsProductAttribution: Bool {
         connectedAgents.count > 1 || Set(sessions.map(\.agent)).count > 1
+    }
+
+    /// Whether rows draw the leading attribution rail.
+    ///
+    /// The style is a preference, but the rail is only ever drawn on the same
+    /// terms as every other attribution: while there are two products to tell
+    /// apart. One product connected and the rows are unmarked whatever the
+    /// picker says, which is why the geometry below is asked of the store
+    /// rather than read off the style.
+    var showsSessionRowRail: Bool {
+        showsProductAttribution && productAttribution == .colourBar
+    }
+
+    /// The row block's leading and trailing margin, which the rail widens.
+    ///
+    /// Unmarked rows keep the `6` that puts their text on the panel's own
+    /// margin; a marked row gives the rail that margin instead, so the stroke
+    /// lines up with the matrix above and the quota rules below. See
+    /// ``PanelMetrics/sessionRowRailGutter``.
+    var sessionRowGutter: CGFloat {
+        showsSessionRowRail
+            ? PanelMetrics.sessionRowRailGutter
+            : PanelMetrics.sessionRowGutter
     }
 
     /// One rule block per connected product, in display order.
