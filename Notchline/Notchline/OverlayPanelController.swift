@@ -102,6 +102,12 @@ final class OverlayPanelController {
             // height the rules were occupying.
             store.$isQuotaFolded.map { _ in () }.eraseToAnyPublisher(),
             store.$reduceMotion.map { _ in () }.eraseToAnyPublisher(),
+            // Giving up the wings collapses the compact body to the cut-out and
+            // takes them back again. Nothing else republishes when it is
+            // toggled -- no status, no session, no quota moves -- so without
+            // this the panel keeps whatever width it had until the next
+            // unrelated change happened to resize it.
+            store.$hidesCompactWings.map { _ in () }.eraseToAnyPublisher(),
             // The compact width is measured from the elapsed string, so the
             // panel has to re-measure when it gains a digit -- but only then.
             // The readouts advance themselves off a tick no SwiftUI view

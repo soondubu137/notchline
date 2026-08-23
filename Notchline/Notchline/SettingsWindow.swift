@@ -131,10 +131,10 @@ struct AppSettingsView: View {
     /// in the same shape rather than dropped, and recorded in `figma-design.md`
     /// §8.4 so the board and the window can be reconciled deliberately.
     ///
-    /// No footnote. The row's own caption already names the display's geometry
-    /// and menu bar height for the display that is actually selected; a
-    /// standing sentence about cut-outs and pills only said the same thing in
-    /// the abstract, under a card one popup high.
+    /// No footnote. Each row's own caption already names the consequence for
+    /// the display that is actually selected — its geometry and menu bar
+    /// height, or why the wings cannot be given up on it; a standing sentence
+    /// about cut-outs and pills only said the same thing in the abstract.
     private var displayGroup: some View {
         SettingsGroup(header: "Display") {
             SettingsRow(
@@ -156,7 +156,45 @@ struct AppSettingsView: View {
                     .fixedSize()
                 }
             }
+
+            SettingsSeparator()
+
+            hideWingsRow
         }
+    }
+
+    /// Give the cut-out back, and draw nothing beside it.
+    ///
+    /// **Always drawn, greyed where it cannot apply.** A switch that appears
+    /// only on a notched display is one nobody finds: the person who would want
+    /// it is looking for it on the laptop they have just plugged an external
+    /// monitor into, which is exactly the moment it would be missing. Greyed,
+    /// the row still says what it would do and why it will not do it here —
+    /// which is the same argument `Distinguish products` is kept visible under
+    /// (§8.2).
+    private var hideWingsRow: some View {
+        SettingsRow(
+            title: "Hide the wings",
+            caption: hideWingsDescription
+        ) {
+            Toggle("Hide the wings", isOn: $store.hidesCompactWings)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(!store.canHideCompactWings)
+                .help(
+                    "Leaves the collapsed component as the cut-out alone, with "
+                        + "no marks and no timer beside it. Needs a notched display."
+                )
+        }
+    }
+
+    private var hideWingsDescription: String {
+        guard store.canHideCompactWings else {
+            return "Needs a notched display. Without a cut-out to hide behind "
+                + "there would be nothing left to hover."
+        }
+        return "Collapsed, Notchline is the cut-out and nothing else — no marks "
+            + "and no timer. Hovering still opens the panel."
     }
 
     // MARK: - Session list

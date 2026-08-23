@@ -400,6 +400,103 @@ struct NotchlineTests {
         #expect(connectedNotched.width > restingNotched.width)
     }
 
+    /// Hiding the wings leaves the cut-out alone in every state, not only the
+    /// resting one.
+    ///
+    /// `onlyTheNotchedFormDrawsNothingWhileResting` already pins this *shape* —
+    /// what is added here is that a connected product with a turn running gets
+    /// it too, marks and timer alike, and that the body still lands exactly on
+    /// the cut-out's own edges rather than merely near them.
+    @Test @MainActor
+    func hidingTheWingsLeavesTheNotchedPanelAsTheCutOutAlone() {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let store = MonitorStore(displays: [display], services: [])
+        let running = MonitoredSession(
+            agent: .codex,
+            threadID: "t", turnID: "u", projectName: "p", title: "t",
+            preview: nil, status: .running,
+            startedAt: Date(timeIntervalSinceNow: -90)
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [running])
+        )
+
+        // Both wings are drawn to begin with: a mark leading the cut-out and a
+        // timer trailing it.
+        #expect(store.drawsCompactMarks)
+        #expect(store.compactTimerText != nil)
+        #expect(store.currentPanelSize.width > display.centerOcclusionWidth)
+
+        store.hidesCompactWings = true
+
+        #expect(store.hidesCompactSurface)
+        #expect(!store.drawsCompactMarks)
+        #expect(store.compactTimerText == nil)
+        #expect(store.currentPanelSize.width == display.centerOcclusionWidth)
+        #expect(store.currentPanelTrailingAnchor == display.centerOcclusionMaxX)
+
+        // Expanded is untouched. The panel is the only way back into this
+        // product, so the preference stops at the moment the pointer arrives.
+        store.isExpanded = true
+        #expect(store.drawsCompactMarks)
+        #expect(store.currentPanelSize.width > display.centerOcclusionWidth)
+    }
+
+    /// The preference belongs to the user; whether it can be honoured belongs
+    /// to the display.
+    ///
+    /// A no-notch pill has nothing to hide behind — hiding it would take its
+    /// place in the menu bar with it and leave no shape to hover — so the
+    /// switch is greyed there rather than the preference being cleared. Sending
+    /// the component to an external monitor and back must not cost the setting.
+    @Test @MainActor
+    func onlyANotchedDisplayHonoursTheWingPreferenceAndTheOtherOneDoesNotClearIt() {
+        let defaults = UserDefaults(suiteName: "wings-\(UUID().uuidString)")!
+        let notched = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let external = makeDisplay(
+            id: "external",
+            ordinal: 2,
+            menuBarHeight: 24,
+            hasNotch: false
+        )
+        let store = MonitorStore(
+            displays: [notched, external],
+            services: [],
+            preferences: defaults
+        )
+        #expect(!store.hidesCompactWings)
+        #expect(store.canHideCompactWings)
+
+        store.hidesCompactWings = true
+        #expect(store.hidesCompactSurface)
+        // Remembered across launches, like the fold and the display itself.
+        #expect(
+            MonitorStore(displays: [notched], services: [], preferences: defaults)
+                .hidesCompactWings
+        )
+
+        store.selectDisplay(id: external.id)
+        #expect(!store.canHideCompactWings)
+        #expect(!store.hidesCompactSurface)
+        // The pill keeps its mark and its position, exactly as it does resting.
+        #expect(store.drawsCompactMarks)
+        // And the preference survived the display that could not honour it.
+        #expect(store.hidesCompactWings)
+
+        store.selectDisplay(id: notched.id)
+        #expect(store.hidesCompactSurface)
+    }
+
     /// A second mark widens the notched wing by exactly one matrix and its gap.
     @Test @MainActor
     func aSecondMarkWidensTheNotchedWingByOneMatrix() {

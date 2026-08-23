@@ -792,11 +792,39 @@ final class MonitorStore: ObservableObject {
             preferences?.set(isQuotaFolded, forKey: Self.quotaFoldedDefaultsKey)
         }
     }
+    /// Whether the collapsed surface gives up its wings and leaves the cut-out
+    /// to speak for itself.
+    ///
+    /// The form is not a new one: it is exactly what a notched display already
+    /// draws while nothing is connected (``drawsCompactMarks``), held for every
+    /// state instead of only for that one. The cut-out is a shape the hardware
+    /// puts on the screen whatever this app does, and this is the preference
+    /// for people who want that shape and nothing beside it.
+    ///
+    /// **Collapsed only, and deliberately.** Hover still opens the panel, and
+    /// the panel still carries the marks, the rows and the gear. The cut-out is
+    /// the only entrance this product has -- an app with no menu bar item and
+    /// no Dock icon (`PRD.md` §11) -- so a preference that closed it would be a
+    /// preference for uninstalling.
+    ///
+    /// Remembered across launches, and kept even while the selected display
+    /// cannot honour it: it is a fact about what the user wants, not about
+    /// which screen happens to be plugged in this morning. See
+    /// ``canHideCompactWings``.
+    @Published var hidesCompactWings: Bool {
+        didSet {
+            preferences?.set(
+                hidesCompactWings,
+                forKey: Self.hidesCompactWingsDefaultsKey
+            )
+        }
+    }
     @Published private(set) var lastIntegrationMessage: String
     @Published private(set) var hasCompletedOnboarding: Bool
 
     private static let productAttributionDefaultsKey = "productAttribution"
     private static let quotaFoldedDefaultsKey = "quotaFolded"
+    private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
@@ -913,6 +941,9 @@ final class MonitorStore: ObservableObject {
         self.isQuotaFolded = preferences?.object(
             forKey: Self.quotaFoldedDefaultsKey
         ) as? Bool ?? false
+        self.hidesCompactWings = preferences?.bool(
+            forKey: Self.hidesCompactWingsDefaultsKey
+        ) ?? false
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
         ) ?? false
@@ -1061,14 +1092,48 @@ final class MonitorStore: ObservableObject {
 
     /// Whether the collapsed surface draws any mark.
     ///
-    /// False only for a notched display resting with nothing connected, where
-    /// the whole leading wing goes away and the panel is just the cut-out. This
-    /// is the one place the two form factors differ in *what is visible* rather
+    /// False for a notched display resting with nothing connected, where the
+    /// whole leading wing goes away and the panel is just the cut-out. This is
+    /// the one place the two form factors differ in *what is visible* rather
     /// than in how it is drawn: a no-notch pill has no cut-out to hide behind,
     /// so it keeps the grey mark and holds its position in the menu bar.
+    ///
+    /// False for the whole of ``hidesCompactSurface`` as well, which is that
+    /// same resting form asked for on purpose rather than arrived at.
     var drawsCompactMarks: Bool {
         guard !isExpanded, geometry == .notched else { return true }
-        return !isRestingOnly
+        return !isRestingOnly && !hidesCompactSurface
+    }
+
+    /// Whether ``hidesCompactWings`` is something the selected display could
+    /// honour -- which is what greys the switch that sets it.
+    ///
+    /// A pill on a display without a notch has nothing to hide behind. Hiding
+    /// it would take its position in the menu bar with it and slide every icon
+    /// to its left across, and it would leave no way to open the panel at all:
+    /// there would be no shape on the screen to hover. The preference itself is
+    /// untouched by this -- it survives unplugging the display that could not
+    /// honour it.
+    var canHideCompactWings: Bool {
+        geometry == .notched
+    }
+
+    /// Whether the collapsed surface is drawing nothing at all.
+    ///
+    /// The cut-out has to be measurable as well as present. A notched display
+    /// whose auxiliary areas report no gap between them is laid out as an
+    /// *emulated* notch instead (see `PanelMetrics.size`), and hiding the
+    /// wings around a cut-out that is not there would leave a
+    /// zero-width panel -- nothing on the screen, and nothing to hover. So that
+    /// display keeps its emulated pill and the preference waits.
+    ///
+    /// Says nothing about hover: both readers of this are already collapsed-only
+    /// (``drawsCompactMarks`` guards on it, and the compact timer is drawn only
+    /// while collapsed), and scoping it here as well would make the answer
+    /// change under the pointer for no drawn difference.
+    var hidesCompactSurface: Bool {
+        guard hidesCompactWings, canHideCompactWings else { return false }
+        return (selectedDisplay?.centerOcclusionWidth ?? 0) >= 1
     }
 
     /// Nothing is connected, so the only mark is the grey one.
@@ -1108,7 +1173,12 @@ final class MonitorStore: ObservableObject {
     }
 
     var compactTimerText: String? {
-        SessionElapsedFormatter.elapsed(
+        // Nil rather than gated at the view, so the trailing wing this string
+        // reserves goes away with the readout it was reserving for. Every
+        // reader is the collapsed surface or its width: the header, the two
+        // width compositions below, and the tick's own re-measure signature.
+        guard !hidesCompactSurface else { return nil }
+        return SessionElapsedFormatter.elapsed(
             since: longestRunningSessionStart,
             now: timerNow
         )
