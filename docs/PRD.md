@@ -121,7 +121,9 @@ Codex in Notch 不主动修改已读状态。点击会话成功后，组件收�
 
 不存在行级 `Idle` 或行级 `Disconnected`。
 
-`Approval needed` 只在当前精确 Turn 存在一个仍未关闭的审批区间时成立，且必须能被同一 `tool_use_id` 的结束事件关闭：专用审批工具自己构成该区间；普通工具（如 Bash 命令）由 `PermissionRequest` 指名、借用该工具仍打开的调用 id 构成。孤立的 `PermissionRequest` 仍不足以证明用户需要操作，因为自动审查可能立即放行。`Stop` 或 App Server 的 `completed`、`failed`、`interrupted` 都是同一种产品信号：当前 Turn 已经结束，因此统一进入 Completed。**Claude Code 的用户中断不产生任何信号**——`Esc` 不触发任何 hook——因此那里还有两份非事件的证据算作同一种信号：会话自己不再报告它在工作（`claude agents --json` 的 `status`），以及**桌面端托管的会话**在自己的 transcript 里留下的那条中断记录（那种会话没有终端界面，因而永远不报告 `status`）。两者都只能结束已经开着的 Turn，不能开启或描述任何 Turn；后者指名了它结束的那个 Turn，因而只对那一个成立。详见 ADR 0011。
+`Approval needed` 只在当前精确 Turn 存在一个仍未关闭的审批区间时成立，且必须能被同一 `tool_use_id` 的结束事件关闭：专用审批工具自己构成该区间；普通工具（如 Bash 命令）由 `PermissionRequest` 指名、借用该工具仍打开的调用 id 构成。孤立的 `PermissionRequest` 仍不足以证明用户需要操作，因为自动审查可能立即放行。
+
+**还有一条比区间更靠前的条件：这条 thread 的审批必须真的会问到人。** Codex Desktop 的「Approval for me」（`guardian-approvals` 代理模式，CLI 的 `--approve-for-me`）把每一次审批交给自动审查者，它只有 allow 与 deny 两个结果，没有任何回到人这里的出口。这类 thread 上的审批区间因此永远不是「用户需要操作」，本产品不为它显示 Approval needed，行保持 Running 直到那次调用关闭。只有**被证明**是自动审查的 thread 适用这条；证据缺席、无法辨认或读不到时，行为与从前完全一致。`request_user_input` 不受影响——自动审查者只决定审批，问题仍然只有人能回答，所以 Input needed 在任何设置下都照常出现。`Stop` 或 App Server 的 `completed`、`failed`、`interrupted` 都是同一种产品信号：当前 Turn 已经结束，因此统一进入 Completed。**Claude Code 的用户中断不产生任何信号**——`Esc` 不触发任何 hook——因此那里还有两份非事件的证据算作同一种信号：会话自己不再报告它在工作（`claude agents --json` 的 `status`），以及**桌面端托管的会话**在自己的 transcript 里留下的那条中断记录（那种会话没有终端界面，因而永远不报告 `status`）。两者都只能结束已经开着的 Turn，不能开启或描述任何 Turn；后者指名了它结束的那个 Turn，因而只对那一个成立。详见 ADR 0011。
 
 ### 6.2 顶部汇总优先级
 
@@ -328,7 +330,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 ## 14. 验收标准
 
 1. 用户提交输入后一秒内出现对应会话行；同一 Thread 的后续 Turn 不产生重复行。
-2. Input needed、Approval needed、Running、Completed 四态及优先级正确；专用审批工具与普通工具（如 Bash 命令）两种审批形态都必须进入 Approval needed，孤立的 PermissionRequest 不误报，任意执行结束信号都使当前 Turn 直接进入 Completed。Claude Code 里被用户中断的 Turn 同样必须到达 Completed——包括中断发生在审批对话框打开时，也包括会话由 Claude Code 桌面端托管（那种会话不报告任何工作状态）——尽管那里没有任何 hook 到达。
+2. Input needed、Approval needed、Running、Completed 四态及优先级正确；在审批会问到人的 thread 上，专用审批工具与普通工具（如 Bash 命令）两种审批形态都必须进入 Approval needed，孤立的 PermissionRequest 不误报；在 Desktop 记录为自动审查（`auto_review`）的 thread 上，同样两种形态都不得进入 Approval needed，而 Input needed 不受该设置影响；任意执行结束信号都使当前 Turn 直接进入 Completed。Claude Code 里被用户中断的 Turn 同样必须到达 Completed——包括中断发生在审批对话框打开时，也包括会话由 Claude Code 桌面端托管（那种会话不报告任何工作状态）——尽管那里没有任何 hook 到达。
 3. 活动轮次始终显示；终态轮次在用户看过之后自动移除——Codex 按未读集合，Claude Code Desktop 托管会话按 4.2 的四条路径（显示时刻晚于该轮次终止时刻；或轮次结束后应用回到前台；或应用此刻持有前台且屏幕醒着未锁，且两者屏幕上的都是该会话；或该会话带着已结束的轮次停在屏幕上之后被别的会话顶下去），Claude Code 终端会话按第五条（该会话控制终端的访问时间晚于该轮次终止时刻，且该终端所属应用此刻持有前台、屏幕醒着未锁）。五条互为平级，任一成立即移除。只有既无 Desktop 记录、也无控制终端可问的会话不参与本条，理由见 ADR 0012。
 4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
 5. 应用重启时不显示缓存行，也不恢复任何启动前的会话；列表从空开始，只累积启动后产生 lifecycle 事件的 Turn。

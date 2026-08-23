@@ -49,6 +49,7 @@ flowchart LR
     subgraph desktopAdapters ["Desktop 私有只读适配器"]
         projectRepository["CodexDesktopProjectMetadataRepository actor"]
         unreadRepository["CodexDesktopUnreadStateRepository actor"]
+        approvalRoutingRepository["CodexDesktopApprovalRoutingRepository actor"]
         directoryWatcher["目录 watcher 与 50 ms debounce 可重新挂载"]
         desktopPidGate["NSRunningApplication PID 观察门槛"]
     end
@@ -101,10 +102,12 @@ flowchart LR
 
     desktopState -.->|"Project assignments"| projectRepository
     desktopState -.->|"local unread thread IDs"| unreadRepository
+    desktopState -.->|"per-thread approvalsReviewer"| approvalRoutingRepository
     desktopState -.->|"目录原子替换事件"| directoryWatcher
     directoryWatcher -->|"debounced change signal"| unreadRepository
     projectRepository -->|"Project 或 Chats 或 unavailable"| liveService
     unreadRepository -->|"权威性标记加未读集合"| liveService
+    approvalRoutingRepository -->|"被证明自动审查的 thread 集合"| liveService
     desktopProcess -->|"当前 PID"| desktopPidGate
     desktopPidGate -->|"绑定 Hook 信任到当前进程"| liveService
     hookRegistrar <-->|"registration install remove"| liveService
@@ -342,7 +345,9 @@ stateDiagram-v2
 - `Approval needed` 一律由某个工具调用的开合区间确定，但 Codex 有**两种**审批形态，都以 `tool_use_id` 成对关闭：
   - **专用审批工具**（实测 2026-08-15，网络访问审批）：`PreToolUse(request_permissions)` 打开一个跨越人工等待整段时间的工具调用，同 `tool_use_id` 的 `PostToolUse` 关闭；此形态下 Codex **不发送** `PermissionRequest`，与 `request_user_input` 完全同构。
   - **普通工具审批**（实测 2026-08-15，Bash 命令审批）：Codex 先用 `PreToolUse` announce 该调用（`tool_name: "Bash"`、`tool_use_id: "exec-…"`），约 30ms 后发出 `PermissionRequest`，后者**带 `tool_name` 但 `tool_use_id` 为 null**，随后停在人工等待上；用户批准后同 `tool_use_id` 的 `PostToolUse` 到达。因此 `PermissionRequest` 借用该 tool 当前仍打开的调用 id 作为等待身份，关闭仍走既有配对，不引入任何计时或超时猜测。
-- `PermissionRequest` 本身仍不是等待证据：没有仍打开的调用可配对时（或它指名的 tool 与当前打开的调用不一致）保持原状态，不建立无法被关闭的等待。自动放行的请求会立刻收到配对的 `PostToolUse`，同一批事件内开合，因此不会滞留成假的等待态。
+- `PermissionRequest` 本身仍不是等待证据：没有仍打开的调用可配对时（或它指名的 tool 与当前打开的调用不一致）保持原状态，不建立无法被关闭的等待。
+- **这里此前写着「自动放行的请求会立刻收到配对的 `PostToolUse`，同一批事件内开合，因此不会滞留成假的等待态」——那句话是错的**，本次改动的起因就是它。实测 2026-08-22（CLI `0.149.0-alpha.4.1`，`codex exec --approve-for-me`，非交互、现场没有任何人可问）：`PreToolUse(Bash, exec-…)`，10 ms 后 `PermissionRequest(Bash, tool_use_id: null)`，配对的 `PostToolUse` 在 **2.5 秒之后**才到——自动审查是一次模型往返，加上命令自身的执行时间。借用 id 的等待区间横跨的正是这一整段，所以行会在每一次被审查的调用上报一次 Approval needed 再自己变回 Running。Desktop 侧的自动审查更长：同一天的 Desktop 日志里 `item/autoApprovalReview/started` 到 `completed` 实测 2.1–5.9 s。
+- **因此审批区间之前还有一道 thread 级的闸门：这条 thread 的审批是否真的会问到人。** Codex Desktop 的「Approval for me」（`guardian-approvals` 代理模式）把审批交给自动审查者，后者只有 allow / deny 两种结果，没有回到人的出口（实测其 guardian 提示词的 Outcome Policy 只定义这两个值）。官方 `permission-request.command.input` schema 里没有任何字段能区分这两种情形——`permission_mode` 两边都是 `default`——所以证据只能来自 thread：`CodexDesktopApprovalRoutingRepository` 只读 `.codex-global-state.json` 的 `heartbeat-thread-permissions-by-id.<threadId>.approvalsReviewer`，值为 `auto_review` 时 `LiveCodexMonitorService` 组行时把该行的 `approvalNeeded` 降为 `running`。**只有被证明是自动审查才降级**：条目缺席、值不认识、文件读不到都回到原行为，因为这个断言说的是「不会有人被问」，缺证据就是没有做出该断言。reducer 完全不变——它证明的仍然是「权限管线在一个仍打开的调用上开过」，那句话在两种设置下都为真；把设置读进 reducer 会让它同时知道事件与 Desktop 文件两件事，违反跨源决策归属。`request_user_input` 不在闸门内：自动审查者只决定审批。
 - **批准与拒绝的关闭方式不同**（实测 2026-08-15，同一 Bash 审批分别批准与拒绝）：批准后到达配对 `PostToolUse`；**拒绝后该调用再也不会出现任何事件**——67 秒静默后直接是本 Turn 的 `Stop`。因此借用 id 的等待还必须能被"其他调用的活动"关闭：Codex 在真正阻塞于审批弹窗期间不发送任何事件，所以任意**其他** `tool_use_id` 的 `PreToolUse`／`PostToolUse` 就是人工已经回答的证据。只有借用 id 的等待适用该规则；`request_permissions` 自带 id、必然收到关闭事件，不受影响。
 - 拒绝后如果 Turn 不再调用任何工具，等待由 `Stop` 关闭并进入 Completed。拒绝瞬间本身没有任何事件可观察，因此从用户点击拒绝到下一个事件之间仍会短暂显示 Approval needed；这是可观察证据的边界，不用计时器弥补。
 - 产品只关心 Turn 是否仍在进行：实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接成为 Completed，不再发起 `thread/read` 区分结束原因。
@@ -394,9 +399,10 @@ flowchart LR
 | 用户配置编辑 | `ManagedHooksConfiguration` | 在用户拥有的配置里严格增删本应用的定义；看不懂的结构一律不改，必须改才能继续时整体拒绝 | [`ManagedHooksConfiguration.swift`](../Notchline/Notchline/ManagedHooksConfiguration.swift) |
 | 公开协议边界 | `CodexAppServerClient` | 子进程、stdio JSON-RPC、握手、请求关联、超时、探活与传输重建 | [`CodexAppServerClient.swift`](../Notchline/Notchline/CodexAppServerClient.swift) |
 | 传输分帧 | `AppServerStreamPump` | 在串行 readability queue 内把 stdout 切成有序完整帧，并对单帧上限 fail closed | [`CodexAppServerClient.swift`](../Notchline/Notchline/CodexAppServerClient.swift) |
-| 纯解析 | `CodexSnapshotParser` | 根线程判定、标题、预览、额度解析与排序；不推导状态 | [`LiveCodexMonitorService.swift`](../Notchline/Notchline/LiveCodexMonitorService.swift) |
+| 纯解析 | `CodexSnapshotParser` | 根线程判定、标题、预览、额度解析与排序；不推导状态，唯一一处**减法**是自动审查的 thread 上把 `approvalNeeded` 降为 `running`（由编排器把 thread 归属传进来） | [`LiveCodexMonitorService.swift`](../Notchline/Notchline/LiveCodexMonitorService.swift) |
 | 私有 Project 边界 | `CodexDesktopProjectMetadataRepository` | 只读并严格校验 Desktop Project/Chats 映射 | [`CodexDesktopProjectMetadata.swift`](../Notchline/Notchline/CodexDesktopProjectMetadata.swift) |
 | 私有未读边界 | `CodexDesktopUnreadStateRepository` | 只读 unread 集合、标记来源权威性、发出目录变化事件 | [`CodexDesktopUnreadState.swift`](../Notchline/Notchline/CodexDesktopUnreadState.swift) |
+| 私有审批归属边界 | `CodexDesktopApprovalRoutingRepository` | 只读同一份 Desktop 状态里的 `heartbeat-thread-permissions-by-id.<threadId>.approvalsReviewer`，回答「这条 thread 的审批会不会问到人」。**只报被证明为 `auto_review` 的 thread**，缺席、不认识的值与读失败都回到原行为；没有自己的 watcher——它与未读集合同一个文件，那边的目录 watcher 已经会为它的每一次写入唤醒刷新 | [`CodexDesktopApprovalRouting.swift`](../Notchline/Notchline/CodexDesktopApprovalRouting.swift) |
 | 私有已读边界（Claude Code） | `ClaudeCodeDesktopReadStateRepository` | 只读 Claude Desktop 的会话记录，按 `cliSessionId` 连接身份，取 `lastFocusedAt` 与 `isArchived`，另取 `sessionId` 供下一行接回身份；**没有记录就是 unknown 而不是未读**；发出账户目录变化事件（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)） | [`ClaudeCodeDesktopReadState.swift`](../Notchline/Notchline/ClaudeCodeDesktopReadState.swift) |
 | 屏幕上是哪个会话 | `ClaudeDesktopFocusLogReader` | 记录只记会话**被放上屏幕**，从不记它被拿下来，所以用户切到新会话的输入框之后，最后被盖章的会话会继续冒充在屏幕上，其终态行会被没人读过就撤掉。Claude Desktop 自己的日志两个方向都说（`setFocusedSession: sessionId=…|null`），从当前末尾向前读、只认本进程启动之后追加的行，**在编排器里只作否决权**：能拦下记录声称的会话，不能提名记录没声称的；读不到就是 `unknown`，即没有这份日志之前的原样行为（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md) 第五条） | [`DesktopDisplayedSession.swift`](../Notchline/Notchline/DesktopDisplayedSession.swift) |
 | 终端已读边界（Claude Code） | `ControllingTerminalGestureReader` | **对每个会话都问，不是上一条答 unknown 时才问**（远程控制会让同一个会话两边都在），一次读出**两个事实**：`sysctl(KERN_PROC_PID)` → 控制终端设备号 → `devname_r` → `stat` 的**访问时间**（手势），加上同一个 `sysctl` 的 `e_ppid` 逐级向上看**前台进程是不是这个会话的祖先**（在不在人眼前，最多 16 级，复用 `DesktopReadingWatcher.systemScreenIsAvailable`）。两者同时成立才算已读——访问时间记的是"会话读了这个设备"而不是"有人做了什么"，而 Claude Code 打开着全动作鼠标上报，指针划过一扇没有焦点的窗就会推动它（ADR 0012 的 2026-08-20 修正）。**不在屏幕上的界面收不到任何东西**，所以它仍按会话而不是按应用成立；没有控制终端答 `nil`，那样的行不进 gate；宿主不在前台答"未读"，那样的行留在 gate 里继续按秒复查 | [`ControllingTerminalGestures.swift`](../Notchline/Notchline/ControllingTerminalGestures.swift) |

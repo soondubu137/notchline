@@ -61,6 +61,13 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     nonisolated private let hookListener: AgentHookListener
     private let projectMetadata: any DesktopProjectMetadataProviding
     private let unreadState: any DesktopUnreadStateProviding
+    /// Which threads Codex answers approval requests for on the user's behalf.
+    ///
+    /// A decision spanning two sources, so it is made here rather than in the
+    /// reducer: the reducer sees only that a permission pipeline opened over a
+    /// call that is still open, which is as true of a request the automatic
+    /// reviewer is deciding as of one a person is looking at.
+    private let approvalRouting: any DesktopApprovalRoutingProviding
     /// Whether there is a screen the user could read a thread on.
     ///
     /// Only the gate's re-check consults it: a row Desktop still reports unread
@@ -111,6 +118,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             CodexDesktopProjectMetadataRepository(),
         unreadState: any DesktopUnreadStateProviding =
             CodexDesktopUnreadStateRepository(),
+        approvalRouting: any DesktopApprovalRoutingProviding =
+            CodexDesktopApprovalRoutingRepository(),
         screenAvailability: any ScreenAvailabilityReporting =
             ScreenAvailabilityWatcher(),
         clock: any MonitorClock = SystemMonitorClock(),
@@ -134,6 +143,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         }
         self.projectMetadata = projectMetadata
         self.unreadState = unreadState
+        self.approvalRouting = approvalRouting
         self.screenAvailability = screenAvailability
         // Background reads land after the snapshot that started them has already
         // been published, so their results need a trigger of their own. The
@@ -283,7 +293,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     from: hookState.turns,
                     threadRecords: threadRecords,
                     projectMetadata: projectSnapshot,
-                    unreadState: unreadSnapshot
+                    unreadState: unreadSnapshot,
+                    approvalRouting: await approvalRouting.snapshot()
                 )
                 // The one branch that looked at every listed row and pruned the
                 // gate to match. Anything it hid or dropped is hidden or
@@ -680,7 +691,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         from states: [HookTurnState],
         threadRecords: [String: ThreadRecord],
         projectMetadata: DesktopProjectMetadataSnapshot,
-        unreadState: DesktopUnreadStateSnapshot
+        unreadState: DesktopUnreadStateSnapshot,
+        approvalRouting: DesktopApprovalRoutingSnapshot
     ) async -> [MonitoredSession] {
         var sessions: [MonitoredSession] = []
         // Keyed on what was actually evaluated, not on every Hook state. A
@@ -700,7 +712,10 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 thread: threadRecords[state.threadID]?.thread,
                 projectName: projectMetadata.resolution(
                     for: state.threadID
-                ).displayName
+                ).displayName,
+                approvalsReachTheUser: approvalRouting.approvalsReachTheUser(
+                    for: state.threadID
+                )
             ) else {
                 continue
             }
@@ -1163,10 +1178,19 @@ enum CodexSnapshotParser {
     /// `thread` contributes presentation only — eligibility, title, preview.
     /// Status and timing come from the reducer, because no field of a Thread
     /// payload carries Turn-level runtime truth for this topology.
+    ///
+    /// `approvalsReachTheUser` is the one exception, and it subtracts rather
+    /// than adds: the reducer proves a permission pipeline opened over a call
+    /// that is still open, which on a thread reviewed by Codex itself is not a
+    /// person being asked anything. See
+    /// ``CodexDesktopApprovalRoutingRepository``. It defaults to the answer
+    /// that changes nothing, so a caller with no evidence keeps every state
+    /// the reducer reached.
     nonisolated static func session(
         from state: HookTurnState,
         thread: JSONValue?,
-        projectName: String
+        projectName: String,
+        approvalsReachTheUser: Bool = true
     ) -> MonitoredSession? {
         if let thread, !isEligibleRootThread(thread) {
             return nil
@@ -1177,7 +1201,12 @@ enum CodexSnapshotParser {
             ?? threadPreview
             ?? normalizedPreview(state.promptPreview)
             ?? "Untitled"
-        let status = state.status
+        // Only the approval wait is answered elsewhere. `request_user_input`
+        // still asks the person -- the automatic reviewer decides approvals
+        // and nothing else -- so Input needed is left exactly as it was.
+        let status = approvalsReachTheUser || state.status != .approvalNeeded
+            ? state.status
+            : .running
         let preview = status == .completed
             ? normalizedPreview(state.assistantPreview)
             : normalizedPreview(state.promptPreview)

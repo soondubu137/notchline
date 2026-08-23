@@ -3543,6 +3543,161 @@ struct NotchlineTests {
         )
     }
 
+    /// Captured from a real Desktop state file on 2026-08-22: every `user`
+    /// thread carries a `heartbeat-thread-permissions-by-id` entry, and the
+    /// reviewer is spelled `auto_review` under "Approval for me" and `user`
+    /// otherwise.
+    @Test @MainActor
+    func desktopApprovalRoutingNamesOnlyTheAutomaticallyReviewedThreads() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "heartbeat-thread-permissions-by-id": [
+                    "thread-auto": [
+                        "approvalPolicy": "on-request",
+                        "approvalsReviewer": "auto_review",
+                        "sandboxPolicy": ["type": "workspaceWrite"]
+                    ],
+                    // The sibling policy is a table rather than a string here,
+                    // which the adapter must step over rather than fail on.
+                    "thread-person": [
+                        "approvalPolicy": [
+                            "granular": ["request_permissions": true]
+                        ],
+                        "approvalsReviewer": "user"
+                    ],
+                    // A reviewer this build has never heard of proves nothing,
+                    // so it must not silence the state either.
+                    "thread-future": ["approvalsReviewer": "team_lead"],
+                    "thread-silent": ["approvalPolicy": "never"]
+                ]
+            ]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let snapshot = await CodexDesktopApprovalRoutingRepository(
+            stateFileURL: stateFile
+        ).snapshot()
+
+        #expect(snapshot.automaticallyReviewedThreadIDs == ["thread-auto"])
+        #expect(!snapshot.approvalsReachTheUser(for: "thread-auto"))
+        #expect(snapshot.approvalsReachTheUser(for: "thread-person"))
+        #expect(snapshot.approvalsReachTheUser(for: "thread-future"))
+        #expect(snapshot.approvalsReachTheUser(for: "thread-silent"))
+        #expect(snapshot.approvalsReachTheUser(for: "thread-unrecorded"))
+    }
+
+    /// An unreadable file must not put the flicker back for one refresh, and a
+    /// file that never was readable must not hide anything.
+    @Test @MainActor
+    func desktopApprovalRoutingKeepsTheLastMapAndClaimsNothingWithoutOne() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let missingFile = root.appendingPathComponent(".codex-global-state.json")
+        let missing = await CodexDesktopApprovalRoutingRepository(
+            stateFileURL: missingFile
+        ).snapshot()
+        #expect(missing == .unknown)
+        #expect(missing.approvalsReachTheUser(for: "thread-auto"))
+
+        try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "heartbeat-thread-permissions-by-id": [
+                    "thread-auto": ["approvalsReviewer": "auto_review"]
+                ]
+            ]
+        ]).write(to: missingFile, options: .atomic)
+
+        let repository = CodexDesktopApprovalRoutingRepository(
+            stateFileURL: missingFile
+        )
+        #expect(await repository.snapshot().automaticallyReviewedThreadIDs
+            == ["thread-auto"])
+
+        try Data("{ not json".utf8).write(to: missingFile, options: .atomic)
+        #expect(await repository.snapshot().automaticallyReviewedThreadIDs
+            == ["thread-auto"])
+    }
+
+    /// The whole point of the routing read, at the layer that composes it.
+    ///
+    /// Measured 2026-08-22 (CLI `0.149.0-alpha.4.1`, `codex exec
+    /// --approve-for-me`, nobody present to answer): `PermissionRequest`
+    /// arrives 10 ms after the call it borrows and the paired `PostToolUse`
+    /// only 2.5 s later, once the automatic reviewer had decided and the
+    /// command had run. The reducer is right that a wait is open; the row must
+    /// still not tell the user to go and clear it.
+    @Test @MainActor
+    func automaticallyReviewedThreadKeepsRunningWhileAnApprovalIsDecided() {
+        func state(_ status: SessionStatus) -> HookTurnState {
+            HookTurnState(
+                threadID: "thread-auto",
+                turnID: "turn-1",
+                sessionStatus: status,
+                pendingInputToolUseID: nil,
+                pendingApproval: PendingApproval(
+                    toolUseID: "exec-1",
+                    isInferred: true
+                ),
+                startedAt: Date(timeIntervalSince1970: 1_000),
+                lastEventAt: Date(timeIntervalSince1970: 1_002),
+                retiredTurnIDs: [],
+                promptPreview: "Run the build",
+                assistantPreview: nil
+            )
+        }
+
+        #expect(
+            CodexSnapshotParser.session(
+                from: state(.approvalNeeded),
+                thread: nil,
+                projectName: "Chats",
+                approvalsReachTheUser: false
+            )?.status == .running
+        )
+        // The same evidence on a thread the person reviews is unchanged.
+        #expect(
+            CodexSnapshotParser.session(
+                from: state(.approvalNeeded),
+                thread: nil,
+                projectName: "Chats",
+                approvalsReachTheUser: true
+            )?.status == .approvalNeeded
+        )
+        // Only approvals are answered elsewhere. `request_user_input` still
+        // asks the person, on every setting.
+        #expect(
+            CodexSnapshotParser.session(
+                from: state(.inputNeeded),
+                thread: nil,
+                projectName: "Chats",
+                approvalsReachTheUser: false
+            )?.status == .inputNeeded
+        )
+        // And a turn that ended still ends.
+        #expect(
+            CodexSnapshotParser.session(
+                from: state(.completed),
+                thread: nil,
+                projectName: "Chats",
+                approvalsReachTheUser: false
+            )?.status == .completed
+        )
+    }
+
     @Test @MainActor
     func desktopUnreadStateReadsOnlyTheLocalHostMembership() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -4827,6 +4982,98 @@ struct NotchlineTests {
         // Hook activity on an already-listed thread no longer re-paginates the
         // whole unarchived set; only the cheap per-thread read follows it.
         #expect(threadListRequests == 1)
+    }
+
+    /// The reported bug, end to end.
+    ///
+    /// A Bash call is announced and then asked about, which is the only shape
+    /// Codex has for an ordinary-tool approval. On a thread Desktop reviews
+    /// automatically the row must stay Running for the whole decision; on a
+    /// thread the person reviews, the same two events must still reach
+    /// Approval needed.
+    @Test @MainActor
+    func automaticallyReviewedThreadNeverPublishesApprovalNeeded() async throws {
+        func rowStatus(reviewer: String) async throws -> SessionStatus? {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try FileManager.default.createDirectory(
+                at: root,
+                withIntermediateDirectories: true
+            )
+            let stateFile = root
+                .appendingPathComponent(".codex-global-state.json")
+            try JSONSerialization.data(withJSONObject: [
+                "electron-persisted-atom-state": [
+                    "heartbeat-thread-permissions-by-id": [
+                        "thread-1": ["approvalsReviewer": reviewer]
+                    ]
+                ]
+            ]).write(to: stateFile, options: .atomic)
+
+            let installer = CodexHookRegistrar(paths: paths)
+            let repository = HookEventRepository(paths: paths)
+            try await installer.install()
+            let timestamp = Date().timeIntervalSince1970
+            for event in [
+                [
+                    "received_at": timestamp,
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "thread-1",
+                    "turn_id": "turn-1"
+                ],
+                [
+                    "received_at": timestamp + 1,
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "thread-1",
+                    "turn_id": "turn-1",
+                    "tool_name": "Bash",
+                    "tool_use_id": "exec-1"
+                ],
+                [
+                    "received_at": timestamp + 2,
+                    "hook_event_name": "PermissionRequest",
+                    "session_id": "thread-1",
+                    "turn_id": "turn-1",
+                    "tool_name": "Bash"
+                ]
+            ] {
+                try JSONSerialization.data(withJSONObject: event)
+                    .deliver(to: repository)
+            }
+
+            let client = CodexAppServerStub(
+                listedThreads: [
+                    .object([
+                        "id": .string("thread-1"),
+                        "ephemeral": .bool(false),
+                        "threadSource": .string("user")
+                    ])
+                ],
+                loadedListResults: []
+            )
+            let service = LiveCodexMonitorService(
+                client: client,
+                hookEvents: repository,
+                hookRegistrar: installer,
+                approvalRouting: CodexDesktopApprovalRoutingRepository(
+                    stateFileURL: stateFile
+                ),
+                desktopProcessIdentifierProvider: { 4_242 }
+            )
+            let snapshot = await service.fetchSnapshot()
+            await service.disconnect()
+            return snapshot.sessions.first?.status
+        }
+
+        #expect(try await rowStatus(reviewer: "auto_review") == .running)
+        #expect(try await rowStatus(reviewer: "user") == .approvalNeeded)
     }
 
     @Test @MainActor
