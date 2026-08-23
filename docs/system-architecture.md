@@ -385,7 +385,7 @@ flowchart LR
 
 | 层 | 真实组件 | 单一职责 | 代码 |
 | --- | --- | --- | --- |
-| UI 状态 | `MonitorStore` | 拉取完整快照、合并刷新触发、发布 UI 状态、计算顶部汇总、按用户意图移除终态行（整张列表或单行，共用 `dismissedSessionIDs`） | [`MonitorStore.swift`](../Notchline/Notchline/MonitorStore.swift) |
+| UI 状态 | `MonitorStore` | 拉取完整快照、合并刷新触发、发布 UI 状态、计算顶部汇总、按用户意图移除终态行（右键单行，记进按产品分开的 `dismissedSessionIDsByAgent`，只在该产品看得见却不再列出这一轮时忘掉，见 `tech-design.md` §17） | [`MonitorStore.swift`](../Notchline/Notchline/MonitorStore.swift) |
 | 核心编排 | `LiveCodexMonitorService` | 协调 Hook、App Server、Project、未读、缓存、成员集合与降级 | [`LiveCodexMonitorService.swift`](../Notchline/Notchline/LiveCodexMonitorService.swift) |
 | Turn reducer 与正文 | `HookEventRepository` | 两个产品共用的唯一 store：payload 先由 `HookPayloadDistiller` 在解码之前选出字段（大起来的都是本 app 不读的字段，所以工具结果的大小不再决定事件听不听得见，见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)），再用精确身份消费、拒绝回放复活、维护内存 `HookTurnState`，并持有每个会话的流式正文（头部 240 字符）与投递证据；读不懂的 payload、放不下的事件、以及「注册了却不触发」的探测按本次运行累计成一句诊断，经 `AgentSnapshot.diagnostic` 交给 Settings 的产品行（CR-029）。**只在渲染投影变化时**发变更信号——状态、轮次身份、或行上那句正文——而不是每个事件一次；delta 只在**从没有到有**且该会话被上次刷新列出时报一个边沿（见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)） | [`HookIntegration.swift`](../Notchline/Notchline/HookIntegration.swift) |
 | Hook transport（两个产品） | `AgentHookListener` | 只做传输：绑定 0600 Unix domain socket、accept、读一份 payload、盖到达戳交给 store。一次连接一条 payload，写方关闭即帧尾；**串行读取队列保序**，交接完成后才关闭连接（唯一的背压）。一条连接最多读到 16 MiB 为止，这个上限只约束读队列每个事件的时间，不约束 reducer 能被告知什么——字段选择在 store 里、在解码之前，所以切断之前完整到达的字段照常生效。不做字段选择、不写任何文件 | [`AgentHookListener.swift`](../Notchline/Notchline/AgentHookListener.swift) |

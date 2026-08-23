@@ -1789,6 +1789,206 @@ struct NotchlineTests {
         #expect(store.sessions.map(\.id) == [nextTurn.id])
     }
 
+    /// Quitting Codex Desktop does not undo a dismissal.
+    ///
+    /// The moment Desktop goes, the provider publishes an empty session list --
+    /// and the Hook reducer behind it still holds that finished Turn, so the
+    /// first hook event after the relaunch republishes exactly the row the user
+    /// waved away. Reading "absent from this snapshot" as "gone for good" put
+    /// that row back on the notch (CR-Fable-004); the product being closed is
+    /// not evidence about any Turn.
+    ///
+    /// The other product being perfectly healthy throughout is the second half
+    /// of it: dismissals are forgotten on their own product's word, never on
+    /// its neighbour's.
+    @Test @MainActor
+    func aDismissalSurvivesItsProductQuitting() {
+        let finished = MonitoredSession(
+            threadID: "thread",
+            turnID: "turn-1",
+            projectName: "Chats",
+            title: "Finished turn",
+            preview: nil,
+            status: .completed,
+            startedAt: Date()
+        )
+        let store = MonitorStore(
+            initialSnapshot: AgentSnapshot(
+                availability: .ready,
+                sessions: [finished],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+
+        #expect(store.dismiss(finished))
+        #expect(store.sessions.isEmpty)
+
+        // Desktop quits: presence is kernel truth, so it says closed at once,
+        // and the row list empties with it.
+        store.applyForTesting(
+            AgentSnapshot(
+                availability: .ready,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                presence: .closed
+            )
+        )
+        // Claude Code is up and has nothing to show. It is not a witness to
+        // what Codex has dismissed.
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+
+        // Relaunched, and the reducer republishes the same Turn.
+        store.applyForTesting(
+            AgentSnapshot(
+                availability: .ready,
+                sessions: [finished],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        #expect(store.sessions.isEmpty)
+    }
+
+    /// A disconnect long enough to publish does not undo a dismissal either.
+    ///
+    /// Past the stability grace the product publishes `.disconnected` with
+    /// nothing in it. Nothing about that says the Turn ended -- it says we
+    /// stopped being able to ask -- and the row comes back with the connection.
+    @Test @MainActor
+    func aDismissalSurvivesASustainedDisconnect() {
+        let baseDate = Date(timeIntervalSince1970: 2_000)
+        let finished = MonitoredSession(
+            threadID: "thread",
+            turnID: "turn-1",
+            projectName: "Chats",
+            title: "Finished turn",
+            preview: nil,
+            status: .completed,
+            startedAt: baseDate
+        )
+        let ready = AgentSnapshot(
+            availability: .ready,
+            sessions: [finished],
+            quota: .unavailable,
+            diagnostic: nil
+        )
+        let disconnected = AgentSnapshot(
+            availability: .disconnected,
+            sessions: [],
+            quota: .unavailable,
+            diagnostic: "transport unavailable"
+        )
+        let store = MonitorStore(initialSnapshot: ready)
+
+        #expect(store.dismiss(finished))
+
+        store.applyForTesting(disconnected, observedAt: baseDate)
+        store.applyForTesting(
+            disconnected,
+            observedAt: baseDate.addingTimeInterval(3)
+        )
+        #expect(store.availability == .disconnected)
+
+        store.applyForTesting(
+            ready,
+            observedAt: baseDate.addingTimeInterval(4)
+        )
+        #expect(store.sessions.isEmpty)
+    }
+
+    /// Claude Code withholding its rows does not undo a dismissal.
+    ///
+    /// With no window open that product publishes an empty list while staying
+    /// perfectly ready -- its rows are withheld, not discarded
+    /// (`tech-design.md` §15.1). A dismissal read off that list would be
+    /// forgotten every time the user closed the terminal.
+    @Test @MainActor
+    func aDismissalSurvivesClaudeCodeWithholdingItsRows() {
+        let finished = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "session",
+            turnID: "turn-1",
+            projectName: "Chats",
+            title: "Finished turn",
+            preview: nil,
+            status: .completed,
+            startedAt: Date()
+        )
+        let listed = AgentSnapshot(
+            agent: .claudeCode,
+            availability: .ready,
+            sessions: [finished],
+            quota: .unavailable,
+            diagnostic: nil
+        )
+        let store = MonitorStore(initialSnapshot: listed)
+
+        #expect(store.dismiss(finished))
+
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                presence: .closed
+            )
+        )
+        store.applyForTesting(listed)
+        #expect(store.sessions.isEmpty)
+    }
+
+    /// A dismissal is forgotten once its own product, in view, stops listing
+    /// the Turn.
+    ///
+    /// This is what keeps the set bounded, and it is the only evidence that
+    /// does: the product is open, it is answering, and the Turn is not among
+    /// what it named. Anything it says after that is a new statement about a
+    /// row the user has not dismissed.
+    @Test @MainActor
+    func aDismissalIsForgottenOnceItsProductSaysTheTurnIsGone() {
+        let finished = MonitoredSession(
+            threadID: "thread",
+            turnID: "turn-1",
+            projectName: "Chats",
+            title: "Finished turn",
+            preview: nil,
+            status: .completed,
+            startedAt: Date()
+        )
+        let listed = AgentSnapshot(
+            availability: .ready,
+            sessions: [finished],
+            quota: .unavailable,
+            diagnostic: nil
+        )
+        let store = MonitorStore(initialSnapshot: listed)
+
+        #expect(store.dismiss(finished))
+
+        store.applyForTesting(
+            AgentSnapshot(
+                availability: .ready,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        store.applyForTesting(listed)
+        #expect(store.sessions.map(\.id) == [finished.id])
+    }
+
     /// Only a finished row can be dismissed.
     ///
     /// The other three statuses are Turns that are still going: the user has

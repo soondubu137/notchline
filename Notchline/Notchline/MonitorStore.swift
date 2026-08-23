@@ -864,7 +864,12 @@ final class MonitorStore: ObservableObject {
     /// hold the other side's switch.
     private var integrationTasks: [AgentKind: Task<Void, Never>] = [:]
     private var isNavigationInFlight = false
-    private var dismissedSessionIDs: Set<String> = []
+    /// The Turns the user has taken off the list, kept per product.
+    ///
+    /// Per product because forgetting one is decided against that product's own
+    /// state: a dismissal may only be dropped on evidence from the product it
+    /// came from, and the other product's health says nothing about it.
+    private var dismissedSessionIDsByAgent: [AgentKind: Set<String>] = [:]
     /// The latest answer from each product, kept so the merge can be recomputed
     /// without asking anyone again. One product answering must never discard
     /// what another already said.
@@ -1527,9 +1532,9 @@ final class MonitorStore: ObservableObject {
     ///
     /// **It ends this Turn's row, not the session's.** The dismissed set is
     /// keyed by ``MonitoredSession/id``, which carries the Turn id, so the next
-    /// Turn on the same thread arrives as a new row and lists normally. And
-    /// because the set is intersected with what the products still report on
-    /// every refresh, the entry costs nothing once the row is gone upstream.
+    /// Turn on the same thread arrives as a new row and lists normally. The
+    /// entry is dropped once that product reports the Turn gone while we can
+    /// still see the product — see ``forgetDismissalsProvenGone(in:)``.
     ///
     /// This is the only way a user can take a terminal Claude Code row off the
     /// list: read state is not a question those rows can be asked (see
@@ -1542,9 +1547,9 @@ final class MonitorStore: ObservableObject {
     @discardableResult
     func dismiss(_ session: MonitoredSession) -> Bool {
         guard session.status == .completed else { return false }
-        guard !dismissedSessionIDs.contains(session.id) else { return false }
+        guard !isDismissed(session) else { return false }
 
-        dismissedSessionIDs.insert(session.id)
+        dismissedSessionIDsByAgent[session.agent, default: []].insert(session.id)
         // Republished through the merge rather than by striking the row out of
         // `sessions` here. The list is not the only thing that has to change:
         // the summary status and the product marks are both derived from the
@@ -1894,11 +1899,8 @@ final class MonitorStore: ObservableObject {
     }
 
     private func apply(_ snapshot: MonitorSnapshot) {
-        let upstreamSessionIDs = Set(snapshot.sessions.map(\.id))
-        dismissedSessionIDs.formIntersection(upstreamSessionIDs)
-        let undismissedSessions = snapshot.sessions.filter {
-            !dismissedSessionIDs.contains($0.id)
-        }
+        forgetDismissalsProvenGone(in: snapshot)
+        let undismissedSessions = snapshot.sessions.filter { !isDismissed($0) }
         let visibleSessions = undismissedSessions
         // Re-aggregated rather than taken from the snapshot: a dismissed row
         // must stop counting towards the summary the moment it stops showing.
@@ -1935,6 +1937,41 @@ final class MonitorStore: ObservableObject {
         }
         if lastIntegrationMessage != integrationMessage {
             lastIntegrationMessage = integrationMessage
+        }
+    }
+
+    private func isDismissed(_ session: MonitoredSession) -> Bool {
+        dismissedSessionIDsByAgent[session.agent]?.contains(session.id) ?? false
+    }
+
+    /// Drops the dismissals whose Turn its own product has stopped listing
+    /// *while we could see that product*.
+    ///
+    /// The set has to be bounded — a dismissal the app never forgets is a leak
+    /// — but "absent from this snapshot" is not the same fact as "gone", and
+    /// reading it that way put dismissed rows back on the notch (CR-Fable-004).
+    /// A product stops listing its rows for ordinary reasons that leave the
+    /// Turn very much alive and about to be republished: Codex Desktop quits,
+    /// its App Server blips for longer than the grace period, Claude Code has
+    /// no open window and so withholds its rows rather than discarding them
+    /// (`tech-design.md` §15.1). Any of those used to erase that product's
+    /// dismissals, and the next hook event brought the row the user had just
+    /// waved away straight back.
+    ///
+    /// So the evidence required is the product itself being observable — open
+    /// *and* answering — and the Turn not being in what it listed. A product we
+    /// cannot see is not a witness to anything, and its dismissals are kept
+    /// untouched until it can speak for them again. Each product answers only
+    /// for its own: one being unreachable must not pin the other's set, and
+    /// one being healthy must not clear the other's.
+    private func forgetDismissalsProvenGone(in snapshot: MonitorSnapshot) {
+        for agentSnapshot in snapshot.agents where agentSnapshot.isConnected {
+            guard var dismissed = dismissedSessionIDsByAgent[agentSnapshot.agent],
+                  !dismissed.isEmpty else { continue }
+            dismissed.formIntersection(agentSnapshot.sessions.map(\.id))
+            dismissedSessionIDsByAgent[agentSnapshot.agent] = dismissed.isEmpty
+                ? nil
+                : dismissed
         }
     }
 
