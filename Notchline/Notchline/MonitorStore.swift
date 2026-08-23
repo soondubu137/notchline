@@ -1108,32 +1108,36 @@ final class MonitorStore: ObservableObject {
     /// Whether ``hidesCompactWings`` is something the selected display could
     /// honour -- which is what greys the switch that sets it.
     ///
-    /// A pill on a display without a notch has nothing to hide behind. Hiding
-    /// it would take its position in the menu bar with it and slide every icon
-    /// to its left across, and it would leave no way to open the panel at all:
-    /// there would be no shape on the screen to hover. The preference itself is
-    /// untouched by this -- it survives unplugging the display that could not
-    /// honour it.
+    /// **The condition is a measured cut-out, not a reported one.** Giving up
+    /// the wings means shrinking the collapsed body onto the hardware's own
+    /// shape, so this app has to know exactly where that shape is and how wide
+    /// it is; there is nothing else left on screen to place. Two displays fail
+    /// that, for the same reason stated twice:
+    ///
+    /// - A display without a notch has no such shape at all. Hiding the pill
+    ///   would take its position in the menu bar with it and slide every icon
+    ///   to its left across, and leave nothing to hover.
+    /// - A display that reports a notch but no gap between its auxiliary areas
+    ///   has a shape this app cannot locate. It is already laid out as an
+    ///   *emulated* notch for exactly that reason (see `PanelMetrics.size`),
+    ///   and shrinking onto a cut-out whose width reads as zero would leave a
+    ///   zero-width panel: nothing drawn, and nothing to hover.
+    ///
+    /// The preference itself is untouched by either -- it survives unplugging
+    /// the display that could not honour it.
     var canHideCompactWings: Bool {
-        geometry == .notched
+        guard geometry == .notched else { return false }
+        return (selectedDisplay?.centerOcclusionWidth ?? 0) >= 1
     }
 
     /// Whether the collapsed surface is drawing nothing at all.
-    ///
-    /// The cut-out has to be measurable as well as present. A notched display
-    /// whose auxiliary areas report no gap between them is laid out as an
-    /// *emulated* notch instead (see `PanelMetrics.size`), and hiding the
-    /// wings around a cut-out that is not there would leave a
-    /// zero-width panel -- nothing on the screen, and nothing to hover. So that
-    /// display keeps its emulated pill and the preference waits.
     ///
     /// Says nothing about hover: both readers of this are already collapsed-only
     /// (``drawsCompactMarks`` guards on it, and the compact timer is drawn only
     /// while collapsed), and scoping it here as well would make the answer
     /// change under the pointer for no drawn difference.
     var hidesCompactSurface: Bool {
-        guard hidesCompactWings, canHideCompactWings else { return false }
-        return (selectedDisplay?.centerOcclusionWidth ?? 0) >= 1
+        hidesCompactWings && canHideCompactWings
     }
 
     /// Nothing is connected, so the only mark is the grey one.

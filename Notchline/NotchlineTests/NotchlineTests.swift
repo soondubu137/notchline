@@ -497,6 +497,67 @@ struct NotchlineTests {
         #expect(store.hidesCompactSurface)
     }
 
+    /// A notch this app cannot place is a notch it cannot shrink onto.
+    ///
+    /// Giving up the wings means putting the collapsed body exactly on the
+    /// hardware's own shape, and there is nothing else left on screen to place
+    /// it by. A display reporting a notch but no gap between its auxiliary
+    /// areas is already laid out as an *emulated* notch for that reason; the
+    /// switch is greyed there for the same one, rather than being movable into
+    /// a state that would draw a zero-width panel.
+    @Test @MainActor
+    func aNotchWithNoMeasurableGapCannotGiveUpItsWings() {
+        let frame = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        let menuBarHeight: CGFloat = 38
+        // Both auxiliary areas present and non-empty -- so this reads as a
+        // notched display -- but meeting in the middle, so the cut-out between
+        // them measures zero.
+        let unplaceable = DisplayOption(
+            id: "notched-unplaceable",
+            displayID: nil,
+            ordinal: 1,
+            name: "Display 1",
+            frame: frame,
+            visibleFrame: NSRect(
+                x: frame.minX,
+                y: frame.minY,
+                width: frame.width,
+                height: frame.height - menuBarHeight
+            ),
+            safeAreaInsets: NSEdgeInsets(
+                top: menuBarHeight,
+                left: 0,
+                bottom: 0,
+                right: 0
+            ),
+            auxiliaryTopLeftArea: NSRect(
+                x: frame.minX,
+                y: frame.maxY - menuBarHeight,
+                width: frame.width / 2,
+                height: menuBarHeight
+            ),
+            auxiliaryTopRightArea: NSRect(
+                x: frame.midX,
+                y: frame.maxY - menuBarHeight,
+                width: frame.width / 2,
+                height: menuBarHeight
+            ),
+            fallbackMenuBarHeight: menuBarHeight
+        )
+        #expect(unplaceable.geometry == .notched)
+        #expect(unplaceable.centerOcclusionWidth == 0)
+
+        let store = MonitorStore(displays: [unplaceable], services: [])
+        #expect(!store.canHideCompactWings)
+
+        // Even asked for outright, it does not take effect: the emulated pill
+        // keeps its mark, because hiding it would leave nothing on the screen.
+        store.hidesCompactWings = true
+        #expect(!store.hidesCompactSurface)
+        #expect(store.drawsCompactMarks)
+        #expect(store.currentPanelSize.width > 0)
+    }
+
     /// A second mark widens the notched wing by exactly one matrix and its gap.
     @Test @MainActor
     func aSecondMarkWidensTheNotchedWingByOneMatrix() {

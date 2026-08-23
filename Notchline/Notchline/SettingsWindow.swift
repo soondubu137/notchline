@@ -183,15 +183,28 @@ struct AppSettingsView: View {
                 .disabled(!store.canHideCompactWings)
                 .help(
                     "Leaves the collapsed component as the cut-out alone, with "
-                        + "no marks and no timer beside it. Needs a notched display."
+                        + "no marks and no timer beside it. Needs a display "
+                        + "whose cut-out Notchline can measure."
                 )
         }
     }
 
+    /// What the row says, which is the consequence on *this* display.
+    ///
+    /// Greyed, it says why rather than what. The two ways a display can fail to
+    /// qualify are named apart rather than merged into one sentence about
+    /// cut-outs: a laptop's built-in screen reporting a notch it cannot place
+    /// is a different situation from an external monitor, and a user reading a
+    /// greyed switch on a MacBook under the words `Needs a notched display`
+    /// would reasonably conclude the app was broken.
     private var hideWingsDescription: String {
         guard store.canHideCompactWings else {
-            return "Needs a notched display. Without a cut-out to hide behind "
-                + "there would be nothing left to hover."
+            guard store.geometry == .notched else {
+                return "Needs a notched display. Without a cut-out to hide "
+                    + "behind there would be nothing left to hover."
+            }
+            return "This display reports a notch but not where it is, so there "
+                + "is nothing to shrink the collapsed component onto."
         }
         return "Collapsed, Notchline is the cut-out and nothing else — no marks "
             + "and no timer. Hovering still opens the panel."
