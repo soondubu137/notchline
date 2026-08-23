@@ -266,6 +266,8 @@ flowchart LR
 
 **这里产出的 availability 只是收起态状态的一半。** 另一半是**在场**：该产品此刻是否打开，由同一次刷新里已经在取的 `NSRunningApplication` 查询回答（Claude Code 侧由活跃会话列表回答）。两者都成立才算已连接，收起态才显示 `Connected`；否则显示 `Disconnected`。`Connecting`、`Set up integration`、`Update required`、`Version unsupported` 都不再出现在收起态，只随 availability 进入展开面板与 Settings。归并规则是纯函数，写在 `MonitorAggregation.status`；在场本身是 `AgentSnapshot.presence`，与 availability 并列而不是由它推导。
 
+**归并读的是派生状态。** `MonitorAggregation.status`、`marks` 与 `rowOrder` 都先经过 `effectiveStatus(of:)`：一条 Codex 行自己的 Turn 已经 Completed、而它派生的子智能体还在跑时，那一行按 Running 参与归并与排序（`CONTEXT.md`「派生状态」，`PRD.md` §6.2）。除此之外它是恒等变换——Claude Code 从不设置 `runningSubagentCount`。**这个派生答案不进入行的渲染**：行画什么仍然只看 `MonitoredSession.status`，那是它自己那个 Turn 的状态。收起态因此会出现「写着 Running、尾翼却没有计时读数」的形态，那是正确的：`longestRunningSessionStart` 按 `keepsTiming` 过滤，此刻确实没有任何 Turn 在计时，尾翼那一格改写子智能体总数。
+
 **启动不做现状同步。** 会话只能由本次启动之后收到的 Hook 创建；启动前正在运行、已完成未读或等待审批的会话一律无视，直到它们产生下一个 lifecycle 事件。这是能力边界而非取舍：实测（CLI `0.148.0-alpha.9`，真实运行中的 Turn）表明独立 App Server 的 `thread/loaded/list` 为空、Thread 恒为 `notLoaded`、`thread/list` 契约上不返回 `turns`、`thread/read` 也从不出现 `inProgress`，因此不存在任何受支持的读取能回答“Desktop 此刻在做什么”。
 
 **Claude Code 侧同一条规则，理由不同。** 那一侧读得出来：`claude agents --json` 给出存在哪些会话，transcript 尾部给出其中哪些仍在轮次中，产品也一度据此重建启动前的行（`ClaudeCodeTranscriptReader.currentTurn`，2026-08-19 移除）。移除的理由不是成本，而是这份答案在最要紧的地方是错的：**等待用户期间 transcript 一个字都不写**，因此重建出的轮次只可能是 *Running*，启动瞬间正停在权限请求上的会话被画成正在干活。文件分不开「在等」与「在做」，猜哪一边都是伪造状态（§7 第 5、6 条），也就不存在一个更窄的版本可留。代价是那些会话要等下一个 lifecycle 事件才出现，与 Codex 侧相同；换回来的是启动边界在两个产品上是同一句话，而不是一侧的例外。

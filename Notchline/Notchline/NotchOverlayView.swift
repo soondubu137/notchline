@@ -67,8 +67,32 @@ struct NotchOverlayView: View {
         // because a bare duration beside a summary status is unattributable.
         let elapsed = store.spokenLongestElapsedText.map { ", longest running for \($0)" }
             ?? ""
+        // The collapsed slot draws a bare number; spoken, it has to say what
+        // the number counts -- and it is the only thing on the surface saying
+        // work is still in flight once every turn has finished.
+        let subagents = store.spokenRunningSubagentText
+            .map { ", \($0) still running" } ?? ""
         return "Codex, \(store.sessions.count) related sessions, status "
-            + "\(store.statusDisplayName)\(elapsed), \(usage)"
+            + "\(store.statusDisplayName)\(elapsed)\(subagents), \(usage)"
+    }
+}
+
+/// The collapsed trailing readout when no turn is being timed.
+///
+/// The elapsed half of that slot draws itself into a layer because it changes
+/// once a second (`AGENTS.md` §7). This half does not change on a clock at all,
+/// so it is ordinary text -- and it is drawn in the same font the panel width
+/// was measured with.
+private struct CompactCountReadout: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 13, weight: .light).monospacedDigit())
+            .foregroundStyle(NotchPalette.label)
+            .fixedSize()
+            // The panel's own label speaks the count in words.
+            .accessibilityHidden(true)
     }
 }
 
@@ -177,14 +201,24 @@ private struct OverlayHeader: View {
 
             Spacer(minLength: 0)
 
-            // Trailing wing, compact only: present while a turn is timed, absent
-            // otherwise so a notched display shows no empty second cut-out. The
-            // expanded view times each row individually instead.
-            if !store.isExpanded, let startedAt = store.compactTimerStart {
-                ElapsedReadout(
-                    startedAt: startedAt,
-                    tick: store.elapsedTick.eraseToAnyPublisher()
-                )
+            // Trailing wing, compact only: present while a turn is timed or a
+            // subagent is still working, absent otherwise so a notched display
+            // shows no empty second cut-out. The expanded view times each row
+            // individually instead.
+            if !store.isExpanded {
+                if let startedAt = store.compactTimerStart {
+                    ElapsedReadout(
+                        startedAt: startedAt,
+                        tick: store.elapsedTick.eraseToAnyPublisher(),
+                        prefix: store.compactTimerPrefix ?? ""
+                    )
+                } else if let trailingText = store.compactTrailingText {
+                    // Nothing is being timed, so the slot holds the count on
+                    // its own. It is a static reading: it changes when a
+                    // subagent starts or stops, which is a snapshot away, and
+                    // never once a second.
+                    CompactCountReadout(text: trailingText)
+                }
             }
 
             // The gear lives up here now rather than in the footer, for one and

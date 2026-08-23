@@ -812,6 +812,34 @@ enum AgentSnapshotMerge {
 }
 
 enum MonitorAggregation {
+    /// Whether this thread is still working — which is not the same question
+    /// as the one the row draws.
+    ///
+    /// The row's status is its **turn's** status, and `CONTEXT.md` defines it
+    /// that way: the main agent's `Stop` really did arrive, the preview really
+    /// is the final answer, and the clock really should stop. But a subagent
+    /// outlives the turn that spawned it, so `.completed` stops being an answer
+    /// to "is anything still running on this thread". Every rule that was
+    /// asking *that* while reading `SessionStatus` reads this instead — the
+    /// collapsed summary, the product marks, the row order and the terminal
+    /// membership gate.
+    ///
+    /// The identity everywhere else. `hasRunningSubagent` is false for every
+    /// product but Codex, and false on Codex for every row without a subagent
+    /// in flight, so this changes nothing for any of them.
+    ///
+    /// **It must not reach the row's own rendering.** A row drawn from this
+    /// would restart its timer and never take the final answer as its preview,
+    /// which is the shape `65e63ab` removed: with `SubagentStop` lost, nothing
+    /// could ever end it. What the row draws is in ``SessionStatusControl``.
+    nonisolated static func effectiveStatus(
+        of session: MonitoredSession
+    ) -> SessionStatus {
+        session.status == .completed && session.hasRunningSubagent
+            ? .running
+            : session.status
+    }
+
     /// Rows first, availability second.
     ///
     /// A live turn always outranks another product's unhealthy availability.
@@ -829,7 +857,8 @@ enum MonitorAggregation {
             .running,
             .completed
         ]
-        for status in priority where sessions.contains(where: { $0.status == status }) {
+        for status in priority
+        where sessions.contains(where: { effectiveStatus(of: $0) == status }) {
             return status.monitorStatus
         }
         // No turns: the surface reports presence rather than our own plumbing.
@@ -894,8 +923,14 @@ enum MonitorAggregation {
             .running: 2,
             .completed: 3
         ]
-        let lhsPriority = priority[lhs.status] ?? Int.max
-        let rhsPriority = priority[rhs.status] ?? Int.max
+        // The same derived answer the summary reads, because `PRD.md` §6.2
+        // says these are one rule: "the list sorts by the same priority". A
+        // finished row with a subagent still working therefore sorts with the
+        // running ones -- otherwise the only row carrying the evidence that
+        // anything is still in flight is the first one pushed out of the
+        // three-row viewport.
+        let lhsPriority = priority[effectiveStatus(of: lhs)] ?? Int.max
+        let rhsPriority = priority[effectiveStatus(of: rhs)] ?? Int.max
         if lhsPriority != rhsPriority {
             return lhsPriority < rhsPriority
         }

@@ -175,13 +175,22 @@ struct ElapsedReadout: View {
     let tick: AnyPublisher<Date, Never>
     var tint: NSColor = NotchPalette.labelDrawingColor
     var weight: NSFont.Weight = .light
+    /// Drawn immediately before the elapsed value, in the same raster.
+    ///
+    /// The collapsed surface puts the subagent count and the elapsed value in
+    /// one slot, and they are one reading rather than two views: laid out as a
+    /// stack, every tick would re-measure a `Text` beside this, and the width
+    /// the panel is sized from would have to be composed from two measurements
+    /// that could disagree. Empty everywhere else.
+    var prefix: String = ""
 
     var body: some View {
         ElapsedReadoutRepresentable(
             startedAt: startedAt,
             tick: tick,
             tint: tint,
-            weight: weight
+            weight: weight,
+            prefix: prefix
         )
         // The panel and each row already speak their own elapsed value in a
         // spoken form; VoiceOver reads "12:34" as a time of day.
@@ -194,6 +203,7 @@ private struct ElapsedReadoutRepresentable: NSViewRepresentable {
     let tick: AnyPublisher<Date, Never>
     let tint: NSColor
     let weight: NSFont.Weight
+    let prefix: String
 
     func makeNSView(context: Context) -> ElapsedReadoutView {
         ElapsedReadoutView()
@@ -204,6 +214,7 @@ private struct ElapsedReadoutRepresentable: NSViewRepresentable {
             startedAt: startedAt,
             tint: tint,
             weight: weight,
+            prefix: prefix,
             tick: tick
         )
     }
@@ -223,6 +234,7 @@ final class ElapsedReadoutView: NSView {
     private var startedAt: Date?
     private var font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .light)
     private var tint = NotchPalette.labelDrawingColor
+    private var prefix = ""
     private var lastTick = Date.distantPast
     private var renderedText = ""
     private var renderedScale: CGFloat = 0
@@ -246,7 +258,7 @@ final class ElapsedReadoutView: NSView {
         // SwiftUI may measure before the first tick has been rendered. A
         // shortest-form reading is the right placeholder: every readout starts
         // at 0:00 and only ever grows from there.
-        let placeholder = NotchTextRaster.textSize("0:00", font: font)
+        let placeholder = NotchTextRaster.textSize(prefix + "0:00", font: font)
         return NSSize(width: placeholder.width, height: placeholder.height)
     }
 
@@ -254,15 +266,18 @@ final class ElapsedReadoutView: NSView {
         startedAt: Date,
         tint: NSColor,
         weight: NSFont.Weight,
+        prefix: String = "",
         tick: AnyPublisher<Date, Never>
     ) {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: weight)
         let changed = startedAt != self.startedAt
             || tint != self.tint
             || font != self.font
+            || prefix != self.prefix
         self.startedAt = startedAt
         self.tint = tint
         self.font = font
+        self.prefix = prefix
 
         guard subscription == nil else {
             if changed { render(at: lastTick) }
@@ -291,7 +306,8 @@ final class ElapsedReadoutView: NSView {
     private func render(at now: Date) {
         lastTick = now
         guard let startedAt else { return }
-        let text = SessionElapsedFormatter.elapsed(since: startedAt, now: now) ?? ""
+        let elapsed = SessionElapsedFormatter.elapsed(since: startedAt, now: now)
+        let text = elapsed.map { prefix + $0 } ?? ""
         let scale = window?.backingScaleFactor ?? 2
         guard text != renderedText || scale != renderedScale else { return }
         renderedText = text

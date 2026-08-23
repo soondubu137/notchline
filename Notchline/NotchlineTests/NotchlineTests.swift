@@ -20,13 +20,13 @@ struct NotchlineTests {
             var heights: Set<CGFloat> = []
             for status in PanelMetrics.workingStatuses {
                 for agent in AgentKind.allCases {
-                    for timerText in [nil, "0:07", "1:23", "00:00:00"] as [String?] {
+                    for trailingText in [nil, "0:07", "1:23", "00:00:00"] as [String?] {
                         for barHeight in [CGFloat(46), 38, 24] {
                             let size = PanelMetrics.size(
                                 geometry: .noNotch,
                                 isExpanded: false,
                                 statusReadoutText: status.compactDisplayName,
-                                timerText: timerText,
+                                trailingText: trailingText,
                                 centerOcclusionWidth: 0,
                                 compactHeight: barHeight,
                                 status: status,
@@ -456,7 +456,7 @@ struct NotchlineTests {
             geometry: .notched,
             isExpanded: false,
             statusReadoutText: "Disconnected",
-            timerText: nil,
+            trailingText: nil,
             centerOcclusionWidth: 200,
             compactHeight: 46,
             status: .disconnected,
@@ -470,7 +470,7 @@ struct NotchlineTests {
             geometry: .notched,
             isExpanded: false,
             statusReadoutText: "Connected",
-            timerText: nil,
+            trailingText: nil,
             centerOcclusionWidth: 200,
             compactHeight: 46,
             status: .connected,
@@ -646,7 +646,7 @@ struct NotchlineTests {
                 geometry: .notched,
                 isExpanded: false,
                 statusReadoutText: "Running",
-                timerText: nil,
+                trailingText: nil,
                 centerOcclusionWidth: 200,
                 compactHeight: 46,
                 status: .running,
@@ -679,7 +679,7 @@ struct NotchlineTests {
                 geometry: geometry,
                 isExpanded: false,
                 statusReadoutText: "Disconnected",
-                timerText: nil,
+                trailingText: nil,
                 centerOcclusionWidth: occlusion,
                 compactHeight: 46,
                 status: .disconnected,
@@ -690,7 +690,7 @@ struct NotchlineTests {
                 geometry: geometry,
                 isExpanded: true,
                 statusReadoutText: "Disconnected",
-                timerText: nil,
+                trailingText: nil,
                 centerOcclusionWidth: occlusion,
                 compactHeight: 46,
                 status: .disconnected,
@@ -1303,12 +1303,12 @@ struct NotchlineTests {
     @Test @MainActor
     func notchedCompactDropsItsTrailingWingUntilATurnIsTimed() {
         let occlusion: CGFloat = 200
-        func size(timerText: String?) -> CGSize {
+        func size(trailingText: String?) -> CGSize {
             PanelMetrics.size(
                 geometry: .notched,
                 isExpanded: false,
                 statusReadoutText: "Running",
-                timerText: timerText,
+                trailingText: trailingText,
                 centerOcclusionWidth: occlusion,
                 compactHeight: 46
             )
@@ -1316,14 +1316,14 @@ struct NotchlineTests {
 
         // Idle: leading wing + the cut-out, and nothing to its right — an empty
         // trailing wing would render as a second, fake notch.
-        let idle = size(timerText: nil)
+        let idle = size(trailingText: nil)
         let leading = PanelMetrics.compactLeadingWidth(
             statusReadoutText: "Running",
             showsStatusText: false
         ) + PanelMetrics.expandedNotchClearance
         #expect(abs(idle.width - (leading + occlusion)) <= 1)
 
-        #expect(size(timerText: "1:23").width > idle.width)
+        #expect(size(trailingText: "1:23").width > idle.width)
     }
 
     /// The panel's black edge lands on the cut-out's, which is the one
@@ -1346,15 +1346,15 @@ struct NotchlineTests {
 
         // The cut-out's own edge, held out by whatever trailing wing is drawn —
         // and nothing is drawn there until a turn is being timed.
-        #expect(PanelMetrics.compactTrailingWingWidth(timerText: nil) == 0)
+        #expect(PanelMetrics.compactTrailingWingWidth(trailingText: nil) == 0)
         #expect(
-            PanelMetrics.compactTrailingWingWidth(timerText: "1:23")
-                > PanelMetrics.compactTrailingWingWidth(timerText: nil)
+            PanelMetrics.compactTrailingWingWidth(trailingText: "1:23")
+                > PanelMetrics.compactTrailingWingWidth(trailingText: nil)
         )
         #expect(
             store.currentPanelTrailingAnchor
                 == occlusionMaxX + PanelMetrics.compactTrailingWingWidth(
-                    timerText: store.compactTimerText
+                    trailingText: store.compactTrailingText
                 )
         )
 
@@ -1400,14 +1400,14 @@ struct NotchlineTests {
     func compactGeometryComposesTheNotchWings() {
         func width(
             geometry: DisplayGeometry,
-            timerText: String?,
+            trailingText: String?,
             compactHeight: CGFloat
         ) -> CGFloat {
             PanelMetrics.size(
                 geometry: geometry,
                 isExpanded: false,
                 statusReadoutText: "Running",
-                timerText: timerText,
+                trailingText: trailingText,
                 centerOcclusionWidth: geometry == .notched ? 200 : 0,
                 compactHeight: compactHeight
             ).width
@@ -1418,20 +1418,20 @@ struct NotchlineTests {
         // number a Figma variant can be checked against directly. `12` padding
         // + `16.6` matrix + `8` clearance + the `200` cut-out; it was `249`
         // while the padding was `24`.
-        let notchedIdle = width(geometry: .notched, timerText: nil, compactHeight: 46)
+        let notchedIdle = width(geometry: .notched, trailingText: nil, compactHeight: 46)
         #expect(notchedIdle == 237)
 
         // Timing a turn adds the trailing wing, and nothing but the trailing wing.
-        let notchedTimed = width(geometry: .notched, timerText: "1:23", compactHeight: 46)
-        let trailingWing = PanelMetrics.compactTrailingWidth(timerText: "1:23")
+        let notchedTimed = width(geometry: .notched, trailingText: "1:23", compactHeight: 46)
+        let trailingWing = PanelMetrics.compactTrailingWidth(trailingText: "1:23")
             + PanelMetrics.expandedNotchClearance
         #expect(abs((notchedTimed - notchedIdle) - trailingWing) <= 1)
 
         // Only the notched panel composes its width from content. A no-notch
         // one is fixed, so the same two cases must not move it at all.
         #expect(
-            width(geometry: .noNotch, timerText: nil, compactHeight: 24)
-                == width(geometry: .noNotch, timerText: "1:23", compactHeight: 24)
+            width(geometry: .noNotch, trailingText: nil, compactHeight: 24)
+                == width(geometry: .noNotch, trailingText: "1:23", compactHeight: 24)
         )
     }
 
@@ -1504,7 +1504,7 @@ struct NotchlineTests {
             geometry: .noNotch,
             isExpanded: true,
             statusReadoutText: "Running",
-            timerText: nil,
+            trailingText: nil,
             centerOcclusionWidth: 0,
             compactHeight: 24
         )
@@ -1512,7 +1512,7 @@ struct NotchlineTests {
             geometry: .notched,
             isExpanded: true,
             statusReadoutText: "Running",
-            timerText: nil,
+            trailingText: nil,
             centerOcclusionWidth: 200,
             compactHeight: 38
         )
@@ -9322,18 +9322,22 @@ for line in sys.stdin:
     }
 
     private func makeSession(
+        agent: AgentKind = .codex,
         threadID: String = "thread",
         status: SessionStatus,
-        startedAt: Date?
+        startedAt: Date?,
+        runningSubagentCount: Int = 0
     ) -> MonitoredSession {
         MonitoredSession(
+            agent: agent,
             threadID: threadID,
             turnID: "turn-\(threadID)",
             projectName: "Chats",
             title: "Timed turn",
             preview: nil,
             status: status,
-            startedAt: startedAt
+            startedAt: startedAt,
+            runningSubagentCount: runningSubagentCount
         )
     }
 
@@ -20314,6 +20318,461 @@ extension NotchlineTests {
             the new process answers for its own Turn and for nothing its \
             predecessor left behind
             """
+        )
+    }
+}
+
+// MARK: - A turn that has ended on a thread that has not
+
+/// Four rules read `SessionStatus` to answer a question it does not answer:
+/// *is anything still running on this thread?* For every row but one the two
+/// agree. The exception is a Codex row whose own turn has finished while a
+/// subagent it spawned is still working — and that row is the only place the
+/// surface has to say so, which is exactly what those rules were erasing.
+extension NotchlineTests {
+    /// The collapsed surface says `Running`, and says how many.
+    ///
+    /// Three shapes in one test, because what makes this readable is the
+    /// difference between them:
+    ///
+    /// - no subagents and a turn being timed — the elapsed value alone, exactly
+    ///   as before this change;
+    /// - subagents and a turn being timed — the count in front of the elapsed
+    ///   value;
+    /// - subagents and every turn finished — the count on its own, with no
+    ///   clock left to read.
+    ///
+    /// The last one is the whole point. It is `Running` with nothing being
+    /// timed, which is true: no *turn* is running. `longestRunningSessionStart`
+    /// filters on `keepsTiming` and finds nothing, and that is the correct
+    /// answer rather than a hole to be filled.
+    @Test @MainActor
+    func aFinishedTurnWithASubagentStillRunningSummarisesAsRunning() async throws {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        let startedAt = clock.now().addingTimeInterval(-30)
+
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .running, startedAt: startedAt)
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(store.status == .running)
+        #expect(store.compactTrailingText == "0:30")
+        #expect(store.spokenRunningSubagentText == nil)
+
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(
+                    status: .running,
+                    startedAt: startedAt,
+                    runningSubagentCount: 1
+                )
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(store.compactTrailingText == "1 │ 0:30")
+        #expect(store.compactTimerPrefix == "1 │ ")
+        #expect(store.spokenRunningSubagentText == "1 subagent")
+
+        // The main agent's `Stop` lands. The row is Completed and the clock has
+        // stopped -- both correct -- and the thread is still working.
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(
+                    status: .completed,
+                    startedAt: startedAt,
+                    runningSubagentCount: 2
+                )
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(store.status == .running, "the thread is still working")
+        #expect(store.compactTimerText == nil, "no turn is being timed")
+        #expect(store.compactTimerStart == nil)
+        #expect(store.compactTrailingText == "2")
+        #expect(store.compactTimerPrefix == nil)
+        #expect(store.spokenRunningSubagentText == "2 subagents")
+        // The row itself is untouched: `effectiveStatus` must not reach it.
+        #expect(store.sessions.first?.status == .completed)
+        #expect(store.elapsedText(for: try #require(store.sessions.first)) == nil)
+
+        // The last subagent finishes. Everything falls back to what a finished
+        // row has always looked like.
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(status: .completed, startedAt: startedAt)
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(store.status == .completed)
+        #expect(store.compactTrailingText == nil)
+        #expect(store.spokenRunningSubagentText == nil)
+    }
+
+    /// The count is a total across the list, like the summary beside it.
+    ///
+    /// One collapsed surface speaks for every row, the same way one timer
+    /// reports the longest-running turn rather than a turn of its own. And the
+    /// slot is still the one place this is said: hiding the wings takes the
+    /// count with it, because that preference is the user asking for the notch
+    /// itself and nothing beside it.
+    @Test @MainActor
+    func theCollapsedCountTotalsEveryRowAndObeysTheHiddenWings() async throws {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(
+                    threadID: "one",
+                    status: .completed,
+                    startedAt: clock.now().addingTimeInterval(-60),
+                    runningSubagentCount: 2
+                ),
+                makeSession(
+                    threadID: "two",
+                    status: .completed,
+                    startedAt: clock.now().addingTimeInterval(-30),
+                    runningSubagentCount: 1
+                )
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(store.compactRunningSubagentCount == 3)
+        #expect(store.compactTrailingText == "3")
+
+        store.hidesCompactWings = true
+        #expect(store.hidesCompactSurface, "the display can honour it")
+        #expect(store.compactRunningSubagentCount == 0)
+        #expect(store.compactTrailingText == nil)
+    }
+
+    /// A row saying work is still in flight sorts with the working ones.
+    ///
+    /// `PRD.md` §6.2 makes the summary and the list one rule, so both read the
+    /// derived answer. Sorted by `SessionStatus` alone, the only row carrying
+    /// the evidence that anything is still running sorts last -- and with three
+    /// live turns beside it, last means outside the three-row viewport.
+    @Test @MainActor
+    func aFinishedRowWithASubagentSortsWithTheRunningOnes() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let working = makeSession(
+            threadID: "working",
+            status: .completed,
+            startedAt: now.addingTimeInterval(-50),
+            runningSubagentCount: 1
+        )
+        let sessions = [
+            makeSession(
+                threadID: "read",
+                status: .completed,
+                startedAt: now.addingTimeInterval(-10)
+            ),
+            makeSession(
+                threadID: "old",
+                status: .running,
+                startedAt: now.addingTimeInterval(-300)
+            ),
+            working,
+            makeSession(
+                threadID: "recent",
+                status: .running,
+                startedAt: now.addingTimeInterval(-100)
+            )
+        ]
+
+        let order = sessions.sorted(by: MonitorAggregation.rowOrder).map(\.threadID)
+        // In the running band, and ordered inside it by recency like every
+        // other row there. The genuinely finished row is still last.
+        #expect(order == ["working", "recent", "old", "read"])
+        #expect(
+            order.prefix(PanelMetrics.maximumVisibleSessionCount).contains("working"),
+            "the one row that knows work is still running stays in the viewport"
+        )
+    }
+
+    /// Claude Code is untouched by all of it.
+    ///
+    /// That product never reports a subagent boundary, so `effectiveStatus` is
+    /// the identity for every row it produces and each of the four rules keeps
+    /// the behaviour it had. Asserted rather than assumed: the count lives on
+    /// the shared row type, and a later Claude Code reading that filled it in
+    /// would silently change the summary, the order and the read gate at once.
+    @Test @MainActor
+    func aClaudeCodeRowIsUnchangedByTheDerivedStatus() {
+        let finished = makeSession(
+            agent: .claudeCode,
+            threadID: "cc",
+            status: .completed,
+            startedAt: nil
+        )
+        #expect(finished.runningSubagentCount == 0)
+        #expect(MonitorAggregation.effectiveStatus(of: finished) == .completed)
+        #expect(
+            MonitorAggregation.status(
+                agents: [makeSessionSnapshot([finished])],
+                sessions: [finished]
+            ) == .completed
+        )
+    }
+
+    /// The row can still be taken off the list by hand.
+    ///
+    /// Deliberate, and the reason is worth stating: removal means "I have seen
+    /// this row", and the user's judgement outranks everything this app knows.
+    /// It is also the only manual way out if a `SubagentStop` is ever lost and
+    /// the count sticks -- the failure mode this design accepts in exchange for
+    /// never saying `Completed` while work is still running.
+    @Test @MainActor
+    func aFinishedRowWithASubagentIsStillDismissable() async throws {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        store.applyForTesting(
+            makeSessionSnapshot([
+                makeSession(
+                    status: .completed,
+                    startedAt: clock.now().addingTimeInterval(-60),
+                    runningSubagentCount: 1
+                )
+            ]),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(store.status == .running)
+
+        let working = try #require(store.sessions.first)
+        #expect(store.dismiss(working))
+        #expect(store.sessions.isEmpty)
+        #expect(store.compactTrailingText == nil)
+    }
+
+    /// A subagent boundary stamps its own instant and never the turn's.
+    ///
+    /// Two stamps, because they bound two different things. `lastEventAt` is
+    /// the reducer's only defence against a subagent's chatter fending off
+    /// membership reconciliation, so nothing a subagent does may move it.
+    /// `lastSubagentBoundaryAt` exists so the finished row's settling window
+    /// can start when the last subagent stopped rather than at a `Stop` that
+    /// was 91 seconds earlier on the 2026-08-22 measurement.
+    @Test @MainActor
+    func aSubagentBoundaryStampsItsOwnInstantAndNotTheTurns() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+        let epoch = Date(timeIntervalSince1970: 1_000)
+        func send(_ body: [String: Any], at offset: TimeInterval) async {
+            repository.deliver(
+                try! JSONSerialization.data(withJSONObject: body),
+                at: epoch.addingTimeInterval(offset)
+            )
+            _ = await repository.drainDeliveredEvents()
+        }
+
+        await send([
+            "hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "t"
+        ], at: 1)
+        await send([
+            "hook_event_name": "SubagentStart", "session_id": "s",
+            "turn_id": "sub", "agent_id": "a1"
+        ], at: 2)
+        await send([
+            "hook_event_name": "Stop", "session_id": "s", "turn_id": "t"
+        ], at: 3)
+
+        var turn = try #require(await repository.observedState().turns.first)
+        #expect(turn.lastEventAt == epoch.addingTimeInterval(3))
+        #expect(turn.lastSubagentBoundaryAt == epoch.addingTimeInterval(2))
+        // Still the turn's own instant: the subagent started before the turn
+        // ended, so it has nothing later to say.
+        #expect(turn.terminalBoundaryAt == epoch.addingTimeInterval(3))
+
+        // 91 seconds later, as measured.
+        await send([
+            "hook_event_name": "SubagentStop", "session_id": "s",
+            "turn_id": "sub", "agent_id": "a1"
+        ], at: 94)
+
+        turn = try #require(await repository.observedState().turns.first)
+        #expect(
+            turn.lastEventAt == epoch.addingTimeInterval(3),
+            "a subagent must never fend off membership reconciliation"
+        )
+        #expect(turn.terminalBoundaryAt == epoch.addingTimeInterval(94))
+
+        // Both are facts about the thread, so both survive the turn boundary
+        // that the turn they were recorded on does not.
+        await send([
+            "hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "t2"
+        ], at: 95)
+        turn = try #require(await repository.observedState().turns.first)
+        #expect(turn.turnID == "t2")
+        #expect(turn.lastSubagentBoundaryAt == epoch.addingTimeInterval(94))
+    }
+
+    /// Desktop reporting the thread read cannot erase the only row that knows
+    /// work is still running.
+    ///
+    /// The membership gate hides a finished row once Desktop has persisted it
+    /// as read and a settling interval has passed. Both halves of this change
+    /// are needed to survive that, and the test fails without either: the gate
+    /// has to be asked the derived question, *and* the window that follows the
+    /// last subagent has to be measured from that subagent rather than from a
+    /// main-agent `Stop` that may be minutes old.
+    ///
+    /// Every event is stamped in the past so the settling window has already
+    /// expired at the first look — the state this is about is a thread the user
+    /// is reading in Desktop right now, which is also the thread most likely to
+    /// have just spawned something.
+    @Test @MainActor
+    func aReadThreadWithASubagentStillRunningKeepsItsRow() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        let now = Date()
+        func deliver(_ body: [String: Any], secondsAgo: TimeInterval) throws {
+            var payload = body
+            payload["received_at"] = now.addingTimeInterval(-secondsAgo)
+                .timeIntervalSince1970
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try deliver([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-working", "turn_id": "turn-working"
+        ], secondsAgo: 120)
+        try deliver([
+            "hook_event_name": "SubagentStart",
+            "session_id": "thread-working", "turn_id": "sub", "agent_id": "a1"
+        ], secondsAgo: 118)
+        try deliver([
+            "hook_event_name": "Stop",
+            "session_id": "thread-working", "turn_id": "turn-working"
+        ], secondsAgo: 60)
+
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-working"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "updatedAt": .number(now.timeIntervalSince1970),
+                "name": .string("Working")
+            ])],
+            loadedListResults: []
+        )
+        // Desktop is authoritative and reports the thread as read: the user is
+        // looking at it. Nothing here is waiting on them.
+        let unreadState = DesktopUnreadStateStub(
+            DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            unreadState: unreadState,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        var listed: MonitoredSession?
+        for _ in 0 ..< 100 {
+            let snapshot = await service.fetchSnapshot()
+            if let row = snapshot.sessions.first {
+                listed = row
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let working = try #require(
+            listed,
+            "a read thread with a subagent still running keeps its row"
+        )
+        #expect(working.status == .completed)
+        #expect(working.runningSubagentCount == 1)
+        #expect(MonitorAggregation.effectiveStatus(of: working) == .running)
+
+        // The last subagent finishes now. The row becomes terminal at this
+        // instant, not at the `Stop` a minute ago, so its settling window is
+        // still open and the row is still listed.
+        try deliver([
+            "hook_event_name": "SubagentStop",
+            "session_id": "thread-working", "turn_id": "sub", "agent_id": "a1"
+        ], secondsAgo: 0)
+
+        var settling: [MonitoredSession] = []
+        for _ in 0 ..< 100 {
+            let snapshot = await service.fetchSnapshot()
+            if snapshot.sessions.first?.runningSubagentCount == 0 {
+                settling = snapshot.sessions
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(
+            settling.map(\.threadID) == ["thread-working"],
+            """
+            the window starts when the last subagent stopped: measured from \
+            the main agent's `Stop`, this row would already be gone
+            """
+        )
+    }
+
+    /// The count is drawn in the slot the timer reserves, and the slot grows
+    /// for it when it has to.
+    ///
+    /// The reservation is an upper bound for an elapsed value and not for a
+    /// count sharing the line with one. A notched panel composes its width from
+    /// what it draws and takes the difference on its wing; a no-notch pill is
+    /// one fixed width with nothing outside it, so anything that does not fit
+    /// is clipped -- which is what a reservation left alone would have done.
+    /// Reserving room for a count permanently instead is what this avoids: a
+    /// wider pill in every menu bar, for a reading almost no collapsed surface
+    /// will ever show.
+    @Test @MainActor
+    func theCollapsedCountGrowsTheSlotItSharesWithTheTimer() {
+        func pill(_ trailingText: String?) -> CGFloat {
+            PanelMetrics.fixedCompactWidth(
+                for: .running,
+                matrixCount: 1,
+                trailingText: trailingText
+            )
+        }
+
+        // An elapsed value alone never moves it, at any length the formatter
+        // can produce -- that is what the reservation is for.
+        #expect(pill("1:23") == pill(nil))
+        #expect(pill("10:00:00") == pill(nil))
+        // A count beside a short reading still fits inside it.
+        #expect(pill("2 │ 1:23") == pill(nil))
+        // A count beside a long one does not, and the pill takes it.
+        #expect(pill("2 │ 1:23:45") > pill(nil))
+
+        // The notched panel hangs it off the cut-out instead, so every count
+        // widens the wing.
+        #expect(
+            PanelMetrics.compactTrailingWidth(trailingText: "2 │ 1:23")
+                > PanelMetrics.compactTrailingWidth(trailingText: "1:23")
+        )
+        #expect(
+            PanelMetrics.compactTrailingWidth(trailingText: "2")
+                > PanelMetrics.compactTrailingWidth(trailingText: nil)
         )
     }
 }

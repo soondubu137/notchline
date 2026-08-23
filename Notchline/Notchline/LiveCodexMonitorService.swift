@@ -797,11 +797,22 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             }
             evaluatedSessionIDs.insert(session.id)
 
+            // The gate asks whether this thread is still working, so it is
+            // given that answer rather than the row's own status: a finished
+            // row with a subagent still in flight takes the running path --
+            // shown outright, entry dropped, no re-check booked -- and the row
+            // carrying the only evidence that anything is still running cannot
+            // be erased a settling interval after the main agent's `Stop`.
+            //
+            // Its boundary moves with it. Once the last subagent stops the row
+            // is terminal again, and the window has to start from that instant
+            // instead of from a `Stop` that may be minutes old, or the row
+            // disappears the moment it stops saying anything is working.
             if terminalUnreadMembershipGate.shouldDisplay(
                 sessionID: session.id,
                 threadID: session.threadID,
-                status: session.status,
-                terminalBoundaryAt: state.lastEventAt,
+                status: MonitorAggregation.effectiveStatus(of: session),
+                terminalBoundaryAt: state.terminalBoundaryAt,
                 unreadState: unreadState,
                 now: clock.now()
             ) {

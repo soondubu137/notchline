@@ -1031,9 +1031,34 @@ struct HookTurnState: Sendable {
     /// `SubagentStop` carry; their `turn_id` is the subagent's own and names
     /// nothing this reducer holds.
     var runningSubagentIDs: Set<String> = []
+    /// When that set last changed, and nothing else.
+    ///
+    /// **Read by exactly one caller**, ``TerminalUnreadMembershipGate``, and
+    /// deliberately not by anything that decides turn identity. It exists
+    /// because `lastEventAt` must not move for a subagent -- that stamp is the
+    /// reducer's only bound against a subagent's chatter fending off membership
+    /// reconciliation -- and yet a finished row whose last subagent has just
+    /// stopped needs a settling window measured from *that* instant. Without
+    /// one, the window is measured from a main-agent `Stop` that may be minutes
+    /// old (91 seconds on the 2026-08-22 measurement) and the row vanishes the
+    /// moment it stops saying anything is still working.
+    ///
+    /// A thread-level fact like the set it stamps, so it survives every turn
+    /// boundary the set survives.
+    var lastSubagentBoundaryAt: Date?
 
     nonisolated var status: SessionStatus {
         sessionStatus
+    }
+
+    /// The instant a finished row's settling window is measured from.
+    ///
+    /// The later of the turn's own last event and the last subagent boundary,
+    /// which for every row without a subagent is simply `lastEventAt`. The two
+    /// stamps stay separate because only this one is allowed to slip forward
+    /// on a subagent's account; see ``lastSubagentBoundaryAt``.
+    nonisolated var terminalBoundaryAt: Date {
+        max(lastEventAt, lastSubagentBoundaryAt ?? lastEventAt)
     }
 }
 
@@ -2231,7 +2256,12 @@ actor HookEventRepository {
         switch signal {
         case .subagentStarted, .subagentStopped:
             guard let agentID = stableIdentifier(event.agentID) else { return false }
-            reduceSubagentBoundary(signal, agentID: agentID, threadID: threadID)
+            reduceSubagentBoundary(
+                signal,
+                agentID: agentID,
+                threadID: threadID,
+                at: delivered.receivedAt
+            )
             return true
         default:
             break
@@ -2276,6 +2306,8 @@ actor HookEventRepository {
             // A subagent is not ended by the user typing again, so it survives
             // the turn boundary that its spawning turn does not.
             let runningSubagentIDs = turnsByThreadID[threadID]?.runningSubagentIDs ?? []
+            let lastSubagentBoundaryAt = turnsByThreadID[threadID]?
+                .lastSubagentBoundaryAt
             if let current = turnsByThreadID[threadID] {
                 if current.turnID == turnID {
                     guard receivedAt >= current.lastEventAt else { return true }
@@ -2303,7 +2335,8 @@ actor HookEventRepository {
                     ? HookSessionPreviewStore.normalized(event.prompt)
                     : nil,
                 assistantPreview: nil,
-                runningSubagentIDs: runningSubagentIDs
+                runningSubagentIDs: runningSubagentIDs,
+                lastSubagentBoundaryAt: lastSubagentBoundaryAt
             )
         case .approvalWaitInferred:
             mutateExactTurn(
@@ -2479,13 +2512,16 @@ actor HookEventRepository {
     /// It attaches to a turn the thread already has and never creates one: a
     /// subagent is something a turn spawned, so a thread with no turn open has
     /// no row for the mark to appear on. The arrival stamp is deliberately not
-    /// taken -- this is not activity by the turn, so it must not move
-    /// `lastEventAt`, where it would let a subagent's chatter fend off the
-    /// membership reconciliation that is the reducer's only bound.
+    /// taken as `lastEventAt` -- this is not activity by the turn, so it must
+    /// not move the stamp where it would let a subagent's chatter fend off the
+    /// membership reconciliation that is the reducer's only bound. It is kept
+    /// separately as ``HookTurnState/lastSubagentBoundaryAt``, which one caller
+    /// reads and nothing about turn identity does.
     private func reduceSubagentBoundary(
         _ signal: HookSignal,
         agentID: String,
-        threadID: String
+        threadID: String,
+        at receivedAt: Date
     ) {
         guard var turn = turnsByThreadID[threadID] else { return }
         switch signal {
@@ -2496,6 +2532,12 @@ actor HookEventRepository {
         default:
             return
         }
+        // Monotonic, like every other stamp here: a boundary that arrived out
+        // of order must not wind a settling window backwards.
+        turn.lastSubagentBoundaryAt = max(
+            turn.lastSubagentBoundaryAt ?? receivedAt,
+            receivedAt
+        )
         turnsByThreadID[threadID] = turn
     }
 
@@ -2559,7 +2601,8 @@ actor HookEventRepository {
                     retiredTurnIDs: retiredTurnIDs,
                     promptPreview: current.promptPreview,
                     assistantPreview: nil,
-                    runningSubagentIDs: current.runningSubagentIDs
+                    runningSubagentIDs: current.runningSubagentIDs,
+                    lastSubagentBoundaryAt: current.lastSubagentBoundaryAt
                 )
             }
         } else {

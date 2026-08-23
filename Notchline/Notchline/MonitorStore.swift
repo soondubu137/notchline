@@ -350,12 +350,13 @@ enum PanelMetrics {
 
     /// Compact content trailing the notch, including its own trailing padding.
     ///
-    /// Zero unless a turn is being timed. The usage ring used to sit here
-    /// unconditionally, which meant an idle notched display rendered a blank
-    /// wing that read as a second, fake notch.
-    static func compactTrailingWidth(timerText: String?) -> CGFloat {
-        guard let timerText else { return 0 }
-        return textWidth(timerText, font: timerFont) + expandedHorizontalPadding
+    /// Zero unless the collapsed surface has a reading to put there -- an
+    /// elapsed value, a subagent count, or the two joined. The usage ring used
+    /// to sit here unconditionally, which meant an idle notched display
+    /// rendered a blank wing that read as a second, fake notch.
+    static func compactTrailingWidth(trailingText: String?) -> CGFloat {
+        guard let trailingText else { return 0 }
+        return textWidth(trailingText, font: timerFont) + expandedHorizontalPadding
     }
 
     /// How far the compact body reaches past the cut-out's trailing edge.
@@ -365,8 +366,8 @@ enum PanelMetrics {
     /// Everything that rounds -- the ceiled width, a cut-out that is not
     /// perfectly centred -- is absorbed by the leading wing, which is padding
     /// and can take it, rather than by the edge that has to meet the hardware.
-    static func compactTrailingWingWidth(timerText: String?) -> CGFloat {
-        let content = compactTrailingWidth(timerText: timerText)
+    static func compactTrailingWingWidth(trailingText: String?) -> CGFloat {
+        let content = compactTrailingWidth(trailingText: trailingText)
         return content > 0 ? content + expandedNotchClearance : 0
     }
 
@@ -419,7 +420,7 @@ enum PanelMetrics {
         geometry: DisplayGeometry,
         isExpanded: Bool,
         statusReadoutText: String,
-        timerText: String?,
+        trailingText: String?,
         centerOcclusionWidth: CGFloat,
         compactHeight: CGFloat,
         status: MonitorStatus = .connected,
@@ -451,7 +452,11 @@ enum PanelMetrics {
                 // Notched display with no measurable cut-out: nothing to wrap
                 // around, so lay it out as an emulated notch instead.
                 return CGSize(
-                    width: fixedCompactWidth(for: status, matrixCount: matrixCount),
+                    width: fixedCompactWidth(
+                        for: status,
+                        matrixCount: matrixCount,
+                        trailingText: trailingText
+                    ),
                     height: compactHeight
                 )
             }
@@ -461,11 +466,15 @@ enum PanelMetrics {
                 markCount: drawsCompactMarks ? matrixCount : 0
             )
                 + centerOcclusionWidth
-                + compactTrailingWingWidth(timerText: timerText)
+                + compactTrailingWingWidth(trailingText: trailingText)
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
             return CGSize(
-                width: fixedCompactWidth(for: status, matrixCount: matrixCount),
+                width: fixedCompactWidth(
+                    for: status,
+                    matrixCount: matrixCount,
+                    trailingText: trailingText
+                ),
                 height: compactHeight
             )
         }
@@ -516,9 +525,16 @@ enum PanelMetrics {
     /// - Parameter matrixCount: How many product matrices are drawn. Zero and
     ///   one are the same width — the grey resting mark occupies the single
     ///   slot rather than adding one.
+    /// - Parameter trailingText: What the trailing readout actually draws, when
+    ///   that is more than an elapsed value. A subagent count sits in the same
+    ///   slot and can be wider than the reservation, and a no-notch pill is the
+    ///   one shape with no cut-out to hang a wing off -- what does not fit
+    ///   inside its width is simply clipped. Defaults to the reservation alone,
+    ///   which is every caller that is only ever going to draw a timer.
     static func fixedCompactWidth(
         for status: MonitorStatus,
-        matrixCount: Int
+        matrixCount: Int,
+        trailingText: String? = nil
     ) -> CGFloat {
         let extraMatrices = CGFloat(max(0, matrixCount - 1))
             * (statusMatrixSize + compactMatrixSpacing)
@@ -529,7 +545,11 @@ enum PanelMetrics {
                     + extraMatrices
             )
         }
-        return ceil(compactChromeWidth + workingContentWidth + extraMatrices)
+        return ceil(
+            compactChromeWidth
+                + workingContentWidth(trailingText: trailingText)
+                + extraMatrices
+        )
     }
 
     /// One status name, at the weight the notch actually draws it.
@@ -558,18 +578,39 @@ enum PanelMetrics {
     ///
     /// Computed rather than a stored `static let`: a lazily-initialised one runs
     /// its initialiser in a nonisolated context, and this measures text.
-    static var workingContentWidth: CGFloat {
-        workingStatuses.map(compactContentWidth).max() ?? 0
+    static func workingContentWidth(trailingText: String? = nil) -> CGFloat {
+        workingStatuses
+            .map { compactContentWidth($0, trailingText: trailingText) }
+            .max() ?? 0
     }
 
-    /// One status's own content: its label, plus the timer slot when that state
-    /// can be counting.
-    static func compactContentWidth(_ status: MonitorStatus) -> CGFloat {
+    /// One status's own content: its label, plus the trailing slot when that
+    /// state can be counting.
+    static func compactContentWidth(
+        _ status: MonitorStatus,
+        trailingText: String? = nil
+    ) -> CGFloat {
         let label = compactLabelWidth(status)
         guard status.canShowElapsed else { return label }
         return label
             + compactTimerClearance
-            + textWidth(timerSlotTemplate, font: timerSlotFont)
+            + compactTrailingSlotWidth(trailingText: trailingText)
+    }
+
+    /// The trailing readout's slot: the elapsed reservation, or what is being
+    /// drawn when that is wider.
+    ///
+    /// The reservation is what keeps the pill still while digits change, and it
+    /// is an upper bound for an elapsed value alone. It is not one for the
+    /// subagent count that shares the slot, and reserving room for a count
+    /// permanently would widen every pill for a reading almost no collapsed
+    /// surface will ever show. So the slot grows to fit that reading and
+    /// shrinks back when it goes -- a movement caused by something appearing,
+    /// which is the one kind this surface already accepts.
+    static func compactTrailingSlotWidth(trailingText: String?) -> CGFloat {
+        let reservation = textWidth(timerSlotTemplate, font: timerSlotFont)
+        guard let trailingText else { return reservation }
+        return max(reservation, textWidth(trailingText, font: timerFont))
     }
 
     /// What the collapsed surface can say while an agent is connected.
@@ -1097,7 +1138,7 @@ final class MonitorStore: ObservableObject {
     private func publishTick(_ now: Date) {
         elapsedTick.send(now)
 
-        var signature = [compactTimerText?.count ?? -1]
+        var signature = [compactTrailingText?.count ?? -1]
         signature.append(contentsOf: sessions.map { elapsedText(for: $0)?.count ?? -1 })
         guard signature != elapsedLayoutSignature else { return }
         elapsedLayoutSignature = signature
@@ -1244,6 +1285,57 @@ final class MonitorStore: ObservableObject {
             since: longestRunningSessionStart,
             now: timerNow
         )
+    }
+
+    /// Subagents still in flight across every listed row.
+    ///
+    /// A total, because the collapsed surface speaks for the whole list the way
+    /// the summary status and the one timer already do. Zero for every product
+    /// but Codex.
+    var compactRunningSubagentCount: Int {
+        guard !hidesCompactSurface else { return 0 }
+        return sessions.reduce(0) { $0 + $1.runningSubagentCount }
+    }
+
+    /// Between the count and the elapsed reading, when both are drawn.
+    ///
+    /// `U+2502`, not the ASCII pipe: the box-drawing rule is a divider rather
+    /// than a character, and SF Pro draws it natively at the same width.
+    private static let compactReadoutSeparator = " │ "
+
+    /// Everything the collapsed surface draws in the slot after the notch.
+    ///
+    /// Three shapes, and each says only what is true. A turn being timed and no
+    /// subagents is the elapsed value alone, exactly as before. A turn being
+    /// timed with subagents in flight puts the count in front of it. And once
+    /// every turn has finished with a subagent still working there is no clock
+    /// left to read, so the count stands alone -- which is the whole shape this
+    /// change exists for: `Running`, and a number saying what is running, with
+    /// nothing being timed because no turn is.
+    ///
+    /// One string rather than two views, because it is one reading: the panel
+    /// width is measured from it, and the elapsed half redraws itself once a
+    /// second inside a single raster instead of laying out a stack every tick.
+    var compactTrailingText: String? {
+        let count = compactRunningSubagentCount
+        guard count > 0 else { return compactTimerText }
+        guard let compactTimerText else { return "\(count)" }
+        return "\(count)\(Self.compactReadoutSeparator)\(compactTimerText)"
+    }
+
+    /// What the elapsed half of that reading is prefixed with, or nil when
+    /// there is no elapsed half to prefix.
+    var compactTimerPrefix: String? {
+        let count = compactRunningSubagentCount
+        guard count > 0, compactTimerText != nil else { return nil }
+        return "\(count)\(Self.compactReadoutSeparator)"
+    }
+
+    /// The count for VoiceOver, which cannot read a bare number in a slot.
+    var spokenRunningSubagentText: String? {
+        let count = compactRunningSubagentCount
+        guard count > 0 else { return nil }
+        return count == 1 ? "1 subagent" : "\(count) subagents"
     }
 
     /// The instant the compact readout counts from, or nil when there is nothing
@@ -1460,7 +1552,7 @@ final class MonitorStore: ObservableObject {
             geometry: geometry,
             isExpanded: isExpanded,
             statusReadoutText: compactStatusReadoutText,
-            timerText: compactTimerText,
+            trailingText: compactTrailingText,
             centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight,
             status: status,
@@ -1486,7 +1578,9 @@ final class MonitorStore: ObservableObject {
         }
 
         return occlusionMaxX
-            + PanelMetrics.compactTrailingWingWidth(timerText: compactTimerText)
+            + PanelMetrics.compactTrailingWingWidth(
+                trailingText: compactTrailingText
+            )
     }
 
     /// The contour's upper fillet on the selected display, which is also the
