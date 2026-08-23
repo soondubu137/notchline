@@ -370,7 +370,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
 
     // MARK: - AgentMonitoring
 
-    func fetchSnapshot() async -> AgentSnapshot {
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         // Before the status gate, not after it. The helper has to exist from
         // the moment the user *could* have pasted the block naming it, and
         // that moment is not the moment this app decides the paste is
@@ -689,7 +689,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // terminal session's read state: the answer is a property of the
             // device that process is attached to, and nothing in the row
             // carries it.
-            processIdentifierByThreadID: liveByID.mapValues(\.processIdentifier)
+            processIdentifierByThreadID: liveByID.mapValues(\.processIdentifier),
+            // And which of them the user has already taken off the list, so
+            // none of the reading below is spent on one.
+            dismissedRowIDs: dismissedRowIDs
         )
         let visibleRows = read.rows
 
@@ -850,7 +853,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     private func rowsStillWorthShowing(
         _ rows: [MonitoredSession],
         boundaryByRowID: [String: Date],
-        processIdentifierByThreadID: [String: Int32]
+        processIdentifierByThreadID: [String: Int32],
+        dismissedRowIDs: Set<String>
     ) async -> (rows: [MonitoredSession], diagnostic: String?) {
         // Nothing below can withhold a row whose Turn is not over, so none of
         // it runs unless one is: ``TerminalUnreadMembershipGate`` shows every
@@ -869,8 +873,17 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         //
         // The diagnostic goes with the reading that produced it. It says
         // finished rows have been kept to be safe, and there are none to keep.
+        //
+        // A row the user has removed is not one of the rows that count here,
+        // and for the same reason: it has already left the list at their
+        // asking, so no reading of Claude Desktop or of a terminal can add
+        // anything to it. A list whose only finished row is one the user waved
+        // away therefore costs what a list of running rows costs -- nothing --
+        // instead of a full account-tree read once per refresh, forever
+        // (CR-Fable-003).
         guard rows.contains(where: {
             TerminalUnreadMembershipGate.isTerminal($0.status)
+                && !dismissedRowIDs.contains($0.id)
         }) else {
             sessionsSeenOnScreenSinceTheirTurnEnded.removeAll()
             terminalReadMembershipGate.reset()
@@ -1060,7 +1073,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         /// the front when it was taken, describe the same instant. Only a
         /// session with a controlling terminal answers at all.
         var terminalReadingByThreadID: [String: ControllingTerminalReading] = [:]
-        for row in rows {
+        for row in rows where !dismissedRowIDs.contains(row.id) {
             guard let pid = processIdentifierByThreadID[row.threadID],
                   let reading = await terminalGestures
                     .reading(forProcessIdentifier: pid) else {
@@ -1108,6 +1121,23 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         }
 
         for row in rows {
+            // The user has taken this row off the list, which is an answer no
+            // reading can improve on -- so it is judged by nobody, never enters
+            // the gate, and the `retain` below drops whatever entry it had.
+            // That entry is what booked the one-second re-check, and it went on
+            // booking it, with the row nowhere on screen, for as long as the
+            // session sat at its prompt (CR-Fable-003).
+            //
+            // The row is still reported. What this product lists is what this
+            // product knows about, and the removal is the store's record to
+            // keep: a product that stopped listing the Turn would be telling
+            // the store the Turn had ended, which is the one thing that makes
+            // it forget a removal -- and a forgotten removal puts the row back
+            // on the notch at the next hook event (CR-Fable-004).
+            if dismissedRowIDs.contains(row.id) {
+                shown.append(row)
+                continue
+            }
             // Every row carries one: rows come only from the reducer, and
             // the reducer stamps every turn with its last event. The fallback
             // is a fail-closed default rather than a case -- an unknown

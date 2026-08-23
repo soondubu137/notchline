@@ -1536,6 +1536,13 @@ final class MonitorStore: ObservableObject {
     /// entry is dropped once that product reports the Turn gone while we can
     /// still see the product — see ``forgetDismissalsProvenGone(in:)``.
     ///
+    /// **The product is told.** Filtering here alone left the row listed by its
+    /// provider, and a listed finished row is one the provider's terminal gate
+    /// keeps asking about — a read-state sample a second, for a row that had
+    /// stopped being drawn (CR-Fable-003). The record stays here, because only
+    /// this layer can tell a removal from a Turn ending; what goes down with
+    /// each snapshot request is which rows it covers.
+    ///
     /// This is the only way a user can take a terminal Claude Code row off the
     /// list: read state is not a question those rows can be asked (see
     /// [ADR 0012](../../docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)),
@@ -1557,6 +1564,14 @@ final class MonitorStore: ObservableObject {
         // agreement. Editing the array alone would leave a dismissed row still
         // lighting its product's mark.
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
+        // And the product it belongs to is told, by being asked again now. Its
+        // terminal gate is still holding this row as something waiting to be
+        // read, which books a re-check every second -- so until the next
+        // refresh carries the removal down, the app goes on sampling read state
+        // for a row nobody can see (CR-Fable-003). The row's own re-check would
+        // deliver it within the second either way; a row that books nothing
+        // would have waited for the heartbeat.
+        requestRefresh()
         return true
     }
 
@@ -2201,7 +2216,20 @@ final class MonitorStore: ObservableObject {
             for service in services {
                 group.addTask { @MainActor [weak self] in
                     guard let self else { return }
-                    let snapshot = await service.fetchSnapshot()
+                    // What the user has already taken off this product's list
+                    // travels with the request. The store keeps the record --
+                    // it is the only layer that can tell a removal from a Turn
+                    // ending -- but the product is the only one that can stop
+                    // paying for it, so it is handed down on every ask rather
+                    // than pushed once and remembered. Pushing it would have to
+                    // survive everything that resets a provider's gate; this
+                    // cannot go stale, because it is read a line before it is
+                    // used (CR-Fable-003).
+                    let snapshot = await service.fetchSnapshot(
+                        dismissedRowIDs: self.dismissedSessionIDsByAgent[
+                            service.agent
+                        ] ?? []
+                    )
                     guard !Task.isCancelled else { return }
                     // The snapshot already carries the health the same refresh
                     // observed; asking again would drain the store twice a

@@ -13,7 +13,22 @@ protocol AgentMonitoring: Sendable {
     /// through a deadline, which is what lets a slow provider not hold up a
     /// fast one.
     nonisolated var stateChangeEvents: AsyncStream<Void> { get }
-    func fetchSnapshot() async -> AgentSnapshot
+    /// This product's answer, told which of its rows the user has already taken
+    /// off the list.
+    ///
+    /// A removed row is still this product's row -- nothing was deleted, and
+    /// the record of the removal belongs to the store, which is the only layer
+    /// that can tell "the user waved it away" from "the Turn is over"
+    /// (CR-Fable-004). What changes here is that the row is no longer waiting
+    /// for anything, and only the provider can act on that: an entry in the
+    /// terminal gate books a re-check once a second, and it does so for a row
+    /// nobody can see as readily as for one on the notch. Removal used to stop
+    /// at the top layer, so both products went on sampling read state for a row
+    /// the user had already dismissed, for as long as its session lived
+    /// (CR-Fable-003).
+    ///
+    /// Ids are ``MonitoredSession/id``, and only this product's.
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot
     /// Earliest moment a refresh could produce different output.
     ///
     /// The store sleeps until this instead of sampling on a fixed cadence, so a
@@ -35,6 +50,12 @@ protocol AgentMonitoring: Sendable {
 }
 
 extension AgentMonitoring {
+    /// Nothing removed, which is what a caller with no removal record of its
+    /// own is saying. The store holds the only one there is.
+    func fetchSnapshot() async -> AgentSnapshot {
+        await fetchSnapshot(dismissedRowIDs: [])
+    }
+
     /// Nothing, which is the ordinary case and the one Codex is in: its quota
     /// arrives over the app server and leaves no files anywhere. Only a product
     /// that writes something the user might want back overrides this.
@@ -181,7 +202,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         self.desktopProcessIdentifierProvider = desktopProcessIdentifierProvider
     }
 
-    func fetchSnapshot() async -> AgentSnapshot {
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         // The transport, before the status gate. A trusted definition can fire
         // before this app decides the registration is complete -- a Codex that
         // was already running has them loaded -- so the socket has to be bound
@@ -294,7 +315,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     threadRecords: threadRecords,
                     projectMetadata: projectSnapshot,
                     unreadState: unreadSnapshot,
-                    approvalRouting: await approvalRouting.snapshot()
+                    approvalRouting: await approvalRouting.snapshot(),
+                    dismissedRowIDs: dismissedRowIDs
                 )
                 // The one branch that looked at every listed row and pruned the
                 // gate to match. Anything it hid or dropped is hidden or
@@ -692,7 +714,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         threadRecords: [String: ThreadRecord],
         projectMetadata: DesktopProjectMetadataSnapshot,
         unreadState: DesktopUnreadStateSnapshot,
-        approvalRouting: DesktopApprovalRoutingSnapshot
+        approvalRouting: DesktopApprovalRoutingSnapshot,
+        dismissedRowIDs: Set<String>
     ) async -> [MonitoredSession] {
         var sessions: [MonitoredSession] = []
         // Keyed on what was actually evaluated, not on every Hook state. A
@@ -717,6 +740,23 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     for: state.threadID
                 )
             ) else {
+                continue
+            }
+            // A row the user has taken off the list is not evaluated, and so
+            // leaves the gate on the retain below. Read state is the only
+            // question the gate asks, and that question has already been
+            // answered by the user in the one way that outranks every source:
+            // they said they are done with the row. Left in, its entry went on
+            // booking a re-check a second for a row the panel no longer draws
+            // -- each one a full snapshot, LaunchServices round trip included
+            // (CR-Fable-003).
+            //
+            // It is still reported. Withholding it would tell the store the
+            // Turn had gone, which is the one thing that makes the store forget
+            // a removal -- and a forgotten removal is a dismissed row back on
+            // the notch at the next hook event (CR-Fable-004).
+            guard !dismissedRowIDs.contains(session.id) else {
+                sessions.append(session)
                 continue
             }
             evaluatedSessionIDs.insert(session.id)

@@ -17022,6 +17022,70 @@ for line in sys.stdin:
         #expect(await store.nextWakeUpForTesting() == nil)
     }
 
+    /// Removing a row stops its product asking to be looked at again for it.
+    ///
+    /// A dismissal used to stop at this layer: the row left the panel, and the
+    /// provider -- which had never been told -- went on holding it as a listed,
+    /// unread entry and booking the one-second re-check that entry is for. The
+    /// user right-clicks the last finished row away, leaves the session at its
+    /// prompt, and the app runs a full dual-product refresh every second for
+    /// the rest of the day, with nothing on the notch (CR-Fable-003).
+    ///
+    /// The record still lives here -- this is the only layer that can tell a
+    /// removal from a Turn ending -- so the product goes on listing the row.
+    /// What travels down is which rows it covers.
+    @Test @MainActor
+    func removingARowStopsItsProductAskingForARecheck() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let finished = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "cli",
+            turnID: "turn-1",
+            projectName: "notchline",
+            title: "Finished turn",
+            preview: nil,
+            status: .completed,
+            startedAt: clock.now()
+        )
+        let recheck = clock.now().addingTimeInterval(1)
+        let service = RowRemovalMonitoringStub(
+            agent: .claudeCode,
+            row: finished,
+            recheck: recheck
+        )
+        let store = MonitorStore(
+            services: [service],
+            initialSnapshot: makeAgentSnapshot(
+                .claudeCode,
+                availability: .connecting
+            ),
+            clock: clock
+        )
+
+        await store.refreshAndWaitForTesting()
+        #expect(store.sessions == [finished])
+        #expect(
+            await store.nextWakeUpForTesting() == recheck,
+            "while the row is on screen, its product asks to be looked at again"
+        )
+
+        #expect(store.dismiss(finished))
+        #expect(store.sessions.isEmpty)
+        await store.refreshAndWaitForTesting()
+
+        #expect(
+            await service.rowsRemovedByTheUser() == [finished.id],
+            "the product has to hear about the removal to act on it"
+        )
+        #expect(
+            await store.nextWakeUpForTesting() == nil,
+            "nothing may wake for a row the user has taken off the list"
+        )
+        // Still listed by the product, and still not drawn: the removal is
+        // remembered because the Turn has not gone anywhere (CR-Fable-004).
+        #expect(store.sessions.isEmpty)
+    }
+
     /// A deadline booked by a watcher-driven refresh is actually slept on.
     ///
     /// This is the shape of every late row. The one-second re-check a finished
@@ -17252,7 +17316,7 @@ private actor OnDemandDeadlineMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { deadline }
 
-    func fetchSnapshot() async -> AgentSnapshot {
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         snapshots += 1
         return AgentSnapshot(
             agent: agent,
@@ -17286,7 +17350,7 @@ private actor StuckDeadlineMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { deadline }
 
-    func fetchSnapshot() async -> AgentSnapshot {
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         snapshots += 1
         return AgentSnapshot(
             availability: .ready,
@@ -17356,7 +17420,7 @@ private actor GatedMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { nil }
 
-    func fetchSnapshot() async -> AgentSnapshot {
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         observedSnapshots += 1
         if holdsSnapshots {
             await withCheckedContinuation { waiters.append($0) }
@@ -17436,7 +17500,7 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
     private var installRequests = 0
     private var removeRequests = 0
 
-    func fetchSnapshot() async -> AgentSnapshot {
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         AgentSnapshot(
             agent: agent,
             availability: setupStatus.isIntegrationEnabled
@@ -18435,7 +18499,7 @@ private actor DiskFootprintMonitoringStub: AgentMonitoring {
         self.report = report
     }
 
-    func fetchSnapshot() async -> AgentSnapshot {
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         AgentSnapshot(
             agent: .claudeCode,
             availability: .ready,
@@ -18487,6 +18551,53 @@ private actor ResponseQueue {
 }
 
 /// A provider whose fetch can be held open, and whose product is chosen.
+/// A provider that asks to be looked at again while one row of its own is still
+/// waiting to be read, and stops once it is told the user removed that row.
+///
+/// Both real providers behave this way through their terminal gate. Stated here
+/// without one, so the test is about the removal reaching the provider rather
+/// than about either product's read state.
+private actor RowRemovalMonitoringStub: AgentMonitoring {
+    nonisolated let agent: AgentKind
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+
+    private let row: MonitoredSession
+    private let recheck: Date
+    private var removed: Set<String> = []
+
+    init(agent: AgentKind, row: MonitoredSession, recheck: Date) {
+        self.agent = agent
+        self.row = row
+        self.recheck = recheck
+    }
+
+    /// What the last request said the user had taken off this product's list.
+    func rowsRemovedByTheUser() -> Set<String> { removed }
+
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
+        removed = dismissedRowIDs
+        return AgentSnapshot(
+            agent: agent,
+            availability: .ready,
+            // Reported either way. A provider that withheld a removed row would
+            // be telling the store the Turn had ended.
+            sessions: [row],
+            quota: .unavailable,
+            diagnostic: nil,
+            setupStatus: .active
+        )
+    }
+
+    func nextRefreshDeadline() async -> Date? {
+        removed.contains(row.id) ? nil : recheck
+    }
+
+    func hookSetupStatus() async -> HookSetupStatus { .active }
+    func installHooks() async throws {}
+    func removeHooks() async throws {}
+    func disconnect() async {}
+}
+
 private actor HoldableMonitoringStub: AgentMonitoring {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
@@ -18525,7 +18636,7 @@ private actor HoldableMonitoringStub: AgentMonitoring {
 
     func nextRefreshDeadline() async -> Date? { deadline }
 
-    func fetchSnapshot() async -> AgentSnapshot {
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         if isHeld {
             await withCheckedContinuation { waiters.append($0) }
         }
@@ -19366,6 +19477,67 @@ extension NotchlineTests {
         #expect((asking?.timeIntervalSinceNow ?? .infinity) <= 1.1)
     }
 
+    /// A row the user removed keeps its place in the list and books nothing.
+    ///
+    /// Both halves are the point. The row stays in what Claude Code reports,
+    /// because the removal is the store's record to keep and a Turn that
+    /// stopped being listed is how the store learns a Turn has ended
+    /// (CR-Fable-004) -- but it leaves the unread gate, because the only
+    /// question that gate asks has already been answered by the user in the one
+    /// way that outranks every source. Left in, it booked the terminal-gesture
+    /// read and the three-state front check once a second, for a row the panel
+    /// had stopped drawing (CR-Fable-003).
+    @Test @MainActor
+    func aRowTheUserRemovedLeavesTheGateWithoutLeavingTheList() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "cli", turn: "p-1", at: 100)
+        try harness.queue(event: "Stop", session: "cli", turn: "p-1", at: 101)
+        harness.live = [harness.session(id: "cli", cwd: cwd, pid: 4_242)]
+        // Last at its terminal before the Turn ended, so the row is unread and
+        // waiting on the user: exactly the row that books the re-check.
+        harness.lastTerminalGestureByPID = [4_242: Date(timeIntervalSince1970: 100)]
+
+        let unread = await harness.service.fetchSnapshot()
+        let row = try #require(unread.sessions.first)
+        let asking = await harness.service.nextRefreshDeadline()
+        #expect((asking?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+
+        let afterRemoval = await harness.service
+            .fetchSnapshot(dismissedRowIDs: [row.id])
+        #expect(
+            afterRemoval.sessions.map(\.id) == [row.id],
+            "the Turn has not gone anywhere, so the product still reports it"
+        )
+        let quiet = await harness.service.nextRefreshDeadline()
+        #expect(
+            (quiet?.timeIntervalSinceNow ?? .infinity) > 2,
+            """
+            nothing can change what the user has already decided, so nothing \
+            should wake for it
+            """
+        )
+
+        // And the row it was keeping company still asks. One removal must not
+        // quieten the rows the user is still waiting on.
+        try harness.queue(event: "UserPromptSubmit", session: "two", turn: "p-2", at: 100)
+        try harness.queue(event: "Stop", session: "two", turn: "p-2", at: 101)
+        harness.live = [
+            harness.session(id: "cli", cwd: cwd, pid: 4_242),
+            harness.session(id: "two", cwd: cwd, pid: 4_243)
+        ]
+        harness.lastTerminalGestureByPID = [
+            4_242: Date(timeIntervalSince1970: 100),
+            4_243: Date(timeIntervalSince1970: 100)
+        ]
+        _ = await harness.service.fetchSnapshot(dismissedRowIDs: [row.id])
+        let stillAsking = await harness.service.nextRefreshDeadline()
+        #expect((stillAsking?.timeIntervalSinceNow ?? .infinity) <= 1.1)
+    }
+
     /// A locked screen stops the re-check, and coming back restarts it.
     ///
     /// The row is not abandoned — it stays listed, because nobody has read it —
@@ -19548,6 +19720,94 @@ extension NotchlineTests {
             """
             a branch that cannot evaluate a row must not book a re-check for \
             one: this is the 1 Hz that ran with an empty notch
+            """
+        )
+    }
+
+    /// Removing a Codex row takes it out of the unread gate, and leaves it in
+    /// the list.
+    ///
+    /// The Codex half of CR-Fable-003. An unread finished row books a re-check
+    /// a second, and every one of them is a full snapshot -- the main-actor
+    /// `NSRunningApplication` round trip included. A row the user has waved
+    /// away is not waiting on being read by anybody, so it must book none of
+    /// them; it stays listed because Codex is still holding that Turn, and a
+    /// product that stopped listing it would be telling the store the Turn had
+    /// ended.
+    @Test @MainActor
+    func removingACodexRowTakesItOutOfTheUnreadGate() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        for event in ["UserPromptSubmit", "Stop"] {
+            try JSONSerialization.data(withJSONObject: [
+                "received_at": Date().timeIntervalSince1970,
+                "hook_event_name": event,
+                "session_id": "thread-unread",
+                "turn_id": "turn-unread"
+            ]).deliver(to: repository)
+        }
+
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-unread"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "updatedAt": .number(Date().timeIntervalSince1970),
+                "name": .string("Unread")
+            ])],
+            loadedListResults: []
+        )
+        let unreadState = DesktopUnreadStateStub(
+            DesktopUnreadStateSnapshot(
+                unreadThreadIDs: ["thread-unread"],
+                source: .current
+            )
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            unreadState: unreadState,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        var row: MonitoredSession?
+        for _ in 0 ..< 100 {
+            let snapshot = await service.fetchSnapshot()
+            if let listed = snapshot.sessions.first, listed.status == .completed {
+                row = listed
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let unread = try #require(row, "an unread finished row is listed")
+        let asking = await service.nextRefreshDeadline()
+        #expect(
+            (asking?.timeIntervalSinceNow ?? .infinity) <= 1.1,
+            "while it is on screen, the row asks to be looked at again"
+        )
+
+        // The user right-clicks it away. Desktop is still running and still
+        // reports the thread unread; nothing about the Turn has changed.
+        let afterRemoval = await service.fetchSnapshot(dismissedRowIDs: [unread.id])
+        #expect(
+            afterRemoval.sessions.map(\.id) == [unread.id],
+            "the Turn is still Codex's, so the product still reports it"
+        )
+        let quiet = await service.nextRefreshDeadline()
+        #expect(
+            (quiet?.timeIntervalSinceNow ?? .infinity) > 1.5,
+            """
+            a row nobody can see must not book a snapshot a second to ask \
+            whether it has been read
             """
         )
     }
