@@ -86,8 +86,13 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
             if shouldLog {
                 // Once per path, not once per attempt: this is the expected
                 // state before the integration is installed.
+                // The path is interpolated at OSLog's default privacy, so it
+                // is redacted in `log show` unless private data is enabled --
+                // which is the point: without it the line names no path, and
+                // the watchers built per session record or per transcript are
+                // exactly the ones that transiently fail to attach.
                 Self.logger.info(
-                    "Directory watcher not attached; falling back to refresh deadlines until it appears"
+                    "Directory watcher not attached at \(self.directoryURL.path); falling back to refresh deadlines until it appears"
                 )
             }
             return false
