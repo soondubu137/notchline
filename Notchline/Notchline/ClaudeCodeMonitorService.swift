@@ -661,7 +661,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 title: await title(for: session),
                 preview: preview(for: session)
             )
-            boundaryByRowID[built.id] = turn.lastEventAt
+            // The later of the turn's own last event and the last subagent
+            // boundary. For every row without a subagent they are the same
+            // instant; for one with a subagent still working, the turn's `Stop`
+            // may be minutes old by the time the thread actually stops working,
+            // and a settling window measured from it would be long spent -- the
+            // row would go the moment it stopped saying anything was running.
+            boundaryByRowID[built.id] = turn.terminalBoundaryAt
             rows.append(built)
         }
 
@@ -1254,7 +1260,14 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         where terminalReadMembershipGate.shouldDisplay(
             sessionID: row.id,
             threadID: row.threadID,
-            status: row.status,
+            // The gate asks whether this thread is still working, so it is
+            // given that answer rather than the row's own status
+            // (`CONTEXT.md`, 派生状态). A finished row with a subagent still in
+            // flight takes the running path -- shown outright, entry dropped,
+            // no re-check booked -- so the one row carrying the evidence that
+            // anything is still running cannot be erased a settling interval
+            // after a `Stop` the user has already read.
+            status: MonitorAggregation.effectiveStatus(of: row),
             terminalBoundaryAt: boundary,
             unreadState: restsOnTerminal ? terminalUnreadState : desktopUnreadState,
             now: now
@@ -1476,7 +1489,14 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // being approved, or a path.
             preview: preview,
             status: turn.status,
-            startedAt: turn.startedAt
+            startedAt: turn.startedAt,
+            // What the row says once its own turn has stopped and the thread
+            // has not. An `Agent` call returns as soon as the subagent is
+            // launched, so a turn can reach `Stop` with work it started still
+            // in flight -- measured 2026-08-23 against CLI 2.1.241, with the
+            // parent's `Stop` naming that subagent in `background_tasks` and
+            // its `SubagentStop` arriving afterwards.
+            runningSubagentCount: turn.runningSubagentIDs.count
         )
     }
 

@@ -1290,8 +1290,8 @@ final class MonitorStore: ObservableObject {
     /// Subagents still in flight across every listed row.
     ///
     /// A total, because the collapsed surface speaks for the whole list the way
-    /// the summary status and the one timer already do. Zero for every product
-    /// but Codex.
+    /// the summary status and the one timer already do — across both products,
+    /// which both report subagent boundaries.
     var compactRunningSubagentCount: Int {
         guard !hidesCompactSurface else { return 0 }
         return sessions.reduce(0) { $0 + $1.runningSubagentCount }

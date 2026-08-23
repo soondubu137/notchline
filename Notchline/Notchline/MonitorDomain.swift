@@ -413,8 +413,10 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// qualifies it is said in words instead. A subagent outlives the turn that spawned it,
     /// so a Completed row can still have one in flight — that is the case the
     /// count exists for, and the row would otherwise read as finished while the
-    /// thread is still working. Zero for every product but Codex: nothing else
-    /// reports a subagent boundary this app registers.
+    /// thread is still working. **Both products report it**, from the same two
+    /// events under the same names: Codex spawns through `spawn_agent` and
+    /// Claude Code through its `Agent` tool, whose call returns as soon as the
+    /// subagent is launched.
     let runningSubagentCount: Int
 
     nonisolated init(
@@ -824,9 +826,9 @@ enum MonitorAggregation {
     /// collapsed summary, the product marks, the row order and the terminal
     /// membership gate.
     ///
-    /// The identity everywhere else. `hasRunningSubagent` is false for every
-    /// product but Codex, and false on Codex for every row without a subagent
-    /// in flight, so this changes nothing for any of them.
+    /// The identity everywhere else, and for the overwhelming majority of rows
+    /// on both products: a row that never spawned anything, or whose subagents
+    /// have all stopped, is passed through untouched.
     ///
     /// **It must not reach the row's own rendering.** A row drawn from this
     /// would restart its timer and never take the final answer as its preview,

@@ -31,7 +31,7 @@ Build:
 xcodebuild build -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS'
 ```
 
-Unit tests (421 cases today, a few seconds on a warm build):
+Unit tests (438 cases today, a few seconds on a warm build):
 
 ```bash
 xcodebuild test -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS' -only-testing:NotchlineTests

@@ -493,6 +493,27 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             ManagedHookDefinition(event: "PermissionDenied", matcher: nil),
             ManagedHookDefinition(event: "Elicitation", matcher: nil),
             ManagedHookDefinition(event: "ElicitationResult", matcher: nil),
+            // The two subagent boundaries, and this product needs them for the
+            // same reason Codex does rather than by symmetry with it. Measured
+            // 2026-08-23 against CLI 2.1.241, one `-p` run whose prompt asked
+            // for an `Agent` call that was not to be waited on: `PreToolUse`
+            // and `PostToolUse` for `Agent` both landed immediately,
+            // `SubagentStart` arrived *after* the parent's `PostToolUse`, the
+            // parent's `Stop` carried
+            // `background_tasks: [{type: "subagent", status: "running"}]`
+            // naming that same agent, and `SubagentStop` arrived after the
+            // `Stop`. So a Claude Code turn ends with its subagent still
+            // working, exactly as a Codex one does, and without these two the
+            // row says Completed while the thread is not.
+            //
+            // The matcher is deliberately absent here as everywhere else,
+            // though this is the one event where a matcher would have meant
+            // something: Claude Code matches these two against `agent_type`,
+            // not against a tool name. Selecting types would make a naming
+            // detail decide whether a subagent is counted, and a miss is
+            // silent.
+            ManagedHookDefinition(event: "SubagentStart", matcher: nil),
+            ManagedHookDefinition(event: "SubagentStop", matcher: nil),
             // The row's third line (CC-015). Officially "While assistant
             // message text is displayed", and absent from the exploration
             // document's table of events — which is why the first pass at this
@@ -592,6 +613,15 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             .inputWaitOpened
         case ("ElicitationResult", _):
             .toolCallClosed
+        case ("SubagentStart", _):
+            .subagentStarted
+        case ("SubagentStop", _):
+            // Never the turn's terminal, even though it reads like one and
+            // carries the same `last_assistant_message` field `Stop` does. Its
+            // text is the *subagent's* closing words, and the row reports its
+            // own turn -- which `carriesTurnText` already declines to read for
+            // this product, so nothing here has to say so twice.
+            .subagentStopped
         case ("Notification", _):
             // No longer registered, and consumed rather than reported so that a
             // user who has not repaired an older registration does not collect
@@ -1119,6 +1149,17 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     /// present on `PreToolUse`, `PostToolUse`, `PermissionRequest` and
     /// `UserPromptSubmit` only when a subagent produced them, and required on
     /// `SubagentStart` and `SubagentStop`.
+    ///
+    /// **Claude Code stamps the parent's `session_id` too**, and puts the field
+    /// on the base schema every event extends rather than on four of them:
+    /// "Subagent identifier. Present only when the hook fires from within a
+    /// subagent. Absent for the main thread, even in `--agent` sessions. Use
+    /// this field (not `agent_type`) to distinguish subagent calls from
+    /// main-thread calls." Measured 2026-08-23 against CLI 2.1.241: a
+    /// subagent's `PreToolUse` and `PostToolUse` carried the parent's
+    /// `session_id`, the parent's `prompt_id`, and an `agent_id` of their own.
+    /// The shared identity is what makes them land on the right row; the
+    /// `agent_id` is what stops them being read as the row's own work.
     let agentID: String?
     let toolName: String?
     let toolUseID: String?
@@ -1966,6 +2007,21 @@ actor HookEventRepository {
             guard let delta = payload.delta, let sessionID = payload.sessionID else {
                 return
             }
+            // A subagent's words are not the row's answer, and this is the one
+            // path a subagent's event could reach the user by: the fold happens
+            // here, before the reducer, so the `agent_id` gate down there never
+            // sees it. Written from the schema rather than from an observation:
+            // `agent_id` is on the base every Claude Code hook input extends,
+            // and two `-p` probes on 2026-08-23 (CLI 2.1.241) produced
+            // `MessageDisplay` for the main thread only -- but `-p` displays no
+            // subagent text at all, and the event's own description is "while
+            // assistant message text is displayed", so a session with a screen
+            // is exactly the case those probes could not reach. One comparison
+            // is not a price worth paying to find that out from a user.
+            if let agentID = payload.agentID,
+               !agentID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return
+            }
             if previews.fold(
                 delta: delta,
                 messageID: payload.messageID,
@@ -2283,6 +2339,22 @@ actor HookEventRepository {
         // together, or the counters behind
         // ``undeliveredPreToolUseDiagnostic`` would see closes without opens
         // and report a definition that has lost trust.
+        //
+        // **On Claude Code the same rule holds for a different reason, and it
+        // costs something different.** Its subagent events carry the parent's
+        // `prompt_id` as well as the parent's `session_id` (measured
+        // 2026-08-23, CLI 2.1.241), so they name the turn that is already open
+        // and no takeover is possible -- the gate is not what protects turn
+        // identity there. What it protects is the pairing: `openToolUse` and
+        // `pendingApproval` are one slot each on the turn, and a subagent's
+        // calls would be a second stream through them. The cost is that a
+        // subagent's own `PermissionRequest` does not reach the row, and on
+        // this product that is not merely a lost hint -- the `Agent` call the
+        // parent is waiting on really is blocked, so the row says Running, or
+        // `N subagents`, while Claude Code is sitting on a dialog. Tracked
+        // separately, because letting those events in means giving the turn a
+        // slot per agent rather than one; see the exploration under
+        // `docs/technical-explorations/subagent-row-consistency/`.
         if stableIdentifier(event.agentID) != nil {
             return true
         }

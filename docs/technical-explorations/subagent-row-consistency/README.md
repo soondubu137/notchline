@@ -2,11 +2,11 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | **第 4 节与第 5 节已采纳并实现（2026-08-23）**；第 6 节（二期：子智能体的审批）与第 8 节最后一条仍是开放研究。落地后的契约在 `PRD.md` §6.2／§8.2／§9.3、`CONTEXT.md`「派生状态」、`tech-design.md` §9.2 与 `figma-design.md` §4.6，本文此后只作为「为什么这样做」的记录，不是契约 |
+| 文档状态 | **第 4 节、第 5 节与第 8.1 节已采纳并实现（2026-08-23）**；第 6 节（二期：子智能体的审批，两个产品都还没做）仍是开放研究。落地后的契约在 `PRD.md` §6.2／§8.2／§9.3、`CONTEXT.md`「派生状态」、`tech-design.md` §9.2 与 `figma-design.md` §4.6，本文此后只作为「为什么这样做」的记录，不是契约 |
 | 首次记录 | 2026-08-23 |
 | 探索点 | Codex 一条 Thread 自己的 Turn 结束、但它派生的子智能体还在跑时，如何让收起态、排序、成员关系与行本身说同一句话 |
 | 目标读者 | 决定是否采纳的人，以及采纳后实现它的人 |
-| 范围 | **只谈 Codex 一侧。** Claude Code 一侧的对应问题记在第 8 节，本次不动 |
+| 范围 | 一期只谈 Codex 一侧；第 8 节记的 Claude Code 一侧已于 2026-08-23 实测并落地，见 8.1 |
 | 依据 | 阅读 `65e63ab` 及其后的工作树（`d290f04`）：`HookIntegration.swift`、`MonitorDomain.swift`、`MonitorStore.swift`、`NotchOverlayView.swift`、`LiveCodexMonitorService.swift`、`CodexDesktopUnreadState.swift`，以及 `PRD.md` §6.1/§6.2/§9.3、`CONTEXT.md`「会话状态」「终态原因」、`docs/non-public-codex-integration-features.md` 子智能体那一行 |
 | 实测 | **没有自己的实测。** 文中出现的每一个数字都来自已有文档或代码注释，并在使用处注明出处 |
 
@@ -56,6 +56,8 @@ nonisolated static func effectiveStatus(of session: MonitoredSession) -> Session
 ```
 
 `hasRunningSubagent` 已经存在（[`MonitorDomain.swift:443`](../../../Notchline/Notchline/MonitorDomain.swift)），除 Codex 外的产品恒为零，所以这个判据对 Claude Code 是恒等变换。
+
+> **这句话在写下的当天就不再成立了。** Claude Code 的计数恒为零，是因为那边还没有注册两条子智能体边界，不是因为它没有子智能体（8.1）。判据本身不用改一个字——它读的是计数，不是产品——但「对 Claude Code 是恒等变换」这半句只对**没有子智能体在跑的行**成立，对任何产品都是。
 
 ### 4.2 汇总与排序——一处改动，因为 PRD 本来就说它们是同一条规则
 
@@ -114,7 +116,7 @@ nonisolated static func effectiveStatus(of session: MonitoredSession) -> Session
 
 代价照第 5 节记着，并且已经明写进 PRD §6.2 与非公开集成登记表，另有 [#102](https://github.com/soondubu137/notchline/issues/102)（CR-033）单独跟踪：`SubagentStop` 永久丢失时，收起态会长期停在 `Running` 并写着一个不会归零的数字，直到该 Thread 离开列表或用户右键移除该行。
 
-## 6. 二期：子智能体的审批（本次不做）
+## 6. 二期：子智能体的审批（本次不做，而且是两个产品共同的未决项——Claude Code 侧的形状见 8.2）
 
 零件其实都在：子智能体的 `PermissionRequest` 确实会到达父 thread 的 hook——当初的接管缺陷正是这批事件造成的——而它今天在 `:2256` 被成对丢弃。
 
@@ -129,11 +131,44 @@ nonisolated static func effectiveStatus(of session: MonitoredSession) -> Session
 - 行不再可移除（4.4 那个唯一的人工出口也一起没了）；
 - 未读门永远不评估它，Desktop 读没读都留在列表里。
 
-## 8. 与 Claude Code 的关系（本次不做，只登记）
+## 8. 与 Claude Code 的关系
 
-- Claude Code 侧从不设置 `runningSubagentCount`（[`ClaudeCodeMonitorService.swift:1455`](../../../Notchline/Notchline/ClaudeCodeMonitorService.swift) 建行时不传，默认 0），`ClaudeCodeHookVocabulary.managedDefinitions` 十一条里也没有子智能体边界。**同一件事在两个产品上画法不同**，这是已知且当前接受的差异。
-- Codex 那个缺陷在 Claude Code 上不复现：那边的 Turn 身份是 `prompt_id`，子智能体事件实测落在**父轮次同一个** `prompt_id` 上（2026-08-16，见 [`HookIntegration.swift:334`](../../../Notchline/Notchline/HookIntegration.swift) 与 `:1013` 的注释），永远不像新轮次；何况还有 `claude agents --json` 活动读数与 transcript 中断记录两道兜底。
-- **需要单独排期的一件事**：`:2256` 那道 `agent_id` 丢弃闸门在**共享** reducer 里，不在 Codex 的 vocabulary 里。若 Claude Code 也用 `agent_id` 给子智能体事件盖章，那边的子智能体 `PermissionRequest` 现在同样被吞掉——而在那个产品上这不是观感损失：Task 子智能体跑在工具调用内部，主轮次真的被挡住，行会停在 Running 且不报 Approval needed。现有子智能体单测全部是 Codex 形状的 payload，没有一条覆盖它。最便宜的验证：`strings -a` 查 CLI 包里是否有 `agent_id`，或用既有的「一次性 `--settings` + pty」探测法跑一个会触发审批的 Task 子智能体。
+一期把这一节写成「本次不做，只登记」，并且建立在两个当时没有实测的假设上。**两个都是错的**，实测见 8.1。
+
+- ~~Claude Code 侧从不设置 `runningSubagentCount`，`ClaudeCodeHookVocabulary.managedDefinitions` 十一条里也没有子智能体边界。**同一件事在两个产品上画法不同**，这是已知且当前接受的差异。~~ 那个差异不是「画法不同」，是那边根本没有画——而它需要画。
+- Codex 那个**接管**缺陷在 Claude Code 上确实不复现：那边的 Turn 身份是 `prompt_id`，子智能体事件实测落在**父轮次同一个** `prompt_id` 上（2026-08-16，见 [`HookIntegration.swift:334`](../../../Notchline/Notchline/HookIntegration.swift) 与 `:1013` 的注释），永远不像新轮次。**但这句话只否掉了接管，没有否掉「子智能体活得比轮次长」**——一期把这两件事当成了一件，那是这一节最大的错。
+- 一期还写着「何况还有 `claude agents --json` 活动读数与 transcript 中断记录两道兜底」。那两道兜底结束的是**轮次**，不是子智能体：轮次本来就正常结束了，它们无话可说。
+
+### 8.1 实测（2026-08-23，CLI `2.1.241`）与落地
+
+探测法沿用既有的「一次性 `--settings` + `--setting-sources project`」（`-p` 模式够用，因为要看的不是审批），提示词明说不要等待那次 `Agent` 调用。事件到达顺序：
+
+```text
+UserPromptSubmit  prompt_id=5fd7…
+PreToolUse        prompt_id=5fd7…  tool=Agent   tool_use_id=toolu_01Un…
+PostToolUse       prompt_id=5fd7…  tool=Agent   tool_use_id=toolu_01Un…
+SubagentStart     prompt_id=5fd7…  agent_id=ae14…  agent_type=general-purpose
+Stop              prompt_id=5fd7…  background_tasks=[{id: ae14…, type: subagent, status: running}]
+PreToolUse        prompt_id=5fd7…  agent_id=ae14…  tool=Bash
+PostToolUse       prompt_id=5fd7…  agent_id=ae14…  tool=Bash
+SubagentStop      prompt_id=5fd7…  agent_id=ae14…
+```
+
+三条结论：
+
+1. **`Agent` 调用在子智能体启动的那一刻就返回**，所以轮次可以带着自己派生的活到达 `Stop`——正是 Codex 那个形状，只是成因不同（那边是子智能体本来就异步，这边是工具调用本身不等）。主智能体的 `Stop` 自己就带着 `background_tasks` 指名那个子智能体还在跑。
+2. **`agent_id` 确实存在**，而且在每一条 hook input 都继承的 base schema 上，不是四条 input 各自的可选字段；官方描述是「只在 hook 从子智能体内部触发时出现……用这个字段而不是 `agent_type` 来区分子智能体调用与主线程调用」。所以第三条那个担心成立。
+3. **子智能体的事件盖的是父会话的 `session_id` 加父轮次的 `prompt_id`**，两者都是父的。这是让它们落在正确那一行的原因，也是接管缺陷在这里不成立的原因。
+
+落地的就是第 4 节与第 5 节那一套，一个字不改地搬过来：`ClaudeCodeHookVocabulary` 注册 `SubagentStart` / `SubagentStop`（11 → 13 条），建行时传 `turn.runningSubagentIDs.count`，`ClaudeCodeMonitorService` 那道已读门收 `effectiveStatus` 与 `terminalBoundaryAt`。多做的一件小事：`MessageDisplay` 的折叠在 `deliver` 里就转向，绕过了 reducer 那道 `agent_id` 闸门，而它写的是用户看得见的正文，所以那里补了同一条判据（据 schema 写的，`-p` 观察不到——`-p` 本来就不显示子智能体的正文）。
+
+### 8.2 没有做的那一件，和它现在的形状
+
+那道 `agent_id` 丢弃闸门在**共享** reducer 里，所以 Claude Code 的子智能体 `PermissionRequest` 同样被吞掉。第三条担心的「行会停在 Running 且不报 Approval needed」成立，而且现在多了一种读法：行可能写着 `1 subagent`，而 Claude Code 停在对话框上。
+
+这次没有修它，理由是它不是一条闸门的事：`HookTurnState` 只有一格 `openToolUse` 和一格 `pendingApproval`，放子智能体的事件进来就是让第二股流穿过同两格。要修得给 Turn 按 agent 分格，那是它自己的一次改动，和第 6 节是同一件事的两个产品版本。
+
+**一个当时没想到、现在测出来的可能出路，只属于 Claude Code**：它的 `Stop` 与 `SubagentStop` 都带 `background_tasks`，其中 `type` 为 `subagent` 的条目的 `id` 就是 `agent_id`。那是一份**绝对**读数而不是累计值，落在 `Stop` 上——也就是计数开始被画出来的那一刻——因此天生不会像 5.1 那个代价那样卡死，是 [#102](https://github.com/soondubu137/notchline/issues/102) 在这个产品上的现成解。没有本次采用是因为它需要自己的实测：`SubagentStop` 自己那一条里**仍然列着正在停止的那个子智能体**（上面的实测里看得见），而 `pending` 状态的子智能体被取消时会不会补一条 `SubagentStop` 完全没测。
 
 ## 9. 影响面
 
@@ -172,8 +207,11 @@ nonisolated static func effectiveStatus(of session: MonitoredSession) -> Session
 6. 该行仍然可以被手动移除；
 7. Claude Code 的行在同一批断言下一切照旧（`effectiveStatus` 对它是恒等变换）。
 
+**8.1 落地时另外写下的三条**（同一个 extension 之后）：`aClaudeCodeSubagentOutlivingItsTurnLeavesTheRowFinishedAndStillWorking`（实测那串事件顺序照原样重放，并钉住轮次 id 不被接管、`lastEventAt` 不被子智能体推进、`SubagentStop` 的 `last_assistant_message` 不进预览）、`aReadClaudeCodeSessionWithASubagentStillRunningKeepsItsRow`（经真实 `ClaudeCodeMonitorService`，与 Codex 那条对称）、`aSubagentsDisplayedTextIsNotTheRowsPreview`（`MessageDisplay` 那道绕过 reducer 的路径）。原先那条 `aClaudeCodeRowIsUnchangedByTheDerivedStatus` 改写成 `theDerivedStatusReadsTheCountAndNotTheProduct`——它的注释本来就写着「以后某个 Claude Code 读数把它填上，就会同时改掉汇总、排序与已读门」，那个读数现在存在了，所以钉的东西从产品换成计数。四条都做过反向验证：注册、`effectiveStatus`、`terminalBoundaryAt`、`MessageDisplay` 判据，任意一处改回旧写法，整个套件都会失败。
+
 ## 11. 未决
 
 - ~~第 5 节那个取舍需要拍板~~ 已拍板并实现，见 5.1；取舍本身写进了 `PRD.md` §6.2 与非公开集成登记表，不再只留在本文。
-- 第 6 节的前置实测没做。
-- 第 8 节最后一条（Claude Code 是否也盖 `agent_id`）没有实测，而它是本次改动唯一可能产生**错误状态**而不是**缺失提示**的地方，优先级高于本文的其余全部内容。**本次一期没有动它**：`effectiveStatus` 对 Claude Code 是恒等变换，所以一期既没有修好它也没有让它更糟。
+- ~~第 8 节最后一条（Claude Code 是否也盖 `agent_id`）没有实测~~ 已实测，见 8.1：盖，而且在 base schema 上。同一次实测还推翻了这一节自己的前提——那边的子智能体一样活得比轮次长——于是第 4、5 节整套搬了过去。
+- 第 6 节的前置实测仍然没做，而它现在是**两个产品共同**的未决项，形状见 8.2：不是一条闸门，是 Turn 上那两格得按 agent 分开。它仍然是本文里唯一可能产生**错误状态**而不是**缺失提示**的地方，优先级高于其余全部内容。
+- 8.2 末尾那条 `background_tasks` 出路没有实测（`pending` 被取消时补不补 `SubagentStop`），一并记在 #102。

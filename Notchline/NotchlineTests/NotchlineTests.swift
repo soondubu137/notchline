@@ -9908,11 +9908,14 @@ for line in sys.stdin:
         #expect(vocabulary.signal(forEvent: "SubagentStart", toolName: nil) == .subagentStarted)
         #expect(vocabulary.signal(forEvent: "SubagentStop", toolName: nil) == .subagentStopped)
         #expect(vocabulary.signal(forEvent: "Stop", toolName: nil) == .turnEnded)
-        // Claude Code's subagents share their parent's `prompt_id` (ADR 0013),
-        // so they are already the same turn and it registers neither event.
+        // Claude Code spells them the same way and means the same thing by
+        // them. Sharing the parent's `prompt_id` (ADR 0013) is what keeps a
+        // subagent's *tool* events from being read as a new turn there; it says
+        // nothing about how long the subagent lives, and it outlives the turn
+        // on that product too (measured 2026-08-23, CLI 2.1.241).
         #expect(
             ClaudeCodeHookVocabulary().signal(forEvent: "SubagentStop", toolName: nil)
-                == nil
+                == .subagentStopped
         )
         #expect(vocabulary.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
@@ -16457,6 +16460,13 @@ for line in sys.stdin:
         // Both terminals converge; failure is a reason, never a fifth state.
         #expect(v.signal(forEvent: "Stop", toolName: nil) == .turnEnded)
         #expect(v.signal(forEvent: "StopFailure", toolName: nil) == .turnEnded)
+        // The two subagent boundaries, and the terminal that is not one of
+        // them. `SubagentStop` carries a `last_assistant_message` exactly as
+        // `Stop` does, so reading it as the turn's terminal would look
+        // plausible and would end a row while its own turn was still working.
+        #expect(v.signal(forEvent: "SubagentStart", toolName: nil) == .subagentStarted)
+        #expect(v.signal(forEvent: "SubagentStop", toolName: nil) == .subagentStopped)
+        #expect(v.managedDefinitions.count == 13)
         #expect(v.signal(forEvent: "Notification", toolName: nil) == .inert)
         #expect(v.signal(forEvent: "NotOurs", toolName: nil) == nil)
     }
@@ -18616,13 +18626,19 @@ private final class ClaudeCodeHarness {
             .write(to: paths.hooksConfiguration)
     }
 
+    /// - Parameter agentID: The subagent that produced the event, when one did.
+    ///   Claude Code stamps a subagent's hooks with the *parent's* `session_id`
+    ///   and the parent's `prompt_id`, so this is the only thing separating
+    ///   them — which is why it is a parameter here rather than a second
+    ///   session.
     func queue(
         event: String,
         session: String,
         turn: String,
         at received: Double,
         toolName: String? = nil,
-        toolUseID: String? = nil
+        toolUseID: String? = nil,
+        agentID: String? = nil
     ) throws {
         var payload: [String: Any] = [
             "event_id": UUID().uuidString,
@@ -18633,6 +18649,7 @@ private final class ClaudeCodeHarness {
         ]
         if let toolName { payload["tool_name"] = toolName }
         if let toolUseID { payload["tool_use_id"] = toolUseID }
+        if let agentID { payload["agent_id"] = agentID }
         try JSONSerialization.data(withJSONObject: payload)
             .deliver(to: repository)
     }
@@ -20326,9 +20343,13 @@ extension NotchlineTests {
 
 /// Four rules read `SessionStatus` to answer a question it does not answer:
 /// *is anything still running on this thread?* For every row but one the two
-/// agree. The exception is a Codex row whose own turn has finished while a
-/// subagent it spawned is still working — and that row is the only place the
-/// surface has to say so, which is exactly what those rules were erasing.
+/// agree. The exception is a row whose own turn has finished while a subagent
+/// it spawned is still working — and that row is the only place the surface has
+/// to say so, which is exactly what those rules were erasing.
+///
+/// Both products reach it. Codex spawns through `spawn_agent`; Claude Code's
+/// `Agent` tool call returns as soon as the subagent is launched, so its turn
+/// can reach `Stop` with the work it started still in flight.
 extension NotchlineTests {
     /// The collapsed surface says `Running`, and says how many.
     ///
@@ -20498,29 +20519,55 @@ extension NotchlineTests {
         )
     }
 
-    /// Claude Code is untouched by all of it.
+    /// The derived status is decided by the count, not by which product wrote
+    /// it.
     ///
-    /// That product never reports a subagent boundary, so `effectiveStatus` is
-    /// the identity for every row it produces and each of the four rules keeps
-    /// the behaviour it had. Asserted rather than assumed: the count lives on
-    /// the shared row type, and a later Claude Code reading that filled it in
-    /// would silently change the summary, the order and the read gate at once.
+    /// This test used to assert the opposite half — that Claude Code never
+    /// reports a subagent boundary, so `effectiveStatus` was the identity for
+    /// every row it produced. Its own comment named the thing that would break
+    /// it ("a later Claude Code reading that filled it in would silently change
+    /// the summary, the order and the read gate at once"), and that reading now
+    /// exists. What it always meant to pin is the rule underneath: a row with
+    /// no subagent is untouched whoever produced it, and a row with one is
+    /// treated the same way whoever produced it. Pinning the product instead
+    /// would fail the moment either of them changed, which is exactly what
+    /// happened.
     @Test @MainActor
-    func aClaudeCodeRowIsUnchangedByTheDerivedStatus() {
-        let finished = makeSession(
-            agent: .claudeCode,
-            threadID: "cc",
-            status: .completed,
-            startedAt: nil
-        )
-        #expect(finished.runningSubagentCount == 0)
-        #expect(MonitorAggregation.effectiveStatus(of: finished) == .completed)
-        #expect(
-            MonitorAggregation.status(
-                agents: [makeSessionSnapshot([finished])],
-                sessions: [finished]
-            ) == .completed
-        )
+    func theDerivedStatusReadsTheCountAndNotTheProduct() {
+        for agent in [AgentKind.codex, .claudeCode] {
+            let finished = makeSession(
+                agent: agent,
+                threadID: "quiet",
+                status: .completed,
+                startedAt: nil
+            )
+            #expect(finished.runningSubagentCount == 0)
+            #expect(MonitorAggregation.effectiveStatus(of: finished) == .completed)
+            #expect(
+                MonitorAggregation.status(
+                    agents: [makeSessionSnapshot([finished])],
+                    sessions: [finished]
+                ) == .completed
+            )
+
+            let working = makeSession(
+                agent: agent,
+                threadID: "working",
+                status: .completed,
+                startedAt: nil,
+                runningSubagentCount: 1
+            )
+            #expect(MonitorAggregation.effectiveStatus(of: working) == .running)
+            #expect(
+                MonitorAggregation.status(
+                    agents: [makeSessionSnapshot([working])],
+                    sessions: [working]
+                ) == .running
+            )
+            // And it sorts with the running ones rather than sinking to the
+            // end of the list, on both products.
+            #expect(MonitorAggregation.rowOrder(working, finished))
+        }
     }
 
     /// The row can still be taken off the list by hand.
@@ -20773,6 +20820,268 @@ extension NotchlineTests {
         #expect(
             PanelMetrics.compactTrailingWidth(trailingText: "2")
                 > PanelMetrics.compactTrailingWidth(trailingText: nil)
+        )
+    }
+}
+
+// MARK: - The same thing on Claude Code
+
+/// The exception above is not a Codex-only shape, and the reason it looked like
+/// one was that this product had never been asked.
+///
+/// Measured 2026-08-23 against CLI 2.1.241, one `-p` run whose prompt asked for
+/// an `Agent` call that was not to be waited on. The order is the whole finding:
+///
+/// ```text
+/// UserPromptSubmit  prompt_id=5fd7…
+/// PreToolUse        prompt_id=5fd7…  tool=Agent   tool_use_id=toolu_01Un…
+/// PostToolUse       prompt_id=5fd7…  tool=Agent   tool_use_id=toolu_01Un…
+/// SubagentStart     prompt_id=5fd7…  agent_id=ae14…  agent_type=general-purpose
+/// Stop              prompt_id=5fd7…  background_tasks=[{id: ae14…, type: subagent, status: running}]
+/// PreToolUse        prompt_id=5fd7…  agent_id=ae14…  tool=Bash
+/// PostToolUse       prompt_id=5fd7…  agent_id=ae14…  tool=Bash
+/// SubagentStop      prompt_id=5fd7…  agent_id=ae14…
+/// ```
+///
+/// The `Agent` call closes immediately, the turn reaches its `Stop` naming the
+/// subagent as still running, and the subagent goes on making tool calls
+/// afterwards. Without the two boundaries the row would say Completed for all
+/// of it.
+extension NotchlineTests {
+    /// The row finishes, and says the thread has not.
+    ///
+    /// Every event here carries the parent's `session_id` **and** the parent's
+    /// `prompt_id`, which is the difference from Codex: nothing a subagent
+    /// sends can look like a new turn, so the turn id must come out unchanged.
+    /// What still has to be true is everything else — the boundaries land, the
+    /// subagent's own tool calls are consumed without touching the turn, and
+    /// the count clears only when that subagent stops.
+    @Test @MainActor
+    func aClaudeCodeSubagentOutlivingItsTurnLeavesTheRowFinishedAndStillWorking()
+        async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let thread = "586df4ed-e1db-4405-bfd4-e9977957b132"
+        let prompt = "5fd735f7-7fbb-4c25-9b2b-5861fa0e1305"
+        let agent = "ae14e0ee8b5e04772"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": prompt
+        ])
+        try deliver([
+            "received_at": 101.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": prompt,
+            "tool_name": "Agent", "tool_use_id": "toolu_01Un"
+        ])
+        try deliver([
+            "received_at": 102.0, "hook_event_name": "PostToolUse",
+            "session_id": thread, "prompt_id": prompt,
+            "tool_name": "Agent", "tool_use_id": "toolu_01Un"
+        ])
+        try deliver([
+            "received_at": 103.0, "hook_event_name": "SubagentStart",
+            "session_id": thread, "prompt_id": prompt,
+            "agent_id": agent, "agent_type": "general-purpose"
+        ])
+        try deliver([
+            "received_at": 104.0, "hook_event_name": "Stop",
+            "session_id": thread, "prompt_id": prompt
+        ])
+
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        // The turn the user started, and no other. A subagent cannot take it
+        // over here, and this asserts the premise rather than assuming it.
+        #expect(turn.turnID == prompt)
+        #expect(turn.status == .completed)
+        #expect(turn.runningSubagentIDs == [agent])
+        #expect(turn.lastEventAt == Date(timeIntervalSince1970: 104))
+
+        // The subagent's own work, arriving after the parent's terminal and
+        // stamped with the parent's identity. Consumed and dropped: it is not
+        // the row's turn doing anything, and it must not move the stamp that
+        // bounds membership reconciliation.
+        try deliver([
+            "received_at": 110.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "tool_name": "Bash", "tool_use_id": "toolu_01UN"
+        ])
+        try deliver([
+            "received_at": 111.0, "hook_event_name": "PostToolUse",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "tool_name": "Bash", "tool_use_id": "toolu_01UN"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .completed)
+        #expect(turn.runningSubagentIDs == [agent])
+        #expect(
+            turn.lastEventAt == Date(timeIntervalSince1970: 104),
+            "a subagent's chatter must not fend off membership reconciliation"
+        )
+        // Dropped in pairs, so the trust probe behind
+        // `undeliveredPreToolUseDiagnostic` never sees a close without an open.
+        #expect(await repository.drainDeliveredEvents().diagnostic == nil)
+
+        // The row draws it, on this product exactly as on the other.
+        let session = MonitoredSession(
+            agent: .claudeCode,
+            threadID: turn.threadID,
+            turnID: turn.turnID,
+            projectName: "notchline",
+            title: "Untitled",
+            preview: nil,
+            status: turn.status,
+            startedAt: turn.startedAt,
+            runningSubagentCount: turn.runningSubagentIDs.count
+        )
+        #expect(session.runningSubagentSummary == "1 subagent")
+        #expect(MonitorAggregation.effectiveStatus(of: session) == .running)
+
+        try deliver([
+            "received_at": 112.0, "hook_event_name": "SubagentStop",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "agent_type": "general-purpose",
+            "last_assistant_message": "Here is the full contents of note.txt"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.runningSubagentIDs.isEmpty)
+        #expect(turn.status == .completed)
+        // `SubagentStop` carries the same `last_assistant_message` field `Stop`
+        // does, and it is the *subagent's* closing words. The row reports its
+        // own turn, so nothing here reaches the preview.
+        #expect(turn.assistantPreview == nil)
+        // The window a finished row settles in starts here, not at the `Stop`
+        // eight seconds ago.
+        #expect(turn.lastEventAt == Date(timeIntervalSince1970: 104))
+        #expect(turn.terminalBoundaryAt == Date(timeIntervalSince1970: 112))
+    }
+
+    /// A session Claude Desktop reports as read keeps its row while a subagent
+    /// is still working.
+    ///
+    /// The read gate is where this costs the most if it is missed: the moment
+    /// the user opens the session, `lastFocusedAt` moves past the turn's `Stop`
+    /// and the row is retired — and the person most likely to be looking at a
+    /// session is the one who just watched it launch something. Through the
+    /// real service, because the rule is the orchestrator's and not the gate's.
+    @Test @MainActor
+    func aReadClaudeCodeSessionWithASubagentStillRunningKeepsItsRow() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(
+            event: "SubagentStart", session: "s-1", turn: "p-1", at: 101,
+            agentID: "a-1"
+        )
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 102)
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+
+        // Nothing has spoken for this session yet, so the row is outside the
+        // gate entirely. The reading below is what puts it in one.
+        let unknown = await harness.service.fetchSnapshot()
+        #expect(unknown.sessions.count == 1)
+
+        // Desktop last had it on screen before the turn ended: unread, and
+        // kept for that reason alone.
+        try harness.writeDesktopRecord(
+            session: "s-1", lastFocusedAt: 100, desktopID: "d-1"
+        )
+        #expect(await harness.service.fetchSnapshot().sessions.count == 1)
+
+        // The user opens it. For a row with nothing left running this is the
+        // end of it -- `aFinishedRowLeavesWhenClaudeDesktopSaysItWasRead` is
+        // exactly this sequence and the row is gone by here. It survives only
+        // because the thread is still working.
+        try harness.writeDesktopRecord(
+            session: "s-1", lastFocusedAt: 103, desktopID: "d-1"
+        )
+        let read = await harness.service.fetchSnapshot()
+        let kept = try #require(
+            read.sessions.first,
+            "a read session with a subagent still running keeps its row"
+        )
+        #expect(kept.status == .completed)
+        #expect(kept.runningSubagentCount == 1)
+        #expect(MonitorAggregation.effectiveStatus(of: kept) == .running)
+
+        // The subagent finishes. The row is terminal from *this* instant, so
+        // the focus recorded before it can no longer speak for the answer and
+        // the row has to survive.
+        try harness.queue(
+            event: "SubagentStop", session: "s-1", turn: "p-1", at: 104,
+            agentID: "a-1"
+        )
+        let settling = await harness.service.fetchSnapshot()
+        #expect(
+            settling.sessions.map(\.threadID) == ["s-1"],
+            """
+            the window starts when the last subagent stopped: measured from \
+            the turn's own `Stop`, this row would already be gone
+            """
+        )
+        #expect(settling.sessions.first?.runningSubagentCount == 0)
+
+        // And once the user reads what is now genuinely finished, it leaves the
+        // way any read row does.
+        try harness.writeDesktopRecord(
+            session: "s-1", lastFocusedAt: 105, desktopID: "d-1"
+        )
+        #expect(await harness.service.fetchSnapshot().sessions.isEmpty)
+    }
+
+    /// A subagent's displayed text is not the row's text.
+    ///
+    /// `MessageDisplay` is folded into the session's preview before the reducer
+    /// is reached, which is the one path a subagent's event can take to the user
+    /// without passing the `agent_id` gate. Two `-p` probes produced the event
+    /// for the main thread only — but `-p` displays no subagent text at all,
+    /// and the field is on the base schema every Claude Code hook input
+    /// extends, so the fold is held to the same rule the reducer is.
+    @Test @MainActor
+    func aSubagentsDisplayedTextIsNotTheRowsPreview() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        func display(_ text: String, agentID: String?) throws {
+            var body: [String: Any] = [
+                "received_at": 100.0,
+                "hook_event_name": ClaudeCodeHookVocabulary.messageDisplayEventName,
+                "session_id": "s", "prompt_id": "p",
+                "message_id": agentID ?? "main", "delta": text
+            ]
+            if let agentID { body["agent_id"] = agentID }
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try display("Reading note.txt for you.", agentID: nil)
+        #expect(repository.preview(forSession: "s") == "Reading note.txt for you.")
+
+        try display("Here is the full contents of note.txt", agentID: "a-1")
+        #expect(
+            repository.preview(forSession: "s") == "Reading note.txt for you.",
+            "the row reports its own turn, not what a subagent is saying"
         )
     }
 }
