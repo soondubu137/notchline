@@ -43,18 +43,62 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
         label: "com.yinfenglu.notchline.directory-watcher"
     )
     private let debounceInterval: TimeInterval
+    /// Whether a path that is not there is news.
+    ///
+    /// It is news for a watcher built once and left: `~/.claude/sessions` does
+    /// not exist until Claude Code has run, and the Hook event directory is
+    /// created by the installer minutes after launch, so the line saying so is
+    /// what explains a product waiting out refresh deadlines instead of
+    /// reacting to edges. Those watchers say so.
+    ///
+    /// It is not news for a watcher built per member of a set that is
+    /// reconciled while the app runs -- see ``PathSetChangeWatcher``. There a
+    /// missing path is the session whose record it is having ended, which is
+    /// how every one of them is expected to finish, and the owner drops the
+    /// watch at its next reconcile. The message those watchers were printing
+    /// -- "until it appears" -- was untrue of them twice over: it will not
+    /// appear, and nothing is waiting for it to.
+    ///
+    /// One line per session exit is what that cost. A record's deletion is
+    /// reported to the source as `delete`, which re-opens by path (see
+    /// ``handleFileSystemEvent()``) and finds nothing there, so this is not a
+    /// race that a busy machine loses occasionally -- it fires every time a
+    /// watched session ends. Once every listed session's record was watched
+    /// rather than only the ones with a Turn in flight, that was the ordinary
+    /// churn of the machine, and it buried the case above in its own noise.
+    ///
+    /// **Only the expected failure is quiet.** This suppresses `ENOENT` and
+    /// `ENOTDIR` and nothing else: a path this app is not allowed to open, or
+    /// one it has no descriptor left for, is reported here exactly as it was.
+    /// Those are the failures worth a line, and telling them apart is what
+    /// `errno` is read for.
+    nonisolated private let absenceIsExpected: Bool
     nonisolated(unsafe) private var source: DispatchSourceFileSystemObject?
     nonisolated(unsafe) private var continuations: [
         UUID: AsyncStream<Void>.Continuation
     ] = [:]
     nonisolated(unsafe) private var pendingDelivery: DispatchWorkItem?
     nonisolated(unsafe) private var isFinished = false
-    nonisolated(unsafe) private var lastAttachFailurePath: String?
+    /// The last failed attach, so one path does not print the same line every
+    /// refresh -- and so a path that starts failing a *different* way still
+    /// prints. Keyed on the reason as well as the path because the reasons
+    /// want opposite responses: a record that is merely gone is silent for a
+    /// reconciled set, and if that same path later cannot be opened for a
+    /// reason that is not absence, the silence must not carry over to it.
+    nonisolated(unsafe) private var lastAttachFailure: (path: String, code: Int32)?
     nonisolated(unsafe) private var changeCounter: UInt64 = 0
 
-    nonisolated init(directoryURL: URL, debounceInterval: TimeInterval) {
+    /// - Parameter absenceIsExpected: Whether a path that cannot be opened is
+    ///   an ordinary end rather than something to report. See
+    ///   ``absenceIsExpected``. Defaults to `false`, so a caller has to say it.
+    nonisolated init(
+        directoryURL: URL,
+        debounceInterval: TimeInterval,
+        absenceIsExpected: Bool = false
+    ) {
         self.directoryURL = directoryURL
         self.debounceInterval = debounceInterval
+        self.absenceIsExpected = absenceIsExpected
         attachIfNeeded()
     }
 
@@ -80,19 +124,33 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
         // here is not something that can be cleaned up after the fact.
         let descriptor = open(directoryURL.path, O_EVTONLY)
         guard descriptor >= 0 else {
-            let shouldLog = lastAttachFailurePath != directoryURL.path
-            lastAttachFailurePath = directoryURL.path
+            // Read before anything else runs. `errno` is the thread's, and the
+            // unlock and the logging below are entitled to overwrite it.
+            let failure = errno
+            let shouldLog = lastAttachFailure?.path != directoryURL.path
+                || lastAttachFailure?.code != failure
+            lastAttachFailure = (directoryURL.path, failure)
             lock.unlock()
-            if shouldLog {
-                // Once per path, not once per attempt: this is the expected
-                // state before the integration is installed.
+            // Silent only for the one failure this path is *expected* to end
+            // with, and only where it is expected. Everything else -- a folder
+            // this app is not allowed to open, a process out of descriptors --
+            // is reported wherever it happens, because those are the failures
+            // that look identical in a product that has simply gone quiet.
+            let isMissing = failure == ENOENT || failure == ENOTDIR
+            if shouldLog, !(absenceIsExpected && isMissing) {
+                // Once per path, not once per attempt.
+                //
                 // The path is interpolated at OSLog's default privacy, so it
-                // is redacted in `log show` unless private data is enabled --
-                // which is the point: without it the line names no path, and
-                // the watchers built per session record or per transcript are
-                // exactly the ones that transiently fail to attach.
+                // is redacted in `log show` unless private data is enabled.
+                // The reason is not: `strerror` names a kind of failure and no
+                // user data, and which kind it is decides whether the line is
+                // worth reading at all. Without it a path that is simply not
+                // there yet is indistinguishable from one this app cannot open
+                // or has run out of descriptors for -- and the three want
+                // opposite responses.
+                let reason = String(cString: strerror(failure))
                 Self.logger.info(
-                    "Directory watcher not attached at \(self.directoryURL.path); falling back to refresh deadlines until it appears"
+                    "Directory watcher not attached at \(self.directoryURL.path): \(reason, privacy: .public) (errno \(failure)); falling back to refresh deadlines until it appears"
                 )
             }
             return false
@@ -110,7 +168,7 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
             close(descriptor)
         }
         self.source = source
-        lastAttachFailurePath = nil
+        lastAttachFailure = nil
         // Attaching counts as a change: until this moment nothing was watching
         // this path, so anything a caller read before it was read blind.
         changeCounter &+= 1

@@ -78,7 +78,15 @@ final class PathSetChangeWatcher: @unchecked Sendable {
         for path in added {
             let watcher = DirectoryChangeWatcher(
                 directoryURL: path,
-                debounceInterval: debounceInterval
+                debounceInterval: debounceInterval,
+                // Every path here belongs to a set this app reconciles, so one
+                // that is simply not there is not a diagnostic: it is the
+                // session whose record it is having ended, a transcript not
+                // written yet, or an account folder that went away. The watch
+                // is dropped at the next reconcile either way, and a failure
+                // that is *not* absence still gets its line. See
+                // ``DirectoryChangeWatcher/absenceIsExpected``.
+                absenceIsExpected: true
             )
             let events = watcher.events()
             let forwarder = Task { [weak self] in
