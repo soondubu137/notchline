@@ -528,6 +528,8 @@ Hook 是四态状态的唯一来源；App Server 只提供展示用元数据。H
 
 **没有历史回放，因此没有 live cutoff。** 一份 payload 顺着 socket 进到这个进程，来自片刻之前跑过的 helper，所以到达的事件按构造就是当前的；应用崩溃或退出期间的 lifecycle 信号根本没有被写在任何地方，下次启动无从伪装（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。
 
+**Turn 与产出它的那个 Desktop 进程同生死。** 上一段说的是本应用重启，这一段说的是被监听的那一方重启。Codex Desktop 崩溃或被更新替换时不发 `Stop`，之后也不可能再发：能结束那个轮次的事件本来就该由它发出。（用户主动退出会不会在关闭前补一条 `Stop` 没有实测——那要在真实轮次中途退出用户自己的 Desktop；答案不改变这里的做法，补发了就是行提前变成 Completed 再被退休，没补发就是下面这条路径。）PID 门槛此前只绑住**要不要发布**（`hasCurrentHookObservation`），没有绑住被它担保的那些 Turn，于是 Desktop 关着的时候行正确地消失，重开之后随便哪个线程里的**第一条 hook** 就把整份 reducer 连同那个僵尸轮次一起重新发布出来，计时还从崩溃前算起；此后没有任何东西能撤掉它——线程仍在列表里且未归档，成员关系校正因此保留它，不会再有 hook 提到那个退休的 `turn_id`，而 Codex 侧没有 `claude agents --json` 那样的活动状态读数可以替它收尾（[ADR 0011](adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md)）。现在每次刷新先取一次当前 PID：与担保这些 Turn 的那个不同就在 drain 之前 `discardTurns()`，查不到进程就在 drain 之后再退一次（将死进程派出的 helper 仍可能在路上）。`hasObservedEvent` / `hasObservedLiveEvent` 一律不动——那些 hook 确实触发过，设置页的产品行不能因为用户重启了 Codex Desktop 就退回「从未收到」（CR-Fable-007）。
+
 **到达顺序由 transport 的串行读取队列保证，不由注册保证。** 连接按到达顺序 accept、交给同一条串行队列，`deliver` 因此按 payload 落地的顺序被调用。交给 actor 时不能用 `await`——按顺序 spawn 的两个 `Task` 不是按顺序运行的两个 `Task`——所以 payload 先按顺序进一个锁保护的 inbox，drain 一次把整个数组取走。
 
 **`retiredTurnIDs` 保留。** 提案曾主张删掉它，理由是「串行队列上的到达戳单调，所以退休轮次的迟到事件不可能存在」。这对 transport 成立，对 executor 不成立：ADR 0013 记录了 Claude Code 在同一个 `prompt_id` 下把 `Stop` 排在自己 subagent 的 `PermissionRequest` 前面交付，而 reducer 是两个产品共用的；Codex 那一半也没有实测。迟到与乱序仍然只靠 `mutateExactTurn` 的时刻比较与 `retiredTurnIDs` 两条挡下。

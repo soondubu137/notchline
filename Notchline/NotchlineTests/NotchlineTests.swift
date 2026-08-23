@@ -19811,4 +19811,107 @@ extension NotchlineTests {
             """
         )
     }
+    /// A Turn dies with the Desktop process that produced it.
+    ///
+    /// CR-Fable-007. The pid gate bound `hasCurrentHookObservation` -- whether
+    /// to publish -- and never the Turns it vouched for, so a Desktop that
+    /// crashed mid-turn left its Running Turn sitting in the reducer. The row
+    /// went away while Desktop was closed, and the first hook event from the
+    /// relaunched process brought it back: that event rebound the observation
+    /// to the new pid, and everything the reducer still held published with it.
+    /// Nothing could then remove it -- the thread is still listed, no hook will
+    /// ever name that `turn_id` again, and Codex has no activity-status read to
+    /// end it with -- so it stood as a Running row with a timer counting from
+    /// before the crash until the user dismissed it by hand.
+    ///
+    /// Both threads stay listed and unarchived throughout, which is what makes
+    /// this a test of the pid binding rather than of membership reconciliation.
+    @Test @MainActor
+    func aCrashedDesktopTakesItsRunningTurnWithIt() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-crashed",
+            "turn_id": "turn-crashed"
+        ]).deliver(to: repository)
+
+        func listed(_ id: String, _ name: String) -> JSONValue {
+            .object([
+                "id": .string(id),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "updatedAt": .number(Date().timeIntervalSince1970),
+                "name": .string(name)
+            ])
+        }
+        let client = CodexAppServerStub(
+            listedThreads: [
+                listed("thread-crashed", "Interrupted"),
+                listed("thread-after", "Afterwards")
+            ],
+            loadedListResults: []
+        )
+        let desktop = MutableDesktopProcessIdentifier(4_242)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { desktop.value }
+        )
+        defer { Task { await service.disconnect() } }
+
+        var running = false
+        for _ in 0 ..< 100 {
+            let snapshot = await service.fetchSnapshot()
+            if snapshot.sessions.first?.status == .running {
+                running = true
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(running, "the turn Desktop is running is on the notch")
+
+        // Codex Desktop crashes mid-turn. No `Stop` is sent, and none ever will
+        // be: the process that owed it is gone.
+        desktop.value = nil
+        let closed = await service.fetchSnapshot()
+        #expect(closed.sessions.isEmpty)
+        #expect(closed.presence == .closed)
+
+        // Desktop is relaunched under a new pid and the user types in some
+        // other thread. One hook event is all it took.
+        desktop.value = 9_001
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-after",
+            "turn_id": "turn-after"
+        ]).deliver(to: repository)
+
+        var relaunched: [MonitoredSession] = []
+        for _ in 0 ..< 100 {
+            let snapshot = await service.fetchSnapshot()
+            if !snapshot.sessions.isEmpty {
+                relaunched = snapshot.sessions
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(
+            relaunched.map(\.threadID) == ["thread-after"],
+            """
+            the new process answers for its own Turn and for nothing its \
+            predecessor left behind
+            """
+        )
+    }
 }

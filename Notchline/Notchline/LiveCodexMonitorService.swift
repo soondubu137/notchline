@@ -229,10 +229,46 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 terminalUnreadMembershipGate.reset()
             }
         }
+        let desktopProcessIdentifier = await desktopProcessIdentifierProvider()
+        // The pid binds the Turns, not just the decision to publish them.
+        //
+        // `hasCurrentHookObservation` gates whether this refresh trusts the
+        // reducer, and that gate was the whole of the pid binding: the Turns
+        // themselves were never bound to anything. So a Desktop that died
+        // mid-turn -- a crash or an update sends no `Stop`, and a user quitting
+        // it has not been measured either way -- left its Running Turn in the
+        // reducer. It correctly vanished from the notch while Desktop was
+        // closed, and then came back in full on the first hook event from the
+        // *relaunched* process, elapsed clock still counting from before the
+        // crash, because that event rebound the observation to the new pid and
+        // republished everything the reducer held (CR-Fable-007). Nothing
+        // could clear it afterwards: membership reconciliation kept the row
+        // because the thread is still listed and unarchived, no hook will ever
+        // name that retired `turn_id` again, and
+        // Codex has no activity-status read to settle
+        // it the way `claude agents --json` does for Claude Code (ADR 0011).
+        // Only resuming that exact thread, or dismissing the row by hand, took
+        // it off the notch.
+        //
+        // Retired *before* the drain, so the relaunched process's events land
+        // in a reducer that no longer holds its predecessor's Turns -- after
+        // the drain they would be indistinguishable from them.
+        if let vouchingProcessIdentifier = observedDesktopProcessIdentifier,
+           vouchingProcessIdentifier != desktopProcessIdentifier {
+            await retireHookTurns()
+        }
         var hookState = await hookEvents.drainDeliveredEvents()
         let hookDiagnostic = hookState.diagnostic
-        let desktopProcessIdentifier = await desktopProcessIdentifierProvider()
-        if hookState.didConsumeEvents {
+        if desktopProcessIdentifier == nil {
+            // And *after* the drain while nothing is running, because a helper
+            // spawned by the dying process can still deliver on its way out.
+            // That payload is no better vouched for than the Turn it belongs
+            // to, and left in the reducer it would outlive this window and be
+            // adopted by the next Desktop exactly as above.
+            hookState = await retireHookTurns(
+                didConsumeEvents: hookState.didConsumeEvents
+            )
+        } else if hookState.didConsumeEvents {
             observedDesktopProcessIdentifier = desktopProcessIdentifier
         }
         // Presence is kernel truth here, so it is never `unknown`: the running
@@ -1105,6 +1141,24 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         listedThreadIDs = listedIDs
         threadListReadAt = snapshotStartedAt
         return threads
+    }
+
+    /// Drops the Hook evidence held for a Desktop process that is not the one
+    /// running now, along with the reads that were following it.
+    ///
+    /// The binding goes with the Turns: nothing is left that a later pid could
+    /// be matched against, so the next process starts from an empty reducer and
+    /// binds itself with its own first event. `hookTrackedThreadIDs` goes too
+    /// -- it is what `nextRefreshDeadline()` measures per-thread metadata
+    /// staleness over, and threads whose Turn has been retired must stop asking
+    /// to be re-read.
+    @discardableResult
+    private func retireHookTurns(
+        didConsumeEvents: Bool = false
+    ) async -> HookStateSnapshot {
+        observedDesktopProcessIdentifier = nil
+        hookTrackedThreadIDs = []
+        return await hookEvents.discardTurns(didConsumeEvents: didConsumeEvents)
     }
 
     private func hasCurrentHookObservation(

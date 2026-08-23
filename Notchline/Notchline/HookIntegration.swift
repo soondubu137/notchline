@@ -2106,6 +2106,37 @@ actor HookEventRepository {
         return snapshot()
     }
 
+    /// Ends every Turn this reducer is holding, and keeps everything else.
+    ///
+    /// **The one way a Turn ends without its own product saying so, and why it
+    /// is not a guess.** Every other route into here reads an event, a list, or
+    /// a status; this one reads the *producer*. A Turn is a claim about what one
+    /// process is doing, so a caller that knows that process is gone knows the
+    /// claim can no longer be true — and, worse, that nothing will ever arrive
+    /// to falsify it, because the events that would have ended the Turn were the
+    /// dead process's to send. Held rather than retired, such a Turn is
+    /// permanent: no hook will name its `turn_id` again, and membership
+    /// reconciliation keeps it because its thread is still listed
+    /// (CR-Fable-007). Only the caller can hold this evidence, which is why the
+    /// decision is not made here.
+    ///
+    /// The observation flags are deliberately untouched. Those hooks did fire,
+    /// and the Settings card must not fall back to "never heard from" because
+    /// the user restarted the app the hooks belong to.
+    ///
+    /// - Parameter didConsumeEvents: carried through from the drain this call
+    ///   follows, so the returned snapshot still reports what that refresh took
+    ///   off the socket.
+    @discardableResult
+    func discardTurns(didConsumeEvents: Bool = false) -> HookStateSnapshot {
+        guard !turnsByThreadID.isEmpty else {
+            return snapshot(didConsumeEvents: didConsumeEvents)
+        }
+        turnsByThreadID.removeAll()
+        signalIfProjectionChanged()
+        return snapshot(didConsumeEvents: didConsumeEvents)
+    }
+
     func resetIntegrationObservation(clearTurns: Bool) {
         hasObservedEvent = false
         hasObservedLiveEvent = false
