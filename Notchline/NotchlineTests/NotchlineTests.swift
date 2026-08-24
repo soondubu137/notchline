@@ -4831,6 +4831,106 @@ struct NotchlineTests {
         #expect(await client.disconnectCount() == 1)
     }
 
+    /// A broken `codex` must not cost a subprocess per refresh.
+    ///
+    /// Nothing else in this service reaches for a `Process`, so this is the one
+    /// backoff that guards a fork-and-exec rather than a write. It also has no
+    /// natural throttle: a binary that launches and exits fails the connect in
+    /// milliseconds, and `fetchSnapshot` connects on every refresh once the
+    /// registration gate passes -- so the spawn rate was simply the refresh
+    /// rate, and a refresh is fanned out to every product no matter which one
+    /// asked for it. One Claude Code row waiting on the user re-checks at 1 Hz,
+    /// which was enough to fork `codex app-server` once a second until the app
+    /// was restarted (CR-Fable-014).
+    ///
+    /// Five refreshes rather than two because one repeat only proves the second
+    /// attempt was skipped; the failure being fixed here is unbounded.
+    @Test @MainActor
+    func aFailedAppServerLaunchIsNotRetriedOnEveryRefresh() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let clock = TestClock()
+        let client = CodexAppServerStub(
+            listedThreads: [],
+            loadedListResults: [],
+            connectResult: .failure(.launchFailed("codex exited immediately"))
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookRegistrar: installer,
+            clock: clock,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        var snapshots: [AgentSnapshot] = []
+        for _ in 0 ..< 5 {
+            snapshots.append(await service.fetchSnapshot())
+        }
+
+        #expect(await client.connectCount() == 1)
+        // The cool-off is a floor on the attempt, not a gap in the answer: a
+        // refresh it turns away still reports what the connect that did happen
+        // found, so the notch says the same thing either way.
+        #expect(snapshots.allSatisfy { $0.availability == .disconnected })
+        #expect(
+            snapshots.allSatisfy {
+                $0.diagnostic?.contains("codex exited immediately") == true
+            }
+        )
+
+        await clock.advance(by: MonitorTiming.standard.connectRetryInterval)
+        _ = await service.fetchSnapshot()
+
+        #expect(await client.connectCount() == 2)
+    }
+
+    /// The cool-off is a budget on work nobody is waiting for.
+    ///
+    /// A click is somebody waiting, so it pays for its own spawn rather than
+    /// being told what the last refresh concluded. The alternative is a row the
+    /// user cannot open for as long as the backoff lasts, over a Codex that may
+    /// well have been repaired since.
+    @Test @MainActor
+    func openingAThreadStillConnectsDuringTheCoolOff() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let clock = TestClock()
+        let client = CodexAppServerStub(
+            listedThreads: [],
+            loadedListResults: [],
+            connectResult: .failure(.launchFailed("codex exited immediately"))
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookRegistrar: installer,
+            clock: clock,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        _ = await service.fetchSnapshot()
+        #expect(await client.connectCount() == 1)
+
+        _ = try? await service.isThreadNavigable("thread-1")
+
+        #expect(await client.connectCount() == 2)
+    }
+
     @Test @MainActor
     func startupWithAppServerResponseButNoSnapshotYetIsConnecting() async throws {
         let paths = makeTemporaryHookPaths()
@@ -6716,6 +6816,89 @@ for line in sys.stdin:
             #expect(smallResponse.objectValue?.isEmpty == true)
         }
         await client.disconnect()
+    }
+
+    /// A server that ignores `SIGTERM` is killed rather than left running.
+    ///
+    /// `terminate()` alone is a request, and a server wedged somewhere that
+    /// never runs its handler is free to decline it -- while the next refresh
+    /// spawns its replacement. Hundreds of transport resets that way is
+    /// hundreds of live `codex` processes (CR-Fable-014). `ClaudeCommand` has
+    /// signalled in two stages for exactly this reason; this is the same rule
+    /// on the last process path that was still only asking.
+    ///
+    /// The child ignores `SIGTERM` and outlives its own stdin, so neither the
+    /// polite signal nor the closed pipe can be what ends it.
+    @Test @MainActor
+    func anAppServerThatIgnoresSIGTERMIsKilled() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotchlineAppServerTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let executable = root.appendingPathComponent("wedged_app_server.py")
+        let pidFile = root.appendingPathComponent("pid")
+        let source = #"""
+#!/usr/bin/python3
+import json
+import os
+import signal
+import sys
+import time
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+with open(PID_FILE, "w") as handle:
+    handle.write(str(os.getpid()))
+
+request = json.loads(sys.stdin.readline())
+print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+
+# Outlives stdin closing, so only a signal can end this.
+while True:
+    time.sleep(0.05)
+"""#.replacingOccurrences(
+            of: "PID_FILE",
+            with: "\"\(pidFile.path)\""
+        )
+        try source.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+
+        let clock = TestClock()
+        let killGrace: TimeInterval = 2
+        let client = CodexAppServerClient(
+            executableURL: executable,
+            killGraceNanoseconds: UInt64(killGrace * 1_000_000_000),
+            clock: clock
+        )
+        try await client.connect()
+
+        let pid = try #require(
+            pid_t(
+                String(contentsOf: pidFile, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        )
+        #expect(processIsAlive(pid))
+
+        await client.disconnect()
+        await clock.settle()
+
+        // Still there: the polite signal was sent and declined. Asserted before
+        // the grace expires, so the kill below cannot be credited to something
+        // that had already happened.
+        #expect(processIsAlive(pid))
+        #expect(clock.requestedSleepIntervals.contains(killGrace))
+
+        await clock.advance(by: killGrace)
+
+        #expect(await processDies(pid, within: 5))
     }
 
     @Test @MainActor
@@ -18075,6 +18258,25 @@ private actor NavigationTargetCheckerStub: CodexNavigationTargetChecking {
     }
 }
 
+/// Whether a pid still names a process this test could signal.
+private func processIsAlive(_ pid: pid_t) -> Bool {
+    kill(pid, 0) == 0
+}
+
+/// Waits for a pid to go away.
+///
+/// Polled rather than slept through: the kill lands as soon as the actor gets
+/// to it, and a fixed wait would either flake or cost the whole bound on every
+/// run.
+private func processDies(_ pid: pid_t, within seconds: TimeInterval) async -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if !processIsAlive(pid) { return true }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+    return !processIsAlive(pid)
+}
+
 private actor CodexAppServerStub: CodexAppServerCommunicating {
     private let listedThreads: [JSONValue]
     private let connectResult: Result<Void, CodexAppServerError>
@@ -18087,6 +18289,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     private var threadReadParams: [JSONValue] = []
     private var completedThreadListRequests = 0
     private var disconnects = 0
+    private var connects = 0
 
     init(
         listedThreads: [JSONValue],
@@ -18105,6 +18308,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     }
 
     func connect() async throws {
+        connects += 1
         try connectResult.get()
     }
 
@@ -18227,6 +18431,14 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
 
     func disconnectCount() -> Int {
         disconnects
+    }
+
+    /// How many times the transport was asked to come up.
+    ///
+    /// Every one of these is a `codex app-server` fork-and-exec in the real
+    /// client, which is what makes counting them worth doing.
+    func connectCount() -> Int {
+        connects
     }
 }
 

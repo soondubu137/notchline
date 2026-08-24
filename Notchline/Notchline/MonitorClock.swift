@@ -81,6 +81,28 @@ nonisolated struct MonitorTiming: Sendable {
     var quotaRefreshInterval: TimeInterval = 60
     /// Cool-off before retrying a background read that failed outright.
     var requestRetryInterval: TimeInterval = 60
+    /// Cool-off before a failed App Server launch is attempted again.
+    ///
+    /// Separate from ``requestRetryInterval`` because it bounds a *spawn*, not
+    /// a write to a transport that already exists: a `codex` that launches and
+    /// exits -- a version mismatch after an update, a half-installed app --
+    /// fails the connect in milliseconds, so with no cool-off the fork-and-exec
+    /// rate is simply the refresh rate. Every refresh reason in the app reaches
+    /// every product, so a Claude Code row waiting on the user at 1 Hz was
+    /// enough to fork `codex app-server` once a second until the app was
+    /// restarted (CR-Fable-014).
+    ///
+    /// Sized to the transport's own `initialize` timeout, which is already the
+    /// floor under the *hanging* version of this failure. A binary that fails
+    /// fast should not cost more than one that fails slowly.
+    ///
+    /// Deliberately not published by `nextRefreshDeadline`: it parks no work,
+    /// so it is a floor on the next attempt rather than a reason to wake --
+    /// the distinction ``LiveCodexMonitorService/deferred(_:by:)`` draws. A
+    /// repaired Codex is picked up by whatever refresh comes next, and in the
+    /// worst case by ``heartbeatInterval``, which exists for mechanisms that
+    /// fail silently.
+    var connectRetryInterval: TimeInterval = 15
     /// Budget for a read on the snapshot path, where latency is user-visible.
     var coreRequestTimeout: TimeInterval = 5
     /// Budget for the paginated membership read, which runs in the background.

@@ -341,6 +341,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     private let requestTimeoutNanoseconds: UInt64
     private let livenessProbeGraceNanoseconds: UInt64
     private let livenessProbeTimeoutNanoseconds: UInt64
+    private let killGraceNanoseconds: UInt64
     private let maximumFrameByteCount: Int
     private let clock: any MonitorClock
     private var process: Process?
@@ -363,6 +364,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         requestTimeoutNanoseconds: UInt64 = 15_000_000_000,
         livenessProbeGraceNanoseconds: UInt64 = 3_000_000_000,
         livenessProbeTimeoutNanoseconds: UInt64 = 5_000_000_000,
+        killGraceNanoseconds: UInt64 = 2_000_000_000,
         maximumFrameByteCount: Int = 64 * 1_024 * 1_024,
         clock: any MonitorClock = SystemMonitorClock()
     ) {
@@ -370,6 +372,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         self.requestTimeoutNanoseconds = requestTimeoutNanoseconds
         self.livenessProbeGraceNanoseconds = livenessProbeGraceNanoseconds
         self.livenessProbeTimeoutNanoseconds = livenessProbeTimeoutNanoseconds
+        self.killGraceNanoseconds = killGraceNanoseconds
         self.maximumFrameByteCount = maximumFrameByteCount
         self.clock = clock
     }
@@ -566,8 +569,43 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
 
         if let process, process.isRunning {
             process.terminate()
+            escalateKill(of: process)
         }
         process = nil
+    }
+
+    /// `SIGKILL` a server that outlived the `SIGTERM` this connection sent it.
+    ///
+    /// Politeness alone is not a teardown. A server wedged in a state that does
+    /// not run its signal handler ignores `terminate()` and goes on holding its
+    /// end of a transport this client has already stopped reading -- while the
+    /// next refresh spawns its replacement. Hundreds of resets that way is
+    /// hundreds of live `codex` processes, which is the same fan the
+    /// unbacked-off spawn path cost (CR-Fable-014). ``ClaudeCommand`` has
+    /// signalled in two stages for exactly this reason; this is that rule, on
+    /// the one process path that was still only asking.
+    ///
+    /// Nothing waits for the exit. `waitUntilExit` is what the caller would
+    /// have to block on, and the caller is this actor -- so waiting on a
+    /// process that is by definition not responding would park every refresh,
+    /// every request and every teardown behind it. The signal is the guarantee;
+    /// being told when it lands is not worth an actor to hold it.
+    ///
+    /// The `Task` inherits this actor, so `process` is never touched from
+    /// anywhere else, and the pid is read before the delay rather than after:
+    /// `processIdentifier` is 0 before launch, and `kill(0, ...)` signals this
+    /// app's own process group.
+    private func escalateKill(of process: Process) {
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        Task {
+            try? await self.clock.sleep(nanoseconds: self.killGraceNanoseconds)
+            guard process.isRunning else { return }
+            Self.logger.warning(
+                "App Server outlived SIGTERM; killing pid=\(pid, privacy: .public)"
+            )
+            kill(pid, SIGKILL)
+        }
     }
 
     private func sendNotification(method: String, params: JSONValue?) throws {

@@ -125,6 +125,14 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     private var observedDesktopProcessIdentifier: pid_t?
     private var quotaRefreshTask: Task<Void, Never>?
     private var quotaRetryAfter: Date?
+    /// Cool-off after a connect that never reached a working transport.
+    ///
+    /// The one backoff here that guards a subprocess rather than a request. See
+    /// ``connectToAppServer()``.
+    private var connectRetryAfter: Date?
+    /// Why the last connect failed, replayed for the refreshes the cool-off
+    /// turns away.
+    private var lastConnectFailure: (any Error)?
     private var lastTrustedSnapshot: AgentSnapshot?
     /// Whether this run has already compared the installed helper's bytes.
     private var didCompareHelperThisLaunch = false
@@ -306,7 +314,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
 
         var appServerResponded = false
         do {
-            try await client.connect()
+            try await connectToAppServer()
             appServerResponded = true
             let projectSnapshot = await projectMetadata.snapshot()
 
@@ -460,6 +468,53 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         }
     }
 
+    /// Brings the App Server transport up, behind a cool-off after a failure.
+    ///
+    /// This is the only backoff in this service that guards a *subprocess*.
+    /// Every other one parks a request on a transport that already exists; a
+    /// connect in the `.disconnected` phase forks and execs `codex app-server`
+    /// before it can find out whether that was going to work.
+    ///
+    /// So the failure it exists for is not a slow server, it is a broken one. A
+    /// `codex` that launches and exits -- a version mismatch after Codex
+    /// updates underneath a running app, a partially-installed binary -- ends
+    /// its stream immediately and fails the connect in milliseconds. Nothing
+    /// then throttles the next attempt: `fetchSnapshot` connects unconditionally
+    /// once the registration gate passes, and a refresh reaches every product
+    /// no matter which one asked for it. One Claude Code row waiting on the
+    /// user re-checks at 1 Hz, and that alone was enough to fork a Codex app
+    /// server every second, for as long as the app stayed open (CR-Fable-014).
+    ///
+    /// The cool-off is a floor on the *attempt*, not a suppression of the
+    /// answer: the refresh it turns away still reports the failure, replayed
+    /// from the connect that actually happened, so the notch says the same
+    /// thing it would have said had this refresh paid for a spawn to be told
+    /// it again.
+    ///
+    /// - Parameter bypassingCoolOff: For a connect the user asked for by
+    ///   clicking something. A cool-off is a budget on work nobody is waiting
+    ///   for; a click is somebody waiting. The attempt still records its
+    ///   outcome, so a click that succeeds clears the backoff for everyone and
+    ///   a click that fails does not shorten it.
+    private func connectToAppServer(bypassingCoolOff: Bool = false) async throws {
+        if !bypassingCoolOff,
+           let connectRetryAfter,
+           clock.now() < connectRetryAfter {
+            throw lastConnectFailure ?? CodexAppServerError.disconnected
+        }
+
+        do {
+            try await client.connect()
+            connectRetryAfter = nil
+            lastConnectFailure = nil
+        } catch {
+            connectRetryAfter = clock.now()
+                .addingTimeInterval(timing.connectRetryInterval)
+            lastConnectFailure = error
+            throw error
+        }
+    }
+
     /// Earliest moment a refresh could produce different output.
     ///
     /// Every deadline here must be one a refresh can actually clear. The store
@@ -564,13 +619,17 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         quotaRefreshTask?.cancel()
         quotaRefreshTask = nil
         terminalUnreadMembershipGate.reset()
+        connectRetryAfter = nil
+        lastConnectFailure = nil
         await client.disconnect()
     }
 
     func isThreadNavigable(_ threadID: String) async throws -> Bool {
         guard !threadID.isEmpty else { return false }
 
-        try await client.connect()
+        // The user clicked a row. Whatever the last refresh concluded about the
+        // server, this is worth one spawn to find out for certain.
+        try await connectToAppServer(bypassingCoolOff: true)
         let listedThreads = try await readAllUnarchivedThreads(
             forceRefresh: true,
             timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
