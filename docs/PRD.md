@@ -355,7 +355,7 @@ Project、未读成员关系或精确导航任一无法满足时，V1 不得用 
 ## 14. 验收标准
 
 1. 用户提交输入后一秒内出现对应会话行；同一 Thread 的后续 Turn 不产生重复行。
-2. Input needed、Approval needed、Running、Completed 四态及优先级正确；在审批会问到人的 thread 上，专用审批工具与普通工具（如 Bash 命令）两种审批形态都必须进入 Approval needed，孤立的 PermissionRequest 不误报；在 Desktop 记录为自动审查（`auto_review`）的 thread 上，同样两种形态都不得进入 Approval needed，而 Input needed 不受该设置影响；任意执行结束信号都使当前 Turn 直接进入 Completed。Claude Code 里被用户中断的 Turn 同样必须到达 Completed——包括中断发生在审批对话框打开时，也包括会话由 Claude Code 桌面端托管（那种会话不报告任何工作状态）——尽管那里没有任何 hook 到达。
+2. Input needed、Approval needed、Running、Completed 四态及优先级正确；在审批会问到人的 thread 上，专用审批工具与普通工具（如 Bash 命令）两种审批形态都必须进入 Approval needed，孤立的 PermissionRequest 不误报；在 Desktop 记录为自动审查（`auto_review`）的 thread 上，同样两种形态都不得进入 Approval needed，而 Input needed 不受该设置影响；该设置按**起轮时的取值**对一整轮生效——用户在一轮进行中改动审查者时，正在跑的这一轮仍然沿用它开始时的答案（Codex 本身也是如此），下一轮才改用新的；任意执行结束信号都使当前 Turn 直接进入 Completed。Claude Code 里被用户中断的 Turn 同样必须到达 Completed——包括中断发生在审批对话框打开时，也包括会话由 Claude Code 桌面端托管（那种会话不报告任何工作状态）——尽管那里没有任何 hook 到达。
 3. 活动轮次始终显示；终态轮次在用户看过之后自动移除——Codex 按未读集合，Claude Code Desktop 托管会话按 4.2 的四条路径（显示时刻晚于该轮次终止时刻；或轮次结束后应用回到前台；或应用此刻持有前台且屏幕醒着未锁，且两者屏幕上的都是该会话；或该会话带着已结束的轮次停在屏幕上之后被别的会话顶下去），Claude Code 终端会话按第五条（该会话控制终端的访问时间晚于该轮次终止时刻，且该终端所属应用此刻持有前台、屏幕醒着未锁）。五条互为平级，任一成立即移除。只有既无 Desktop 记录、也无控制终端可问的会话不参与本条，理由见 ADR 0012。
 4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
 5. 应用重启时不显示缓存行，也不恢复任何启动前的会话；列表从空开始，只累积启动后产生 lifecycle 事件的 Turn。

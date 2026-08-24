@@ -5390,6 +5390,197 @@ struct NotchlineTests {
         #expect(try await rowStatus(reviewer: "user") == .approvalNeeded)
     }
 
+    /// The routing answer belongs to the Turn, not to the thread's setting as
+    /// it stands when the row is drawn.
+    @Test @MainActor
+    func approvalRoutingPinKeepsTheAnswerTheTurnStartedUnder() {
+        var pin = TurnApprovalRoutingPin()
+        let firstTurn = TurnApprovalRoutingPin.TurnIdentity(
+            threadID: "thread-1",
+            turnID: "turn-1"
+        )
+        let personReviews = DesktopApprovalRoutingSnapshot.unknown
+        let codexReviews = DesktopApprovalRoutingSnapshot(
+            automaticallyReviewedThreadIDs: ["thread-1"]
+        )
+
+        let atTurnStart = pin.approvalsReachTheUser(
+            forTurn: firstTurn,
+            in: personReviews
+        )
+        // Desktop records the switch mid-turn. The turn in flight keeps the
+        // reviewer it started with, so the row must too.
+        let afterTheSwitch = pin.approvalsReachTheUser(
+            forTurn: firstTurn,
+            in: codexReviews
+        )
+        #expect(atTurnStart)
+        #expect(afterTheSwitch)
+
+        // Symmetric: a thread switched the other way mid-turn is still being
+        // reviewed automatically until this turn ends.
+        var reversed = TurnApprovalRoutingPin()
+        let reversedAtTurnStart = reversed.approvalsReachTheUser(
+            forTurn: firstTurn,
+            in: codexReviews
+        )
+        let reversedAfterTheSwitch = reversed.approvalsReachTheUser(
+            forTurn: firstTurn,
+            in: personReviews
+        )
+        #expect(!reversedAtTurnStart)
+        #expect(!reversedAfterTheSwitch)
+
+        // The next turn on the same thread asks again, and gets the answer
+        // that is now true.
+        let secondTurn = TurnApprovalRoutingPin.TurnIdentity(
+            threadID: "thread-1",
+            turnID: "turn-2"
+        )
+        let nextTurnAnswer = pin.approvalsReachTheUser(
+            forTurn: secondTurn,
+            in: codexReviews
+        )
+        #expect(!nextTurnAnswer)
+
+        // And a turn the reducer no longer holds is forgotten, so the same
+        // identity coming back is a fresh question rather than a stale answer.
+        pin.retain(turns: [secondTurn])
+        let forgottenTurnAnswer = pin.approvalsReachTheUser(
+            forTurn: firstTurn,
+            in: personReviews
+        )
+        let retainedTurnAnswer = pin.approvalsReachTheUser(
+            forTurn: secondTurn,
+            in: personReviews
+        )
+        #expect(forgottenTurnAnswer)
+        #expect(!retainedTurnAnswer)
+    }
+
+    /// The reported bug, end to end.
+    ///
+    /// Measured 2026-08-24 on thread `01a03241`: started under `user`,
+    /// switched to `auto_review` five minutes in, and went on opening approval
+    /// dialogs the user answered by hand for five minutes after that — the
+    /// `rm -rf` it was reported against among them. Reading the map at
+    /// projection time left the row on *Running* for every one of them.
+    @Test @MainActor
+    func aReviewerChangedMidTurnDoesNotSilenceTheApprovalAlreadyBeingAsked() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        func recordReviewer(_ reviewer: String) throws {
+            try JSONSerialization.data(withJSONObject: [
+                "electron-persisted-atom-state": [
+                    "heartbeat-thread-permissions-by-id": [
+                        "thread-1": ["approvalsReviewer": reviewer]
+                    ]
+                ]
+            ]).write(to: stateFile, options: .atomic)
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        let timestamp = Date().timeIntervalSince1970
+        func deliver(_ event: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: event)
+                .deliver(to: repository)
+        }
+
+        // The turn starts while the person is the reviewer.
+        try recordReviewer("user")
+        try deliver([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ])
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                .object([
+                    "id": .string("thread-1"),
+                    "ephemeral": .bool(false),
+                    "threadSource": .string("user")
+                ])
+            ],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            approvalRouting: CodexDesktopApprovalRoutingRepository(
+                stateFileURL: stateFile
+            ),
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        #expect(await service.fetchSnapshot().sessions.first?.status == .running)
+
+        // Desktop records the switch. Nothing about the running turn changed:
+        // it goes on asking the person, one call at a time.
+        try recordReviewer("auto_review")
+        try deliver([
+            "received_at": timestamp + 1,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 2,
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash"
+        ])
+        #expect(
+            await service.fetchSnapshot().sessions.first?.status
+                == .approvalNeeded
+        )
+
+        // The *next* turn is the one the switch applies to, and it asks the
+        // map again rather than inheriting the answer its predecessor pinned.
+        try deliver([
+            "received_at": timestamp + 3,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-2"
+        ])
+        try deliver([
+            "received_at": timestamp + 4,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-2",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-2"
+        ])
+        try deliver([
+            "received_at": timestamp + 5,
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "turn_id": "turn-2",
+            "tool_name": "Bash"
+        ])
+        let afterNextTurn = await service.fetchSnapshot()
+        await service.disconnect()
+        #expect(afterNextTurn.sessions.first?.status == .running)
+    }
+
     @Test @MainActor
     func liveStopCompletesWithoutAThreadDetailRead() async throws {
         let paths = makeTemporaryHookPaths()

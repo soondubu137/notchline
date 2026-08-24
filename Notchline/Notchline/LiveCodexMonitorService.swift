@@ -137,6 +137,12 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// Whether this run has already compared the installed helper's bytes.
     private var didCompareHelperThisLaunch = false
     private var terminalUnreadMembershipGate: TerminalUnreadMembershipGate
+    /// The routing answer each live Turn started under.
+    ///
+    /// The snapshot beside it says what Desktop records for the thread *now*,
+    /// which stops being an answer about this row the moment the reviewer is
+    /// changed under a running turn. See ``TurnApprovalRoutingPin``.
+    private var approvalRoutingPin = TurnApprovalRoutingPin()
 
     init(
         client: any CodexAppServerCommunicating = CodexAppServerClient(),
@@ -819,8 +825,25 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         // frozen mid-window, reporting a deadline that could never be cleared
         // because nothing evaluated it again.
         var evaluatedSessionIDs: Set<String> = []
+        // Every Turn this pass walked, whether or not it produced a row: the
+        // pin is retained on what the reducer still holds, not on what the
+        // panel happens to draw.
+        var observedTurns: Set<TurnApprovalRoutingPin.TurnIdentity> = []
 
         for state in states {
+            let turn = TurnApprovalRoutingPin.TurnIdentity(
+                threadID: state.threadID,
+                turnID: state.turnID
+            )
+            observedTurns.insert(turn)
+            // Asked for every Turn rather than only for the ones sitting on an
+            // approval, because the question is what this Turn *started* under
+            // and a Turn that has reached Approval needed is already too late
+            // to ask it.
+            let approvalsReachTheUser = approvalRoutingPin.approvalsReachTheUser(
+                forTurn: turn,
+                in: approvalRouting
+            )
             // Thread records only supply metadata. Status is the reducer's
             // alone: an independent App Server reports every thread as
             // `notLoaded` even while a turn is running, so it has no runtime
@@ -831,9 +854,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 projectName: projectMetadata.resolution(
                     for: state.threadID
                 ).displayName,
-                approvalsReachTheUser: approvalRouting.approvalsReachTheUser(
-                    for: state.threadID
-                )
+                approvalsReachTheUser: approvalsReachTheUser
             ) else {
                 continue
             }
@@ -880,6 +901,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         }
 
         terminalUnreadMembershipGate.retain(sessionIDs: evaluatedSessionIDs)
+        approvalRoutingPin.retain(turns: observedTurns)
         return sessions
     }
 
