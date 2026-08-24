@@ -26,7 +26,7 @@ struct NotchlineTests {
                                 geometry: .noNotch,
                                 isExpanded: false,
                                 statusReadoutText: status.compactDisplayName,
-                                trailingText: trailingText,
+                                trailing: CompactTrailingReading(timerText: trailingText),
                                 centerOcclusionWidth: 0,
                                 compactHeight: barHeight,
                                 status: status,
@@ -456,7 +456,7 @@ struct NotchlineTests {
             geometry: .notched,
             isExpanded: false,
             statusReadoutText: "Disconnected",
-            trailingText: nil,
+            trailing: .empty,
             centerOcclusionWidth: 200,
             compactHeight: 46,
             status: .disconnected,
@@ -470,7 +470,7 @@ struct NotchlineTests {
             geometry: .notched,
             isExpanded: false,
             statusReadoutText: "Connected",
-            trailingText: nil,
+            trailing: .empty,
             centerOcclusionWidth: 200,
             compactHeight: 46,
             status: .connected,
@@ -646,7 +646,7 @@ struct NotchlineTests {
                 geometry: .notched,
                 isExpanded: false,
                 statusReadoutText: "Running",
-                trailingText: nil,
+                trailing: .empty,
                 centerOcclusionWidth: 200,
                 compactHeight: 46,
                 status: .running,
@@ -679,7 +679,7 @@ struct NotchlineTests {
                 geometry: geometry,
                 isExpanded: false,
                 statusReadoutText: "Disconnected",
-                trailingText: nil,
+                trailing: .empty,
                 centerOcclusionWidth: occlusion,
                 compactHeight: 46,
                 status: .disconnected,
@@ -690,7 +690,7 @@ struct NotchlineTests {
                 geometry: geometry,
                 isExpanded: true,
                 statusReadoutText: "Disconnected",
-                trailingText: nil,
+                trailing: .empty,
                 centerOcclusionWidth: occlusion,
                 compactHeight: 46,
                 status: .disconnected,
@@ -1366,7 +1366,7 @@ struct NotchlineTests {
                 geometry: .notched,
                 isExpanded: false,
                 statusReadoutText: "Running",
-                trailingText: trailingText,
+                trailing: CompactTrailingReading(timerText: trailingText),
                 centerOcclusionWidth: occlusion,
                 compactHeight: 46
             )
@@ -1404,15 +1404,17 @@ struct NotchlineTests {
 
         // The cut-out's own edge, held out by whatever trailing wing is drawn —
         // and nothing is drawn there until a turn is being timed.
-        #expect(PanelMetrics.compactTrailingWingWidth(trailingText: nil) == 0)
+        #expect(PanelMetrics.compactTrailingWingWidth(trailing: .empty) == 0)
         #expect(
-            PanelMetrics.compactTrailingWingWidth(trailingText: "1:23")
-                > PanelMetrics.compactTrailingWingWidth(trailingText: nil)
+            PanelMetrics.compactTrailingWingWidth(
+                trailing: CompactTrailingReading(timerText: "1:23")
+            )
+                > PanelMetrics.compactTrailingWingWidth(trailing: .empty)
         )
         #expect(
             store.currentPanelTrailingAnchor
                 == occlusionMaxX + PanelMetrics.compactTrailingWingWidth(
-                    trailingText: store.compactTrailingText
+                    trailing: store.compactTrailingReading
                 )
         )
 
@@ -1465,7 +1467,7 @@ struct NotchlineTests {
                 geometry: geometry,
                 isExpanded: false,
                 statusReadoutText: "Running",
-                trailingText: trailingText,
+                trailing: CompactTrailingReading(timerText: trailingText),
                 centerOcclusionWidth: geometry == .notched ? 200 : 0,
                 compactHeight: compactHeight
             ).width
@@ -1481,7 +1483,9 @@ struct NotchlineTests {
 
         // Timing a turn adds the trailing wing, and nothing but the trailing wing.
         let notchedTimed = width(geometry: .notched, trailingText: "1:23", compactHeight: 46)
-        let trailingWing = PanelMetrics.compactTrailingWidth(trailingText: "1:23")
+        let trailingWing = PanelMetrics.compactTrailingWidth(
+            trailing: CompactTrailingReading(timerText: "1:23")
+        )
             + PanelMetrics.expandedNotchClearance
         #expect(abs((notchedTimed - notchedIdle) - trailingWing) <= 1)
 
@@ -1562,7 +1566,7 @@ struct NotchlineTests {
             geometry: .noNotch,
             isExpanded: true,
             statusReadoutText: "Running",
-            trailingText: nil,
+            trailing: .empty,
             centerOcclusionWidth: 0,
             compactHeight: 24
         )
@@ -1570,7 +1574,7 @@ struct NotchlineTests {
             geometry: .notched,
             isExpanded: true,
             statusReadoutText: "Running",
-            trailingText: nil,
+            trailing: .empty,
             centerOcclusionWidth: 200,
             compactHeight: 38
         )
@@ -8180,7 +8184,9 @@ for line in sys.stdin:
         ))
         // Finished, and saying what is still in flight beside it.
         #expect(session.status == .completed)
-        #expect(session.runningSubagentSummary == "1 subagent")
+        #expect(session.showsSubagentChips)
+        #expect(session.subagentsStillRunningCount == 1)
+        #expect(session.subagentsAwaitingApprovalCount == 0)
 
         // 91 seconds later on the measurement, and the terminal it arrives with
         // is `SubagentStop` -- `Stop` carries no `agent_id` and never describes
@@ -8200,7 +8206,7 @@ for line in sys.stdin:
             from: turn, thread: nil, projectName: "tikzcd-editor"
         ))
         #expect(session.status == .completed)
-        #expect(session.runningSubagentSummary == nil)
+        #expect(!session.showsSubagentChips)
     }
 
     /// A subagent that is still working while its parent turn is not finished
@@ -8246,7 +8252,7 @@ for line in sys.stdin:
         ))
         #expect(session.status == .running)
         #expect(session.runningSubagentCount == 2)
-        #expect(session.runningSubagentSummary == nil)
+        #expect(!session.showsSubagentChips)
 
         await send([
             "hook_event_name": "Stop", "session_id": "s", "turn_id": "t"
@@ -8255,7 +8261,9 @@ for line in sys.stdin:
         session = try #require(CodexSnapshotParser.session(
             from: turn, thread: nil, projectName: "P"
         ))
-        #expect(session.runningSubagentSummary == "2 subagents")
+        #expect(session.showsSubagentChips)
+        #expect(session.subagentsStillRunningCount == 2)
+        #expect(session.subagentsAwaitingApprovalCount == 0)
 
         // A subagent is not ended by the user typing again, so it survives the
         // turn boundary that the turn it was spawned by does not.
@@ -9398,7 +9406,10 @@ for line in sys.stdin:
             status: status,
             startedAt: startedAt,
             runningSubagentCount: runningSubagentCount,
-            subagentsAwaitingApproval: subagentsAwaitingApproval
+            // The helper keeps its old Bool surface -- every call site just
+            // wants "one is blocked" or not -- and turns it into the one
+            // subagent that fact is true of.
+            subagentsAwaitingApprovalCount: subagentsAwaitingApproval ? 1 : 0
         )
     }
 
@@ -20499,7 +20510,7 @@ extension NotchlineTests {
         )
         await clock.settle()
         #expect(store.status == .running)
-        #expect(store.compactTrailingText == "0:30")
+        #expect(store.compactTrailingReading == CompactTrailingReading(timerText: "0:30"))
         #expect(store.spokenRunningSubagentText == nil)
 
         store.applyForTesting(
@@ -20513,8 +20524,13 @@ extension NotchlineTests {
             observedAt: clock.now()
         )
         await clock.settle()
-        #expect(store.compactTrailingText == "1 │ 0:30")
-        #expect(store.compactTimerPrefix == "1 │ ")
+        // The collapsed surface's chip cluster is a total across the list --
+        // unlike a row's own trailing slot, it does not wait for a row's turn
+        // to stop timing before counting that row's subagents.
+        #expect(
+            store.compactTrailingReading
+                == CompactTrailingReading(chips: SubagentChipCounts(running: 1), timerText: "0:30")
+        )
         #expect(store.spokenRunningSubagentText == "1 subagent")
 
         // The main agent's `Stop` lands. The row is Completed and the clock has
@@ -20533,8 +20549,10 @@ extension NotchlineTests {
         #expect(store.status == .running, "the thread is still working")
         #expect(store.compactTimerText == nil, "no turn is being timed")
         #expect(store.compactTimerStart == nil)
-        #expect(store.compactTrailingText == "2")
-        #expect(store.compactTimerPrefix == nil)
+        #expect(
+            store.compactTrailingReading
+                == CompactTrailingReading(chips: SubagentChipCounts(running: 2))
+        )
         #expect(store.spokenRunningSubagentText == "2 subagents")
         // The row itself is untouched: `effectiveStatus` must not reach it.
         #expect(store.sessions.first?.status == .completed)
@@ -20550,7 +20568,7 @@ extension NotchlineTests {
         )
         await clock.settle()
         #expect(store.status == .completed)
-        #expect(store.compactTrailingText == nil)
+        #expect(store.compactTrailingReading == .empty)
         #expect(store.spokenRunningSubagentText == nil)
     }
 
@@ -20585,12 +20603,15 @@ extension NotchlineTests {
         )
         await clock.settle()
         #expect(store.compactRunningSubagentCount == 3)
-        #expect(store.compactTrailingText == "3")
+        #expect(
+            store.compactTrailingReading
+                == CompactTrailingReading(chips: SubagentChipCounts(running: 3))
+        )
 
         store.hidesCompactWings = true
         #expect(store.hidesCompactSurface, "the display can honour it")
         #expect(store.compactRunningSubagentCount == 0)
-        #expect(store.compactTrailingText == nil)
+        #expect(store.compactTrailingReading == .empty)
     }
 
     /// A row saying work is still in flight sorts with the working ones.
@@ -20715,7 +20736,7 @@ extension NotchlineTests {
         let working = try #require(store.sessions.first)
         #expect(store.dismiss(working))
         #expect(store.sessions.isEmpty)
-        #expect(store.compactTrailingText == nil)
+        #expect(store.compactTrailingReading == .empty)
     }
 
     /// A subagent boundary stamps its own instant and never the turn's.
@@ -20912,32 +20933,57 @@ extension NotchlineTests {
     /// will ever show.
     @Test @MainActor
     func theCollapsedCountGrowsTheSlotItSharesWithTheTimer() {
-        func pill(_ trailingText: String?) -> CGFloat {
+        func pill(_ trailing: CompactTrailingReading) -> CGFloat {
             PanelMetrics.fixedCompactWidth(
                 for: .running,
                 matrixCount: 1,
-                trailingText: trailingText
+                trailing: trailing
             )
         }
 
         // An elapsed value alone never moves it, at any length the formatter
         // can produce -- that is what the reservation is for.
-        #expect(pill("1:23") == pill(nil))
-        #expect(pill("10:00:00") == pill(nil))
-        // A count beside a short reading still fits inside it.
-        #expect(pill("2 │ 1:23") == pill(nil))
-        // A count beside a long one does not, and the pill takes it.
-        #expect(pill("2 │ 1:23:45") > pill(nil))
-
-        // The notched panel hangs it off the cut-out instead, so every count
-        // widens the wing.
+        #expect(pill(CompactTrailingReading(timerText: "1:23")) == pill(.empty))
+        #expect(pill(CompactTrailingReading(timerText: "10:00:00")) == pill(.empty))
+        // A chip cluster beside a short reading still fits inside it.
         #expect(
-            PanelMetrics.compactTrailingWidth(trailingText: "2 │ 1:23")
-                > PanelMetrics.compactTrailingWidth(trailingText: "1:23")
+            pill(
+                CompactTrailingReading(
+                    chips: SubagentChipCounts(running: 2),
+                    timerText: "1:23"
+                )
+            )
+                == pill(.empty)
+        )
+        // A chip cluster beside a long reading does not, and the pill takes it.
+        #expect(
+            pill(
+                CompactTrailingReading(
+                    chips: SubagentChipCounts(running: 2),
+                    timerText: "1:23:45"
+                )
+            )
+                > pill(.empty)
+        )
+
+        // The notched panel hangs it off the cut-out instead, so every chip
+        // cluster widens the wing.
+        #expect(
+            PanelMetrics.compactTrailingWidth(
+                trailing: CompactTrailingReading(
+                    chips: SubagentChipCounts(running: 2),
+                    timerText: "1:23"
+                )
+            )
+                > PanelMetrics.compactTrailingWidth(
+                    trailing: CompactTrailingReading(timerText: "1:23")
+                )
         )
         #expect(
-            PanelMetrics.compactTrailingWidth(trailingText: "2")
-                > PanelMetrics.compactTrailingWidth(trailingText: nil)
+            PanelMetrics.compactTrailingWidth(
+                trailing: CompactTrailingReading(chips: SubagentChipCounts(running: 2))
+            )
+                > PanelMetrics.compactTrailingWidth(trailing: .empty)
         )
     }
 }
@@ -21064,7 +21110,8 @@ extension NotchlineTests {
             startedAt: turn.startedAt,
             runningSubagentCount: turn.runningSubagentIDs.count
         )
-        #expect(session.runningSubagentSummary == "1 subagent")
+        #expect(session.showsSubagentChips)
+        #expect(session.subagentsStillRunningCount == 1)
         #expect(MonitorAggregation.effectiveStatus(of: session) == .running)
 
         try deliver([
@@ -21295,10 +21342,12 @@ extension NotchlineTests {
             status: turn.status,
             startedAt: turn.startedAt,
             runningSubagentCount: turn.runningSubagentIDs.count,
-            subagentsAwaitingApproval: turn.subagentsAwaitingApproval
+            subagentsAwaitingApprovalCount: turn.subagentsAwaitingApprovalCount
         )
         #expect(waiting.status == .completed, "the row still reports its own turn")
-        #expect(waiting.runningSubagentSummary == "1 subagent")
+        #expect(waiting.showsSubagentChips)
+        #expect(waiting.subagentsAwaitingApprovalCount == 1)
+        #expect(waiting.subagentsStillRunningCount == 0)
         #expect(MonitorAggregation.effectiveStatus(of: waiting) == .approvalNeeded)
 
         // Approved. `PostToolUse` names the same call and the same agent, which
@@ -22056,7 +22105,11 @@ extension NotchlineTests {
         )
         await clock.settle()
         #expect(store.status == .approvalNeeded)
-        #expect(store.compactTrailingText == "1", "no turn is being timed")
+        #expect(
+            store.compactTrailingReading
+                == CompactTrailingReading(chips: SubagentChipCounts(attention: 1)),
+            "no turn is being timed"
+        )
 
         let waiting = try #require(store.sessions.first)
         #expect(waiting.status == .completed)
@@ -22065,7 +22118,7 @@ extension NotchlineTests {
         // With the row gone the surface reports presence again, and the slot it
         // was writing the count into is empty.
         #expect(store.status == .connected)
-        #expect(store.compactTrailingText == nil)
+        #expect(store.compactTrailingReading == .empty)
     }
 
     /// The same silence, on the main thread, where it was being trusted not to
@@ -22175,7 +22228,7 @@ extension NotchlineTests {
                 status: turn.status,
                 startedAt: turn.startedAt,
                 runningSubagentCount: turn.runningSubagentIDs.count,
-                subagentsAwaitingApproval: turn.subagentsAwaitingApproval,
+                subagentsAwaitingApprovalCount: turn.subagentsAwaitingApprovalCount,
                 isPausedForBackgroundWork: turn.pausedForBackgroundWork
             )
         }
@@ -22225,7 +22278,7 @@ extension NotchlineTests {
         // The row draws nothing in the trailing slot — its own turn really did
         // finish and it has no subagent left to name — and the thread is still
         // working, so the collapsed summary must not say otherwise.
-        #expect(row(turn).runningSubagentSummary == nil)
+        #expect(!row(turn).showsSubagentChips)
         #expect(
             MonitorAggregation.effectiveStatus(of: row(turn)) == .running,
             "the parent is re-entered 50 ms from here; Completed is a state the thread is never in"

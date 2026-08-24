@@ -418,7 +418,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// Claude Code through its `Agent` tool, whose call returns as soon as the
     /// subagent is launched.
     let runningSubagentCount: Int
-    /// Whether one of those subagents is sitting on a permission prompt.
+    /// How many of those subagents are sitting on a permission prompt.
     ///
     /// **The one thing a subagent can do that this product exists to report.**
     /// A count says work is in flight, which is a hint; this says the product
@@ -429,11 +429,14 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// turn's terminal — so this is true of finished rows and running ones
     /// alike.
     ///
-    /// A `Bool` and not a count on purpose. The trailing slot already says how
-    /// many subagents there are; how many of them are blocked is a second
-    /// number nothing draws, and the answer the user acts on — *go and look* —
-    /// is the same at one as at three.
-    let subagentsAwaitingApproval: Bool
+    /// **A count, not a `Bool`, since `dual-agent-design.md` §10.** The old
+    /// text mark only ever spelled out one number and going-to-look was the
+    /// same action at one as at three, so the second figure went undrawn. The
+    /// numeral chip that replaced it draws two figures side by side — this one
+    /// on its leading (white) chip, ``runningSubagentCount`` less this one on
+    /// its trailing (grey or product-tinted) chip — so both are real counts
+    /// now, not a count and a flag standing in for one.
+    let subagentsAwaitingApprovalCount: Int
     /// Whether this row's turn ended by pausing rather than by finishing.
     ///
     /// **Row data, not a fifth state, and not a second count.** Like
@@ -465,7 +468,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         status: SessionStatus,
         startedAt: Date?,
         runningSubagentCount: Int = 0,
-        subagentsAwaitingApproval: Bool = false,
+        subagentsAwaitingApprovalCount: Int = 0,
         isPausedForBackgroundWork: Bool = false
     ) {
         self.agent = agent
@@ -477,26 +480,64 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.status = status
         self.startedAt = startedAt
         self.runningSubagentCount = runningSubagentCount
-        self.subagentsAwaitingApproval = subagentsAwaitingApproval
+        self.subagentsAwaitingApprovalCount = subagentsAwaitingApprovalCount
         self.isPausedForBackgroundWork = isPausedForBackgroundWork
     }
 
     /// Whether the row says work is still in flight beside its own turn.
     nonisolated var hasRunningSubagent: Bool { runningSubagentCount > 0 }
 
-    /// What the row says once its own turn has stopped but the thread has not.
+    /// Whether one of those subagents is sitting on a permission prompt.
+    nonisolated var subagentsAwaitingApproval: Bool { subagentsAwaitingApprovalCount > 0 }
+
+    /// Subagents that are working and not stopped on a permission prompt --
+    /// the figure the trailing (grey or product-tinted) chip draws.
     ///
-    /// `nil` while the turn is still timing. The row's one mark is the elapsed
-    /// readout and this does not displace it: a running row already says the
-    /// thread is working, so the count would only be a second mark saying the
-    /// same thing. Once the clock stops, the slot the timer had is where this
-    /// goes — a finished row that draws nothing there reads as finished, and
-    /// with a subagent still working that is not what happened.
-    nonisolated var runningSubagentSummary: String? {
-        guard !status.keepsTiming, hasRunningSubagent else { return nil }
-        return runningSubagentCount == 1
-            ? "1 subagent"
-            : "\(runningSubagentCount) subagents"
+    /// ``runningSubagentCount`` counts every subagent this thread has started
+    /// and not yet seen stop, which includes the ones blocked on a dialog.
+    /// Split from ``subagentsAwaitingApprovalCount`` so the two chips never
+    /// double-count the same subagent.
+    nonisolated var subagentsStillRunningCount: Int {
+        max(0, runningSubagentCount - subagentsAwaitingApprovalCount)
+    }
+
+    /// Whether the row draws the subagent chip cluster in place of its timer.
+    ///
+    /// `false` while the turn is still timing. The row's one mark is the
+    /// elapsed readout and this does not displace it: a running row already
+    /// says the thread is working, so the chips would only be a second mark
+    /// saying the same thing. Once the clock stops, the slot the timer had is
+    /// where they go — a finished row that draws nothing there reads as
+    /// finished, and with a subagent still working that is not what happened.
+    nonisolated var showsSubagentChips: Bool {
+        !status.keepsTiming && hasRunningSubagent
+    }
+
+    /// The spoken form of the row's subagent chips, since VoiceOver cannot
+    /// read the white/grey split the chips draw with colour alone.
+    ///
+    /// `nil` under the same guard as ``showsSubagentChips``. Speaks both
+    /// figures when both are non-zero -- `dual-agent-design.md` §10 draws them
+    /// as two chips for exactly this reason, so a summary that only spoke one
+    /// would say less than the mark it is standing in for.
+    nonisolated var spokenSubagentSummary: String? {
+        guard showsSubagentChips else { return nil }
+        var parts: [String] = []
+        if subagentsAwaitingApprovalCount > 0 {
+            parts.append(
+                subagentsAwaitingApprovalCount == 1
+                    ? "1 waiting for you"
+                    : "\(subagentsAwaitingApprovalCount) waiting for you"
+            )
+        }
+        if subagentsStillRunningCount > 0 {
+            parts.append(
+                subagentsStillRunningCount == 1
+                    ? "1 still running"
+                    : "\(subagentsStillRunningCount) still running"
+            )
+        }
+        return parts.joined(separator: ", ")
     }
 
     /// The row's identity, and the key for the dismissed set, the terminal
@@ -508,6 +549,33 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// would silently make one row dismiss, hide or re-render the other.
     nonisolated var id: String {
         "\(agent.rawValue):\(threadID):\(turnID)"
+    }
+}
+
+/// The two figures the subagent numeral chip draws, wherever it draws them.
+///
+/// One row's trailing slot and the collapsed surface's trailing wing both
+/// draw this same shape (`dual-agent-design.md` §10): a white chip for
+/// ``attention``, leading, and a grey-or-product-tinted chip for ``running``,
+/// trailing. A chip whose count is zero is not drawn at all -- the pair is
+/// never padded out to two just to keep a position stable, because an empty
+/// chip would be a mark that means nothing.
+nonisolated struct SubagentChipCounts: Equatable, Sendable {
+    /// Subagents stopped on a permission prompt. Draws the white, never-tinted
+    /// leading chip.
+    var attention: Int = 0
+    /// Subagents working and not stopped on a dialog. Draws the trailing chip,
+    /// grey in an expanded row always, and grey or product-tinted in the
+    /// collapsed pill depending on how many products are connected.
+    var running: Int = 0
+
+    static let empty = SubagentChipCounts()
+
+    var isEmpty: Bool { attention == 0 && running == 0 }
+    /// How many chips this pair draws -- 0, 1 or 2 -- which is what both the
+    /// view and ``PanelMetrics`` need to lay them out and measure them alike.
+    var chipCount: Int {
+        (attention > 0 ? 1 : 0) + (running > 0 ? 1 : 0)
     }
 }
 

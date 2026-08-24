@@ -2,9 +2,9 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | 视觉与数据口径已定；域层与合并层已落地（`claude-code-integration` 分支），UI 尚未开始 |
-| 版本 | 1.0 |
-| 日期 | 2026-08-16 |
+| 文档状态 | 视觉与数据口径已定；域层与合并层已落地（`claude-code-integration` 分支），UI 尚未开始；子智能体计数标记（Numeral Chip，§10）已实现 |
+| 版本 | 1.2 |
+| 日期 | 2026-08-23 |
 | Figma | [`10 — Double Apps`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=540-2)；设置项在 [`09 — Settings`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=609-2) |
 | 相关 ADR | [0007](adr/0007-read-claude-code-quota-from-the-cli.md)、[0008](adr/0008-count-today-tokens-cache-inclusive.md)、[0009](adr/0009-resolve-project-per-product.md) |
 
@@ -253,3 +253,20 @@ Figma §09 的 `Codex integration` 卡片围绕一个开关：拨动它，应用
 [`figma-design.md`](figma-design.md) 描述单产品契约，其中两处已被本文取代：设置齿轮的位置（§4.5，现为顶栏右上角）与页脚额度行的构成（§4.3，双产品时为两行规则加当日用量行）。其余部分不受影响。
 
 例外是设置窗口：`figma-design.md` §8 已按 macOS 26 重写，其中 `Products` 分组直接容纳两个产品，`Session list` 分组来自本文 §6。设置窗口的结构、几何与颜色以 §8 为准，本文只保留 `Distinguish products` 的语义。
+
+## 10. 子智能体计数标记（已定，已实现）
+
+[`11 — Subagent UI Concepts`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=812-2)（`812:2`）对比了四个候选，评审后决定采用 `C — Numeral Chip`（`815:116`，页面上标 `PROCEEDING`；`A`／`B`／`D` 标 `Not proceeding` 后留在页面上作评审记录，不再是候选）。它把 [`figma-design.md`](figma-design.md) §4.6 里的两处文字标记——行尾 `N subagents`、收起态尾翼 `N │ 1:23`——换成一枚 `15 × 15`、圆角 `4` 的填色数字方块（下称 chip），编号即当前 count，不拼「subagent(s)」这个词。**已落地**：`SubagentChip`／`SubagentChipCluster`／`SubagentChipTint`（`NotchStatusMatrix.swift`）画 chip，`SubagentChipCounts`（`MonitorDomain.swift`）是两个计数的值类型，`CompactTrailingReading` 与 `PanelMetrics.subagentChipWidth`／`subagentChipsWidth`／`compactTrailingReadingWidth`（`MonitorStore.swift`）取代了原来按 `trailingText: String?` 测量一整串文本的宽度组成——chip 量的是自己的数字加内边距，不是拼出来的句子。本节此后只作为「为什么这样定」的记录，§4.6 已改写为本节描述的行为。
+
+单产品时这枚 chip 与今天的行为一致，仍不指名产品。以下六条只在两个产品都已连接、或需要跨产品说明时才生效，判定依据与 §1「在场」同一条：
+
+1. **收起态胶囊，只有一个产品已连接：chip 染该产品自己的墨色**——点亮格／熄灭格取 §2 颜色表同一对值（Codex `#6CB4FF` / `#101B26`，Claude Code `#D97757` / `#21120D`）。
+2. **收起态胶囊，两个产品都已连接：chip 转中性灰**——底 `#151515`、字 `#7C7C80`（即 `NotchPalette.restingInk` 与 `label`／`text/notch-label`，见 `NotchStatusMatrix.swift`）。两种墨色此刻都不准确，谁也不借。
+3. **展开态行内：chip 永远是中性灰**，不论已连接几个产品——这一行本身已经用行归属标记（§4）或 Project 文案说明了它属于哪个产品，chip 不需要再借一次色相去说同一件事。
+4. **需要处理（等待批准或输入）：chip 永远是白底深字，不染色**——延续既有约束 1（色相表示产品，亮度表示是否需要用户处理），白色是亮度通道的信号，不参与色相染色。
+5. **收起态胶囊：Running 与「需要处理」是两个独立的计数，各自一枚 chip**；白色（需要处理）在前，灰／染色（Running）在后。
+6. **展开态行内：同一种拆分**——白色 chip（需要处理）在前，灰色 chip（Running）在后。
+
+色相在这枚 chip 上因此只剩一个用途：告诉用户「此刻能不能诚实地代表一个产品」——能就染色（规则 1），不能（两个产品同时在场，规则 2；或展开态里产品已经由别处说明，规则 3）就退回中性灰；需要处理永远是与产品无关的白色，且永远排在 Running 前面（规则 4–6）。这与 §1 既有约束 1 一致，不是新增通道——白色沿用的正是矩阵自己的亮度语义，色相依旧只用来分辨产品。
+
+示范节点：行版两例（`815:119` 单灰 chip「2 running」、`815:133` 白 chip 领先＋灰 chip 「1 needs you, 2 running」，`x=360`／`x=900`）；胶囊版五例（`815:147` 起，`x=360…1420`，覆盖 Codex 单独染蓝、Claude Code 单独染琥珀、双产品灰、双产品「需要处理＋灰」拆分、Codex 单产品「需要处理＋蓝」拆分——最后一例说明白色即便在单产品可染色的语境下也不染色）。

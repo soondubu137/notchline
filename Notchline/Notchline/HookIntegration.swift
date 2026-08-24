@@ -1197,7 +1197,7 @@ struct HookTurnState: Sendable {
         sessionStatus
     }
 
-    /// Whether a subagent of this thread is sitting on a permission prompt.
+    /// How many of this thread's subagents are sitting on a permission prompt.
     ///
     /// **Capped by the running set on purpose.** Both products stamp `agent_id`
     /// on events from agents that never announced themselves — Claude Code's
@@ -1205,13 +1205,23 @@ struct HookTurnState: Sendable {
     /// `--approve-for-me`, which is a nested agent with no `SubagentStart` of
     /// its own (both measured 2026-08-23). A slot is therefore never evidence
     /// that this thread has a subagent; only ``runningSubagentIDs`` is. The
-    /// cap also means this flag can never outlive the count that draws it: what
-    /// clears one clears the other, so the stuck-state risk stays the single
-    /// one already accepted in `PRD.md` §6.2.
-    nonisolated var subagentsAwaitingApproval: Bool {
-        subagentSlots.contains { agentID, slots in
+    /// cap also means this count can never outlive the count that draws it:
+    /// what clears one clears the other, so the stuck-state risk stays the
+    /// single one already accepted in `PRD.md` §6.2.
+    ///
+    /// A count, not a boolean, since `dual-agent-design.md` §10: the numeral
+    /// chip that replaces this thread's trailing mark draws this figure on its
+    /// own leading (white) chip, separately from ``runningSubagentIDs``'s
+    /// count on the trailing one.
+    nonisolated var subagentsAwaitingApprovalCount: Int {
+        subagentSlots.filter { agentID, slots in
             runningSubagentIDs.contains(agentID) && slots.pendingApproval != nil
-        }
+        }.count
+    }
+
+    /// Whether a subagent of this thread is sitting on a permission prompt.
+    nonisolated var subagentsAwaitingApproval: Bool {
+        subagentsAwaitingApprovalCount > 0
     }
 
     /// The instant a finished row's settling window is measured from.

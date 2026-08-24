@@ -121,6 +121,23 @@ struct DisplayOption: Identifiable {
     }
 }
 
+/// The collapsed surface's trailing wing: a subagent chip cluster sharing one
+/// slot with the elapsed timer, exactly as the plain string this replaced
+/// (`compactTrailingText`) used to share it.
+///
+/// One value rather than two views for the same reason the old string was
+/// one: the panel's width is measured from it, so a chip cluster and a timer
+/// that could independently disagree about what they drew would leave the
+/// width composed from two readings instead of one.
+struct CompactTrailingReading: Equatable {
+    var chips: SubagentChipCounts = .empty
+    var timerText: String?
+
+    static let empty = CompactTrailingReading()
+
+    var isEmpty: Bool { chips.isEmpty && timerText == nil }
+}
+
 enum PanelMetrics {
     static let referenceCompactHeight: CGFloat = 46
     /// The cut-out's upper fillet, as a share of its height.
@@ -348,15 +365,63 @@ enum PanelMetrics {
             + CGFloat(markCount - 1) * compactMatrixSpacing
     }
 
+    /// The subagent numeral chip: font, minimum size, and the padding that
+    /// lets a two-digit count grow it rather than clip it.
+    ///
+    /// `dual-agent-design.md` §10 draws the chip at a fixed `15 × 15` for the
+    /// single-digit counts every mockup shows; that figure is this type's
+    /// floor rather than a hardcoded width -- `figma-design.md` §4.6's one
+    /// lesson is that a slot must grow to fit what it actually draws, and a
+    /// count of `10` or more is real once a thread has spawned enough
+    /// subagents.
+    static let subagentChipFont = NSFont.systemFont(ofSize: 9, weight: .semibold)
+    static let subagentChipMinSize: CGFloat = 15
+    static let subagentChipCornerRadius: CGFloat = 4
+    static let subagentChipHorizontalPadding: CGFloat = 4
+    /// Between the two chips, when both are drawn.
+    static let subagentChipSpacing: CGFloat = 4
+    /// Between the chip cluster and the timer it shares the trailing slot
+    /// with.
+    static let subagentChipTimerSpacing: CGFloat = 8
+
+    /// One chip's width, hugging its digits at the minimum size and growing
+    /// only when a wider count needs it.
+    static func subagentChipWidth(_ count: Int) -> CGFloat {
+        let measured = textWidth("\(count)", font: subagentChipFont)
+            + subagentChipHorizontalPadding * 2
+        return max(subagentChipMinSize, ceil(measured))
+    }
+
+    /// The chip cluster's width -- zero, one or two chips, spaced apart when
+    /// both are drawn. A chip whose count is zero contributes nothing: see
+    /// ``SubagentChipCounts``.
+    static func subagentChipsWidth(_ counts: SubagentChipCounts) -> CGFloat {
+        var widths: [CGFloat] = []
+        if counts.attention > 0 { widths.append(subagentChipWidth(counts.attention)) }
+        if counts.running > 0 { widths.append(subagentChipWidth(counts.running)) }
+        guard !widths.isEmpty else { return 0 }
+        return widths.reduce(0, +) + CGFloat(widths.count - 1) * subagentChipSpacing
+    }
+
+    /// Everything the trailing slot actually draws: the chip cluster, the
+    /// timer, and the gap between them when both are present.
+    static func compactTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
+        let chipsWidth = subagentChipsWidth(trailing.chips)
+        guard let timerText = trailing.timerText else { return chipsWidth }
+        let timerWidth = textWidth(timerText, font: timerFont)
+        guard chipsWidth > 0 else { return timerWidth }
+        return chipsWidth + subagentChipTimerSpacing + timerWidth
+    }
+
     /// Compact content trailing the notch, including its own trailing padding.
     ///
     /// Zero unless the collapsed surface has a reading to put there -- an
-    /// elapsed value, a subagent count, or the two joined. The usage ring used
+    /// elapsed value, a subagent chip cluster, or both. The usage ring used
     /// to sit here unconditionally, which meant an idle notched display
     /// rendered a blank wing that read as a second, fake notch.
-    static func compactTrailingWidth(trailingText: String?) -> CGFloat {
-        guard let trailingText else { return 0 }
-        return textWidth(trailingText, font: timerFont) + expandedHorizontalPadding
+    static func compactTrailingWidth(trailing: CompactTrailingReading) -> CGFloat {
+        guard !trailing.isEmpty else { return 0 }
+        return compactTrailingReadingWidth(trailing) + expandedHorizontalPadding
     }
 
     /// How far the compact body reaches past the cut-out's trailing edge.
@@ -366,8 +431,8 @@ enum PanelMetrics {
     /// Everything that rounds -- the ceiled width, a cut-out that is not
     /// perfectly centred -- is absorbed by the leading wing, which is padding
     /// and can take it, rather than by the edge that has to meet the hardware.
-    static func compactTrailingWingWidth(trailingText: String?) -> CGFloat {
-        let content = compactTrailingWidth(trailingText: trailingText)
+    static func compactTrailingWingWidth(trailing: CompactTrailingReading) -> CGFloat {
+        let content = compactTrailingWidth(trailing: trailing)
         return content > 0 ? content + expandedNotchClearance : 0
     }
 
@@ -420,7 +485,7 @@ enum PanelMetrics {
         geometry: DisplayGeometry,
         isExpanded: Bool,
         statusReadoutText: String,
-        trailingText: String?,
+        trailing: CompactTrailingReading,
         centerOcclusionWidth: CGFloat,
         compactHeight: CGFloat,
         status: MonitorStatus = .connected,
@@ -455,7 +520,7 @@ enum PanelMetrics {
                     width: fixedCompactWidth(
                         for: status,
                         matrixCount: matrixCount,
-                        trailingText: trailingText
+                        trailing: trailing
                     ),
                     height: compactHeight
                 )
@@ -466,14 +531,14 @@ enum PanelMetrics {
                 markCount: drawsCompactMarks ? matrixCount : 0
             )
                 + centerOcclusionWidth
-                + compactTrailingWingWidth(trailingText: trailingText)
+                + compactTrailingWingWidth(trailing: trailing)
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
             return CGSize(
                 width: fixedCompactWidth(
                     for: status,
                     matrixCount: matrixCount,
-                    trailingText: trailingText
+                    trailing: trailing
                 ),
                 height: compactHeight
             )
@@ -525,16 +590,16 @@ enum PanelMetrics {
     /// - Parameter matrixCount: How many product matrices are drawn. Zero and
     ///   one are the same width — the grey resting mark occupies the single
     ///   slot rather than adding one.
-    /// - Parameter trailingText: What the trailing readout actually draws, when
-    ///   that is more than an elapsed value. A subagent count sits in the same
-    ///   slot and can be wider than the reservation, and a no-notch pill is the
-    ///   one shape with no cut-out to hang a wing off -- what does not fit
-    ///   inside its width is simply clipped. Defaults to the reservation alone,
-    ///   which is every caller that is only ever going to draw a timer.
+    /// - Parameter trailing: What the trailing slot actually draws, when that
+    ///   is more than an elapsed value. A subagent chip cluster sits in the
+    ///   same slot and can be wider than the reservation, and a no-notch pill
+    ///   is the one shape with no cut-out to hang a wing off -- what does not
+    ///   fit inside its width is simply clipped. Defaults to empty, which is
+    ///   every caller that is only ever going to draw a timer.
     static func fixedCompactWidth(
         for status: MonitorStatus,
         matrixCount: Int,
-        trailingText: String? = nil
+        trailing: CompactTrailingReading = .empty
     ) -> CGFloat {
         let extraMatrices = CGFloat(max(0, matrixCount - 1))
             * (statusMatrixSize + compactMatrixSpacing)
@@ -547,7 +612,7 @@ enum PanelMetrics {
         }
         return ceil(
             compactChromeWidth
-                + workingContentWidth(trailingText: trailingText)
+                + workingContentWidth(trailing: trailing)
                 + extraMatrices
         )
     }
@@ -578,9 +643,9 @@ enum PanelMetrics {
     ///
     /// Computed rather than a stored `static let`: a lazily-initialised one runs
     /// its initialiser in a nonisolated context, and this measures text.
-    static func workingContentWidth(trailingText: String? = nil) -> CGFloat {
+    static func workingContentWidth(trailing: CompactTrailingReading = .empty) -> CGFloat {
         workingStatuses
-            .map { compactContentWidth($0, trailingText: trailingText) }
+            .map { compactContentWidth($0, trailing: trailing) }
             .max() ?? 0
     }
 
@@ -588,13 +653,13 @@ enum PanelMetrics {
     /// state can be counting.
     static func compactContentWidth(
         _ status: MonitorStatus,
-        trailingText: String? = nil
+        trailing: CompactTrailingReading = .empty
     ) -> CGFloat {
         let label = compactLabelWidth(status)
         guard status.canShowElapsed else { return label }
         return label
             + compactTimerClearance
-            + compactTrailingSlotWidth(trailingText: trailingText)
+            + compactTrailingSlotWidth(trailing: trailing)
     }
 
     /// The trailing readout's slot: the elapsed reservation, or what is being
@@ -602,15 +667,15 @@ enum PanelMetrics {
     ///
     /// The reservation is what keeps the pill still while digits change, and it
     /// is an upper bound for an elapsed value alone. It is not one for the
-    /// subagent count that shares the slot, and reserving room for a count
+    /// subagent chip cluster that shares the slot, and reserving room for it
     /// permanently would widen every pill for a reading almost no collapsed
     /// surface will ever show. So the slot grows to fit that reading and
     /// shrinks back when it goes -- a movement caused by something appearing,
     /// which is the one kind this surface already accepts.
-    static func compactTrailingSlotWidth(trailingText: String?) -> CGFloat {
+    static func compactTrailingSlotWidth(trailing: CompactTrailingReading) -> CGFloat {
         let reservation = textWidth(timerSlotTemplate, font: timerSlotFont)
-        guard let trailingText else { return reservation }
-        return max(reservation, textWidth(trailingText, font: timerFont))
+        guard !trailing.isEmpty else { return reservation }
+        return max(reservation, compactTrailingReadingWidth(trailing))
     }
 
     /// What the collapsed surface can say while an agent is connected.
@@ -1134,11 +1199,15 @@ final class MonitorStore: ObservableObject {
     ///
     /// The formatter emits digits and colons in tabular figures, so a string's
     /// character count *is* its rendered width; comparing counts is comparing
-    /// widths without measuring text once a second.
+    /// widths without measuring text once a second. The chip counts are
+    /// included directly, rather than measured, for the same reason: a count
+    /// changing is a width-affecting event whether or not its digit count
+    /// happens to change too.
     private func publishTick(_ now: Date) {
         elapsedTick.send(now)
 
-        var signature = [compactTrailingText?.count ?? -1]
+        let chips = compactSubagentChipCounts
+        var signature = [chips.attention, chips.running, compactTimerText?.count ?? -1]
         signature.append(contentsOf: sessions.map { elapsedText(for: $0)?.count ?? -1 })
         guard signature != elapsedLayoutSignature else { return }
         elapsedLayoutSignature = signature
@@ -1287,55 +1356,63 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// Subagents still in flight across every listed row.
+    /// Subagents still in flight across every listed row, split into the
+    /// figures the two chips draw (`dual-agent-design.md` §10).
     ///
-    /// A total, because the collapsed surface speaks for the whole list the way
-    /// the summary status and the one timer already do — across both products,
-    /// which both report subagent boundaries.
+    /// A total across every row, because the collapsed surface speaks for the
+    /// whole list the way the summary status and the one timer already do —
+    /// across both products, which both report subagent boundaries.
+    var compactSubagentChipCounts: SubagentChipCounts {
+        guard !hidesCompactSurface else { return .empty }
+        let attention = sessions.reduce(0) { $0 + $1.subagentsAwaitingApprovalCount }
+        let running = sessions.reduce(0) { $0 + $1.subagentsStillRunningCount }
+        return SubagentChipCounts(attention: attention, running: running)
+    }
+
+    /// The collapsed pill's running chip colour -- rules 1–2 of
+    /// `dual-agent-design.md` §10.
+    ///
+    /// Tinted only while the pill can honestly speak for one product: exactly
+    /// one connected. Two connected, or none, and it goes neutral -- neither
+    /// ink would be accurate, so neither is used.
+    var compactSubagentRunningTint: SubagentChipTint {
+        guard connectedAgents.count == 1, let only = connectedAgents.first else {
+            return .neutral
+        }
+        return .product(only)
+    }
+
+    /// Every subagent still in flight across every listed row, counting both
+    /// chips together. Kept for VoiceOver's total and for callers that only
+    /// need to know whether the collapsed surface has anything to say here.
     var compactRunningSubagentCount: Int {
-        guard !hidesCompactSurface else { return 0 }
-        return sessions.reduce(0) { $0 + $1.runningSubagentCount }
+        let chips = compactSubagentChipCounts
+        return chips.attention + chips.running
     }
 
-    /// Between the count and the elapsed reading, when both are drawn.
+    /// Everything the collapsed surface draws in the slot after the notch: a
+    /// subagent chip cluster, the elapsed timer, or both sharing the slot.
     ///
-    /// `U+2502`, not the ASCII pipe: the box-drawing rule is a divider rather
-    /// than a character, and SF Pro draws it natively at the same width.
-    private static let compactReadoutSeparator = " │ "
-
-    /// Everything the collapsed surface draws in the slot after the notch.
-    ///
-    /// Three shapes, and each says only what is true. A turn being timed and no
-    /// subagents is the elapsed value alone, exactly as before. A turn being
-    /// timed with subagents in flight puts the count in front of it. And once
-    /// every turn has finished with a subagent still working there is no clock
-    /// left to read, so the count stands alone -- which is the whole shape this
-    /// change exists for: `Running`, and a number saying what is running, with
-    /// nothing being timed because no turn is.
-    ///
-    /// One string rather than two views, because it is one reading: the panel
+    /// One value rather than two views, because it is one reading: the panel
     /// width is measured from it, and the elapsed half redraws itself once a
-    /// second inside a single raster instead of laying out a stack every tick.
-    var compactTrailingText: String? {
-        let count = compactRunningSubagentCount
-        guard count > 0 else { return compactTimerText }
-        guard let compactTimerText else { return "\(count)" }
-        return "\(count)\(Self.compactReadoutSeparator)\(compactTimerText)"
+    /// second inside its own raster instead of laying out a stack every tick.
+    var compactTrailingReading: CompactTrailingReading {
+        CompactTrailingReading(chips: compactSubagentChipCounts, timerText: compactTimerText)
     }
 
-    /// What the elapsed half of that reading is prefixed with, or nil when
-    /// there is no elapsed half to prefix.
-    var compactTimerPrefix: String? {
-        let count = compactRunningSubagentCount
-        guard count > 0, compactTimerText != nil else { return nil }
-        return "\(count)\(Self.compactReadoutSeparator)"
-    }
-
-    /// The count for VoiceOver, which cannot read a bare number in a slot.
+    /// The spoken form of ``compactSubagentChipCounts``, since VoiceOver
+    /// cannot read the white/grey split the chips draw with colour alone.
     var spokenRunningSubagentText: String? {
-        let count = compactRunningSubagentCount
-        guard count > 0 else { return nil }
-        return count == 1 ? "1 subagent" : "\(count) subagents"
+        let chips = compactSubagentChipCounts
+        guard !chips.isEmpty else { return nil }
+        var parts: [String] = []
+        if chips.attention > 0 {
+            parts.append(chips.attention == 1 ? "1 waiting for you" : "\(chips.attention) waiting for you")
+        }
+        if chips.running > 0 {
+            parts.append(chips.running == 1 ? "1 subagent" : "\(chips.running) subagents")
+        }
+        return parts.joined(separator: ", ")
     }
 
     /// The instant the compact readout counts from, or nil when there is nothing
@@ -1552,7 +1629,7 @@ final class MonitorStore: ObservableObject {
             geometry: geometry,
             isExpanded: isExpanded,
             statusReadoutText: compactStatusReadoutText,
-            trailingText: compactTrailingText,
+            trailing: compactTrailingReading,
             centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight,
             status: status,
@@ -1579,7 +1656,7 @@ final class MonitorStore: ObservableObject {
 
         return occlusionMaxX
             + PanelMetrics.compactTrailingWingWidth(
-                trailingText: compactTrailingText
+                trailing: compactTrailingReading
             )
     }
 

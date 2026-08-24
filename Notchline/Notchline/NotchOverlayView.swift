@@ -67,32 +67,13 @@ struct NotchOverlayView: View {
         // because a bare duration beside a summary status is unattributable.
         let elapsed = store.spokenLongestElapsedText.map { ", longest running for \($0)" }
             ?? ""
-        // The collapsed slot draws a bare number; spoken, it has to say what
-        // the number counts -- and it is the only thing on the surface saying
-        // work is still in flight once every turn has finished.
-        let subagents = store.spokenRunningSubagentText
-            .map { ", \($0) still running" } ?? ""
+        // The collapsed slot draws two bare chips; spoken, each has to say
+        // what it counts -- and together they are the only thing on the
+        // surface saying work is still in flight once every turn has
+        // finished.
+        let subagents = store.spokenRunningSubagentText.map { ", \($0)" } ?? ""
         return "Codex, \(store.sessions.count) related sessions, status "
             + "\(store.statusDisplayName)\(elapsed)\(subagents), \(usage)"
-    }
-}
-
-/// The collapsed trailing readout when no turn is being timed.
-///
-/// The elapsed half of that slot draws itself into a layer because it changes
-/// once a second (`AGENTS.md` §7). This half does not change on a clock at all,
-/// so it is ordinary text -- and it is drawn in the same font the panel width
-/// was measured with.
-private struct CompactCountReadout: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: 13, weight: .light).monospacedDigit())
-            .foregroundStyle(NotchPalette.label)
-            .fixedSize()
-            // The panel's own label speaks the count in words.
-            .accessibilityHidden(true)
     }
 }
 
@@ -205,19 +186,28 @@ private struct OverlayHeader: View {
             // subagent is still working, absent otherwise so a notched display
             // shows no empty second cut-out. The expanded view times each row
             // individually instead.
+            //
+            // The chip cluster and the timer are two views sharing one slot,
+            // not one raster the way the count used to be baked into the
+            // timer's own prefix: the chips are a static reading that only
+            // changes when a subagent starts or stops, and drawing them apart
+            // from the timer's once-a-second layer keeps that layer from
+            // re-rastering on every chip change and vice versa.
             if !store.isExpanded {
-                if let startedAt = store.compactTimerStart {
-                    ElapsedReadout(
-                        startedAt: startedAt,
-                        tick: store.elapsedTick.eraseToAnyPublisher(),
-                        prefix: store.compactTimerPrefix ?? ""
-                    )
-                } else if let trailingText = store.compactTrailingText {
-                    // Nothing is being timed, so the slot holds the count on
-                    // its own. It is a static reading: it changes when a
-                    // subagent starts or stops, which is a snapshot away, and
-                    // never once a second.
-                    CompactCountReadout(text: trailingText)
+                HStack(spacing: PanelMetrics.subagentChipTimerSpacing) {
+                    let chips = store.compactSubagentChipCounts
+                    if !chips.isEmpty {
+                        SubagentChipCluster(
+                            counts: chips,
+                            runningTint: store.compactSubagentRunningTint
+                        )
+                    }
+                    if let startedAt = store.compactTimerStart {
+                        ElapsedReadout(
+                            startedAt: startedAt,
+                            tick: store.elapsedTick.eraseToAnyPublisher()
+                        )
+                    }
                 }
             }
 
@@ -609,15 +599,14 @@ private struct SessionRow: View {
         // time. The row draws the elapsed value, so the label must carry it too.
         let elapsed = store.spokenElapsedText(for: session).map { ", running for \($0)" }
             ?? ""
-        // The drawn form is a bare count in the slot the timer had; spoken, it
-        // has to say what is still running and not just how many.
-        let subagents = session.runningSubagentSummary
-            .map { ", \($0) still running" } ?? ""
-        // Brightness cannot be read out, so the thing it is saying has to be
-        // said. It goes on any row with a blocked subagent, timed or not: a
-        // running row draws its timer bright and would otherwise say nothing
-        // about why.
-        let blocked = session.subagentsAwaitingApproval
+        // The drawn form is two bare chips in the slot the timer had; spoken,
+        // each has to say what it counts and not just how many.
+        let subagents = session.spokenSubagentSummary.map { ", \($0)" } ?? ""
+        // Brightness cannot be read out on its own, so a blocked subagent
+        // still needs a word even while the row is timed and its own mark is
+        // the bright clock rather than a chip -- a running row draws its
+        // timer bright and would otherwise say nothing about why.
+        let blocked = session.status.keepsTiming && session.subagentsAwaitingApproval
             ? ", a subagent is waiting for approval"
             : ""
         return "\(session.projectName), \(session.title), "
@@ -745,12 +734,17 @@ private struct SessionStatusControl: View {
                 tint: tint,
                 weight: weight
             )
-        } else if let subagents = session.runningSubagentSummary {
-            Text(subagents)
-                .font(.system(size: 13, weight: textWeight))
-                .foregroundStyle(textTint)
-                .fixedSize()
-                .accessibilityHidden(true)
+        } else if session.showsSubagentChips {
+            // Rule 3 of `dual-agent-design.md` §10: an expanded row's chip is
+            // always neutral grey, whatever else is connected -- the row
+            // already names its product on the caption above.
+            SubagentChipCluster(
+                counts: SubagentChipCounts(
+                    attention: session.subagentsAwaitingApprovalCount,
+                    running: session.subagentsStillRunningCount
+                ),
+                runningTint: .neutral
+            )
         } else if session.status.keepsTiming {
             // Unfinished but its start was never observed — unreachable with
             // hook-sourced data, and it must not be left unmarked when previews
@@ -783,17 +777,6 @@ private struct SessionStatusControl: View {
         wantsAttention
             ? NotchPalette.spotlightDrawingColor
             : NotchPalette.labelDrawingColor
-    }
-
-    /// The same two treatments for the count, which is drawn as text rather
-    /// than into the readout's own raster and so needs SwiftUI's spelling of
-    /// them.
-    private var textTint: Color {
-        wantsAttention ? NotchPalette.spotlight : NotchPalette.label
-    }
-
-    private var textWeight: Font.Weight {
-        wantsAttention ? .medium : .light
     }
 
     private var weight: NSFont.Weight {

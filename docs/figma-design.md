@@ -2,8 +2,8 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | V1 SwiftUI 四态契约已同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个，在场与宽度已实现、画法待 [#35](https://github.com/soondubu137/notchline/issues/35)；子智能体尾部状态（§4.6）已同步到 Session Row 与 Panel 两个组件集；外部 Figma 的旧状态变体待清理 |
-| 版本 | 1.2 |
+| 文档状态 | V1 SwiftUI 四态契约已同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个，在场与宽度已实现、画法待 [#35](https://github.com/soondubu137/notchline/issues/35)；子智能体尾部标记已从文字换成 Numeral Chip 并已实现（§4.6，[`dual-agent-design.md`](dual-agent-design.md) §10）；外部 Figma 的 `807:91`／`807:102`／`808:527` 仍是旧文字变体，待下一次同步换成 `11 — Subagent UI Concepts` 里对应的 chip 变体 |
+| 版本 | 1.4 |
 | 日期 | 2026-08-23 |
 | 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
 
@@ -31,6 +31,7 @@
 | `08 — Onboarding` | 首次安装三步流程 | `232:95` |
 | `09 — Settings` | macOS 26 设置窗口（浅色／深色）、集成管理与 `Session list` 分组 | `609:2`（现行）；`233:3`、`591:2`（v1 参考） |
 | `10 — Double Apps` | 双产品（Codex + Claude Code）设计；`08 — Presence` 定义收起态的在场规则 | `540:2`、`624:1560` |
+| `11 — Subagent UI Concepts` | 子智能体计数标记候选评审；已定并已实现 `C — Numeral Chip`，取代本文 §4.6 的文字标记，规则见 [`dual-agent-design.md`](dual-agent-design.md) §10；`A`／`B`／`D` 标 `Not proceeding` | `812:2`、`815:116` |
 
 本文描述单产品契约。同时监视 Codex 与 Claude Code 时的设计见 [`dual-agent-design.md`](dual-agent-design.md)，其中两处已取代本文：设置齿轮的位置（见 4.5，现为展开态顶栏右上角，单产品同样生效）与双产品页脚的额度构成（见 4.3）。其余部分不受影响。
 
@@ -169,9 +170,9 @@ Figma `Panel` 组件集（`115:82`）使用 `Mode`、`Content` 与 `Menu Bar` �
 
 PRD 8.2 与技术设计第 12 节已明确权威时间语义、等待/睡眠行为、无障碍文案与刷新成本，处理时间因此进入产品范围。它不是独立的 Runtime Badge：未完成会话行以计时文本本身作为状态标记，一行永远只有一个标记——等待人工的行为琥珀色 Medium，Running 为暗色 Light，Completed 行不显示计时，只保留绿色状态点。
 
-**行尾那个位置在计时停下之后还有一句话可说，而且只有一句。** 这条 Thread 的 Turn 已经结束、但它派生的子智能体还在跑时（两个产品都会走到），同一个位置写 `1 subagent` / `N subagents`，用 Running 的暗色 Light（有活在跑，没有人被问任何事，不能用琥珀）。**这一格有两档亮度**：这条 Thread 的某个子智能体停在审批对话框上时改用 spotlight 亮色 Medium——与需要用户处理的行同一套处理，因为那正是它现在的意思，产品停下来在等人。同一条规则也作用在计时上：一条还在计时的行也可能有子智能体卡在对话框上，那一格照样转亮。两档之外不加记号、不加颜色。这**不违反「一行只有一个标记」**：位置只有一个，先给计时，计时没有了才轮到它，两者永不并存。正在跑的行不写这个数字——那一行已经在说这条 Thread 在工作了。Figma 侧因此是同一个文字层的又一个变体，同样必须 hug contents（下文）。产品理由与状态语义见 [`PRD.md`](PRD.md) §6.1 与 §9.3。这两档亮度现在也在 Figma 里：`112:28`（Session Row）新增 `Type=Completed - Subagent Running, Interaction=Default`（`807:91`，暗色 Light，「2 subagents」）与 `Type=Completed - Subagent Awaiting Approval, Interaction=Default`（`807:102`，spotlight 亮色 Medium，「1 subagent」），行内容与既有 `Completed` 变体不变，只有尾部这一格不同。两个节点的文字层是 Inter 而非 SF Pro，§3.1 记着原因与待办；仅有 `Default` interaction——`Hover`／`Pressed` 沿用既有 `Completed` 变体那一套背景处理，不单独复制。
+**行尾那个位置在计时停下之后还有一句话可说，而且只有一句——`N subagents` 这样的文字标记已换成一到两枚数字 chip（`15 × 15`、圆角 `4`，`dual-agent-design.md` §10）。** 这条 Thread 的 Turn 已经结束、但它派生的子智能体还在跑或在等审批时（两个产品都会走到），同一个位置画 `SubagentChipCluster`：仍在跑的那枚 chip 灰底灰字（Running 的暗色语义），需要处理的那枚白底深字（与需要用户处理的行同一套语义），需要处理的一枚永远排在前面。两枚都不染产品色——展开态里 chip 永远是中性灰，这一行本身已经用行归属标记或 Project 文案说明了产品，不需要 chip 再借一次色相。两档亮度因此换成了两枚颜色固定的 chip，而不是同一个位置换色：这**不违反「一行只有一个标记」**——位置只有一个，先给计时，计时没有了才轮到它，chip 与计时永不并存。正在跑的行不画 chip——那一行已经在说这条 Thread 在工作了。产品理由与状态语义见 [`PRD.md`](PRD.md) §6.1 与 §9.3。SwiftUI 实现：`SubagentChip`／`SubagentChipCluster`（`NotchStatusMatrix.swift`），数据来自 `MonitoredSession.subagentsAwaitingApprovalCount` 与 `subagentsStillRunningCount`（`MonitorDomain.swift`）。**外部 Figma 待清理**：`112:28`（Session Row）上的 `807:91`／`807:102` 仍是旧文字标记，下一次同步应换成对应的 chip 变体，参照 `11 — Subagent UI Concepts` 的 `815:119`／`815:133`。
 
-**同一件事在收起态是另一种画法，规矩相反：那里两者并存。** 行尾的一个位置属于一行，收起态的尾翼属于整张列表，所以它说的是总数，也没有「同一句话说两遍」的问题——计时说的是最长的那个轮次，计数说的是列表里还有几个子智能体在跑。计数大于零时写在计时前面，`2 │ 1:23`；所有轮次都结束而子智能体还在跑时没有计时可读，尾翼只剩 `2`。分隔符是 `U+2502`（BOX DRAWINGS LIGHT VERTICAL）两侧各一个普通空格，不是 ASCII 竖线——SF Pro 里两者宽度相同，取前者是因为它是一条分隔规则而不是一个字符。整串与计时同色同字号（暗色 Light，等宽数字），画在同一个 layer 上：一秒一变的只是它的计时那一半，拆成两个视图会让面板宽度由两次可能互相矛盾的测量组成。收起态写 `Running` 而尾翼没有计时读数，是这一形态的正常样子而不是缺口（[`PRD.md`](PRD.md) §6.2）。**还有一种更短的形态：`Running` 而整条尾翼什么都没有。** 它出现在 Claude Code 的子智能体收尾到父轮次被叫醒之间——实测 50–130 ms——此刻既没有轮次在计时，也没有子智能体可数，而这条 Thread 确实还在工作（`PRD.md` §6.2 第 3 档）。它太短，不值得为它画一个变体：要点是尾翼**空**着不等于状态词错了，读到这个组合时不要去补一个占位读数。`115:82`（Panel）新增 `Mode=No Notch Compact, Content=Working With Subagents, Menu Bar=46 Reference`（`808:527`）示范这个合成读数，宽度仍是无刘海工作集合共用的那个定宽（§6.4）；文字层同样是 Inter，且分隔符暂以 ASCII `|` 代替 `U+2502`（Inter 在本文件里没有这个字形），两处都记在 §3.1 与该节点自己的 `description` 里。有刘海形态的等价变体未新增——它的宽度会随内容变化，直接改 `PanelContour` 矢量会破坏两个圆角比例（见 §3.3），留给下一次同步。
+**同一件事在收起态是另一种画法，规矩相反：那里两者并存。** 行尾的一个位置属于一行，收起态的尾翼属于整张列表，所以它说的是总数，也没有「同一句话说两遍」的问题——计时说的是最长的那个轮次，chip 说的是列表里还有几个子智能体在跑、几个在等审批。有 chip 要画时它们排在计时前面；所有轮次都结束而子智能体还在跑或在等审批时没有计时可读，尾翼只剩 chip。染色规则与展开行相反：**只有一个产品已连接时，「仍在跑」那枚 chip 染该产品的墨色**（`#6CB4FF` / `#101B26` 或 `#D97757` / `#21120D`）；**两个产品都已连接时退回中性灰**（底 `#151515`、字 `#7C7C80`）——两种墨色此刻都不准确，谁也不借。需要处理的那枚 chip 永远白底深字，不参与染色，且永远排在前面。chip 与计时之间的间距是 `8`；两枚 chip 之间是 `4`。收起态写 `Running` 而尾翼没有计时读数，是这一形态的正常样子而不是缺口（[`PRD.md`](PRD.md) §6.2）。**还有一种更短的形态：`Running` 而整条尾翼什么都没有。** 它出现在 Claude Code 的子智能体收尾到父轮次被叫醒之间——实测 50–130 ms——此刻既没有轮次在计时，也没有子智能体可数，而这条 Thread 确实还在工作（`PRD.md` §6.2 第 3 档）。它太短，不值得为它画一个变体：要点是尾翼**空**着不等于状态词错了，读到这个组合时不要去补一个占位读数。SwiftUI 实现：`CompactTrailingReading`／`PanelMetrics.subagentChipWidth`／`subagentChipsWidth`／`compactTrailingReadingWidth`（`MonitorStore.swift`），聚合口径见 `MonitorStore.compactSubagentChipCounts` 与 `compactSubagentRunningTint`。**外部 Figma 待清理**：`115:82`（Panel）上的 `808:527`（`「2 │ 1:23」` 合成读数）同样待换成 `11 — Subagent UI Concepts` `815:116` 里对应的胶囊变体；有刘海形态的等价变体从未画过，留给下一次同步一并处理。
 
 收起态在刘海右侧显示全局最长运行时间，与左翼状态读数构成两翼；没有未完成轮次、也没有子智能体在跑时右翼整体消失，避免渲染出第二个假刘海。展开态不重复该汇总值。计时文本使用等宽数字，因此右翼宽度只在进位时变化。
 
@@ -179,9 +180,9 @@ PRD 8.2 与技术设计第 12 节已明确权威时间语义、等待/睡眠行�
 
 收起态宽度不是设计常量：实现按真实渲染文本测量后向上取整，宽度是布局的结果而不是谁定下的数值。因此 **Figma 变体中的计时与状态文字层必须 hug contents，不得写死宽度**。写死是唯一需要记住的失败模式——上一次同步把计时 TEXT 固定为 `34`（自然宽约 `28.6`），刘海计时变体因此整体偏宽 `5.4`；无刘海一对同样因固定文本宽度偏出十余 pt。
 
-可以直接对照的固定值只有一处：刘海形态左翼 = `12` padding + `16.6` 状态矩阵 + `8` clearance = `36.6`，加 `200` 遮挡后收起态总宽为 `237`。计时文本从 `x = 244.6` 开始（`36.6 + 200 + 8`），宽度随文本自身变化——尾翼里出现子智能体计数时同样只是这个文本变长，右翼跟着变宽。无刘海那个定宽为计时预留的槽位是 `00:00:00`（Medium，`57.9`），装得下 `2 │ 1:23`（Light，`45.7`）这样的组合；装不下的组合（`2 │ 1:23:45` 是 `65.5`）让胶囊自己变宽，而不是把计数裁掉——那是**唯一**一处内容能推动这个定宽的地方，为一个几乎不会出现的读数长期加宽每一个菜单栏里的胶囊才是更糟的那一边。由 `theCollapsedCountGrowsTheSlotItSharesWithTheTimer` 锁定。无刘海形态不再按内容组合：整个工作集合共用一个定宽（§6.4「固定工作宽度」），也不再有随菜单栏高度变化的宽度下限——`PanelMetrics` 中已没有任何一处拿菜单栏高度算宽度，它只决定面板高度与圆角。这些关系由 `compactGeometryComposesTheNotchWings` 锁定，其余宽度不写入契约。
+可以直接对照的固定值只有一处：刘海形态左翼 = `12` padding + `16.6` 状态矩阵 + `8` clearance = `36.6`，加 `200` 遮挡后收起态总宽为 `237`。尾翼从 `x = 244.6` 开始（`36.6 + 200 + 8`），宽度随它实际画出的内容变化——`CompactTrailingReading` 把 chip 簇的宽度（`PanelMetrics.subagentChipsWidth`）与计时文本的宽度合成一个读数（`compactTrailingReadingWidth`），chip 簇出现或多一枚时同样只是这个合成宽度变长，右翼跟着变宽。单枚 chip 量的是自己的数字加左右各 `4` 内边距，下限 `15 × 15`（两位数会把它撑宽，而不是溢出裁切）；两枚 chip 之间空 `4`，chip 簇与计时之间空 `8`。无刘海那个定宽为计时预留的槽位是 `00:00:00`（Medium）；chip 簇与计时的组合装不下时让胶囊自己变宽，而不是把 chip 裁掉——那是**唯一**一处内容能推动这个定宽的地方，为一个几乎不会出现的读数长期加宽每一个菜单栏里的胶囊才是更糟的那一边。由 `theCollapsedCountGrowsTheSlotItSharesWithTheTimer` 锁定。无刘海形态不再按内容组合：整个工作集合共用一个定宽（§6.4「固定工作宽度」），也不再有随菜单栏高度变化的宽度下限——`PanelMetrics` 中已没有任何一处拿菜单栏高度算宽度，它只决定面板高度与圆角。这些关系由 `compactGeometryComposesTheNotchWings` 锁定，其余宽度不写入契约。
 
-> 本段此前写过两轮旧数字：`18.4` / `50.4` / `251` 是矩阵改用 `16.6`（`13 × 1.2778`，见 `PanelMetrics.statusMatrixSize`）之前的；`48.6` / `249` 是两侧内边距还是 `24` 时的。内边距收到 `12` 之后（`PanelMetrics.expandedHorizontalPadding`），左翼为 `36.6`、总宽为 `237`，`compactGeometryComposesTheNotchWings` 断言的正是 `237`。§6.4 的宽度表用 `16.62` 记 `16.6` 这同一个值；两者差 `0.02`，ceil 之后的宽度完全相同，所以下表不受影响。
+> 本段此前写过两轮旧数字：`18.4` / `50.4` / `251` 是矩阵改用 `16.6`（`13 × 1.2778`，见 `PanelMetrics.statusMatrixSize`）之前的；`48.6` / `249` 是两侧内边距还是 `24` 时的。内边距收到 `12` 之后（`PanelMetrics.expandedHorizontalPadding`），左翼为 `36.6`、总宽为 `237`，`compactGeometryComposesTheNotchWings` 断言的正是 `237`。§6.4 的宽度表用 `16.62` 记 `16.6` 这同一个值；两者差 `0.02`，ceil 之后的宽度完全相同，所以下表不受影响。尾翼的组成关系此前是拼一整串文本（`2 │ 1:23`）后整体测量宽度；换成 chip 簇加计时两个读数分别测量、相加取代之后，两种算法在纯计时读数（chip 簇为空）上给出同一个数字，`theCollapsedCountGrowsTheSlotItSharesWithTheTimer` 与 `compactGeometryComposesTheNotchWings` 两条断言都是在这次改动后重新跑过的。
 
 ## 5. 实时监视列表
 

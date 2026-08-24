@@ -1632,7 +1632,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // Codex's automatic reviewer on the path a hook can see, so a
             // `PermissionRequest` that opened over one of this thread's
             // subagents is a person being asked.
-            subagentsAwaitingApproval: turn.subagentsAwaitingApproval,
+            subagentsAwaitingApprovalCount: turn.subagentsAwaitingApprovalCount,
             // What the row says between its subagent stopping and the turn
             // Claude Code opens next. The `Stop` that finished this turn said
             // which of the two terminals it was, and a turn that stopped in

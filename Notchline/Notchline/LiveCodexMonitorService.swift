@@ -1319,8 +1319,9 @@ enum CodexSnapshotParser {
         // `approvals_reviewer` as it stood when the subagent was spawned, with
         // both values represented. So on a thread Codex reviews itself, a
         // subagent's `PermissionRequest` is not a person being asked either.
-        let subagentsAwaitingApproval =
-            approvalsReachTheUser && state.subagentsAwaitingApproval
+        let subagentsAwaitingApprovalCount = approvalsReachTheUser
+            ? state.subagentsAwaitingApprovalCount
+            : 0
         let preview = status == .completed
             ? normalizedPreview(state.assistantPreview)
             : normalizedPreview(state.promptPreview)
@@ -1334,7 +1335,7 @@ enum CodexSnapshotParser {
             status: status,
             startedAt: state.startedAt,
             runningSubagentCount: state.runningSubagentIDs.count,
-            subagentsAwaitingApproval: subagentsAwaitingApproval
+            subagentsAwaitingApprovalCount: subagentsAwaitingApprovalCount
         )
     }
 

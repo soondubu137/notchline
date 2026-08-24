@@ -135,6 +135,12 @@ enum NotchPalette {
     )
     /// Session title — the one element that stays bright.
     static let sessionTitle = Color.white.opacity(0.98)
+    /// The subagent attention chip's numeral, drawn on ``spotlight`` white.
+    ///
+    /// `dual-agent-design.md` §10. Not ``label`` or pure black: the chip
+    /// inverts the same way the row's own attention state already does
+    /// elsewhere on this surface, and this is that inversion's dark end.
+    static let chipOnLight = Color(red: 0.05, green: 0.05, blue: 0.06)
 
     static let matrixOffLayerColor = CGColor(
         srgbRed: matrixOffRGB.red,
@@ -364,6 +370,99 @@ struct UsageMeter: View {
         }
         .frame(height: height)
         .accessibilityHidden(true)
+    }
+}
+
+/// Which colour a subagent numeral chip draws in.
+///
+/// `dual-agent-design.md` §10: hue on this chip only ever answers "can this
+/// mark honestly speak for one product right now" — never "which state is
+/// this". State is ``attention`` versus everything else, and it is answered
+/// by which chip a count is drawn on, not by tint.
+enum SubagentChipTint: Equatable {
+    /// The attention chip's colour, always -- never product-tinted (rule 4).
+    case attention
+    /// The running chip's colour when it cannot honestly speak for one
+    /// product: two products connected in the collapsed pill (rule 2), or an
+    /// expanded row regardless of how many products are connected (rule 3) --
+    /// the row already names its product elsewhere.
+    case neutral
+    /// The running chip's colour when exactly one product is connected in the
+    /// collapsed pill (rule 1).
+    case product(AgentKind)
+
+    var fill: Color {
+        switch self {
+        case .attention: NotchPalette.spotlight
+        case .neutral: NotchPalette.restingInk.off
+        case .product(let agent): NotchPalette.ink(for: agent).off
+        }
+    }
+
+    var text: Color {
+        switch self {
+        case .attention: NotchPalette.chipOnLight
+        case .neutral: NotchPalette.label
+        case .product(let agent): NotchPalette.ink(for: agent).on
+        }
+    }
+}
+
+/// One subagent numeral chip: a filled, rounded tile holding a bare count.
+///
+/// `dual-agent-design.md` §10. Sized to `PanelMetrics.subagentChipWidth`
+/// explicitly rather than left to hug its own text: the collapsed pill's
+/// width is composed from that same measurement, and a view free to size
+/// itself independently could drift from it by a point SwiftUI's own text
+/// layout and `NSString`'s measurement disagree on.
+struct SubagentChip: View {
+    let count: Int
+    let tint: SubagentChipTint
+
+    var body: some View {
+        Text("\(count)")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(tint.text)
+            .frame(
+                width: PanelMetrics.subagentChipWidth(count),
+                height: PanelMetrics.subagentChipMinSize
+            )
+            .background(
+                RoundedRectangle(
+                    cornerRadius: PanelMetrics.subagentChipCornerRadius,
+                    style: .continuous
+                )
+                .fill(tint.fill)
+            )
+            // Spoken by the row or the panel header, which say what each
+            // figure counts -- this mark alone is a bare number with colour
+            // as its only label, which VoiceOver cannot read.
+            .accessibilityHidden(true)
+    }
+}
+
+/// The white-then-grey/tinted chip pair, wherever it is drawn.
+///
+/// `dual-agent-design.md` §10, rules 5–6. A chip whose count is zero is not
+/// drawn at all -- see ``SubagentChipCounts`` -- and the attention chip always
+/// leads when both are present.
+struct SubagentChipCluster: View {
+    let counts: SubagentChipCounts
+    /// ``.neutral`` for a row always, and for the collapsed pill while two
+    /// products are connected; ``.product(_:)`` only for the collapsed pill
+    /// with exactly one product connected. Never ``.attention`` -- that tint
+    /// belongs to the other chip alone.
+    let runningTint: SubagentChipTint
+
+    var body: some View {
+        HStack(spacing: PanelMetrics.subagentChipSpacing) {
+            if counts.attention > 0 {
+                SubagentChip(count: counts.attention, tint: .attention)
+            }
+            if counts.running > 0 {
+                SubagentChip(count: counts.running, tint: runningTint)
+            }
+        }
     }
 }
 
