@@ -356,6 +356,17 @@ struct TurnEvidence: Equatable {
 - **读数必须整段晚于该轮次最后一个事件**，比较用命令**开始**运行的时刻而不是它答复的时刻。列表最长可缓存 30 秒，手里那份答案通常比之后到达的事件旧；用答复时刻比较，则一次跨越提交瞬间的读取会把它没看见的那个轮次报成空闲。
 - **结束就是 Completed。** 产品只有一个终态，被中断的轮次是已经结束的轮次。
 
+**同一份读数还回答另一个问题：用户面前有没有对话框。** Claude Code 在人**批准**一次审批时不发出任何 hook，`PermissionRequest` 之后到达的下一个事件是那次调用自己的 `PostToolUse`——它落在工具跑完的时刻，不是对话框关闭的时刻。2026-08-23 对 2.1.241 实测（子智能体 sleep 12 秒，父轮次已 `Stop`）：`PermissionRequest` 在 +6.22 s，人在 +9.35 s 批准，`PostToolUse` 在 +22.72 s——批准之后仍有 13.4 秒的 *Approval needed*。同一段时间会话一直报 `busy`；对话框开着时（包括父轮次 `Stop` 之后由**子智能体**弹出的那一个）它报 `waiting` / `waitingFor: "permission prompt"`。
+
+规则写在 `HookEventRepository.endApprovalWaitsForWorkingSessions(_:)`，四条：
+
+- **只认 `busy`，不认「不是 `waiting`」。** `idle` 证明不了对话框不在——对话框仍开着时按 `Esc`，160 ms 内就到 `idle`（CC-019）。不报告状态的会话在这里同样什么也不做。
+- **只能结束，不能开启。** 读数里既没有轮次身份也没有 `agent_id`，所以它对这条 thread 此刻持有的每一个审批等待发话——轮次自己的，和每个子智能体槽位里的——而一个都开不了。Input pending 不受影响：它必然由自己的 `PostToolUse` 关闭，两个等待同时存在时按 §6.2 显示 Input。
+- **顺序护栏钉在每一个等待自己身上**（`PendingApproval.openedAt`），不是钉在轮次的 `lastEventAt` 上：一次**开始**得比某个对话框还早的读取不可能看见它，因此不许关它。代价最多是晚一次刷新，而 `waiting → busy` 会重写会话记录，那条边沿本来就在。
+- **它不移动 `lastEventAt`。** 这不是轮次在做事，而那个戳是成员关系对账的唯一约束。
+
+详见 ADR 0011 的 2026-08-23 补充。
+
 **桌面端托管的会话不说这句话，它写在别处。** Claude Code 桌面端把 CLI 当作 `stream-json` 的子进程来跑，没有终端界面，而 `status` 正是终端界面写出来的——所以那种会话的记录里从头到尾没有这个字段，上面第一条按「沉默不是空闲」什么也不做，行就一直停在 *Running* 或 *Approval needed*（CC-022 / #41）。它留下的是另一样东西：Claude Code 中止一轮时会往 transcript 里写一条 `user` 记录，而那条记录**指名了它中止的那个轮次**。
 
 规则写在 `ClaudeCodeTranscriptReader.interruption(forSession:workingDirectory:turnID:after:)`，应用写在 `HookEventRepository.endInterruptedTurns(_:)`：
@@ -526,7 +537,7 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 - `PermissionRequest` 没有自己的 `tool_use_id`，因此不能独立成为 Approval evidence；但它携带 `tool_name`，而被审批的调用已经由紧邻的 `PreToolUse` announce 过。reducer 因此为每个 Turn 记录"当前仍打开的工具调用"（`openToolUse`：`PreToolUse` 写入，同 `tool_use_id` 的 `PostToolUse` 清除），`PermissionRequest` 借用该 id 建立 Approval pending。没有打开的调用可配对，或 `tool_name` 与打开的调用不一致时，保持原状态——绝不建立无法关闭的等待。`PostToolUse` 自身仍不得用来猜测审批状态。
 - **这里此前还写着「自动放行的请求在同一批事件内开合，不会滞留成假等待」，那句话不成立**：借用 id 的等待关的是那次调用，不是那次决定，所以它横跨的是「决定 + 执行」而不只是「人在看」。实测 2026-08-22 的自动审查是 2.5 s（Desktop 侧 2.1–5.9 s），reducer 因此在每一次被审查的调用上都真的开一段 Approval——这不是 reducer 的错，它证明的事情是对的。修正落在**组行**这一层，见下一条。
 - **审批归属闸门（Codex，跨源决策，因此在 `LiveCodexMonitorService` 里）。** `CodexDesktopApprovalRoutingRepository` 只读 `.codex-global-state.json` 的 `electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<threadId>.approvalsReviewer`；值为 `auto_review`（Desktop 的「Approval for me」／`guardian-approvals`）时，该 thread 上的审批永远不会问到人——自动审查者只有 allow / deny，没有回到人的出口——于是 `CodexSnapshotParser.session` 把该行的 `approvalNeeded` 降为 `running`，`inputNeeded` 与 `completed` 原样通过。**方向是单向的**：只有被证明为 `auto_review` 才降级；条目缺席、值不认识、文件读不到都保持原行为，因为要断言的是「不会有人被问」，缺证据就是没有断言。reducer 不知道这件事，也不应该知道：它只看事件，而这条闸门要同时知道事件与 Desktop 文件。官方 `permission-request.command.input` schema 里没有任何字段可以替代它（`permission_mode` 两种设置下都是 `default`，实测 2026-08-22）。
-- Approval pending 因此分两类（`PendingApproval.isInferred`）。`request_permissions` 自带 id，必然收到配对 `PostToolUse`，只由该事件关闭。借用 id 的等待在**拒绝**时永远收不到关闭事件，因此额外由「任意其他 `tool_use_id` 的 `PreToolUse`／`PostToolUse`」关闭——产品在阻塞于审批期间不发送任何事件，所以其他调用的活动就是人工已回答的证据。两类都由 `Stop` 兜底进入 Completed。该规则严格限定在借用 id 的等待上，不得放宽到 `request_permissions` 或 Input pending。
+- Approval pending 因此分两类（`PendingApproval.isInferred`）。`request_permissions` 自带 id，必然收到配对 `PostToolUse`，只由该事件关闭。借用 id 的等待在**拒绝**时永远收不到关闭事件，因此额外由「任意其他 `tool_use_id` 的 `PreToolUse`／`PostToolUse`」关闭——产品在阻塞于审批期间不发送任何事件，所以其他调用的活动就是人工已回答的证据。两类都由 `Stop` 兜底进入 Completed。该规则严格限定在借用 id 的等待上，不得放宽到 `request_permissions` 或 Input pending。**Claude Code 侧还有第三条关闭路径**，它管的是**批准**而不是拒绝：那里 `PostToolUse` 落在工具跑完而不是对话框关闭的时刻，所以批准一条慢命令会让行在整段执行期间错写 *Approval needed*；会话状态说 `busy` 就是对话框不在的证据，见第 4 节「会话自己会说它还在不在工作」与 ADR 0011 的 2026-08-23 补充。
 - **「人拒绝了」在两个产品上都是静默的，因此两边都要那条推断。** Codex 实测 2026-08-15：拒绝后该 `tool_use_id` 再无任何事件，67 秒后直接 `Stop`。Claude Code 此前被记作例外，理由是 `PermissionDenied` 指名了被拒的调用——实测 2026-08-23（CLI `2.1.241`）推翻了它：该事件在二进制里只有一个产生点，且唯一调用点被 `decisionReason.classifier == "auto-mode"` 挡着，**它报的是自动模式的分类器拒绝，不是人**；两次交互式实测里人选 `No` 之后没有 `PermissionDenied`、没有 `PostToolUse`、连 `Stop` 都没有（拒绝把那一轮中断掉了，而官方 hook 里没有中断事件）。所以 `ClaudeCodeHookVocabulary.reportsApprovalDenials` 由 `true` 改为 `false`。当初把它设成 `true` 的另一半理由——「`Stop` 被测到早于它自己子智能体的 `PermissionRequest`，乱序投递会让不相关的活动关掉人还在看的等待」——也不成立：那不是乱序，那就是异步子智能体的形状（`Agent` 调用立刻返回、轮次先结束、子智能体后来才要人），而按 agent 分格之后这两个事件根本落在两格里。子智能体那一格无论哪个产品都推断，理由同上。
 - 只有本次启动后收到的实时 `Stop` 才清空 pending input/approval，并让同一精确 Turn 直接进入 Completed。产品不区分 completed/failed/interrupted 的结束原因，也不存在终态待解析窗口。历史回放的 Stop 完全不进入 Turn reducer。
 

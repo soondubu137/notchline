@@ -38,3 +38,35 @@ Claude Code 里用户按 `Esc` 中断一个轮次时，**不会有任何 hook �
 其余三条边界原样成立。顺序护栏在这里更准——比较用的是记录被**写下**的时刻，而不是本应用读到它的时刻。「只有肯定的停止才作数」也一样：没有那条记录就什么都不做，一条读不出时间戳、或者结构对不上的记录同样什么都不做。
 
 代价：**多了一个非公开依赖的用途**。transcript 本来就是本表登记的私有只读 schema（标题与当日用量都读它），这里给它加的是一个新问题——「这一轮被中断了吗」——以及一条新的结构规则，两者都登记在 `non-public-codex-integration-features.md` 里。以及一条自己的边沿：中断不会改写 `~/.claude/sessions/<pid>.json`，所以 `ClaudeCodeSessionRecordWatcher` 看不到它，`transcriptWatcher` 按文件监听那些会话的 transcript；它不把会话列表标记为过期，因为答案不在那条命令里。
+
+## 补充（2026-08-23）：同一份读数还可以结束一个**等待**
+
+上面第 4 条边界写着「`busy` 与 `waiting` 是会话在工作」，然后就把这两个词一起放过了。**放过 `busy` 是对的，只看它能不能结束轮次却漏掉了它能回答的另一个问题：对话框还在不在。**
+
+漏掉的代价是一个明确的错报。**Claude Code 在人批准一次审批时不发出任何 hook。** `PermissionRequest` 开启等待，之后到达的下一个事件是那次调用自己的 `PostToolUse`——而它落在**工具跑完**的时刻，不是对话框关闭的时刻。命令要跑 200 ms 时这两者看不出差别，命令要跑十几秒时行就在整段执行期间写着 *Approval needed*，请用户去回答一个他刚刚已经回答过的问题。子智能体是它显形的地方（一次不被等待的 `Agent` 调用加一条长命令，父轮次早已 `Stop`），但这个形状与子智能体无关：主线程上批准一条慢命令是同一回事。
+
+2026-08-23 对 CLI 2.1.241 实测，一个被要求 sleep 12 秒的子智能体，父轮次 `Stop` 在 +4.90 s：
+
+```text
++6.18  PreToolUse         agent_id=a1f0…  tool=Bash  tool_use_id=toolu_01UX…
++6.22  PermissionRequest  agent_id=a1f0…  tool=Bash  （没有 tool_use_id）
+       claude agents --json: status=waiting, waitingFor="permission prompt"   [+6.37 … +8.37]
++9.35  人按下批准
+       claude agents --json: status=busy                                      [+9.07 起，整段]
++22.72 PostToolUse        agent_id=a1f0…  tool=Bash  tool_use_id=toolu_01UX…
+```
+
+批准之后仍有 **13.4 秒**的 *Approval needed*。同一段时间里，会话自己一直在说 `busy`。
+
+**因此允许这份读数再做一件事：结束一个已经开着的审批等待。** 写在 `HookEventRepository.endApprovalWaitsForWorkingSessions(_:)`，与上面两条同一个形状——服务层交出的仍是一件关于**会话**的事实，reducer 自己改状态。
+
+边界比照上面四条，逐条对齐：
+
+1. **能力仍然只有「结束」。** 这份读数没有轮次身份、也没有 `agent_id`，所以它开不了任何等待，只能对这条 thread 此刻持有的等待发话——轮次自己的那个，和每一个子智能体槽位里的那个。没有对话框的会话，这些等待没有一个在用户面前。
+2. **只有肯定的证据才作数：只认 `busy`，不认「不是 `waiting`」。** `idle` 证明不了对话框不在——CC-019 实测，对话框仍开着时按 `Esc`，160 ms 内就到 `idle`。从一个「缺席」里读出等待的结束，会关掉用户正在看的那一个。不报告状态的会话（桌面端托管）在这里同样什么也不做。
+3. **顺序护栏钉在每一个等待自己身上**，而不是钉在轮次的 `lastEventAt` 上：一次**开始**得比某个等待还早的读取，不可能看见那个对话框，因此不许关它。为此 `PendingApproval` 记下自己开启的时刻。代价是最多晚一次刷新，而那次刷新本来就在路上——`waiting → busy` 会重写会话记录，`ClaudeCodeSessionRecordWatcher` 正盯着每一个列出的会话。
+4. **它不移动 `lastEventAt`。** 这不是轮次在做事，而 `lastEventAt` 是 reducer 对账成员关系的唯一约束（`endOpenTurn` 移动它，是因为它**结束**轮次、必须挡住晚到事件把它重新打开；这里没有东西需要挡：后一个 `PermissionRequest` 是一个新的对话框，本来就该重新开启等待）。
+
+拒绝的替代方案有两个。`Notification(permission_prompt)` 早已在 CC-011 里量过：它按 6 秒的键盘空闲计时器触发，且**没有任何一种通知类型表示「已解决」**，所以它连开启都比 `PermissionRequest` 晚，更谈不上关闭。「等 `PostToolUse`」就是今天的行为，它把审批区间和执行区间当成同一段，而这两段本来就不是一回事。
+
+代价：**上面那条非公开依赖多了一个用途。** `status` 的词表本来只用来回答「这个会话还在不在工作」，现在还回答「用户面前有没有对话框」。这不是一个新字段，但确实是一句更强的话，同样登记在 `non-public-codex-integration-features.md` 里；`busy` 之外的一切——包括词表之外的新词——仍然一律当作「没有报告」。

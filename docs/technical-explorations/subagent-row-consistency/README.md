@@ -254,6 +254,33 @@ return session.status == .completed && session.hasRunningSubagent
 
 **顺带测出的一个既有缺陷，写在这里而不是藏着。** `ClaudeCodeHookVocabulary.reportsApprovalDenials = true` 只对**分类器**的拒绝成立（6.1 第 4 条）。人按 `No` 时 Claude Code 什么也不发，而 `infersDenials` 因为这个 `true` 是关着的，于是主线程的行会一直写着 `Approval needed`——直到 `claude agents --json` 报出 `idle` 让那一轮进入 Completed（ADR 0011，最多一拍 30 秒），桌面端托管的会话则要等 transcript 的中断记录。这与本节是同一条规则的两侧：**拒绝在两个产品上都是静默的**，所以那条「别的调用上有活动就算人答过了」的推断两边都需要。建议在同一次改动里把它一起修掉，并单独写一条 `aRefusedMainThreadCallStopsSayingApprovalNeeded`。
 
+#### 后续（2026-08-23）：上面那条「测到了但不采用」被推翻了一半
+
+方案落地当天用户就撞上了它没盖住的洞：*「子智能体弹出审批，行进入 Approval needed，**批准之后它不消失**，一直卡到十秒的 sleep 跑完为止。」*
+
+这不是实现漏了什么，是 6.2 的模型缺一条出路。**Claude Code 在人按下批准时不发出任何 hook。** 那一格的等待因此只能等那次调用自己的 `PostToolUse`——而它落在**工具跑完**的时刻，不是对话框关闭的时刻。命令跑 200 ms 时两者看不出差别，命令跑十几秒时行就在整段执行期间请用户去回答一个他已经回答过的问题。6.2 的落地记录里那条「拒绝在两个产品上都是静默的」说的是**拒绝**；这里是**批准**，而批准同样是静默的，只是它后面还跟着一个迟到的关闭事件，所以一直看起来像是被盖住了。
+
+实测（2026-08-23，CLI `2.1.241`，父轮次 `Stop` 在 +4.90 s，子智能体被要求 sleep 12 秒）：
+
+```text
++6.18  PreToolUse         agent_id=a1f0…  tool=Bash  tool_use_id=toolu_01UX…
++6.22  PermissionRequest  agent_id=a1f0…  tool=Bash  （没有 tool_use_id）
+       claude agents --json: status=waiting, waitingFor="permission prompt"   [+6.37 … +8.37]
++9.35  人按下批准
+       claude agents --json: status=busy                                      [+9.07 起，整段执行期间]
++22.72 PostToolUse        agent_id=a1f0…  tool=Bash  tool_use_id=toolu_01UX…
+```
+
+**批准之后 13.4 秒的错报，而同一段时间会话自己一直在说 `busy`。** 于是上面那三条拒绝理由逐条重看：
+
+1. 「30 秒一拍太慢」——**不成立**。那是没有边沿时的数字。`waiting → busy` 会重写 `~/.claude/sessions/<pid>.json`，而 `ClaudeCodeSessionRecordWatcher` 早已盯着**每一个列出的会话**（不只是有轮次在跑的），registry 的 `edgeFloor` 把一串翻转压到两秒一次读取。等待的关闭因此落在一次去抖 + 一次 `claude agents --json` 之内，而不是一拍。
+2. 「桌面端托管的会话永远没有它」——**成立，但这是一次刻意的部分修复**，与 ADR 0011 本体当初的形状一样。那些会话保持今天的行为。
+3. 「只属于 Claude Code，Codex 没有对等物」——**不适用**。这条规则不画任何新东西，它只**关掉**一个等待；Codex 侧一个字不改，两个产品画出来的仍然是同一套。
+
+采用的是三件事里最小的那一件：不用它证实（对话框确实开着仍然只由 `PermissionRequest` 说），不用它当自愈兜底，只用它回答「人已经答过了」。并且**只认 `busy`，不认「不是 `waiting`」**——`idle` 证明不了对话框不在（CC-019 实测：对话框仍开着时按 `Esc`，160 ms 内即到 `idle`），从一个缺席里读出结束会关掉用户正在看的那一个。
+
+落地：`PendingApproval` 记下自己开启的时刻（顺序护栏因此钉在每个等待自己身上，而不是钉在轮次的 `lastEventAt` 上——子智能体的事件本来就不许移动那个戳），新规则写在 `HookEventRepository.endApprovalWaitsForWorkingSessions(_:)`，由 `ClaudeCodeMonitorService` 用它已经在取的那份读数调用。主线程那一格一并修好，因为那是同一个缺陷的另一半。写进 ADR 0011 的 2026-08-23 补充、`tech-design.md` 第 4 节、`PRD.md` 与非公开集成登记表。
+
 ### 6.3 Codex 侧实测（2026-08-23，Codex CLI `0.149.0-alpha.4.1`）
 
 两件事：一件跑出来的，一件从既有 rollout 里读出来的。用户的 `~/.codex` 全程只读——`hooks.json` 一个字节没动。
@@ -392,4 +419,5 @@ SubagentStop      prompt_id=5fd7…  agent_id=ae14…
   - ~~自动审查的 thread 上，子智能体的审批到底交给谁~~ 已测（6.3 第二条）：继承父 thread，72/72，因此 6.2 改成照做减法；
   - 唯一还没测的是**人在交互式 TUI 里拒绝一次子智能体的审批时 Codex 发什么**，理由与它为什么不改变设计写在 6.3 第四条；
   - ~~6.2 末尾那条既有缺陷需要一并决定是不是同一次改动里修~~ 已在同一次改动里修掉，理由见 6.2 的落地记录第 2 条。
+- ~~6.2 落地记录里「测到了但不采用 `claude agents --json` 的 `waiting` 读数」~~ 被推翻了一半，见 6.3 前那节后续：**批准与拒绝一样是静默的**，而那条会话读数是唯一能说「人已经答过了」的证据，三条拒绝理由里只有「桌面端托管的会话没有它」还成立。
 - 8.2 末尾那条 `background_tasks` 出路没有实测（`pending` 被取消时补不补 `SubagentStop`），一并记在 #102。

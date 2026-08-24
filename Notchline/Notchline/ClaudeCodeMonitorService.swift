@@ -542,6 +542,24 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // bug, not a reason to trap.
             uniquingKeysWith: { first, _ in first }
         )
+        // The same reading's other word, and the only evidence this product
+        // gives that an approval was *answered*. No hook fires when a human
+        // approves: `PermissionRequest` opens the wait and the next event is
+        // the call's own `PostToolUse`, which lands when the tool finishes
+        // rather than when the dialog closes. `busy` means no dialog is in
+        // front of the user, so it ends the wait the moment the record's flip
+        // brings this refresh round -- see
+        // ``HookEventRepository/endApprovalWaitsForWorkingSessions(_:)`` for
+        // the measurement and for why `idle` is not allowed to say the same.
+        let working = Dictionary(
+            live.compactMap { session -> (String, Date)? in
+                guard let activity = session.activity, activity.state == .busy else {
+                    return nil
+                }
+                return (session.sessionID, activity.observedAt)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
         // The other half of the same question, for the sessions the reading
         // above cannot answer for at all. A desktop-hosted session never
         // reports a working status -- the terminal interface publishes that
@@ -583,6 +601,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         }
         if !interruptions.isEmpty {
             hookState = await hookEvents.endInterruptedTurns(interruptions)
+        }
+        // After both, and disjoint from `stopped` by construction: a session is
+        // either working or it is not. A turn those two just ended keeps no
+        // approval for this to clear, and a turn still running is exactly the
+        // one that has an answered dialog to forget.
+        if !working.isEmpty {
+            hookState = await hookEvents.endApprovalWaitsForWorkingSessions(working)
         }
         // What draining the queue had to say about it survives whichever of
         // those calls ran, none of which knows anything about the files this

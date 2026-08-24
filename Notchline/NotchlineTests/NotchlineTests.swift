@@ -3859,7 +3859,8 @@ struct NotchlineTests {
                 pendingInputToolUseID: nil,
                 pendingApproval: PendingApproval(
                     toolUseID: "exec-1",
-                    isInferred: true
+                    isInferred: true,
+                    openedAt: Date(timeIntervalSince1970: 1_002)
                 ),
                 startedAt: Date(timeIntervalSince1970: 1_000),
                 lastEventAt: Date(timeIntervalSince1970: 1_002),
@@ -21521,6 +21522,263 @@ extension NotchlineTests {
         // And the settling window still starts at the boundary, not at the
         // call in the middle of it.
         #expect(turn.terminalBoundaryAt == Date(timeIntervalSince1970: 150))
+    }
+
+    /// Approving a subagent's dialog ends the wait, without waiting for the
+    /// tool to finish.
+    ///
+    /// **No hook fires when a human approves**, so until the session reading
+    /// was consulted the only way out was the call's own `PostToolUse` -- which
+    /// lands when the *tool* finishes, not when the dialog closes. The timeline
+    /// below is the measurement, 2026-08-23 against CLI 2.1.241, a subagent
+    /// asked to sleep twelve seconds after its parent turn had already stopped:
+    ///
+    /// ```text
+    /// +4.90  Stop                                          (the row is Completed)
+    /// +6.18  PreToolUse   agent_id=a1f0…  tool=Bash  tool_use_id=toolu_01UX…
+    /// +6.22  PermissionRequest  agent_id=a1f0…  tool=Bash   (no tool_use_id)
+    ///        claude agents --json: status=waiting, waitingFor="permission prompt"
+    /// +9.35  the human approves
+    ///        claude agents --json: status=busy
+    /// +22.72 PostToolUse  agent_id=a1f0…  tool=Bash  tool_use_id=toolu_01UX…
+    /// ```
+    ///
+    /// Thirteen seconds of `Approval needed` after the answer. The reading is
+    /// what closes it, and the stamps here are that timeline to the second.
+    @Test @MainActor
+    func aWorkingSessionEndsTheApprovalItsSubagentWasWaitingOn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let thread = "thread-1"
+        let prompt = "prompt-1"
+        let agent = "a1f0029b4239"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": prompt
+        ])
+        try deliver([
+            "received_at": 103.0, "hook_event_name": "SubagentStart",
+            "session_id": thread, "prompt_id": prompt,
+            "agent_id": agent, "agent_type": "general-purpose"
+        ])
+        try deliver([
+            "received_at": 104.90, "hook_event_name": "Stop",
+            "session_id": thread, "prompt_id": prompt
+        ])
+        try deliver([
+            "received_at": 106.18, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "tool_name": "Bash", "tool_use_id": "toolu_01UX"
+        ])
+        try deliver([
+            "received_at": 106.22, "hook_event_name": "PermissionRequest",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "tool_name": "Bash"
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .completed)
+        #expect(turn.subagentsAwaitingApproval, "the dialog is open")
+
+        // A reading taken while the dialog was still up, arriving late. It
+        // started before the wait opened, so it cannot have seen the dialog and
+        // is refused -- the strictness that keeps this from closing a question
+        // the user is still looking at.
+        var state = await repository.endApprovalWaitsForWorkingSessions(
+            [thread: Date(timeIntervalSince1970: 105.66)]
+        )
+        turn = try #require(state.turns.first)
+        #expect(
+            turn.subagentsAwaitingApproval,
+            "a reading older than the dialog cannot speak for it"
+        )
+
+        // The reading that says the session went back to work. `PostToolUse` is
+        // still thirteen seconds away and never arrives in this test.
+        state = await repository.endApprovalWaitsForWorkingSessions(
+            [thread: Date(timeIntervalSince1970: 109.07)]
+        )
+        turn = try #require(state.turns.first)
+        #expect(turn.subagentsAwaitingApproval == false, "the human answered")
+        #expect(
+            turn.subagentSlots[agent]?.openToolUse?.id == "toolu_01UX",
+            "the call is still open -- only the wait ended"
+        )
+        // Everything else the row draws is untouched: the thread is still
+        // working, and the evidence was not the turn doing anything.
+        #expect(turn.runningSubagentIDs == [agent])
+        #expect(turn.status == .completed)
+        #expect(turn.lastEventAt == Date(timeIntervalSince1970: 104.90))
+
+        // And the call closing later is still a no-op rather than a surprise.
+        try deliver([
+            "received_at": 122.72, "hook_event_name": "PostToolUse",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "tool_name": "Bash", "tool_use_id": "toolu_01UX"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.subagentsAwaitingApproval == false)
+        #expect(turn.subagentSlots.isEmpty)
+    }
+
+    /// The same rule over the turn's own wait, which has the identical defect.
+    ///
+    /// A subagent is where it is visible -- an approved `sleep` is a long call
+    /// by construction -- but nothing about the shape is the subagent's. The
+    /// main thread's `PermissionRequest` is closed by the same `PostToolUse`
+    /// at the same moment, so a row approving a slow command sat on `Approval
+    /// needed` for the length of it too.
+    @Test @MainActor
+    func aWorkingSessionEndsTheTurnsOwnApprovalToo() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let thread = "thread-1"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": "prompt-1"
+        ])
+        try deliver([
+            "received_at": 101.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": "prompt-1",
+            "tool_name": "Bash", "tool_use_id": "call-1"
+        ])
+        try deliver([
+            "received_at": 101.03, "hook_event_name": "PermissionRequest",
+            "session_id": thread, "prompt_id": "prompt-1", "tool_name": "Bash"
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .approvalNeeded)
+
+        let state = await repository.endApprovalWaitsForWorkingSessions(
+            [thread: Date(timeIntervalSince1970: 104)]
+        )
+        turn = try #require(state.turns.first)
+        #expect(turn.status == .running, "approved, and the command is running")
+        #expect(turn.pendingApproval == nil)
+        #expect(turn.openToolUse?.id == "call-1", "the call itself is still open")
+        // Not the turn doing anything, so the stamp that bounds membership
+        // reconciliation does not move.
+        #expect(turn.lastEventAt == Date(timeIntervalSince1970: 101.03))
+    }
+
+    /// A question the user has not answered survives the same reading.
+    ///
+    /// `Approval needed` and `Input needed` are separate waits with separate
+    /// evidence, and this one is closed by its own `PostToolUse` whatever the
+    /// human says. A session that is `busy` while an `AskUserQuestion` is open
+    /// must therefore leave it alone -- and where a turn holds both, clearing
+    /// the approval must leave the row on the input rather than on `Running`.
+    @Test @MainActor
+    func aWorkingSessionLeavesAnInputWaitAlone() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let thread = "thread-1"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": "prompt-1"
+        ])
+        try deliver([
+            "received_at": 101.0, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": "prompt-1",
+            "tool_name": "AskUserQuestion", "tool_use_id": "ask-1"
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .inputNeeded)
+
+        let state = await repository.endApprovalWaitsForWorkingSessions(
+            [thread: Date(timeIntervalSince1970: 104)]
+        )
+        turn = try #require(state.turns.first)
+        #expect(turn.status == .inputNeeded, "nobody answered the question")
+        #expect(turn.pendingInputToolUseID == "ask-1")
+    }
+
+    /// The whole route, from the dialog opening to the row going back to work.
+    ///
+    /// Through the real service, because what closes the wait is a reading the
+    /// service takes and the reducer never asks for. `PostToolUse` is never
+    /// delivered here at all: the point is that the row recovers without it.
+    @Test @MainActor
+    func aClaudeCodeRowLeavesApprovalNeededWhenTheSessionGoesBackToWork()
+        async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(
+            event: "SubagentStart", session: "s-1", turn: "p-1", at: 103,
+            agentID: "a-1"
+        )
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 104.9)
+        try harness.queue(
+            event: "PreToolUse", session: "s-1", turn: "p-1", at: 106.18,
+            toolName: "Bash", toolUseID: "call-1", agentID: "a-1"
+        )
+        try harness.queue(
+            event: "PermissionRequest", session: "s-1", turn: "p-1", at: 106.22,
+            toolName: "Bash", agentID: "a-1"
+        )
+
+        // While the dialog is up the session says so, and the row says it too.
+        harness.live = [
+            harness.session(id: "s-1", cwd: cwd, activity: .waiting, observedAt: 107)
+        ]
+        var snapshot = await harness.service.fetchSnapshot()
+        var row = try #require(snapshot.sessions.first)
+        #expect(row.status == .completed, "the turn itself finished long ago")
+        #expect(row.subagentsAwaitingApproval)
+        #expect(MonitorAggregation.effectiveStatus(of: row) == .approvalNeeded)
+
+        // The human approves. Nothing is sent for that -- the session simply
+        // stops saying it is waiting, which the record watcher brings round.
+        harness.live = [
+            harness.session(id: "s-1", cwd: cwd, activity: .busy, observedAt: 109.07)
+        ]
+        snapshot = await harness.service.fetchSnapshot()
+        row = try #require(snapshot.sessions.first)
+        #expect(row.subagentsAwaitingApproval == false)
+        #expect(row.runningSubagentCount == 1, "and it is still working on it")
+        #expect(MonitorAggregation.effectiveStatus(of: row) == .running)
     }
 
     /// An agent that never announced itself is not a subagent of this thread.

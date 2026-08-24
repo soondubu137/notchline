@@ -1054,6 +1054,16 @@ nonisolated struct PendingApproval: Sendable, Equatable {
     /// end on any evidence the turn resumed, since Codex sends nothing while it
     /// is genuinely blocked on the prompt.
     let isInferred: Bool
+    /// When the event that opened this wait arrived.
+    ///
+    /// Carried so that evidence which is not a hook event can be held to the
+    /// same monotonic rule every hook event is held to. A reading of the
+    /// session that *started* before this instant cannot have seen the dialog
+    /// this wait is about, so it is not allowed to close it -- see
+    /// ``HookEventRepository/endApprovalWaitsForWorkingSessions(_:)``. Getting
+    /// that backwards would close a dialog the user is still looking at, which
+    /// is worse than the delay it exists to fix.
+    let openedAt: Date
 }
 
 /// A tool call that has been announced and not yet closed.
@@ -2291,6 +2301,104 @@ actor HookEventRepository {
         turnsByThreadID[threadID] = turn
     }
 
+    /// Ends the approval waits of sessions the product says are working.
+    ///
+    /// **The only evidence Claude Code gives that an approval was answered,
+    /// and without it a row says `Approval needed` while the approved tool
+    /// runs.** No hook fires when a human approves. `PermissionRequest` opens
+    /// the wait and the next thing to arrive is the call's own `PostToolUse`,
+    /// which lands when the *tool finishes* rather than when the dialog closes
+    /// -- so the row is right for a command that takes 200 ms and wrong for
+    /// every second of one that takes longer. Measured 2026-08-23 against CLI
+    /// 2.1.241, a subagent asked to sleep twelve seconds: `PermissionRequest`
+    /// at +6.22 s, the human approved at +9.35 s, `PostToolUse` at +22.72 s.
+    /// Thirteen seconds of a row asking the user to answer something they had
+    /// already answered.
+    ///
+    /// What closes it instead is the session status the same reading already
+    /// takes for ``endTurnsForStoppedSessions(_:)``. Claude Code publishes
+    /// `waiting` for exactly as long as a dialog is in front of the user --
+    /// including one a *subagent* raised after the parent turn's `Stop` -- and
+    /// `busy` otherwise. On the same measurement the session read `waiting`
+    /// (`waitingFor: "permission prompt"`) from +6.37 s to +8.37 s and `busy`
+    /// from +9.07 s onward, through the whole of the approved sleep. So `busy`
+    /// is positive evidence that no dialog is open, which is the one thing a
+    /// hook never says.
+    ///
+    /// **`busy` only, never "not `waiting`".** `idle` does not prove the
+    /// absence of a dialog: measured for CC-019, `Esc` reaches `idle` with the
+    /// dialog still drawn. Reading a wait's end out of an absence would close
+    /// one the user is still looking at, so this asks for the word that means
+    /// what it needs and treats every other word, and no word at all, as
+    /// silence. A session the desktop app hosts publishes no status whatsoever
+    /// and is therefore never named here.
+    ///
+    /// **It may only end a wait, exactly like the two above it.** The reading
+    /// carries no turn id and no `agent_id`, so it can no more open an approval
+    /// than a session status can open a turn. It applies to whichever waits the
+    /// thread is holding -- the turn's own and every subagent's -- because a
+    /// session with no dialog open has none of them in front of the user.
+    ///
+    /// Each wait is held to its own stamp: a reading that *started* before a
+    /// wait opened cannot have seen that dialog, so it is refused. The cost of
+    /// that strictness is one refresh, and the refresh is already on its way --
+    /// the session record is rewritten on the `waiting` to `busy` flip and
+    /// ``ClaudeCodeSessionRecordWatcher`` is pointed at every listed session.
+    ///
+    /// - Parameter observations: Thread id to when the reading that said `busy`
+    ///   **started running**, which is the strictest thing it can be held to.
+    func endApprovalWaitsForWorkingSessions(
+        _ observations: [String: Date]
+    ) -> HookStateSnapshot {
+        for (threadID, observedAt) in observations {
+            endApprovalWaits(ofThread: threadID, at: observedAt)
+        }
+        signalIfProjectionChanged()
+        return snapshot()
+    }
+
+    /// Clears every approval wait one thread holds that the evidence outdates.
+    ///
+    /// Deliberately does not move `lastEventAt`. This is not the turn doing
+    /// anything -- it is a reading of the session that happens to prove a
+    /// dialog is gone -- and that stamp is the reducer's only bound against a
+    /// row fending off membership reconciliation. ``endOpenTurn(ofThread:named:at:)``
+    /// moves it because it *ends* the turn and a later event must not reopen
+    /// what it closed; there is nothing here for a later event to undo, because
+    /// a later `PermissionRequest` is a new dialog and should reopen the wait.
+    private func endApprovalWaits(ofThread threadID: String, at moment: Date) {
+        guard var turn = turnsByThreadID[threadID] else { return }
+        var changed = false
+
+        if let pending = turn.pendingApproval, moment > pending.openedAt {
+            turn.pendingApproval = nil
+            changed = true
+            // The same re-derivation `toolCallClosed` performs, and for the
+            // same reason: an input wait outranks the approval that was
+            // cleared, and a turn already at `completed` absorbs both.
+            turn.sessionStatus = turn.sessionStatus.transitioned(
+                on: turn.pendingInputToolUseID != nil ? .inputNeeded : .running
+            )
+        }
+
+        for (agentID, slots) in turn.subagentSlots {
+            guard let pending = slots.pendingApproval, moment > pending.openedAt else {
+                continue
+            }
+            var cleared = slots
+            cleared.pendingApproval = nil
+            changed = true
+            if cleared.isEmpty {
+                turn.subagentSlots.removeValue(forKey: agentID)
+            } else {
+                turn.subagentSlots[agentID] = cleared
+            }
+        }
+
+        guard changed else { return }
+        turnsByThreadID[threadID] = turn
+    }
+
     /// Forgets the threads a listing of what exists no longer names.
     ///
     /// The reducer's own bound, and the only one it has: nothing else here ever
@@ -2448,7 +2556,8 @@ actor HookEventRepository {
                 signal,
                 agentID: agentID,
                 threadID: threadID,
-                event: event
+                event: event,
+                at: delivered.receivedAt
             )
             return true
         }
@@ -2537,7 +2646,8 @@ actor HookEventRepository {
                 }
                 state.pendingApproval = PendingApproval(
                     toolUseID: openToolUse.id,
-                    isInferred: true
+                    isInferred: true,
+                    openedAt: receivedAt
                 )
                 state.sessionStatus = state.sessionStatus
                     .transitioned(on: .approvalNeeded)
@@ -2582,7 +2692,8 @@ actor HookEventRepository {
                 )
                 $0.pendingApproval = PendingApproval(
                     toolUseID: toolUseID,
-                    isInferred: false
+                    isInferred: false,
+                    openedAt: receivedAt
                 )
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
@@ -2744,11 +2855,18 @@ actor HookEventRepository {
     /// belongs to the two boundaries, because what it dates is when this
     /// thread stopped working, and a call in the middle of a subagent's life
     /// says nothing about that.
+    ///
+    /// - Parameter at: The arrival stamp, kept on the approval it opens and
+    ///   nowhere else. It is what lets
+    ///   ``endApprovalWaitsForWorkingSessions(_:)`` refuse a session reading
+    ///   older than the dialog it would be closing; it moves neither of the
+    ///   two stamps above.
     private func reduceSubagentToolEvent(
         _ signal: HookSignal,
         agentID: String,
         threadID: String,
-        event: HookPayload
+        event: HookPayload,
+        at receivedAt: Date
     ) {
         guard var turn = turnsByThreadID[threadID] else { return }
         var slots = turn.subagentSlots[agentID] ?? AgentWaitSlots()
@@ -2785,7 +2903,8 @@ actor HookEventRepository {
             case .approvalWaitOpened:
                 slots.pendingApproval = PendingApproval(
                     toolUseID: toolUseID,
-                    isInferred: false
+                    isInferred: false,
+                    openedAt: receivedAt
                 )
             default:
                 break
@@ -2803,7 +2922,8 @@ actor HookEventRepository {
             }
             slots.pendingApproval = PendingApproval(
                 toolUseID: openToolUse.id,
-                isInferred: true
+                isInferred: true,
+                openedAt: receivedAt
             )
         case .toolCallClosed:
             observedPostToolUseCount += 1
