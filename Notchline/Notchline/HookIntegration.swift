@@ -1168,6 +1168,30 @@ struct HookTurnState: Sendable {
     /// subagent's own `turn_id` on Codex and the parent's `prompt_id` on Claude
     /// Code, and this table reads neither.
     var subagentSlots: [String: AgentWaitSlots] = [:]
+    /// Whether this turn's own terminal event said the session was pausing
+    /// rather than finishing.
+    ///
+    /// **The gap this closes is between two facts that are both true.** An
+    /// asynchronous subagent's `SubagentStop` empties
+    /// ``runningSubagentIDs``, and Claude Code re-enters the parent with a new
+    /// prompt of its own -- measured 2026-08-23 against CLI 2.1.241 at 130 ms
+    /// under `-p` and 50 ms in a pty. In between, a row whose only evidence was
+    /// the count said `Completed`, and then said `Running` again, for a state
+    /// the thread was never in. Claude Code's `Stop` had already said which of
+    /// the two it was: `background_tasks` is documented as the field that
+    /// "lets hooks distinguish 'session is done' from 'session is paused
+    /// waiting for background work to wake it'".
+    ///
+    /// A fact about **this turn**, unlike the two above it, so it is not copied
+    /// across a turn boundary: it is written by the turn's own `Stop` and it
+    /// cannot outlive the turn that wrote it. The next turn's `Stop` answers
+    /// for the next turn, with an empty list when the work is finally done.
+    ///
+    /// Nothing infers it from elapsed time (`AGENTS.md` §6.2). It is set by one
+    /// event and cleared by another, and its failure direction is the old
+    /// behaviour: a build that stops sending the field puts the flicker back
+    /// and invents nothing.
+    var pausedForBackgroundWork: Bool = false
 
     nonisolated var status: SessionStatus {
         sessionStatus
@@ -1237,6 +1261,17 @@ struct HookStateSnapshot: Sendable {
     }
 }
 
+/// One item of in-flight background work, read for the fact that it is there.
+///
+/// **It decodes no fields, and that is the whole design.** The schema gives
+/// each item an id, a type, a status and a description, and none of them
+/// changes the one question this app asks of the list -- the question the
+/// field's own documentation is written to answer: is the session done, or
+/// paused waiting for background work to wake it. A list of these is a count,
+/// and the count is the entire reading. Anything more would be a private
+/// schema this app does not need and would then have to keep up with.
+nonisolated struct HookBackgroundTask: Sendable, Decodable, Equatable {}
+
 /// One hook payload, as either product sends it.
 ///
 /// The helper forwards stdin unchanged, so field selection happens here rather
@@ -1278,6 +1313,22 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     let lastAssistantMessage: String?
     let messageID: String?
     let delta: String?
+    /// The session's in-flight background work, as its own terminal event
+    /// reports it.
+    ///
+    /// **Claude Code's answer to the one question a `Stop` cannot otherwise
+    /// settle**, and its own schema says so: "In-flight background work
+    /// (running/pending + backgrounded) registered in this session. Lets hooks
+    /// distinguish 'session is done' from 'session is paused waiting for
+    /// background work to wake it'. Empty array when nothing is in flight."
+    /// It rides on `Stop` and `SubagentStop`; Codex sends nothing of the kind,
+    /// so it is nil there and every rule that reads it is an identity
+    /// transform on that product.
+    ///
+    /// Read on `Stop` and nowhere else. `SubagentStop` carries one too, but it
+    /// still lists the agent that is stopping (measured 2026-08-23 against CLI
+    /// 2.1.241, twice), so it is not an absolute reading of what is left.
+    let backgroundTasks: [HookBackgroundTask]?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case hookEventName = "hook_event_name"
@@ -1293,18 +1344,30 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         case lastAssistantMessage = "last_assistant_message"
         case messageID = "message_id"
         case delta
+        case backgroundTasks = "background_tasks"
 
-        /// Whether this field is the row's text rather than an identity.
-        ///
-        /// Text may be cut short and still be the same answer; an identity may
-        /// not, so only these three are ever shortened (see
-        /// ``HookPayloadDistiller``).
-        nonisolated var carriesText: Bool {
+        /// What kind of value this field is, which is what decides what
+        /// happens to it when it arrives too big (see ``HookPayloadDistiller``).
+        nonisolated var carried: CarriedValue {
             switch self {
-            case .prompt, .lastAssistantMessage, .delta: return true
-            default: return false
+            case .prompt, .lastAssistantMessage, .delta: return .text
+            case .backgroundTasks: return .list
+            default: return .identity
             }
         }
+    }
+
+    /// The three kinds of value this payload carries, and the three answers to
+    /// "it is too big".
+    nonisolated enum CarriedValue: Sendable {
+        /// Cut short: a shorter answer is the same answer.
+        case text
+        /// Left out: half a `session_id` is a different session.
+        case identity
+        /// Carried whole or left out. A list cannot be cut -- half of one is
+        /// not JSON -- and it must not be, because "how many are left" is the
+        /// entire reading.
+        case list
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1325,6 +1388,21 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         )
         messageID = try container.decodeIfPresent(String.self, forKey: .messageID)
         delta = try container.decodeIfPresent(String.self, forKey: .delta)
+        backgroundTasks = try container.decodeIfPresent(
+            [HookBackgroundTask].self,
+            forKey: .backgroundTasks
+        )
+    }
+
+    /// Whether this terminal event says the session is pausing rather than
+    /// finishing.
+    ///
+    /// False when the field is absent, which is both products' honest answer:
+    /// Codex never sends it, and a Claude Code build that stopped sending it
+    /// would leave the row saying `Completed` a moment early -- the behaviour
+    /// this reading improves on, never a state it invents.
+    nonisolated var pausesForBackgroundWork: Bool {
+        backgroundTasks?.isEmpty == false
     }
 
     /// The payload the reducer will see, out of the bytes that landed.
@@ -1388,6 +1466,15 @@ nonisolated enum HookPayloadDistiller {
     /// is a path. Anything past this is none of those.
     nonisolated static let maximumIdentityBytes = 1_024
 
+    /// How long a list may be before it is refused whole.
+    ///
+    /// The one list carried is `background_tasks`, whose items cap their two
+    /// free-text fields at 1,000 characters each -- so this is room for several
+    /// worst-case items and hundreds of the ones measured, which run about 145
+    /// bytes. Past it the field is left out, and the row reaches `Completed` a
+    /// moment early rather than the payload being lost.
+    nonisolated static let maximumListBytes = 16 * 1_024
+
     /// The fields worth carrying, out of the bytes that landed, or `nil` if
     /// this never was a JSON object.
     nonisolated static func distilled(from body: Data) -> Data? {
@@ -1397,13 +1484,13 @@ nonisolated enum HookPayloadDistiller {
         }
     }
 
-    /// The keys worth carrying, and whether a long one may be cut short.
+    /// The keys worth carrying, and what kind of value each one is.
     ///
     /// Read off ``HookPayload/CodingKeys`` rather than listed a second time, so
     /// a field added to the payload cannot become one this drops on the floor.
-    private static let selectedKeys: [String: Bool] = Dictionary(
+    private static let selectedKeys: [String: HookPayload.CarriedValue] = Dictionary(
         uniqueKeysWithValues: HookPayload.CodingKeys.allCases.map {
-            ($0.rawValue, $0.carriesText)
+            ($0.rawValue, $0.carried)
         }
     )
 
@@ -1474,8 +1561,8 @@ nonisolated enum HookPayloadDistiller {
                 guard index < bytes.count else { break }
 
                 let value = scanValue()
-                if let carriesText = HookPayloadDistiller.selectedKeys[key],
-                   let carried = carry(value, carriesText: carriesText) {
+                if let kind = HookPayloadDistiller.selectedKeys[key],
+                   let carried = carry(value, kind: kind) {
                     if !isFirstCarried { selected.append(Self.comma) }
                     isFirstCarried = false
                     selected.append(contentsOf: Array("\"\(key)\":".utf8))
@@ -1489,16 +1576,19 @@ nonisolated enum HookPayloadDistiller {
 
         /// The bytes to emit for one selected value, or `nil` to leave the
         /// field out entirely.
-        private func carry(_ value: ScannedValue, carriesText: Bool) -> Data? {
-            let limit = carriesText
-                ? HookPayloadDistiller.maximumTextBytes
-                : HookPayloadDistiller.maximumIdentityBytes
+        private func carry(_ value: ScannedValue, kind: HookPayload.CarriedValue) -> Data? {
+            let limit = switch kind {
+            case .text: HookPayloadDistiller.maximumTextBytes
+            case .identity: HookPayloadDistiller.maximumIdentityBytes
+            case .list: HookPayloadDistiller.maximumListBytes
+            }
             if value.isComplete, value.range.count <= limit {
                 return Data(UnsafeRawBufferPointer(rebasing: bytes[value.range]))
             }
             // Only a string can be shortened and still be itself, and only
-            // where the field is the row's text rather than an identity.
-            guard value.isString, carriesText else { return nil }
+            // where the field is the row's text rather than an identity or a
+            // list.
+            guard value.isString, case .text = kind else { return nil }
             let start = value.range.lowerBound + 1
             let end = value.isComplete ? value.range.upperBound - 1 : value.range.upperBound
             guard start <= end else { return nil }
@@ -2783,6 +2873,11 @@ actor HookEventRepository {
                 $0.pendingInputToolUseID = nil
                 $0.pendingApproval = nil
                 $0.assistantPreview = assistantPreview
+                // And whether that terminal was the session finishing or the
+                // session pausing, which only its own payload can say. Assigned
+                // rather than or-ed: a turn that stops twice is answered by its
+                // latest stop, and an empty list is that answer.
+                $0.pausedForBackgroundWork = event.pausesForBackgroundWork
             }
         case .subagentStarted, .subagentStopped, .inert:
             // All three are answered above, before the turn identity gate.
@@ -3078,7 +3173,12 @@ actor HookEventRepository {
                     String(turn.runningSubagentIDs.count),
                     // And whether one of them is waiting on a human, which
                     // changes the collapsed summary as well as the row.
-                    String(turn.subagentsAwaitingApproval)
+                    String(turn.subagentsAwaitingApproval),
+                    // A finished turn that is only paused reads as Running in
+                    // the collapsed summary, so the surface has to be woken
+                    // when the last subagent stops and this is what is left
+                    // holding it there.
+                    String(turn.pausedForBackgroundWork)
                 ].joined(separator: "\u{1}")
             }
             .sorted()

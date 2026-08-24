@@ -434,6 +434,26 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// number nothing draws, and the answer the user acts on — *go and look* —
     /// is the same at one as at three.
     let subagentsAwaitingApproval: Bool
+    /// Whether this row's turn ended by pausing rather than by finishing.
+    ///
+    /// **Row data, not a fifth state, and not a second count.** Like
+    /// ``runningSubagentCount`` it answers "is this thread still working" and
+    /// leaves "what did this turn do" alone -- but it answers it for the
+    /// moment the count cannot: an asynchronous subagent's `SubagentStop`
+    /// empties the count, and Claude Code re-enters the parent 50-130 ms later
+    /// with a turn of its own (measured 2026-08-23, CLI 2.1.241). Between those
+    /// two the count says nothing is running and the thread is about to run,
+    /// so a row reading the count alone showed `Completed` for a tenth of a
+    /// second and then `Running` again.
+    ///
+    /// **Claude Code only**, because only it says so: its `Stop` carries
+    /// `background_tasks`, documented as the field that "lets hooks distinguish
+    /// 'session is done' from 'session is paused waiting for background work to
+    /// wake it'". Codex has no equivalent and is false here always, which makes
+    /// every rule below an identity transform on that product -- exactly what
+    /// ``runningSubagentCount`` was on this one until its two boundaries were
+    /// registered.
+    let isPausedForBackgroundWork: Bool
 
     nonisolated init(
         agent: AgentKind = .codex,
@@ -445,7 +465,8 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         status: SessionStatus,
         startedAt: Date?,
         runningSubagentCount: Int = 0,
-        subagentsAwaitingApproval: Bool = false
+        subagentsAwaitingApproval: Bool = false,
+        isPausedForBackgroundWork: Bool = false
     ) {
         self.agent = agent
         self.threadID = threadID
@@ -457,6 +478,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.startedAt = startedAt
         self.runningSubagentCount = runningSubagentCount
         self.subagentsAwaitingApproval = subagentsAwaitingApproval
+        self.isPausedForBackgroundWork = isPausedForBackgroundWork
     }
 
     /// Whether the row says work is still in flight beside its own turn.
@@ -864,7 +886,16 @@ enum MonitorAggregation {
         if session.subagentsAwaitingApproval, session.status != .inputNeeded {
             return .approvalNeeded
         }
-        return session.status == .completed && session.hasRunningSubagent
+        // Two readings of the same sentence, and the row needs both. The
+        // count is continuous and says a subagent is in flight; the pause flag
+        // is a single stamp from the turn's own terminal event and says the
+        // session stopped in order to wait rather than because it was done. A
+        // subagent that finishes clears the first 50-130 ms before the parent's
+        // next turn opens (measured 2026-08-23, CLI 2.1.241), and for that
+        // tenth of a second the second one is the only thing that still knows
+        // the thread is working.
+        return session.status == .completed
+            && (session.hasRunningSubagent || session.isPausedForBackgroundWork)
             ? .running
             : session.status
     }

@@ -22127,6 +22127,242 @@ extension NotchlineTests {
     }
 }
 
+extension NotchlineTests {
+    /// The tenth of a second between a subagent stopping and its parent's next
+    /// turn opening, and what the row says during it.
+    ///
+    /// Replays the sequence measured on 2026-08-23 against CLI 2.1.241 (a pty
+    /// session, the gap at 50 ms; a `-p` run put it at 130 ms). The count goes
+    /// to zero at `SubagentStop` and the thread is not finished — Claude Code
+    /// re-enters the parent with a prompt of its own, and its `Stop` said so in
+    /// advance. Without the pause the row reported `Completed` here and
+    /// `Running` again immediately after, which is the flicker this exists to
+    /// remove.
+    @Test @MainActor
+    func aTurnPausedForItsSubagentDoesNotSayFinishedBetweenTheTwo() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let thread = "1396fc6f-217f-4c7a-ac3b-c22d8bd08412"
+        let prompt = "1b212120-4d0b-4f0e-9d0a-2a0e6c5f7a11"
+        let resumed = "0f4a550c-2a1c-4a25-9a5a-6a4a10d1b7c2"
+        let agent = "a48982cefc1e20102"
+        let inFlight: [[String: Any]] = [[
+            "id": agent, "type": "subagent", "status": "running",
+            "description": "Run sleep and reply done",
+            "agent_type": "general-purpose"
+        ]]
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        func row(_ turn: HookTurnState) -> MonitoredSession {
+            MonitoredSession(
+                agent: .claudeCode,
+                threadID: turn.threadID,
+                turnID: turn.turnID,
+                projectName: "notchline",
+                title: "Untitled",
+                preview: nil,
+                status: turn.status,
+                startedAt: turn.startedAt,
+                runningSubagentCount: turn.runningSubagentIDs.count,
+                subagentsAwaitingApproval: turn.subagentsAwaitingApproval,
+                isPausedForBackgroundWork: turn.pausedForBackgroundWork
+            )
+        }
+
+        try deliver([
+            "received_at": 100.00, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": prompt
+        ])
+        try deliver([
+            "received_at": 102.96, "hook_event_name": "PreToolUse",
+            "session_id": thread, "prompt_id": prompt,
+            "tool_name": "Agent", "tool_use_id": "toolu_01Ag"
+        ])
+        try deliver([
+            "received_at": 103.00, "hook_event_name": "SubagentStart",
+            "session_id": thread, "prompt_id": prompt,
+            "agent_id": agent, "agent_type": "general-purpose"
+        ])
+        try deliver([
+            "received_at": 103.00, "hook_event_name": "PostToolUse",
+            "session_id": thread, "prompt_id": prompt,
+            "tool_name": "Agent", "tool_use_id": "toolu_01Ag"
+        ])
+        // The parent's terminal, naming the work it is pausing for.
+        try deliver([
+            "received_at": 104.93, "hook_event_name": "Stop",
+            "session_id": thread, "prompt_id": prompt,
+            "background_tasks": inFlight
+        ])
+
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .completed)
+        #expect(turn.runningSubagentIDs == [agent])
+        #expect(turn.pausedForBackgroundWork)
+        #expect(MonitorAggregation.effectiveStatus(of: row(turn)) == .running)
+
+        // The subagent finishes. Its own payload still lists it, which is why
+        // nothing here reads that copy of the list.
+        try deliver([
+            "received_at": 118.05, "hook_event_name": "SubagentStop",
+            "session_id": thread, "prompt_id": prompt, "agent_id": agent,
+            "agent_type": "general-purpose", "background_tasks": inFlight
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.runningSubagentIDs.isEmpty)
+        #expect(turn.status == .completed)
+        // The row draws nothing in the trailing slot — its own turn really did
+        // finish and it has no subagent left to name — and the thread is still
+        // working, so the collapsed summary must not say otherwise.
+        #expect(row(turn).runningSubagentSummary == nil)
+        #expect(
+            MonitorAggregation.effectiveStatus(of: row(turn)) == .running,
+            "the parent is re-entered 50 ms from here; Completed is a state the thread is never in"
+        )
+
+        // 50 ms later, measured. Claude Code re-enters the parent under a
+        // prompt id of its own.
+        try deliver([
+            "received_at": 118.10, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": resumed
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.turnID == resumed)
+        #expect(turn.status == .running)
+        // The pause belonged to the turn that wrote it, so the new turn starts
+        // without one rather than inheriting it.
+        #expect(!turn.pausedForBackgroundWork)
+
+        // And the terminal that is a terminal: an empty list is the field's own
+        // way of saying nothing is in flight.
+        try deliver([
+            "received_at": 121.22, "hook_event_name": "Stop",
+            "session_id": thread, "prompt_id": resumed,
+            "background_tasks": [[String: Any]]()
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .completed)
+        #expect(!turn.pausedForBackgroundWork)
+        #expect(MonitorAggregation.effectiveStatus(of: row(turn)) == .completed)
+    }
+
+    /// A `Stop` with nothing in flight, and a `Stop` from the product that has
+    /// never heard of the field.
+    ///
+    /// The reverse of the case above, and the reason the pause cannot leak into
+    /// ordinary rows: the flag is written by every terminal event, so an empty
+    /// list clears one the previous stop set, and an absent field — every Codex
+    /// stop, and every Claude Code stop before this field existed — reads as
+    /// finished exactly as it always did.
+    @Test @MainActor
+    func aTerminalThatNamesNoBackgroundWorkIsTheThreadFinishing() async throws {
+        for kind in [AnyHookVocabularyCase.codex, .claudeCode] {
+            let paths = makeTemporaryHookPaths()
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            let repository = HookEventRepository(
+                paths: paths,
+                vocabulary: kind.vocabulary
+            )
+            let thread = "586df4ed-e1db-4405-bfd4-e9977957b132"
+
+            func deliver(_ body: [String: Any]) throws {
+                try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+            }
+
+            try deliver([
+                "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+                "session_id": thread, kind.turnKey: "t-1"
+            ])
+            try deliver([
+                "received_at": 101.0, "hook_event_name": "Stop",
+                "session_id": thread, kind.turnKey: "t-1"
+            ])
+            var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+            #expect(!turn.pausedForBackgroundWork, "\(kind.name)")
+            #expect(turn.status == .completed, "\(kind.name)")
+
+            try deliver([
+                "received_at": 102.0, "hook_event_name": "UserPromptSubmit",
+                "session_id": thread, kind.turnKey: "t-2"
+            ])
+            try deliver([
+                "received_at": 103.0, "hook_event_name": "Stop",
+                "session_id": thread, kind.turnKey: "t-2",
+                "background_tasks": [[String: Any]]()
+            ])
+            turn = try #require(await repository.drainDeliveredEvents().turns.first)
+            #expect(!turn.pausedForBackgroundWork, "\(kind.name)")
+            #expect(turn.status == .completed, "\(kind.name)")
+        }
+    }
+
+    /// The one list the payload carries is carried whole or not at all.
+    ///
+    /// A list cannot be shortened the way the row's text can — half of one is
+    /// not JSON, and "how many are left" is the entire reading — so the two
+    /// answers are the whole list and no field. Losing the field costs the
+    /// pause and nothing else: the row reaches `Completed` a moment early,
+    /// which is where it was before the field was read at all.
+    @Test @MainActor
+    func aListTooLongToCarryIsLeftOutRatherThanCutShort() throws {
+        func payload(taskCount: Int, description: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "hook_event_name": "Stop",
+                "session_id": "s-1",
+                "prompt_id": "p-1",
+                "background_tasks": (0 ..< taskCount).map {
+                    [
+                        "id": "task-\($0)", "type": "subagent",
+                        "status": "running", "description": description
+                    ]
+                }
+            ])
+        }
+
+        // Comfortably past what an identity may weigh, so this pins the list's
+        // own ceiling rather than passing under the one beside it.
+        let carried = try #require(
+            HookPayload.distilled(
+                from: try payload(
+                    taskCount: 12,
+                    description: String(repeating: "d", count: 200)
+                )
+            )
+        )
+        #expect(carried.backgroundTasks?.count == 12)
+        #expect(carried.pausesForBackgroundWork)
+
+        let refused = try #require(
+            HookPayload.distilled(
+                from: try payload(
+                    taskCount: 16,
+                    description: String(repeating: "d", count: 1_000)
+                )
+            )
+        )
+        #expect(refused.backgroundTasks == nil)
+        #expect(!refused.pausesForBackgroundWork)
+        // The event itself still lands: the turn is what the payload is for.
+        #expect(refused.turnID == "p-1")
+        #expect(refused.sessionID == "s-1")
+    }
+}
+
 /// The two vocabularies, and the one payload key they spell differently.
 private enum AnyHookVocabularyCase {
     case codex

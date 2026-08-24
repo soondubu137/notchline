@@ -436,4 +436,66 @@ SubagentStop      prompt_id=5fd7…  agent_id=ae14…
   - 唯一还没测的是**人在交互式 TUI 里拒绝一次子智能体的审批时 Codex 发什么**，理由与它为什么不改变设计写在 6.3 第四条；
   - ~~6.2 末尾那条既有缺陷需要一并决定是不是同一次改动里修~~ 已在同一次改动里修掉，理由见 6.2 的落地记录第 2 条。
 - ~~6.2 落地记录里「测到了但不采用 `claude agents --json` 的 `waiting` 读数」~~ 被推翻了一半，见 6.3 前那节后续：**批准与拒绝一样是静默的**，而那条会话读数是唯一能说「人已经答过了」的证据，三条拒绝理由里只有「桌面端托管的会话没有它」还成立。
-- 8.2 末尾那条 `background_tasks` 出路没有实测（`pending` 被取消时补不补 `SubagentStop`），一并记在 #102。
+- 8.2 末尾那条 `background_tasks` 出路**作为计数**仍然没有实测（`pending` 被取消时补不补 `SubagentStop`），一并记在 #102。**作为状态的那一半已经采纳并落地**，见第 12 节：它只问那一条 `Stop` 自己的列表是不是空的，不问里面是谁，因此不依赖上面那两条没测过的事实。
+
+## 12. 子智能体收尾与父轮次被叫醒之间那一瞬（2026-08-23，Claude Code CLI `2.1.241`）
+
+### 12.1 报告
+
+> 「起一个子智能体然后立刻结束」这句提示词跑下来，行的读数是：Running → Approval needed（子智能体要 `sleep` 的权限）→ Running（子智能体在睡）→ **Completed（子智能体睡醒）** → Running（主智能体在总结）→ Completed。中间那次 Completed 能不能不要？状态变化太多，很分心。
+
+### 12.2 实测
+
+同一套探测法（一次性 `--settings` + `--setting-sources project`，全部 16 个事件都注册一个只写时间戳与 payload 的 helper），跑两遍：`-p` 一遍，pty 交互式一遍。两遍的形状完全相同，只有间隔不同。
+
+pty 那一遍（时间以 `SessionStart` 为零点）：
+
+```text
++26.25  UserPromptSubmit   prompt=1b21…
++29.21  PreToolUse         prompt=1b21…  tool=Agent
++29.25  SubagentStart      prompt=1b21…  agent=a489…
++29.25  PostToolUse        prompt=1b21…  tool=Agent
++31.18  Stop               prompt=1b21…  background_tasks=[{id: a489…, type: subagent, status: running}]
++31.61  PreToolUse         prompt=1b21…  agent=a489…  tool=Bash
++42.85  PostToolUse        prompt=1b21…  agent=a489…  tool=Bash
++44.30  SubagentStop       prompt=1b21…  agent=a489…  background_tasks=[{id: a489…, …, status: running}]
++44.35  UserPromptSubmit   prompt=0f4a…                ← 新的轮次，间隔 50 ms
++47.47  Stop               prompt=0f4a…  background_tasks=[]
+```
+
+四条结论：
+
+1. **那次 Completed 只有 50 ms**（`-p` 下 130 ms），它是 `SubagentStop` 清空 `runningSubagentIDs` 到 Claude Code 用一个**新的 `prompt_id`** 把父轮次叫醒之间的空隙。行读的是计数，计数那一刻确实是零，所以行说的不是假话——它只是回答了一个没有人问的问题。
+2. **父轮次是被一条 `UserPromptSubmit` 叫醒的，`prompt_id` 是新的**，不是原轮次的续。所以那一瞬之后是一个全新的 Turn，而不是同一个 Turn 复活。
+3. **`Stop` 自己早就说清楚了它是哪一种终态。** `background_tasks` 在 `Stop` 与 `SubagentStop` 的官方 schema 上都有，描述一字不改地就是这件事：「In-flight background work (running/pending + backgrounded) registered in this session. Lets hooks distinguish "session is done" from "session is paused waiting for background work to wake it". Empty array when nothing is in flight.」最后那次 `Stop` 带的是 `[]`。
+4. **`SubagentStop` 上的那份不能用**：它仍然列着正在停止的那个子智能体（两遍实测都是），所以它不是「还剩什么」的绝对读数。同一次实测还看到两条没有配对 `SubagentStart` 的 `SubagentStop`（TUI 自己的内部 agent，6.1 第 5 条），与本节无关但再次说明按 `agent_id` 开格子的东西不能自证是子智能体。
+
+### 12.3 采纳：把「暂停」记成 Turn 自己的一个事实
+
+`HookTurnState.pausedForBackgroundWork`，在 `turnEnded` 上由 `background_tasks` 非空写下，`MonitoredSession.isPausedForBackgroundWork` 带到行上，`MonitorAggregation.effectiveStatus` 与计数**并列**地读它：
+
+```swift
+return session.status == .completed
+    && (session.hasRunningSubagent || session.isPausedForBackgroundWork)
+    ? .running
+    : session.status
+```
+
+三个决定，理由各自独立：
+
+- **Turn 级而不是 Thread 级。** 与 `runningSubagentIDs`、`subagentSlots` 相反：那两个跨 Turn 边界继承，因为子智能体活得比轮次长；这一个由该轮次自己的终态写下，也就不许活得比它久。下一个轮次的终态自己答自己，而那一次带的是空列表。写的是赋值不是或，一个轮次停两次时以最后一次为准。
+- **只读 `Stop` 上的那一份**（结论 4）。
+- **没有计时器。** `AGENTS.md` §6.2 禁止用计时器推断 Running，而这里没有一个：一个事件写，另一个事件清。真正的替代方案——「最后一个 `SubagentStop` 之后宽限两秒」——正是那条禁令说的东西，也正是为什么它没有被选。
+
+**行本身仍然一个字不改**（第 3 节、§4.5）。那 50 ms 里行尾什么都不画：它自己那一轮确实结束了，也确实没有子智能体可以点名。收起态与展开面板在这一瞬的分歧是明写的设计，不是疏漏。
+
+### 12.4 代价，与它为什么比原来那一下轻
+
+新增的失效方向只有一个：`SubagentStop` 之后父轮次永远没有被叫醒（用户正好在这 50 ms 里退出，或某次更新不再叫醒），那一行会停在 `Running` 而不是进入 `Completed`。它与 5.1 已经明写接受的那条（#102）是同一个方向、同一个出口（右键移除该行），而不是第二处新的卡死来源：两者都要求同一件事发生——该 Thread 再也不产生任何终态。反过来，字段消失或改名的方向是安全的：`pausedForBackgroundWork` 恒为 false，行退回今天的样子，闪一次，什么都不伪造。
+
+登记表（`AGENTS.md` §8）**不新增行**：`background_tasks` 在随 CLI 分发的官方 hook input schema 上，并且带着官方描述，与 `agent_id` 同性质——那一半是公开的。本次没有依赖任何未公开的形状：不读条目里的 `id`、`type`、`status`，只读列表是不是空的。已有的「子智能体仍在跑时行尾说出来」那一行补记了新的显示后果。
+
+### 12.5 验收
+
+三条单测（`NotchlineTests.swift` 末尾）：`aTurnPausedForItsSubagentDoesNotSayFinishedBetweenTheTwo`（12.2 那串事件原样重放，逐帧钉住那 50 ms 里派生状态仍是 Running、计数确实是零、新轮次不继承这个标志、最后那次空列表让行进入 Completed）、`aTerminalThatNamesNoBackgroundWorkIsTheThreadFinishing`（空列表与字段缺席两种，两个产品各跑一遍）、`aListTooLongToCarryIsLeftOutRatherThanCutShort`（`HookPayloadDistiller` 的第三种取值：整段留下或整段不留，超上限时事件本身照常落地）。第一条做过反向验证：`effectiveStatus` 改回只读计数，它失败。
+
