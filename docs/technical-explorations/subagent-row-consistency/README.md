@@ -281,6 +281,22 @@ return session.status == .completed && session.hasRunningSubagent
 
 落地：`PendingApproval` 记下自己开启的时刻（顺序护栏因此钉在每个等待自己身上，而不是钉在轮次的 `lastEventAt` 上——子智能体的事件本来就不许移动那个戳），新规则写在 `HookEventRepository.endApprovalWaitsForWorkingSessions(_:)`，由 `ClaudeCodeMonitorService` 用它已经在取的那份读数调用。主线程那一格一并修好，因为那是同一个缺陷的另一半。写进 ADR 0011 的 2026-08-23 补充、`tech-design.md` 第 4 节、`PRD.md` 与非公开集成登记表。
 
+#### 更正（2026-08-23，同日）：上面那节只修好了终端里的会话
+
+上面写完之后用户复现，**问题照旧**：批准之后仍然停在 *Approval needed*，一直到 20 秒的 `sleep` 跑完。修的方向没错，覆盖面错了——那节整节只在 pty 里的 TUI 上量过，而用户测的是 **Claude Code 桌面端托管的会话**，那种会话从头到尾不报告 `status`（实测其 `~/.claude/sessions/<pid>.json` 带 `entrypoint: "claude-desktop"`，没有 `status`／`updatedAt`／`statusUpdatedAt`，且会话启动后再不重写）。于是 `busy` 那条规则对它一个字都用不上。**教训写在这里：宿主是这个产品的一条真实分界线，任何「非事件证据」的方案都必须两种宿主各量一次，只量一种等于没量。**
+
+顺手把一件更基本的事测掉，因为整套方案都压在它上面：**批准到底有没有 hook。** 把二进制里 `strings -a` 挖出的**全部 31 个**事件一次性注册，跑一个 sleep 25 秒的子智能体——批准（+9.96 s）与 `PostToolUse`（+36.23 s）之间 26 秒，唯一到达的是另一个无关 agent 的 `SubagentStop`。**没有漏注册的事件，这条路上就是没有事件。**
+
+桌面端把证据写在自己的日志里（`~/Library/Logs/Claude/main.log`，用户那次复现的原文）：
+
+```text
+18:10:40 Emitted tool permission request c930390d-… for Bash in session local_6c63f909-…
+18:10:45 LocalSessions.respondToToolPermission: requestId=c930390d-…, decision=once, …
+18:10:45 Received permission response for c930390d-…: once (tool: Bash)
+```
+
+只有第一行带会话，只有第三行证明人答过，request id 把它们配起来——与 6.2 让 `PermissionRequest` 借用仍打开的调用 id 是同一个形状。落地：`ClaudeDesktopPermissionLogReader`，经 Desktop 记录的 `sessionId ↔ cliSessionId` 连回 thread，答案交给**与终端那条同一个入口** `HookEventRepository.endAnsweredApprovalWaits(_:)`。**决定本身不读**，所以桌面端的**拒绝**也一并修好了——那一半此前只能等 `SubagentStop`。日志与 Desktop 记录树都只在真的有审批开着时才读，边沿（`permissionLogWatcher`）也只在那时才建。详见 ADR 0011 的两条 2026-08-23 补充。
+
 ### 6.3 Codex 侧实测（2026-08-23，Codex CLI `0.149.0-alpha.4.1`）
 
 两件事：一件跑出来的，一件从既有 rollout 里读出来的。用户的 `~/.codex` 全程只读——`hooks.json` 一个字节没动。

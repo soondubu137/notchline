@@ -365,7 +365,21 @@ struct TurnEvidence: Equatable {
 - **顺序护栏钉在每一个等待自己身上**（`PendingApproval.openedAt`），不是钉在轮次的 `lastEventAt` 上：一次**开始**得比某个对话框还早的读取不可能看见它，因此不许关它。代价最多是晚一次刷新，而 `waiting → busy` 会重写会话记录，那条边沿本来就在。
 - **它不移动 `lastEventAt`。** 这不是轮次在做事，而那个戳是成员关系对账的唯一约束。
 
-详见 ADR 0011 的 2026-08-23 补充。
+**桌面端托管的会话在这里同样不说这句话，而它写在第三个地方。** 那种会话永远不报告 `status`（理由见下一段），所以上面这条规则对它一个字都用不上——这正是用户复现该错报的环境。先把更基本的一件事测掉：2026-08-23 对 2.1.241 把二进制里全部 **31 个** hook 事件一次性注册后实测，**批准与 `PostToolUse` 之间 26 秒没有任何相关事件**，所以这条路上根本没有 hook 可漏。桌面端把两端都写进自己的日志，中间用 request id 串起来：
+
+```text
+18:10:40 Emitted tool permission request c930390d-… for Bash in session local_6c63f909-…
+18:10:45 Received permission response for c930390d-…: once (tool: Bash)
+```
+
+读在 `ClaudeDesktopPermissionLogReader`，应用走**与上面同一个入口**（两份证据说的是同一句话）：
+
+- **只有开启行带会话，只有应答行证明人答过**，所以 request id 是唯一的配对方式；配不上开启行的应答不归属给任何会话，失败方向是等待继续留着。Desktop 的 id 到 CLI 的 id 由 Desktop 记录里的 `sessionId ↔ cliSessionId` 连接，与已读那条同源。
+- **决定本身不读。** 批准、永久允许、拒绝都同样是人答过了——顺带把桌面端的拒绝一并修好。
+- **各持一个游标。** 焦点读数读的是同一个文件；共用偏移量的话，先问的那个会把后问的那行吃掉。
+- **只在真的有审批开着时才读，边沿也只在那时才建。** 焦点读数当初拒绝监听这个文件（「一条 oauth 查询也要唤醒一次」），那条理由只在没有东西等着它时成立；`permissionLogWatcher` 因此只在那段时间里指向它。
+
+详见 ADR 0011 的两条 2026-08-23 补充。
 
 **桌面端托管的会话不说这句话，它写在别处。** Claude Code 桌面端把 CLI 当作 `stream-json` 的子进程来跑，没有终端界面，而 `status` 正是终端界面写出来的——所以那种会话的记录里从头到尾没有这个字段，上面第一条按「沉默不是空闲」什么也不做，行就一直停在 *Running* 或 *Approval needed*（CC-022 / #41）。它留下的是另一样东西：Claude Code 中止一轮时会往 transcript 里写一条 `user` 记录，而那条记录**指名了它中止的那个轮次**。
 

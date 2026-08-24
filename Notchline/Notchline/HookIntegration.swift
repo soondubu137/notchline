@@ -1060,7 +1060,7 @@ nonisolated struct PendingApproval: Sendable, Equatable {
     /// same monotonic rule every hook event is held to. A reading of the
     /// session that *started* before this instant cannot have seen the dialog
     /// this wait is about, so it is not allowed to close it -- see
-    /// ``HookEventRepository/endApprovalWaitsForWorkingSessions(_:)``. Getting
+    /// ``HookEventRepository/endAnsweredApprovalWaits(_:)``. Getting
     /// that backwards would close a dialog the user is still looking at, which
     /// is worse than the delay it exists to fix.
     let openedAt: Date
@@ -2301,53 +2301,55 @@ actor HookEventRepository {
         turnsByThreadID[threadID] = turn
     }
 
-    /// Ends the approval waits of sessions the product says are working.
+    /// Ends the approval waits a human has been shown to have answered.
     ///
-    /// **The only evidence Claude Code gives that an approval was answered,
-    /// and without it a row says `Approval needed` while the approved tool
-    /// runs.** No hook fires when a human approves. `PermissionRequest` opens
-    /// the wait and the next thing to arrive is the call's own `PostToolUse`,
-    /// which lands when the *tool finishes* rather than when the dialog closes
-    /// -- so the row is right for a command that takes 200 ms and wrong for
-    /// every second of one that takes longer. Measured 2026-08-23 against CLI
-    /// 2.1.241, a subagent asked to sleep twelve seconds: `PermissionRequest`
-    /// at +6.22 s, the human approved at +9.35 s, `PostToolUse` at +22.72 s.
-    /// Thirteen seconds of a row asking the user to answer something they had
-    /// already answered.
+    /// **No hook fires when a person approves, on either host.** Measured
+    /// 2026-08-23 against CLI 2.1.241 with *all thirty-one* hook events
+    /// registered: between the `PermissionRequest` that opened the dialog and
+    /// the call's own `PostToolUse` twenty-six seconds later, the only event of
+    /// any kind was an unrelated agent's `SubagentStop`. `PostToolUse` lands
+    /// when the *tool finishes* rather than when the dialog closes, so a row is
+    /// right for a command that takes 200 ms and wrong for every second of one
+    /// that takes longer -- thirteen seconds of `Approval needed` after the
+    /// answer, on the first measurement of this.
     ///
-    /// What closes it instead is the session status the same reading already
-    /// takes for ``endTurnsForStoppedSessions(_:)``. Claude Code publishes
-    /// `waiting` for exactly as long as a dialog is in front of the user --
-    /// including one a *subagent* raised after the parent turn's `Stop` -- and
-    /// `busy` otherwise. On the same measurement the session read `waiting`
-    /// (`waitingFor: "permission prompt"`) from +6.37 s to +8.37 s and `busy`
-    /// from +9.07 s onward, through the whole of the approved sleep. So `busy`
-    /// is positive evidence that no dialog is open, which is the one thing a
-    /// hook never says.
+    /// So the wait can only be ended by evidence that is not a hook event, and
+    /// the two hosts keep that evidence in different places. **This method is
+    /// the one rule both of them feed**, because what they produce is the same
+    /// sentence -- *no dialog of this thread was in front of the user at this
+    /// instant* -- and only the way they prove it differs:
     ///
-    /// **`busy` only, never "not `waiting`".** `idle` does not prove the
-    /// absence of a dialog: measured for CC-019, `Esc` reaches `idle` with the
-    /// dialog still drawn. Reading a wait's end out of an absence would close
-    /// one the user is still looking at, so this asks for the word that means
-    /// what it needs and treats every other word, and no word at all, as
-    /// silence. A session the desktop app hosts publishes no status whatsoever
-    /// and is therefore never named here.
+    /// * A terminal-hosted session says so itself. `claude agents --json`
+    ///   reads `waiting` (`waitingFor: "permission prompt"`) for exactly as
+    ///   long as a dialog is up -- including one a *subagent* raised after the
+    ///   parent turn's `Stop` -- and `busy` otherwise. `busy` **only**, never
+    ///   "not `waiting`": `idle` does not prove the absence of a dialog, since
+    ///   `Esc` reaches `idle` with one still drawn (CC-019), and reading a
+    ///   wait's end out of an absence would close one the user is still looking
+    ///   at.
+    /// * A desktop-hosted session publishes no status at all -- the terminal
+    ///   interface writes that field and Claude Desktop has no terminal
+    ///   interface (CC-022, #41) -- but Claude Desktop logs both ends of every
+    ///   dialog it raises. See ``ClaudeDesktopPermissionLogReader``.
     ///
-    /// **It may only end a wait, exactly like the two above it.** The reading
-    /// carries no turn id and no `agent_id`, so it can no more open an approval
-    /// than a session status can open a turn. It applies to whichever waits the
-    /// thread is holding -- the turn's own and every subagent's -- because a
-    /// session with no dialog open has none of them in front of the user.
+    /// **It may only end a wait, exactly like the two methods above it.**
+    /// Neither piece of evidence carries a turn id or an `agent_id`, so neither
+    /// can open an approval any more than a session status can open a turn. It
+    /// applies to whichever waits the thread is holding -- the turn's own and
+    /// every subagent's -- because a session with no dialog open has none of
+    /// them in front of the user.
     ///
-    /// Each wait is held to its own stamp: a reading that *started* before a
-    /// wait opened cannot have seen that dialog, so it is refused. The cost of
-    /// that strictness is one refresh, and the refresh is already on its way --
-    /// the session record is rewritten on the `waiting` to `busy` flip and
-    /// ``ClaudeCodeSessionRecordWatcher`` is pointed at every listed session.
+    /// Each wait is held to its own stamp, so evidence older than a dialog can
+    /// never close it. The cost of that strictness is one refresh, and both
+    /// hosts have an edge that brings it: the session record is rewritten on
+    /// the `waiting` to `busy` flip, and the desktop log is watched for as long
+    /// as an answer is what the app is waiting for.
     ///
-    /// - Parameter observations: Thread id to when the reading that said `busy`
-    ///   **started running**, which is the strictest thing it can be held to.
-    func endApprovalWaitsForWorkingSessions(
+    /// - Parameter observations: Thread id to the instant no dialog was open.
+    ///   For the session reading that is when the command **started running**,
+    ///   which is the strictest thing it can be held to; for the desktop log it
+    ///   is the instant Desktop stamped on the line saying the human answered.
+    func endAnsweredApprovalWaits(
         _ observations: [String: Date]
     ) -> HookStateSnapshot {
         for (threadID, observedAt) in observations {
@@ -2858,7 +2860,7 @@ actor HookEventRepository {
     ///
     /// - Parameter at: The arrival stamp, kept on the approval it opens and
     ///   nowhere else. It is what lets
-    ///   ``endApprovalWaitsForWorkingSessions(_:)`` refuse a session reading
+    ///   ``endAnsweredApprovalWaits(_:)`` refuse a session reading
     ///   older than the dialog it would be closing; it moves neither of the
     ///   two stamps above.
     private func reduceSubagentToolEvent(

@@ -18561,6 +18561,14 @@ private final class ClaudeCodeHarness {
             displayed: ClaudeDesktopFocusLogReader(
                 logURL: ClaudeCodeHarness.desktopLogURL(in: root)
             ),
+            // The real reader over the harness's own log, for the reason the
+            // one above it is real: what this answers is a parse of Claude
+            // Desktop's actual line shapes, and a stub would be asserting the
+            // test's idea of them rather than the product's.
+            permissions: ClaudeDesktopPermissionLogReader(
+                logURL: ClaudeCodeHarness.desktopLogURL(in: root)
+            ),
+            permissionLogURL: ClaudeCodeHarness.desktopLogURL(in: root),
             // And again for the same reason: the real reader would resolve
             // each session's controlling terminal on this machine, so a test
             // would be answering with whichever tty the developer last typed
@@ -18627,6 +18635,46 @@ private final class ClaudeCodeHarness {
             + "[CCD] LocalSessions.setFocusedSession: sessionId=\(identifier)\n"
         try append(toDesktopLog: line)
     }
+
+    /// Appends the three lines Claude Desktop writes around one permission
+    /// dialog, field for field as 2026-08-23 wrote them.
+    ///
+    /// The middle one is deliberately included though nothing reads it: the
+    /// point of a captured shape is that the lines the product ignores are
+    /// there to be ignored.
+    ///
+    /// - Parameters:
+    ///   - raisedAt: When the dialog went up, on the same scale of seconds the
+    ///     hook events here use.
+    ///   - answeredAt: When the human answered. `nil` leaves the dialog open,
+    ///     which is the state that must *not* end a wait.
+    func appendDesktopPermissionDialog(
+        requestID: String = UUID().uuidString,
+        desktopID: String,
+        tool: String = "Bash",
+        raisedAt: Double,
+        answeredAt: Double?
+    ) throws {
+        func stamp(_ seconds: Double) -> String {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            return formatter.string(from: Date(timeIntervalSince1970: seconds))
+        }
+        var text = "\(stamp(raisedAt)) [info] Emitted tool permission request "
+            + "\(requestID) for \(tool) in session local_\(desktopID)\n"
+        if let answeredAt {
+            text += "\(stamp(answeredAt)) [info] "
+                + "LocalSessions.respondToToolPermission: requestId=\(requestID), "
+                + "decision=once, hasUpdatedInput=true\n"
+            text += "\(stamp(answeredAt)) [info] Received permission response for "
+                + "\(requestID): once (tool: \(tool))\n"
+        }
+        try append(toDesktopLog: text)
+    }
+
+    /// How many paths the service is watching Claude Desktop's log at.
+    var watchedPermissionLogs: Int { service.permissionLogWatcher.watchedCount }
 
     /// Appends something else Claude Desktop logs, or a shape it no longer
     /// writes.
@@ -21596,7 +21644,7 @@ extension NotchlineTests {
         // started before the wait opened, so it cannot have seen the dialog and
         // is refused -- the strictness that keeps this from closing a question
         // the user is still looking at.
-        var state = await repository.endApprovalWaitsForWorkingSessions(
+        var state = await repository.endAnsweredApprovalWaits(
             [thread: Date(timeIntervalSince1970: 105.66)]
         )
         turn = try #require(state.turns.first)
@@ -21607,7 +21655,7 @@ extension NotchlineTests {
 
         // The reading that says the session went back to work. `PostToolUse` is
         // still thirteen seconds away and never arrives in this test.
-        state = await repository.endApprovalWaitsForWorkingSessions(
+        state = await repository.endAnsweredApprovalWaits(
             [thread: Date(timeIntervalSince1970: 109.07)]
         )
         turn = try #require(state.turns.first)
@@ -21674,7 +21722,7 @@ extension NotchlineTests {
         var turn = try #require(await repository.drainDeliveredEvents().turns.first)
         #expect(turn.status == .approvalNeeded)
 
-        let state = await repository.endApprovalWaitsForWorkingSessions(
+        let state = await repository.endAnsweredApprovalWaits(
             [thread: Date(timeIntervalSince1970: 104)]
         )
         turn = try #require(state.turns.first)
@@ -21723,7 +21771,7 @@ extension NotchlineTests {
         var turn = try #require(await repository.drainDeliveredEvents().turns.first)
         #expect(turn.status == .inputNeeded)
 
-        let state = await repository.endApprovalWaitsForWorkingSessions(
+        let state = await repository.endAnsweredApprovalWaits(
             [thread: Date(timeIntervalSince1970: 104)]
         )
         turn = try #require(state.turns.first)
@@ -21779,6 +21827,149 @@ extension NotchlineTests {
         #expect(row.subagentsAwaitingApproval == false)
         #expect(row.runningSubagentCount == 1, "and it is still working on it")
         #expect(MonitorAggregation.effectiveStatus(of: row) == .running)
+    }
+
+    /// The desktop-hosted half, which is the one the bug was reported from.
+    ///
+    /// **A desktop-hosted session publishes no working status ever**, so the
+    /// `busy` route above is empty for it however long ago the user answered
+    /// -- the same shape as CC-022 / #41 and answered the same way, with
+    /// something Claude Desktop writes down. The three lines here are field for
+    /// field the ones it wrote on 2026-08-23 around the dialog the user
+    /// reported, and `PostToolUse` is never delivered at all: the point is that
+    /// the row recovers without it.
+    @Test @MainActor
+    func aDesktopHostedRowLeavesApprovalNeededWhenTheDialogIsAnswered()
+        async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        let cwd = "/Users/someone/Projects/thing"
+        let desktopID = "6c63f909-2261-491f-a6c2-3d1dcbb1e88b"
+
+        try harness.writeDesktopRecord(
+            session: "s-1",
+            lastFocusedAt: 50,
+            desktopID: desktopID
+        )
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(
+            event: "SubagentStart", session: "s-1", turn: "p-1", at: 103, agentID: "a-1"
+        )
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 104)
+        try harness.queue(
+            event: "PreToolUse", session: "s-1", turn: "p-1", at: 106,
+            toolName: "Bash", toolUseID: "call-1", agentID: "a-1"
+        )
+        try harness.queue(
+            event: "PermissionRequest", session: "s-1", turn: "p-1", at: 106.03,
+            toolName: "Bash", agentID: "a-1"
+        )
+        // No activity at all, which is what every desktop-hosted session
+        // reports and the reason the session-status route cannot help here.
+        harness.live = [harness.session(id: "s-1", cwd: cwd)]
+        try harness.appendDesktopPermissionDialog(
+            desktopID: desktopID,
+            raisedAt: 106,
+            answeredAt: nil
+        )
+
+        var snapshot = await harness.service.fetchSnapshot()
+        var row = try #require(snapshot.sessions.first)
+        #expect(row.subagentsAwaitingApproval, "nobody has answered yet")
+        #expect(MonitorAggregation.effectiveStatus(of: row) == .approvalNeeded)
+        #expect(
+            harness.watchedPermissionLogs == 1,
+            "the answer is what this app is waiting for, so the log is watched"
+        )
+
+        // The human approves. Claude Desktop logs it; Claude Code does not.
+        try harness.appendDesktopPermissionDialog(
+            requestID: "c930390d-7319-4439-bb26-6c610bede16c",
+            desktopID: desktopID,
+            raisedAt: 106,
+            answeredAt: 111
+        )
+        snapshot = await harness.service.fetchSnapshot()
+        row = try #require(snapshot.sessions.first)
+        #expect(row.subagentsAwaitingApproval == false)
+        #expect(row.runningSubagentCount == 1, "and it is still working on it")
+        #expect(MonitorAggregation.effectiveStatus(of: row) == .running)
+        #expect(
+            harness.watchedPermissionLogs == 0,
+            "with the wait closed there is nothing left to watch the log for"
+        )
+    }
+
+    /// The reader's own rules, over Claude Desktop's real line shapes.
+    @Test @MainActor
+    func theDesktopPermissionLogPairsARequestWithItsAnswer() async throws {
+        let directory = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-plog-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("main.log")
+        let reader = ClaudeDesktopPermissionLogReader(logURL: url)
+
+        func append(_ text: String) throws {
+            let data = Data(text.utf8)
+            guard let handle = try? FileHandle(forWritingTo: url) else {
+                try data.write(to: url)
+                return
+            }
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        }
+
+        // A file that does not exist yet says nothing, rather than trapping.
+        #expect(await reader.answeredAt().isEmpty)
+
+        // Noise, and a dialog that is still open. Neither is an answer.
+        try append("""
+            2026-08-23 18:10:30 [info] [process-memory] trigger=interval tree_rss_sum=1918MB
+            2026-08-23 18:10:40 [info] Emitted tool permission request \
+            c930390d-7319-4439-bb26-6c610bede16c for Bash in session \
+            local_6c63f909-2261-491f-a6c2-3d1dcbb1e88b
+            2026-08-23 18:10:42 [info] [refreshSourceRef] refreshed origin/master in 1492ms
+
+            """)
+        #expect(
+            await reader.answeredAt().isEmpty,
+            "the dialog is up and nobody has answered it"
+        )
+
+        // A response for a request whose opening line was never seen. It names
+        // no session, so it is attributed to nothing rather than to whichever
+        // session happens to be waiting.
+        try append("""
+            2026-08-23 18:10:43 [info] Received permission response for \
+            5b7a7b68-c717-4407-9ea5-0b594f3b0d32: once (tool: Bash)
+
+            """)
+        #expect(await reader.answeredAt().isEmpty)
+
+        // The answer, exactly as Claude Desktop writes it.
+        try append("""
+            2026-08-23 18:10:45 [info] LocalSessions.respondToToolPermission: \
+            requestId=c930390d-7319-4439-bb26-6c610bede16c, decision=once, hasUpdatedInput=true
+            2026-08-23 18:10:45 [info] Received permission response for \
+            c930390d-7319-4439-bb26-6c610bede16c: once (tool: Bash)
+
+            """)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let expected = try #require(formatter.date(from: "2026-08-23 18:10:45"))
+        var answered = await reader.answeredAt()
+        #expect(answered["local_6c63f909-2261-491f-a6c2-3d1dcbb1e88b"] == expected)
+
+        // And it stays answered: a reading is not the only thing that happens
+        // between the answer and the refresh that uses it.
+        answered = await reader.answeredAt()
+        #expect(answered["local_6c63f909-2261-491f-a6c2-3d1dcbb1e88b"] == expected)
     }
 
     /// An agent that never announced itself is not a subagent of this thread.

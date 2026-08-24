@@ -70,3 +70,41 @@ Claude Code 里用户按 `Esc` 中断一个轮次时，**不会有任何 hook �
 拒绝的替代方案有两个。`Notification(permission_prompt)` 早已在 CC-011 里量过：它按 6 秒的键盘空闲计时器触发，且**没有任何一种通知类型表示「已解决」**，所以它连开启都比 `PermissionRequest` 晚，更谈不上关闭。「等 `PostToolUse`」就是今天的行为，它把审批区间和执行区间当成同一段，而这两段本来就不是一回事。
 
 代价：**上面那条非公开依赖多了一个用途。** `status` 的词表本来只用来回答「这个会话还在不在工作」，现在还回答「用户面前有没有对话框」。这不是一个新字段，但确实是一句更强的话，同样登记在 `non-public-codex-integration-features.md` 里；`busy` 之外的一切——包括词表之外的新词——仍然一律当作「没有报告」。
+
+## 再补充（2026-08-23，同日）：上面那条只修好了一半的会话
+
+上一节写完当天，用户在自己的环境里复现了同一个错报——批准之后行仍然停在 *Approval needed*，一直到 20 秒的 `sleep` 跑完。原因不在实现，在**证据的适用范围**：上一节整节只测了终端里的会话，而用户测的是 **Claude Code 桌面端托管的会话**，那种会话从头到尾不报告 `status`。这正是本 ADR 主体「代价」第一条早就写下、又在 2026-08-19 补充里为**中断**修好的那个洞——只是当时没有人把它跟**审批**连起来。
+
+先把一件更基本的事测掉，因为整节都压在它上面：**批准到底有没有 hook。** 2026-08-23 对 CLI 2.1.241，把 `strings -a` 从二进制里挖出的**全部 31 个** hook 事件（`ConfigChange`…`WorktreeRemove`）一次性注册到一份一次性 settings 上，跑一个被要求 sleep 25 秒的子智能体：
+
+```text
++6.69  PreToolUse         agent_id=a0de…  tool=Bash  tool_use_id=toolu_012V…
++6.72  PermissionRequest  agent_id=a0de…  tool=Bash
++9.96  人按下批准
++10.96 SubagentStop       agent_id=aeed…   ← 另一个无关 agent，TUI 自己的
++36.23 PostToolUse        agent_id=a0de…  tool=Bash  tool_use_id=toolu_012V…
+```
+
+**批准与 `PostToolUse` 之间 26 秒，一个相关事件都没有。** 所以这不是「漏注册了某个事件」，是这条路上根本没有事件——审批的结束只能由非事件证据回答，而两种宿主把这份证据放在不同地方。
+
+桌面端把它写在自己的日志里，两端都写，中间用 request id 串起来（`~/Library/Logs/Claude/main.log`，用户那次复现的原文）：
+
+```text
+18:10:40 Emitted tool permission request c930390d-… for Bash in session local_6c63f909-…
+18:10:45 LocalSessions.respondToToolPermission: requestId=c930390d-…, decision=once, …
+18:10:45 Received permission response for c930390d-…: once (tool: Bash)
+```
+
+**因此允许第三份非事件证据结束一个已经开着的等待**：`ClaudeDesktopPermissionLogReader` 读这两种行形，`ClaudeCodeMonitorService` 用 Desktop 记录里的 `sessionId ↔ cliSessionId` 把它连回 thread，答案交给**与终端那条同一个入口** `HookEventRepository.endAnsweredApprovalWaits(_:)`。同一个入口是有意的：两份证据说的是同一句话——「此刻这条 thread 没有对话框在用户面前」——不同的只有它们怎么证明它。
+
+四条边界照样成立，逐条对齐：
+
+1. **只能结束，不能开启。** 日志行里既没有轮次身份也没有 `agent_id`。**只有开启行带会话，只有应答行证明人答过**，所以配不上开启行的应答一律不归属给任何会话——失败方向是等待继续留着，那正是允许的方向。
+2. **只有肯定的证据才作数。** 没有应答行就什么也不做。**决定本身不读**：`once`、永久允许还是拒绝都同样是人答过了，而本应用没有任何理由关心用户选了什么——顺带把桌面端的**拒绝**也一起修好了，那一半此前只能等子智能体自己 `SubagentStop`。
+3. **顺序护栏**钉在每个等待自己的开启时刻上。日志时间戳是本地时区、秒级精度，截断方向安全：它只会让应答显得更旧而被拒绝，不会让它显得更新。
+4. **它不移动 `lastEventAt`**，与上一节同理。
+
+新增的两样代价写清楚：
+
+- **多了一个非公开依赖的用途，而且这次读的是日志正文。** 这份日志本来就是本表登记的私有只读来源（焦点读数读它），但那条只匹配一种行形、只解出一个 id；这里多解一个会话、一个 request id 和一个时间戳。行形是 Claude Desktop 的实现细节，版本风险比 CLI 的字段更高，所以退化方向被写死成「一条也不命中就退回今天的样子」。**两个问题各持一个游标**：共用一个偏移量的话，先问的那个会把后问的那行吃掉。
+- **一条自己的边沿，而且是有条件的。** 焦点读数当初明确拒绝监听这个文件，理由是「一条 oauth 查询、一次 git 计时也要唤醒一次」。那条理由只在**没有东西等着它**时成立：一个桌面端会话正停在对话框上时，等着它的正是那行应答，而少了边沿就要等一整个心跳（60 秒）。所以 `permissionLogWatcher` 只在「reducer 手里有审批等待，且那个会话不报告任何状态」时指向该文件，其余时间指向空集——与 `recordWatcher`、`transcriptWatcher` 同一条「只监听值得监听的那几个」的规矩。同样地，日志与 Desktop 记录树都只在有审批开着时才读，所以 CR-Fable-003 那条「终态行才付账」的性质没有被这次改动摊薄。

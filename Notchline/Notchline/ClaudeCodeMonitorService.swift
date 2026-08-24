@@ -80,8 +80,44 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// Not private, for the reason ``recordWatcher`` is not: what is watched,
     /// and for how long, is an invariant a test has to be able to state.
     nonisolated let transcriptWatcher: PathSetChangeWatcher
+    /// Claude Desktop's own log, while a dialog it raised is still open.
+    ///
+    /// **The third watcher pointed at only what is worth watching, and the one
+    /// with the strongest reason to be.** ``ClaudeDesktopFocusLogReader``
+    /// deliberately has no watcher at all, because a wake-up per line of a log
+    /// that records oauth lookups and git timings buys nothing -- and that
+    /// argument holds for exactly as long as nothing is waiting on the file.
+    /// While a desktop-hosted session is sitting on a permission dialog,
+    /// something is: the line saying the human answered is the only report that
+    /// dialog is over (see ``ClaudeDesktopPermissionLogReader``), and without
+    /// this edge it would wait out the heartbeat -- a whole minute of a row
+    /// asking for an answer already given.
+    ///
+    /// Pointed at the log only while such a wait is open, and at nothing the
+    /// rest of the time, so the noise the focus reader declined to pay for is
+    /// still not paid for.
+    ///
+    /// It does not invalidate the session list, for the reason
+    /// ``transcriptWatcher`` does not: the answer is in a file this app reads
+    /// itself, and no `claude` launch holds it.
+    ///
+    /// Not private, for the reason the other two are not.
+    nonisolated let permissionLogWatcher: PathSetChangeWatcher
     /// Which sessions the user has already read, when anything can say.
     private let readState: any ClaudeCodeReadStateProviding
+    /// When Claude Desktop last recorded a human answering one of its dialogs.
+    ///
+    /// The desktop half of "the approval has been answered", and the only half
+    /// that reaches a desktop-hosted session -- see
+    /// ``ClaudeDesktopPermissionLogReader`` for why no hook and no session
+    /// status can.
+    private let permissions: any DesktopPermissionResponseReporting
+    /// The file behind that, for the watcher rather than the reader.
+    ///
+    /// Held separately because the reader answers questions and the watcher
+    /// needs a path; a test pointing one at its own log has to be able to point
+    /// the other at the same one.
+    nonisolated private let permissionLogURL: URL
     /// When Claude Desktop last came to the front.
     ///
     /// The second of the two routes to "read", and the one that covers the
@@ -176,6 +212,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         activations: (any DesktopActivationReporting)? = nil,
         reading: (any DesktopReadingReporting)? = nil,
         displayed: (any DesktopDisplayedSessionReporting)? = nil,
+        permissions: (any DesktopPermissionResponseReporting)? = nil,
+        permissionLogURL: URL = ClaudeDesktopFocusLogReader.liveLogURL(),
         terminalGestures: (any ControllingTerminalGestureReporting)? = nil,
         screenAvailability: (any ScreenAvailabilityReporting)? = nil,
         sessionsDirectory: URL? = nil,
@@ -321,6 +359,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             debounceInterval: timing.unreadStateDebounceInterval
         )
         self.transcriptWatcher = transcriptWatcher
+        let permissionLogWatcher = PathSetChangeWatcher(
+            debounceInterval: timing.unreadStateDebounceInterval
+        )
+        self.permissionLogWatcher = permissionLogWatcher
+        self.permissions = permissions
+            ?? ClaudeDesktopPermissionLogReader(logURL: permissionLogURL)
+        self.permissionLogURL = permissionLogURL
         self.stateChangeEvents = DirectoryChangeWatcher.merged([
             repository.changeEvents(),
             Self.sessionsChanged(
@@ -345,6 +390,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // the reader that already knows how to answer it. Nothing here
             // invalidates the session list -- see ``transcriptWatcher``.
             transcriptWatcher.events(),
+            // Claude Desktop logging that a dialog it raised has been
+            // answered. A signal and not a reading, exactly like the one above
+            // it, and pointed at the log only while such an answer is what the
+            // app is waiting for -- see ``permissionLogWatcher``.
+            permissionLogWatcher.events(),
             // Claude Desktop writing a session's record. It is the low-latency
             // half of retiring a finished row: the write that stamps a focus is
             // an atomic replace inside the account folder, so this edge lands
@@ -549,7 +599,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // rather than when the dialog closes. `busy` means no dialog is in
         // front of the user, so it ends the wait the moment the record's flip
         // brings this refresh round -- see
-        // ``HookEventRepository/endApprovalWaitsForWorkingSessions(_:)`` for
+        // ``HookEventRepository/endAnsweredApprovalWaits(_:)`` for
         // the measurement and for why `idle` is not allowed to say the same.
         let working = Dictionary(
             live.compactMap { session -> (String, Date)? in
@@ -607,7 +657,46 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // approval for this to clear, and a turn still running is exactly the
         // one that has an answered dialog to forget.
         if !working.isEmpty {
-            hookState = await hookEvents.endApprovalWaitsForWorkingSessions(working)
+            hookState = await hookEvents.endAnsweredApprovalWaits(working)
+        }
+        // And the same sentence for the sessions that cannot say it themselves.
+        // A desktop-hosted session publishes no status ever, so `working` above
+        // is empty for it however long ago the user answered -- the same shape
+        // as CC-022 / #41 one paragraph up, and answered the same way: with
+        // something the desktop app writes down. Claude Desktop logs both ends
+        // of every dialog it raises, joined by a request id.
+        //
+        // **Asked only while an approval is actually open.** Everything here is
+        // free until a dialog exists to close: no log read, no account-tree
+        // read, and no watcher. That gate is what keeps a second reading of
+        // Claude Desktop's tree off the ordinary refresh (CR-Fable-003), and it
+        // closes again the moment the wait does.
+        let waitsOnAnApproval = hookState.turns.contains { turn in
+            turn.pendingApproval != nil || turn.subagentsAwaitingApproval
+        }
+        if waitsOnAnApproval {
+            let answered = await permissions.answeredAt()
+            if !answered.isEmpty {
+                // The log names Desktop's own id for the session; the reducer
+                // knows the CLI's. Desktop's records carry both, which is the
+                // join this app already keeps for the read state -- so no id is
+                // guessed and a session whose record cannot say is left alone.
+                let records = await readState.snapshot()
+                let answeredByThread = Dictionary(
+                    answered.compactMap { desktopSessionID, at -> (String, Date)? in
+                        guard let threadID = records.cliSessionID(
+                            forDesktopSessionID: desktopSessionID
+                        ) else {
+                            return nil
+                        }
+                        return (threadID, at)
+                    },
+                    uniquingKeysWith: { first, second in max(first, second) }
+                )
+                if !answeredByThread.isEmpty {
+                    hookState = await hookEvents.endAnsweredApprovalWaits(answeredByThread)
+                }
+            }
         }
         // What draining the queue had to say about it survives whichever of
         // those calls ran, none of which knows anything about the files this
@@ -758,6 +847,23 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // a Turn this app still holds and still has to be able to end, and its
         // session is listed either way.
         recordWatcher.watch(processIdentifiers: Set(live.map(\.processIdentifier)))
+
+        // Claude Desktop's log, and only while its answer is what this app is
+        // waiting for. Recomputed from the state the calls above left, so a
+        // wait they just closed unwatches it in the same refresh.
+        //
+        // Held to sessions that report no status of their own, which is the
+        // only place this evidence is needed: a terminal-hosted session's
+        // `waiting` to `busy` flip already arrives on the record edge, and it
+        // is the reading this app trusts first.
+        let awaitsADesktopAnswer = hookState.turns.contains { turn in
+            guard turn.pendingApproval != nil || turn.subagentsAwaitingApproval,
+                  let session = liveByID[turn.threadID] else {
+                return false
+            }
+            return session.activity == nil
+        }
+        permissionLogWatcher.watch(paths: awaitsADesktopAnswer ? [permissionLogURL] : [])
 
         // And the transcripts of exactly the turns the reading above cannot
         // see stop -- the ones whose session reports nothing. Watched from
