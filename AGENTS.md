@@ -170,6 +170,16 @@ Existing tests assert that `NotchStatusMatrix` and the two layer-backed labels a
 
 Separately, `SearchlightLabel`'s font and `PanelMetrics.statusLabelFont` are two independent declarations of the same `NSFont`. Change one and the drawn label no longer matches the panel width reserved for it.
 
+### Panel state is written on the main actor, and only Release can prove it
+
+Every property the overlay renders from must be written on the main actor. `@Published` sends `objectWillChange` from `willSet`; a write on any other thread lets SwiftUI re-render on the main thread *before* the property has been stored, so `body` reads the previous value and nothing invalidates it again. The panel then draws the wrong state until an unrelated publish repairs it — measured as a collapsed notch carrying the expanded header's gear where its timer belongs, on roughly one hover burst in three.
+
+**The annotations do not give you this.** `MonitorStore` is `@MainActor`, `scheduleHoverAction`'s action is `@MainActor`, and its `Task` is started from a `@MainActor` method — and under `SWIFT_APPROACHABLE_CONCURRENCY` the task body is `nonisolated(nonsending)`, so the hop back after an `await` is elided by the optimiser. Work that resumes from a suspension and then touches store state needs an explicit `await MainActor.run { … }`.
+
+Nothing in `NotchlineTests` can catch this. The elision is an `-O` behaviour, so it does not exist in Debug, and `@testable import` needs `-enable-testing`, which Release does not build with — `xcodebuild test -configuration Release` fails to compile the suite. The test that exists (`hoverExpansionIsWrittenOnTheMainActorWhenTheDwellWakesOffIt`) pins the invariant against a wrongly-placed write and nothing more.
+
+The Release reproduction is manual, and it is worth keeping: run the Release app, post one `UserPromptSubmit` payload into `agents/claudeCode/hook.sock` so a row is timed, then drive the pointer on and off the panel in bursts of 1–3 passes with dwells jittered across 0.08–0.55s, settle, and screenshot the collapsed panel. A status label or a gear drawn on a 39pt-tall panel is the failure. Note that on a notched display the status label lands *behind* the cut-out, so the gear in the trailing wing is the only half of it a person sees. Unfixed, it appeared three times in ten bursts; fixed, it survived a hundred and twenty.
+
 ---
 
 ## 8. Registry of Codex integrations without official public support

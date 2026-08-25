@@ -2840,6 +2840,50 @@ struct NotchlineTests {
         }
     }
 
+    /// The dwell is served by an unstructured `Task`, and where its *wake-up*
+    /// lands decides what the panel draws.
+    ///
+    /// `isExpanded` is the one property both surfaces read: the header picks
+    /// the compact timer or the expanded gear from it, and the panel window
+    /// sizes itself from it. Written off the main thread, `objectWillChange`
+    /// fires from that thread, SwiftUI wakes the main thread to re-render, and
+    /// the render can read the property between its `willSet` and its store --
+    /// so the body draws the *previous* expansion state and is never asked
+    /// again. That is a collapsed notch carrying the expanded header's gear
+    /// where its timer belongs, until an unrelated publish repairs it.
+    ///
+    /// **What this test cannot see.** It pins the invariant against code that
+    /// writes the store from the wrong place — a dispatch onto another queue,
+    /// a hop that gets dropped in a refactor. It cannot reproduce the failure
+    /// that motivated it: the main-actor hop is elided by the *optimiser*, so
+    /// the bug exists only in Release, and `@testable import` needs
+    /// `-enable-testing`, which Release does not build with. The Release
+    /// reproduction is a manual procedure — `AGENTS.md` §7.
+    @Test @MainActor
+    func hoverExpansionIsWrittenOnTheMainActorWhenTheDwellWakesOffIt() async throws {
+        let store = MonitorStore(
+            displays: [
+                makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 38, hasNotch: true)
+            ],
+            clock: OffMainWakingClock()
+        )
+        let publishes = PublishThreadRecorder()
+        let subscription = store.$isExpanded
+            .dropFirst()
+            .sink { _ in publishes.record(isMain: Thread.isMainThread) }
+        defer { subscription.cancel() }
+
+        store.pointerEnteredPanel()
+        try await publishes.waitForPublish()
+        #expect(store.isExpanded)
+
+        store.pointerExitedPanel()
+        try await publishes.waitForPublish(atLeast: 2)
+        #expect(!store.isExpanded)
+
+        #expect(publishes.offMainCount == 0)
+    }
+
     @Test @MainActor
     func aDisconnectedAgentClearsOnlyItsOwnRowsAndReachesTheAggregateOnlyWhenNoAgentHasSessions() {
         let session = MonitoredSession(
@@ -18256,6 +18300,68 @@ private struct ParkedMonitorClock: MonitorClock {
 
     nonisolated func sleep(nanoseconds: UInt64) async throws {
         try await Task.sleep(nanoseconds: 60 * 60 * 1_000_000_000)
+    }
+}
+
+/// A clock whose sleeper wakes on a background thread, the way `Task.sleep`
+/// does.
+///
+/// ``TestClock`` resumes its continuations from whichever thread called
+/// `advance`, which in a `@MainActor` test is the main one — so work that never
+/// returns to the main actor still looks correct under it. This is the shape
+/// production actually has, and it is the only reason a missing hop is visible
+/// to a test at all. The requested duration is ignored: the dwell itself is
+/// asserted by ``NotchlineTests/hoverExpandsAndCollapsesBothGeometries()``, and
+/// this clock exists to say *where* the wake-up lands, not when.
+private struct OffMainWakingClock: MonitorClock {
+    nonisolated func now() -> Date { Date(timeIntervalSince1970: 1_000_000) }
+
+    nonisolated func sleep(nanoseconds: UInt64) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume()
+            }
+        }
+    }
+}
+
+/// Which thread each publish of an observed property arrived on.
+private final class PublishThreadRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var publishes: [Bool] = []
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return publishes.count
+    }
+
+    var offMainCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return publishes.count { !$0 }
+    }
+
+    func record(isMain: Bool) {
+        lock.lock()
+        publishes.append(isMain)
+        lock.unlock()
+    }
+
+    /// Waits for the publish to arrive rather than for a duration, so the test
+    /// is bounded by a real signal and not by a guess at how long the hop takes.
+    func waitForPublish(
+        atLeast expected: Int = 1,
+        timeout: TimeInterval = 5
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while count < expected {
+            guard Date() < deadline else {
+                Issue.record("no publish after \(timeout)s")
+                return
+            }
+            try await Task.sleep(nanoseconds: 500_000)
+        }
     }
 }
 

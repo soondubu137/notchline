@@ -2092,7 +2092,27 @@ final class MonitorStore: ObservableObject {
             guard let self else { return }
             try? await clock.sleep(seconds: delay)
             guard !Task.isCancelled else { return }
-            action(self)
+            // `MainActor.run`, not a bare `action(self)`, and the reason is not
+            // style. `action` is `@MainActor`, this store is `@MainActor`, and
+            // the task was started from a `@MainActor` method -- and none of
+            // that puts the resumption back on the main thread. Under
+            // `SWIFT_APPROACHABLE_CONCURRENCY` the task body is
+            // `nonisolated(nonsending)`, so its isolation is carried
+            // dynamically rather than in its type, and the hop back after
+            // `clock.sleep` is elided; measured in Release, `action` ran on a
+            // cooperative-pool thread every time.
+            //
+            // What that costs is not a theoretical race. Writing `isExpanded`
+            // off the main thread fires `objectWillChange` from that thread,
+            // SwiftUI wakes the main thread to re-render, and the render can
+            // read the property *before* the background thread has stored it --
+            // between `willSet` and `didSet`. The body then draws the previous
+            // expansion state and nothing invalidates it again, so the
+            // collapsed notch keeps the expanded header's gear where its timer
+            // belongs until some unrelated publish repairs it. Measured in
+            // Release: three failures in ten hover bursts before this hop, none
+            // in a hundred and twenty after it.
+            await MainActor.run { action(self) }
         }
     }
 
