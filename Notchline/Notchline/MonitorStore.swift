@@ -446,9 +446,28 @@ enum PanelMetrics {
     /// Everything that rounds -- the ceiled width, a cut-out that is not
     /// perfectly centred -- is absorbed by the leading wing, which is padding
     /// and can take it, rather than by the edge that has to meet the hardware.
-    static func compactTrailingWingWidth(trailing: CompactTrailingReading) -> CGFloat {
+    ///
+    /// With nothing to draw out there the edge does not land exactly on the
+    /// reported one either: it steps past it by
+    /// ``winglessTrailingOvershoot(menuBarHeight:)``, which is where that
+    /// figure's reasoning lives. The one form that keeps the reported edge is
+    /// the surface drawing nothing at all -- it *is* the cut-out, and pushing
+    /// it out would hang a sliver of black off the side of the notch.
+    ///
+    /// - Parameter drawsCompactMarks: Whether the collapsed surface is drawing
+    ///   anything at all. Passed rather than inferred here so the body's two
+    ///   edges are decided by one reading: the leading wing already answers to
+    ///   it, and a trailing edge that disagreed would move the panel sideways
+    ///   on a form that draws no black.
+    static func compactTrailingWingWidth(
+        trailing: CompactTrailingReading,
+        menuBarHeight: CGFloat,
+        drawsCompactMarks: Bool
+    ) -> CGFloat {
         let content = compactTrailingWidth(trailing: trailing)
-        return content > 0 ? content + expandedNotchClearance : 0
+        guard content <= 0 else { return content + expandedNotchClearance }
+        guard drawsCompactMarks else { return 0 }
+        return winglessTrailingOvershoot(menuBarHeight: menuBarHeight)
     }
 
     /// Leading wing on a notched display: padding, the marks, and the clearance.
@@ -494,6 +513,43 @@ enum PanelMetrics {
     /// curve is the only place the shape is checkable against the hardware.
     static func surfaceBottomCornerRadius(menuBarHeight: CGFloat) -> CGFloat {
         max(0, menuBarHeight) * notchLowerRadiusRatio
+    }
+
+    /// How far past the cut-out's *reported* trailing edge a body with nothing
+    /// in its trailing wing is pushed, so that its upper shoulder is not drawn
+    /// behind the hardware.
+    ///
+    /// `NSScreen`'s auxiliary areas describe the cut-out as a rectangle, and
+    /// the hardware is not one: the glass curves back outward where the notch
+    /// meets the top of the display, so the black up there is wider than the
+    /// rectangle says. An edge laid exactly on the reported one therefore has
+    /// the top of its shoulder -- the concave fillet `PanelContour` draws
+    /// outside the body -- behind that flare, and the panel reads as stopping
+    /// short of the notch rather than as continuing out of it. It is the
+    /// outline that made this visible: the hairline curving back up to the
+    /// menu bar is what gets cut, not the black, which had nothing to show
+    /// against a cut-out anyway.
+    ///
+    /// A nudge and not a derived figure, because the shape it clears cannot be
+    /// read from here. The auxiliary areas are the only measurement macOS
+    /// offers, and a screen capture is no second opinion: the framebuffer runs
+    /// on under the notch, so a capture of that band comes back as wallpaper
+    /// rather than as the black a person is looking at. Finding the true
+    /// contour would mean per-model hardware figures for a shape this panel
+    /// only has to clear.
+    ///
+    /// Only the trailing side takes it, and only while that side is empty. A
+    /// wing wide enough for a timer or a chip cluster is already well clear of
+    /// the flare, and the leading side is either such a wing or the resting
+    /// form that is meant to be invisible.
+    ///
+    /// A share of the menu bar height for the reason the two radii are: what
+    /// the cut-out hides is a fixed shape in millimetres, and it shrinks in
+    /// points as the display scaling coarsens. Half the upper fillet --
+    /// `2.375pt` under a `38pt` bar, `1.375pt` under a `22pt` one.
+    static let notchTrailingOvershootRatio: CGFloat = 1.0 / 16
+    static func winglessTrailingOvershoot(menuBarHeight: CGFloat) -> CGFloat {
+        max(0, menuBarHeight) * notchTrailingOvershootRatio
     }
 
     static func size(
@@ -546,7 +602,11 @@ enum PanelMetrics {
                 markCount: drawsCompactMarks ? matrixCount : 0
             )
                 + centerOcclusionWidth
-                + compactTrailingWingWidth(trailing: trailing)
+                + compactTrailingWingWidth(
+                    trailing: trailing,
+                    menuBarHeight: compactHeight,
+                    drawsCompactMarks: drawsCompactMarks
+                )
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
             return CGSize(
@@ -1754,7 +1814,9 @@ final class MonitorStore: ObservableObject {
 
         return occlusionMaxX
             + PanelMetrics.compactTrailingWingWidth(
-                trailing: compactTrailingReading
+                trailing: compactTrailingReading,
+                menuBarHeight: compactHeight,
+                drawsCompactMarks: drawsCompactMarks
             )
     }
 
