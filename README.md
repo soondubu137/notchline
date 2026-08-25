@@ -1,6 +1,7 @@
 <p align="center">
-  <img src="design/assets/02-horizontal/notchline-horizontal-white.png" width="420" alt="Notchline">
+  <img src="design/assets/02-horizontal/notchline-horizontal-white.png" width="300" alt="Notchline">
 </p>
+
 
 
 
