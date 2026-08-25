@@ -7058,10 +7058,14 @@ struct NotchlineTests {
         let first = await service.fetchSnapshot()
         #expect(first.quota.remainingPercent == nil)
 
-        // The store would otherwise be asleep until the metadata window, which
-        // is an order of magnitude further out than the read itself takes.
-        let deadline = try #require(await service.nextRefreshDeadline())
-        #expect(deadline.timeIntervalSince(clock.now()) >= 5)
+        // The store would otherwise be asleep. With no Hook observation nothing
+        // in this state books a wake-up for the membership set at all
+        // (CR-Fable-023), and every deadline that can be booked here is an
+        // order of magnitude further out than the read itself takes. The
+        // trigger below is the only thing that puts the ring on screen.
+        if let deadline = await service.nextRefreshDeadline() {
+            #expect(deadline.timeIntervalSince(clock.now()) >= 5)
+        }
 
         let signalled = await withTaskGroup(of: Bool.self) { group in
             group.addTask { await observer.value }
@@ -19775,6 +19779,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     /// The items each turn has produced, newest last, by `turnId`.
     private var turnItemsByTurnID: [String: [JSONValue]]
     private var methods: [String] = []
+    private var threadListParams: [JSONValue] = []
     private var threadReadParams: [JSONValue] = []
     private var turnItemsParams: [JSONValue] = []
     private var completedThreadListRequests = 0
@@ -19816,6 +19821,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
         methods.append(method)
         switch method {
         case "thread/list":
+            threadListParams.append(params ?? .null)
             if let threadListError {
                 throw threadListError
             }
@@ -19932,6 +19938,10 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
 
     func requestCount(method: String) -> Int {
         methods.filter { $0 == method }.count
+    }
+
+    func recordedThreadListParams() -> [JSONValue] {
+        threadListParams
     }
 
     func recordedThreadReadParams() -> [JSONValue] {
@@ -22015,6 +22025,243 @@ extension NotchlineTests {
             a branch that cannot evaluate a row must not book a re-check for \
             one: this is the 1 Hz that ran with an empty notch
             """
+        )
+    }
+
+    /// The no-hook branch confirms the transport. It does not read the history.
+    ///
+    /// CR-Fable-023. `thread/list` does two jobs and this branch needs only the
+    /// cheaper one: sessions cannot be produced without a live Hook — the
+    /// branch's defining condition, and a deliberate product rule (PRD §3) — so
+    /// the membership set the sweep rebuilt was read by nobody. The user's
+    /// version of it: keep the integration installed, work in Claude Code, and
+    /// leave Codex Desktop shut. The App Server was asked to paginate every
+    /// unarchived thread the user owns, every thirty seconds, around the clock,
+    /// to answer "does this transport answer a read".
+    @Test @MainActor
+    func withNoHookObservationTheTransportIsConfirmedWithoutReadingTheHistory() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        // A history worth not reading.
+        let client = CodexAppServerStub(
+            listedThreads: (0 ..< 40).map { index in
+                .object([
+                    "id": .string("thread-\(index)"),
+                    "ephemeral": .bool(false),
+                    "threadSource": .string("user"),
+                    "name": .string("History \(index)")
+                ])
+            },
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                clock: clock,
+                timing: timing
+            ),
+            hookRegistrar: installer,
+            clock: clock,
+            timing: timing,
+            desktopProcessIdentifierProvider: { nil }
+        )
+        defer { Task { await service.disconnect() } }
+
+        let ready = await service.fetchSnapshot()
+        #expect(ready.availability == .ready, "the transport still answers")
+        #expect(ready.sessions.isEmpty)
+        #expect(ready.presence == .closed)
+
+        // Ten membership windows of a day with Desktop shut.
+        for _ in 0 ..< 10 {
+            await clock.advance(by: timing.threadListRefreshInterval + 1)
+            _ = await service.fetchSnapshot()
+        }
+
+        let requests = await client.recordedThreadListParams()
+        #expect(!requests.isEmpty, "the transport is still confirmed by a read")
+        #expect(
+            requests.allSatisfy { $0["limit"]?.intValue == 1 },
+            """
+            a branch that produces no rows asked for the whole history \
+            \(requests.map { $0["limit"]?.intValue ?? -1 })
+            """
+        )
+        #expect(
+            requests.allSatisfy { $0["cursor"] == nil },
+            "one page is the whole of what confirming a read needs"
+        )
+    }
+
+    /// A membership set nobody reads is not woken for.
+    ///
+    /// The other half of CR-Fable-023, and the half that would have turned the
+    /// first into a busy loop. `nextRefreshDeadline()` may only report an
+    /// instant that the refresh it wakes can actually move; the membership
+    /// deadline was armed from a read stamp alone, and the only code that
+    /// re-reads membership is in the live-Hook branch. So with Desktop gone the
+    /// store woke on an instant no refresh could clear, found it still in the
+    /// past, and fell through to the refresh floor — 1 Hz with an empty notch,
+    /// the same shape as CR-Fable-050 one branch further up.
+    @Test @MainActor
+    func aMembershipSetWithNoLiveTurnBehindItIsNotWokenFor() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let repository = HookEventRepository(
+            paths: paths,
+            clock: clock,
+            timing: timing
+        )
+        try await installer.install()
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": clock.now().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-live",
+            "turn_id": "turn-live"
+        ]).deliver(to: repository)
+
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-live"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "name": .string("Live")
+            ])],
+            loadedListResults: []
+        )
+        let desktop = MutableDesktopProcessIdentifier(4_242)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            clock: clock,
+            timing: timing,
+            desktopProcessIdentifierProvider: { desktop.value }
+        )
+        defer { Task { await service.disconnect() } }
+
+        // A live Turn, so the sweep runs and leaves a read stamp behind it.
+        let running = await service.fetchSnapshot()
+        #expect(running.sessions.first?.status == .running)
+        await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        let sweeps = await client.requestCount(method: "thread/list")
+
+        // The user quits Codex Desktop. The Turn is retired with the process
+        // that vouched for it, and nothing is left that reads a membership set.
+        desktop.value = nil
+        let quiet = await service.fetchSnapshot()
+        #expect(quiet.sessions.isEmpty)
+
+        await clock.advance(by: timing.threadListRefreshInterval + 1)
+        _ = await service.fetchSnapshot()
+        await clock.settle()
+
+        let requests = await client.recordedThreadListParams()
+        #expect(
+            requests.dropFirst(sweeps).allSatisfy { $0["limit"]?.intValue == 1 },
+            "the membership window came due for a set nothing reads"
+        )
+        let deadline = await service.nextRefreshDeadline()
+        let stale = deadline.map { Int(clock.now().timeIntervalSince($0)) } ?? 0
+        #expect(
+            deadline == nil || deadline! >= clock.now(),
+            "a set nobody reads left a deadline \(stale)s in the past"
+        )
+    }
+
+    /// A read parked by a backoff goes when its consumer goes.
+    ///
+    /// Same rule as CR-Fable-023 seen from the retry side. A membership read
+    /// that failed keeps its request outstanding and publishes its cool-off as
+    /// a wake-up, and only the live-Hook branch picks such a request back up.
+    /// Losing Desktop between the failure and the retry therefore left a marker
+    /// with nobody to clear it: the store woke at it, ran a refresh that could
+    /// not reach the scheduler, and span at the floor.
+    @Test @MainActor
+    func aParkedReadIsDroppedWhenNothingCanRunItAgain() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let repository = HookEventRepository(
+            paths: paths,
+            clock: clock,
+            timing: timing
+        )
+        try await installer.install()
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": clock.now().timeIntervalSince1970,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-parked",
+            "turn_id": "turn-parked"
+        ]).deliver(to: repository)
+
+        let client = CodexAppServerStub(
+            listedThreads: [.object([
+                "id": .string("thread-parked"),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "name": .string("Parked")
+            ])],
+            loadedListResults: [],
+            threadListError: .timeout(method: "thread/list")
+        )
+        let desktop = MutableDesktopProcessIdentifier(4_242)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            clock: clock,
+            timing: timing,
+            desktopProcessIdentifierProvider: { desktop.value }
+        )
+        defer { Task { await service.disconnect() } }
+
+        // The membership read fails, so its request stays outstanding behind a
+        // cool-off that only the live-Hook branch can spend.
+        _ = await service.fetchSnapshot()
+        await waitForThreadListRequests(client, atLeast: 1)
+        await clock.settle()
+        let parked = await service.nextRefreshDeadline()
+        #expect(
+            parked != nil,
+            "a parked retry is what the store wakes for while it can run it"
+        )
+
+        // The user quits Codex Desktop before the cool-off expires.
+        desktop.value = nil
+        await client.setThreadListError(nil)
+        _ = await service.fetchSnapshot()
+        await clock.advance(by: timing.requestRetryInterval + 1)
+        _ = await service.fetchSnapshot()
+        await clock.settle()
+
+        let deadline = await service.nextRefreshDeadline()
+        let stale = deadline.map { Int(clock.now().timeIntervalSince($0)) } ?? 0
+        #expect(
+            deadline == nil || deadline! >= clock.now(),
+            "a retry nothing can run left a deadline \(stale)s in the past"
         )
     }
 

@@ -493,7 +493,7 @@ launch
 - Mac 睡眠唤醒。
 - 账户切换。
 - 收到可能影响成员集合的未读、归档、删除或 Project 事件。
-- 每 30 秒进行一次低频安全校正，用于覆盖漏失事件；Hook 发现尚未列出的新 Thread 时立即调度一次后台校正，但不得等待它再发布 Hook 状态，也不得秒级扫描完整历史。后台请求合并为单个 in-flight task；失败后至少 60 秒再重试。
+- 每 30 秒进行一次低频安全校正，用于覆盖漏失事件——**只在 Hook reducer 里还握着 Turn 时**：成员集合的消费者全在活 Hook 分支里，没有 Turn 时既不预约这次到期，也不重读（CR-Fable-023）。Hook 发现尚未列出的新 Thread 时立即调度一次后台校正，但不得等待它再发布 Hook 状态，也不得秒级扫描完整历史。后台请求合并为单个 in-flight task；失败后至少 60 秒再重试；失去 Hook 观察时，未完成的成员关系与元数据请求连同它们的退避标记一并丢弃——只有活 Hook 分支能把它们接回来，留着就是一个没人能清的唤醒理由。
 - 点击导航前进行目标级轻量校正。
 
 ## 8. 成员集合算法
@@ -875,7 +875,7 @@ Codex 的在场是内核事实，没有缓存也没有过期。Claude Code 的�
 
 单次 App Server 查询超时不等于连接断开。传输层保留现有连接，UI 继续展示最后一次可信内存快照，并在同一连接上启动至多一个独立探活流程：先等待 3 秒宽限期；其间任意带 `id` 的响应（包括晚到响应）都证明 RPC event loop 仍活跃并取消探活。宽限期内没有响应时，调用官方只读且只访问内存集合的 `thread/loaded/list`，单次最多等待 5 秒；只有该探活也超时且期间仍无任何响应，才重建只读 App Server 传输。并行业务请求超时共享同一个探活，不累计为多次连接失败；远端方法错误和协议错误本身已经收到响应，也不得触发进程重启。该恢复动作不清空 Hook reducer 或最近可信 UI。已有 Ready 等可信状态时，只有 `disconnected` 连续超过 3 秒才发布全局断开状态并清空列表；启动仍为 Connecting 且初始化已确认无响应时直接发布 Disconnected。
 
-尚未建立本次启动后的 Hook 观察时，启动与常规轮询只用最多 5 秒的 `thread/list` 做一次**只读连通性校验**，其结果不得产生任何会话行。请求完成前保持 Connecting（该 availability 不进入收起态，收起态在此期间为 `Disconnected`——观察契约尚未建立，就还没连上）；成功返回后发布 Ready，此时若 Codex Desktop 也在运行，收起态转为 `Connected`；App Server 未响应或连接失败才发布 availability 层面的 Disconnected。该分支不重建启动前的任何会话（cold-start sync 已明确列为非目标，理由见 PRD 第 3 节），因此也不需要 `thread/loaded/list` 或逐 Thread 详情读取。建立启动后 Hook 观察后，Hook 状态立即发布；后台校正按成本分成两条独立的单飞路径。Hook 跟踪的 Thread 用 `thread/read`（`includeTurns: false`，最多 5 秒，单条元数据陈旧超过 10 秒才重取）刷新标题、preview 与 `status`；全量分页 `thread/list` 只在 Hook 出现从未列出过的 Thread、或 30 秒成员关系到期时运行，最多 15 秒。两条路径各自同一时间只允许一个请求，失败后至少 60 秒再重试，且都不得位于 Hook → UI 关键路径上。服务端不支持 `thread/read`（`-32601`）时只探测一次，之后永久回退为由 `thread/list` 提供元数据，行为退化为旧路径而不丢标题。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 直接把同一 Turn 标记为 Completed，不发起终态详情读取。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
+尚未建立本次启动后的 Hook 观察时，启动与常规轮询只用最多 5 秒、**只要一页（`limit: 1`）**的 `thread/list` 做一次**只读连通性校验**，其结果不得产生任何会话行，也**不得写入成员关系缓存**：一页不是成员集合，把截断的 `listedThreadIDs` 配上当次时间戳，下一次活 Hook 刷新就会按「不在列表里」退休掉这一页之外的每一个 Turn。方法与参数形状与全量分页读一致，只有条数不同——校验若换一种更窄的形状，就可能被一个真正的 `thread/list` 本应用用不了的 build 答出来，`unsupportedVersion` 也就报不出来了。它的新鲜度（30 秒）是**上限**而不是节拍：`nextRefreshDeadline()` 不为它报出任何到期，它只搭额度读数本来就会造成的唤醒的车。这条分支上被删掉的是**全量分页**：它在这里没有消费者，代价与实测见 `system-architecture.md` 第 6 节（CR-Fable-023）。请求完成前保持 Connecting（该 availability 不进入收起态，收起态在此期间为 `Disconnected`——观察契约尚未建立，就还没连上）；成功返回后发布 Ready，此时若 Codex Desktop 也在运行，收起态转为 `Connected`；App Server 未响应或连接失败才发布 availability 层面的 Disconnected。该分支不重建启动前的任何会话（cold-start sync 已明确列为非目标，理由见 PRD 第 3 节），因此也不需要 `thread/loaded/list` 或逐 Thread 详情读取。建立启动后 Hook 观察后，Hook 状态立即发布；后台校正按成本分成两条独立的单飞路径。Hook 跟踪的 Thread 用 `thread/read`（`includeTurns: false`，最多 5 秒，单条元数据陈旧超过 10 秒才重取）刷新标题、preview 与 `status`；全量分页 `thread/list` 只在 Hook 出现从未列出过的 Thread、或 30 秒成员关系到期时运行，最多 15 秒；该到期只在 Hook reducer 里还握着 Turn 时才报出。两条路径各自同一时间只允许一个请求，失败后至少 60 秒再重试，且都不得位于 Hook → UI 关键路径上。服务端不支持 `thread/read`（`-32601`）时只探测一次，之后永久回退为由 `thread/list` 提供元数据，行为退化为旧路径而不丢标题。旧列表仍可提供标题，但其请求开始时间早于最新 Hook 时不得移除该 Turn；Project 与未读元数据分别从第 1.4、1.3 节的 Desktop 状态快照解析。实时 Stop 直接把同一 Turn 标记为 Completed，不发起终态详情读取。额度与今日用量读取也必须在核心会话快照之后异步执行；两个只读请求可并发，失败按第 13 节分别降级。
 
 ### 15.2 子进程读取的截止时间
 

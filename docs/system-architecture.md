@@ -113,7 +113,7 @@ flowchart LR
     hookRegistrar <-->|"registration install remove"| liveService
 
     liveService -->|"构造行状态"| snapshotParser
-    liveService <-->|"30 秒列表与 60 秒用量刷新"| serviceState
+    liveService <-->|"有 Turn 时 30 秒列表与 60 秒用量刷新"| serviceState
     snapshotParser -->|"MonitoredSession 候选"| unreadGate
     unreadGate -->|"活动或未读终态成员"| monitorSnapshot
     liveService -->|"availability quota diagnostic"| monitorSnapshot
@@ -186,10 +186,9 @@ sequenceDiagram
             service->>hooks: reconcile exact four-state session status
             reducer-->>service: sorted active or unread-terminal sessions
         else 尚无启动后当前态证据
-            service->>appServer: thread/list within 5 seconds
-            appServer-->>service: current thread snapshot response
-            service->>reducer: parse eligible root active turns
-            reducer-->>service: active sessions or confirmed empty snapshot
+            service->>appServer: thread/list limit 1 within 5 seconds
+            appServer-->>service: one page, discarded unread
+            service->>service: Ready with an empty session set
         end
 
         service->>service: schedule quota and daily usage refresh after core snapshot
@@ -224,7 +223,9 @@ sequenceDiagram
 
 4. **被用户移除的行还留在 gate 里**（CR-Fable-003）。`MonitorStore.dismiss(_:)` 把行 id 记进 `dismissedSessionIDsByAgent` 并重新走一遍 merge，就到此为止——**没有任何信号到达 provider**。两个产品的终态门于是继续把这一行当成「列出的、未读的」条目，`nextRefreshDeadline()` 继续为它预约 1 秒复查：Claude Code 每次复查要做一次终端手势读（`sysctl` + `devname_r` + `stat`，加上最多 16 级的祖先遍历）与三态 `isInFrontOfThem` 采样，Codex 每次复查是一次完整快照（含主线程 `NSRunningApplication` 的 LaunchServices 往返）。用户右键送走一行终态、把那个 CLI 留在提示符上，刘海上什么都没有，应用照样每秒跑一轮双产品刷新，无限期。修法是把移除送到拥有它的服务：记录仍然只由 store 持有——只有它分得清「用户移除」与「轮次结束」，见 `tech-design.md` §17——但每次 `fetchSnapshot(dismissedRowIDs:)` 把该产品名下的那一份带下去，服务据此不评估这一行、不给它建条目，`retain` 顺手丢掉它原有的条目。**行仍然照常上报**：不上报等于告诉 store 这个轮次已经结束，而那正是 CR-Fable-004 里让移除被遗忘、行在下一条 hook 事件回到刘海上的那件事。
 
-四条合起来是同一条规则的加强版：**到期不仅要是这一行原则上可清除的，还要是当前这条分支、当前这台机器状态下真的会有刷新去清除的。**
+5. **成员集合的到期没有 Hook 观察时无人可清**（CR-Fable-023）。`threadListReadAt` 一旦落下，成员关系到期就无条件重新装填，而**重读它的调度只写在活 Hook 分支里**。Desktop 退出之后这个到期于是每 30 秒报出一次、落在过去、没有任何刷新推得动它，最后压在存储侧 1 秒的下界上——又是一次空刘海的 1 Hz。被退避停住的那次成员关系请求同样如此：重试标记按契约要报成唤醒理由，而无 Hook 分支根本不会去把那次请求接回来。到期因此改为只在 Hook reducer 里还握着 Turn 时才报出（那也正是 `threadRecords` 与 `removeThreads(notIn:)` 唯一的消费者所在），而无 Hook 分支把这两条只有活 Hook 分支能消费或清除的读取整批丢掉。
+
+五条合起来是同一条规则的加强版：**到期不仅要是这一行原则上可清除的，还要是当前这条分支、当前这台机器状态下真的会有刷新去清除的。**
 
 **到期唤醒必须在一次刷新运行结束时重新装填，而不是在存储侧自己的循环里。** 到期是刷新*产生*的：一行终态在 Stop hook 驱动的那次刷新里才开始等用户，也才在那一刻预约 1 秒复查。而绝大多数刷新由 watcher 边沿驱动，不是由存储侧发起的。早先的写法是一个 `while` 循环——自己刷新一次、算一次到期、睡到那个时刻——于是边沿驱动的刷新预约出来的到期，落在循环已经睡下之后：那个睡眠是按"还没有终态行"的状态算出来的，通常就是 60 秒心跳。复查被如实报出、被如实忽略，行就在屏幕上多留最多一分钟。同一处漏装填也拖住了断连宽限期的重新判定与额度读取的重试。现在 `scheduleNextWake()` 挂在 `startRefreshRunIfNeeded` 的运行结束处，watcher、Recheck 与心跳三条路径都经过它，因此每一次刷新之后的到期都真的被睡到。
 
@@ -265,10 +266,10 @@ flowchart LR
     store[("同一持久化 thread 记录")] --> desktopServer
     store --> notchServer
     desktopServer -.->|"实测无跨进程当前态查询\nloaded/list 空 · 恒 notLoaded · 无 inProgress"| notchServer
-    notchServer -->|"thread/list 仅确认传输可用\n始终发布 Ready 空集合"| notch
+    notchServer -->|"thread/list 一页仅确认传输可用\n始终发布 Ready 空集合"| notch
 ```
 
-状态判断分为传输与快照两个阶段：`initialize` 或连接失败、App Server 没有响应时才是 Disconnected；握手已经开始但校验 `thread/list` 尚未完成时保持 Connecting；`thread/list` 成功返回即确认传输可用，并**始终**以 Ready 空集合发布。`thread/loaded/list` 只保留为传输超时后的轻量探活，不决定业务 availability，也不参与任何成员集合。
+状态判断分为传输与快照两个阶段：`initialize` 或连接失败、App Server 没有响应时才是 Disconnected；握手已经开始但校验 `thread/list` 尚未完成时保持 Connecting；`thread/list` 成功返回即确认传输可用，并**始终**以 Ready 空集合发布。这次校验只要一页（`limit: 1`）：它问的是「这个传输答不答得出一次真读」，不是「有哪些 thread」，而分页读回来的成员集合在这条分支上没有任何消费者（CR-Fable-023，见第 6 节）。`thread/loaded/list` 只保留为传输超时后的轻量探活，不决定业务 availability，也不参与任何成员集合。
 
 收起态的绘制随在场走：`MonitorStore.presenceMarks` 为每个已连接产品给出一个标记，UI 一个矩阵画一个，**每个矩阵跑自己产品的曲线**而不是共用汇总状态。没有产品已连接时只有一个不指认任何产品的灰色标记；有刘海形态在这种静息态下连前导翼一起不画（`drawsCompactMarks`），因为缺口本身已经是屏幕上的一个形状，旁边再放一个不带信息的形状没有意义。无刘海形态保留标记以守住它在菜单栏里的位置。此时 hover 只把药丸横向撑开露出齿轮（`expandsToPillOnly`），不落下面板——面板里没有内容可放。
 
@@ -659,6 +660,21 @@ Release 实测（`ENABLE_TESTABILITY=YES`，同一台机器，合成账号树，
 时间上两者同价（0.278 对 0.278 ms；2.40 对 2.40 ms），所以 pool 是白拿的。**真正省下代价的是另一半**：没有终态行时那一整遍不再跑，那也是列表最常见的样子。
 
 一句写在别处会走样的账：跳过的那一次仍然要把屏幕成员关系与 gate 条目清空，因为原来的那一遍对这样一份列表正是把它们逐行清掉的；判据取自 `TerminalUnreadMembershipGate.isTerminal` 而不是就地再写一次 `== .completed`，免得 gate 将来放宽定义时这里悄悄漏掉一种。
+
+### 稳态里的第三遍白读：没人会读的成员集合（CR-Fable-023）
+
+同一条规则的 Codex 版本，单次代价比前两条都大。尚未建立本次启动后的 Hook 观察时，服务仍然每 30 秒把全部未归档 thread 分页读一遍、重建整份 `threadRecords`——而这条分支按产品规则（`PRD.md` 第 3 节）永远不产生任何行，那份成员集合没有任何消费者。用户侧的样子是：装着 Codex 集成、整天在 Claude Code 里干活、Codex Desktop 一次都没开——`codex app-server` 子进程照样常驻，并每 30 秒被要求分页读完这个人的全部历史，只为回答一个「这个传输答不答得出一次读」的问题。
+
+本机实测（2026-08-25，真实 `~/.codex`，Codex Desktop 内置的 `codex` 二进制，47 条未归档 thread；突发法：按调用差 `ps -o time`，解码一侧用 `-O` 编译后差 `getrusage`）：
+
+| 形状 | 响应字节 | 子进程 CPU/次 | 本应用解码 CPU/次 |
+| --- | --- | --- | --- |
+| 全量分页（`limit: 100`，本机 1 页） | 61 KB | 0.14–0.16 s | 2.30 ms |
+| 一页确认（`limit: 1`） | 1.1 KB | 0.01–0.02 s | 0.05 ms |
+
+按 30 秒一次折算，子进程那一侧是**0.5% 的一个核，永远**，且随历史线性增长（本机 47 条只需一页；分页阈值是 100 条）；换成一页确认之后是 0.05%。本应用自己那一半从 2.30 ms 降到 0.05 ms，稳态下量不出差别，但它同时不再每 30 秒重建 47 条 `ThreadRecord`。
+
+**留下来的那一次读取有消费者，这正是两者的分界。** 传输答不答得出一次真读，决定的是收起态上 `Connected` 与 `Disconnected` 那一半，和额度环一样画在屏幕上（额度轮询在这个状态下同样成立，理由相同）；成员集合的消费者则全都在活 Hook 分支里。所以确认读留下，但压到一页，且它的新鲜度（30 秒）只是**上限**而不是节拍——`nextRefreshDeadline()` 一个字都不为它报出，它只搭额度读数本来就会造成的那趟唤醒的车（同 CR-Fable-002）。它也**不写成员关系缓存**：一页不是成员集合，把截断的 `listedThreadIDs` 配上当次时间戳，会让下一次活 Hook 刷新按「不在列表里」退休掉这一页之外的每一个 Turn。
 
 ## 7. 保持 clean and neat 的架构约束
 

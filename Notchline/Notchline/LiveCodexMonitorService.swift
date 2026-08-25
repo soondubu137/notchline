@@ -139,6 +139,20 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     private var hookTrackedThreadIDs: Set<String> = []
     private var listedThreadIDs: Set<String> = []
     private var threadListReadAt: Date?
+    /// When `thread/list` last answered, for either of the two jobs it does.
+    ///
+    /// Separate from ``threadListReadAt`` because the two questions are: that
+    /// one is "how fresh is the membership set", this one is "does the
+    /// transport answer a real read". The no-hook branch asks only the second,
+    /// with a call bounded to one row, and must never leave a mark that says
+    /// the membership set was re-read -- a truncated `listedThreadIDs` with a
+    /// current timestamp would retire live Hook Turns whose thread it did not
+    /// happen to contain.
+    ///
+    /// It is a ceiling on how often the confirmation is bought, never a reason
+    /// to wake: nothing is published for it in `nextRefreshDeadline()`, so it
+    /// rides on the wake-ups quota already causes.
+    private var threadListAnsweredAt: Date?
     private var threadListGate = SingleFlightGate()
     private var threadListRefreshTask: Task<Void, Never>?
     private var threadListRetryAfter: Date?
@@ -468,9 +482,24 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             // thread `notLoaded`, and never a single `inProgress` turn. There is
             // no supported read that answers "what is Codex Desktop doing right
             // now", so any startup list would have been a guess.
+            //
+            // The confirmation is one bounded page, not the membership sweep
+            // (CR-Fable-023). The sweep answered this question by accident and
+            // charged the whole user history for it: nothing here consumes a
+            // membership set -- sessions cannot exist without a live Hook, by
+            // rule -- so with Codex Desktop closed all day the App Server was
+            // re-paginating every unarchived thread every thirty seconds to
+            // answer "does the transport work", for data no layer would read.
             hookTrackedThreadIDs = []
-            _ = try await readAllUnarchivedThreads(
-                forceRefresh: false,
+            // And the reads that only the live-Hook branch can consume or clear
+            // go with it. A membership or metadata request parked by a backoff
+            // publishes its retry marker as a deadline, and nothing reachable
+            // from here picks it back up: the store would wake at the marker,
+            // find it still in the past, and spin at the refresh floor for as
+            // long as Desktop stayed shut. Same shape as CR-Fable-050, one
+            // branch further down.
+            stopThreadReadsWithNoConsumer()
+            try await confirmAppServerAnswersReads(
                 timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
             )
             scheduleQuotaRefreshIfNeeded()
@@ -594,8 +623,23 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     func nextRefreshDeadline() -> Date? {
         var deadlines: [Date] = []
 
-        // Membership reconciliation.
-        if let threadListReadAt {
+        // Membership reconciliation, and only while a Hook-tracked Turn gives
+        // the set a consumer (CR-Fable-023).
+        //
+        // The condition mirrors its scheduler exactly, like every other entry
+        // here: the re-read is reachable only from the live-Hook branch, so
+        // with no Hook observation this deadline is one no refresh can clear --
+        // the store would wake at it, find it unmoved, and spin. It is also the
+        // honest answer on its own terms. `threadRecords` decorates Hook Turns
+        // and `removeThreads(notIn:)` reconciles them; with none of them held,
+        // re-paginating the user's whole history buys nothing anyone reads.
+        // Freshness is a ceiling on how stale an answer may get, not a reason
+        // to buy one nobody asked for (CR-Fable-002).
+        //
+        // Nothing is lost when a Turn does appear: a Hook naming a thread the
+        // last list did not carry schedules a read on the spot, and a Hook
+        // event is itself a wake-up.
+        if let threadListReadAt, !hookTrackedThreadIDs.isEmpty {
             deadlines.append(
                 deferred(
                     threadListReadAt.addingTimeInterval(
@@ -681,17 +725,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     }
 
     func disconnect() async {
-        threadListRefreshTask?.cancel()
-        threadListRefreshTask = nil
-        threadListGate.reset()
-        threadMetadataRefreshTask?.cancel()
-        threadMetadataRefreshTask = nil
-        threadMetadataGate.reset()
-        pendingMetadataThreadIDs.removeAll()
-        turnProgressRefreshTask?.cancel()
-        turnProgressRefreshTask = nil
-        turnProgressGate.reset()
-        pendingProgressReads.removeAll()
+        stopThreadReadsWithNoConsumer()
         // The text goes with the connection that answered for it. It is a fact
         // about a turn that is still running, and this call is the app deciding
         // it no longer knows what is running.
@@ -699,6 +733,9 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         // And so does the refusal: it was this server's answer about this
         // thread, and the next connection is entitled to be asked again.
         threadsWithoutItemsRead.removeAll()
+        // And so does the confirmation that it answers reads at all: the next
+        // connection is a different process, and may be a different build.
+        threadListAnsweredAt = nil
         quotaRefreshTask?.cancel()
         quotaRefreshTask = nil
         terminalUnreadMembershipGate.reset()
@@ -756,15 +793,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         try await hookRegistrar.uninstall()
         observedDesktopProcessIdentifier = nil
         hookTrackedThreadIDs = []
-        threadListRefreshTask?.cancel()
-        threadListRefreshTask = nil
-        threadListRetryAfter = nil
-        threadListGate.reset()
-        threadMetadataRefreshTask?.cancel()
-        threadMetadataRefreshTask = nil
-        threadMetadataRetryAfter = nil
-        threadMetadataGate.reset()
-        pendingMetadataThreadIDs.removeAll()
+        stopThreadReadsWithNoConsumer()
         lastTrustedSnapshot = nil
         terminalUnreadMembershipGate.reset()
     }
@@ -1422,6 +1451,101 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         )
     }
 
+    /// One page of `thread/list`, asked for only to see it answered.
+    ///
+    /// This is what the no-hook branch needs and the whole of it: a real read,
+    /// on the same method and the same parameter shape the membership sweep
+    /// uses, so a Codex that does not support it fails here exactly as it would
+    /// there and the branch can report `unsupportedVersion` rather than an
+    /// empty Ready. One row is enough to be answered; the rows themselves are
+    /// discarded unread.
+    ///
+    /// Nothing it learns is written into the membership caches. A first page is
+    /// not the membership set, and a truncated `listedThreadIDs` stamped with a
+    /// current `threadListReadAt` would make the next live-Hook refresh retire
+    /// every Turn whose thread did not happen to be on it.
+    ///
+    /// The freshness window is a ceiling, not a cadence: `nextRefreshDeadline()`
+    /// never wakes for it, so the confirmation is bought only when a refresh
+    /// was going to happen anyway. Its consumer is the collapsed mark --
+    /// Connected against Disconnected -- which is what separates it from the
+    /// membership set, whose consumers are all in the live-Hook branch.
+    private func confirmAppServerAnswersReads(
+        timeoutNanoseconds: UInt64
+    ) async throws {
+        if let threadListAnsweredAt,
+           clock.now().timeIntervalSince(threadListAnsweredAt)
+               < timing.threadListRefreshInterval {
+            return
+        }
+
+        let startedAt = clock.now()
+        _ = try await client.request(
+            method: "thread/list",
+            params: threadListParameters(limit: 1),
+            timeoutNanoseconds: timeoutNanoseconds
+        )
+        threadListAnsweredAt = startedAt
+    }
+
+    /// One page's worth of `thread/list` parameters.
+    ///
+    /// Shared by the membership sweep and the bounded confirmation so the two
+    /// present the same request to the server and differ only in how much they
+    /// ask for. A confirmation that narrowed the shape as well as the size
+    /// could be answered by a build whose real `thread/list` this app cannot
+    /// use.
+    nonisolated private func threadListParameters(
+        limit: Int,
+        cursor: String? = nil
+    ) -> JSONValue {
+        var params: [String: JSONValue] = [
+            "archived": .bool(false),
+            "limit": .number(Double(limit)),
+            "sortKey": .string("updated_at"),
+            "sortDirection": .string("desc"),
+            "sourceKinds": .array([
+                .string("cli"),
+                .string("vscode"),
+                .string("appServer"),
+                .string("unknown")
+            ])
+        ]
+        if let cursor {
+            params["cursor"] = .string(cursor)
+        }
+        return .object(params)
+    }
+
+    /// Drops the reads only a live Hook observation can consume or clear.
+    ///
+    /// Called from the branch that has no such observation. Membership and
+    /// per-thread metadata are both scheduled from the live-Hook branch alone,
+    /// so a request left outstanding here has nobody to run it and a backoff
+    /// marker left behind it has nobody to clear it -- and
+    /// `nextRefreshDeadline()` publishes a parked request's marker as a wake-up.
+    ///
+    /// Only the pending work is dropped, not what it had already read: the
+    /// cached thread metadata is still the best answer there is about those
+    /// threads, and the next Hook to name one is entitled to draw a title
+    /// immediately rather than after a round trip.
+    private func stopThreadReadsWithNoConsumer() {
+        threadListRefreshTask?.cancel()
+        threadListRefreshTask = nil
+        threadListGate.reset()
+        threadListRetryAfter = nil
+        threadMetadataRefreshTask?.cancel()
+        threadMetadataRefreshTask = nil
+        threadMetadataGate.reset()
+        threadMetadataRetryAfter = nil
+        pendingMetadataThreadIDs.removeAll()
+        turnProgressRefreshTask?.cancel()
+        turnProgressRefreshTask = nil
+        turnProgressGate.reset()
+        turnProgressRetryAfter = nil
+        pendingProgressReads.removeAll()
+    }
+
     /// Reads every unarchived thread.
     ///
     /// This is the transport's most expensive call, so it exists for exactly one
@@ -1445,30 +1569,15 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         let snapshotStartedAt = clock.now()
 
         repeat {
-            var params: [String: JSONValue] = [
-                "archived": .bool(false),
-                "limit": .number(100),
-                "sortKey": .string("updated_at"),
-                "sortDirection": .string("desc"),
-                "sourceKinds": .array([
-                    .string("cli"),
-                    .string("vscode"),
-                    .string("appServer"),
-                    .string("unknown")
-                ])
-            ]
-            if let cursor {
-                guard observedCursors.insert(cursor).inserted else {
-                    throw CodexAppServerError.protocolViolation(
-                        "thread/list returned a repeated cursor"
-                    )
-                }
-                params["cursor"] = .string(cursor)
+            if let cursor, !observedCursors.insert(cursor).inserted {
+                throw CodexAppServerError.protocolViolation(
+                    "thread/list returned a repeated cursor"
+                )
             }
 
             let page = try await client.request(
                 method: "thread/list",
-                params: .object(params),
+                params: threadListParameters(limit: 100, cursor: cursor),
                 timeoutNanoseconds: timeoutNanoseconds
             )
             threads.append(contentsOf: page["data"]?.arrayValue ?? [])
@@ -1494,6 +1603,10 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         threadRecords = threadRecords.filter { listedIDs.contains($0.key) }
         listedThreadIDs = listedIDs
         threadListReadAt = snapshotStartedAt
+        // The sweep answers the transport's question too, so a Desktop that
+        // quits just after one does not pay for a confirmation of what was
+        // confirmed a moment ago.
+        threadListAnsweredAt = snapshotStartedAt
         return threads
     }
 
