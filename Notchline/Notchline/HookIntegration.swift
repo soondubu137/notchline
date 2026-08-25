@@ -374,6 +374,26 @@ protocol AgentHookVocabulary: Sendable {
     /// against CLI 2.1.234, one 1561-character message arrived as eleven
     /// deltas, mean 0.29 s apart. Three a second is not a redraw rate.
     nonisolated var messageDeltaEventName: String? { get }
+    /// Whether a tool call opening is worth waking the panel for.
+    ///
+    /// It changes nothing this reducer holds — the row draws no tool name and
+    /// the status stays Running — so ``renderedProjection()`` cannot see it,
+    /// and by that projection alone a turn that talks for five minutes between
+    /// two status changes never redraws once.
+    ///
+    /// It is still the moment the row's live text moves, for the product whose
+    /// text is not in here. Codex prints its commentary and *then* calls the
+    /// tool, and that commentary is read from the App Server against the turn
+    /// this reducer owns (``LiveCodexMonitorService/refreshTurnProgressInBackground(requests:)``), so this
+    /// is the only local evidence that there is something new to ask for. One
+    /// wake per call, not per event: the paired close is deliberately not
+    /// counted, because nothing is printed by a tool finishing.
+    ///
+    /// Claude Code answers `false` and needs to: its text arrives here as
+    /// `MessageDisplay` deltas, so the fold itself knows when the row's line
+    /// changed and says so directly (``HookSessionPreviewStore/fold``). Waking
+    /// on its tool calls as well would be a second wake for the same edge.
+    nonisolated var wakesOnToolCallOpened: Bool { get }
     /// What to tell the user when a definition this product registered has
     /// stopped running.
     ///
@@ -395,6 +415,10 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated let reportsApprovalDenials = false
     nonisolated let carriesTurnText = true
     nonisolated let messageDeltaEventName: String? = nil
+    /// No delta event, so the row's live text is read from the App Server and a
+    /// tool call opening is the only sign it has moved. See
+    /// ``AgentHookVocabulary/wakesOnToolCallOpened``.
+    nonisolated let wakesOnToolCallOpened = true
 
     /// Seven definitions, and this exact set is the contract §4.2 freezes.
     ///
@@ -516,6 +540,9 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// PRD §7: one source for all four states, and it is not the prompt.
     nonisolated let carriesTurnText = false
     nonisolated let messageDeltaEventName: String? = Self.messageDisplayEventName
+    /// The fold carries its own edge, so a tool call would only wake the panel
+    /// a second time for text it has already reported.
+    nonisolated let wakesOnToolCallOpened = false
 
     /// The tool Claude Code uses to put a question to the user.
     static let inputToolName = "AskUserQuestion"
@@ -1897,18 +1924,35 @@ nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
 
     /// Folds one delta into the session's preview.
     ///
-    /// Returns whether this session went from having no text to having some
-    /// *and* the last refresh listed it, which is the only edge the change
-    /// stream carries. The deltas themselves are deliberately off it — three a
-    /// second is not a redraw rate — but a row holding *no* text is a different
-    /// case: nothing on screen is stale, something is missing, and a turn that
-    /// talks for a minute before it touches a tool sends no lifecycle event in
-    /// the meantime.
+    /// Returns whether the line this session would *draw* moved, and the last
+    /// refresh listed it. That is the edge the change stream carries.
     ///
-    /// Without the listed test this is a 3 Hz loop rather than one wake: text
-    /// from a session the list does not carry is pruned by the very refresh it
-    /// asks for, which makes the next delta an absent-to-present edge again —
-    /// and the row it would draw is not on screen either way.
+    /// **This used to be the absent-to-present edge only, and a row that is
+    /// never blank is exactly the case that got wrong.** Nothing else wakes for
+    /// text: ``HookEventRepository/renderedProjection()`` holds no delta, and a
+    /// tool call opening and closing leaves every field in it unchanged — so
+    /// between two status changes the row kept whichever message happened to be
+    /// half-printed at the last refresh, while the session went on to say three
+    /// more things. What a user reads as "live progress" was then the step
+    /// before the one being worked on, or older.
+    ///
+    /// **It is still not a 3.4 Hz redraw**, because the head is capped
+    /// (``maximumCharacters``): once a message has filled it, every further
+    /// delta of that message returns early and wakes nothing at all. Measured
+    /// against CLI 2.1.234 — 1561 characters in eleven deltas, mean 142 each —
+    /// a message costs two wakes and then goes quiet, however long it runs on.
+    /// A short message costs one. The rate is therefore set by how often the
+    /// agent starts a new message, which is the rate the row is meant to
+    /// follow.
+    ///
+    /// Whitespace-only growth is not a change: the stored form keeps a trailing
+    /// space so the next delta can join onto it (see ``normalized``), and the
+    /// row never draws one.
+    ///
+    /// Without the listed test this is a loop rather than a wake: text from a
+    /// session the list does not carry is pruned by the very refresh it asks
+    /// for, which makes the next delta a change again — and the row it would
+    /// draw is not on screen either way.
     @discardableResult
     nonisolated func fold(
         delta: String,
@@ -1931,6 +1975,9 @@ nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
             carriedLength: carriedLength
         )
         guard !text.isEmpty else { return false }
+        // Compared as the row reads them, not as they are stored.
+        let drawn = text.trimmingCharacters(in: .whitespaces)
+        let wasDrawn = existing?.text.trimmingCharacters(in: .whitespaces)
 
         lock.lock()
         let isFirstSinceEmpty = previewsBySessionID[sessionID] == nil
@@ -1941,9 +1988,14 @@ nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
         while order.count > Self.maximumRetained {
             previewsBySessionID.removeValue(forKey: order.removeFirst())
         }
-        let appeared = isFirstSinceEmpty && listedSessionIDs.contains(sessionID)
+        // `isFirstSinceEmpty` is checked as well as the comparison, because a
+        // prune between the two locks leaves `existing` describing text this
+        // store no longer holds: the row is blank again, and putting text back
+        // on it is a change whatever that text says.
+        let didChange = isFirstSinceEmpty || drawn != wasDrawn
+        let moved = didChange && listedSessionIDs.contains(sessionID)
         lock.unlock()
-        return appeared
+        return moved
     }
 
     /// One line, collapsed and cut.
@@ -2148,6 +2200,13 @@ actor HookEventRepository {
     // the same call, so closes without opens are direct evidence of that state.
     private var observedPreToolUseCount = 0
     private var observedPostToolUseCount = 0
+    /// Whether the batch being reduced opened a tool call on a turn this store
+    /// still holds.
+    ///
+    /// Consumed by ``drainInbox()``; see
+    /// ``AgentHookVocabulary/wakesOnToolCallOpened`` for why one product needs
+    /// the wake and the other must not have it.
+    private var didOpenToolCallInThisBatch = false
     private var turnsByThreadID: [String: HookTurnState] = [:]
     /// What the last signal described, so a payload that changes nothing
     /// rendered does not wake the panel.
@@ -2244,7 +2303,10 @@ actor HookEventRepository {
 
         // Assistant text stops here. Folding it costs one bounded scan and
         // reaches the reducer's mailbox not at all, which is why a talking turn
-        // does not wake the panel three times a second.
+        // never reduces anything. It does wake the panel when the line the row
+        // draws moves -- that is the whole point of the line -- and the head's
+        // cap is what keeps that to about one wake per message rather than one
+        // per delta. See ``HookSessionPreviewStore/fold``.
         if let deltaEvent = vocabulary.messageDeltaEventName, eventName == deltaEvent {
             guard let delta = payload.delta, let sessionID = payload.sessionID else {
                 return
@@ -2318,7 +2380,14 @@ actor HookEventRepository {
             didReduceSinceLastReport = true
             recordFirstEventOfThisLaunch()
         }
-        signalIfProjectionChanged()
+        let didOpenToolCall = didOpenToolCallInThisBatch
+        didOpenToolCallInThisBatch = false
+        // The projection first, so a batch that both opened a call and changed
+        // a status is still one wake rather than two.
+        guard !signalIfProjectionChanged() else { return }
+        if didOpenToolCall, vocabulary.wakesOnToolCallOpened {
+            changes.signal()
+        }
     }
 
     /// Stamps `lastEventAt`, once per launch and never per event.
@@ -2889,6 +2958,11 @@ actor HookEventRepository {
                 if $0.pendingInputToolUseID == nil, $0.pendingApproval == nil {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
                 }
+                // Recorded inside the mutation rather than beside it, so it is
+                // set only where a turn this store holds was actually
+                // annotated: a call announced against a retired turn, or one
+                // arriving out of order, changes nothing and is worth no wake.
+                didOpenToolCallInThisBatch = true
             }
         case .toolCallClosed:
             observedPostToolUseCount += 1
@@ -3237,13 +3311,17 @@ actor HookEventRepository {
 
     /// Everything a row draws that this store is the source of.
     ///
-    /// Turns only. A streamed delta is not here and is not meant to be: a row's
-    /// text updates on whatever refresh the turn's own lifecycle events cause,
-    /// and the alternative is a redraw 3.4 times a second for a line the user is
-    /// already reading (`AGENTS.md` §7, and the measurement in
-    /// `system-architecture.md` §6). The one case that does need an edge — a row
-    /// with *nothing* to show — carries its own, qualified by whether the
-    /// session is listed at all; see ``HookSessionPreviewStore/fold``.
+    /// Turns only. A streamed delta is not here and is not meant to be: it does
+    /// not reach this actor at all, and putting it on the reducer's mailbox at
+    /// 3.4 events a second would be the expensive half of the old design
+    /// (`AGENTS.md` §7, and the measurement in `system-architecture.md` §6).
+    /// The text still has to reach the panel, so it carries an edge of its own,
+    /// raised where it is folded and bounded by the head's cap; see
+    /// ``HookSessionPreviewStore/fold``.
+    ///
+    /// A tool call opening is likewise absent and likewise woken for, on the
+    /// one product whose row text is read from somewhere else entirely; see
+    /// ``AgentHookVocabulary/wakesOnToolCallOpened``.
     private func renderedProjection() -> [String] {
         turnsByThreadID.values
             .map { turn in
@@ -3269,11 +3347,14 @@ actor HookEventRepository {
             .sorted()
     }
 
-    private func signalIfProjectionChanged() {
+    /// Returns whether it signalled.
+    @discardableResult
+    private func signalIfProjectionChanged() -> Bool {
         let current = renderedProjection()
-        guard current != signalledProjection else { return }
+        guard current != signalledProjection else { return false }
         signalledProjection = current
         changes.signal()
+        return true
     }
 
     /// Set once enough tool calls have closed without a single one opening.

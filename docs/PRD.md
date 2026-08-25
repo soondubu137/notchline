@@ -194,11 +194,13 @@ Disconnected 是全局集成健康问题，不能用于单会话。进入 Discon
 | Running | 最新公开进度；没有时回退到本轮用户输入 |
 | Completed | 最终回答开头 |
 
-**Claude Code：** 四个状态同一个来源——官方 Hook `MessageDisplay`（官方描述 "While assistant message text is displayed"）送来的 `delta`，即 Claude Code 正打印到屏幕上的助手正文。不按状态切换，因为这一个来源在四个状态下读法相同：**当前这条消息的开头**。轮次停下时，它精确就是上表 Codex 那一行的「最终回答开头」；轮次进行中，它是「它刚才说的那段话的开头」——比 Codex 的「最新公开进度」弱一档，这是刻意的取舍：滚动保留结尾能更紧地跟住一条长回答，但轮次一结束它就不再是这条回答的开头了。工具调用之间的消息多数短于截断长度，两种读法通常重合。等待审批或等待输入时显示的是引出该问题的正文，**不是**工具参数、被审批的命令或路径。
+**「最新公开进度」是「正在做的那一步」，不是「刚做完的那一步」。** 举例：智能体先打出「已确认，问题出在 reducer。」再打出「开始修。」，那么在它开始修的这段时间里，行上要写的是「开始修。」。这是这一节从一开始就写的意思，两个产品此前都不满足它，原因各不相同，见 `tech-design.md` 第 11 节：Codex 侧的 `Running` 整轮显示用户自己的 prompt，因为没有任何 Hook 在轮次结束前带助手正文，现在由一次 scope 到本轮的 `thread/items/list` 读取补上；Claude Code 侧正文一直在本进程里，但它不唤醒面板，而工具调用的开合又不改任何行上画出来的字段，于是两次状态变化之间一次重画都不发生，行停在上一次刷新时的那条消息上。
+
+**Claude Code：** 四个状态同一个来源——官方 Hook `MessageDisplay`（官方描述 "While assistant message text is displayed"）送来的 `delta`，即 Claude Code 正打印到屏幕上的助手正文。不按状态切换，因为这一个来源在四个状态下读法相同：**当前这条消息的开头**。轮次停下时，它精确就是上表 Codex 那一行的「最终回答开头」；轮次进行中，它是「它现在正在说的那段话的开头」。工具调用之间的消息多数短于截断长度。等待审批或等待输入时显示的是引出该问题的正文，**不是**工具参数、被审批的命令或路径。
 
 只保留每条消息的**开头** 240 字符，新的 `message_id` 直接替换旧文本。这是一条性能约束：实测（CLI 2.1.234，pty 驱动交互式会话）一条 1561 字符的消息拆成 11 个 delta，间隔 0.20–0.44 秒、均值 0.29 秒送达，所以每个会话占用的内存必须由常数决定，而不是由模型说了多少决定；头部写满之后，后续 delta 在被扫描进任何保留结构之前就停下。
 
-这里不写命令、路径或理由，不是因为不许写，而是因为这条路径根本没有去取：`thread/read` 恒带 `includeTurns: false`，轮次明细一律不读（`tech-design.md` 第 1.1 节）。要显示它们得先加一次读取，那是一个按价值判断的新功能，不是一条被禁止的事。
+这里不写命令、路径或理由，不是因为不许写，而是因为这条路径没有去取：Codex 侧那次 `thread/items/list` 只挑页里最新的 `agentMessage.text`，`commandExecution` 及其 `aggregatedOutput`、`fileChange`、`mcpToolCall` 一概跳过；`thread/read` 仍恒带 `includeTurns: false`（`tech-design.md` 第 1.1 节）。要显示它们仍然是一个按价值判断的新功能，不是一条被禁止的事。
 
 预览规范化为单行并在 UI 中 Alpha 渐隐，不显示省略号。
 
@@ -206,7 +208,7 @@ Disconnected 是全局集成健康问题，不能用于单会话。进入 Discon
 
 理由是这两句从头到尾没有对象。本产品整个跑在用户自己的机器上，**没有任何网络出口**——代码里一个 `URLSession` 都没有，仅有的 socket 是两个产品各自的 Unix domain socket，App Server 是本机子进程。它读到的每一个字节，在它读到之前就已经躺在这台机器上、属于这台机器的主人。把「正文有没有经过磁盘」抬成产品契约，换不来这位主人能察觉的任何东西，只换来对实现的限制：第一句的代价是 [#34](https://github.com/soondubu137/notchline/issues/34) 长期悬而未决，理由是「改动比看上去大」而不是任何用户能察觉的问题。
 
-**正文放在哪里、走哪条路，从此是纯粹的工程问题**，按性能与简单性决定，不得再以隐私为由否决方案。现存的相关约束一条不剩地属于性能：上一段的 240 字符头部、`MessageDisplay` 不进 reducer 也不唤醒面板、交接完成才关闭连接，见 `tech-design.md` 第 11 节。Codex 侧那条只送正文的 `preview.sock` 已经删除——它当初存在只为让那句作废的承诺成立，现在正文和它所属的事件走同一条连接一起到（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。
+**正文放在哪里、走哪条路，从此是纯粹的工程问题**，按性能与简单性决定，不得再以隐私为由否决方案。现存的相关约束一条不剩地属于性能：上一段的 240 字符头部、`MessageDisplay` 不进 reducer（它按行上那句话变没变来唤醒面板，而那个频率由 240 字符的上限封住）、交接完成才关闭连接，见 `tech-design.md` 第 11 节。Codex 侧那条只送正文的 `preview.sock` 已经删除——它当初存在只为让那句作废的承诺成立，现在正文和它所属的事件走同一条连接一起到（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。
 
 **没有预览开关。** `Show current content previews` 连同 `PrivacySettings`、Settings 的 `Privacy` 分组、`MonitoredSession.privacySafeTitle` 与两侧监听器的 `setAcceptsText` 一并删除：它唯一的用途是履行上面那条已经作废的承诺。预览始终显示。
 

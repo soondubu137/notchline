@@ -109,6 +109,14 @@ nonisolated struct MonitorTiming: Sendable {
     var backgroundThreadListTimeout: TimeInterval = 15
     /// Budget for a single thread's metadata read.
     var threadMetadataTimeout: TimeInterval = 5
+    /// Budget for one running turn's live-progress read.
+    ///
+    /// Shorter than every other read here, and deliberately: what it fetches is
+    /// one line of text that a fresher read will supersede within seconds, so a
+    /// request still outstanding after this long has already been overtaken by
+    /// the turn it describes. Failing it costs the row nothing -- the preview
+    /// falls back to the prompt the turn started from.
+    var turnProgressTimeout: TimeInterval = 3
     /// Grace before a membership reconciliation may retire a brand-new Turn,
     /// covering a prompt Hook that beat Codex's own state write.
     var newTurnReconciliationGrace: TimeInterval = 10

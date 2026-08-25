@@ -6163,12 +6163,494 @@ struct NotchlineTests {
         #expect(observedStatuses.first == .completed)
         #expect(observedStatuses.last == .completed)
         #expect(afterRead.sessions.isEmpty)
-        // Terminal status comes from the Hook reducer alone; no Turn detail is
-        // fetched to classify it.
-        #expect(await client.requestCount(method: "thread/items/list") == 0)
+        // Terminal status comes from the Hook reducer alone. The live-progress
+        // read exists now and this stub refuses it, which is the point: the
+        // turn still reached Completed with nothing fetched about it, and no
+        // read was ever issued for a turn that had already ended.
+        for params in await client.recordedTurnItemsParams() {
+            #expect(params["turnId"]?.stringValue == "turn-terminal")
+        }
+        #expect(await client.requestCount(method: "thread/items/list") <= 1)
         for params in await client.recordedThreadReadParams() {
             #expect(params["includeTurns"]?.boolValue == false)
         }
+    }
+
+    /// The row's second line follows the turn, not the prompt that started it.
+    ///
+    /// No Codex hook carries assistant text before the turn ends -- checked
+    /// against the schemas the CLI ships, `last_assistant_message` is on
+    /// `stop.command.input` and `subagent-stop.command.input` and nowhere else
+    /// -- so a Running row used to show the user's own prompt for the whole
+    /// turn, which is the one thing about the turn that cannot change. It is
+    /// read from the App Server against the turn the reducer owns instead.
+    @Test @MainActor
+    func aRunningCodexRowSaysWhatTheTurnIsSayingNow() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        deliverHook([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-live",
+            "turn_id": "turn-live",
+            "prompt": "Fix the flaky test."
+        ], to: repository)
+
+        let listedThread = JSONValue.object([
+            "id": .string("thread-live"),
+            "ephemeral": .bool(false),
+            "threadSource": .string("user"),
+            "updatedAt": .number(Date().timeIntervalSince1970),
+            "status": .object([
+                "type": .string("active"),
+                "activeFlags": .array([])
+            ])
+        ])
+        let client = CodexAppServerStub(
+            listedThreads: [listedThread],
+            loadedListResults: [],
+            supportsTurnItems: true,
+            turnItemsByTurnID: [
+                "turn-live": [
+                    agentMessageEntry(turn: "turn-live", text: "Verified. The problem is in the reducer.")
+                ]
+            ]
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        _ = await service.fetchSnapshot()
+        let saidFirst = await holds {
+            await service.fetchSnapshot().sessions.first?.preview
+                == "Verified. The problem is in the reducer."
+        }
+        #expect(saidFirst, "the row kept showing the prompt instead of the turn")
+
+        // The step it moves on to. A tool call opening is what tells the app
+        // there is something new to ask for; without it the row would sit on
+        // the sentence above until the turn's status changed.
+        await client.appendTurnItem(
+            commandExecutionEntry(turn: "turn-live"),
+            toTurn: "turn-live"
+        )
+        await client.appendTurnItem(
+            agentMessageEntry(turn: "turn-live", text: "Working on the fix."),
+            toTurn: "turn-live"
+        )
+        deliverHook([
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-live",
+            "turn_id": "turn-live",
+            "tool_name": "shell",
+            "tool_use_id": "shell-1"
+        ], to: repository)
+
+        let movedOn = await holds {
+            await service.fetchSnapshot().sessions.first?.preview
+                == "Working on the fix."
+        }
+        #expect(movedOn, "the row reported the step before the one being worked on")
+
+        // Scoped, newest-first, and bounded. All three matter: unscoped it
+        // would answer with the previous turn's closing words, ascending it
+        // would answer with the turn's opening ones, and unbounded it would
+        // pull every command output the turn has produced.
+        let requests = await client.recordedTurnItemsParams()
+        #expect(!requests.isEmpty)
+        for params in requests {
+            #expect(params["threadId"]?.stringValue == "thread-live")
+            #expect(params["turnId"]?.stringValue == "turn-live")
+            #expect(params["sortDirection"]?.stringValue == "desc")
+            #expect((params["limit"]?.intValue ?? 0) > 0)
+            #expect((params["limit"]?.intValue ?? .max) <= 8)
+        }
+    }
+
+    /// A finished turn keeps the answer its own `Stop` carried.
+    ///
+    /// The two sources say different things on purpose: the live read reports
+    /// whatever the turn had most recently printed, and `last_assistant_message`
+    /// is the turn's actual closing answer. A completed row shows the answer.
+    @Test @MainActor
+    func aFinishedCodexTurnShowsItsOwnClosingAnswer() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        deliverHook([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-done",
+            "turn_id": "turn-done",
+            "prompt": "Fix the flaky test."
+        ], to: repository)
+
+        let listedThread = JSONValue.object([
+            "id": .string("thread-done"),
+            "ephemeral": .bool(false),
+            "threadSource": .string("user"),
+            "updatedAt": .number(Date().timeIntervalSince1970),
+            "status": .object([
+                "type": .string("active"),
+                "activeFlags": .array([])
+            ])
+        ])
+        let client = CodexAppServerStub(
+            listedThreads: [listedThread],
+            loadedListResults: [],
+            supportsTurnItems: true,
+            turnItemsByTurnID: [
+                "turn-done": [
+                    agentMessageEntry(turn: "turn-done", text: "Working on the fix.")
+                ]
+            ]
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        _ = await service.fetchSnapshot()
+        #expect(
+            await holds {
+                await service.fetchSnapshot().sessions.first?.preview
+                    == "Working on the fix."
+            }
+        )
+
+        deliverHook([
+            "hook_event_name": "Stop",
+            "session_id": "thread-done",
+            "turn_id": "turn-done",
+            "last_assistant_message": "Fixed: the reducer dropped the second event."
+        ], to: repository)
+
+        let closed = await holds {
+            let row = await service.fetchSnapshot().sessions.first
+            return row?.status == .completed
+                && row?.preview == "Fixed: the reducer dropped the second event."
+        }
+        #expect(closed)
+    }
+
+    /// A new turn never inherits the last one's words.
+    ///
+    /// The read is scoped to the turn the reducer owns rather than to the
+    /// thread. Unscoped, a turn that has not said anything yet answers with the
+    /// previous turn's closing words -- a row confidently describing work that
+    /// is already over.
+    @Test @MainActor
+    func aFreshCodexTurnDoesNotInheritTheLastOnesWords() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        let listedThread = JSONValue.object([
+            "id": .string("thread-two"),
+            "ephemeral": .bool(false),
+            "threadSource": .string("user"),
+            "updatedAt": .number(Date().timeIntervalSince1970),
+            "status": .object([
+                "type": .string("active"),
+                "activeFlags": .array([])
+            ])
+        ])
+        let client = CodexAppServerStub(
+            listedThreads: [listedThread],
+            loadedListResults: [],
+            supportsTurnItems: true,
+            turnItemsByTurnID: [
+                "turn-first": [
+                    agentMessageEntry(turn: "turn-first", text: "All done with the first one.")
+                ],
+                "turn-second": []
+            ]
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        let moment = Date().timeIntervalSince1970
+        deliverHook([
+            "received_at": moment,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-two",
+            "turn_id": "turn-first",
+            "prompt": "The first question."
+        ], to: repository)
+        _ = await service.fetchSnapshot()
+        deliverHook([
+            "received_at": moment + 1,
+            "hook_event_name": "Stop",
+            "session_id": "thread-two",
+            "turn_id": "turn-first",
+            "last_assistant_message": "All done with the first one."
+        ], to: repository)
+        _ = await service.fetchSnapshot()
+
+        deliverHook([
+            "received_at": moment + 2,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-two",
+            "turn_id": "turn-second",
+            "prompt": "The second question."
+        ], to: repository)
+
+        // The new turn has said nothing yet, so the row falls back to the
+        // prompt it started from -- never to the answer above it.
+        let started = await holds {
+            await service.fetchSnapshot().sessions.first?.turnID == "turn-second"
+        }
+        #expect(started)
+        for _ in 0..<5 {
+            let row = await service.fetchSnapshot().sessions.first
+            #expect(row?.preview == "The second question.")
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// One thread refusing the read does not take it away from the others.
+    ///
+    /// `thread/items/list` answers `-32601` for a thread whose `historyMode` is
+    /// `legacy` while `paginated` threads on the same server answer normally
+    /// (measured 2026-08-25, CLI `0.149.0-alpha.4.3`). Held server-wide, the
+    /// one legacy thread a user still has open would have taken the live
+    /// progress off every other row in the panel.
+    @Test @MainActor
+    func oneThreadRefusingTheProgressReadDoesNotSilenceTheOthers() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        for (thread, turn, prompt) in [
+            ("thread-legacy", "turn-legacy", "The legacy question."),
+            ("thread-modern", "turn-modern", "The modern question.")
+        ] {
+            deliverHook([
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": thread,
+                "turn_id": turn,
+                "prompt": prompt
+            ], to: repository)
+        }
+
+        let listedThreads = ["thread-legacy", "thread-modern"].map { id in
+            JSONValue.object([
+                "id": .string(id),
+                "ephemeral": .bool(false),
+                "threadSource": .string("user"),
+                "updatedAt": .number(Date().timeIntervalSince1970),
+                "status": .object([
+                    "type": .string("active"),
+                    "activeFlags": .array([])
+                ])
+            ])
+        }
+        let client = CodexAppServerStub(
+            listedThreads: listedThreads,
+            loadedListResults: [],
+            supportsTurnItems: true,
+            turnItemsByTurnID: [
+                "turn-legacy": [
+                    agentMessageEntry(turn: "turn-legacy", text: "Never readable.")
+                ],
+                "turn-modern": [
+                    agentMessageEntry(turn: "turn-modern", text: "Working on the fix.")
+                ]
+            ],
+            legacyHistoryThreadIDs: ["thread-legacy"]
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        _ = await service.fetchSnapshot()
+        let split = await holds {
+            let rows = await service.fetchSnapshot().sessions
+            let legacy = rows.first { $0.threadID == "thread-legacy" }
+            let modern = rows.first { $0.threadID == "thread-modern" }
+            return legacy?.preview == "The legacy question."
+                && modern?.preview == "Working on the fix."
+        }
+        #expect(split, "the refusing thread took the other row's line with it")
+
+        // And the refusing thread is not asked again, however much it does.
+        //
+        // Settled first: a refresh that runs while the first read is still in
+        // flight legitimately queues a second one, because nothing has been
+        // recorded for the thread yet. What is pinned here is that the count
+        // stops growing, not what it stopped at.
+        func legacyRequestCount() async -> Int {
+            await client.recordedTurnItemsParams()
+                .filter { $0["threadId"]?.stringValue == "thread-legacy" }
+                .count
+        }
+        var askedBefore = await legacyRequestCount()
+        let settled = await holds {
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            _ = await service.fetchSnapshot()
+            let now = await legacyRequestCount()
+            defer { askedBefore = now }
+            return now == askedBefore && now >= 1
+        }
+        #expect(settled, "the refusing thread never stopped being asked")
+        for index in 0..<4 {
+            deliverHook([
+                "hook_event_name": "PreToolUse",
+                "session_id": "thread-legacy",
+                "turn_id": "turn-legacy",
+                "tool_name": "shell",
+                "tool_use_id": "shell-\(index)"
+            ], to: repository)
+            _ = await service.fetchSnapshot()
+        }
+        let askedAfter = await legacyRequestCount()
+        #expect(askedBefore == askedAfter)
+    }
+
+    /// A Codex that does not have the read is asked once per thread, then left
+    /// alone.
+    ///
+    /// `thread/items/list` is experimental, so a build without it is an
+    /// expected answer rather than a fault: the rows fall back to the prompt
+    /// preview, which is exactly what they showed before this read existed.
+    /// It arrives as the same `-32601` a legacy thread answers with, and is
+    /// deliberately not told apart from it by message text -- so the cost of a
+    /// Codex that has no such method is one refused call per thread rather than
+    /// one per run.
+    @Test @MainActor
+    func aCodexWithoutTheItemsReadKeepsShowingThePrompt() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        deliverHook([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-old",
+            "turn_id": "turn-old",
+            "prompt": "Fix the flaky test."
+        ], to: repository)
+
+        let listedThread = JSONValue.object([
+            "id": .string("thread-old"),
+            "ephemeral": .bool(false),
+            "threadSource": .string("user"),
+            "updatedAt": .number(Date().timeIntervalSince1970),
+            "status": .object([
+                "type": .string("active"),
+                "activeFlags": .array([])
+            ])
+        ])
+        let client = CodexAppServerStub(
+            listedThreads: [listedThread],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        _ = await service.fetchSnapshot()
+        #expect(
+            await holds {
+                await client.requestCount(method: "thread/items/list") >= 1
+            }
+        )
+        for index in 0..<6 {
+            deliverHook([
+                "hook_event_name": "PreToolUse",
+                "session_id": "thread-old",
+                "turn_id": "turn-old",
+                "tool_name": "shell",
+                "tool_use_id": "shell-\(index)"
+            ], to: repository)
+            let row = await service.fetchSnapshot().sessions.first
+            #expect(row?.preview == "Fix the flaky test.")
+        }
+        // Refused once, then never asked again for the rest of the run.
+        #expect(await client.requestCount(method: "thread/items/list") == 1)
+    }
+
+    @Test
+    func newestAgentMessageReadsThePageTheServerActuallyReturns() {
+        // Newest first, so the first match wins and everything else is skipped
+        // rather than described -- the row reports what the agent said it is
+        // doing, and a tool name is not a sentence.
+        let page = JSONValue.object([
+            "data": .array([
+                commandExecutionEntry(turn: "t"),
+                .object([
+                    "turnId": .string("t"),
+                    "item": .object([
+                        "type": .string("reasoning"),
+                        "id": .string("rs-1"),
+                        "summary": .array([])
+                    ])
+                ]),
+                agentMessageEntry(turn: "t", text: "  Working   on\n the fix.  "),
+                agentMessageEntry(turn: "t", text: "An older thing it said.")
+            ])
+        ])
+        #expect(
+            CodexSnapshotParser.newestAgentMessage(in: page) == "Working on the fix."
+        )
+        #expect(CodexSnapshotParser.newestAgentMessage(in: .object(["data": .array([])])) == nil)
+        #expect(CodexSnapshotParser.newestAgentMessage(in: .object([:])) == nil)
+        // An empty message is not something the row can show.
+        #expect(
+            CodexSnapshotParser.newestAgentMessage(
+                in: .object(["data": .array([agentMessageEntry(turn: "t", text: "   ")])])
+            ) == nil
+        )
     }
 
     @Test @MainActor
@@ -6269,25 +6751,43 @@ struct NotchlineTests {
         )
         _ = await repository.drainDeliveredEvents()
 
-        // An ordinary tool call opening and closing inside a running turn draws
-        // nothing different, so it wakes nobody. This is the whole of what
-        // replaced the debounce: a 17-event turn is one wake-up, not seventeen.
+        // A tool call *closing* draws nothing different and wakes nobody. This
+        // is what replaced the debounce, and it is still the rule for every
+        // event that only moves state no row reads.
         let quiet = await receivesChange(
             repository.changeEvents(),
             within: .milliseconds(400)
         ) {
-            for (index, name) in ["PreToolUse", "PostToolUse"].enumerated() {
+            deliverHook([
+                "received_at": moment + 1,
+                "hook_event_name": "PostToolUse",
+                "session_id": "thread-watch",
+                "turn_id": "turn-watch",
+                "tool_name": "Bash",
+                "tool_use_id": "bash-0"
+            ], to: repository)
+        }
+        #expect(!quiet)
+        #expect(await repository.observedState().turns.first?.status == .running)
+
+        // A tool call *opening* is the exception, and only on Codex. Nothing
+        // this store holds moves -- the status stays Running and no field of
+        // the projection changes -- but the row's third line is Codex's live
+        // progress, read from the App Server against this turn, and this is the
+        // moment it moves: Codex prints its commentary and then calls the tool.
+        // Before this the row showed the user's own prompt for the whole turn.
+        #expect(
+            await receivesChange(repository.changeEvents()) {
                 deliverHook([
-                    "received_at": moment + 1 + Double(index),
-                    "hook_event_name": name,
+                    "received_at": moment + 2,
+                    "hook_event_name": "PreToolUse",
                     "session_id": "thread-watch",
                     "turn_id": "turn-watch",
                     "tool_name": "Bash",
                     "tool_use_id": "bash-1"
                 ], to: repository)
             }
-        }
-        #expect(!quiet)
+        )
         #expect(await repository.observedState().turns.first?.status == .running)
 
         // The turn ending does change the row.
@@ -6301,6 +6801,52 @@ struct NotchlineTests {
                 ], to: repository)
             }
         )
+    }
+
+    @Test
+    func claudeCodeToolCallsStayOffTheChangeStream() async throws {
+        // The same events on the other product. Claude Code's row text arrives
+        // here as `MessageDisplay` deltas, so the fold raises its own edge when
+        // the line moves -- waking on its tool calls as well would be a second
+        // wake for text that has already been reported, and a tool-heavy turn
+        // is where that costs the most.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let moment = Date().timeIntervalSince1970
+        deliverHook([
+            "received_at": moment,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-quiet",
+            "prompt_id": "turn-quiet"
+        ], to: repository)
+        _ = await repository.drainDeliveredEvents()
+
+        let quiet = await receivesChange(
+            repository.changeEvents(),
+            within: .milliseconds(400)
+        ) {
+            for (index, name) in ["PreToolUse", "PostToolUse"].enumerated() {
+                deliverHook([
+                    "received_at": moment + 1 + Double(index),
+                    "hook_event_name": name,
+                    "session_id": "session-quiet",
+                    "prompt_id": "turn-quiet",
+                    "tool_name": "Bash",
+                    "tool_use_id": "bash-1"
+                ], to: repository)
+            }
+        }
+        #expect(!quiet)
+        #expect(await repository.observedState().turns.first?.status == .running)
     }
 
     @Test @MainActor
@@ -17274,20 +17820,25 @@ for line in sys.stdin:
         #expect(repository.preview(forSession: "ghost") == nil)
     }
 
-    /// A row with nothing to show is redrawn as soon as there is something.
+    /// The row is redrawn when the line it draws moves, and not otherwise.
     ///
-    /// Deltas are kept off the change stream on purpose -- they arrive three a
-    /// second, which is not a redraw rate -- and the text is picked up by
-    /// whatever refresh the session's own lifecycle causes. That works while a
-    /// row already shows the previous message and only goes stale. It does not
-    /// work when the row shows *nothing*: a turn that talks for a minute
-    /// between tool calls fires no lifecycle event to redraw its row with, so
-    /// a row that has yet to receive a line would keep showing none.
+    /// **Deltas used to be kept off the change stream entirely**, on the
+    /// argument that they arrive three a second and the text would be picked up
+    /// by whatever refresh the session's own lifecycle caused. Nothing causes
+    /// one: a tool call opening and closing leaves every field of
+    /// `renderedProjection()` exactly as it was, so between two status changes
+    /// the row kept whichever message happened to be half-printed at the last
+    /// refresh while the session went on to say three more things. What a user
+    /// reads as live progress was the step before the one being worked on.
     ///
-    /// So only the absent-to-present edge is reported: once per session per
-    /// spell of having nothing to say, not once per delta.
+    /// It is still not a per-delta redraw, and the head's cap is what makes
+    /// that true rather than a rule about it: once a message has filled the
+    /// 240 characters the row can show, every further delta of that message is
+    /// dropped before it is stored and wakes nothing. Measured against CLI
+    /// 2.1.234 -- 1561 characters in eleven deltas -- that is two wakes for a
+    /// long message and one for a short one.
     @Test @MainActor
-    func aPreviewArrivingWhereThereWasNoneAsksToBeDrawn() async throws {
+    func aPreviewIsRedrawnWhenTheLineItDrawsMoves() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-listener-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -17314,18 +17865,60 @@ for line in sys.stdin:
 
         #expect(
             await receivesChange(repository.changeEvents()) {
-                try display("First words.", "m-1")
+                try display("Verified. The problem is in the reducer.", "m-1")
             }
         )
 
+        // The step the agent is actually on. This is the whole fix: the row was
+        // showing the sentence above while the session had moved on.
+        #expect(
+            await receivesChange(repository.changeEvents()) {
+                try display(" Working on the fix.", "m-2")
+            },
+            "a new message is the step being worked on and has to be drawn"
+        )
+        // A prefix, not an equality: `receivesChange` repeats its mutation
+        // until the change lands, so the same delta may have been folded twice.
+        #expect(
+            repository.preview(forSession: "s-1")?
+                .hasPrefix("Working on the fix.") == true
+        )
+
+        // A message that goes on printing keeps redrawing while what the row
+        // shows is still growing.
+        #expect(
+            await receivesChange(repository.changeEvents()) {
+                try display(" Patching the projection now.", "m-2")
+            }
+        )
+
+        // Whitespace is not a change: the stored form keeps a trailing space so
+        // the next delta can join onto it, and the row never draws one.
         #expect(
             !(await receivesChange(
                 repository.changeEvents(),
                 within: .milliseconds(400)
             ) {
-                try display(" and more of the same message.", "m-1")
+                try display("\n\n", "m-2")
             }),
-            "a row that already has a line does not ask to be drawn per delta"
+            "growth the row does not draw is not growth"
+        )
+
+        // And once the head is full the message goes quiet, however long it
+        // runs on. This is the bound that keeps a talking turn off the 3.4 Hz
+        // redraw the old design was written to avoid.
+        try display(
+            String(repeating: "a", count: HookSessionPreviewStore.maximumCharacters),
+            "m-2"
+        )
+        #expect(
+            !(await receivesChange(
+                repository.changeEvents(),
+                within: .milliseconds(400)
+            ) {
+                try display(" and still more of the same message.", "m-2")
+            }),
+            "a message that has filled the row's line asks for nothing further"
         )
 
         // Back to blank the way it happens for real: the session drops off a
@@ -17335,7 +17928,7 @@ for line in sys.stdin:
         repository.retainPreviews(forSessions: ["s-1"])
         #expect(
             await receivesChange(repository.changeEvents()) {
-                try display("Said after coming back.", "m-2")
+                try display("Said after coming back.", "m-3")
             },
             "the row was left blank with no edge that would ever redraw it"
         )
@@ -17349,7 +17942,7 @@ for line in sys.stdin:
                 repository.changeEvents(),
                 within: .milliseconds(400)
             ) {
-                try display("Said by a session nothing lists.", "m-3")
+                try display("Said by a session nothing lists.", "m-4")
             })
         )
     }
@@ -18743,6 +19336,33 @@ for line in sys.stdin:
         }
     }
 
+    /// One `thread/items/list` entry carrying an assistant message.
+    private func agentMessageEntry(turn: String, text: String) -> JSONValue {
+        .object([
+            "turnId": .string(turn),
+            "item": .object([
+                "type": .string("agentMessage"),
+                "id": .string("msg-\(text.hashValue)"),
+                "text": .string(text),
+                "phase": .string("commentary")
+            ])
+        ])
+    }
+
+    /// One entry of the kind that pushes an assistant message down the page.
+    private func commandExecutionEntry(turn: String) -> JSONValue {
+        .object([
+            "turnId": .string(turn),
+            "item": .object([
+                "type": .string("commandExecution"),
+                "id": .string("exec-1"),
+                "command": .string("/bin/zsh -lc 'swift test'"),
+                "aggregatedOutput": .string("... a great deal of output ..."),
+                "status": .string("completed")
+            ])
+        ])
+    }
+
     private func waitForThreadListRequests(
         _ client: CodexAppServerStub,
         atLeast expectedCount: Int,
@@ -19139,8 +19759,24 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     private var threadReadDelayNanoseconds: UInt64 = 0
     private var loadedListResults: [Result<JSONValue, CodexAppServerError>]
     private let supportsThreadRead: Bool
+    /// Whether this stub answers `thread/items/list` at all.
+    ///
+    /// Defaults to off, which is the shape of a Codex without the experimental
+    /// method: the read is tried once, refused, and never asked again. Every
+    /// test that predates the live-progress read therefore keeps the rows it
+    /// always had.
+    private let supportsTurnItems: Bool
+    /// Threads that refuse `thread/items/list` even though the server has it.
+    ///
+    /// Measured shape: a thread whose `historyMode` is `legacy` answers
+    /// `-32601 "thread/items/list is not supported yet"` while `paginated`
+    /// threads on the same server answer normally.
+    private let legacyHistoryThreadIDs: Set<String>
+    /// The items each turn has produced, newest last, by `turnId`.
+    private var turnItemsByTurnID: [String: [JSONValue]]
     private var methods: [String] = []
     private var threadReadParams: [JSONValue] = []
+    private var turnItemsParams: [JSONValue] = []
     private var completedThreadListRequests = 0
     private var disconnects = 0
     private var connects = 0
@@ -19151,7 +19787,10 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
         threadListDelayNanoseconds: UInt64 = 0,
         connectResult: Result<Void, CodexAppServerError> = .success(()),
         threadListError: CodexAppServerError? = nil,
-        supportsThreadRead: Bool = true
+        supportsThreadRead: Bool = true,
+        supportsTurnItems: Bool = false,
+        turnItemsByTurnID: [String: [JSONValue]] = [:],
+        legacyHistoryThreadIDs: Set<String> = []
     ) {
         self.listedThreads = listedThreads
         self.connectResult = connectResult
@@ -19159,6 +19798,9 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
         self.loadedListResults = loadedListResults
         self.threadListDelayNanoseconds = threadListDelayNanoseconds
         self.supportsThreadRead = supportsThreadRead
+        self.supportsTurnItems = supportsTurnItems
+        self.turnItemsByTurnID = turnItemsByTurnID
+        self.legacyHistoryThreadIDs = legacyHistoryThreadIDs
     }
 
     func connect() async throws {
@@ -19214,6 +19856,31 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
                 metadata["turns"] = .array([])
             }
             return .object(["thread": .object(metadata)])
+        case "thread/items/list":
+            turnItemsParams.append(params ?? .null)
+            let threadID = params?["threadId"]?.stringValue
+            guard supportsTurnItems,
+                  !(threadID.map(legacyHistoryThreadIDs.contains) ?? false) else {
+                // Both absences arrive as the same code from the real server:
+                // a Codex without the experimental method, and a thread whose
+                // `historyMode` is `legacy`.
+                throw CodexAppServerError.remote(
+                    code: -32601,
+                    message: "thread/items/list is not supported yet"
+                )
+            }
+            let turnID = params?["turnId"]?.stringValue
+            let produced = turnID.flatMap { turnItemsByTurnID[$0] } ?? []
+            // The real server returns the newest first when asked to, and the
+            // fixtures are written in the order the turn produced them.
+            let ordered = params?["sortDirection"]?.stringValue == "desc"
+                ? produced.reversed().map { $0 }
+                : produced
+            let limit = params?["limit"]?.intValue ?? ordered.count
+            return .object([
+                "data": .array(Array(ordered.prefix(limit))),
+                "nextCursor": .null
+            ])
         case "thread/loaded/list":
             guard !loadedListResults.isEmpty else {
                 throw CodexAppServerError.protocolViolation(
@@ -19269,6 +19936,15 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
 
     func recordedThreadReadParams() -> [JSONValue] {
         threadReadParams
+    }
+
+    func recordedTurnItemsParams() -> [JSONValue] {
+        turnItemsParams
+    }
+
+    /// Appends one item to a turn, the way a running turn produces them.
+    func appendTurnItem(_ item: JSONValue, toTurn turnID: String) {
+        turnItemsByTurnID[turnID, default: []].append(item)
     }
 
     func completedThreadListRequestCount() -> Int {

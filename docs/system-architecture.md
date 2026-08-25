@@ -98,7 +98,7 @@ flowchart LR
     streamConsumer -->|"已解码 envelope"| appServerClient
     appServerClient -->|"stdin JSON-RPC request"| appServerProcess
     requestGuard -->|"保护 request 生命周期"| appServerClient
-    appServerClient <-->|"六个只读方法与结果"| liveService
+    appServerClient <-->|"七个只读方法与结果"| liveService
 
     desktopState -.->|"Project assignments"| projectRepository
     desktopState -.->|"local unread thread IDs"| unreadRepository
@@ -122,7 +122,7 @@ flowchart LR
     monitorSnapshot -->|"ready 时聚合 sessions"| aggregation
     stabilityGate -->|"允许发布或暂存重试"| monitorStore
     aggregation -->|"顶部 MonitorStatus"| monitorStore
-    hookRepository -.->|"changeEvents 仅当渲染投影变化"| monitorStore
+    hookRepository -.->|"changeEvents：渲染投影变化、行上正文变化、Codex 的 PreToolUse"| monitorStore
     unreadRepository -.->|"changeEvents"| monitorStore
 
     monitorStore -->|"Published 状态"| panelController
@@ -141,6 +141,7 @@ flowchart LR
 | 类型 | 图中能力 | 约束 |
 | --- | --- | --- |
 | 官方公开 | Hooks lifecycle、App Server 协议与六个只读方法（`thread/read` 恒带 `includeTurns: false`）、`codex://threads/{threadId}` | 作为主集成契约使用 |
+| 已登记的实验性 App Server 方法 | `thread/items/list`（scope 到本轮、降序、`limit: 6`，只取最新 `agentMessage.text`） | 只为 Running 行的当前进度；不带 `--experimental` 的 schema 里没有它，因此按非公开依赖登记。`-32601`（方法缺席，或该 thread 的 `historyMode` 是 `legacy`）**按 thread 记**，该行退回 prompt 预览，其余行不受影响 |
 | 已登记的非公开依赖 | Desktop Project/unread schema、Desktop bundle 内可执行路径、Desktop bundle identifier | 只读或只用于发现；失败时 fail closed；同步维护非公开 feature 清单 |
 | 应用内部 | Hook helper、socket、`install.json`、reducer、缓存、snapshot、UI store | `install.json` 的 `lastEventAt` 只回答“Hook 是否曾成功执行”，不能证明当前运行时；Turn 状态、会话身份、预览和缓存**只**存在于内存中——没有事件队列，因此没有待消费的事件（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)） |
 
@@ -201,6 +202,13 @@ sequenceDiagram
 两个目录 watcher 都能重新挂载：目录不存在或被替换不是终局状态，`rename`／`delete` 会触发重开，刷新路径也会顺手重试。它们没有自己的重试定时器，因此「挂不上」的成本是每次刷新一个失败的 `open`，而不是新增一个唤醒源。
 
 刷新不再按固定节拍采样。驱动它的有四个来源，合并成同一条 `changeEvents` 流或睡眠时长：store 在渲染投影变化时发出的信号、`hooks.json` 与 Desktop 状态文件的目录 watcher、**服务自身在后台读取落地后发出的失效信号**、服务通过 `nextRefreshDeadline()` 报出的下一个到期时刻（终态 settling 到期、元数据/成员关系/额度缓存过期），以及一个 60 秒心跳。
+
+第一项现在有两条渲染投影之外的补充，两条都只为行上那一行「当前进度」而存在，而那一行的来源不在投影里：
+
+- **Claude Code**：`MessageDisplay` 的 delta 折进 preview store 时，如果行会画出来的那一行文字真的变了就发一次信号。频率不由一条规矩封住，而由 240 字符的头部上限封住——写满之后同一条消息的后续 delta 在存进任何结构之前就返回。实测（CLI 2.1.234，1561 字符 / 11 个 delta）一条长消息两次唤醒，一条短消息一次。
+- **Codex**：`PreToolUse` 发一次信号（`PostToolUse` 不发）。它不改投影里的任何字段，但 Codex 先打 commentary 再调工具，所以这是那句话变化的时刻，也是那次 `thread/items/list` 读取该被安排的时刻。
+
+两条都不是「内容变了就重画」的一般化：`MonitorStore.apply` 仍然只在 `sessions` 真的不等时才发布，所以没有变化的唤醒只花一次刷新运行，不花那 20 ms 的整屏重估（`AGENTS.md` §7）。
 
 第二项是必需的而非优化：额度、成员关系与线程元数据都在后台读取，结果落地时启动它的那次快照早已发布。取消轮询之前，这些结果靠下一个轮询周期（1 秒内）被顺带带出；取消之后，如果它们不自己发出信号，就要一直等到某个不相关的到期唤醒——实测表现为启动后额度环空白约 10 秒。因此**每个后台读取都必须以一次失效信号结束**。`isRefreshInFlight` 把它们合并为一条刷新，不产生第二套状态管线。
 
@@ -268,7 +276,9 @@ flowchart LR
 
 **归并读的是派生状态。** `MonitorAggregation.status`、`marks` 与 `rowOrder` 都先经过 `effectiveStatus(of:)`，它答两件事：一行自己的 Turn 已经 Completed、而它派生的子智能体还在跑时，那一行按 Running 参与归并与排序；而这条 Thread 的某个子智能体停在审批对话框上时，它按 Approval needed 参与，压过前一条，但不压过 Turn 自己的 Input needed（`CONTEXT.md`「派生状态」，`PRD.md` §6.2）。第二条与 Turn 是不是终态无关。**还有第三件事，只有 Claude Code 答得出**：一行自己的 Turn 已经 Completed、子智能体也已经收尾，而那一轮的 `Stop` 当时说的是「暂停等后台工作把我叫醒」（`background_tasks` 非空）时，那一行也按 Running 参与归并与排序，直到该 Thread 的下一个终态说没有活在飞了——中间那 50–130 ms 正是 Claude Code 把父轮次叫醒所用的时间（实测 2026-08-23，CLI `2.1.241`），只读计数的话行会在那一瞬闪一次 `Completed`。**两个产品都会给出这样的行**：Codex 用 `spawn_agent`，Claude Code 的 `Agent` 调用在子智能体启动的那一刻就返回。除此之外它是恒等变换——`runningSubagentCount` 为零的行一个字不变，无论哪个产品产生的。**这个派生答案不进入行的渲染**：行画什么仍然只看 `MonitoredSession.status`，那是它自己那个 Turn 的状态；行尾那一格的**亮度**是唯一的例外，而亮度不改变行画什么。收起态因此会出现「写着 Running、尾翼却没有计时读数」的形态，那是正确的：`longestRunningSessionStart` 按 `keepsTiming` 过滤，此刻确实没有任何 Turn 在计时，尾翼那一格改写子智能体总数。
 
-**启动不做现状同步。** 会话只能由本次启动之后收到的 Hook 创建；启动前正在运行、已完成未读或等待审批的会话一律无视，直到它们产生下一个 lifecycle 事件。这是能力边界而非取舍：实测（CLI `0.148.0-alpha.9`，真实运行中的 Turn）表明独立 App Server 的 `thread/loaded/list` 为空、Thread 恒为 `notLoaded`、`thread/list` 契约上不返回 `turns`、`thread/read` 也从不出现 `inProgress`，因此不存在任何受支持的读取能回答“Desktop 此刻在做什么”。
+**启动不做现状同步。** 会话只能由本次启动之后收到的 Hook 创建；启动前正在运行、已完成未读或等待审批的会话一律无视，直到它们产生下一个 lifecycle 事件。这是能力边界而非取舍：实测（CLI `0.148.0-alpha.9`，真实运行中的 Turn）表明独立 App Server 的 `thread/loaded/list` 为空、Thread 恒为 `notLoaded`、`thread/list` 契约上不返回 `turns`、`thread/read` 也从不出现 `inProgress`，因此不存在任何受支持的读取能回答“Desktop 此刻**处于什么状态**”。
+
+**这句话只管状态，不管内容——2026-08-25 补测的边界。** 同一个独立 App Server 上，`thread/items/list` **读得到另一个进程正在跑的那一轮已经产出的 item**，包括还没结束的轮次：实测 CLI `0.149.0-alpha.4.3`，一个由独立 `codex exec` 驱动的轮次，每 1.5 秒问一次，commentary 的 `agentMessage` 在它打出来之后的第一次轮询里就出现，往后每一句都跟得上。这不与上一段矛盾——它答的是「这一轮说过什么」，不是「这一轮是不是还在跑」；同一次读取里的轮次 `status` 仍然是 `interrupted`，`thread/turns/list` 的 summary 在轮次结束前也只有 `userMessage`。所以它只用来填行上那一行正文，成员关系与状态仍然只能来自 Hook（`tech-design.md` 第 11 节）。
 
 **Claude Code 侧同一条规则，理由不同。** 那一侧读得出来：`claude agents --json` 给出存在哪些会话，transcript 尾部给出其中哪些仍在轮次中，产品也一度据此重建启动前的行（`ClaudeCodeTranscriptReader.currentTurn`，2026-08-19 移除）。移除的理由不是成本，而是这份答案在最要紧的地方是错的：**等待用户期间 transcript 一个字都不写**，因此重建出的轮次只可能是 *Running*，启动瞬间正停在权限请求上的会话被画成正在干活。文件分不开「在等」与「在做」，猜哪一边都是伪造状态（§7 第 5、6 条），也就不存在一个更窄的版本可留。代价是那些会话要等下一个 lifecycle 事件才出现，与 Codex 侧相同；换回来的是启动边界在两个产品上是同一句话，而不是一侧的例外。
 
@@ -397,7 +407,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | UI 状态 | `MonitorStore` | 拉取完整快照、合并刷新触发、发布 UI 状态、计算顶部汇总、按用户意图移除终态行（右键单行，记进按产品分开的 `dismissedSessionIDsByAgent`，只在该产品看得见却不再列出这一轮时忘掉，见 `tech-design.md` §17） | [`MonitorStore.swift`](../Notchline/Notchline/MonitorStore.swift) |
 | 核心编排 | `LiveCodexMonitorService` | 协调 Hook、App Server、Project、未读、缓存、成员集合与降级 | [`LiveCodexMonitorService.swift`](../Notchline/Notchline/LiveCodexMonitorService.swift) |
-| Turn reducer 与正文 | `HookEventRepository` | 两个产品共用的唯一 store：payload 先由 `HookPayloadDistiller` 在解码之前选出字段（大起来的都是本 app 不读的字段，所以工具结果的大小不再决定事件听不听得见，见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)），再用精确身份消费、拒绝回放复活、维护内存 `HookTurnState`，并持有每个会话的流式正文（头部 240 字符）与投递证据；读不懂的 payload、放不下的事件、以及「注册了却不触发」的探测按本次运行累计成一句诊断，经 `AgentSnapshot.diagnostic` 交给 Settings 的产品行（CR-029）。**只在渲染投影变化时**发变更信号——状态、轮次身份、或行上那句正文——而不是每个事件一次；delta 只在**从没有到有**且该会话被上次刷新列出时报一个边沿（见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)） | [`HookIntegration.swift`](../Notchline/Notchline/HookIntegration.swift) |
+| Turn reducer 与正文 | `HookEventRepository` | 两个产品共用的唯一 store：payload 先由 `HookPayloadDistiller` 在解码之前选出字段（大起来的都是本 app 不读的字段，所以工具结果的大小不再决定事件听不听得见，见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)），再用精确身份消费、拒绝回放复活、维护内存 `HookTurnState`，并持有每个会话的流式正文（头部 240 字符）与投递证据；读不懂的 payload、放不下的事件、以及「注册了却不触发」的探测按本次运行累计成一句诊断，经 `AgentSnapshot.diagnostic` 交给 Settings 的产品行（CR-029）。**只在渲染投影变化时**发变更信号——状态、轮次身份、或行上那句正文——而不是每个事件一次；投影之外只有两条补充，都只为行上那一行「当前进度」：delta 在**行会画出来的那一行文字变了**且该会话被上次刷新列出时报一个边沿（频率由 240 字符的头部上限封住，不由规矩封住），以及 Codex 的 `PreToolUse` 报一个边沿（它的正文不在本进程里，要去 App Server 读；`PostToolUse` 不报）（见 [ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)） | [`HookIntegration.swift`](../Notchline/Notchline/HookIntegration.swift) |
 | Hook transport（两个产品） | `AgentHookListener` | 只做传输：绑定 0600 Unix domain socket、accept、读一份 payload、盖到达戳交给 store。一次连接一条 payload，写方关闭即帧尾；**串行读取队列保序**，交接完成后才关闭连接（唯一的背压）。一条连接最多读到 16 MiB 为止，这个上限只约束读队列每个事件的时间，不约束 reducer 能被告知什么——字段选择在 store 里、在解码之前，所以切断之前完整到达的字段照常生效。不做字段选择、不写任何文件 | [`AgentHookListener.swift`](../Notchline/Notchline/AgentHookListener.swift) |
 | 会话身份（Claude Code） | `ClaudeCodeSessionRegistry` | 运行 `claude agents --json` 并对读取单飞；**一份「读出来是空的」列表被扣住，不按时钟重读**，只有边沿、非空列表与失败的尝试才按节拍走（CR-Fable-002）；新鲜度从**上一次尝试**起算，失败保留上一次列表；**会话目录的变更可以把新鲜度窗口截断**（`invalidate()`，不低于 `edgeFloor`，读取途中到达的边沿不被该次读取消费）；在 stdout 里定位数组而不假定它独占该流（逐段配平的 `[ … ]` 按开始先后交给解码器裁决，不认第一个方括号，空数组最后才取，CR-Fable-039；**候选数组必须每一条都带 `sessionId`/`pid`/`cwd`/`startedAt` 才被采纳，混杂的或根本不是会话列表的数组整段拒绝，空数组还须自成一行**，CR-Codex-001）；**排除本应用自己的额度读取会话**（见 `tech-design.md` §15.1） | [`ClaudeCodeSessionRegistry.swift`](../Notchline/Notchline/ClaudeCodeSessionRegistry.swift) |
 | Hook 注册（Codex） | `CodexHookRegistrar` | 写 `hook.sh`、在用户的 `hooks.json` 里增删本应用管理的**七**条定义，并回答注册完整度（`absent` / `mismatched` / `complete`）。**定义写下之后不再改写**（[ADR 0014](adr/0014-the-codex-hook-definition-is-never-rewritten.md)）；注册健康度由自己写文件与 FSEvents 边沿触发重算，不按节拍轮询；边沿在读的时候比计数，不订阅（CR-028） | [`HookIntegration.swift`](../Notchline/Notchline/HookIntegration.swift) |

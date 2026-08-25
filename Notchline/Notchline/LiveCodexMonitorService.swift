@@ -74,6 +74,32 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         let observedAt: Date
     }
 
+    /// What one turn had most recently said when it was last read.
+    ///
+    /// `text` is deliberately allowed to survive a read that found nothing.
+    /// A page of the newest items is a window, not the whole turn, and a turn
+    /// that runs a long command produces items that push its last words out of
+    /// that window -- but those words are still the step it is on. Only the
+    /// turn changing clears them, and the turn changing replaces the record
+    /// outright.
+    private struct TurnProgress: Sendable {
+        let turnID: String
+        var text: String?
+        /// The turn's own `lastEventAt` when this read was *issued*.
+        ///
+        /// The issue stamp rather than the completion stamp, for the reason
+        /// ``ThreadRecord/observedAt`` uses the same one: an event that lands
+        /// while the read is in flight must still count as unread-for, or the
+        /// text it announced would wait for the event after it.
+        var readAtEventStamp: Date
+    }
+
+    /// One outstanding progress read.
+    private struct TurnProgressRequest: Sendable {
+        let turnID: String
+        let eventStamp: Date
+    }
+
     private let clock: any MonitorClock
     private let timing: MonitorTiming
     private let client: any CodexAppServerCommunicating
@@ -122,6 +148,36 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// Threads a metadata read was asked for but has not yet covered.
     private var pendingMetadataThreadIDs: Set<String> = []
     private var supportsThreadMetadataRead = true
+    /// The newest thing each unfinished turn has said, by thread.
+    ///
+    /// This is the row's live progress on this product, and it is read rather
+    /// than received: no Codex hook carries assistant text before the turn ends
+    /// -- `last_assistant_message` is on `stop.command.input` and
+    /// `subagent-stop.command.input` and nowhere else, checked against the
+    /// schemas the CLI itself ships (0.149.0-alpha.4.3). Without it a Running
+    /// row shows the prompt the user typed for the whole turn, which is the one
+    /// thing about the turn that cannot change.
+    private var turnProgressByThreadID: [String: TurnProgress] = [:]
+    private var turnProgressGate = SingleFlightGate()
+    private var turnProgressRefreshTask: Task<Void, Never>?
+    private var turnProgressRetryAfter: Date?
+    /// Turns a progress read was asked for but has not yet covered, by thread.
+    private var pendingProgressReads: [String: TurnProgressRequest] = [:]
+    /// Threads that answered `thread/items/list` with "method not found".
+    ///
+    /// **Per thread rather than per server, because the refusal is.** Codex
+    /// answers `-32601 "thread/items/list is not supported yet"` for a thread
+    /// whose `historyMode` is `legacy`, and `paginated` threads on the same
+    /// server answer it fine -- measured 2026-08-25 against CLI
+    /// `0.149.0-alpha.4.3`, where a thread started without
+    /// `historyMode: "paginated"` refused while every thread Codex Desktop had
+    /// created answered. Held server-wide, one legacy thread would have taken
+    /// the live progress off every other row in the panel.
+    ///
+    /// A Codex with no such method at all lands here too, one refused call per
+    /// thread rather than one per run. That is the whole cost of not telling
+    /// the two cases apart by their message text.
+    private var threadsWithoutItemsRead: Set<String> = []
     private var observedDesktopProcessIdentifier: pid_t?
     private var quotaRefreshTask: Task<Void, Never>?
     private var quotaRetryAfter: Date?
@@ -360,6 +416,13 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                         snapshotStartedAt: threadListReadAt
                     )
                 }
+                // After the reconciliation above, so a turn this refresh is
+                // about to drop is never asked about -- and, like the two reads
+                // above it, in the background: what it fetches is the row's
+                // third line, and a slow request for it must not hold up the
+                // status the first two lines carry.
+                scheduleTurnProgressRefreshIfNeeded(for: hookState.turns)
+                startTurnProgressRefreshIfPossible()
                 let sessions = await sessions(
                     from: hookState.turns,
                     threadRecords: threadRecords,
@@ -590,6 +653,9 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         if threadMetadataGate.isPending, let threadMetadataRetryAfter {
             deadlines.append(threadMetadataRetryAfter)
         }
+        if turnProgressGate.isPending, let turnProgressRetryAfter {
+            deadlines.append(turnProgressRetryAfter)
+        }
 
         // Both the settling window and the floor under the unread watcher. This
         // is the one deadline here measured partly forward from now rather than
@@ -622,6 +688,17 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         threadMetadataRefreshTask = nil
         threadMetadataGate.reset()
         pendingMetadataThreadIDs.removeAll()
+        turnProgressRefreshTask?.cancel()
+        turnProgressRefreshTask = nil
+        turnProgressGate.reset()
+        pendingProgressReads.removeAll()
+        // The text goes with the connection that answered for it. It is a fact
+        // about a turn that is still running, and this call is the app deciding
+        // it no longer knows what is running.
+        turnProgressByThreadID.removeAll()
+        // And so does the refusal: it was this server's answer about this
+        // thread, and the next connection is entitled to be asked again.
+        threadsWithoutItemsRead.removeAll()
         quotaRefreshTask?.cancel()
         quotaRefreshTask = nil
         terminalUnreadMembershipGate.reset()
@@ -844,17 +921,24 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 forTurn: turn,
                 in: approvalRouting
             )
-            // Thread records only supply metadata. Status is the reducer's
-            // alone: an independent App Server reports every thread as
-            // `notLoaded` even while a turn is running, so it has no runtime
-            // evidence to correct with.
+            // Pinned to the turn it was read for. A record left over from
+            // the turn before this one describes work that has already
+            // finished, and the row must not present it as what is happening
+            // now.
+            let liveProgress = turnProgressByThreadID[state.threadID]
+                .flatMap { $0.turnID == state.turnID ? $0.text : nil }
+            // Thread records and the progress read both supply presentation
+            // only. Status is the reducer's alone: an independent App Server
+            // reports every thread as `notLoaded` even while a turn is running,
+            // so it has no runtime evidence to correct with.
             guard let session = CodexSnapshotParser.session(
                 from: state,
                 thread: threadRecords[state.threadID]?.thread,
                 projectName: projectMetadata.resolution(
                     for: state.threadID
                 ).displayName,
-                approvalsReachTheUser: approvalsReachTheUser
+                approvalsReachTheUser: approvalsReachTheUser,
+                liveProgress: liveProgress
             ) else {
                 continue
             }
@@ -1007,6 +1091,184 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
 
     private func clearThreadMetadataRefreshTask() {
         threadMetadataRefreshTask = nil
+    }
+
+    // MARK: - Live progress
+
+    /// How many of a turn's newest items one progress read asks for.
+    ///
+    /// A window, and a small one on purpose. Every item in the page is decoded,
+    /// and a `commandExecution` item carries its own `aggregatedOutput` --
+    /// measured over the 381 command items in this machine's rollouts, the
+    /// largest is 290 KB, so the page size is also the multiplier on the worst
+    /// case. Six is enough to see past the reasoning and command items Codex
+    /// interleaves between two things it says (measured against
+    /// 0.149.0-alpha.4.3: at most four such items separated two consecutive
+    /// `agentMessage`s across three instrumented turns), and a message that
+    /// does fall out of the window is not lost -- ``TurnProgress/text`` keeps
+    /// the last one that was seen.
+    private static let turnProgressItemLimit = 6
+
+    /// Records which unfinished turns need their progress re-read.
+    ///
+    /// Keyed on the turn's own `lastEventAt` rather than on a clock interval:
+    /// this read has nothing to say until the turn does something, and the
+    /// events that move that stamp are the same ones the reducer wakes the
+    /// refresh for. So a turn sitting on a ten-minute command is read once and
+    /// then left alone, and a turn calling tools in a burst is read once per
+    /// call rather than once per second.
+    private func scheduleTurnProgressRefreshIfNeeded(for states: [HookTurnState]) {
+        // Whatever the reducer still holds, finished or not: the pruning below
+        // is against the threads that exist, not against the ones being read.
+        let liveThreadIDs = Set(states.map(\.threadID))
+        turnProgressByThreadID = turnProgressByThreadID.filter {
+            liveThreadIDs.contains($0.key)
+        }
+        pendingProgressReads = pendingProgressReads.filter {
+            liveThreadIDs.contains($0.key)
+        }
+        threadsWithoutItemsRead.formIntersection(liveThreadIDs)
+
+        for state in states {
+            // A finished turn already has its own last word, carried by the
+            // `Stop` that ended it. Asking the App Server for it again would
+            // be a request for something this process was handed.
+            guard state.status != .completed else { continue }
+            // A thread that has already refused is not asked twice.
+            guard !threadsWithoutItemsRead.contains(state.threadID) else { continue }
+            let held = turnProgressByThreadID[state.threadID]
+            if held?.turnID == state.turnID,
+               held?.readAtEventStamp == state.lastEventAt {
+                continue
+            }
+            // Replaced rather than accumulated, unlike the metadata read: a
+            // second request for the same thread is the same question asked
+            // about a later moment, and only the later answer is wanted.
+            pendingProgressReads[state.threadID] = TurnProgressRequest(
+                turnID: state.turnID,
+                eventStamp: state.lastEventAt
+            )
+        }
+        guard !pendingProgressReads.isEmpty else { return }
+        turnProgressGate.request()
+    }
+
+    private func startTurnProgressRefreshIfPossible() {
+        let now = clock.now()
+        guard turnProgressGate.isPending,
+              turnProgressRetryAfter.map({ now >= $0 }) ?? true else {
+            return
+        }
+        guard turnProgressGate.beginRun() else { return }
+
+        turnProgressRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            while await self.runTurnProgressRefresh() {}
+            await self.clearTurnProgressRefreshTask()
+        }
+    }
+
+    private func runTurnProgressRefresh() async -> Bool {
+        let requests = pendingProgressReads
+        pendingProgressReads.removeAll()
+        guard !requests.isEmpty else {
+            _ = turnProgressGate.endRun(covered: true)
+            return false
+        }
+
+        let succeeded = await refreshTurnProgressInBackground(requests: requests)
+        if !succeeded {
+            // Put back only what a later request has not already superseded.
+            for (threadID, request) in requests where pendingProgressReads[threadID] == nil {
+                pendingProgressReads[threadID] = request
+            }
+        }
+        return turnProgressGate.endRun(covered: succeeded)
+    }
+
+    private func clearTurnProgressRefreshTask() {
+        turnProgressRefreshTask = nil
+    }
+
+    /// Reads the newest thing each of these turns has said.
+    ///
+    /// Returns whether the read covered them, on the same terms as the metadata
+    /// read beside it: one unreadable turn is a line of text missing from one
+    /// row, and every other fact about that row comes from somewhere else.
+    @discardableResult
+    private func refreshTurnProgressInBackground(
+        requests: [String: TurnProgressRequest]
+    ) async -> Bool {
+        defer { invalidatePublishedSnapshot() }
+
+        var didReadAnyTurn = false
+        for (threadID, request) in requests.sorted(by: { $0.key < $1.key }) {
+            guard !Task.isCancelled else { return false }
+
+            do {
+                let response = try await client.request(
+                    method: "thread/items/list",
+                    params: .object([
+                        "threadId": .string(threadID),
+                        // Scoped to the turn the reducer owns, and never
+                        // widened to the thread. Without it a turn that has not
+                        // said anything yet answers with the *previous* turn's
+                        // closing words, which is the row confidently
+                        // describing work that is over.
+                        "turnId": .string(request.turnID),
+                        "sortDirection": .string("desc"),
+                        "limit": .number(Double(Self.turnProgressItemLimit))
+                    ]),
+                    timeoutNanoseconds: nanoseconds(timing.turnProgressTimeout)
+                )
+                didReadAnyTurn = true
+                let text = CodexSnapshotParser.newestAgentMessage(in: response)
+                if var held = turnProgressByThreadID[threadID],
+                   held.turnID == request.turnID {
+                    // A window that found nothing keeps what the last one saw.
+                    if let text {
+                        held.text = text
+                    }
+                    held.readAtEventStamp = request.eventStamp
+                    turnProgressByThreadID[threadID] = held
+                } else {
+                    turnProgressByThreadID[threadID] = TurnProgress(
+                        turnID: request.turnID,
+                        text: text,
+                        readAtEventStamp: request.eventStamp
+                    )
+                }
+            } catch let error as CodexAppServerError {
+                if error.isUnsupportedMethod {
+                    // Two different absences arrive as the same code, and both
+                    // are expected answers rather than faults: a thread whose
+                    // `historyMode` is `legacy` (`thread/items/list is not
+                    // supported yet`), and a Codex without this experimental
+                    // method at all. Recorded against the thread either way --
+                    // see ``threadsWithoutItemsRead`` for why the difference is
+                    // not worth reading out of the message text. This row falls
+                    // back to the prompt preview, which is what every Codex row
+                    // showed before this read existed.
+                    threadsWithoutItemsRead.insert(threadID)
+                    turnProgressByThreadID.removeValue(forKey: threadID)
+                    didReadAnyTurn = true
+                    continue
+                }
+                if error.requiresConnectionReset {
+                    await client.disconnect()
+                    return false
+                }
+                continue
+            } catch {
+                continue
+            }
+        }
+
+        guard !Task.isCancelled else { return false }
+        turnProgressRetryAfter = didReadAnyTurn
+            ? nil
+            : clock.now().addingTimeInterval(timing.requestRetryInterval)
+        return didReadAnyTurn
     }
 
     /// Reads metadata for `threadIDs`; returns whether the read covered them.
@@ -1372,11 +1634,18 @@ enum CodexSnapshotParser {
     /// ``CodexDesktopApprovalRoutingRepository``. It defaults to the answer
     /// that changes nothing, so a caller with no evidence keeps every state
     /// the reducer reached.
+    ///
+    /// `liveProgress` is the newest thing this turn has said, read from the App
+    /// Server against this exact turn. It defaults to absent, which is the
+    /// answer that leaves a Running row showing the prompt it started from --
+    /// what every Codex row showed before that read existed, and what one still
+    /// shows on a Codex that cannot answer it.
     nonisolated static func session(
         from state: HookTurnState,
         thread: JSONValue?,
         projectName: String,
-        approvalsReachTheUser: Bool = true
+        approvalsReachTheUser: Bool = true,
+        liveProgress: String? = nil
     ) -> MonitoredSession? {
         if let thread, !isEligibleRootThread(thread) {
             return nil
@@ -1403,9 +1672,14 @@ enum CodexSnapshotParser {
         let subagentsAwaitingApprovalCount = approvalsReachTheUser
             ? state.subagentsAwaitingApprovalCount
             : 0
+        // A finished turn's last word is carried by the `Stop` that ended it,
+        // which is the turn's own answer and needs no read. An unfinished one
+        // shows the step it is on, and falls back to the prompt only when
+        // nothing has been read for it yet -- the first seconds of a turn, a
+        // Codex without `thread/items/list`, or a read that failed.
         let preview = status == .completed
             ? normalizedPreview(state.assistantPreview)
-            : normalizedPreview(state.promptPreview)
+            : (normalizedPreview(liveProgress) ?? normalizedPreview(state.promptPreview))
 
         return MonitoredSession(
             threadID: state.threadID,
@@ -1418,6 +1692,28 @@ enum CodexSnapshotParser {
             runningSubagentCount: state.runningSubagentIDs.count,
             subagentsAwaitingApprovalCount: subagentsAwaitingApprovalCount
         )
+    }
+
+    /// The item type Codex files an assistant message under.
+    nonisolated static let agentMessageItemType = "agentMessage"
+
+    /// The newest assistant message in one `thread/items/list` page.
+    ///
+    /// The page is requested newest-first, so this is the first match rather
+    /// than the last. Every other item type is skipped rather than described:
+    /// the row reports what the agent *said* it is doing, which is the same
+    /// thing Claude Code's row reports, and a tool name is neither the agent's
+    /// words nor a sentence.
+    nonisolated static func newestAgentMessage(in response: JSONValue) -> String? {
+        guard let entries = response["data"]?.arrayValue else { return nil }
+        for entry in entries {
+            guard let item = entry["item"],
+                  item["type"]?.stringValue == agentMessageItemType,
+                  let text = item["text"]?.stringValue else { continue }
+            guard let normalized = normalizedPreview(text) else { continue }
+            return normalized
+        }
+        return nil
     }
 
     nonisolated private static func normalizedTitle(_ value: String?) -> String? {

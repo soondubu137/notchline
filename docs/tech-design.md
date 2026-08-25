@@ -20,7 +20,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 已经实现：
 
 - 通过 Codex Desktop 随附的 `codex app-server --listen stdio://` 建立 JSON-RPC 连接，严格按 `initialize → initialized` 握手。
-- 只调用 `thread/list`、`thread/read`、`thread/loaded/list`、`account/read`、`account/rateLimits/read`、`account/usage/read` 六个只读方法，且不响应或代替用户处理审批/输入请求。`thread/read` **必须始终带 `includeTurns: false`**：它只用于按 id 取单个 Thread 的元数据（标题、preview、根线程判定、`status`），绝不用于读取 Turn 历史；`thread/items/list`、`thread/turns/list` 等 Turn 明细接口一律不调用。这条约束由测试固定。
+- 只调用 `thread/list`、`thread/read`、`thread/loaded/list`、`thread/items/list`、`account/read`、`account/rateLimits/read`、`account/usage/read` 七个只读方法，且不响应或代替用户处理审批/输入请求。`thread/read` **必须始终带 `includeTurns: false`**：它只用于按 id 取单个 Thread 的元数据（标题、preview、根线程判定、`status`），绝不用于读取 Turn 历史；`thread/turns/list` 一律不调用。**`thread/items/list` 是这条约束上唯一的、后加的口子**，只为 PRD 第 7 节里 Codex `Running` 那一行的「最新公开进度」而存在：没有任何 Codex Hook 在轮次结束前带助手正文——`last_assistant_message` 只出现在 `stop.command.input` 与 `subagent-stop.command.input` 上，对着 CLI `0.149.0-alpha.4.3` 自带的 schema 逐个查过——所以那一行此前整轮显示用户自己的 prompt，也就是这一轮里唯一不会变的东西。调用形状压到最小并由测试固定：**必带 `turnId`**（scope 到 reducer 自己那一轮）、`sortDirection: desc`、`limit: 6`，只取这一页里最新的 `agentMessage` 的 `text`，其余 item 类型一概跳过——不读命令、不读路径、不读 `aggregatedOutput`。详见第 11 节与[登记表](non-public-codex-integration-features.md)。
 - 从当前账户 primary rate-limit window 读取真实 `usedPercent`，转换为剩余百分比；不可用时显示灰色圆环。
 - 从 `account/usage/read.dailyUsageBuckets` 读取本地日历“今天”的 token bucket；Expanded footer 显示标准 Compact 数字、额度重置日期和 Settings 入口。今日 bucket 缺失但 bucket 数组有效时按 `0` 处理，接口不可用时只将今日用量显示为 `--`。
 - 提供用户显式触发的 Hooks 安装器，增量合并 `~/.codex/hooks.json`，保留其他定义，并要求用户在 Codex `/hooks` 中审核信任。Settings 使用一个 `Codex integration` 总开关，把七种必需 lifecycle event 定义作为一个产品能力启停；关闭后留在 Settings，不重置首次引导。
@@ -605,6 +605,8 @@ Input needed
 3. Running：最新公开 commentary/progress；否则本轮 prompt。
 4. Completed：final answer 开头；没有时保留最后公开进度。
 
+第 3 条上的「最新」是字面意思：它必须是**正在做的那一步**，不是刚做完的那一步。两个产品之前都做不到这一点，而且是两个不同的原因——Codex 根本没有正文来源，Claude Code 有来源但没有把它送上屏幕的边沿。两处修复分别写在下面两小节。
+
 处理步骤：去控制字符 → 合并空白 → 取第一可见行 → 内存限制 → 交给 UI Alpha mask。禁止写日志、数据库、UserDefaults 或诊断包。
 
 ### 正文如何到达本进程（Codex）
@@ -619,6 +621,30 @@ Input needed
 
 不能改用 `thread.preview` 代替：实测它是**线程的首条用户消息**，不随轮次前进（17 轮的线程仍返回第 1 轮的文本），因此它满足不了 PRD 2.7 的「当前内容预览」。
 
+#### Running 那一行的正文，来自一次读取而不是一个事件
+
+上面这条路径覆盖了 `UserPromptSubmit` 的 `prompt` 与 `Stop` 的 `last_assistant_message`，也就是 Running 那一行的**回退值**和 Completed 那一行的正文。它覆盖不了 Running 本身：Codex 在轮次进行中不发助手正文，任何一个 Hook 都不带。因此 `Running` 那一行长期显示用户自己的 prompt——整轮不变，因为它就是这一轮里唯一不会变的东西。
+
+现在由 `LiveCodexMonitorService.refreshTurnProgressInBackground` 读一次 `thread/items/list` 补上，形状是：
+
+```
+{ threadId, turnId, sortDirection: "desc", limit: 6 }
+```
+
+`turnId` 是必需的而不是优化：不带它，一个还没说过话的新轮次会答上一轮的收尾语，行就会用「已经结束的工作」描述「正在做的事」。降序 + 小 `limit` 也不是优化——页里每个 item 都要解码，而 `commandExecution` 自带 `aggregatedOutput`（本机 381 条命令 item 里最大 290 KB），所以页大小就是最坏情况的乘数。6 足够越过 Codex 在两句话之间插的 `reasoning`/`commandExecution`（实测 0.149.0-alpha.4.3，三个被观测的轮次里最多隔 4 条）；万一真的掉出窗口，`TurnProgress.text` 保留上一次看见的那句，只有换轮次才清空。
+
+**什么时候读。** 键是轮次自己的 `lastEventAt`，不是时钟间隔：这次读取在轮次不动的时候没有任何新东西可说，所以一个卡在十分钟命令上的轮次只读一次，一个连着调工具的轮次每次调用读一次。为此 reducer 多了一条唤醒：`PreToolUse` 在这个产品上进 `changeEvents()`（`AgentHookVocabulary.wakesOnToolCallOpened`）——它不改 `renderedProjection()` 里的任何一个字段，但它正是行上那句话变化的时刻，因为 Codex 先说 commentary 再调工具。配对的 `PostToolUse` **不**唤醒：工具结束不打印任何东西。
+
+**失败方向，以及为什么它按 thread 记而不是按 server 记。** `-32601` 有**两个**成因，实测都会遇到：一是没有这个实验性方法的 Codex（不带 `--experimental` 时 `codex app-server generate-json-schema` 根本不生成它），二是**`historyMode` 为 `legacy` 的 thread**——同一个 server 上，`paginated` 的 thread 答得好好的，`legacy` 的答 `thread/items/list is not supported yet`。实测 2026-08-25：用 `thread/start` 不带 `historyMode` 建的 thread 是 `legacy` 且必然被拒，而 Codex Desktop 建的 thread 全部是 `paginated`。
+
+所以拒绝记在 `threadsWithoutItemsRead` 这个 thread 集合里，不记成一个全局开关。**这一条是端到端跑出来的，不是想出来的**：第一版记在全局，Release 端到端里的探针 thread 恰好是 `legacy`，于是一次拒绝把整块面板的实时进度都关掉了——用户手上只要还开着一条 legacy thread，别的行就全哑了。两个成因不按 message 文本区分：代价只是「没有这个方法的 Codex 每个 thread 多问一次」，换来的是不会因为一条 thread 连累其余。
+
+其余失败都只影响一行、都退回 prompt 预览（也就是这次读取存在之前的行为）：超时（3 秒，本文件里最短的预算）、单条读取失败、`turnId` 对不上导致的空页。连接需要重建时整批请求原样放回，下一次刷新再问。
+
+**实测（2026-08-25，CLI `0.149.0-alpha.4.3`）**：另一个进程正在跑的轮次，这次调用 1–4 ms 返回，普通页 0.6–4.3 KB；一个 `find /usr/share -type f | head -20000` 之后同一次调用变成 378 KB，这就是把 `limit` 压到 6 的那个测量。Hook 的 `turn_id` 与 `thread/items/list` 接受的 `turnId` 实测是同一个值（在 `hook.sock` 上抓下 `01a037e8-4fbc-…`，用它 scope 的那一页返回的正是那一轮的 `agentMessage`）。
+
+**端到端（Release 构建，隔离 `CODEX_HOME`，真实轮次）**：行依次显示 `I'm starting the check.`（0:13）、`I'm now applying the fix.`（0:26）、`I'm verifying the fix.`（0:38），轮次结束后变成 `Stop` 带来的 `I'm done.`。同一套探针在改成 `historyMode: "paginated"` 之前整轮显示用户的 prompt——那次「失败」正是上面那条降级路径本身，也是它被发现的方式。
+
 ### 正文如何到达本进程（Claude Code）
 
 **两个产品现在是同一条形状：一个 helper、一条 socket、一个 store。** 这边和 Codex 的差别只剩正文的来源——那边一轮两次、跟着生命周期事件到；这边是 `MessageDisplay`，一个正在说话的轮次每秒 3.4 次。所以这边多一条规则：`MessageDisplay` 在 `HookEventRepository.deliver` 里就停下，折进一个锁保护的 preview store，**不进 reducer 的 mailbox**。折叠留在 listener 的串行读取队列上，而不是走一次 actor hop——那条路径每秒 3.4 次，一次 hop 会把它放上产品的关键路径（`AGENTS.md` §6.3）。
@@ -631,16 +657,22 @@ Input needed
 
 `AgentHookListener` 对它做四件事：
 
-1. **在进 reducer 之前转向。** `deliver` 认出 `MessageDisplay` 后折进内存并直接返回：不排队、不 reduce、不唤醒面板。此前它还要避开一个文件目录——三次每秒写一个文件、再由 reducer 读一个删一个，是这条路径最贵的做法；那个目录已经不存在了。
+1. **在进 reducer 之前转向。** `deliver` 认出 `MessageDisplay` 后折进内存并直接返回：不排队、不 reduce（唤醒面板与否见下，按行上那句话变没变决定，不是按 delta）。此前它还要避开一个文件目录——三次每秒写一个文件、再由 reducer 读一个删一个，是这条路径最贵的做法；那个目录已经不存在了。
 2. **一条串行读取队列，保序而不是抢快。** 连接按到达顺序 accept，交给同一条串行队列，所以 `record(_:)` 看到的顺序就是 payload 落地的顺序。这一条现在要单独说，因为 `command` schema **有** `async` 这个键（`http` schema 没有，2026-08-18 读 schema 证实，此前本文档以为写得进去的 `async: true` 会被 settings 解析器直接丢掉）。实测 2.1.237：`async: true` 会让同一个 `tool_use_id` 的 `PreToolUse` 与 `PostToolUse` 互相超车，并且在 `-p` 下**整个丢掉 `Stop`**——进程在后台 hook 跑完之前就退出了。所以注册是同步的，代价是每个事件 6.3 ms 落在会话上（对照：Codex 那边的 Python helper 一直是 30 ms）。
 3. **只留每条消息的头部 240 字符。** 内存由常数决定，而不是由模型说了多少决定：头写满之后，后续 delta 在被扫描进任何保留结构之前就停下。
 4. **一趟扫完，只扫新 delta。** 折叠函数以已规范化的头部为种子往下写，长度用 `Int` 随行。此前的写法是重建 `carried + delta` 再在每个字符后取 `.count`——`String.count` 要走一遍字素边界，于是相对截断长度是平方级，还额外整份拷贝了 delta（那时的上限是 `maximumBodyBytes`，1 MB；现在 delta 作为正文字段在选择这一步就被截在 `HookPayloadDistiller.maximumTextBytes`，16 KiB）。现在超长 delta 与普通 delta 同价。
 
 `delta` 的官方措辞是「**newly completed lines**」，实测确实如此，而且**是增量、不是累计**：同一条消息的相邻 delta 依次以 `1. `、`2. `、`3. ` 开头，各自从上一个停下的地方开始——若是累计，逐块追加会把整条消息重复一遍。除最后一个之外，**每个 delta 都以换行结束**，规范化后塌成一个尾随空格，所以下一个 delta 直接接上去，分隔符不需要被发明；`pendingSpace` 的种子只为消息的最后一个 delta 而存在，那一个才停在行中间。`-p` 非交互是另一种形状：一次交付、`index: 0`、`final: true`，多行消息带着换行整份到达。
 
-**它也不进 `changeEvents()`，只有一个例外。** 不写文件的第二个后果：一个正在说话的轮次不会每秒把面板重画三次。正文由该轮次自身生命周期事件引起的刷新顺带取走，也就是面板本来的节奏——这条约束见 [`AGENTS.md`](../AGENTS.md) §7。
+**它不进 reducer 的 mailbox，但它唤醒面板——按行上那句话变没变，而不是按 delta。** 这一条曾经写的是「也不进 `changeEvents()`，只有一个例外（从没有到有）」，那个设计错在一个隐含前提上：它假定「行上已经有一句、它变旧了」会被**该轮次自身生命周期事件引起的刷新**顺带修好。没有那样的刷新。一次普通的工具调用开合不改 `renderedProjection()` 里的任何一个字段（状态仍是 Running，两个 preview 字段都不动），所以两次状态变化之间**一次刷新都不会发生**，行就一直停在上一次刷新时恰好印到一半的那条消息上，而会话已经往下说了三句。用户看到的所谓「实时进度」于是是**上一步**，甚至更早。
 
-例外是**从没有到有**这一个边沿，由 store 自己的 `changeEvents()` 报出——它不再需要一条自己的流，因为 store 本来就只在渲染投影变化时发信号。上一段的理由只覆盖「行上已经有一句、它变旧了」，不覆盖「行上什么都没有」——后者要等的不是一次更整齐的重画，而是那个会话下一次做点别的，而一个说上一分钟才调一次工具的轮次期间什么生命周期事件都不发，于是那一行会一直空着。只报这一个边沿，因此代价是每个会话每一段「无话可说」一次唤醒，而不是每个 delta 一次；并且只为**上一次刷新列出过**的会话报（`retainPreviews` 收下的那个集合）——列表不带的会话，它的正文会被它自己求来的那次刷新裁掉，于是下一个 delta 又是一次「从没有到有」，那不是一次唤醒而是一个按 delta 速率跑的循环，何况那一行本来也不在屏幕上。
+现在报的边沿是「**行会画出来的那一行文字变了**」：`fold` 把新文本按行的读法（去掉尾随空格）与旧文本比较，变了才发信号。它仍然不是逐 delta 重画，而且这一点由头部的上限保证、不由一条规矩保证——一条消息把 240 字符写满之后，它后面每一个 delta 都在存进任何结构之前就返回，什么都不唤醒。按 CLI 2.1.234 的实测（1561 字符 / 11 个 delta / 均值 142 字符），一条长消息两次唤醒然后彻底安静，一条短消息一次。**唤醒的频率因此等于这个智能体开始说新话的频率**，也正是这一行该跟住的频率。只加空白不算变化：存下来的形式故意留一个尾随空格好让下一个 delta 接上去（见上），行永远不画它。
+
+「从没有到有」仍然单独成立，因为**裁剪**会让 `existing` 描述一段这个 store 已经不再持有的文本：行重新变空，再放回去就是一次变化，不管放回去的是什么。
+
+并且只为**上一次刷新列出过**的会话报（`retainPreviews` 收下的那个集合）——列表不带的会话，它的正文会被它自己求来的那次刷新裁掉，于是下一个 delta 又是一次变化，那不是一次唤醒而是一个按 delta 速率跑的循环，何况那一行本来也不在屏幕上。
+
+这个产品**不**打开 `wakesOnToolCallOpened`：它的正文就在本进程里，`fold` 自己知道行什么时候变，再按工具调用唤醒一次是同一个边沿的第二次唤醒，而工具密集的轮次正是这件事最贵的地方。
 
 预览按 live 会话集合裁剪（与标题缓存同一个集合），所以会话结束后它的正文不会比那一行活得更久。
 
