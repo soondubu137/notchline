@@ -154,6 +154,10 @@ struct AppSettingsView: View {
             SettingsSeparator()
 
             hideWingsRow
+
+            SettingsSeparator()
+
+            outlineRow
         }
     }
 
@@ -179,6 +183,31 @@ struct AppSettingsView: View {
                     "Leaves the collapsed component as the cut-out alone, with "
                         + "no marks and no timer beside it. Needs a display "
                         + "whose cut-out Notchline can measure."
+                )
+        }
+    }
+
+    /// Give the black surface an edge of its own.
+    ///
+    /// Beside `Hide the wings` because it is the same kind of preference —
+    /// what the surface draws, decided by the person looking at it — and the
+    /// two answer the same wallpaper from opposite ends: one gives the notch
+    /// back, the other makes the panel visible where the wallpaper is as dark
+    /// as it is.
+    ///
+    /// Never greyed. It needs nothing of the display: any surface has an edge,
+    /// notched or not, collapsed or expanded.
+    private var outlineRow: some View {
+        SettingsRow(
+            title: "Outline the panel",
+            caption: "A hairline edge, for dark wallpapers."
+        ) {
+            Toggle("Outline the panel", isOn: $store.drawsSurfaceOutline)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .help(
+                    "Traces the sides and lower corners in a grey just off "
+                        + "Notchline's own black, collapsed and expanded alike."
                 )
         }
     }

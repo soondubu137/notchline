@@ -119,6 +119,27 @@ enum NotchPalette {
         green: labelRGB.green,
         blue: labelRGB.blue
     )
+    /// The optional edge around the whole surface (`figma-design.md` §8.4).
+    ///
+    /// Three quarters of ``label`` in every channel — `#5D5D60` against the
+    /// running timer's `#7C7C80`. Derived rather than picked, so the edge
+    /// cannot drift into a hue of its own: it is the same neutral the dimmest
+    /// text on this surface uses, turned down until it stops being a mark and
+    /// starts being a boundary. An edge is not information — it is there so
+    /// the black has a shape on a dark wallpaper — and anything bright enough
+    /// to read as a mark would be a third brightness on a surface that says
+    /// everything with two.
+    static let surfaceEdge = Color(
+        red: labelRGB.red * edgeDimming,
+        green: labelRGB.green * edgeDimming,
+        blue: labelRGB.blue * edgeDimming
+    )
+    /// How far ``surfaceEdge`` is turned down from ``label``.
+    ///
+    /// Landed on by looking at it: `0.5` (`#3E3E40`) all but vanished on a
+    /// wallpaper that was merely dim rather than black, and undimmed it read
+    /// as a mark. This is the midpoint of those two.
+    private static let edgeDimming = 0.75
     /// `text/notch-spotlight` — the searchlight highlight.
     static let spotlight = Color.white
     /// Unlit matrix cell.

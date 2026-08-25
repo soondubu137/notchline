@@ -686,6 +686,61 @@ struct NotchlineTests {
         #expect(store.currentPanelSize.width > 0)
     }
 
+    /// The outline is the user's answer to their own wallpaper, so it is
+    /// remembered and it asks nothing of the display.
+    ///
+    /// The one form it stands down on is the collapsed surface that has given
+    /// up its wings: there the body *is* the cut-out and the only lit part of
+    /// the contour is the pair of shoulders, so an outline would draw two grey
+    /// hooks on the one form whose point is that it carries no marks. Hovering
+    /// drops a panel with an edge of its own, and the outline comes back with
+    /// it.
+    @Test @MainActor
+    func theOutlineIsRememberedAndStandsDownOnlyForTheHiddenCompactSurface() {
+        let defaults = UserDefaults(suiteName: "outline-\(UUID().uuidString)")!
+        let notched = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let external = makeDisplay(
+            id: "external",
+            ordinal: 2,
+            menuBarHeight: 24,
+            hasNotch: false
+        )
+        let store = MonitorStore(
+            displays: [notched, external],
+            services: [],
+            preferences: defaults
+        )
+        #expect(!store.drawsSurfaceOutline)
+        #expect(!store.showsSurfaceOutline)
+
+        store.drawsSurfaceOutline = true
+        #expect(store.showsSurfaceOutline)
+        // Remembered across launches, like the fold and the wings.
+        #expect(
+            MonitorStore(displays: [notched], services: [], preferences: defaults)
+                .drawsSurfaceOutline
+        )
+
+        // No display can withhold it: an emulated pill has an edge too, and it
+        // is the form most likely to be lost against a dark wallpaper.
+        store.selectDisplay(id: external.id)
+        #expect(store.showsSurfaceOutline)
+        store.selectDisplay(id: notched.id)
+
+        // The two preferences do not fight. Collapsed onto the cut-out there is
+        // no edge to trace; the panel that hover drops has one.
+        store.hidesCompactWings = true
+        #expect(store.hidesCompactSurface)
+        #expect(!store.showsSurfaceOutline)
+        store.isExpanded = true
+        #expect(store.showsSurfaceOutline)
+    }
+
     /// A second mark widens the notched wing by exactly one matrix and its gap.
     @Test @MainActor
     func aSecondMarkWidensTheNotchedWingByOneMatrix() {

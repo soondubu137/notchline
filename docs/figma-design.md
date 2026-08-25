@@ -61,6 +61,7 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 ### 3.2 Color
 
 - Panel 背景：纯黑或现有 `surface/notch` / `surface/panel` token。
+- Panel 外轮廓描线（可选，默认不画）：`#5D5D60`（Running 计时那档灰的四分之三），`0.8pt`，画在轮廓内侧，且不画最上沿（§8.4）。
 - Primary text：白色（暗色 Panel）或近黑色（原生窗口）。
 - Secondary text：中性灰。
 - Running：蓝色。
@@ -441,7 +442,7 @@ Input needed
 
 ### 8.4 Display
 
-板上没有这一组，实现里有，位置在 `Products` 与 `Session list` 之间。卡片里现在是两行。
+板上没有这一组，实现里有，位置在 `Products` 与 `Session list` 之间。卡片里现在是三行。
 
 `Show Codex in Notch on` 是一个已经存在的控件：组件只出现在一台显示器上，由用户选定，说明行报出该显示器的形态与真实菜单栏高度（`Notch display · 39 pt menu bar`）。删掉它会拿走一个真实功能，所以它按同一形状留下——小标题、一张卡片。**没有脚注**：~~脚注写的是「组件占用所选显示器的菜单栏，并随之取得它的几何——一处要绕开的缺口，或者没有缺口时的一枚胶囊」。~~两行的说明行都已经就当前选中的那台显示器报出了结论——形态与菜单栏高度，以及为什么这块屏上收不起翼，脚注只是把同一件事抽象地再说一遍。
 
@@ -465,7 +466,27 @@ Input needed
 
 **两种情况都置灰而不是隐藏，而且偏好本身不清空。** 隐藏的代价写在 §8.2 同一条论证里：只在有刘海时才出现的开关，恰好在用户刚把外接显示器插上、正想找它的那一刻不见了。置灰的行还照旧说明它会做什么、以及为什么这块屏上做不到——**两种原因分开写**，不并成一句关于缺口的话：内建屏报了刘海却定位不了，与外接显示器根本没有刘海，是两种处境，而在一台 MacBook 上看到 `Needs a notched display` 底下压着一个灰开关，用户只会得出「这应用坏了」。偏好属于用户而不属于此刻插着哪块屏，因此换屏只置灰，换回来即恢复。
 
-这不是「加入尚未确认的功能」的例外：下面那条禁止的是把没定过的功能塞进设置，而 `Show Codex in Notch on` 是既有功能在新形状里的安置，`Hide the wings` 是同一张卡片上就近增加的一项显示偏好——它不新增任何被监视的对象，也不改变任何状态判定，只决定收起态画多少。板与窗口的差异记在这里，等板更新时一起消掉。
+#### `Outline the panel`
+
+| 标签 | `Outline the panel` |
+| --- | --- |
+| 控件 | 原生 macOS switch，默认 off，跨启动记忆（`drawsSurfaceOutline`） |
+| 说明 | `A hairline edge, for dark wallpapers.` |
+| tooltip | `Traces the sides and lower corners in a grey just off Notchline's own black, collapsed and expanded alike.` |
+
+沿 `PanelContour` 画一条 `0.8pt` 细线，**收起态与展开态一视同仁**——理由是面板背后的壁纸，而壁纸不会因为 hover 而改变。`0.8pt` 不落在像素边界上：2x 下它盖住一个像素再多半个，因此这条线是带抗锯齿的、不是硬边。这是要的样子而不是疏忽——一条硬的单像素线读作「画了一道边框」，糊一点才读作「这块黑到此为止」。
+
+**颜色是推导出来的，不是挑出来的：Running 计时那档灰的四分之三**（`#5D5D60`，`NotchPalette.surfaceEdge` = `label × 0.75`）。这个系数是看出来的：`× 0.5`（`#3E3E40`）在只是偏暗、并非纯黑的壁纸上几乎看不见，不调暗又读作一个记号，现取两者的中点。推导而不是新写一个值，是为了让这条边不可能漂出自己的色相——它用的仍是这块表面最暗的文字用的那个中性灰，只是一路调暗到不再像一个记号、而像一条边界为止。**边不是信息**：它存在只是为了让这块黑在暗壁纸上还有个形状，因此它应该压在所有承载状态的记号**之下**，而不是与其中最暗的那个并排。
+
+**描在轮廓内侧，不是骑在轮廓上。** 实现是「按两倍宽度描边，再用同一条路径裁回去」：`PanelContour` 的下沿正好落在面板自己的边界上，而 overlay 又裁到那个边界，居中描边会被裁掉外侧一半——下沿只剩半条，与两侧竖边不等粗。宽度是常数而不是菜单栏高度的比例：两个圆角跟着硬件的形状走，而一条边界没有理由因为菜单栏变高就变粗。
+
+**最上沿不画。** 那条边不是这块面板的，是屏幕的：面板从显示器最顶上挂下来，沿着它画一条线，读起来是「菜单栏上方横了一道」而不是「底下这个东西的边界」。因此描线取的是一条**开口路径**——从右上角起，走完肩、竖边与下圆角，到左上角止，两端与顶齐平地截断（`PanelContour.spansTopEdge`，填充与裁剪仍用闭合的那条）。描出来的是两侧的肩、两条竖边与两个下圆角。
+
+**任何显示器都可用，不置灰。** 与 `Hide the wings` 相反：那一项要求一个量得出的缺口，而这一项只要求有一条边——有刘海没刘海、收起展开，都有。
+
+**唯一不画的场合是 `Hide the wings` 已经生效的收起态。** 那一形态的面板本体正好等于遮挡宽度，整条轮廓上还落在亮处的只剩两侧的肩，描出来就是刘海两边各挂一枚灰钩子——偏偏是那个「什么标记都不画」才是全部意义的形态。所以两项偏好不打架：那一形态在屏幕上时描线让位，hover 落下的面板有自己的边，描线随之回来（`MonitorStore.showsSurfaceOutline`，由 `theOutlineIsRememberedAndStandsDownOnlyForTheHiddenCompactSurface` 锁定）。
+
+这不是「加入尚未确认的功能」的例外：下面那条禁止的是把没定过的功能塞进设置，而 `Show Codex in Notch on` 是既有功能在新形状里的安置，`Hide the wings` 与 `Outline the panel` 是同一张卡片上就近增加的两项显示偏好——它们不新增任何被监视的对象，也不改变任何状态判定，只决定这块表面画多少。板与窗口的差异记在这里，等板更新时一起消掉。
 
 不在 V1 设置画板中加入登录启动、动画、通知、模型选择或其他尚未确认的功能。
 
@@ -537,7 +558,7 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] Claude Code 在场的第二条校正：为陈旧缓存设上限（`90` 秒 = 三次连续失败），超过后在场为未知并落到 `Disconnected`。`freshness` 与 `trustCeiling` 现在是两个参数。
 - [x] 首次安装三步流程。
 - [x] Settings 预览 On/Off 与集成管理。
-- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift)），与板不一致之处均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、产品行说明行下多一行失败报告（§8.1）、Products 三行各多一个 `Show in Finder` 文件夹图标（§8.1）、多一个 `Display` 分组、且该分组是两行而不是一行（§8.4）、少一个 `Privacy` 分组（§8.3）。~~多一行 `Clear the session list`（§8.2）~~ 这一处已经消掉：那一行被右键移除单行取代后删除。
+- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift)），与板不一致之处均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、产品行说明行下多一行失败报告（§8.1）、Products 三行各多一个 `Show in Finder` 文件夹图标（§8.1）、多一个 `Display` 分组、且该分组是三行而不是一行（§8.4）、少一个 `Privacy` 分组（§8.3）。~~多一行 `Clear the session list`（§8.2）~~ 这一处已经消掉：那一行被右键移除单行取代后删除。
 - [ ] 在装有 SF Pro 的 Figma 桌面端打开 `609:2`，确认字形正常渲染、多行脚注的换行落位与预期一致。
 - [ ] 同一次打开时，把 `closing note` 的四条 Inter 文字（`665:3`、`665:5`、`667:3`、`667:5`）重新键入为 SF Pro Regular，原因见 §3.1。
 - [x] 会话行已同步 Running／等待人工／Completed 三种计时表现，一行只有一个标记。

@@ -10,7 +10,8 @@ struct NotchOverlayView: View {
             ZStack(alignment: .top) {
                 PanelSurface(
                     shoulderRadius: store.surfaceShoulderRadius,
-                    bottomRadius: store.surfaceBottomCornerRadius
+                    bottomRadius: store.surfaceBottomCornerRadius,
+                    drawsOutline: store.showsSurfaceOutline
                 )
 
                 VStack(spacing: 0) {
@@ -80,10 +81,44 @@ struct NotchOverlayView: View {
 private struct PanelSurface: View {
     let shoulderRadius: CGFloat
     let bottomRadius: CGFloat
+    /// See ``MonitorStore/drawsSurfaceOutline``. Static, and it has to stay
+    /// that way: §7 of `AGENTS.md` bans anything on this surface that ticks.
+    let drawsOutline: Bool
 
     var body: some View {
-        PanelContour(shoulderRadius: shoulderRadius, bottomRadius: bottomRadius)
+        let contour = PanelContour(
+            shoulderRadius: shoulderRadius,
+            bottomRadius: bottomRadius
+        )
+
+        contour
             .fill(.black)
+            // Everything but the top line, which is not this panel's edge but
+            // the screen's: the surface hangs from the very top of the display,
+            // so a rule drawn there reads as a line across the menu bar rather
+            // than as the boundary of the thing under it. The stroke therefore
+            // comes off an open path, from the top-right corner round to the
+            // top-left one, and ends flush with the top on both sides.
+            //
+            // Stroked at twice the width and clipped back to the closed shape,
+            // so the line lands wholly *inside* it. A centred stroke would lose
+            // its outer half along the bottom, which lies on the panel's own
+            // bounds and is clipped to them — leaving that edge half the
+            // thickness of the two sides.
+            .overlay {
+                if drawsOutline {
+                    PanelContour(
+                        shoulderRadius: shoulderRadius,
+                        bottomRadius: bottomRadius,
+                        spansTopEdge: false
+                    )
+                    .stroke(
+                        NotchPalette.surfaceEdge,
+                        lineWidth: PanelMetrics.surfaceOutlineWidth * 2
+                    )
+                    .clipShape(contour)
+                }
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -99,6 +134,16 @@ private struct PanelSurface: View {
 private struct PanelContour: Shape {
     let shoulderRadius: CGFloat
     let bottomRadius: CGFloat
+    /// Whether the path spans the top of its rect, which is the one edge the
+    /// panel does not own.
+    ///
+    /// `true` for the black body and for anything clipping to it — the shape
+    /// has to be closed to be filled. `false` produces the same outline as an
+    /// open path running from the top-right corner round to the top-left one,
+    /// which is what the optional edge is stroked from: that top line lies on
+    /// the screen's own edge, and a line drawn along it is not this panel's
+    /// boundary but a rule across the top of the display.
+    var spansTopEdge = true
 
     func path(in rect: CGRect) -> Path {
         // Each side of the shape spends one shoulder plus one lower corner, so
@@ -116,8 +161,12 @@ private struct PanelContour: Shape {
         let bottomControl = bottom * 0.552_284_749_8
 
         var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        if spansTopEdge {
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        } else {
+            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
         path.addCurve(
             to: CGPoint(x: rect.maxX - shoulder, y: rect.minY + shoulder),
             control1: CGPoint(x: rect.maxX - shoulderControl, y: rect.minY),
@@ -159,7 +208,9 @@ private struct PanelContour: Shape {
             ),
             control2: CGPoint(x: rect.minX + shoulderControl, y: rect.minY)
         )
-        path.closeSubpath()
+        if spansTopEdge {
+            path.closeSubpath()
+        }
         return path
     }
 }

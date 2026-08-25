@@ -150,6 +150,21 @@ enum PanelMetrics {
     static let notchUpperRadiusRatio: CGFloat = 1.0 / 8
     /// The cut-out's lower corners, as a share of its height.
     static let notchLowerRadiusRatio: CGFloat = 1.0 / 4
+    /// How thick the optional surface outline is drawn.
+    ///
+    /// Drawn inside the contour rather than centred on it, so this is the full
+    /// width of the line and none of it is lost to the clip.
+    ///
+    /// `0.8`, which does not land on a pixel boundary: at 2x it covers a pixel
+    /// and most of its neighbour, so the line is antialiased rather than
+    /// crisp. That is the intended look and not an oversight -- a hard
+    /// single-pixel rule reads as a drawn border, and the softer edge is what
+    /// makes this read as the black simply ending.
+    ///
+    /// A constant, not a share of the menu bar height like the two radii:
+    /// those follow the hardware's shape, while a boundary does not get
+    /// thicker because the menu bar got taller.
+    static let surfaceOutlineWidth: CGFloat = 0.8
     static let expandedBaselineWidth: CGFloat = 520
     static let sessionRowHeight: CGFloat = 80
     static let maximumVisibleSessionCount = 3
@@ -978,12 +993,46 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
+    /// Whether the surface draws a hairline around its own edge.
+    ///
+    /// The panel is black, and on a dark wallpaper that is a shape with no
+    /// edge: the expanded panel reads as a hole rather than as an object, and
+    /// on a display with no cut-out to inherit, so does the collapsed pill.
+    /// The outline gives it one back.
+    ///
+    /// **The colour is derived, not picked**: three quarters of the grey a
+    /// running turn's timer is drawn in (``NotchPalette/surfaceEdge``). An edge is not
+    /// information -- it is there so the black has a shape against the
+    /// wallpaper -- so it sits below every mark that does carry state rather
+    /// than beside the dimmest of them.
+    ///
+    /// **The top line is not drawn.** The surface hangs from the very top of
+    /// the display, so that edge belongs to the screen and not to this panel;
+    /// a rule along it reads as a line across the menu bar. What is traced is
+    /// the two shoulders, the sides and the lower corners.
+    ///
+    /// Collapsed and expanded alike, because the reason is the wallpaper
+    /// behind it and that does not change on hover. The one form it is not
+    /// drawn on is ``hidesCompactSurface``, where the user has asked for the
+    /// cut-out and nothing else; see ``showsSurfaceOutline``.
+    ///
+    /// Off by default and remembered across launches. It is a fact about the
+    /// wallpaper somebody chose, and nothing here can read that.
+    @Published var drawsSurfaceOutline: Bool {
+        didSet {
+            preferences?.set(
+                drawsSurfaceOutline,
+                forKey: Self.drawsSurfaceOutlineDefaultsKey
+            )
+        }
+    }
     @Published private(set) var lastIntegrationMessage: String
     @Published private(set) var hasCompletedOnboarding: Bool
 
     private static let productAttributionDefaultsKey = "productAttribution"
     private static let quotaFoldedDefaultsKey = "quotaFolded"
     private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
+    private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
@@ -1107,6 +1156,9 @@ final class MonitorStore: ObservableObject {
         ) as? Bool ?? false
         self.hidesCompactWings = preferences?.bool(
             forKey: Self.hidesCompactWingsDefaultsKey
+        ) ?? false
+        self.drawsSurfaceOutline = preferences?.bool(
+            forKey: Self.drawsSurfaceOutlineDefaultsKey
         ) ?? false
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
@@ -1306,6 +1358,25 @@ final class MonitorStore: ObservableObject {
     /// change under the pointer for no drawn difference.
     var hidesCompactSurface: Bool {
         hidesCompactWings && canHideCompactWings
+    }
+
+    /// Whether the outline is actually drawn, which is the preference minus the
+    /// one form that has no edge of its own to trace.
+    ///
+    /// A collapsed surface that has given up its wings *is* the cut-out: its
+    /// body is exactly the occlusion, and the only part of the contour still
+    /// on lit pixels is the pair of shoulders curving back to the menu bar.
+    /// Outlining those draws two grey hooks either side of the notch -- marks,
+    /// on the one form whose whole point is that there are none. So the two
+    /// preferences do not fight: the outline stands down while that form is on
+    /// screen, and comes back the moment the panel drops.
+    ///
+    /// Scoped to the collapsed state here rather than in ``hidesCompactSurface``
+    /// for the reason given there: that property answers about the collapsed
+    /// form and each reader says when it is asking.
+    var showsSurfaceOutline: Bool {
+        guard drawsSurfaceOutline else { return false }
+        return isExpanded || !hidesCompactSurface
     }
 
     /// Nothing is connected, so the only mark is the grey one.
