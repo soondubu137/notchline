@@ -41,6 +41,28 @@ enum NotchPalette {
         }
         /// How far ``spent`` travels from unlit towards lit.
         private static let spentLift = 0.12
+        /// The running subagent chip's fill.
+        ///
+        /// The chip is a flat tile with a numeral on it, not a dot, and at
+        /// the unlit colour that tile read as a hole in the panel rather than
+        /// as a mark sitting on it. So it is lifted a little towards white --
+        /// every channel by the same amount, which leaves each product's hue
+        /// and the resting grey's neutrality where they were and gives all
+        /// three the same distance from the black behind them. Still plainly
+        /// the dim end of the pair the attention chip's white leads.
+        var chipFill: Color {
+            Color(
+                red: offRed + Self.chipLift,
+                green: offGreen + Self.chipLift,
+                blue: offBlue + Self.chipLift
+            )
+        }
+        /// How far ``chipFill`` is lifted off the unlit colour towards white.
+        ///
+        /// `#151515` becomes `#242424` for the resting grey. Landed on by
+        /// looking at it: below this the tile still sank into the panel,
+        /// above it the fill started competing with the numeral it carries.
+        private static let chipLift = 0.06
         var offLayerColor: CGColor {
             CGColor(srgbRed: offRed, green: offGreen, blue: offBlue, alpha: 1)
         }
@@ -423,8 +445,8 @@ enum SubagentChipTint: Equatable {
     var fill: Color {
         switch self {
         case .attention: NotchPalette.spotlight
-        case .neutral: NotchPalette.restingInk.off
-        case .product(let agent): NotchPalette.ink(for: agent).off
+        case .neutral: NotchPalette.restingInk.chipFill
+        case .product(let agent): NotchPalette.ink(for: agent).chipFill
         }
     }
 
@@ -561,7 +583,7 @@ private enum MatrixTrack {
         0.743, 0.622, 0.492, 0.363, 0.243, 0.141, 0.063, 0.015,
         0.000, 0.019, 0.071, 0.152, 0.257, 0.378, 0.508, 0.637
     ]
-    /// The ring holds at half ``inactiveLevel``. It used to hold at exactly
+    /// The ring holds below ``inactiveLevel``. It used to hold at exactly
     /// that level, which made a mark waiting on the user as dark between
     /// flashes as a mark with nothing running at all; sitting below it says
     /// the darkness itself belongs to a live session, and it lengthens the
@@ -591,7 +613,7 @@ private enum MatrixTrack {
     /// that are — the attention ring between flashes, the completed breath at
     /// its trough — dip below it, so "dark" alone tells a live mark from a
     /// resting one.
-    static let inactiveLevel = 0.200
+    static let inactiveLevel = 0.180
 }
 
 private extension NotchMatrixState {
