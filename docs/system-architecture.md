@@ -420,7 +420,7 @@ flowchart LR
 | 宿主唤起（Claude Code） | `ClaudeCodeNavigator`、`ProcessAncestryHostResolver`、`AppleEventsTerminalTabFocuser` | 点击时向 `ClaudeCodeMonitorService` 问该会话此刻的 pid（会话已结束就失败，这就是点击前的重新确认），用 `sysctl(KERN_PROC_PID)` 的 `e_ppid` 与 `proc_pidpath` 向上走进程祖先链判定宿主：祖先里有 Claude Desktop 就激活它，否则最近的那个 `.app` 就是宿主终端。终端能报出 tty 的（Terminal.app、iTerm2）用它自己的公开脚本字典选中该标签页，报不出的只激活应用（见 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)）。激活这一步会**跟着窗口换桌面**：`WindowServerOccupancyReporter` 先问窗口服务器该 pid 在当前 Space 有没有可见窗口，没有就先 `hide()` 再 `activate()`——应用自己把窗口 order front 才会带走用户（`tech-design.md` §14.2） | [`ClaudeCodeNavigator.swift`](../Notchline/Notchline/ClaudeCodeNavigator.swift) |
 | 进程形态 | `AppDelegate`、`NotchlineApp` | 以 `LSUIElement` 运行（`INFOPLIST_KEY_LSUIElement`，Debug 与 Release 两个 configuration 都写）：没有 Dock 图标，不进 ⌘-Tab，前台时也没有菜单栏，因此 `⌘,`／`⌘W`／`⌘Q` 一并不存在（产品侧的代价见 `PRD.md` §1 与 §11）。**叠层本来就不受这条影响**：它是 `.nonactivatingPanel` 且 `canBecomeKey` 为 `false`，从不靠本应用持有前台。要补的只有首次引导那一次启动——辅助型应用启动时不获得前台，那扇窗会开在别人的窗口底下、标题栏是灰的、`Start` 上声明的 Return 也不生效。实测协作式 `NSApp.activate()` 在这一刻**被拒绝**：直接调、以及晚一跳等 SwiftUI 把窗口摆上来再调，两种写法前台都仍留在原来那个应用（`lsappinfo front` 读，Chrome 在前台时 `open` 本应用）；`activate(ignoringOtherApps:)` 才成立，所以用它，并且只在 `hasCompletedOnboarding` 为假时调——其余每一次启动一个窗口也不开，前台原地不动（同法实测）。齿轮那条路不受影响：那是用户的点击，协作式 `NSApp.activate()` 在那里照常成立（`SettingsWindowPresenter.reveal`，实测按下齿轮后本应用到前台、窗口落在组件那块屏上） | [`NotchlineApp.swift`](../Notchline/Notchline/NotchlineApp.swift) |
 | 窗体 | `OverlayPanelController` | NSPanel 生命周期、目标显示器、顶部吸附、尺寸和动画；并持有「此刻该不该在屏幕上」——遮蔽状态**不进 store**，因为面板两侧画的是同一棵视图树，发布它等于为了什么都不改而重算整个叠层（见第 6 节） | [`OverlayPanelController.swift`](../Notchline/Notchline/OverlayPanelController.swift) |
-| 面板该不该在屏幕上 | `OverlayConcealment`、`OverlayConcealmentWatcher` | 回答目标显示器此刻是不是还归用户的桌面，只判一条：**菜单栏没画**（该屏有应用或视频全屏、或菜单栏设成自动隐藏）。Mission Control **不隐藏菜单栏**，因此它自然落在「留在屏幕上」这一侧，这是产品要的（`PRD.md` §9.2.1），窗口列表里那一层 Dock 铺屏窗口存在但不读。判据只读窗口列表里的 owner、layer 与 bounds 三个字段（都不受 Screen Recording 权限遮蔽，`kCGWindowName` 才受），纯函数可断言；watcher 只报边沿，且给每次取样发号，让路上被后取样超过的旧读数作废 | [`OverlayConcealment.swift`](../Notchline/Notchline/OverlayConcealment.swift) |
+| 面板该不该在屏幕上 | `OverlayConcealment`、`OverlayConcealmentWatcher` | 回答目标显示器此刻是不是还归用户的桌面，只判一条：**菜单栏没画**（该屏有应用或视频全屏、或菜单栏设成自动隐藏）。判的是菜单栏窗口**在哪儿**而不是在不在：落在本屏原点是 `drawn`，被切换桌面横向滑走是 `sliding`（不上报，上一个答案原地不动），一个都没有才是 `away`（见本文第 7 节「唯一一个允许存在的轮询」）。Mission Control **不隐藏菜单栏**，因此它自然落在「留在屏幕上」这一侧，这是产品要的（`PRD.md` §9.2.1），窗口列表里那一层 Dock 铺屏窗口存在但不读。判据只读窗口列表里的 owner、layer 与 bounds 三个字段（都不受 Screen Recording 权限遮蔽，`kCGWindowName` 才受），纯函数可断言；watcher 只报边沿，且给每次取样发号，让路上被后取样超过的旧读数作废 | [`OverlayConcealment.swift`](../Notchline/Notchline/OverlayConcealment.swift) |
 | 视图 | `NotchOverlayView` | 只渲染 `MonitorStore`，不解析协议、不读文件；终态行上盖一层只认领次要点击的 `SecondaryClickCatcher`，发出的仍然只是意图（`tech-design.md` §17） | [`NotchOverlayView.swift`](../Notchline/Notchline/NotchOverlayView.swift) |
 | 设置窗口 | `AppSettingsView`、`ProductSettingsCopy`、`FinderRevealTarget`、`MacOSWindowColor` | macOS 26 单面板设置：分组卡片自绘，控件全用原生；`Color / macOS Window` 两模式 token（见 `figma-design.md` §8）。产品行说的那几句话是一个值（`ProductSettingsCopy`）而不是四个 view 上的计算属性——那一行下方的失败报告是本窗口里唯一为报告失败而存在的东西，值可以被断言，`body` 不能（CR-029）。窗口**怎么出现**归 `SettingsWindowPresenter`：每次打开都把窗口居中放到**组件所在的那块屏**上（`MonitorStore.selectedScreen`，按显示器标识符匹配 `NSScreen`；见 `PRD.md` §11），再激活本应用并把窗口排到最前。取组件那块屏而不是有焦点的那块，一是这扇窗改的东西只在刘海里看得见，二是这个答案在排窗过程中不会变——焦点那块屏晚读一步就变成 Settings 自己那块。落点算法是纯函数 `SettingsWindowPlacement.origin`，可断言。**摆放只在窗口看不见时发生**，这是这条路的形状所在：`SettingsWindowTracker` 用一个 `viewDidMoveToWindow` 的 `NSView` 同步交出窗口——`makeNSView` 时还没有窗口，而晚一跳 SwiftUI 已经把窗口排上屏，那一跳就是用户看见的闪（实测：窗口先在上次关掉的那块屏出现，约 50 ms 后跳过来）；presenter 再观察 `isVisible` 的**两个**方向，隐藏那一次才是主力——它把窗口摆到当前该去的那块屏，于是下一次显示的第一帧就已经对了。`⌘,` 与应用菜单那条路已经不在了——本应用以 `LSUIElement` 运行，没有菜单栏可放那个菜单项（见本表「进程形态」一行），齿轮是唯一入口；`isVisible` 观察因此不再是「另一条入口的补网」，而只是摆放本身所在的地方。`Products` 卡片三行尾部的 `Show in Finder` 走同一条「值而不是 `body`」的路：`FinderRevealTarget.revealing(_:)` 给出「选中这个文件」「打开这个文件夹」「无处可去（置灰）」三档，两个产品行的路径向 `HookIntegrationPaths.live(for:)` 要，因此按钮与写那个文件的写入方不可能指向两个地方 | [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift) |
 | 常驻动效 | `NotchStatusMatrix`、`SearchlightLabel`、`SessionRowText` | 用 CALayer 承载持续动画，使叠层不必逐帧重渲染（见第 6 节） | [`NotchStatusMatrix.swift`](../Notchline/Notchline/NotchStatusMatrix.swift) |
@@ -476,16 +476,23 @@ flowchart LR
 
 叠层跟着菜单栏走（PRD §9.2.1），而**这件事没有任何东西发布**。在 macOS 26.5 上逐个量过，进程问到的都是自己的状态，不是系统的：
 
-| 信号 | 别的应用全屏时 | Mission Control 时 |
-| --- | --- | --- |
-| `NSApp.currentSystemPresentationOptions` | `0`，不变 | `0`，不变 |
-| `NSMenu.menuBarVisible()` | `true`，不变 | `true`，不变 |
-| `NSScreen` 的 `visibleFrame` / `safeAreaInsets` / `auxiliaryTopLeftArea` | 不变 | 不变 |
-| `NSWorkspace.activeSpaceDidChangeNotification` | 不触发 | 不触发 |
-| Window Server 自己的菜单栏窗口 | **离开在屏列表** | 还在 |
-| Dock 在 dock 层以下、铺满整屏的窗口 | 没有 | 每屏一个 |
+| 信号 | 别的应用全屏时 | Mission Control 时 | 切换桌面时 |
+| --- | --- | --- | --- |
+| `NSApp.currentSystemPresentationOptions` | `0`，不变 | `0`，不变 | 未量 |
+| `NSMenu.menuBarVisible()` | `true`，不变 | `true`，不变 | 未量 |
+| `NSScreen` 的 `visibleFrame` / `safeAreaInsets` / `auxiliaryTopLeftArea` | 不变 | 不变 | 不变 |
+| `NSApplication.didChangeScreenParametersNotification` | 未量 | 未量 | 不触发 |
+| `NSWorkspace.activeSpaceDidChangeNotification` | 不触发 | 不触发 | 触发，但**切换已经结束**才到 |
+| Window Server 自己的菜单栏窗口 | **离开在屏列表** | 还在 | 还在，**横向滑走了** |
+| Dock 在 dock 层以下、铺满整屏的窗口 | 没有 | 每屏一个 | 没有 |
 
-只有后两行会动，所以判据读窗口列表；而**前四行同时也是「试过哪些订阅」的清单**——边沿触发版本根本不会触发，于是这里只能轮询。后两行里也只有菜单栏那一行被读：**Mission Control 并不隐藏菜单栏**，于是「跟着菜单栏」这一条规则把 Mission Control 判成留在屏幕上，而这正是产品要的结果（`PRD.md` §9.2.1）。最后一行留在表里，是因为它是曾经据以隐藏 Mission Control 的那个信号，也是唯一能看见 Mission Control 的信号——将来若要再判它，从这里开始，别再去试上面四行。
+只有后三行会动，所以判据读窗口列表；而**前五行同时也是「试过哪些订阅」的清单**——边沿触发版本根本不会触发，于是这里只能轮询。后三行里也只有菜单栏那一行被读：**Mission Control 并不隐藏菜单栏**，于是「跟着菜单栏」这一条规则把 Mission Control 判成留在屏幕上，而这正是产品要的结果（`PRD.md` §9.2.1）。最后一行留在表里，是因为它是曾经据以隐藏 Mission Control 的那个信号，也是唯一能看见 Mission Control 的信号——将来若要再判它，从这里开始，别再去试上面五行。
+
+**切换桌面不是把菜单栏藏起来，而是把它滑走。** 2026-08-24 实测：整个切换过程中，该屏的菜单栏窗口保持自己的上沿与宽度，沿 x 横向移动（1800pt 宽的屏上从 `x: 0` 走到 `-1864`），直到下一个 Space 自己的菜单栏落到原点为止；叠层被 window server 按**同一个位移**一起带走。所以判据读的不是「在不在列表里」而是「在哪儿」，三态：落在本屏原点是 `drawn`，在别处是 `sliding`（Space 正在滑，什么都还没定），一个候选都没有才是 `away`。`sliding` 不是答案、不上报，上一个答案原地不动。
+
+原先的判据要求菜单栏必须落在本屏原点，于是整整约 850ms 的切换被读成「菜单栏没了」，叠层每切一次桌面就被 `orderOut` 一次再 `orderFrontRegardless` 回来——用户看到的是切换时消失、到了新桌面又闪一下；触控板慢速滑动时菜单栏可以离开原点 3.5s（实测），叠层就消失这么久。`activeSpaceDidChange` 那一行正是不能靠订阅解决的原因：它跟着新菜单栏一起到，而这里要从切换的第一帧就撑住。
+
+候选按「上沿 + 宽度」认屏，因此还要防一种配置：两块等宽、上沿等高的显示器并排时，邻屏那条静止的菜单栏在几何上与本屏滑动中的那条无法区分，误判成 `sliding` 会让答案永远悬着、叠层一直压在全屏视频上面。判据因此额外收一份「所有在用显示器的 bounds」，**落在别的屏原点上的候选归那块屏**。这份列表只在已经读出 `sliding` 时才去取——`activeDisplayBounds()` 一次 214µs（Release，3 屏），而 `sliding` 一次切换只出现几次取样，稳态一次都不取。
 
 它不违反第 7 节，因为**下游不重渲染**：取样在 utility 队列上做，回到主 actor 只做一次比较，相同就丢掉；不同也只是 `orderOut` / `orderFrontRegardless` 一个窗口。store 和任何 SwiftUI 视图都看不见这个节拍。
 

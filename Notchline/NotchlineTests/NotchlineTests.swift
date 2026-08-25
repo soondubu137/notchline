@@ -10031,12 +10031,18 @@ for line in sys.stdin:
     private static let dockOwner = "Dock"
     private static let dockLayer = Int(CGWindowLevelForKey(.dockWindow))
 
-    private static func menuBar(of display: CGRect) -> ChromeWindow {
+    /// The display's menu bar window, optionally carried `slidBy` points along
+    /// x by a Space transition -- which is the only thing that moves it, and
+    /// moves it in that one axis: Spaces are a horizontal strip.
+    private static func menuBar(
+        of display: CGRect,
+        slidBy offset: CGFloat = 0
+    ) -> ChromeWindow {
         ChromeWindow(
             owner: OverlayConcealment.windowServerOwner,
             layer: OverlayConcealment.menuBarLayer,
             bounds: CGRect(
-                x: display.minX,
+                x: display.minX + offset,
                 y: display.minY,
                 width: display.width,
                 height: 39
@@ -10080,10 +10086,16 @@ for line in sys.stdin:
         ]
 
         #expect(
-            !OverlayConcealment.isConcealed(onDisplay: builtIn, windows: resting)
+            OverlayConcealment.menuBarPresence(
+                onDisplay: builtIn,
+                windows: resting
+            ) == .drawn
         )
         #expect(
-            !OverlayConcealment.isConcealed(onDisplay: external, windows: resting)
+            OverlayConcealment.menuBarPresence(
+                onDisplay: external,
+                windows: resting
+            ) == .drawn
         )
 
         // A film full-screen on the external display takes that display's menu
@@ -10091,16 +10103,95 @@ for line in sys.stdin:
         // easy reading of "the menu bar is hidden" and it is the wrong one.
         let externalFullScreen = resting.filter { $0 != Self.menuBar(of: external) }
         #expect(
-            OverlayConcealment.isConcealed(
+            OverlayConcealment.menuBarPresence(
                 onDisplay: external,
                 windows: externalFullScreen
-            )
+            ) == .away
         )
         #expect(
-            !OverlayConcealment.isConcealed(
+            OverlayConcealment.menuBarPresence(
                 onDisplay: builtIn,
                 windows: externalFullScreen
+            ) == .drawn
+        )
+    }
+
+    /// A Space switch slides the menu bar; it does not take it away.
+    ///
+    /// This is the difference between "the desktop is moving" and "something
+    /// took the display", and it is the whole of the switching-desktops fix:
+    /// the bar keeps its top edge and its width and travels sideways for the
+    /// length of the transition, which on an interactive swipe is as long as
+    /// the user holds it.
+    @Test
+    func aSlidingMenuBarIsASpaceSwitchAndNotAConcealment() {
+        let builtIn = Self.builtInDisplay
+
+        for offset in [-26.0, -1_800, -1_864, 1_864] as [CGFloat] {
+            #expect(
+                OverlayConcealment.menuBarPresence(
+                    onDisplay: builtIn,
+                    windows: [Self.menuBar(of: builtIn, slidBy: offset)]
+                ) == .sliding
             )
+        }
+
+        // The incoming Space's bar arriving is the end of it: a bar at the
+        // origin answers, whatever else is still on its way out.
+        #expect(
+            OverlayConcealment.menuBarPresence(
+                onDisplay: builtIn,
+                windows: [
+                    Self.menuBar(of: builtIn, slidBy: 1_864),
+                    Self.menuBar(of: builtIn)
+                ]
+            ) == .drawn
+        )
+    }
+
+    /// A neighbour's resting menu bar is never this display's, slid.
+    ///
+    /// Two displays of the same width whose top edges share a y are
+    /// indistinguishable by top edge and width alone -- a pair of identical
+    /// monitors side by side is the ordinary case. Reading the neighbour's bar
+    /// as this one's mid-slide would hold the answer forever and leave the
+    /// overlay sitting on top of a full-screen film.
+    @Test
+    func aNeighbouringDisplaysRestingMenuBarIsNotThisDisplaySliding() {
+        let left = CGRect(x: 0, y: 0, width: 1_800, height: 1_169)
+        let right = CGRect(x: 1_800, y: 0, width: 1_800, height: 1_169)
+        let displays = [left, right]
+
+        // A film full-screen on the left display. The right display's bar has
+        // the left's width and the left's top edge, and is the only bar listed.
+        #expect(
+            OverlayConcealment.menuBarPresence(
+                onDisplay: left,
+                windows: [Self.menuBar(of: right)],
+                otherDisplays: displays
+            ) == .away
+        )
+
+        // Without the display list there is nothing to tell them apart, which
+        // is why the watcher always passes it.
+        #expect(
+            OverlayConcealment.menuBarPresence(
+                onDisplay: left,
+                windows: [Self.menuBar(of: right)]
+            ) == .sliding
+        )
+
+        // The left display mid-switch: its bar is between the two origins and
+        // belongs to neither.
+        #expect(
+            OverlayConcealment.menuBarPresence(
+                onDisplay: left,
+                windows: [
+                    Self.menuBar(of: left, slidBy: 900),
+                    Self.menuBar(of: right)
+                ],
+                otherDisplays: displays
+            ) == .sliding
         )
     }
 
@@ -10125,25 +10216,25 @@ for line in sys.stdin:
         ]
 
         #expect(
-            !OverlayConcealment.isConcealed(
+            OverlayConcealment.menuBarPresence(
                 onDisplay: builtIn,
                 windows: missionControl
-            )
+            ) == .drawn
         )
         #expect(
-            !OverlayConcealment.isConcealed(
+            OverlayConcealment.menuBarPresence(
                 onDisplay: external,
                 windows: missionControl
-            )
+            ) == .drawn
         )
 
         // Mission Control opened from a full-screen app is still a display
         // whose menu bar is gone, and the cover changes nothing about that.
         #expect(
-            OverlayConcealment.isConcealed(
+            OverlayConcealment.menuBarPresence(
                 onDisplay: external,
                 windows: missionControl.filter { $0 != Self.menuBar(of: external) }
-            )
+            ) == .away
         )
     }
 
@@ -10156,18 +10247,20 @@ for line in sys.stdin:
         let external = Self.externalDisplay
 
         #expect(
-            !OverlayConcealment.isConcealed(
+            OverlayConcealment.menuBarPresence(
                 onDisplay: builtIn,
                 windows: [Self.menuBar(of: builtIn), Self.dockBacking(of: builtIn)]
-            )
+            ) == .drawn
         )
 
-        // Only the neighbour's menu bar is listed.
+        // Only the neighbour's menu bar is listed. It is a different width and
+        // a different top edge, so it is not a candidate at all -- not even a
+        // sliding one.
         #expect(
-            OverlayConcealment.isConcealed(
+            OverlayConcealment.menuBarPresence(
                 onDisplay: builtIn,
                 windows: [Self.menuBar(of: external)]
-            )
+            ) == .away
         )
     }
 
@@ -10180,13 +10273,14 @@ for line in sys.stdin:
     @Test
     func anUnplaceableDisplayLeavesTheOverlayAlone() {
         #expect(
-            !OverlayConcealment.isConcealed(onDisplay: .zero, windows: [])
+            OverlayConcealment.menuBarPresence(onDisplay: .zero, windows: [])
+                == .drawn
         )
         #expect(
-            !OverlayConcealment.isConcealed(
+            OverlayConcealment.menuBarPresence(
                 onDisplay: CGRect(x: 0, y: 0, width: 0, height: 1_169),
                 windows: []
-            )
+            ) == .drawn
         )
     }
 
@@ -10209,7 +10303,8 @@ for line in sys.stdin:
             // instead.
             interval: 3_600,
             sampleWindows: { listed },
-            boundsOfDisplay: { id in id == displayID ? display : .zero }
+            boundsOfDisplay: { id in id == displayID ? display : .zero },
+            boundsOfActiveDisplays: { [display] }
         )
 
         var reported: [Bool] = []
@@ -10240,6 +10335,84 @@ for line in sys.stdin:
         watcher.stop()
     }
 
+    /// Switching desktops orders the overlay nowhere at all.
+    ///
+    /// This is the fix stated as an invariant. A switch used to be two edges --
+    /// concealed as the Space left, revealed as the next one landed -- and the
+    /// user saw the overlay blink out and back for every switch. A sliding menu
+    /// bar is not an answer, so the whole transition is now zero reports and
+    /// the overlay rides it out where the window server puts it.
+    @Test @MainActor
+    func switchingDesktopsIsNotAnEdge() {
+        let display = Self.builtInDisplay
+        let displayID = CGDirectDisplayID(7)
+        nonisolated(unsafe) var listed: [ChromeWindow] = [Self.menuBar(of: display)]
+
+        let watcher = OverlayConcealmentWatcher(
+            interval: 3_600,
+            sampleWindows: { listed },
+            boundsOfDisplay: { _ in display },
+            boundsOfActiveDisplays: { [display] }
+        )
+
+        var reported: [Bool] = []
+        watcher.observe(displayID: displayID)
+        watcher.start { reported.append($0) }
+        #expect(reported == [false])
+
+        // The Space leaves, carrying the menu bar and the overlay with it.
+        for offset in [-26.0, -700, -1_864] as [CGFloat] {
+            listed = [Self.menuBar(of: display, slidBy: offset)]
+            watcher.sampleNow()
+        }
+        #expect(reported == [false])
+
+        // The next Space lands. Nothing was ever ordered out, so there is
+        // nothing to order back in.
+        listed = [Self.menuBar(of: display)]
+        watcher.sampleNow()
+        #expect(reported == [false])
+        #expect(!watcher.isConcealed)
+
+        // The same slide ending in a display with no menu bar -- an app taking
+        // it full screen -- still conceals, on the first sample after the
+        // transition rather than during it.
+        listed = [Self.menuBar(of: display, slidBy: -900)]
+        watcher.sampleNow()
+        #expect(reported == [false])
+
+        listed = []
+        watcher.sampleNow()
+        #expect(reported == [false, true])
+
+        watcher.stop()
+    }
+
+    /// A watcher whose very first sample lands mid-slide has no answer to hold,
+    /// and takes the same fail-open side as an unplaceable display.
+    @Test @MainActor
+    func aFirstSampleTakenMidSlideLeavesTheOverlayOnScreen() {
+        let display = Self.builtInDisplay
+        nonisolated(unsafe) let listed: [ChromeWindow] = [
+            Self.menuBar(of: display, slidBy: -1_200)
+        ]
+
+        let watcher = OverlayConcealmentWatcher(
+            interval: 3_600,
+            sampleWindows: { listed },
+            boundsOfDisplay: { _ in display },
+            boundsOfActiveDisplays: { [display] }
+        )
+
+        var reported: [Bool] = []
+        watcher.observe(displayID: CGDirectDisplayID(7))
+        watcher.start { reported.append($0) }
+
+        #expect(reported == [false])
+        #expect(!watcher.isConcealed)
+        watcher.stop()
+    }
+
     /// A sample overtaken on its way to the main actor is dropped, not reported.
     ///
     /// The timer reads the window list on its own queue and hops back, so its
@@ -10256,7 +10429,8 @@ for line in sys.stdin:
         let watcher = OverlayConcealmentWatcher(
             interval: 3_600,
             sampleWindows: { listed },
-            boundsOfDisplay: { _ in display }
+            boundsOfDisplay: { _ in display },
+            boundsOfActiveDisplays: { [display] }
         )
 
         var reported: [Bool] = []
@@ -10287,7 +10461,8 @@ for line in sys.stdin:
         let watcher = OverlayConcealmentWatcher(
             interval: 3_600,
             sampleWindows: { [] },
-            boundsOfDisplay: { _ in Self.builtInDisplay }
+            boundsOfDisplay: { _ in Self.builtInDisplay },
+            boundsOfActiveDisplays: { [Self.builtInDisplay] }
         )
 
         var reported: [Bool] = []

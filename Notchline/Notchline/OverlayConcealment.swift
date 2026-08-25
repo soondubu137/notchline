@@ -13,6 +13,22 @@ nonisolated struct ChromeWindow: Equatable, Sendable {
     let bounds: CGRect
 }
 
+/// What the window server is doing with a display's menu bar.
+///
+/// Three states and not two, because a Space switch is neither: for the ~850 ms
+/// it takes -- and for as long as the user holds an interactive swipe, 3.5 s
+/// measured -- the menu bar is still drawn and is simply somewhere else.
+nonisolated enum MenuBarPresence: Equatable, Sendable {
+    /// Drawn on the display it belongs to. The overlay belongs there with it.
+    case drawn
+    /// Drawn, but carried off the display by a Space transition. Nothing has
+    /// been settled yet, so nothing should move.
+    case sliding
+    /// Not drawn at all: a full-screen window has taken the display, or the
+    /// menu bar is set to hide automatically and is currently away.
+    case away
+}
+
 /// Whether the overlay should be on a given display right now.
 ///
 /// The overlay sits at `.statusBar`, one level above the menu bar, so the
@@ -22,22 +38,41 @@ nonisolated struct ChromeWindow: Equatable, Sendable {
 /// it**. Every obvious API was measured on macOS 26.5 and reports the asking
 /// process's own state, not the system's:
 ///
-/// | Signal | Another app full-screen | Mission Control |
-/// | --- | --- | --- |
-/// | `NSApp.currentSystemPresentationOptions` | `0`, unchanged | `0`, unchanged |
-/// | `NSMenu.menuBarVisible()` | `true`, unchanged | `true`, unchanged |
-/// | `NSScreen.visibleFrame` / `.safeAreaInsets` / `.auxiliaryTopLeftArea` | unchanged | unchanged |
-/// | `NSWorkspace.activeSpaceDidChangeNotification` | never fired | never fired |
-/// | Window Server's own menu bar window | **leaves the on-screen list** | present |
-/// | Dock's full-display covers below dock level | absent | appear, one per display |
+/// | Signal | Another app full-screen | Mission Control | Switching Space |
+/// | --- | --- | --- | --- |
+/// | `NSApp.currentSystemPresentationOptions` | `0`, unchanged | `0`, unchanged | not measured |
+/// | `NSMenu.menuBarVisible()` | `true`, unchanged | `true`, unchanged | not measured |
+/// | `NSScreen.visibleFrame` / `.safeAreaInsets` / `.auxiliaryTopLeftArea` | unchanged | unchanged | unchanged |
+/// | `NSApplication.didChangeScreenParametersNotification` | not measured | not measured | never fired |
+/// | `NSWorkspace.activeSpaceDidChangeNotification` | never fired | never fired | fires, but only once the switch is **over** |
+/// | Window Server's own menu bar window | **leaves the on-screen list** | present | present, **slid sideways** |
+/// | Dock's full-display covers below dock level | absent | appear, one per display | absent |
 ///
-/// Only the last two rows move, which is why this reads the window list; of the
-/// two, only the menu bar row is consulted. The right-hand column says why the
-/// last row is not: **Mission Control does not hide the menu bar.** It is drawn
-/// over the zoomed-out desktops exactly as usual, and the product wants the
-/// overlay drawn there with it — Mission Control is a place the user goes to
-/// look at what is running, which is what this overlay is for. So this is one
-/// clause, not two: the overlay follows the menu bar, and nothing else.
+/// Only the last three rows move, which is why this reads the window list; of
+/// the three, only the menu bar row is consulted, and it is read for **where**
+/// the bar is rather than merely whether it is listed.
+///
+/// **A Space switch does not hide the menu bar. It slides it.** Measured on
+/// 2026-08-24: through a switch the display's menu bar window keeps its top
+/// edge and its width and travels horizontally -- `x: 0 → -1864` on an 1800pt
+/// display -- until the incoming Space's own bar arrives at the origin. The
+/// overlay is carried by the *same* offset, because the window server moves
+/// both, so an overlay left alone slides out with the old desktop and back in
+/// with the new one. That is precisely what the menu bar it follows does.
+/// Insisting the bar be at the display's origin read all ~850 ms of that as
+/// "the menu bar is gone" and ordered the overlay off screen and back on for
+/// every switch; an interactive swipe held it off for as long as the finger was
+/// down.
+///
+/// The `activeSpaceDidChange` row is the reason that is fixed here rather than
+/// by subscribing: the notification arrives with the incoming bar, at the end
+/// of a transition this has to survive from its first frame.
+///
+/// Mission Control does not hide the menu bar either. It is drawn over the
+/// zoomed-out desktops exactly as usual, and the product wants the overlay
+/// drawn there with it -- Mission Control is a place the user goes to look at
+/// what is running, which is what this overlay is for. So this is still one
+/// clause: the overlay follows the menu bar, and nothing else.
 nonisolated enum OverlayConcealment {
     /// The window server's own process, as it names itself in the window list.
     static let windowServerOwner = "Window Server"
@@ -49,41 +84,81 @@ nonisolated enum OverlayConcealment {
     /// they agree exactly; this only absorbs a fractional scale conversion.
     static let matchTolerance: CGFloat = 1
 
-    /// `true` when the display's menu bar is not drawn: a full-screen window
-    /// has taken the whole display, or the user has the menu bar set to hide
-    /// automatically and it is currently away.
-    static func isConcealed(
+    /// Where this display's menu bar is, as the window list shows it.
+    ///
+    /// A candidate is a menu bar window that shares this display's top edge and
+    /// width. Landing on the display's own origin makes it ``drawn``; anywhere
+    /// else it is ``sliding``, and none at all is ``away``.
+    ///
+    /// - Parameter otherDisplays: the bounds of every active display. A bar
+    ///   resting on a *neighbour's* origin is that neighbour's own, not this
+    ///   display's mid-slide: two displays of the same width whose top edges
+    ///   share a y are otherwise indistinguishable by geometry, and reading the
+    ///   neighbour's bar as this one's would leave the overlay sitting on top
+    ///   of a full-screen film with nothing to move it. Passing this display's
+    ///   own bounds in the list is harmless -- a bar at this display's origin
+    ///   has already answered ``drawn``.
+    static func menuBarPresence(
         onDisplay displayBounds: CGRect,
-        windows: [ChromeWindow]
-    ) -> Bool {
+        windows: [ChromeWindow],
+        otherDisplays: [CGRect] = []
+    ) -> MenuBarPresence {
         // Fail open. A display with no usable bounds is one this cannot judge,
-        // and of the two ways to be wrong — an overlay that lingers over a
+        // and of the two ways to be wrong -- an overlay that lingers over a
         // film, and an overlay that is simply gone with no way to ask for it
-        // back — only the second loses the product.
+        // back -- only the second loses the product.
         guard displayBounds.width >= 1, displayBounds.height >= 1 else {
-            return false
+            return .drawn
         }
 
-        let hasMenuBar = windows.contains { window in
-            window.owner == windowServerOwner
-                && window.layer == menuBarLayer
-                && matches(
-                    origin: window.bounds,
-                    displayBounds: displayBounds
-                )
-                && abs(window.bounds.width - displayBounds.width)
-                    <= matchTolerance
+        var isSliding = false
+
+        for window in windows {
+            guard window.owner == windowServerOwner,
+                  window.layer == menuBarLayer,
+                  abs(window.bounds.minY - displayBounds.minY) <= matchTolerance,
+                  abs(window.bounds.width - displayBounds.width)
+                    <= matchTolerance else {
+                continue
+            }
+
+            if abs(window.bounds.minX - displayBounds.minX) <= matchTolerance {
+                return .drawn
+            }
+
+            let restsOnAnotherDisplay = otherDisplays.contains { other in
+                abs(window.bounds.minX - other.minX) <= matchTolerance
+                    && abs(window.bounds.minY - other.minY) <= matchTolerance
+            }
+
+            if !restsOnAnotherDisplay {
+                isSliding = true
+            }
         }
 
-        return !hasMenuBar
+        return isSliding ? .sliding : .away
     }
 
-    private static func matches(
-        origin: CGRect,
-        displayBounds: CGRect
-    ) -> Bool {
-        abs(origin.minX - displayBounds.minX) <= matchTolerance
-            && abs(origin.minY - displayBounds.minY) <= matchTolerance
+    /// Every active display's bounds, in the window server's own coordinate
+    /// space -- the one ``ChromeWindow/bounds`` is already in.
+    ///
+    /// This exists so that ``menuBarPresence(onDisplay:windows:otherDisplays:)``
+    /// can tell a neighbour's resting menu bar from this display's sliding one.
+    /// `NSScreen.screens` would answer the same question in AppKit coordinates
+    /// and is exactly the mix-up ``ChromeWindow`` warns about.
+    static func activeDisplayBounds() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else {
+            return []
+        }
+
+        var identifiers = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &identifiers, &count) == .success
+        else {
+            return []
+        }
+
+        return identifiers.prefix(Int(count)).map { CGDisplayBounds($0) }
     }
 
     /// The on-screen windows, as this process can see them.
@@ -136,6 +211,11 @@ nonisolated enum OverlayConcealment {
 /// the last one and dropped when equal, and the only thing a change does is
 /// order a window in or out. Neither the store nor any SwiftUI view sees the
 /// tick, which is what keeps this outside the rule in `AGENTS.md` §7.
+///
+/// A ``MenuBarPresence/sliding`` sample is not an answer and is not reported:
+/// the last answer stands until the Space has finished arriving. That is what
+/// keeps a desktop switch from ordering the overlay out and back in -- the
+/// overlay rides the transition with the menu bar instead.
 @MainActor
 final class OverlayConcealmentWatcher {
     /// 250 ms.
@@ -152,6 +232,7 @@ final class OverlayConcealmentWatcher {
     private let interval: TimeInterval
     private let sampleWindows: @Sendable () -> [ChromeWindow]
     private let boundsOfDisplay: @Sendable (CGDirectDisplayID) -> CGRect
+    private let boundsOfActiveDisplays: @Sendable () -> [CGRect]
     private let queue = DispatchQueue(
         label: "com.yinfenglu.Notchline.overlay-concealment",
         qos: .utility
@@ -185,11 +266,14 @@ final class OverlayConcealmentWatcher {
             OverlayConcealment.currentWindows,
         boundsOfDisplay: @escaping @Sendable (CGDirectDisplayID) -> CGRect = {
             CGDisplayBounds($0)
-        }
+        },
+        boundsOfActiveDisplays: @escaping @Sendable () -> [CGRect] =
+            OverlayConcealment.activeDisplayBounds
     ) {
         self.interval = interval
         self.sampleWindows = sampleWindows
         self.boundsOfDisplay = boundsOfDisplay
+        self.boundsOfActiveDisplays = boundsOfActiveDisplays
     }
 
     deinit {
@@ -266,12 +350,35 @@ final class OverlayConcealmentWatcher {
         guard ticket > lastConsumedTicket else { return }
         lastConsumedTicket = ticket
 
-        let isConcealed = observedDisplayID.map { displayID in
-            OverlayConcealment.isConcealed(
-                onDisplay: boundsOfDisplay(displayID),
+        let presence = observedDisplayID.map { displayID in
+            let displayBounds = boundsOfDisplay(displayID)
+            let reading = OverlayConcealment.menuBarPresence(
+                onDisplay: displayBounds,
                 windows: windows
             )
-        } ?? false
+
+            // Only a displaced bar can be a neighbour's, so only a displaced
+            // bar is worth the display list: `activeDisplayBounds()` costs
+            // 214µs against 583µs for the window list itself (Release,
+            // 3 displays), and asking on every tick would spend it four times a
+            // second to answer a question that arises for a handful of samples
+            // per Space switch.
+            guard reading == .sliding else { return reading }
+
+            return OverlayConcealment.menuBarPresence(
+                onDisplay: displayBounds,
+                windows: windows,
+                otherDisplays: boundsOfActiveDisplays()
+            )
+        } ?? .drawn
+
+        // A Space carrying the menu bar past is not an answer about
+        // concealment. Hold the last one -- except when there is no last one,
+        // where the same fail-open rule as an unplaceable display applies and
+        // the overlay is left on screen.
+        if presence == .sliding, hasReported { return }
+
+        let isConcealed = presence == .away
 
         guard !hasReported || isConcealed != lastReported else { return }
         hasReported = true
