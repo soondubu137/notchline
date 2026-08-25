@@ -2984,6 +2984,55 @@ struct NotchlineTests {
         #expect(store.compactHeight == 22)
     }
 
+    /// A notched panel is as tall as the cut-out, not as tall as the band the
+    /// menu bar occupies -- the two differ by a point on real hardware, and the
+    /// panel is imitating the cut-out.
+    ///
+    /// The numbers are a 14-inch M3 Pro at *More Space*, read from `NSScreen`:
+    /// `safeAreaInsets.top` `38`, `frame.maxY - visibleFrame.maxY` `39`, and
+    /// AppKit's own `_notchFrame` `(790, 1131, 220, 38)`. `makeDisplay` builds
+    /// the two flush with each other, so this display is written out by hand.
+    @Test @MainActor
+    func aNotchedPanelIsAsTallAsTheCutOutAndNotTheMenuBarBand() {
+        let frame = NSRect(x: 0, y: 0, width: 1_800, height: 1_169)
+        let notched = DisplayOption(
+            id: "built-in",
+            displayID: nil,
+            ordinal: 1,
+            name: "Built-in Retina Display",
+            frame: frame,
+            // A point lower than the safe area: `visibleFrame` leaves a gap
+            // under the menu bar for window content.
+            visibleFrame: NSRect(x: 0, y: 0, width: 1_800, height: 1_130),
+            safeAreaInsets: NSEdgeInsets(top: 38, left: 0, bottom: 0, right: 0),
+            auxiliaryTopLeftArea: NSRect(x: 0, y: 1_131, width: 790, height: 38),
+            auxiliaryTopRightArea: NSRect(x: 1_010, y: 1_131, width: 790, height: 38),
+            fallbackMenuBarHeight: 24
+        )
+
+        #expect(notched.geometry == .notched)
+        #expect(notched.frame.maxY - notched.visibleFrame.maxY == 39)
+        #expect(notched.menuBarHeight == 38)
+        #expect(MonitorStore(displays: [notched]).compactHeight == 38)
+
+        // Without a cut-out there is no hardware to match, and the panel goes
+        // back to filling what the menu bar occupies.
+        let external = DisplayOption(
+            id: "external",
+            displayID: nil,
+            ordinal: 2,
+            name: "External",
+            frame: NSRect(x: 1_800, y: 0, width: 2_560, height: 1_440),
+            visibleFrame: NSRect(x: 1_800, y: 0, width: 2_560, height: 1_416),
+            safeAreaInsets: NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0),
+            auxiliaryTopLeftArea: nil,
+            auxiliaryTopRightArea: nil,
+            fallbackMenuBarHeight: 22
+        )
+        #expect(external.geometry == .noNotch)
+        #expect(external.menuBarHeight == 24)
+    }
+
     @Test
     func panelFramesStayTopAttachedAndCentered() {
         let screenFrame = NSRect(x: 1_440.5, y: -120, width: 1_919, height: 1_080)
