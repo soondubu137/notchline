@@ -49,27 +49,19 @@ struct DisplayOption: Identifiable {
         return hasTopInset && hasAuxiliaryArea ? .notched : .noNotch
     }
 
-    /// The band the collapsed panel fills — and on a notched display, the
-    /// height of the cut-out itself, which is not the same number.
+    /// The band the collapsed panel fills: the height the menu bar occupies,
+    /// on every display.
     ///
-    /// Two measurements are on offer and they disagree by a point.
-    /// `safeAreaInsets.top` is the camera housing: AppKit's own private
-    /// `_notchFrame` is exactly that tall and no taller. `frame.maxY -
-    /// visibleFrame.maxY` is what the menu bar *occupies*, which is one more,
-    /// because `visibleFrame` also leaves a gap under the bar for window
-    /// content. Measured on a 14-inch M3 Pro at *More Space*: safe area `38`,
-    /// occupied `39`, `_notchFrame` `(790, 1131, 220, 38)`.
-    ///
-    /// Taking the larger of the two drew the panel a point taller than the
-    /// hardware it is imitating — two pixels of overhang at 2x, and with
-    /// `Outline the panel` on it is the hairline along the bottom that runs
-    /// past where the cut-out ends. So a notched display answers with the
-    /// cut-out. A display without one has no hardware to match and falls back
-    /// to the occupied band, where filling the menu bar is the whole point.
+    /// `NSScreen` offers two measurements of that band and they disagree by a
+    /// point. `safeAreaInsets.top` is the camera housing — on a 14-inch M3 Pro
+    /// at *More Space*, `38`. `frame.maxY - visibleFrame.maxY` is what the menu
+    /// bar occupies, `39`, because `visibleFrame` also leaves a gap under the
+    /// bar for window content. The panel takes the larger of the two, so it is
+    /// as tall as the menu bar rather than as tall as the cut-out. That is a
+    /// point of overhang past the hardware on a notched display, and it is the
+    /// answer we want: one height for every display, and the collapsed panel
+    /// filling the bar it sits in.
     var menuBarHeight: CGFloat {
-        if geometry == .notched, safeAreaInsets.top >= 1 {
-            return safeAreaInsets.top
-        }
         let occupiedTopHeight = max(0, frame.maxY - visibleFrame.maxY)
         let measuredHeight = max(occupiedTopHeight, safeAreaInsets.top)
         return measuredHeight >= 1

@@ -106,7 +106,7 @@ shoulderRadius   = max(0, menuBarHeight) / 8    // 上凹弧，也是窗口每�
 bottomCornerRadius = max(0, menuBarHeight) / 4  // 下圆角
 ```
 
-**比例而非常数**，是因为硬件就是这样：刘海是一块毫米数固定的缺口，带刘海屏的菜单栏与它同一档高度（准确的关系见 §3.4：缺口是 `safeAreaInsets.top`，菜单栏占的那条带还要多一个点），两者在缩放变粗时一起在点单位上缩小——*More Space* 下 `220 × 38`，默认 `185 × 32`，再到 *Larger Text* 的 `127 × 22`。写死一个半径只在某一档缩放上对，其余每一档都偏圆；旧写法在带刘海屏固定 `10`，在默认缩放下就比真实缺口圆 `25%`，在 `22` 档上圆到近乎胶囊。
+**比例而非常数**，是因为硬件就是这样：刘海是一块毫米数固定的缺口，带刘海屏的菜单栏正好与它等高（差一个点，见 §3.4），两者在缩放变粗时一起在点单位上缩小——*More Space* 下 `220 × 38`，默认 `185 × 32`，再到 *Larger Text* 的 `127 × 22`。写死一个半径只在某一档缩放上对，其余每一档都偏圆；旧写法在带刘海屏固定 `10`，在默认缩放下就比真实缺口圆 `25%`，在 `22` 档上圆到近乎胶囊。
 
 比例取自 Iconfactory 的 Notchmeister——它把轮廓直接描在硬件缺口上，`notchUpperRadius = 4`、`notchLowerRadius = 8`，对应默认的 `185 × 32` 缺口。上凹弧与 Apple 自带机型图标（`com.apple.macbookpro-14-2021`）中量到的 `13.5%` 一致；图标把下圆角画得更圆（约 `40%`），但那是插画尺度上的夸张，以描线为准。两段都是**正圆弧**（`0.5523` 控制柄），与缺口边缘一致。
 
@@ -120,9 +120,9 @@ bottomCornerRadius = max(0, menuBarHeight) / 4  // 下圆角
 
 带刘海的收起面板**以缺口的右缘为锚**：`NSScreen.auxiliaryTopRightArea.minX` 加尾翼宽度，不再由屏幕中心加位移推导。旧写法只有在缺口正好居中、且本体宽度不取整时才与之等价；取整的余量现在落在前导翼上——那里是留白，吃得下半个点，与硬件对齐的右缘吃不下。展开态与无刘海形态仍然锁定屏幕水平中心。
 
-**面板高度取的是缺口，不是菜单栏占的那条带。** `NSScreen` 给得出两个数，它们差一个点：`safeAreaInsets.top` 是摄像头那块（AppKit 私有的 `_notchFrame` 正好这么高，一点不多），而 `frame.maxY - visibleFrame.maxY` 是菜单栏**占掉**的高度，多出来的一点是 `visibleFrame` 在菜单栏下面给窗口内容留的缝。14 吋 M3 Pro 在 *More Space* 下实测：安全区 `38`、占用 `39`、`_notchFrame` 为 `(790, 1131, 220, 38)`。
+**面板高度取的是菜单栏占掉的那条带，带刘海屏也一样。** `NSScreen` 给得出两个数，它们差一个点：`safeAreaInsets.top` 是摄像头那块缺口，而 `frame.maxY - visibleFrame.maxY` 是菜单栏**占掉**的高度，多出来的一点是 `visibleFrame` 在菜单栏下面给窗口内容留的缝。14 吋 M3 Pro 在 *More Space* 下实测：安全区 `38`、占用 `39`。
 
-`menuBarHeight` 此前取两者中较大的那个，于是面板比它在模仿的硬件高出一个点——2x 下是两个像素的探出，开了 `Outline the panel` 之后，沿下沿那条发丝线会画到缺口结束的地方以下。现在带刘海屏一律回答缺口高度；没有刘海的屏没有硬件要对齐，仍然回答菜单栏占掉的那条带，那里「填满菜单栏」本来就是全部意义。由 `aNotchedPanelIsAsTallAsTheCutOutAndNotTheMenuBarBand` 锁定。
+`menuBarHeight` 取两者中较大的那个，于是面板在带刘海屏比硬件缺口高出一个点（2x 下两个像素）。这是刻意的：所有屏幕一个口径，收起态就是「填满它所在的那条菜单栏」，而按缺口取高度会让面板看起来比刘海矮一截。由 `aNotchedPanelIsAsTallAsTheBandTheMenuBarOccupies` 锁定。
 
 **尾翼为空时，右缘并不正好压在报告出的那条边上，而是再往外走一小步**：`菜单栏高度 / 16`（`PanelMetrics.winglessTrailingOvershoot(menuBarHeight:)`，`38` 档为 `2.375`，`22` 档为 `1.375`）。`auxiliaryTopLeftArea` / `auxiliaryTopRightArea` 把缺口描述成一个矩形，硬件不是：缺口与屏幕上沿相接的地方玻璃向外翻出去，那一段的黑比矩形更宽。右缘正好落在报告值上时，肩部那道凹弧的上半截就画在这段翻边后面，读起来像面板在刘海之前就断了，而不是从刘海里接出来。它是 `Outline the panel`（§8.4）之后才看得见的：被切掉的是那条发丝线，纯黑本来就无从对照。
 

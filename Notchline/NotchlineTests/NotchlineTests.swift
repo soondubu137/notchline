@@ -2984,16 +2984,16 @@ struct NotchlineTests {
         #expect(store.compactHeight == 22)
     }
 
-    /// A notched panel is as tall as the cut-out, not as tall as the band the
-    /// menu bar occupies -- the two differ by a point on real hardware, and the
-    /// panel is imitating the cut-out.
+    /// The panel is as tall as the band the menu bar occupies, on a notched
+    /// display too -- `safeAreaInsets.top` is the cut-out and stops a point
+    /// short of it.
     ///
     /// The numbers are a 14-inch M3 Pro at *More Space*, read from `NSScreen`:
-    /// `safeAreaInsets.top` `38`, `frame.maxY - visibleFrame.maxY` `39`, and
-    /// AppKit's own `_notchFrame` `(790, 1131, 220, 38)`. `makeDisplay` builds
-    /// the two flush with each other, so this display is written out by hand.
+    /// `safeAreaInsets.top` `38`, `frame.maxY - visibleFrame.maxY` `39`.
+    /// `makeDisplay` builds the two flush with each other, so this display is
+    /// written out by hand.
     @Test @MainActor
-    func aNotchedPanelIsAsTallAsTheCutOutAndNotTheMenuBarBand() {
+    func aNotchedPanelIsAsTallAsTheBandTheMenuBarOccupies() {
         let frame = NSRect(x: 0, y: 0, width: 1_800, height: 1_169)
         let notched = DisplayOption(
             id: "built-in",
@@ -3011,12 +3011,12 @@ struct NotchlineTests {
         )
 
         #expect(notched.geometry == .notched)
-        #expect(notched.frame.maxY - notched.visibleFrame.maxY == 39)
-        #expect(notched.menuBarHeight == 38)
-        #expect(MonitorStore(displays: [notched]).compactHeight == 38)
+        #expect(notched.safeAreaInsets.top == 38)
+        #expect(notched.menuBarHeight == 39)
+        #expect(MonitorStore(displays: [notched]).compactHeight == 39)
 
-        // Without a cut-out there is no hardware to match, and the panel goes
-        // back to filling what the menu bar occupies.
+        // A display without a cut-out answers the same way: the menu bar band
+        // is the whole measurement.
         let external = DisplayOption(
             id: "external",
             displayID: nil,
