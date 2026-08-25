@@ -31,7 +31,7 @@ Build:
 xcodebuild build -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS'
 ```
 
-Unit tests (438 cases today, a few seconds on a warm build):
+Unit tests (466 cases today, a few seconds on a warm build):
 
 ```bash
 xcodebuild test -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS' -only-testing:NotchlineTests
@@ -156,6 +156,8 @@ This is a measurement, not a preference (Release build, status pinned to `.runni
 The test is not "is this animation expensive to draw?" but **"does it tick continuously?"** Cost is not proportional to what is on screen: the real expense is re-rendering the entire overlay every frame, including the custom `PanelContour` shape and all text measurement. Removing three layers of Gaussian blur bought back only 2 points out of 11.8%. Lowering the refresh rate does not help either — redraws are driven by the panel being marked as needing display, not by the view's own tick.
 
 **The full form of the rule: overlay re-render count should be driven by whether the layout changed, not by whether the content changed.** The once-a-second elapsed readout is subject to it too. It used to publish through `@Published`, and every publish re-evaluated the whole overlay at roughly 20ms — measured at 4.7%. It now subscribes to `MonitorStore.elapsedTick`, which SwiftUI does not observe, and draws itself into a layer; the store publishes `elapsedLayoutRevision` only when the readout's **reserved width** changes. Same scenario: 4.7% → 0.0%.
+
+**A readout that goes *absent* is a layout change, and the width signature cannot see it.** `elapsedLayoutRevision` is bumped only when a readout's reserved width changes, which is right for digits and wrong for presence: a row draws `ElapsedReadout` or the untimed dot depending on whether the store answers with a reading at all, and `0:09` → nothing → `0:00` is the same width from end to end, so no re-render is ever asked for and the dot stays for the rest of the turn. The rule the store keeps instead is that a turn with a known start is never answered "not timed": the shared tick advances once a second, so a start later than the last tick means the tick has not caught up, not that the turn is untimed, and it is clamped to the turn's own start (`MonitorStore.readableNow`). Measured on a Release build 2026-08-24 — without the clamp a running row lost its timer permanently while the collapsed pill, whose own readout stayed mounted, went on counting.
 
 ### How to measure: `ps %cpu` will lie to you
 

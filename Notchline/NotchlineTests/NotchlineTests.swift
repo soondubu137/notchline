@@ -485,6 +485,54 @@ struct NotchlineTests {
     ///
     /// `onlyTheNotchedFormDrawsNothingWhileResting` already pins this *shape* —
     /// what is added here is that a connected product with a turn running gets
+    /// A turn that started since the last tick still draws a readout.
+    ///
+    /// **The tick is not the clock; it is a once-a-second sample of it.** A row
+    /// whose start is later than the last sample is a turn that began between
+    /// ticks, not an untimed one — and the difference decides which *view* the
+    /// row draws, not merely what it says. Answering "not timed" swaps
+    /// ``ElapsedReadout`` out for the untimed dot, and only a re-render puts it
+    /// back; the once-a-second re-measure is gated on the readouts' width
+    /// (`AGENTS.md` §7), and `0:09` → nothing → `0:00` never changes it. So the
+    /// row lost its timer for the rest of the turn while the collapsed pill,
+    /// whose own readout stayed mounted, went on counting. Measured on a
+    /// Release build, 2026-08-24.
+    @Test @MainActor
+    func aTurnThatStartedSinceTheLastTickStillReadsAsTimed() {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let store = MonitorStore(
+            displays: [makeDisplay(id: "d", ordinal: 1, menuBarHeight: 24, hasNotch: false)],
+            services: [],
+            clock: clock
+        )
+        // Started half a second after the tick the store is holding.
+        let justStarted = MonitoredSession(
+            agent: .codex,
+            threadID: "t", turnID: "u", projectName: "p", title: "t",
+            preview: nil, status: .running,
+            startedAt: clock.now().addingTimeInterval(0.5)
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [justStarted])
+        )
+
+        #expect(store.elapsedText(for: justStarted) == "0:00")
+        #expect(store.elapsedStart(for: justStarted) == justStarted.startedAt)
+        #expect(store.compactTimerText == "0:00")
+        #expect(store.compactTimerStart == justStarted.startedAt)
+        #expect(store.spokenElapsedText(for: justStarted) == "0 seconds")
+
+        // A finished row is still untimed: this softens a stale tick, nothing else.
+        let finished = MonitoredSession(
+            agent: .codex,
+            threadID: "t2", turnID: "u2", projectName: "p", title: "t",
+            preview: nil, status: .completed,
+            startedAt: clock.now().addingTimeInterval(-30)
+        )
+        #expect(store.elapsedText(for: finished) == nil)
+        #expect(store.elapsedStart(for: finished) == nil)
+    }
+
     /// it too, marks and timer alike, and that the body still lands exactly on
     /// the cut-out's own edges rather than merely near them.
     @Test @MainActor
@@ -5256,6 +5304,131 @@ struct NotchlineTests {
 
         try emit(4, ["hook_event_name": "Stop"])
         #expect(await repository.drainDeliveredEvents().turns.first?.status == .completed)
+    }
+
+    /// Replays the `--approve-for-me` reviewer landing on the row's own thread.
+    ///
+    /// Codex spawns it as a thread of its own whose rollout records the
+    /// **parent** as `session_id` and its own turn as `turn_id`, and its
+    /// `UserPromptSubmit` carries no `agent_id` — so nothing in the payload
+    /// says it is not this thread's user starting a second turn. Adopted as
+    /// one, it retired the real turn id and the turn's own `Stop` was then
+    /// refused as late: the row said `Running` for ever, and the reviewer's
+    /// instructions became its preview. Reproduced end to end on a Release
+    /// build, 2026-08-24.
+    @Test
+    func aPromptForAnotherTurnMidTurnNeitherRetiresNorRenamesTheRunningTurn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(paths: paths)
+        var clock = 6_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-reviewed"
+            payload["turn_id"] = payload["turn_id"] ?? "turn-real"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the user's own prompt"])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewed"
+        ])
+        try emit(["hook_event_name": "PermissionRequest", "tool_name": "Bash"])
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .approvalNeeded)
+
+        // The reviewer's own prompt, under the parent's session and its own turn.
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-reviewer",
+            "prompt": "The following is the Codex agent history whose request action you are assessing."
+        ])
+        let held = await repository.drainDeliveredEvents().turns.first
+        // The row keeps its own turn, its own start, and its own text.
+        #expect(held?.turnID == "turn-real")
+        #expect(held?.promptPreview == "the user's own prompt")
+        #expect(held?.status == .approvalNeeded)
+
+        // And the turn's own terminal still lands, which is the whole point:
+        // a retired turn id could never be heard from again.
+        try emit([
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewed"
+        ])
+        try emit(["hook_event_name": "Stop", "last_assistant_message": "Done."])
+        let ended = await repository.drainDeliveredEvents().turns.first
+        #expect(ended?.turnID == "turn-real")
+        #expect(ended?.status == .completed)
+    }
+
+    /// The held prompt is not thrown away — it is redeemed by the first event
+    /// that proves the turn really is this thread's own.
+    ///
+    /// Codex sends no terminal for an interrupted turn (measured 2026-08-24
+    /// against CLI `0.149.0-alpha.4.3`: `turn/interrupt` produced no `Stop`,
+    /// and not even the open call's `PostToolUse`), so the interrupted turn
+    /// stays open and the user's next prompt is exactly the held case. Without
+    /// the redemption below, the new turn would be timed from the interrupted
+    /// one and would show its text.
+    @Test
+    func aHeldPromptIsAdoptedByTheFirstEventThatProvesItsTurn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(paths: paths)
+        var clock = 7_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-interrupted"
+            payload["turn_id"] = payload["turn_id"] ?? "turn-first"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the interrupted prompt"])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-abandoned"
+        ])
+        let interrupted = await repository.drainDeliveredEvents().turns.first
+        let firstStart = try #require(interrupted?.startedAt)
+
+        // The user interrupts — no terminal arrives — and types again.
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-second",
+            "prompt": "the prompt after the interrupt"
+        ])
+        // Held, so the row is still showing the turn it can still account for.
+        #expect(await repository.drainDeliveredEvents().turns.first?.turnID == "turn-first")
+
+        // The new turn's first call proves it, and the held start and text come
+        // with it rather than the interrupted turn's.
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "turn_id": "turn-second",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-second"
+        ])
+        let adopted = await repository.drainDeliveredEvents().turns.first
+        #expect(adopted?.turnID == "turn-second")
+        #expect(adopted?.promptPreview == "the prompt after the interrupt")
+        #expect(adopted?.startedAt ?? firstStart > firstStart)
     }
 
     @Test @MainActor

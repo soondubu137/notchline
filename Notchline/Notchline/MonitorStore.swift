@@ -1352,7 +1352,7 @@ final class MonitorStore: ObservableObject {
         guard !hidesCompactSurface else { return nil }
         return SessionElapsedFormatter.elapsed(
             since: longestRunningSessionStart,
-            now: timerNow
+            now: Self.readableNow(timerNow, forStart: longestRunningSessionStart)
         )
     }
 
@@ -1431,7 +1431,7 @@ final class MonitorStore: ObservableObject {
     var spokenLongestElapsedText: String? {
         SessionElapsedFormatter.spokenElapsed(
             since: longestRunningSessionStart,
-            now: timerNow
+            now: Self.readableNow(timerNow, forStart: longestRunningSessionStart)
         )
     }
 
@@ -1439,7 +1439,7 @@ final class MonitorStore: ObservableObject {
         guard session.status.keepsTiming else { return nil }
         return SessionElapsedFormatter.elapsed(
             since: session.startedAt,
-            now: timerNow
+            now: Self.readableNow(timerNow, forStart: session.startedAt)
         )
     }
 
@@ -1447,8 +1447,35 @@ final class MonitorStore: ObservableObject {
         guard session.status.keepsTiming else { return nil }
         return SessionElapsedFormatter.spokenElapsed(
             since: session.startedAt,
-            now: timerNow
+            now: Self.readableNow(timerNow, forStart: session.startedAt)
         )
+    }
+
+    /// The instant a readout is drawn at, never earlier than the turn it draws.
+    ///
+    /// **A tick that has not caught up is not an untimed turn.** ``elapsedTick``
+    /// only advances once a second, so between a turn starting and the next tick
+    /// the shared instant is behind that turn's start by up to a second, and
+    /// ``SessionElapsedFormatter`` answers `nil` — its contract, and the right
+    /// one, because for it a start in the future is clock skew.
+    ///
+    /// Here it is not skew: both stamps come from ``MonitorClock``, so the only
+    /// way the start can lead is that the tick has not arrived yet, and the
+    /// honest reading at a turn's own start instant is `0:00`. Nothing is
+    /// invented — the turn is running and its start is known.
+    ///
+    /// **What the `nil` cost was.** It does not just blank the readout for a
+    /// beat; it takes the readout off screen and leaves it off. `nil` makes the
+    /// row draw the untimed dot instead of ``ElapsedReadout``, and only a
+    /// re-render puts the readout back — while the once-a-second re-measure is
+    /// gated on the readouts' *width* (`AGENTS.md` §7), and `0:09` → nil →
+    /// `0:00` is the same width throughout, so no re-render is ever asked for.
+    /// Measured on a Release build 2026-08-24: a running row lost its timer for
+    /// good, the collapsed pill went on counting because its own readout stayed
+    /// mounted, and hovering the panel was what brought the row's back.
+    nonisolated private static func readableNow(_ now: Date, forStart start: Date?) -> Date {
+        guard let start else { return now }
+        return max(now, start)
     }
 
     /// Whether rows say which product they belong to.

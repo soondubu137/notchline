@@ -312,7 +312,15 @@ final class ElapsedReadoutView: NSView {
     private func render(at now: Date) {
         lastTick = now
         guard let startedAt else { return }
-        let elapsed = SessionElapsedFormatter.elapsed(since: startedAt, now: now)
+        // Clamped for the same reason ``MonitorStore.readableNow`` clamps: the
+        // shared tick advances once a second, so a readout configured for a turn
+        // that started since the last one would draw an empty raster until the
+        // next tick. `0:00` is what this readout's own placeholder width already
+        // assumes every reading starts at.
+        let elapsed = SessionElapsedFormatter.elapsed(
+            since: startedAt,
+            now: max(now, startedAt)
+        )
         let text = elapsed.map { prefix + $0 } ?? ""
         let scale = window?.backingScaleFactor ?? 2
         guard text != renderedText || scale != renderedScale else { return }

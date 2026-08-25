@@ -1192,6 +1192,39 @@ struct HookTurnState: Sendable {
     /// behaviour: a build that stops sending the field puts the flicker back
     /// and invents nothing.
     var pausedForBackgroundWork: Bool = false
+    /// A prompt this thread was told about while its own turn was still open.
+    ///
+    /// **The one thing a nested agent can do that `agent_id` does not label.**
+    /// Codex's `--approve-for-me` reviewer is a thread of its own whose rollout
+    /// records the *parent* as its `session_id` and its own turn as `turn_id`,
+    /// and its `UserPromptSubmit` carries no `agent_id` at all -- so it arrives
+    /// looking exactly like the user starting a second turn on this thread.
+    /// Adopted as one, it retired the real turn id, and the turn's own `Stop`
+    /// was then refused as late: the row said `Running` for ever, its timer
+    /// counted from the reviewer's prompt, and the reviewer's instructions
+    /// became the row's preview. Reproduced end to end on a Release build,
+    /// 2026-08-24 (`docs/tech-design.md` §9.2).
+    ///
+    /// So a prompt whose turn is not this thread's open one is **held** rather
+    /// than adopted, and held is recoverable where retiring is not: the id is
+    /// redeemed by ``mutateExactTurn`` the moment any event arrives under it,
+    /// which is what proves the turn was this thread's after all. The reviewer
+    /// sends no such event -- measured, it emits no hook of any kind on CLI
+    /// `0.149.0-alpha.4.3` -- so its prompt simply expires with the turn.
+    var heldTurnStart: HeldTurnStart?
+
+    /// A turn start waiting for an event to prove whose turn it is.
+    nonisolated struct HeldTurnStart: Sendable, Equatable {
+        let turnID: String
+        let startedAt: Date
+        let promptPreview: String?
+
+        nonisolated init(turnID: String, startedAt: Date, promptPreview: String?) {
+            self.turnID = turnID
+            self.startedAt = startedAt
+            self.promptPreview = promptPreview
+        }
+    }
 
     nonisolated var status: SessionStatus {
         sessionStatus
@@ -2697,6 +2730,36 @@ actor HookEventRepository {
                           !current.retiredTurnIDs.contains(turnID) else {
                         return true
                     }
+                    // **A thread has one agent and one open turn.** A second
+                    // turn cannot start on it while the first is still working:
+                    // Codex Desktop queues a follow-up until the running turn's
+                    // terminal, so a prompt that really is this thread's next
+                    // turn always lands after `Stop`. One that lands *during* a
+                    // turn came from something else running under this thread's
+                    // identity -- see ``HookTurnState/heldTurnStart``, which is
+                    // where it goes instead of over the turn.
+                    //
+                    // Deliberately not conditioned on the turn sitting on an
+                    // approval, which is the only window today's reviewer can
+                    // appear in. What is being defended is the identity rule,
+                    // not the one caller known to break it, and a narrower test
+                    // would have to be widened again by the next nested agent
+                    // Codex adds. The stamp is left alone for the same reason
+                    // `reduceSubagentToolEvent` leaves it alone: this is not
+                    // this turn's activity, so it must not fend off membership
+                    // reconciliation.
+                    guard current.sessionStatus == .completed else {
+                        var holder = current
+                        holder.heldTurnStart = HookTurnState.HeldTurnStart(
+                            turnID: turnID,
+                            startedAt: receivedAt,
+                            promptPreview: carriesText
+                                ? HookSessionPreviewStore.normalized(event.prompt)
+                                : nil
+                        )
+                        turnsByThreadID[threadID] = holder
+                        return true
+                    }
                     retiredTurnIDs = current.retiredTurnIDs
                     retiredTurnIDs.insert(current.turnID)
                 }
@@ -3114,6 +3177,18 @@ actor HookEventRepository {
                 }
                 var retiredTurnIDs = current.retiredTurnIDs
                 retiredTurnIDs.insert(current.turnID)
+                // This event is what proves the turn is this thread's own, so a
+                // prompt held back for it is redeemed here rather than lost.
+                // Codex sends no terminal for an interrupted turn -- measured
+                // 2026-08-24 against CLI `0.149.0-alpha.4.3`: `turn/interrupt`
+                // produced no `Stop` and not even the open call's `PostToolUse`
+                // -- so the turn the user interrupts stays open, and their next
+                // prompt is exactly the held case. Without this it would be
+                // adopted with the interrupted turn's start and text, and the
+                // row would time the wrong turn.
+                let redeemed = current.heldTurnStart?.turnID == turnID
+                    ? current.heldTurnStart
+                    : nil
                 state = HookTurnState(
                     threadID: threadID,
                     turnID: turnID,
@@ -3121,10 +3196,10 @@ actor HookEventRepository {
                     pendingInputToolUseID: nil,
                     pendingApproval: nil,
                     openToolUse: nil,
-                    startedAt: current.startedAt,
+                    startedAt: redeemed?.startedAt ?? current.startedAt,
                     lastEventAt: date,
                     retiredTurnIDs: retiredTurnIDs,
-                    promptPreview: current.promptPreview,
+                    promptPreview: redeemed?.promptPreview ?? current.promptPreview,
                     assistantPreview: nil,
                     runningSubagentIDs: current.runningSubagentIDs,
                     lastSubagentBoundaryAt: current.lastSubagentBoundaryAt,
