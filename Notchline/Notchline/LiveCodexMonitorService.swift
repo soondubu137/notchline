@@ -181,6 +181,21 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     private var threadMetadataRetryAfter: Date?
     /// Threads a metadata read was asked for but has not yet covered.
     private var pendingMetadataThreadIDs: Set<String> = []
+    /// Threads a metadata read has been *issued* for, until it answers.
+    ///
+    /// The same window ``inFlightProgressReads`` covers, on the read beside it:
+    /// ``ThreadRecord`` is written when the answer arrives, so a refresh that
+    /// runs re-entrant with the read finds no record, calls the thread stale
+    /// and queues it again -- and that question is dispatched the moment the
+    /// read in flight ends, by which point the answer it was asking for is in
+    /// hand and good for the next ten seconds.
+    ///
+    /// Narrower than the progress read's version of the same hole, because the
+    /// membership read writes every listed thread's record in bulk: on a fast
+    /// `thread/list` that record lands part-way through the single-thread read
+    /// and the re-queue never happens. It is the slow list -- the case
+    /// pagination exists to be -- that leaves the window open.
+    private var inFlightMetadataThreadIDs: Set<String> = []
     private var supportsThreadMetadataRead = true
     /// The newest thing each unfinished turn has said, by thread.
     ///
@@ -1285,6 +1300,11 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
 
         let now = clock.now()
         let staleThreadIDs = threadIDs.filter { threadID in
+            // A read already out for this thread is going to write the record
+            // the check below is looking for, stamped when it was issued.
+            guard !inFlightMetadataThreadIDs.contains(threadID) else {
+                return false
+            }
             guard let record = threadRecords[threadID] else { return true }
             return now.timeIntervalSince(record.observedAt)
                 >= timing.threadMetadataRefreshInterval
@@ -1315,6 +1335,17 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     }
 
     private func runThreadMetadataRefresh() async -> Bool {
+        // Checked at dispatch and not only where the read was queued: the
+        // answer that this build has no `thread/read` arrives mid-run, and
+        // whatever the loop had queued behind it must not go out anyway. The
+        // request is settled rather than left pending -- there is no later
+        // moment at which this build grows the method.
+        guard supportsThreadMetadataRead else {
+            pendingMetadataThreadIDs.removeAll()
+            _ = threadMetadataGate.endRun(covered: true)
+            return false
+        }
+
         let threadIDs = pendingMetadataThreadIDs
         pendingMetadataThreadIDs.removeAll()
         guard !threadIDs.isEmpty else {
@@ -1322,9 +1353,11 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             return false
         }
 
+        inFlightMetadataThreadIDs = threadIDs
         let succeeded = await refreshThreadMetadataInBackground(
             threadIDs: threadIDs
         )
+        inFlightMetadataThreadIDs.removeAll()
         if !succeeded {
             // Put them back so the retry has something to read.
             pendingMetadataThreadIDs.formUnion(threadIDs)
@@ -1797,6 +1830,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         threadMetadataGate.reset()
         threadMetadataRetryAfter = nil
         pendingMetadataThreadIDs.removeAll()
+        inFlightMetadataThreadIDs.removeAll()
         turnProgressRefreshTask?.cancel()
         turnProgressRefreshTask = nil
         turnProgressGate.reset()

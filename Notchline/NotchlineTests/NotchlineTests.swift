@@ -6870,6 +6870,159 @@ struct NotchlineTests {
         #expect(await client.requestCount(method: "thread/items/list") == 1)
     }
 
+    /// And the same for the metadata read beside it.
+    ///
+    /// `thread/read` writes its ``ThreadRecord`` on the answer, and the
+    /// staleness check that decides whether to ask is against that record -- so
+    /// a refresh re-entrant with the read found no record, called the thread
+    /// stale, and queued it again. The queued question is dispatched the moment
+    /// the read in flight ends, by which point the answer it was asking for is
+    /// already in hand and good for the next ten seconds.
+    ///
+    /// The membership read is held open here as well, because that is the one
+    /// thing that hid this: `thread/list` writes every listed thread's record
+    /// in bulk, so on a fast list the record appears part-way through the
+    /// single-thread read and the re-queue never happens. A slow list -- the
+    /// case the paginated read exists to be -- leaves the window open.
+    @Test @MainActor
+    func aThreadsMetadataIsReadOnceWhileTheReadIsStillInFlight() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        deliverHook([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-metadata",
+            "turn_id": "turn-metadata",
+            "prompt": "Close the other one."
+        ], to: repository)
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                codexRootThread(
+                    id: "thread-metadata",
+                    name: "Closing the metadata hole"
+                )
+            ],
+            loadedListResults: [],
+            threadListDelayNanoseconds: 600_000_000
+        )
+        await client.setThreadReadDelayNanoseconds(300_000_000)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        _ = await snapshotWithSessions(from: service)
+        let issued = await holds {
+            await client.requestCount(method: "thread/read") >= 1
+        }
+        #expect(issued, "the hook's thread was never read")
+
+        // Re-entrant with the read still out, asking about a thread whose
+        // record the answer in flight is going to write.
+        for _ in 0..<10 {
+            _ = await service.fetchSnapshot()
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        // Counted after the answer lands, not during the read: a question
+        // queued mid-flight is not dispatched until the run in flight ends, so
+        // counting while it is still out would miss the duplicate entirely.
+        let answered = await holds {
+            await client.completedThreadReadRequestCount() >= 1
+        }
+        #expect(answered, "the metadata read never answered")
+        for _ in 0..<5 {
+            _ = await service.fetchSnapshot()
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(await client.requestCount(method: "thread/read") == 1)
+        #expect(
+            await service.fetchSnapshot().sessions.first?.title
+                == "Closing the metadata hole"
+        )
+    }
+
+    /// A build without `thread/read` is probed once, not once per thread.
+    ///
+    /// The answer "this build has no such method" arrives mid-run, and a
+    /// thread queued behind the probe went out anyway: the capability was
+    /// checked where reads are queued and where a run is started, but not at
+    /// the moment the run dispatches the next batch -- which is the only place
+    /// it can be checked *after* the refusal has been recorded.
+    @Test @MainActor
+    func aBuildWithoutThreadReadIsProbedOnceNotOncePerThread() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        deliverHook([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-probe",
+            "turn_id": "turn-probe"
+        ], to: repository)
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                codexRootThread(id: "thread-probe", name: "Probed"),
+                codexRootThread(id: "thread-behind", name: "Queued behind it")
+            ],
+            loadedListResults: [],
+            threadListDelayNanoseconds: 600_000_000,
+            supportsThreadRead: false
+        )
+        await client.setThreadReadDelayNanoseconds(300_000_000)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        _ = await snapshotWithSessions(from: service)
+        let probed = await holds {
+            await client.requestCount(method: "thread/read") >= 1
+        }
+        #expect(probed, "the build was never probed for thread/read")
+
+        // A second thread starts while the probe is still out, so it is queued
+        // by a refresh that has not been told yet that there is no method.
+        deliverHook([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-behind",
+            "turn_id": "turn-behind"
+        ], to: repository)
+        for _ in 0..<15 {
+            _ = await service.fetchSnapshot()
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(await client.requestCount(method: "thread/read") == 1)
+        // And the rows still get their titles, from the list that has them.
+        let titled = await holds {
+            await Set(service.fetchSnapshot().sessions.map(\.title))
+                == ["Probed", "Queued behind it"]
+        }
+        #expect(titled, "the fallback stopped supplying titles")
+    }
+
     /// The row's second line follows the turn, not the prompt that started it.
     ///
     /// No Codex hook carries assistant text before the turn ends -- checked
@@ -20980,6 +21133,12 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     private var threadReadParams: [JSONValue] = []
     private var turnItemsParams: [JSONValue] = []
     private var completedThreadListRequests = 0
+    /// `thread/read` requests that have *answered*, not just been issued.
+    ///
+    /// The duplicate a re-entrant refresh queues is dispatched when the read in
+    /// flight finishes, so a test that wants to catch it has to be able to wait
+    /// for that moment rather than guess at it.
+    private var completedThreadReadRequests = 0
     private var disconnects = 0
     private var connects = 0
 
@@ -21036,6 +21195,13 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
             ])
         case "thread/read":
             threadReadParams.append(params ?? .null)
+            // Ahead of the refusals below, not just the answer: a server takes
+            // as long to say it has no such method as it does to say anything
+            // else, and a refusal that comes back instantly closes the window
+            // this delay exists to hold open.
+            if threadReadDelayNanoseconds > 0 {
+                try await Task.sleep(nanoseconds: threadReadDelayNanoseconds)
+            }
             if let threadReadError {
                 throw threadReadError
             }
@@ -21056,9 +21222,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
                     message: "Unknown thread"
                 )
             }
-            if threadReadDelayNanoseconds > 0 {
-                try await Task.sleep(nanoseconds: threadReadDelayNanoseconds)
-            }
+            completedThreadReadRequests += 1
             var metadata = thread.objectValue ?? [:]
             if params?["includeTurns"]?.boolValue != true {
                 metadata["turns"] = .array([])
@@ -21173,6 +21337,10 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
 
     func completedThreadListRequestCount() -> Int {
         completedThreadListRequests
+    }
+
+    func completedThreadReadRequestCount() -> Int {
+        completedThreadReadRequests
     }
 
     func setThreadListDelayNanoseconds(_ delay: UInt64) {
