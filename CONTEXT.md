@@ -21,7 +21,7 @@ _Avoid_: 任务、Session、单次请求
 _Avoid_: 相关会话、所有本地会话、子智能体会话
 
 **侧边会话（Side chat）**：
-Codex Desktop 在一条会话内部开出的临时旁支，只在父会话的面板里列出，关掉应用即消失。它是 ephemeral thread：有自己的 thread id、照常触发 Turn hook，但不落盘、不被列出、`thread/read` 拒绝它、也没有 deep link；把它和父会话连起来的关系只存在于 Desktop 进程内存里。因此它**不是**可导航根会话，也无法归到父会话名下——本应用对它不成行。
+在一条会话内部开出的临时旁支，只在父会话的界面里列出，关掉应用即消失。**两个产品各有一个，形状不同，结论相同：本应用对它都不成行。** Codex 的是 ephemeral thread：有自己的 thread id、照常触发 Turn hook，但不落盘、不被列出、`thread/read` 拒绝它、也没有 deep link；把它和父会话连起来的关系只存在于 Desktop 进程内存里。因此它**不是**可导航根会话，也无法归到父会话名下（见 [ADR 0017](docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。Claude Code 的是 Claude Desktop 开出的只读 fork（`settingSources: []`、`persistSession: false`），它连本应用的观察面都碰不到：不触发任何 hook、不进 `claude agents --json`、不写 transcript。**那一条不是一条规则挡下来的，是它本来就说不出话**——不需要、也不应该为它写判定。
 _Avoid_: 子会话、临时会话、子智能体
 
 **处理轮次（Turn）**：
