@@ -131,12 +131,16 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// thread's current setting and lags a switch by however long Desktop takes
     /// to persist one.
     private let turnReviewer: any TurnReviewerReading
-    /// Whether there is a screen the user could read a thread on.
+    /// Whether there is a screen the user could read this app's output on.
     ///
-    /// Only the gate's re-check consults it: a row Desktop still reports unread
-    /// is cleared by somebody opening it in Desktop, which a locked screen
-    /// makes impossible. See
+    /// Two things consult it, both because the work behind them is only worth
+    /// buying for somebody who can look at the result. The unread gate's
+    /// re-check: a row Desktop still reports unread is cleared by somebody
+    /// opening it in Desktop, which a locked screen makes impossible -- see
     /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
+    /// And the account and quota reads, whose figures are drawn only in a
+    /// footer the user reaches by hovering the notch -- see
+    /// ``scheduleQuotaRefreshIfNeeded()``.
     nonisolated private let screenAvailability: any ScreenAvailabilityReporting
     nonisolated let stateChangeEvents: AsyncStream<Void>
     nonisolated private let snapshotInvalidations: AsyncStream<Void>.Continuation
@@ -648,6 +652,10 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// tests, and a source with no pending work reports nothing at all.
     func nextRefreshDeadline() -> Date? {
         var deadlines: [Date] = []
+        // Asked once. Two entries below consult it, and a deadline that
+        // disagreed with the guard its scheduler tests is the busy-wait this
+        // whole doc comment is about.
+        let screenIsAvailable = screenAvailability.isAvailable()
 
         // Membership reconciliation, and only while a Hook-tracked Turn gives
         // the set a consumer (CR-Fable-023).
@@ -697,21 +705,30 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
 
         // Quota and account. A nil read date means the read is already due, and
         // the next refresh schedules it without needing a wake-up of its own.
-        if let quotaReadAt {
-            deadlines.append(
-                deferred(
-                    quotaReadAt.addingTimeInterval(timing.quotaRefreshInterval),
-                    by: quotaRetryAfter
+        //
+        // Both are skipped while there is no screen, mirroring the guard in
+        // `scheduleQuotaRefreshIfNeeded()`. Left standing they would be
+        // deadlines no refresh could clear -- the store wakes, the scheduler
+        // refuses the read, the deadline is still in the past -- which is the
+        // busy-wait shape this whole comment is about, and the screen coming
+        // back is already an edge `stateChangeEvents` carries.
+        if screenIsAvailable {
+            if let quotaReadAt {
+                deadlines.append(
+                    deferred(
+                        quotaReadAt.addingTimeInterval(timing.quotaRefreshInterval),
+                        by: quotaRetryAfter
+                    )
                 )
-            )
-        }
-        if let accountReadAt {
-            deadlines.append(
-                deferred(
-                    accountReadAt.addingTimeInterval(timing.accountRefreshInterval),
-                    by: quotaRetryAfter
+            }
+            if let accountReadAt {
+                deadlines.append(
+                    deferred(
+                        accountReadAt.addingTimeInterval(timing.accountRefreshInterval),
+                        by: quotaRetryAfter
+                    )
                 )
-            )
+            }
         }
 
         // Work a backoff parked. Reported only while backing off: a pending
@@ -733,7 +750,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         // on the user and not on an interval that started somewhere.
         if let terminal = terminalUnreadMembershipGate.nextDeadline(
             now: clock.now(),
-            screenIsAvailable: screenAvailability.isAvailable()
+            screenIsAvailable: screenIsAvailable
         ) {
             deadlines.append(terminal)
         }
@@ -952,9 +969,29 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         UInt64(max(0, seconds) * 1_000_000_000)
     }
 
+    /// Starts the account and quota reads if either has gone stale, and there
+    /// is a screen the answer could be drawn on.
+    ///
+    /// **Nothing is read while there is no screen.** Both figures exist to be
+    /// drawn in the panel's footer, which a user reaches by hovering the notch,
+    /// so a display that is asleep or a screen that is locked means they cannot
+    /// be looked at -- not merely that they are unlikely to be. Left ungated,
+    /// an idle machine spent the night issuing three App Server requests a
+    /// minute for a footer nobody could open, and unlike Codex Desktop being
+    /// shut this cost was paid whenever the transport was alive at all: the
+    /// branch of `fetchSnapshot(dismissedRowIDs:)` that finds no Hook
+    /// observation schedules this too.
+    ///
+    /// The same rule ``ClaudeCodeUsageReader/startReadIfStale()`` applies to
+    /// the other product's copy of this reading, and for the same reason. The
+    /// wake is an edge ``stateChangeEvents`` already carries -- the screen
+    /// coming back is one of the streams merged into it -- so the first refresh
+    /// after an unlock takes the reading, rather than the figures waiting out
+    /// the interval at the moment the user is most likely to be looking.
     private func scheduleQuotaRefreshIfNeeded() {
         let now = clock.now()
         guard quotaRefreshTask == nil,
+              screenAvailability.isAvailable(),
               quotaRetryAfter.map({ now >= $0 }) ?? true else {
             return
         }

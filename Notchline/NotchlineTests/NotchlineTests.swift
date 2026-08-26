@@ -7691,6 +7691,88 @@ struct NotchlineTests {
     }
 
     @Test @MainActor
+    func theQuotaReadIsParkedWhileThereIsNoScreen() async throws {
+        // The figures this buys are drawn in a footer the user reaches by
+        // hovering the notch, so a locked screen means nobody can look at them.
+        // Ungated, an idle machine issued three App Server requests a minute
+        // all night -- and the branch below is the cheap one, reached with
+        // Codex Desktop shut and no Hook observation at all.
+        //
+        // Both halves are asserted, because only one of them saves anything on
+        // its own. The scheduler declining to read is what stops the requests;
+        // `nextRefreshDeadline` dropping the entry is what stops the store
+        // waking to be declined, which would otherwise be a deadline in the
+        // past that no refresh could clear -- the busy-wait shape of
+        // CR-Fable-050, one source further along.
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+
+        let clock = TestClock()
+        let timing = MonitorTiming.standard
+        let screen = StubScreenAvailability()
+        let client = CodexAppServerStub(
+            listedThreads: [],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(
+                paths: paths,
+                clock: clock,
+                timing: timing
+            ),
+            hookRegistrar: installer,
+            screenAvailability: screen,
+            clock: clock,
+            timing: timing
+        )
+
+        // With a screen, the reading happens as it always did.
+        _ = await service.fetchSnapshot()
+        #expect(await holds {
+            await client.requestCount(method: "account/rateLimits/read") == 1
+        })
+        #expect(await client.requestCount(method: "account/usage/read") == 1)
+        #expect(await client.requestCount(method: "account/read") == 1)
+
+        // Long enough that every window here is stale, so a refresh that still
+        // reads would read now.
+        screen.available = false
+        await clock.advance(by: timing.quotaRefreshInterval + 1)
+
+        _ = await service.fetchSnapshot()
+        await clock.settle()
+        #expect(await client.requestCount(method: "account/rateLimits/read") == 1)
+        #expect(await client.requestCount(method: "account/usage/read") == 1)
+        #expect(await client.requestCount(method: "account/read") == 1)
+
+        // And nothing is booked to wake for the read that was just declined. A
+        // deadline already in the past is the assertion that matters: the store
+        // wakes at it, refreshes, and finds it exactly where it was.
+        let parked = await service.nextRefreshDeadline()
+        #expect(parked.map { $0 > clock.now() } ?? true)
+
+        // The screen coming back is an edge `stateChangeEvents` already
+        // carries, and the refresh it triggers takes the reading -- so the
+        // figure the user looks at is at most one wake old, never a whole
+        // locked night.
+        screen.available = true
+        _ = await service.fetchSnapshot()
+        #expect(await holds {
+            await client.requestCount(method: "account/rateLimits/read") == 2
+        })
+        #expect(await client.requestCount(method: "account/usage/read") == 2)
+        #expect(await service.nextRefreshDeadline() != nil)
+        await service.disconnect()
+    }
+
+    @Test @MainActor
     func refreshSleepsUntilTheNextDeadlineRatherThanACadence() async throws {
         let paths = makeTemporaryHookPaths()
         defer {

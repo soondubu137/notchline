@@ -702,6 +702,10 @@ Input needed
 
 账户 fingerprint 每 30 秒校正一次，额度与今日用量最多每 60 秒刷新一次；两份用量请求并发执行，但解析与降级相互独立：今日用量失败不得清空可用圆环，额度读取失败也不得隐藏可用的今日 token 总量。账户标识变化时先同时清空，再读取新账户。不得从 `lifetimeTokens`、`peakDailyTokens`、会话行 token、剩余百分比或旧 snapshot 推算今天的值。
 
+**这三支读取都要有屏幕才走（2026-08-26）。** 它们买回来的两个数字只画在 Expanded footer 上，而 footer 要用户把指针放到刘海上才展开——显示器睡着或会话锁着时，那不是「大概没人在看」，是没有人能看。此前这道闸只有 Claude Code 侧有（见 15.1），Codex 侧整夜每分钟发三个请求，而且付这笔钱的条件比想象中宽：`fetchSnapshot` 里那条「没有任何 Hook 观测」的分支——也就是 Codex Desktop 根本没开的状态——同样会预约这次刷新，所以只要 App Server 传输还活着就一直买。
+
+闸门落在两处，缺一处都省不下来：`scheduleQuotaRefreshIfNeeded()` 拒绝读取，省的是请求；`nextRefreshDeadline()` 同时不再发布额度与账户这两个到期时间，省的是「醒来只为了被拒绝」——那会是一个刷新永远清不掉的过去时刻，正是 CR-Fable-050 那种忙等，只是换了一个来源。屏幕回来是 `stateChangeEvents` 已经合并进去的一条边沿（`ScreenAvailabilityWatcher`），所以整夜没买的那次读取在用户回来的第一次刷新就买上；代价是解锁瞬间 `cachedQuota` 可能已经是一整夜前的，直到那一个 JSON-RPC 往返落地——与 Claude Code 侧同一笔交易，理由也相同。
+
 ### 13.1 Footer 格式
 
 Expanded footer 固定 `40 pt` 高，位于会话/空状态正文之后且无额外 bottom padding；其顶部 hairline 与 header/正文分隔线使用同一视觉 token。外层跟随面板 `12 pt` 水平 inset，因此 `520 pt` 面板中的 footer 内容宽 `496 pt`。
