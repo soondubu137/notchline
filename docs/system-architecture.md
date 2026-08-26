@@ -292,6 +292,8 @@ flowchart LR
 
 **Hook 是会话的唯一来源，但不是成行的全部条件。** Hook 答的是「有没有一个轮次、它是什么状态」；「这条 Thread 是不是可导航根会话」只有产品自己答得出，而这个判定 fail closed——拿不到 Thread 就不成行，与拿到之后判定为子智能体同解。这条差别是 Codex 侧边会话（side chat）逼出来的：它是 ephemeral thread，有自己的 thread id、照常触发 Turn hook，却不落盘、不出现在 `thread/list`、`thread/read` 答 `-32600 "thread not loaded"`、也没有 deep link 打得开；判定原先只在**拿到** Thread 时才可能否决，于是它画出一行 *Project unavailable*，10 秒后被成员对账退休，结束时又回来一次，点下去报「已归档、删除或不再可用」。现在这类拒绝会被记下来：不成行，不重复问，也不再为一条产品自己都说不存在的 thread 去分页整部历史。代价是一行要等一次本地 `thread/read`——实测第一个 hook 触发时会话已经落盘可读（2026-08-25，CLI `0.149.0-alpha.4.3`），所以正常路径上是一个本地往返，且不等那条全量列表（[ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。
 
+**点击那一刻问的是同一个问题（2026-08-26）。** 打开一行之前的重新确认，也是对**那一条** Thread 的一次 `thread/read`，不是对全部未归档 Thread 的一次强制全量分页。原先是后者，于是用户的整部 Codex 历史压在一次点击的关键路径上：`thread/list` 由 App Server 扫描并解析 `~/.codex/sessions` 下的 rollout 文件来回答（把 `state_5.sqlite` 换成空库、只留 sessions 目录，它照样列全），代价随历史增长且分页——隔离 `CODEX_HOME` 上实测 CLI `0.149.0-alpha.4.3`，一次完整分页在 50 条时 51 ms、199 条 335 ms、400 条 754 ms、**799 条 2215 ms**，而一次 `thread/read` 中位 1.4 ms。点击路径其余各项可以忽略（`NSWorkspace.open` 回调 94 ms，连接是空操作）。端到端 A/B：空闲机器、同一条 thread、同一夹具（hook socket 摆一行真行，`CGEvent` 真点，量到 `didActivateApplicationNotification`），只换应用二进制——改动前中位 **220 ms**（208–317），改动后中位 **62 ms**（56–69），差值与本机那次完整分页同量级，而本机只有 47 条未归档 thread。**归档不在这道门里**：它结束的是行的监视生命周期而不是 thread 的可达性，而生命周期已经由 30 秒成员对账拥有——用户还看得见的行就是上一次对账仍然列出的行（[ADR 0018](adr/0018-the-click-asks-about-one-thread.md)）。
+
 独立 App Server 与 Desktop 不共享进程内事件流，也没有任何受支持的读取能观察 Desktop 当前运行时，因此启动不产生会话；启动后的 Hook 是会话的唯一来源。完整共享运行时仍属于 [`technical-explorations/shared-app-server/README.md`](technical-explorations/shared-app-server/README.md) 中的后续探索——只有在那类拓扑成立后才值得重新讨论启动同步，且不能建立在 `status` 或 `inProgress` 之上。在任何拓扑下都不得用启动 cutoff 之前的事件补齐当前状态。
 
 ## 3. 单会话状态收敛

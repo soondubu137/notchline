@@ -5232,6 +5232,200 @@ struct NotchlineTests {
         #expect(await client.connectCount() == 2)
     }
 
+    /// The click asks about the thread the user clicked.
+    ///
+    /// It used to re-paginate every unarchived thread to find out whether one
+    /// of them was this one, which put the user's whole Codex history on the
+    /// critical path of a click: measured 2026-08-26 against CLI
+    /// `0.149.0-alpha.4.3`, 51ms at 50 threads and 2.2s at 799, against 1.4ms
+    /// for the single read that answers the same question.
+    @Test @MainActor
+    func openingAThreadAsksForThatThreadInsteadOfPaginatingTheHistory() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let client = CodexAppServerStub(
+            listedThreads: [codexRootThread(id: "thread-1", name: "Real work")],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        #expect(try await service.isThreadNavigable("thread-1"))
+
+        #expect(await client.requestCount(method: "thread/read") == 1)
+        #expect(
+            await client.requestCount(method: "thread/list") == 0,
+            "a click paginated the user's history to identify one thread"
+        )
+        let params = await client.recordedThreadReadParams().first
+        #expect(params?["threadId"]?.stringValue == "thread-1")
+        #expect(params?["includeTurns"]?.boolValue == false)
+
+        await service.disconnect()
+    }
+
+    /// A thread the App Server will not hand over is one this app cannot open.
+    ///
+    /// Same reading as the metadata path's: the server took the request and
+    /// refused it, so that is an answer about this thread -- and not a reason
+    /// to go looking for it in a full pagination.
+    @Test @MainActor
+    func openingAThreadTheAppServerRefusesIsNotNavigable() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let client = CodexAppServerStub(listedThreads: [], loadedListResults: [])
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        #expect(try await service.isThreadNavigable("thread-side") == false)
+        #expect(await client.requestCount(method: "thread/list") == 0)
+
+        await service.disconnect()
+    }
+
+    /// Eligibility is judged on what the read hands back, not on membership.
+    ///
+    /// `thread/read` is the better-informed of the two answers as well as the
+    /// cheaper: measured 2026-08-26, it populates `threadSource` and
+    /// `parentThreadId` on a subagent thread that `thread/list` leaves null.
+    @Test @MainActor
+    func openingASubagentThreadIsNotNavigable() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let client = CodexAppServerStub(
+            listedThreads: [],
+            loadedListResults: [],
+            readableThreads: [.object([
+                "id": .string("thread-sub"),
+                "threadSource": .string("subagent"),
+                "parentThreadId": .string("thread-main"),
+                "ephemeral": .bool(false)
+            ])]
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        #expect(try await service.isThreadNavigable("thread-sub") == false)
+        #expect(await client.requestCount(method: "thread/list") == 0)
+
+        await service.disconnect()
+    }
+
+    /// A transport failure is not an answer about the thread.
+    ///
+    /// It has to reach the navigator as a throw, because that is the
+    /// difference between telling the user "could not confirm that the session
+    /// still exists; please try again shortly" and telling them their session
+    /// has been archived or deleted.
+    @Test @MainActor
+    func aThreadReadThatFailsInTransportDoesNotClaimTheSessionIsGone() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let client = CodexAppServerStub(
+            listedThreads: [codexRootThread(id: "thread-1")],
+            loadedListResults: []
+        )
+        await client.setThreadReadError(.timeout(method: "thread/read"))
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        do {
+            _ = try await service.isThreadNavigable("thread-1")
+            Issue.record("Expected a transport failure to reach the navigator")
+        } catch {
+            #expect(
+                error as? CodexAppServerError == .timeout(method: "thread/read")
+            )
+        }
+        #expect(await client.requestCount(method: "thread/list") == 0)
+
+        await service.disconnect()
+    }
+
+    /// A Codex too old for `thread/read` keeps the answer it always had.
+    ///
+    /// The method is probed once and the fallback is permanent, which is the
+    /// same degradation the metadata path takes -- so such a build pays the
+    /// pagination here exactly as it did before, and nowhere else does.
+    @Test @MainActor
+    func aCodexWithoutThreadReadAnswersTheClickFromTheList() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let client = CodexAppServerStub(
+            listedThreads: [codexRootThread(id: "thread-1")],
+            loadedListResults: [],
+            supportsThreadRead: false
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths),
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        #expect(try await service.isThreadNavigable("thread-1"))
+        #expect(await client.requestCount(method: "thread/read") == 1)
+        #expect(await client.requestCount(method: "thread/list") == 1)
+
+        // Probed once: the second click goes straight to the list.
+        #expect(try await service.isThreadNavigable("thread-1"))
+        #expect(await client.requestCount(method: "thread/read") == 1)
+        #expect(await client.requestCount(method: "thread/list") == 2)
+
+        await service.disconnect()
+    }
+
     @Test @MainActor
     func startupWithAppServerResponseButNoSnapshotYetIsConnecting() async throws {
         let paths = makeTemporaryHookPaths()
@@ -20581,6 +20775,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     private var threadListError: CodexAppServerError?
     private var threadListDelayNanoseconds: UInt64
     private var threadReadDelayNanoseconds: UInt64 = 0
+    private var threadReadError: CodexAppServerError?
     private var loadedListResults: [Result<JSONValue, CodexAppServerError>]
     private let supportsThreadRead: Bool
     /// Whether this stub answers `thread/items/list` at all.
@@ -20659,6 +20854,9 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
             ])
         case "thread/read":
             threadReadParams.append(params ?? .null)
+            if let threadReadError {
+                throw threadReadError
+            }
             guard supportsThreadRead else {
                 throw CodexAppServerError.remote(
                     code: -32601,
@@ -20752,6 +20950,15 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     /// what a transient App Server fault looks like from here.
     func setThreadListError(_ error: CodexAppServerError?) {
         threadListError = error
+    }
+
+    /// Starts or stops `thread/read` failing, whatever thread is asked for.
+    ///
+    /// Separate from the unknown-thread refusal the stub answers by itself: a
+    /// refusal is the server *answering* about one thread, and this is the
+    /// transport failing, which is not an answer about anything.
+    func setThreadReadError(_ error: CodexAppServerError?) {
+        threadReadError = error
     }
 
     func requestedMethods() -> [String] {

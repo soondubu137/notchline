@@ -29,7 +29,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 标题使用 Thread 元数据，按成本分两层获取：Hook reducer 当前跟踪的 Thread 用 `thread/read`（`includeTurns: false`，实测约 1.2 KB/线程）按 id 读取，全量分页 `thread/list` 只负责低频成员关系对账（实测 33 个线程约 45 KB，且随历史线性增长）。`thread/list` 按契约**永远返回空 `turns`**（schema：`turns` 仅在 `thread/resume`、`thread/rollback`、`thread/fork` 和 `includeTurns: true` 的 `thread/read` 上填充），因此任何 Turn 级事实都只能来自 Hook reducer。Project/`Chats` 使用 Desktop 私有全局状态中的精确 thread assignment，绝不把 `thread.section` 当成 Project。未读终态成员关系只读消费同一 Desktop 全局状态中的本地未读集合；活动会话始终显示，只有权威主文件确认终态已读后才隐藏。会话状态只包含 Running、Input needed、Approval needed、Completed；实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接收敛为 Completed，不再读取 Thread 详情区分结束原因。
 - Preview 始终显示，没有开关；缺少 Desktop 标题时回退到本轮 prompt，仍取不到才显示 `Untitled`。Codex 侧的 prompt/回答片段经 Unix socket 从 helper 交到运行中的进程内存，见第 11 节。
 - `MonitorStore` 替换生产 Mock，事件活跃时 1 秒校正、断开时 5 秒静默重试；首次收到合法 Hook 后只持久化不含会话身份与内容的布尔配置健康标记。应用重启时 reducer 从空集合开始，启动前积压的所有 Hook（包括 Stop 与 SessionEnd）一律不恢复或修改 Turn；只有本次进程启动后的 Hook 才是实时证据，也是四态状态的唯一来源。Running 直接显示状态名称，额度区域始终显示真实剩余比例；空列表与全局状态采用薄层展开 UI。
-- 会话行通过官方 `codex://threads/<thread-id>` deep link 打开同一 Codex Desktop 会话；打开前强制刷新全部未归档根 Thread，目标不存在时拒绝导航。URL 只定向交给 bundle id `com.openai.codex`，Launch Services 接受后才收起面板。
+- 会话行通过官方 `codex://threads/<thread-id>` deep link 打开同一 Codex Desktop 会话；打开前对**这一条 Thread** 重新问一次 `thread/read`，App Server 交不出来或判定不是可导航根会话时拒绝导航（不再分页整部历史，见 [ADR 0018](adr/0018-the-click-asks-about-one-thread.md)）。URL 只定向交给 bundle id `com.openai.codex`，Launch Services 接受后才收起面板。
 
 已经通过本机当前 Codex 版本验证：App Server 握手、真实额度响应、Thread/Turn schema、Desktop Project 与未读私有状态解析、Hooks 配置合并、事件 reducer 与精确导航 adapter。未读适配器的主/备份/last-known-good、私有 schema 失败、原子替换目录事件、settling window 与端到端已读移除均有单元测试。应用构建与单元测试已通过。
 
@@ -495,7 +495,7 @@ launch
 - 账户切换。
 - 收到可能影响成员集合的未读、归档、删除或 Project 事件。
 - 每 30 秒进行一次低频安全校正，用于覆盖漏失事件——**只在 Hook reducer 里还握着 Turn 时**：成员集合的消费者全在活 Hook 分支里，没有 Turn 时既不预约这次到期，也不重读（CR-Fable-023）。Hook 发现尚未列出的新 Thread 时立即调度一次后台校正，但不得等待它再发布 Hook 状态，也不得秒级扫描完整历史。后台请求合并为单个 in-flight task；失败后至少 60 秒再重试；失去 Hook 观察时，未完成的成员关系与元数据请求连同它们的退避标记一并丢弃——只有活 Hook 分支能把它们接回来，留着就是一个没人能清的唤醒理由。
-- 点击导航前进行目标级轻量校正。
+- 点击导航前进行目标级轻量校正：只对被点的那一条 Thread 读一次 `thread/read`，不触发成员集合的全量分页（[ADR 0018](adr/0018-the-click-asks-about-one-thread.md)）。
 
 ## 8. 成员集合算法
 
@@ -736,7 +736,8 @@ reset 按**剩余时长**而不是本地日历日计算——`Resets today` 在 
 
 `CodexDesktopNavigator.open(threadId:)`：
 
-1. 通过 repository 和目标级校正确认 Thread 仍存在、未归档、未删除、可导航。
+1. 向 repository 问**这一条** Thread：`thread/read`（`includeTurns: false`）交得出来、并且通过可导航根会话判定，才继续。**这就是点击前的重新确认**，与 Claude Code 那一侧同形（§14.2 第 1 步），也与 [ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md) 让这一行成立的是同一个问题——点击因此不会比成行要求更多的证据。remote error 是**回答**（这条 thread 不成，并按 ADR 0017 记下拒绝，行随之退休）；传输层失败不是回答，要抛出去，让用户看到「无法确认会话是否仍然存在」而不是「已归档或删除」。没有 `thread/read` 的旧 Codex 探测一次后永久回退到全量分页，与元数据那条路径同一处降级。
+   **归档不在这道门里**：归档结束的是行的监视生命周期，不是 thread 的可达性，而生命周期已经由 30 秒成员对账拥有（`removeThreads(notIn:)` 直接退休该 Turn）——用户还看得见的行就是上一次对账仍然列出的行。它也问不便宜：`thread/read` 交出已归档的 thread 且不带任何归档标记，而本该带这件事的 `thread/archived` 通知只发给执行归档的那个客户端，永远到不了本应用自己那个 App Server（两条都是 2026-08-26 实测）。详见 [ADR 0018](adr/0018-the-click-asks-about-one-thread.md)。
 2. 对 `threadId` 做 URL path-component 编码，构造官方 `codex://threads/<thread-id>`。
 3. 使用 `NSWorkspace` 将 URL 定向交给 bundle id `com.openai.codex`；不得退回浏览器或 Codex 首页。
 4. 当前没有公开的页面完成回执。运行时成功只表示 Launch Services 接受请求；“打开同一 Thread 且不创建/resume Turn”由版本化端到端兼容测试保证。

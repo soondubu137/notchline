@@ -770,12 +770,50 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         await client.disconnect()
     }
 
+    /// Whether the App Server still hands this thread over as a navigable root.
+    ///
+    /// **It asks about one thread, not about the whole history.** This is the
+    /// question [ADR 0017](../../docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)
+    /// already puts to the App Server before a row is drawn, asked again at the
+    /// moment the user clicks -- so the click can never demand more evidence
+    /// than the row was admitted on. It used to be answered by re-paginating
+    /// every unarchived thread, which is the transport's most expensive call
+    /// and grows with the user's history: measured 2026-08-26 against CLI
+    /// `0.149.0-alpha.4.3`, a full pagination costs 51ms at 50 threads, 335ms
+    /// at 199, 754ms at 400 and **2.2s at 799**, against 1.4ms median for one
+    /// `thread/read`. That was the whole of the 1-2s lag between clicking a
+    /// Codex row and Codex Desktop coming forward.
+    ///
+    /// **Archiving is not this gate's question.** A thread the user archived is
+    /// still a thread Codex Desktop holds and a deep link still names; what
+    /// archiving ends is the row's monitoring lifecycle, and that is already
+    /// owned by the membership sweep, which retires the Turn outright via
+    /// `removeThreads(notIn:)` within `threadListRefreshInterval`. So a row the
+    /// user can still see is a row the last sweep still listed, and re-asking
+    /// here bought a second copy of an answer the row already carries. It could
+    /// not be asked cheaply either: `thread/read` returns an archived thread
+    /// with no marker of it (measured against a real `thread/archive` in an
+    /// isolated `CODEX_HOME`), and the `thread/archived` notification that
+    /// would have carried it reaches only the client that did the archiving --
+    /// never this app's independent App Server.
+    ///
+    /// A refusal is recorded exactly as the metadata read records one, and for
+    /// the same reason: it is an *answer* about this thread, so it retires the
+    /// row rather than being asked again on every refresh.
     func isThreadNavigable(_ threadID: String) async throws -> Bool {
         guard !threadID.isEmpty else { return false }
 
         // The user clicked a row. Whatever the last refresh concluded about the
         // server, this is worth one spawn to find out for certain.
         try await connectToAppServer(bypassingCoolOff: true)
+
+        if supportsThreadMetadataRead,
+           let isNavigable = try await readNavigableRootThread(threadID) {
+            return isNavigable
+        }
+
+        // A Codex without `thread/read` has only the paginated list left to be
+        // asked, which is the shape this check had for every build.
         let listedThreads = try await readAllUnarchivedThreads(
             forceRefresh: true,
             timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
@@ -784,6 +822,71 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             thread["id"]?.stringValue == threadID
                 && CodexSnapshotParser.isEligibleRootThread(thread)
         }
+    }
+
+    /// Reads one thread and judges it; `nil` when this build cannot be asked.
+    ///
+    /// Only `-32601` answers `nil`, and it answers it once: the flag it clears
+    /// is the same one the metadata path keeps, so a build without the method
+    /// falls back to the list here and everywhere else. Every other remote
+    /// error is the App Server *answering* about this thread -- it took the
+    /// request and refused it -- which is `false`, not a reason to go and
+    /// paginate. A transport failure is not an answer at all and is rethrown,
+    /// so the user is told the target could not be confirmed rather than told
+    /// their session is gone.
+    private func readNavigableRootThread(
+        _ threadID: String
+    ) async throws -> Bool? {
+        let startedAt = clock.now()
+        let response: JSONValue
+        do {
+            response = try await client.request(
+                method: "thread/read",
+                params: .object([
+                    "threadId": .string(threadID),
+                    // Never the turn history -- see
+                    // `refreshThreadMetadataInBackground` for why.
+                    "includeTurns": .bool(false)
+                ]),
+                timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
+            )
+        } catch let error as CodexAppServerError {
+            if error.isUnsupportedMethod {
+                supportsThreadMetadataRead = false
+                return nil
+            }
+            guard case .remote = error else { throw error }
+            recordThreadRead(
+                threadID: threadID,
+                thread: nil,
+                observedAt: startedAt
+            )
+            return false
+        }
+
+        guard let thread = response["thread"] else { return false }
+        recordThreadRead(
+            threadID: threadID,
+            thread: thread,
+            observedAt: startedAt
+        )
+        return CodexSnapshotParser.isEligibleRootThread(thread)
+    }
+
+    /// Files what the App Server just said about one thread.
+    ///
+    /// The click pays for a read either way, so the row it came from gets the
+    /// fresher title, and a refusal gets filed as a refusal.
+    private func recordThreadRead(
+        threadID: String,
+        thread: JSONValue?,
+        observedAt: Date
+    ) {
+        threadRecords[threadID] = ThreadRecord(
+            thread: thread,
+            observedAt: observedAt
+        )
+        invalidatePublishedSnapshot()
     }
 
     /// Reads integration health without draining the store.
