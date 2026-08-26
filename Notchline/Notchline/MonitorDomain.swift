@@ -368,13 +368,16 @@ nonisolated enum AgentDiskFootprintReport: Sendable, Equatable {
     /// so there is no row. Codex is here permanently: its quota arrives over
     /// the app server and leaves no files anywhere.
     case leavesNothing
-    /// It does leave files, and nothing has said where they are yet.
+    /// It does leave files, a reading that will say where they are is out, and
+    /// nothing has come back from one yet.
     case measuring
     case measured(AgentDiskFootprint)
     /// It leaves files and this app cannot say where they are or what they
-    /// weigh. Distinct from ``measuring``: that one is still an answer on its
-    /// way, and a word that means "in progress" must stop saying so once the
-    /// attempt behind it has finished and failed.
+    /// weigh. Distinct from ``measuring``: that one is an answer genuinely on
+    /// its way, and a word that means "in progress" must stop saying so once
+    /// the attempt behind it has finished and failed -- or when there was never
+    /// going to be an attempt at all, which is where a machine with no Claude
+    /// Code installed sits for the life of the process.
     case unavailable
 
     /// The trailing readout. Empty only for ``leavesNothing``, which draws no

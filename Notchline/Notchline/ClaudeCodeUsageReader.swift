@@ -221,17 +221,28 @@ actor ClaudeCodeUsageReader {
     /// ``ClaudeCodeUsageTranscripts`` for why that is a decision and not an
     /// omission.
     ///
-    /// `attemptedAt` is the whole difference between *still looking* and
-    /// *looked and found nothing*, and it is the right signal for it: the
-    /// reading notes its own session id from inside ``read``, before this is
-    /// set, so a folder that a finished reading located is never still being
-    /// reported as on its way. Without the distinction a machine with no
-    /// `claude` on it would read `Calculating…` for the life of the process,
-    /// which is a progress claim about work that has already stopped.
+    /// *Still looking* is a claim about a reading, so it is read off one that
+    /// is actually out rather than off the absence of a finished one.
+    ///
+    /// `inFlight` is that reading. `attemptedAt` then keeps the word to the
+    /// first of them: once an attempt has come back with nothing the answer
+    /// stays `unavailable` through every retry, instead of flicking back to
+    /// `Calculating…` each time the escalating retry fires. The reading notes
+    /// its own session id from inside ``read``, before either is set, so a
+    /// folder a finished reading located is never still reported as on its way.
+    ///
+    /// **Both nil is neither of those states**: nothing has ever asked this for
+    /// a quota. On a machine with no Claude Code on it nothing ever will --
+    /// `ClaudeCodeMonitorService.fetchSnapshot` returns before the reading
+    /// whenever the integration is not registered, so no attempt is made, none
+    /// comes back, and `attemptedAt` stays nil for the life of the process.
+    /// Keyed on that alone the state was indistinguishable from a first reading
+    /// still out, and Settings read `Calculating…` forever -- a progress claim
+    /// about work that was never going to start.
     func transcriptFootprint() async -> AgentDiskFootprintReport {
         guard let transcripts else { return .leavesNothing }
         if let measured = await transcripts.footprint() { return .measured(measured) }
-        return attemptedAt == nil ? .measuring : .unavailable
+        return attemptedAt == nil && inFlight != nil ? .measuring : .unavailable
     }
 
     /// A failure is worth retrying sooner than a success is worth re-reading --

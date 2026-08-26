@@ -97,6 +97,11 @@ struct AppSettingsView: View {
     /// is drawn instead of the row being withheld: `Calculating…` where the
     /// figure will go, and a button that is plainly not ready rather than one
     /// that would reveal nowhere (CC-020).
+    ///
+    /// `Calculating…` only while a reading is actually out. A machine with no
+    /// Claude Code on it never starts one — the refresh stops at the setup gate
+    /// — so the row there reads `Unavailable` from the first refresh rather
+    /// than claiming progress on work that is never going to begin.
     private func claudeCodeTranscriptRow(_ report: AgentDiskFootprintReport) -> some View {
         SettingsRow(
             title: "Quota reading transcripts",

@@ -12466,21 +12466,30 @@ for line in sys.stdin:
             projectsDirectory: root,
             clock: clock
         )
+        let held = HeldReading()
         let reader = ClaudeCodeUsageReader(
             clock: clock,
             transcripts: transcripts,
             read: {
+                await held.hold()
                 await transcripts.noteReading(ours)
                 return "Current session: 20% used · "
                     + "resets Aug 16 at 7:19pm (America/Los_Angeles)"
             }
         )
 
-        // Before the first reading there is still an answer, and the row that
-        // draws it exists from here on.
-        #expect(await reader.transcriptFootprint() == .measuring)
+        // Before anything has asked for a quota there is still an answer, and
+        // the row that draws it exists from here on -- but the answer is not
+        // that a measurement is coming, because nothing has started one.
+        #expect(await reader.transcriptFootprint() == .unavailable)
 
-        _ = await reader.quota()
+        async let reading = reader.quota()
+        await held.waitUntilReading()
+        // Now one is genuinely out, which is the state the word describes.
+        #expect(await reader.transcriptFootprint() == .measuring)
+        await held.release()
+        _ = await reading
+
         guard case .measured(let footprint) = await reader.transcriptFootprint() else {
             Issue.record("the located folder was never reported")
             return
@@ -12492,26 +12501,95 @@ for line in sys.stdin:
         )
     }
 
-    /// A machine with no `claude` on it must not read `Calculating…` forever.
+    /// A `claude` that answers nothing must not read `Calculating…` forever.
     ///
     /// "In progress" is a claim about work, and the work stops being in
     /// progress the moment an attempt comes back with nothing. The reading is
     /// still retried — a later one that lands replaces this with a figure — but
     /// until then the row says what is true, which is that this app cannot say.
+    ///
+    /// And it goes on saying it *through* those retries. Each one is a reading
+    /// genuinely out, so a row keyed on that alone would flick back to
+    /// `Calculating…` every few seconds and never settle; the word is kept for
+    /// the first attempt, before there is any answer at all to stand on.
     @Test @MainActor
     func aReadingThatCameBackWithNothingStopsTheRowSayingItIsCalculating() async {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-usage-\(UUID().uuidString.prefix(8))")
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let held = HeldReading()
         let reader = ClaudeCodeUsageReader(
             clock: clock,
+            retryInterval: 5,
             transcripts: ClaudeCodeUsageTranscripts(projectsDirectory: root, clock: clock),
-            read: { nil }
+            read: {
+                await held.hold()
+                return nil
+            }
         )
 
+        async let first = reader.quota()
+        await held.waitUntilReading()
         #expect(await reader.transcriptFootprint() == .measuring)
-        _ = await reader.quota()
+        await held.release()
+        _ = await first
         #expect(await reader.transcriptFootprint() == .unavailable)
+
+        // The retry the failure booked, held open the same way. It is a reading
+        // on its way, and the row still does not say the answer is coming.
+        //
+        // Settled first: the reader clears `inFlight` from a task that runs
+        // after the one this awaited, and a `quota()` arriving before it does
+        // is handed the finished reading instead of starting the retry.
+        await clock.settle()
+        await held.rearm()
+        await clock.advance(by: 6)
+        async let retry = reader.quota()
+        await held.waitUntilReading(2)
+        #expect(await reader.transcriptFootprint() == .unavailable)
+        await held.release()
+        _ = await retry
+    }
+
+    /// A user with no Claude Code on their machine must not be told the size
+    /// is being calculated for the life of the process.
+    ///
+    /// Nothing registers the hooks here, which is where such a machine stops:
+    /// the refresh returns at the setup gate, several hundred lines before it
+    /// asks for a quota, so the reading that would locate the transcripts is
+    /// never started and no attempt is ever made to come back. Settings still
+    /// draws the row — it is published from the first refresh by design
+    /// (CC-020) — so what the row says has to be true of a measurement that is
+    /// never going to happen. It said `Calculating…`, forever, because the
+    /// state was read off "no attempt has finished" rather than off a reading
+    /// actually being out.
+    @Test @MainActor
+    func aMachineWithNoClaudeCodeIsNotToldTheSizeIsBeingCalculated() async throws {
+        let projects = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-usage-\(UUID().uuidString.prefix(8))")
+        let readings = HeldReading(open: true)
+        let harness = try ClaudeCodeHarness(
+            usage: ClaudeCodeUsageReader(
+                transcripts: ClaudeCodeUsageTranscripts(projectsDirectory: projects),
+                read: {
+                    await readings.hold()
+                    return nil
+                }
+            )
+        )
+        defer { harness.tearDown() }
+
+        // No `registerHooks()`. This is a machine where Claude Code was never
+        // installed, so nothing ever wrote the registration this app reads.
+        _ = await harness.service.fetchSnapshot()
+
+        // The premise, pinned: the refresh really does return without asking
+        // for a reading. If this ever stops being true the row below is fixed
+        // by the reading rather than by the rule under test, and the test would
+        // go on passing while the bug came back.
+        #expect(await readings.count == 0)
+        #expect(await harness.service.diskFootprint() == .unavailable)
+        #expect(await harness.service.diskFootprint().summary == "Unavailable")
     }
 
     /// Settings has a row to draw before there is a figure to put in it.
@@ -20411,11 +20489,19 @@ private final class ClaudeCodeHarness {
         return invalidations > count
     }
 
-    /// - Parameter ownedSessionRecords: The entries of the sessions directory
-    ///   this harness's service should treat as belonging to a `claude` the app
-    ///   launched itself. Named rather than launched, because launching one in
-    ///   a test would run the user's real Claude Code.
-    init(ownedSessionRecords: Set<String> = []) throws {
+    /// - Parameters:
+    ///   - ownedSessionRecords: The entries of the sessions directory this
+    ///     harness's service should treat as belonging to a `claude` the app
+    ///     launched itself. Named rather than launched, because launching one
+    ///     in a test would run the user's real Claude Code.
+    ///   - usage: The quota reader the service reads windows and transcripts
+    ///     from. The default answers nothing and runs no command; a test about
+    ///     the reader's own state -- whether a reading was ever attempted, what
+    ///     it has left on disk -- passes one it can see into.
+    init(
+        ownedSessionRecords: Set<String> = [],
+        usage: ClaudeCodeUsageReader = .silent()
+    ) throws {
         root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-svc-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -20456,7 +20542,7 @@ private final class ClaudeCodeHarness {
             // real `/usage` against this harness's throwaway root, and leave a
             // transcript folder named after it in the real `~/.claude/projects`
             // that nothing here can reach to remove.
-            usage: .silent(),
+            usage: usage,
             // The real adapter, pointed at this harness's own tree. Injected
             // for the same reason the usage reader is: the default one reads
             // the machine's actual Claude Desktop state, so a test would be
@@ -20941,6 +21027,56 @@ private actor UpdateCounter {
 }
 
 /// A product that leaves files behind, for the Settings row that reports them.
+/// A quota reading a test can hold open, and count.
+///
+/// ``AgentDiskFootprintReport/measuring`` is a claim that a reading is out, so
+/// the state it describes only exists while one is. Stood in for by a closure
+/// that returns immediately, the assertions about it would be asserting about a
+/// reading that had already finished -- which is the other state entirely.
+///
+/// - Parameter open: A gate that holds nothing, for a test that only wants the
+///   count. `false` holds every reading at ``hold()`` until ``release()``.
+private actor HeldReading {
+    private var isOpen: Bool
+    /// How many readings have started. Ends a test that expects none.
+    private(set) var count = 0
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(open: Bool = false) {
+        isOpen = open
+    }
+
+    /// Called from inside the reader's `read`: announces that a reading is out,
+    /// and leaves it there until the test lets it finish.
+    func hold() async {
+        count += 1
+        arrivalWaiters.forEach { $0.resume() }
+        arrivalWaiters.removeAll()
+        guard !isOpen else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    /// Returns once the `count`-th reading has reached ``hold()``.
+    func waitUntilReading(_ wanted: Int = 1) async {
+        while count < wanted {
+            await withCheckedContinuation { arrivalWaiters.append($0) }
+        }
+    }
+
+    /// Lets the held readings finish, and every later one straight through.
+    func release() {
+        isOpen = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
+
+    /// Closes the gate again, so the next reading is held like the first.
+    func rearm() {
+        isOpen = false
+    }
+}
+
 private actor DiskFootprintMonitoringStub: AgentMonitoring {
     nonisolated let agent = AgentKind.claudeCode
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
