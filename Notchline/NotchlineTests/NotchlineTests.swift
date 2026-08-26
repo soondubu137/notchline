@@ -25312,7 +25312,10 @@ extension NotchlineTests {
         #expect(turn.runningSubagentIDs == ["announced"])
 
         // And its stop, which arrives without a start ever having done, changes
-        // neither the count nor anyone else's slot.
+        // neither the count nor anyone else's slot -- nor the stamp that dates
+        // when the count last moved, which is the one this used to leak
+        // through. See `anInternalForkCannotRedateAFinishedTurn`.
+        let beforeTheInternalStop = turn.lastSubagentBoundaryAt
         try deliver([
             "received_at": 103.0, "hook_event_name": "SubagentStop",
             "session_id": thread, "turn_id": "sub-turn", "agent_id": "internal"
@@ -25320,6 +25323,109 @@ extension NotchlineTests {
         turn = try #require(await repository.drainDeliveredEvents().turns.first)
         #expect(turn.runningSubagentIDs == ["announced"])
         #expect(turn.subagentsAwaitingApproval == false)
+        #expect(
+            turn.lastSubagentBoundaryAt == beforeTheInternalStop,
+            "a set that did not move has no new last-changed instant"
+        )
+    }
+
+    /// A row the user has read and finished with cannot be re-dated by a fork
+    /// the product ran on its own.
+    ///
+    /// **The events are real and they arrive minutes late.** Claude Code runs
+    /// internal forks on a turn that has already ended -- the prompt
+    /// suggestion, and the session recap (`/config` -> `Session recap`) --
+    /// and each of them announces itself with no `SubagentStart` and finishes
+    /// with a `SubagentStop` carrying `agent_type: ""`, an `agent_id` nothing
+    /// ever named, and the *finished* turn's `prompt_id`. Measured 2026-08-26
+    /// against CLI `2.1.246`, an interactive pty with every event registered on
+    /// a throwaway `--settings`: the suggestion at `Stop` + 3.79 s carrying the
+    /// suggested next prompt, and the recap at `Stop` + 183.74 s carrying the
+    /// summary — that one with **no user input of any kind**, because it fires
+    /// `min(180 s, 0.8 x prompt-cache TTL)` after the turn ends while the
+    /// terminal is blurred.
+    ///
+    /// What that cost is a whole product behaviour rather than a stray field.
+    /// ``HookTurnState/terminalBoundaryAt`` takes the later of the two stamps,
+    /// and it is what ``TerminalUnreadMembershipGate`` compares to decide a
+    /// Turn has ended *again* — the one thing allowed to bring a hidden row
+    /// back. So a Completed row the user had read, and which the gate had
+    /// hidden for good (CC-024), reappeared unread three minutes later and
+    /// stayed until they went back to that terminal.
+    @Test @MainActor
+    func anInternalForkCannotRedateAFinishedTurn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        let thread = "4be6467a-4351-403d-ae9e-8b49f4420a32"
+        let prompt = "3c635b5b-8123-44cd-92af-7fc9b85d81dc"
+
+        func deliver(_ body: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: body).deliver(to: repository)
+        }
+
+        try deliver([
+            "received_at": 100.0, "hook_event_name": "UserPromptSubmit",
+            "session_id": thread, "prompt_id": prompt
+        ])
+        try deliver([
+            "received_at": 120.0, "hook_event_name": "Stop",
+            "session_id": thread, "prompt_id": prompt,
+            "last_assistant_message": "gamma", "background_tasks": []
+        ])
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .completed)
+        #expect(turn.terminalBoundaryAt == Date(timeIntervalSince1970: 120))
+
+        // The prompt-suggestion fork, 3.79 s after the turn's own terminal.
+        try deliver([
+            "received_at": 123.79, "hook_event_name": "SubagentStop",
+            "session_id": thread, "prompt_id": prompt,
+            "agent_id": "a7894b6e8cc77a9b7", "agent_type": "",
+            "last_assistant_message": "reply with the single word: delta"
+        ])
+        // And the recap, 183.74 s after it, with nothing from the user in
+        // between.
+        try deliver([
+            "received_at": 303.74, "hook_event_name": "SubagentStop",
+            "session_id": thread, "prompt_id": prompt,
+            "agent_id": "aa4fd8235513dca83", "agent_type": "",
+            "last_assistant_message": "We've been testing single-word replies."
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.runningSubagentIDs.isEmpty)
+        #expect(turn.lastSubagentBoundaryAt == nil)
+        #expect(
+            turn.terminalBoundaryAt == Date(timeIntervalSince1970: 120),
+            "the row's Turn ended once, at its own Stop"
+        )
+        // The turn's own stamp is untouched too, exactly as it is for every
+        // other agent-stamped event: this is not the turn doing anything.
+        #expect(turn.lastEventAt == Date(timeIntervalSince1970: 120))
+        #expect(turn.turnID == prompt)
+
+        // A subagent this thread really did announce still moves the window,
+        // which is the whole reason the stamp exists.
+        try deliver([
+            "received_at": 400.0, "hook_event_name": "SubagentStart",
+            "session_id": thread, "prompt_id": prompt,
+            "agent_id": "real", "agent_type": "general-purpose"
+        ])
+        try deliver([
+            "received_at": 500.0, "hook_event_name": "SubagentStop",
+            "session_id": thread, "prompt_id": prompt,
+            "agent_id": "real", "agent_type": "general-purpose"
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.runningSubagentIDs.isEmpty)
+        #expect(turn.terminalBoundaryAt == Date(timeIntervalSince1970: 500))
     }
 
     /// The manual exit survives the new state.

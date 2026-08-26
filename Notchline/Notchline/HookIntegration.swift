@@ -1170,6 +1170,13 @@ struct HookTurnState: Sendable {
     var runningSubagentIDs: Set<String> = []
     /// When that set last changed, and nothing else.
     ///
+    /// **"When the set changed" is literal, and it used not to be.** A
+    /// `SubagentStop` naming an agent this thread never counted leaves the set
+    /// alone and must leave this alone with it -- both products stamp
+    /// `agent_id` on agents that never announced themselves, and Claude Code's
+    /// arrive *minutes after* the turn they name has finished. See
+    /// ``HookEventRepository/reduceSubagentBoundary(_:agentID:threadID:at:)``.
+    ///
     /// **Read by exactly one caller**, ``TerminalUnreadMembershipGate``, and
     /// deliberately not by anything that decides turn identity. It exists
     /// because `lastEventAt` must not move for a subagent -- that stamp is the
@@ -3050,6 +3057,10 @@ actor HookEventRepository {
     /// membership reconciliation that is the reducer's only bound. It is kept
     /// separately as ``HookTurnState/lastSubagentBoundaryAt``, which one caller
     /// reads and nothing about turn identity does.
+    ///
+    /// **And that stamp moves only when the running set moves.** Both products
+    /// send these events for agents this thread never had; see below for what
+    /// stamping one of those cost.
     private func reduceSubagentBoundary(
         _ signal: HookSignal,
         agentID: String,
@@ -3057,15 +3068,22 @@ actor HookEventRepository {
         at receivedAt: Date
     ) {
         guard var turn = turnsByThreadID[threadID] else { return }
+        // Whether the set the stamp below dates actually moved. **An agent that
+        // never announced itself is not a subagent of this thread**, which is
+        // the same rule ``HookTurnState/subagentsAwaitingApprovalCount`` is
+        // capped by -- and it has to hold for the stamp too, or a thread that
+        // never had a subagent gets told when its last one stopped.
+        let didChangeTheRunningSet: Bool
         switch signal {
         case .subagentStarted:
-            turn.runningSubagentIDs.insert(agentID)
+            didChangeTheRunningSet = turn.runningSubagentIDs.insert(agentID).inserted
         case .subagentStopped:
-            turn.runningSubagentIDs.remove(agentID)
-            // The slot goes with it, and this is the rule that guarantees
-            // nothing is ever left waiting. A *refused* call closes with no
-            // event of its own on either product -- Codex measured 2026-08-15
-            // (67 seconds of silence), Claude Code measured 2026-08-23, where
+            didChangeTheRunningSet = turn.runningSubagentIDs.remove(agentID) != nil
+            // The slot goes with it whether or not this thread ever counted the
+            // agent, and this is the rule that guarantees nothing is ever left
+            // waiting. A *refused* call closes with no event of its own on
+            // either product -- Codex measured 2026-08-15 (67 seconds of
+            // silence), Claude Code measured 2026-08-23, where
             // `PermissionDenied` turns out to fire only for the auto-mode
             // classifier's own refusals and never for a human's. After a
             // refusal this was the only event that arrived at all.
@@ -3073,12 +3091,37 @@ actor HookEventRepository {
         default:
             return
         }
-        // Monotonic, like every other stamp here: a boundary that arrived out
-        // of order must not wind a settling window backwards.
-        turn.lastSubagentBoundaryAt = max(
-            turn.lastSubagentBoundaryAt ?? receivedAt,
-            receivedAt
-        )
+        // **A stop that changed nothing dates nothing, and that is the whole
+        // fix.** Claude Code runs internal forks *on a turn that has already
+        // ended* -- the prompt suggestion, and the session recap (`/config` ->
+        // `Session recap`). Each announces itself with no `SubagentStart` at
+        // all and finishes with a `SubagentStop` carrying `agent_type: ""`, an
+        // `agent_id` nothing ever named, and the **finished** turn's
+        // `prompt_id`. Measured 2026-08-26 against CLI `2.1.246` in a pty with
+        // every event registered: the suggestion at `Stop` + 3.79 s carrying
+        // the suggested next prompt, and the recap at `Stop` + 183.74 s
+        // carrying the summary -- the latter with no user input of any kind,
+        // because it fires `min(180 s, 0.8 x prompt-cache TTL)` after the turn
+        // ends while the terminal is blurred.
+        //
+        // Stamped unconditionally, each of those moved `terminalBoundaryAt`
+        // minutes past the `Stop`, and that instant is exactly what
+        // ``TerminalUnreadMembershipGate`` compares for `endedAgain`. So a
+        // Completed row the user had read, and which the gate had hidden for
+        // good, was un-hidden and re-judged against a boundary later than the
+        // gesture that read it -- it came back unread and stayed until the user
+        // went back to that terminal. Hiding is final for the Turn it was
+        // decided for (CC-024); an agent this thread never had must not be able
+        // to present the same Turn as a new one.
+        //
+        // Monotonic when it does move, like every other stamp here: a boundary
+        // that arrived out of order must not wind a settling window backwards.
+        if didChangeTheRunningSet {
+            turn.lastSubagentBoundaryAt = max(
+                turn.lastSubagentBoundaryAt ?? receivedAt,
+                receivedAt
+            )
+        }
         turnsByThreadID[threadID] = turn
     }
 
