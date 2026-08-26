@@ -6771,10 +6771,103 @@ struct NotchlineTests {
         for params in await client.recordedTurnItemsParams() {
             #expect(params["turnId"]?.stringValue == "turn-terminal")
         }
-        #expect(await client.requestCount(method: "thread/items/list") <= 1)
+        // Exactly one, not "at most one". The hedge was hiding a real duplicate
+        // -- the refusal is recorded when the answer arrives, so every refresh
+        // that ran while the read was in flight asked again, and this failed on
+        // a loaded machine and nowhere else. See
+        // `aTurnsProgressIsReadOnceWhileTheReadIsStillInFlight`.
+        #expect(await client.requestCount(method: "thread/items/list") == 1)
         for params in await client.recordedThreadReadParams() {
             #expect(params["includeTurns"]?.boolValue == false)
         }
+    }
+
+    /// One question about one moment of one turn is asked once.
+    ///
+    /// The progress read is issued from inside a refresh and answered after an
+    /// actor hop, and every `fetchSnapshot` that lands in that hop is
+    /// re-entrant with it. Until the answer came back there was nothing in the
+    /// service saying the question had been asked -- the held record is written
+    /// on the response -- so each of those refreshes saw an unread stamp and
+    /// queued the identical read again. On a quiet machine the hop is too short
+    /// for anything to fit inside it, which is why this only ever showed up as
+    /// `liveStopTransitionsDirectlyFromRunningToCompleted` failing on a loaded
+    /// one. Here the answer is held open on purpose, so the window is the test's
+    /// to choose rather than the machine's.
+    @Test @MainActor
+    func aTurnsProgressIsReadOnceWhileTheReadIsStillInFlight() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        deliverHook([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-inflight",
+            "turn_id": "turn-inflight",
+            "prompt": "Pin the flake."
+        ], to: repository)
+
+        let listedThread = JSONValue.object([
+            "id": .string("thread-inflight"),
+            "ephemeral": .bool(false),
+            "threadSource": .string("user"),
+            "updatedAt": .number(Date().timeIntervalSince1970),
+            "status": .object([
+                "type": .string("active"),
+                "activeFlags": .array([])
+            ])
+        ])
+        let client = CodexAppServerStub(
+            listedThreads: [listedThread],
+            loadedListResults: [],
+            supportsTurnItems: true,
+            turnItemsByTurnID: [
+                "turn-inflight": [
+                    agentMessageEntry(turn: "turn-inflight", text: "Reading the reducer.")
+                ]
+            ]
+        )
+        // Long enough that the refreshes below all land inside the one read,
+        // which is the whole point: they are the loaded machine.
+        await client.setTurnItemsDelayNanoseconds(300_000_000)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        _ = await snapshotWithSessions(from: service)
+        let issued = await holds {
+            await client.requestCount(method: "thread/items/list") >= 1
+        }
+        #expect(issued, "the running turn's progress was never read")
+
+        // Every one of these is re-entrant with the read still in flight, and
+        // none of them has anything new to ask about: the turn has produced no
+        // event since the read was issued.
+        for _ in 0..<10 {
+            _ = await service.fetchSnapshot()
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(await client.requestCount(method: "thread/items/list") == 1)
+
+        // And once the answer is in, the same unchanged stamp is not re-read
+        // either -- the held record covers it from here.
+        let said = await holds {
+            await service.fetchSnapshot().sessions.first?.preview
+                == "Reading the reducer."
+        }
+        #expect(said, "the row never showed what the turn was saying")
+        _ = await service.fetchSnapshot()
+        #expect(await client.requestCount(method: "thread/items/list") == 1)
     }
 
     /// The row's second line follows the turn, not the prompt that started it.
@@ -20857,6 +20950,13 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     private var threadListError: CodexAppServerError?
     private var threadListDelayNanoseconds: UInt64
     private var threadReadDelayNanoseconds: UInt64 = 0
+    /// How long `thread/items/list` takes to answer.
+    ///
+    /// The window a re-entrant `fetchSnapshot` lands in. On a quiet machine it
+    /// is one actor hop and nothing fits inside it; under load it is long
+    /// enough for a whole refresh, which is the only difference between the
+    /// duplicate progress read reproducing and not.
+    private var turnItemsDelayNanoseconds: UInt64 = 0
     private var threadReadError: CodexAppServerError?
     private var loadedListResults: [Result<JSONValue, CodexAppServerError>]
     private let supportsThreadRead: Bool
@@ -20966,6 +21066,9 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
             return .object(["thread": .object(metadata)])
         case "thread/items/list":
             turnItemsParams.append(params ?? .null)
+            if turnItemsDelayNanoseconds > 0 {
+                try await Task.sleep(nanoseconds: turnItemsDelayNanoseconds)
+            }
             let threadID = params?["threadId"]?.stringValue
             guard supportsTurnItems,
                   !(threadID.map(legacyHistoryThreadIDs.contains) ?? false) else {
@@ -21078,6 +21181,10 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
 
     func setThreadReadDelayNanoseconds(_ delay: UInt64) {
         threadReadDelayNanoseconds = delay
+    }
+
+    func setTurnItemsDelayNanoseconds(_ delay: UInt64) {
+        turnItemsDelayNanoseconds = delay
     }
 
     func disconnectCount() -> Int {

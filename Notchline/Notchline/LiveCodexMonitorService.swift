@@ -197,6 +197,22 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     private var turnProgressRetryAfter: Date?
     /// Turns a progress read was asked for but has not yet covered, by thread.
     private var pendingProgressReads: [String: TurnProgressRequest] = [:]
+    /// Turns a progress read has been *issued* for, by thread, until it answers.
+    ///
+    /// The queue above empties the moment a run picks it up, and
+    /// ``TurnProgress`` is not written until the answer comes back -- so
+    /// between those two moments nothing in this actor said the question had
+    /// been asked. The read is an `await` on another actor, every refresh in
+    /// that window is re-entrant with it, and each one saw an unread stamp and
+    /// queued the identical question again. One hop is too short for that to
+    /// happen on a quiet machine, which is the whole reason it only ever
+    /// surfaced as a test failing under load.
+    ///
+    /// Only an *identical* question is suppressed -- same turn, same
+    /// `lastEventAt`. A turn that does something while its read is in flight
+    /// has a different stamp, and that is a new question the in-flight answer
+    /// cannot contain.
+    private var inFlightProgressReads: [String: TurnProgressRequest] = [:]
     /// Threads that answered `thread/items/list` with "method not found".
     ///
     /// **Per thread rather than per server, because the refusal is.** Codex
@@ -1354,6 +1370,9 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         pendingProgressReads = pendingProgressReads.filter {
             liveThreadIDs.contains($0.key)
         }
+        inFlightProgressReads = inFlightProgressReads.filter {
+            liveThreadIDs.contains($0.key)
+        }
         threadsWithoutItemsRead.formIntersection(liveThreadIDs)
 
         for state in states {
@@ -1371,6 +1390,12 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             let held = turnProgressByThreadID[state.threadID]
             if held?.turnID == state.turnID,
                held?.readAtEventStamp == state.lastEventAt {
+                continue
+            }
+            // Nor is a question already out there waiting for its answer.
+            if let inFlight = inFlightProgressReads[state.threadID],
+               inFlight.turnID == state.turnID,
+               inFlight.eventStamp == state.lastEventAt {
                 continue
             }
             // Replaced rather than accumulated, unlike the metadata read: a
@@ -1401,14 +1426,22 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     }
 
     private func runTurnProgressRefresh() async -> Bool {
-        let requests = pendingProgressReads
+        // Filtered here and not only where it was queued: a thread that refused
+        // while its own read was in flight had already had the next question
+        // queued behind it, and "a thread that has already refused is not asked
+        // twice" is a fact about the moment the read goes out.
+        let requests = pendingProgressReads.filter {
+            !threadsWithoutItemsRead.contains($0.key)
+        }
         pendingProgressReads.removeAll()
         guard !requests.isEmpty else {
             _ = turnProgressGate.endRun(covered: true)
             return false
         }
 
+        inFlightProgressReads = requests
         let succeeded = await refreshTurnProgressInBackground(requests: requests)
+        inFlightProgressReads.removeAll()
         if !succeeded {
             // Put back only what a later request has not already superseded.
             for (threadID, request) in requests where pendingProgressReads[threadID] == nil {
@@ -1769,6 +1802,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         turnProgressGate.reset()
         turnProgressRetryAfter = nil
         pendingProgressReads.removeAll()
+        inFlightProgressReads.removeAll()
     }
 
     /// Reads every unarchived thread.
