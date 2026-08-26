@@ -4178,7 +4178,7 @@ struct NotchlineTests {
         #expect(
             CodexSnapshotParser.session(
                 from: state(.approvalNeeded),
-                thread: nil,
+                thread: codexRootThread(id: "thread-auto"),
                 projectName: "Chats",
                 approvalsReachTheUser: false
             )?.status == .running
@@ -4187,7 +4187,7 @@ struct NotchlineTests {
         #expect(
             CodexSnapshotParser.session(
                 from: state(.approvalNeeded),
-                thread: nil,
+                thread: codexRootThread(id: "thread-auto"),
                 projectName: "Chats",
                 approvalsReachTheUser: true
             )?.status == .approvalNeeded
@@ -4197,7 +4197,7 @@ struct NotchlineTests {
         #expect(
             CodexSnapshotParser.session(
                 from: state(.inputNeeded),
-                thread: nil,
+                thread: codexRootThread(id: "thread-auto"),
                 projectName: "Chats",
                 approvalsReachTheUser: false
             )?.status == .inputNeeded
@@ -4206,7 +4206,7 @@ struct NotchlineTests {
         #expect(
             CodexSnapshotParser.session(
                 from: state(.completed),
-                thread: nil,
+                thread: codexRootThread(id: "thread-auto"),
                 projectName: "Chats",
                 approvalsReachTheUser: false
             )?.status == .completed
@@ -5061,7 +5061,7 @@ struct NotchlineTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let initial = await firstService.fetchSnapshot()
+        let initial = await snapshotWithSessions(from: firstService)
         await firstService.disconnect()
 
         #expect(initial.availability == .ready)
@@ -5340,6 +5340,7 @@ struct NotchlineTests {
         let client = CodexAppServerStub(
             listedThreads: [],
             loadedListResults: [],
+            readableThreads: [codexRootThread(id: "thread-1")],
             threadListDelayNanoseconds: 2_000_000_000
         )
         let service = LiveCodexMonitorService(
@@ -5362,8 +5363,10 @@ struct NotchlineTests {
         ])
         prompt.deliver(to: repository)
 
+        // The row comes from the cheap per-thread read, so it must arrive
+        // while the paginated list is still two seconds from answering.
         let startedAt = Date()
-        let running = await service.fetchSnapshot()
+        let running = await snapshotWithSessions(from: service)
         let elapsed = Date().timeIntervalSince(startedAt)
         let threadListRequests = await client.requestCount(method: "thread/list")
         await service.disconnect()
@@ -5371,6 +5374,96 @@ struct NotchlineTests {
         #expect(running.sessions.first?.status == .running)
         #expect(elapsed < 1.5)
         #expect(threadListRequests == 1)
+    }
+
+    /// Codex side chats, and every other thread Codex will not hand over.
+    ///
+    /// A side chat is Codex Desktop's temporary aside inside one conversation:
+    /// it gets a thread id of its own and fires the ordinary Turn hooks, but it
+    /// is ephemeral -- never written to disk, absent from `thread/list`,
+    /// refused by `thread/read`, unreachable by deep link, and with nothing
+    /// outside Desktop's own memory tying it to the thread it belongs to.
+    ///
+    /// It used to draw a row: no Project, no way back, gone ten seconds later
+    /// when membership reconciliation retired the Turn, and back again when the
+    /// final hook landed. It draws nothing now, from the first hook to the
+    /// last, while a real thread in the same breath draws its row as before.
+    @Test @MainActor
+    func aThreadTheAppServerRefusesDrawsNoRowAtAnyPointInItsTurn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        // Only the ordinary thread is one the App Server will answer for. The
+        // side chat is in neither answer, which is all this app ever learns
+        // about it.
+        let client = CodexAppServerStub(
+            listedThreads: [codexRootThread(id: "thread-main", name: "Real work")],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        let timestamp = Date().timeIntervalSince1970
+        for event in [
+            [
+                "received_at": timestamp,
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "thread-main",
+                "turn_id": "turn-main"
+            ],
+            [
+                "received_at": timestamp,
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "thread-side",
+                "turn_id": "turn-side"
+            ]
+        ] {
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
+        }
+
+        // The refusal must not park the read that the real thread's row is
+        // waiting on: both threads are in the same batch.
+        let running = await snapshotWithSessions(from: service)
+        #expect(running.sessions.map(\.threadID) == ["thread-main"])
+        await waitForThreadListRequests(client, atLeast: 1, completed: true)
+        let sweepsAfterFirstPass = await client.requestCount(method: "thread/list")
+
+        // The side chat's turn ends. This is the moment the row used to come
+        // back, as a Completed row that could not be opened.
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "Stop",
+            "session_id": "thread-side",
+            "turn_id": "turn-side",
+            "last_assistant_message": "Answered in the side chat."
+        ]).deliver(to: repository)
+
+        for _ in 0 ..< 3 {
+            let snapshot = await service.fetchSnapshot()
+            #expect(snapshot.sessions.map(\.threadID) == ["thread-main"])
+        }
+
+        let sweeps = await client.requestCount(method: "thread/list")
+        await service.disconnect()
+
+        // A thread the App Server has already disowned is not worth
+        // re-paginating the user's whole history to look for.
+        #expect(
+            sweeps == sweepsAfterFirstPass,
+            "a refused thread went on asking for the membership sweep"
+        )
     }
 
     @Test
@@ -5681,7 +5774,9 @@ struct NotchlineTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let initial = await service.fetchSnapshot()
+        // The row waits for the App Server to confirm the thread, so it lands
+        // on the fetch after the read rather than on the one that scheduled it.
+        let initial = await snapshotWithSessions(from: service)
         #expect(initial.sessions.first?.status == .running)
         await waitForThreadListRequests(
             client,
@@ -5807,7 +5902,7 @@ struct NotchlineTests {
                 ),
                 desktopProcessIdentifierProvider: { 4_242 }
             )
-            let snapshot = await service.fetchSnapshot()
+            let snapshot = await snapshotWithSessions(from: service)
             await service.disconnect()
             return snapshot.sessions.first?.status
         }
@@ -5954,7 +6049,7 @@ struct NotchlineTests {
             ),
             desktopProcessIdentifierProvider: { 4_242 }
         )
-        #expect(await service.fetchSnapshot().sessions.first?.status == .running)
+        #expect(await snapshotWithSessions(from: service).sessions.first?.status == .running)
 
         // Desktop records the switch. Nothing about the running turn changed:
         // it goes on asking the person, one call at a time.
@@ -6044,7 +6139,7 @@ struct NotchlineTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let first = await service.fetchSnapshot()
+        let first = await snapshotWithSessions(from: service)
         await waitForThreadListRequests(
             client,
             atLeast: 1,
@@ -6124,7 +6219,7 @@ struct NotchlineTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        let initial = await service.fetchSnapshot()
+        let initial = await snapshotWithSessions(from: service)
         #expect(initial.sessions.first?.status == .running)
         await waitForThreadListRequests(
             client,
@@ -6871,7 +6966,11 @@ struct NotchlineTests {
         ], to: repository)
 
         let service = LiveCodexMonitorService(
-            client: CodexAppServerStub(listedThreads: [], loadedListResults: []),
+            client: CodexAppServerStub(
+                listedThreads: [],
+                loadedListResults: [],
+                readableThreads: [codexRootThread(id: "thread-intact")]
+            ),
             hookEvents: repository,
             hookRegistrar: installer,
             desktopProcessIdentifierProvider: { 4_242 }
@@ -6885,7 +6984,7 @@ struct NotchlineTests {
 
         // The snapshot path is the single consumer, and it still sees the Turn
         // as one that arrived since it last looked.
-        let snapshot = await service.fetchSnapshot()
+        let snapshot = await snapshotWithSessions(from: service)
         #expect(snapshot.sessions.first?.threadID == "thread-intact")
         #expect(snapshot.setupStatus == .active)
         await service.disconnect()
@@ -9530,7 +9629,7 @@ for line in sys.stdin:
         #expect(turn.runningSubagentIDs == ["agent-1"])
 
         var session = try #require(CodexSnapshotParser.session(
-            from: turn, thread: nil, projectName: "tikzcd-editor"
+            from: turn, thread: codexRootThread(id: parent), projectName: "tikzcd-editor"
         ))
         // Finished, and saying what is still in flight beside it.
         #expect(session.status == .completed)
@@ -9553,7 +9652,7 @@ for line in sys.stdin:
         // turn, and its turn ended with the main agent's answer.
         #expect(turn.assistantPreview == "Seven decisions to confirm.")
         session = try #require(CodexSnapshotParser.session(
-            from: turn, thread: nil, projectName: "tikzcd-editor"
+            from: turn, thread: codexRootThread(id: parent), projectName: "tikzcd-editor"
         ))
         #expect(session.status == .completed)
         #expect(!session.showsSubagentChips)
@@ -9598,7 +9697,7 @@ for line in sys.stdin:
         var turn = try #require(await repository.observedState().turns.first)
         #expect(turn.runningSubagentIDs == ["a1", "a2"])
         var session = try #require(CodexSnapshotParser.session(
-            from: turn, thread: nil, projectName: "P"
+            from: turn, thread: codexRootThread(id: "s"), projectName: "P"
         ))
         #expect(session.status == .running)
         #expect(session.runningSubagentCount == 2)
@@ -9609,7 +9708,7 @@ for line in sys.stdin:
         ])
         turn = try #require(await repository.observedState().turns.first)
         session = try #require(CodexSnapshotParser.session(
-            from: turn, thread: nil, projectName: "P"
+            from: turn, thread: codexRootThread(id: "s"), projectName: "P"
         ))
         #expect(session.showsSubagentChips)
         #expect(session.subagentsStillRunningCount == 2)
@@ -19367,6 +19466,30 @@ for line in sys.stdin:
         ])
     }
 
+    /// Fetches until the service publishes a row, or gives up.
+    ///
+    /// A Codex row waits for the App Server to confirm its thread, so the
+    /// snapshot taken in the same breath as a Hook is legitimately empty: the
+    /// read it needs was only just scheduled. In the app the read's own
+    /// invalidation is what fetches again; here that is this loop.
+    @discardableResult
+    private func snapshotWithSessions(
+        from service: LiveCodexMonitorService,
+        count expectedCount: Int = 1
+    ) async -> AgentSnapshot {
+        var snapshot = await service.fetchSnapshot()
+        let arrived = await holds {
+            snapshot = await service.fetchSnapshot()
+            return snapshot.sessions.count >= expectedCount
+        }
+        if !arrived {
+            Issue.record(
+                "Expected at least \(expectedCount) session(s); got \(snapshot.sessions.count)"
+            )
+        }
+        return snapshot
+    }
+
     private func waitForThreadListRequests(
         _ client: CodexAppServerStub,
         atLeast expectedCount: Int,
@@ -19736,6 +19859,27 @@ private actor NavigationTargetCheckerStub: CodexNavigationTargetChecking {
     }
 }
 
+/// The smallest Thread payload the App Server could hand back for a navigable
+/// root thread.
+///
+/// A row needs one: a Turn whose thread the App Server has never handed over
+/// draws nothing, so a test about anything *else* still has to say which thread
+/// the Turn is on.
+private func codexRootThread(
+    id: String,
+    name: String? = nil,
+    preview: String? = nil
+) -> JSONValue {
+    var fields: [String: JSONValue] = [
+        "id": .string(id),
+        "threadSource": .string("user"),
+        "ephemeral": .bool(false)
+    ]
+    if let name { fields["name"] = .string(name) }
+    if let preview { fields["preview"] = .string(preview) }
+    return .object(fields)
+}
+
 /// Whether a pid still names a process this test could signal.
 private func processIsAlive(_ pid: pid_t) -> Bool {
     kill(pid, 0) == 0
@@ -19757,6 +19901,14 @@ private func processDies(_ pid: pid_t, within seconds: TimeInterval) async -> Bo
 
 private actor CodexAppServerStub: CodexAppServerCommunicating {
     private let listedThreads: [JSONValue]
+    /// Threads `thread/read` answers for that `thread/list` does not carry.
+    ///
+    /// The real server has both: a thread is written to disk before its first
+    /// Hook fires and reads back immediately, while the paginated list is
+    /// filtered by source and may be a page behind -- measured 2026-08-25, an
+    /// `exec` thread reads back from an independent App Server and never
+    /// appears in `thread/list`.
+    private let readableThreads: [JSONValue]
     private let connectResult: Result<Void, CodexAppServerError>
     private var threadListError: CodexAppServerError?
     private var threadListDelayNanoseconds: UInt64
@@ -19789,6 +19941,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     init(
         listedThreads: [JSONValue],
         loadedListResults: [Result<JSONValue, CodexAppServerError>],
+        readableThreads: [JSONValue] = [],
         threadListDelayNanoseconds: UInt64 = 0,
         connectResult: Result<Void, CodexAppServerError> = .success(()),
         threadListError: CodexAppServerError? = nil,
@@ -19798,6 +19951,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
         legacyHistoryThreadIDs: Set<String> = []
     ) {
         self.listedThreads = listedThreads
+        self.readableThreads = readableThreads
         self.connectResult = connectResult
         self.threadListError = threadListError
         self.loadedListResults = loadedListResults
@@ -19846,7 +20000,7 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
             // The real server only populates `turns` when includeTurns is true,
             // so the stub mirrors that: a metadata read never carries turns.
             let requestedID = params?["threadId"]?.stringValue
-            guard let thread = listedThreads.first(
+            guard let thread = (listedThreads + readableThreads).first(
                 where: { $0["id"]?.stringValue == requestedID }
             ) else {
                 throw CodexAppServerError.remote(
@@ -21333,16 +21487,22 @@ extension NotchlineTests {
         #expect(gate.nextDeadline(now: now) == now.addingTimeInterval(1))
     }
 
-    /// A row that stops rendering must stop asking to be woken for.
+    /// A row that never renders must never ask to be woken for.
     ///
-    /// A Hook-tracked thread parses fine while its metadata is absent, and
-    /// parses to nothing once that metadata reveals it is a sub-agent or
-    /// ephemeral thread -- nothing filters those out of `threadRecords`. The
-    /// gate entry created on the first pass was then never evaluated again, but
-    /// `retain` kept it alive because it was keyed on every Hook state rather
-    /// than on the sessions actually evaluated. Frozen inside its settling
-    /// window, it reported a deadline that went stale and stayed stale, which
-    /// the store clamps to its one-second floor.
+    /// This used to be a row that *stopped* rendering: a Hook-tracked thread
+    /// parsed fine while its metadata was absent and parsed to nothing once the
+    /// metadata revealed a sub-agent, so the first pass drew a row and created
+    /// a gate entry that no later pass evaluated. `retain` kept it alive
+    /// because it was keyed on every Hook state rather than on the sessions
+    /// actually evaluated, and frozen inside its settling window it reported a
+    /// deadline that went stale and stayed stale -- which the store clamps to
+    /// its one-second floor.
+    ///
+    /// Eligibility fails closed now, so the first pass draws nothing and the
+    /// entry is never created: the defect is unreachable rather than handled.
+    /// Both halves are still worth pinning -- that a thread Codex will not
+    /// vouch for renders no row on any pass, and that the pass which decided so
+    /// leaves no deadline behind it.
     @Test @MainActor
     func aSessionThatStopsRenderingStopsSchedulingWakeUps() async throws {
         let paths = makeTemporaryHookPaths()
@@ -21379,8 +21539,8 @@ extension NotchlineTests {
             try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
         }
 
-        // The list reveals this thread is a sub-agent, so from the next pass on
-        // it renders no row at all.
+        // Every read says the same thing: this thread is a sub-agent, so no
+        // pass renders a row for it.
         let client = CodexAppServerStub(
             listedThreads: [
                 .object([
@@ -21404,10 +21564,10 @@ extension NotchlineTests {
             desktopProcessIdentifierProvider: { 4_242 }
         )
 
-        // First pass: no metadata yet, so the Completed row renders and the
-        // gate starts its settling window.
+        // First pass: no metadata yet, and a Turn whose thread the App Server
+        // has not vouched for is not a row.
         let first = await service.fetchSnapshot()
-        #expect(first.sessions.count == 1, "the row renders before metadata lands")
+        #expect(first.sessions.isEmpty, "no row before metadata lands")
         await waitForThreadListRequests(client, atLeast: 1, completed: true)
 
         // Second pass, past the settling window but well inside every other
@@ -22157,7 +22317,7 @@ extension NotchlineTests {
         defer { Task { await service.disconnect() } }
 
         // A live Turn, so the sweep runs and leaves a read stamp behind it.
-        let running = await service.fetchSnapshot()
+        let running = await snapshotWithSessions(from: service)
         #expect(running.sessions.first?.status == .running)
         await waitForThreadListRequests(client, atLeast: 1, completed: true)
         let sweeps = await client.requestCount(method: "thread/list")

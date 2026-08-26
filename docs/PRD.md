@@ -37,6 +37,7 @@ V1 不包含：
 
 - 发送新输入、批准权限、回答 Codex 提问、取消、归档或删除会话。
 - 把 CLI、IDE 或子智能体作为独立列表来源。只有已经成为可在 Desktop 中精确导航的同一根会话时，才可能被纳入。（Claude Code 的子智能体同样不单独成行：其事件携带父会话的 `session_id` 与 `prompt_id`，天然并入父轮次。）
+- **Codex 侧边会话（side chat）**，以及任何 App Server 不肯交出的 Thread。side chat 是 Codex Desktop 在一条会话内部开出的临时旁支，按 Codex 自己的说法「关掉应用就消失」、关闭即删除且不可恢复；它是 ephemeral thread，不落盘、不出现在 `thread/list`、`thread/read` 拒绝它、也没有任何 deep link 打得开它。它确实有自己的 thread id 并照常触发 Turn hook，但**把它和它所属的那条会话连起来的东西只存在于 Desktop 进程内存里**，本应用够不着。因此它既不能单独成行（无 Project、无标题、点了没有去处），也不能并入父会话那一行（父是谁问不出来）。这不是暂缓，是能力边界：Codex 哪天把归属说出来，正确答案就是并入父会话那一行，像子智能体一样，而不是新增一种行（见 [ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。
 - 历史会话搜索、最近 N 条或固定时间窗列表。
 - **启动时做任何形式的现状同步（cold-start sync）——两个产品同一条规则。** 应用启动前的所有会话状态——正在运行、已完成未读、正在等待审批——一律无视，直到它们产生下一个 lifecycle 事件。两侧的理由不同：
   - **Codex 侧是能力边界而非取舍。** 针对 Codex CLI `0.148.0-alpha.9` 在真实运行中的 Turn 上实测，独立 App Server 的 `thread/loaded/list` 为空、所有 Thread 恒为 `notLoaded`、从不出现 `inProgress` Turn，正在运行的 Turn 在持久化数据中甚至被记为 `interrupted`。没有任何受支持的读取能回答“Codex Desktop 此刻在做什么”，因此任何启动列表都只能是猜测。
@@ -54,9 +55,11 @@ V1 不包含：
 ### 4.1 会话与处理轮次
 
 - 一行永远代表一个可导航根会话（Thread）。
+- **成行的前提是产品先交出这条 Thread。** Hook 给出轮次身份与状态，但「这是不是一个可导航根会话」只有产品自己答得出；没答之前不成行，答了「没有这条 thread」也不成行。这一条 fail closed，与「没问到」同解：一行是一次承诺，点下去要有去处，而拿不到 Thread 就没有任何证据支持这个承诺。代价是一行要等一次本地读取——不是等那条昂贵的全量列表；实测 Codex 在第一个 hook 触发时会话已经落盘可读，所以这次等待是一个本地往返（见 [ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。
 - 一个处理轮次（Turn）从用户提交输入时开始，在 Codex 报告任意执行结束信号时统一进入 Completed。
 - 同一 Thread 的多个 Turn 不产生多行；新 Turn 替换该行的驱动轮次。
 - 子智能体不显示为独立行。
+- Codex 侧边会话不显示为行，从第一个 hook 到最后一个都不显示（第 3 节）。
 
 ### 4.2 监视生命周期
 

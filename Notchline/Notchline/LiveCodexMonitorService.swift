@@ -69,9 +69,19 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     ///
     /// `observedAt` is the request start, not its completion, so a Hook that
     /// arrives while the read is in flight still wins the freshness comparison.
+    ///
+    /// `thread` is nil when the App Server *answered* that it has no such
+    /// thread. That is a different fact from having no record at all -- one is
+    /// "not asked yet", the other is "asked, and the answer was no" -- and only
+    /// the second one settles anything: it is what stops this service asking
+    /// again in a loop, and what keeps a thread Codex will never list from
+    /// re-paginating the user's whole history on every refresh.
     private struct ThreadRecord: Sendable {
-        let thread: JSONValue
+        let thread: JSONValue?
         let observedAt: Date
+
+        /// Whether the App Server answered with a thread this app can address.
+        var isAddressable: Bool { thread != nil }
     }
 
     /// What one turn had most recently said when it was last read.
@@ -398,8 +408,16 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 let unreadSnapshot = await unreadState.snapshot()
                 let hookThreadIDs = Set(hookState.turns.map(\.threadID))
                 hookTrackedThreadIDs = hookThreadIDs
-                let containsUnlistedHookThread = hookThreadIDs.contains {
-                    !listedThreadIDs.contains($0)
+                // A thread the last sweep did not carry is a reason to sweep
+                // again -- unless the App Server has already answered that it
+                // has no such thread. Re-paginating the user's whole history to
+                // look for a thread its owner says does not exist buys nothing,
+                // and a Codex side chat would otherwise ask for that sweep on
+                // every refresh for as long as it ran.
+                let containsUnlistedHookThread = hookThreadIDs.contains { threadID in
+                    guard !listedThreadIDs.contains(threadID) else { return false }
+                    guard let record = threadRecords[threadID] else { return true }
+                    return record.isAddressable
                 }
 
                 // Hook state is the low-latency source; App Server reads only
@@ -956,13 +974,16 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             // now.
             let liveProgress = turnProgressByThreadID[state.threadID]
                 .flatMap { $0.turnID == state.turnID ? $0.text : nil }
-            // Thread records and the progress read both supply presentation
-            // only. Status is the reducer's alone: an independent App Server
-            // reports every thread as `notLoaded` even while a turn is running,
-            // so it has no runtime evidence to correct with.
+            // Status is the reducer's alone: an independent App Server reports
+            // every thread as `notLoaded` even while a turn is running, so it
+            // has no runtime evidence to correct with. The thread record is
+            // what says the row may exist at all -- both "not asked yet" and
+            // "asked, and Codex has no such thread" arrive here as no payload,
+            // and neither is grounds for a row (see
+            // ``CodexSnapshotParser/session(from:thread:projectName:approvalsReachTheUser:liveProgress:)``).
             guard let session = CodexSnapshotParser.session(
                 from: state,
-                thread: threadRecords[state.threadID]?.thread,
+                thread: threadRecords[state.threadID].flatMap(\.thread),
                 projectName: projectMetadata.resolution(
                     for: state.threadID
                 ).displayName,
@@ -1165,6 +1186,11 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             guard state.status != .completed else { continue }
             // A thread that has already refused is not asked twice.
             guard !threadsWithoutItemsRead.contains(state.threadID) else { continue }
+            // Neither is one the App Server has said it does not have. This
+            // read fetches the third line of a row that is not being drawn.
+            if let record = threadRecords[state.threadID], !record.isAddressable {
+                continue
+            }
             let held = turnProgressByThreadID[state.threadID]
             if held?.turnID == state.turnID,
                held?.readAtEventStamp == state.lastEventAt {
@@ -1345,8 +1371,30 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                     await client.disconnect()
                     return false
                 }
-                // One unreadable thread is metadata loss, not state loss:
-                // membership and Turn status both come from elsewhere.
+                // Every other remote error is the App Server *answering* about
+                // this thread: it took the request and rejected it. Recording
+                // the refusal is what makes it worth something -- an ephemeral
+                // thread refuses forever, and without a record this read is
+                // reissued on every refresh and the membership sweep is
+                // requested alongside it. It is deliberately not read for its
+                // wording or its code: whatever the reason, a thread the App
+                // Server will not hand over is one this app cannot address.
+                //
+                // The distinction that matters is against the errors above and
+                // below -- a reset transport and a timeout answered nothing, so
+                // they leave no record and the next refresh asks again.
+                if case .remote = error {
+                    threadRecords[threadID] = ThreadRecord(
+                        thread: nil,
+                        observedAt: startedAt
+                    )
+                    // And it counts as a read, so a batch of nothing but
+                    // refusals does not park every later metadata read behind
+                    // a request-failure cool-off. A row now waits on this read,
+                    // so a side chat must not be able to delay a real thread's
+                    // row by a minute.
+                    didReadAnyThread = true
+                }
                 continue
             } catch {
                 continue
@@ -1560,7 +1608,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
            let threadListReadAt,
            clock.now().timeIntervalSince(threadListReadAt)
                < timing.threadListRefreshInterval {
-            return listedThreadIDs.compactMap { threadRecords[$0]?.thread }
+            return listedThreadIDs.compactMap { threadRecords[$0].flatMap(\.thread) }
         }
 
         var threads: [JSONValue] = []
@@ -1600,7 +1648,17 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 observedAt: snapshotStartedAt
             )
         }
-        threadRecords = threadRecords.filter { listedIDs.contains($0.key) }
+        threadRecords = threadRecords.filter { threadID, record in
+            if listedIDs.contains(threadID) { return true }
+            // A refusal survives the sweep that could never have carried it.
+            // Dropping it here would restore exactly the loop it exists to
+            // stop: the thread goes back to "not asked yet", the next refresh
+            // asks again and requests another full pagination alongside. It is
+            // kept only while a Turn still names the thread, so the set cannot
+            // outgrow what the reducer holds.
+            return !record.isAddressable
+                && hookTrackedThreadIDs.contains(threadID)
+        }
         listedThreadIDs = listedIDs
         threadListReadAt = snapshotStartedAt
         // The sweep answers the transport's question too, so a Desktop that
@@ -1736,9 +1794,23 @@ enum CodexSnapshotParser {
 
     /// Builds a display row for a Turn the Hook reducer already owns.
     ///
-    /// `thread` contributes presentation only — eligibility, title, preview.
-    /// Status and timing come from the reducer, because no field of a Thread
-    /// payload carries Turn-level runtime truth for this topology.
+    /// `thread` decides eligibility and supplies title and preview; status and
+    /// timing come from the reducer, because no field of a Thread payload
+    /// carries Turn-level runtime truth for this topology.
+    ///
+    /// **A Turn with no Thread payload gets no row.** Eligibility fails closed
+    /// here rather than open: "the App Server has not handed us this thread" is
+    /// not evidence that it is a navigable root thread, and a row is a promise
+    /// that clicking it goes somewhere. Codex Desktop runs threads it never
+    /// materialises -- the one the user meets is a side chat, and Desktop
+    /// starts others of its own -- and such a thread is absent from
+    /// `thread/list`, refused by `thread/read`, and unreachable by deep link.
+    /// Failing open drew a row for the ones that fire Turn hooks: no Project,
+    /// no way back, and gone again a reconciliation grace later. Nothing is
+    /// lost on a real thread, which is already written to disk before its first
+    /// Hook fires (measured 2026-08-25, CLI `0.149.0-alpha.4.3`: at
+    /// `UserPromptSubmit` the rollout exists and an independent App Server
+    /// reads the thread), so the wait this adds is one local `thread/read`.
     ///
     /// `approvalsReachTheUser` is the one exception, and it subtracts rather
     /// than adds: the reducer proves a permission pipeline opened over a call
@@ -1760,12 +1832,12 @@ enum CodexSnapshotParser {
         approvalsReachTheUser: Bool = true,
         liveProgress: String? = nil
     ) -> MonitoredSession? {
-        if let thread, !isEligibleRootThread(thread) {
+        guard let thread, isEligibleRootThread(thread) else {
             return nil
         }
 
-        let threadPreview = normalizedPreview(thread?["preview"]?.stringValue)
-        let title = normalizedTitle(thread?["name"]?.stringValue)
+        let threadPreview = normalizedPreview(thread["preview"]?.stringValue)
+        let title = normalizedTitle(thread["name"]?.stringValue)
             ?? threadPreview
             ?? normalizedPreview(state.promptPreview)
             ?? "Untitled"

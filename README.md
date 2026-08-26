@@ -46,6 +46,7 @@ Integration is enabled separately for each product in Settings. Notchline preser
 - Requires macOS 26.5 or later.
 - There is no cold-start sync. Turns already active, waiting, or completed before Notchline starts appear only after a new lifecycle event.
 - Codex opens the exact thread. Claude Code selects a terminal tab when its host exposes the controlling terminal; otherwise it activates only the host application.
+- Codex side chats are not monitored. A side chat is a temporary aside inside its parent conversation, and Codex keeps it entirely within the running Desktop window: nothing outside identifies it, ties it to the conversation it belongs to, or opens it. Notchline draws no row for one, and more generally draws no row for any Turn whose thread Codex will not hand over.
 - Some handling of Projects, read state, usage, presence, approval routing, and subagents depends on undocumented local data or observed host behaviour. Private data is read only, failures are handled conservatively, and host updates may require changes. See [the integration registry](docs/non-public-codex-integration-features.md).
 - A Claude Code Turn with neither a Desktop record nor a controlling terminal has no reliable read signal; its completed row remains until the next submission or manual dismissal.
 - Scope is one account on one Mac, with no history, search, or sync.

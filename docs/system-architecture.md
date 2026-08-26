@@ -178,10 +178,11 @@ sequenceDiagram
                 service->>appServer: schedule background thread/read includeTurns false
                 appServer-->>service: per-thread metadata record
             end
-            opt Hook 出现未列出 thread 或 30 秒成员关系到期
+            opt Hook 出现未列出且未被拒绝的 thread 或 30 秒成员关系到期
                 service->>appServer: schedule background paginated thread/list
                 appServer-->>service: membership replacement on full success
             end
+            note over service: 没有 Thread 记录的 Turn 不成行；remote error 记为「无此 thread」
             service->>reducer: merge Hook evidence fresh App Server data and metadata
             service->>hooks: reconcile exact four-state session status
             reducer-->>service: sorted active or unread-terminal sessions
@@ -282,6 +283,8 @@ flowchart LR
 **这句话只管状态，不管内容——2026-08-25 补测的边界。** 同一个独立 App Server 上，`thread/items/list` **读得到另一个进程正在跑的那一轮已经产出的 item**，包括还没结束的轮次：实测 CLI `0.149.0-alpha.4.3`，一个由独立 `codex exec` 驱动的轮次，每 1.5 秒问一次，commentary 的 `agentMessage` 在它打出来之后的第一次轮询里就出现，往后每一句都跟得上。这不与上一段矛盾——它答的是「这一轮说过什么」，不是「这一轮是不是还在跑」；同一次读取里的轮次 `status` 仍然是 `interrupted`，`thread/turns/list` 的 summary 在轮次结束前也只有 `userMessage`。所以它只用来填行上那一行正文，成员关系与状态仍然只能来自 Hook（`tech-design.md` 第 11 节）。
 
 **Claude Code 侧同一条规则，理由不同。** 那一侧读得出来：`claude agents --json` 给出存在哪些会话，transcript 尾部给出其中哪些仍在轮次中，产品也一度据此重建启动前的行（`ClaudeCodeTranscriptReader.currentTurn`，2026-08-19 移除）。移除的理由不是成本，而是这份答案在最要紧的地方是错的：**等待用户期间 transcript 一个字都不写**，因此重建出的轮次只可能是 *Running*，启动瞬间正停在权限请求上的会话被画成正在干活。文件分不开「在等」与「在做」，猜哪一边都是伪造状态（§7 第 5、6 条），也就不存在一个更窄的版本可留。代价是那些会话要等下一个 lifecycle 事件才出现，与 Codex 侧相同；换回来的是启动边界在两个产品上是同一句话，而不是一侧的例外。
+
+**Hook 是会话的唯一来源，但不是成行的全部条件。** Hook 答的是「有没有一个轮次、它是什么状态」；「这条 Thread 是不是可导航根会话」只有产品自己答得出，而这个判定 fail closed——拿不到 Thread 就不成行，与拿到之后判定为子智能体同解。这条差别是 Codex 侧边会话（side chat）逼出来的：它是 ephemeral thread，有自己的 thread id、照常触发 Turn hook，却不落盘、不出现在 `thread/list`、`thread/read` 答 `-32600 "thread not loaded"`、也没有 deep link 打得开；判定原先只在**拿到** Thread 时才可能否决，于是它画出一行 *Project unavailable*，10 秒后被成员对账退休，结束时又回来一次，点下去报「已归档、删除或不再可用」。现在这类拒绝会被记下来：不成行，不重复问，也不再为一条产品自己都说不存在的 thread 去分页整部历史。代价是一行要等一次本地 `thread/read`——实测第一个 hook 触发时会话已经落盘可读（2026-08-25，CLI `0.149.0-alpha.4.3`），所以正常路径上是一个本地往返，且不等那条全量列表（[ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。
 
 独立 App Server 与 Desktop 不共享进程内事件流，也没有任何受支持的读取能观察 Desktop 当前运行时，因此启动不产生会话；启动后的 Hook 是会话的唯一来源。完整共享运行时仍属于 [`technical-explorations/shared-app-server/README.md`](technical-explorations/shared-app-server/README.md) 中的后续探索——只有在那类拓扑成立后才值得重新讨论启动同步，且不能建立在 `status` 或 `inProgress` 之上。在任何拓扑下都不得用启动 cutoff 之前的事件补齐当前状态。
 

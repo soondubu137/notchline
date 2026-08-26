@@ -17,8 +17,12 @@ _Avoid_: 服务、客户端、Monitor
 _Avoid_: 任务、Session、单次请求
 
 **可导航根会话**：
-不隶属于其他会话，并且能在 Codex Desktop 中以相同身份直接打开的会话。
+不隶属于其他会话，并且能在 Codex Desktop 中以相同身份直接打开的会话。**这是一个要产品自己回答的问题，而且只有肯定回答才算数**：产品交出这条 Thread 并且它通过判定时才是；没问到、或者产品答「没有这条 thread」，都不是（见 [ADR 0017](docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。
 _Avoid_: 相关会话、所有本地会话、子智能体会话
+
+**侧边会话（Side chat）**：
+Codex Desktop 在一条会话内部开出的临时旁支，只在父会话的面板里列出，关掉应用即消失。它是 ephemeral thread：有自己的 thread id、照常触发 Turn hook，但不落盘、不被列出、`thread/read` 拒绝它、也没有 deep link；把它和父会话连起来的关系只存在于 Desktop 进程内存里。因此它**不是**可导航根会话，也无法归到父会话名下——本应用对它不成行。
+_Avoid_: 子会话、临时会话、子智能体
 
 **处理轮次（Turn）**：
 一个会话中由一次用户提交发起、直到成功、失败或取消终态的处理周期。
