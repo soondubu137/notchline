@@ -561,10 +561,28 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     }
 
     private let read: @Sendable () async -> Data?
+    /// When a process started, or nil when there is no such process.
+    ///
+    /// The whole of the ghost check — see ``everyListedSessionIsStillAlive()``.
+    /// Injected so a test can kill a session without killing a process.
+    private let processStartedAt: @Sendable (Int32) -> Date?
+    /// Whether there is a screen the user could read the notch on.
+    ///
+    /// Gates the *clock-driven* re-read and nothing else. See
+    /// ``isDueForReading``.
+    private let screenIsAvailable: @Sendable () -> Bool
     private let clock: any MonitorClock
     private let freshness: TimeInterval
     private let edgeFloor: TimeInterval
     private let trustCeiling: TimeInterval
+    /// The start instant of each listed session's process, read once when the
+    /// list was read.
+    ///
+    /// Empty for any pid the kernel would not answer for at anchoring time,
+    /// which is what makes ``everyListedSessionIsStillAlive()`` refuse rather
+    /// than guess. Rebuilt with every answered read, so a pid that leaves the
+    /// list leaves this too.
+    private var livenessAnchors: [Int32: Date] = [:]
     /// Resolved once, because it is compared against every entry of every read.
     private let ignoredWorkingDirectoryPath: String?
     private var cached: [ClaudeCodeSession] = []
@@ -668,12 +686,19 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         edgeFloor: TimeInterval = 2,
         trustCeiling: TimeInterval = 90,
         ignoringWorkingDirectory: URL? = nil,
+        screenIsAvailable: @escaping @Sendable () -> Bool = { true },
+        processStartedAt: (@Sendable (Int32) -> Date?)? = nil,
         read: (@Sendable () async -> Data?)? = nil
     ) {
         self.clock = clock
         self.freshness = freshness
         self.edgeFloor = edgeFloor
         self.trustCeiling = trustCeiling
+        self.screenIsAvailable = screenIsAvailable
+        self.processStartedAt = processStartedAt
+            ?? ControllingTerminalGestureReader.systemProcessStartedAt(
+                forProcessIdentifier:
+            )
         // Symlinks resolved on both sides: the command reports a working
         // directory the kernel already resolved, and a home reached through a
         // link would otherwise never compare equal to the one this app built
@@ -763,13 +788,27 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// exists. So an answered-empty list is held until something says
     /// otherwise, and the clock keeps pacing every other case:
     ///
-    /// - **listed sessions** are re-read on ``freshness``, because a row can
-    ///   have to be *retired* and one route there raises no edge at all -- a
-    ///   `SIGKILL`ed session leaves its record behind, and only the command's
-    ///   own `pid` + `procStart` check can see that it is a ghost;
+    /// - **listed sessions** are re-read on ``freshness``, and then only when
+    ///   the cheap version of the question says the answer could have changed.
+    ///   The one route to retiring a row that raises no edge is a `SIGKILL`ed
+    ///   session, which leaves its record behind; the command sees that through
+    ///   its own `pid` + `procStart` check, and so can this app, for one
+    ///   `sysctl` a session instead of a process tree -- see
+    ///   ``everyListedSessionIsStillAlive()``. So the clock still says *when*
+    ///   the question may be asked and the kernel says whether it is worth
+    ///   paying `claude` to answer it;
     /// - **a failed or unreadable attempt** is retried on ``freshness``, which
-    ///   is the cadence ``trustCeiling`` counts its three failures in;
+    ///   is the cadence ``trustCeiling`` counts its three failures in. The
+    ///   liveness check does not gate this one: there is no list to check, and
+    ///   the point of the retry is the failure rather than the contents;
     /// - **an edge** is answered no sooner than ``edgeFloor``, empty or not.
+    ///
+    /// **Only the clock's branch is gated on there being a screen.** An edge is
+    /// a report that the list is wrong and is answered whether or not anybody
+    /// is looking; the cadence is a guess about staleness, and a guess bought
+    /// while the display is asleep is bought for nobody. The display waking is
+    /// itself one of the edges the service merges, so the reading arrives with
+    /// the user rather than after them.
     func liveSessions() async -> [ClaudeCodeSession] {
         guard isDueForReading else { return cached }
         return await refresh()
@@ -783,7 +822,70 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         // Nothing has reported this wrong, and there is nothing in it that
         // could go wrong quietly. Holding it is the whole of the fix.
         if lastAttemptAnswered, cached.isEmpty { return false }
-        return waited >= freshness
+        guard waited >= freshness else { return false }
+        // Both of the remaining gates are on the *clock-driven* re-read alone,
+        // which is the branch this line ends. An edge left above them
+        // deliberately: an edge is somebody reporting that the list has stopped
+        // being true, and neither a dark screen nor a live pid is an argument
+        // against a report.
+        //
+        // Nobody can read the notch, so nothing on it has to be right yet. The
+        // list is held instead, exactly as a known-empty one is, and the
+        // display waking is one of the edges
+        // ``ClaudeCodeMonitorService/stateChangeEvents`` already carries -- so
+        // the reading a locked night would have bought thirty seconds at a time
+        // is bought once, when somebody is there to see it.
+        guard screenIsAvailable() else { return false }
+        // An attempt that did not answer is retried on the failure, not on the
+        // contents: there is no list the check below could speak for, and the
+        // cadence this restores is the one ``trustCeiling`` counts its three
+        // consecutive failures in.
+        guard lastAttemptAnswered else { return true }
+        return !everyListedSessionIsStillAlive()
+    }
+
+    /// Whether every session in the held list is still the process it was.
+    ///
+    /// **This is the whole reason listed sessions were re-read on a clock.**
+    /// Every other way the list can go wrong reports an edge: a session
+    /// starting or ending writes `~/.claude/sessions/<pid>.json`, and a hook
+    /// event naming a session the list does not have is proof in itself. The
+    /// exception is a session that was `SIGKILL`ed, which leaves its record
+    /// behind and raises nothing at all -- so the list goes on naming a ghost,
+    /// and only a `pid` + start-time check can tell.
+    ///
+    /// The command does that check too, and that is what the cadence was
+    /// buying: one `claude agents --json` every ``freshness`` for the life of
+    /// every listed session. Measured in Release on 2026-08-25 that is 0.29 s
+    /// of CPU and 187 MB of peak resident memory per run, and it starts the
+    /// user's MCP servers on the way, so it is a process tree rather than a
+    /// process. This asks the same question of the kernel directly: one
+    /// `sysctl` per listed session, microseconds, no subprocess and nothing
+    /// started on anybody's behalf.
+    ///
+    /// **It is a trigger, not an answer.** A false here does not retire
+    /// anything -- it only lets the command run, which is what decides. So the
+    /// worst a wrong reading can do is buy a reading, and the direction is
+    /// chosen accordingly: a pid this could not anchor when the list arrived,
+    /// or cannot read now, counts as *not* still alive and falls straight
+    /// through to the command, which is the behaviour that was there before.
+    ///
+    /// It also makes a ghost show up *sooner* rather than later. The check runs
+    /// on whatever refresh comes next instead of on the next freshness
+    /// boundary, and refreshes are driven by hook events -- so the kill of a
+    /// busy session is now noticed in the same second, where before it waited
+    /// out up to a full ``freshness``.
+    private func everyListedSessionIsStillAlive() -> Bool {
+        cached.allSatisfy { session in
+            guard let anchored = livenessAnchors[session.processIdentifier],
+                  let started = processStartedAt(session.processIdentifier) else {
+                return false
+            }
+            // Compared against an earlier reading of the same value, never
+            // against the session's own reported start -- see
+            // ``ControllingTerminalGestureReader/systemProcessStartedAt(forProcessIdentifier:)``.
+            return started == anchored
+        }
     }
 
     /// Whether something has reported this list wrong since it was last read.
@@ -903,6 +1005,24 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         lastAttemptAnswered = true
 
         cached = sessions.filter { !isOwnReading($0) }
+        // Anchored from the answer that produced the list, so the two can never
+        // describe different sets: a pid that has just left the list leaves
+        // this with it, and one that has just joined is anchored before
+        // anything can ask about it. Read here rather than lazily because the
+        // kernel's answer is only an identity while the process it names is the
+        // one the command reported -- a moment later the pid could be somebody
+        // else's, and an anchor taken then would certify the wrong process for
+        // as long as it lived.
+        livenessAnchors = Dictionary(
+            cached.compactMap { session in
+                processStartedAt(session.processIdentifier)
+                    .map { (session.processIdentifier, $0) }
+            },
+            // Two sessions in one process is not a shape this app has seen, and
+            // if it ever appears the two agree by construction -- the value is
+            // a property of the pid, not of the session.
+            uniquingKeysWith: { first, _ in first }
+        )
         readAt = clock.now()
         readStartedAt = observedAt
         return cached

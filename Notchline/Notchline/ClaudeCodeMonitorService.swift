@@ -235,6 +235,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // was pinned to it -- the store was handed nothing, and the registry
         // had no notion that such a session existed.
         let quotaDirectory = paths.quotaWorkingDirectory
+        // Resolved before the two readers below rather than beside the gate
+        // that reads it, because both of them now take it: a `claude` launched
+        // for a figure nobody can look at is the same waste as a re-check
+        // booked for a row nobody can read.
+        let resolvedScreenAvailability = screenAvailability
+            ?? ScreenAvailabilityWatcher()
+        self.screenAvailability = resolvedScreenAvailability
         let repository = hookEvents ?? HookEventRepository(
             paths: paths,
             clock: clock,
@@ -245,7 +252,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         self.hookEvents = repository
         let resolvedSessions = sessions ?? ClaudeCodeSessionRegistry(
             clock: clock,
-            ignoringWorkingDirectory: quotaDirectory
+            ignoringWorkingDirectory: quotaDirectory,
+            screenIsAvailable: resolvedScreenAvailability.isAvailable
         )
         self.sessions = resolvedSessions
         // A row's third line arriving where there was none used to need a
@@ -278,6 +286,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         self.usage = usage ?? ClaudeCodeUsageReader(
             clock: clock,
             workingDirectory: quotaDirectory,
+            screenIsAvailable: resolvedScreenAvailability.isAvailable,
             tokens: ClaudeCodeTokenCounter(clock: clock),
             transcripts: ClaudeCodeUsageTranscripts(clock: clock),
             onUpdate: { quotaLanded.yield() }
@@ -326,9 +335,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // one `stat` per listed terminal row per second, and nothing at all
         // when no such row is listed.
         self.terminalGestures = terminalGestures ?? ControllingTerminalGestureReader()
-        let resolvedScreenAvailability = screenAvailability
-            ?? ScreenAvailabilityWatcher()
-        self.screenAvailability = resolvedScreenAvailability
         self.terminalReadMembershipGate = TerminalUnreadMembershipGate(
             settlingInterval: timing.terminalReadSettlingInterval,
             unreadRecheckInterval: timing.terminalUnreadRecheckInterval

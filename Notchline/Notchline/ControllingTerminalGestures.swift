@@ -464,6 +464,32 @@ final class ControllingTerminalGestureReader:
         return parent > 0 ? parent : nil
     }
 
+    /// When a process started, or nil when there is no such process.
+    ///
+    /// The second reader on this record, and here rather than beside its
+    /// caller for the reason the parent walk above gives: one `sysctl` wrapper
+    /// in the app, not one per question asked of it.
+    ///
+    /// **This is an identity, not a clock reading.** A pid on its own does not
+    /// name a process for longer than that process lives — the number is
+    /// reused — so ``ClaudeCodeSessionRegistry`` pairs it with this instant and
+    /// treats a changed start time exactly as it treats a missing one. The
+    /// value is never compared against a time the app got from anywhere else,
+    /// only against an earlier reading of itself, so its epoch and its
+    /// resolution do not have to agree with anything.
+    nonisolated static func systemProcessStartedAt(
+        forProcessIdentifier pid: Int32
+    ) -> Date? {
+        guard let process = systemProcessRecord(forProcessIdentifier: pid) else {
+            return nil
+        }
+        let started = process.kp_proc.p_un.__p_starttime
+        return Date(
+            timeIntervalSince1970: TimeInterval(started.tv_sec)
+                + TimeInterval(started.tv_usec) / 1_000_000
+        )
+    }
+
     /// One process's kernel record, or nil when it has gone.
     nonisolated private static func systemProcessRecord(
         forProcessIdentifier pid: Int32

@@ -113,7 +113,7 @@ flowchart LR
     hookRegistrar <-->|"registration install remove"| liveService
 
     liveService -->|"构造行状态"| snapshotParser
-    liveService <-->|"有 Turn 时 30 秒列表与 60 秒用量刷新"| serviceState
+    liveService <-->|"有 Turn 时 30 秒列表与 60 秒用量刷新（Claude Code 侧的列表与额度另有活性与屏幕两道闸，见 §2）"| serviceState
     snapshotParser -->|"MonitoredSession 候选"| unreadGate
     unreadGate -->|"活动或未读终态成员"| monitorSnapshot
     liveService -->|"availability quota diagnostic"| monitorSnapshot
@@ -235,6 +235,12 @@ sequenceDiagram
 **心跳只是兜底，不承担任何延迟指标。** 它存在的唯一理由是本仓库已知的两类静默失效：`DirectoryChangeWatcher` 在 `open(O_EVTONLY)` 失败或目录被替换后不会重新挂载（CR-018），而到期唤醒同样可能因为任务被取消或 deadline 算错而无声丢失。任何"更新太慢"的问题都不得通过缩短心跳来解决。
 
 **但一次唤醒本身不是重读的理由（CR-Fable-002）。** 上面那条心跳，加上 Codex 侧 30 秒到期一次的账号读数，意味着这个进程无论如何每 30–60 秒会醒一次，并在那一次里向**所有**服务各要一次快照。于是任何「缓存超过 N 秒就重读」的数据源，只要 N 小于这个间隔，实际行为就是按这个间隔无条件采样——`ClaudeCodeSessionRegistry` 的 30 秒新鲜度正是如此，`claude agents --json` 因此在一台空闲机器上（一个 Claude Code 都没开、屏幕锁着）每 30–60 秒被启动一次，永远。新鲜度是「一个答案最陈旧能到什么程度」的上限，不是「没人问也要买一份新的」的理由。规则因此写成：**没有边沿报告过变化、屏幕上也没有任何一行依赖它的时候，缓存里那个答案直接算数**——前提是那个答案真的是答出来的，而不是没人回答时留下的空壳。这与上面终态行那条"没有行在等的时候一次也不问"是同一条规则的两个方向：一个说没人等就不预约到期，一个说醒了也不代表要花钱。成本与实测见 §6，判定见 `tech-design.md` §15.1。
+
+**列出来的会话是同一条规则剩下的那一半（2026-08-26）。** 上面那条只管「答出来的空列表」；列表里有行的时候，30 秒新鲜度照旧每 30 秒买一次 `claude agents --json`，一台开着 Claude Code 的机器于是整天都在这个节拍上。它买的其实只有一件事：一行**可能要被撤下**，而通往撤下的路里只有一条不报边沿——会话被 `SIGKILL`，记录留在磁盘上，`~/.claude/sessions` 什么都不触发。那条路要的是 `pid` 加进程启动时刻的比对，而这件事内核直接答得了：每个列出的会话一次 `sysctl`，微秒级，不起进程。所以节拍仍然决定**什么时候可以问**，内核决定**值不值得为答案付钱**——`ClaudeCodeSessionRegistry.everyListedSessionIsStillAlive()`。启动时刻在每次答出来的读取里就地锚定，之后只与自己的旧读数比，因此 pid 被复用也算 ghost；锚不上或读不出的 pid 一律算「不还活着」，掉回命令去问，也就是改动前的行为。附带一个好处：ghost 现在在下一次刷新就被发现，而不是等到下一个新鲜度边界——刷新由 hook 事件驱动，所以杀掉一个正忙的会话是同一秒被看见的。
+
+**时钟那一支还要有屏幕才走（2026-08-26）。** 节拍是对「答案有多陈旧」的猜测，而没有显示器时这份猜测是买给没有人的——它要修正的刘海根本没在画。边沿不受这条限制：边沿是有人报告列表已经不对了，那是证据，有没有人在看都要答。屏幕醒来本身就是 `ClaudeCodeMonitorService.stateChangeEvents` 已经合并的一条边沿，所以整夜没买的那次读取，会在用户回来的那一刻买一次。额度读取（`claude -p "/usage"`）同理，而且更硬：它和今日 token 两个数字都只画在展开面板的页脚里，用户要 hover 刘海才看得到，屏幕不可用时不是「多半没人看」而是**看不到**。
+
+`claude -p "/usage"` 的节拍同时从 5 分钟放宽到 **30 分钟**。这个数由代价定，不由价值定：Release 实测 2026-08-25，一次读取是 **2.53 秒 CPU、375 MB 峰值常驻、31.5 万分之三的缺页（31.5K page faults）与 3.55 万次上下文切换**，还在磁盘上留下一份不会被清理的 transcript；按 5 分钟算，十二小时是 142 次启动、约 360 秒 CPU——比这个应用本体在同一段时间里花的还多。它买回来的是一条 5 小时窗口与一条 7 天窗口，画到百分位；5 小时那条按人能花的最快速度算每分钟约走 0.3%，半小时的陈旧最多是离重置最远那条规则上的几个百分点。信任上限同步从 900 秒抬到 3600 秒：上限是从**上一次答出来**开始量的，而第一次失败的尝试要等满一整个新鲜度窗口才会发生，900 秒配 1800 秒会让第一次失手就把额度抹掉——正是这个拆分要防的事。
 
 安装健康度同理：注册完整度回答的是一个只在本应用写 `hooks.json`、用户主动 Recheck 或该文件在我们脚下被改动时才变化的问题，因此它同样不按节拍重算。`CodexHookRegistrar.registration()` 缓存上一次读数，前两者直接失效缓存，外部编辑则在读取时比对 watcher 的 `changeCount` 认出来——**没有兜底的上限节拍**（`tech-design.md` §442）。**轮询配置本来就无法回答真正会出问题的那一维**——Codex 按定义内容哈希记录信任，扫描通过并不意味着 hook 会被执行（见第 8 节）。
 
@@ -434,7 +440,7 @@ flowchart LR
 | 宿主唤起（Claude Code） | `ClaudeCodeNavigator`、`ProcessAncestryHostResolver`、`AppleEventsTerminalTabFocuser` | 点击时向 `ClaudeCodeMonitorService` 问该会话此刻的 pid（会话已结束就失败，这就是点击前的重新确认），用 `sysctl(KERN_PROC_PID)` 的 `e_ppid` 与 `proc_pidpath` 向上走进程祖先链判定宿主：祖先里有 Claude Desktop 就激活它，否则最近的那个 `.app` 就是宿主终端。终端能报出 tty 的（Terminal.app、iTerm2）用它自己的公开脚本字典选中该标签页，报不出的只激活应用（见 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)）。激活这一步会**跟着窗口换桌面**：`WindowServerOccupancyReporter` 先问窗口服务器该 pid 在当前 Space 有没有可见窗口，没有就先 `hide()` 再 `activate()`——应用自己把窗口 order front 才会带走用户（`tech-design.md` §14.2） | [`ClaudeCodeNavigator.swift`](../Notchline/Notchline/ClaudeCodeNavigator.swift) |
 | 进程形态 | `AppDelegate`、`NotchlineApp` | 以 `LSUIElement` 运行（`INFOPLIST_KEY_LSUIElement`，Debug 与 Release 两个 configuration 都写）：没有 Dock 图标，不进 ⌘-Tab，前台时也没有菜单栏，因此 `⌘,`／`⌘W`／`⌘Q` 一并不存在（产品侧的代价见 `PRD.md` §1 与 §11）。**叠层本来就不受这条影响**：它是 `.nonactivatingPanel` 且 `canBecomeKey` 为 `false`，从不靠本应用持有前台。要补的只有首次引导那一次启动——辅助型应用启动时不获得前台，那扇窗会开在别人的窗口底下、标题栏是灰的、`Start` 上声明的 Return 也不生效。实测协作式 `NSApp.activate()` 在这一刻**被拒绝**：直接调、以及晚一跳等 SwiftUI 把窗口摆上来再调，两种写法前台都仍留在原来那个应用（`lsappinfo front` 读，Chrome 在前台时 `open` 本应用）；`activate(ignoringOtherApps:)` 才成立，所以用它，并且只在 `hasCompletedOnboarding` 为假时调——其余每一次启动一个窗口也不开，前台原地不动（同法实测）。齿轮那条路不受影响：那是用户的点击，协作式 `NSApp.activate()` 在那里照常成立（`SettingsWindowPresenter.reveal`，实测按下齿轮后本应用到前台、窗口落在组件那块屏上） | [`NotchlineApp.swift`](../Notchline/Notchline/NotchlineApp.swift) |
 | 窗体 | `OverlayPanelController` | NSPanel 生命周期、目标显示器、顶部吸附、尺寸和动画；并持有「此刻该不该在屏幕上」——遮蔽状态**不进 store**，因为面板两侧画的是同一棵视图树，发布它等于为了什么都不改而重算整个叠层（见第 6 节） | [`OverlayPanelController.swift`](../Notchline/Notchline/OverlayPanelController.swift) |
-| 面板该不该在屏幕上 | `OverlayConcealment`、`OverlayConcealmentWatcher` | 回答目标显示器此刻是不是还归用户的桌面，只判一条：**菜单栏没画**（该屏有应用或视频全屏、或菜单栏设成自动隐藏）。判的是菜单栏窗口**在哪儿**而不是在不在：落在本屏原点是 `drawn`，被切换桌面横向滑走是 `sliding`（不上报，上一个答案原地不动），一个都没有才是 `away`（见本文第 7 节「唯一一个允许存在的轮询」）。Mission Control **不隐藏菜单栏**，因此它自然落在「留在屏幕上」这一侧，这是产品要的（`PRD.md` §9.2.1），窗口列表里那一层 Dock 铺屏窗口存在但不读。判据只读窗口列表里的 owner、layer 与 bounds 三个字段（都不受 Screen Recording 权限遮蔽，`kCGWindowName` 才受），纯函数可断言；watcher 只报边沿，且给每次取样发号，让路上被后取样超过的旧读数作废 | [`OverlayConcealment.swift`](../Notchline/Notchline/OverlayConcealment.swift) |
+| 面板该不该在屏幕上 | `OverlayConcealment`、`OverlayConcealmentWatcher` | 回答目标显示器此刻是不是还归用户的桌面，只判一条：**菜单栏没画**（该屏有应用或视频全屏、或菜单栏设成自动隐藏）。判的是菜单栏窗口**在哪儿**而不是在不在：落在本屏原点是 `drawn`，被切换桌面横向滑走是 `sliding`（不上报，上一个答案原地不动），一个都没有才是 `away`（见本文第 7 节「唯一一个允许存在的轮询」）。Mission Control **不隐藏菜单栏**，因此它自然落在「留在屏幕上」这一侧，这是产品要的（`PRD.md` §9.2.1），窗口列表里那一层 Dock 铺屏窗口存在但不读。判据只读窗口列表里的 owner、layer 与 bounds 三个字段（都不受 Screen Recording 权限遮蔽，`kCGWindowName` 才受），纯函数可断言；watcher 只报边沿，且给每次取样发号，让路上被后取样超过的旧读数作废；判定与发号都在取样队列上做，只有答案翻转才回主 actor，没有屏幕时定时器直接停到 `.distantFuture`（见第 7 节） | [`OverlayConcealment.swift`](../Notchline/Notchline/OverlayConcealment.swift) |
 | 视图 | `NotchOverlayView` | 只渲染 `MonitorStore`，不解析协议、不读文件；终态行上盖一层只认领次要点击的 `SecondaryClickCatcher`，发出的仍然只是意图（`tech-design.md` §17） | [`NotchOverlayView.swift`](../Notchline/Notchline/NotchOverlayView.swift) |
 | 设置窗口 | `AppSettingsView`、`ProductSettingsCopy`、`FinderRevealTarget`、`MacOSWindowColor` | macOS 26 单面板设置：分组卡片自绘，控件全用原生；`Color / macOS Window` 两模式 token（见 `figma-design.md` §8）。产品行说的那几句话是一个值（`ProductSettingsCopy`）而不是四个 view 上的计算属性——那一行下方的失败报告是本窗口里唯一为报告失败而存在的东西，值可以被断言，`body` 不能（CR-029）。窗口**怎么出现**归 `SettingsWindowPresenter`：每次打开都把窗口居中放到**组件所在的那块屏**上（`MonitorStore.selectedScreen`，按显示器标识符匹配 `NSScreen`；见 `PRD.md` §11），再激活本应用并把窗口排到最前。取组件那块屏而不是有焦点的那块，一是这扇窗改的东西只在刘海里看得见，二是这个答案在排窗过程中不会变——焦点那块屏晚读一步就变成 Settings 自己那块。落点算法是纯函数 `SettingsWindowPlacement.origin`，可断言。**摆放只在窗口看不见时发生**，这是这条路的形状所在：`SettingsWindowTracker` 用一个 `viewDidMoveToWindow` 的 `NSView` 同步交出窗口——`makeNSView` 时还没有窗口，而晚一跳 SwiftUI 已经把窗口排上屏，那一跳就是用户看见的闪（实测：窗口先在上次关掉的那块屏出现，约 50 ms 后跳过来）；presenter 再观察 `isVisible` 的**两个**方向，隐藏那一次才是主力——它把窗口摆到当前该去的那块屏，于是下一次显示的第一帧就已经对了。`⌘,` 与应用菜单那条路已经不在了——本应用以 `LSUIElement` 运行，没有菜单栏可放那个菜单项（见本表「进程形态」一行），齿轮是唯一入口；`isVisible` 观察因此不再是「另一条入口的补网」，而只是摆放本身所在的地方。`Products` 卡片三行尾部的 `Show in Finder` 走同一条「值而不是 `body`」的路：`FinderRevealTarget.revealing(_:)` 给出「选中这个文件」「打开这个文件夹」「无处可去（置灰）」三档，两个产品行的路径向 `HookIntegrationPaths.live(for:)` 要，因此按钮与写那个文件的写入方不可能指向两个地方 | [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift) |
 | 常驻动效 | `NotchStatusMatrix`、`SearchlightLabel`、`SessionRowText` | 用 CALayer 承载持续动画，使叠层不必逐帧重渲染（见第 6 节） | [`NotchStatusMatrix.swift`](../Notchline/Notchline/NotchStatusMatrix.swift) |
@@ -508,9 +514,21 @@ flowchart LR
 
 候选按「上沿 + 宽度」认屏，因此还要防一种配置：两块等宽、上沿等高的显示器并排时，邻屏那条静止的菜单栏在几何上与本屏滑动中的那条无法区分，误判成 `sliding` 会让答案永远悬着、叠层一直压在全屏视频上面。判据因此额外收一份「所有在用显示器的 bounds」，**落在别的屏原点上的候选归那块屏**。这份列表只在已经读出 `sliding` 时才去取——`activeDisplayBounds()` 一次 214µs（Release，3 屏），而 `sliding` 一次切换只出现几次取样，稳态一次都不取。
 
-它不违反第 7 节，因为**下游不重渲染**：取样在 utility 队列上做，回到主 actor 只做一次比较，相同就丢掉；不同也只是 `orderOut` / `orderFrontRegardless` 一个窗口。store 和任何 SwiftUI 视图都看不见这个节拍。
+它不违反第 7 节，因为**下游不重渲染**：取样与判定都在 utility 队列上做，只有**答案变了**才回主 actor，而回去也只是 `orderOut` / `orderFrontRegardless` 一个窗口。store 和任何 SwiftUI 视图都看不见这个节拍。
+
+**判定从主 actor 移下来，是因为「不重渲染」并不等于「不唤醒」。** 早先每一次取样都无条件 `DispatchQueue.main.async` 一次，比较在主 actor 上做——下游确实什么都没画，但主 run loop 因此永远睡不过 250ms，一天四万八千次、十二小时三十四万五千次唤醒，几乎每一次的结论都是「没变」。判定所需的状态（发号、上一个答案、正在看哪块屏）现在整批放在 `OverlayConcealmentWatcher` 的一把锁后面，由取样队列自己读写；主 actor 只在答案真的翻转时被叫醒，正常一天是几小时几次。发号规则一字未改：被后来的取样超过的旧读数照样作废，`sliding` 照样不认领号码。
+
+**没有屏幕时定时器直接停掉。** 没人看得见的菜单栏遮不住任何东西，而这是整个进程稳态开销里最大的一项：2026-08-25 对 Release 实机 `sample` 45 秒，全进程在 CPU 上的采样有 **41%** 落在这一个调用里，而它此前从 `start(onChange:)` 起就一直跑，锁屏过夜也照跑。现在每个 tick 先读一次 `ScreenAvailabilityReporting.isAvailable()`：为假就把定时器 `schedule` 到 `.distantFuture`，直到 `changeEvents()` 的边沿（显示器唤醒、解锁、屏保结束、会话回到 console、系统唤醒）把它接回来——接回来的同时立刻取样一次，因为显示器可以睡在一种窗口排布上、醒在另一种上，等满一个间隔再看会让叠层压在一条并不存在的菜单栏上。用 `schedule` 到远期而不是 `suspend()`：两者对唤醒的效果相同，而只有后者要求配平，配平不上的 `DispatchSourceTimer` 会在析构时崩溃。
+
+这一次读数本身要付钱，而它比那个比值看起来更贵：`isAvailable()` 一次 107µs，对着窗口列表的 530µs 只是 20% 的加价，但它和窗口列表一样是一次**到 window server 的往返**，按 4 Hz 取实测让本进程的 Mach 流量涨了一半（71/s → 107/s），换来的是一个一天只变几次的状态。因此它按**约 1 Hz** 取，不是每个 tick 都取：加价降到一核的 0.011%，停表最多迟一秒，而这一秒不可能有代价——屏幕上本来就没有东西会画错。arming 之后的第一个 tick 一定读，免得刚归零的计数器把一次该停的表往后拖。
+
+零加价的写法是让 `changeEvents()` **双向**触发、只在它的边沿上读。这里刻意没有这么做：那条流由两个 monitor service 共用，放宽它的契约改的是它们的刷新行为而不是这个文件；而且这个轮询同时是「万一某条通知丢了」的兜底。
+
+买回来的是没有屏幕时的**零**。按十二小时里八小时无屏算，一核的 0.21% 全天候变成四小时 0.22% 加八小时 0.00%——91.6 秒 CPU 变成 31.7 秒。读的是 `ScreenAvailabilityReporting` 那一个读数而不是它的某个子集（比如只看 `CGDisplayIsAsleep`），理由写在该协议自己的文档里：把「醒着、已解锁、在 console」重述第二遍，正是两半开始漂移的方式。
 
 代价与选择：Release 下一次 `CGWindowListCopyWindowInfo` 屏上 61 个窗口时 723µs，加 `.excludeDesktopElements` 后 583µs（判据要读的菜单栏窗口还在）。间隔 250ms 是**延迟预算而不是采样率**——它是菜单栏开始离开之后面板最多还能留多久。这个数当初是按 Mission Control 的展开取的（缩放约 350ms，是两个场景里更紧的那个；菜单栏自己的淡出比它慢），如今只剩菜单栏这一条，预算比需要的更紧；不放宽是因为一次取样只要 583µs，省下来也换不到什么。合计 0.1%–0.3% `%cpu`，按累计 CPU 时间差算 0.25%，稳态法与累计法在这里一致。
+
+**583µs 是下界，不是典型值。** 2026-08-26 在一台开着 Chrome、Xcode 与 Figma 的机器上复测同一个调用：屏上 39 个窗口、机器空闲时 530µs，49 个窗口、负载下 2.0ms——一核的 0.21% 到 0.80%。代价随屏上窗口数与争用一起走，所以「省下来也换不到什么」这句话只在安静的机器上成立；真正把它按住的是上面那两条（有变化才回主 actor、没屏幕就停），而不是这个间隔。
 
 ### 有限的过渡不算持续动效
 
@@ -640,7 +658,53 @@ Release 实测（`ENABLE_TESTABILITY=YES`，同一台机器，300 次采样取�
 
 它买回来的，绝大多数时候是「空列表仍然是空的」这一句重复。而从空变成非空的每一条路径本来就会自己报告：会话开始时它那份 `~/.claude/sessions/<pid>.json` 是被**新建**出来的，新建触发目录事件（原地重写不会，见 `tech-design.md` §15.1），而一条指名着列表里没有的会话的 hook 事件，本身就是那个会话存在的证据。因此**一份已经答出来是空的列表被扣住**，其余每一种情况仍然按时钟走：非空列表要按新鲜度重读（被 `SIGKILL` 的会话留着自己的记录、不产生任何边沿，只有那条命令自己的 `pid` + `procStart` 校验看得出它是幽灵），失败的尝试要按新鲜度重试（那正是 `trustCeiling` 数它三次失败所用的节拍），边沿则一律不早于 `edgeFloor` 作答。空闲机器上的稳态启动次数因此是**零**。
 
-两处代价写下来。其一，这条路径现在真的压在 `~/.claude/sessions` 的目录边沿上，而不是拿它当延迟优化——watcher 静默失效时，一个开着但一次提示都没提交过的会话不会点亮刘海上的标记，要等它第一次提交（那条 hook 事件会把列表作废）。其二，额度读数不在此列：`claude -p "/usage"` 仍然每 5 分钟跑一次（约 0.9 s），那是另一条命令、另一个理由，与本条无关。
+两处代价写下来。其一，这条路径现在真的压在 `~/.claude/sessions` 的目录边沿上，而不是拿它当延迟优化——watcher 静默失效时，一个开着但一次提示都没提交过的会话不会点亮刘海上的标记，要等它第一次提交（那条 hook 事件会把列表作废）。其二，额度读数当时不在此列：`claude -p "/usage"` 那时每 5 分钟跑一次，本节曾记作「约 0.9 s」——**这个数字是错的**，2026-08-25 在 Release 下重测是 2.53 秒 CPU，见下一小节。
+
+### 稳态的真实账单：进程之外的那一半（2026-08-26）
+
+上一条已经写下「它不在本应用的进程里，所以 `ps %cpu` 看本应用永远看不到」。这一条是把那句话量完，起因是一次十二小时的 Release 实机运行：进程自己的数字全部正常——`%CPU` 常态低于 1%、CPU 时间 4 分 45 秒、线程 7、端口 280、常驻 58.4 MB——而活动监视器「最近 12 小时的平均能耗」报 **214.42**。两者对不上：214 若是速率，等于两个核跑满十二小时，而 4 分 45 秒是 0.66%。
+
+对不上的原因是这两栏问的不是同一个东西。**能耗那一栏按「应用」聚合，并把子进程折叠在应用行下面**——实测把本应用那一行展开，`codex` 就挂在它下面。更准确地说是按 coalition 聚合：本应用与它启动的每一个子进程共用同一个 resource coalition（实测 `res=77602`：`codex app-server`、`claude agents --json`、`claude -p "/usage"` 全部相同）。而线程、端口、CPU 时间、上下文切换那些数字只算**这一个进程**。于是这个应用真正的代价里有一大半，在它自己的进程行里根本不出现。
+
+量完之后的十二小时账单（Release，2026-08-25，本机；子进程单次成本用 `/usr/bin/time -l` 量，次数用实机观测的间隔折算）：
+
+| 工作 | 实测间隔 | 单次代价 | 12 小时 CPU |
+| --- | --- | --- | --- |
+| 本应用进程自己 | — | — | **285 s** |
+| ↳ 其中菜单栏轮询 | 4 Hz | 0.53–2.0 ms | ~115–345 s（`sample` 实测占全进程 41%） |
+| ↳ 其中 transcript stat 遍历 | 60 s | 27.3 ms | ~24 s |
+| `claude agents --json` | 33–55 s | 0.29 s CPU / 187 MB 峰值 | **~260–420 s** |
+| `claude -p "/usage"` | 5 min 4 s | 2.53 s CPU / 375 MB 峰值 | **~360 s** |
+| `codex app-server`（常驻） | — | 0.24% 一核 | **~103 s** |
+
+`/usage` 的间隔不是推算的：每一次读取都在 `~/.claude/projects/…-Notchline-agents-claudeCode-usage/` 留下一份 transcript（`ClaudeCodeUsageTranscripts` 说明了为什么不删），本机 418 份的时间戳精确地每 5 分 04 秒一个。
+
+结论是**约七成的代价在子进程里**，而且形状是最差的那一种：十二小时上千次 Node 进程启动，每次分配又释放 190–375 MB。进程启动是 macOS 上单位工作最贵的动作（dyld、JIT 预热、缺页），而且它让整个包一直进不了深度空闲——这正是一个 CPU 百分比看起来微不足道的应用能在能耗栏里排到浏览器旁边的原因。
+
+四处改动，按收益排（每一处的判定写在各自的文档注释里）：
+
+1. **`claude -p "/usage"` 从 5 分钟放宽到 30 分钟**，信任上限同步 900 → 3600 秒。142 次启动变 24 次。
+2. **列出的会话改用内核活性判定**（`everyListedSessionIsStillAlive()`）：会话还活着时 `claude agents --json` 一次都不跑，代价从每 30 秒一棵进程树变成每次刷新几个 `sysctl`。
+3. **上面两条外加菜单栏轮询，都加一道屏幕闸**：没有显示器时前两者不跑，第三者把定时器停到 `.distantFuture`。锁屏过夜从「照跑」变成零。
+4. **transcript 遍历改用 `URL.resourceValues` 并在目录读取时批量预取**：本机 691 份实测 27.3 ms → 3.2 ms 一遍（8.5 倍），其中 3.2 ms 是目录枚举本身、stat 几乎免费。`attributesOfItem(atPath:)` 的绝大部分时间花在 `_FileManagerImpl._extendedAttributes` 上——扩展属性与 ACL，这里一个字都不读。
+
+改动之后的实机复测（Release，同一台机器，屏幕**醒着**——也就是这几条闸门收益最小的那一侧；`top` 60 秒一档取四档）：
+
+| | 改动前 | 改动后 |
+| --- | --- | --- |
+| `%CPU` | 0.5%–0.8% | **0.3%** |
+| 空闲唤醒 | 约 0.37/s | **0** |
+| 上下文切换 | 约 30/s | 约 32/s |
+| Mach 系统调用 | 约 71/s | 约 77/s |
+| `claude` 子进程 | 7 分钟约 10 次 | **7 分钟 0 次** |
+
+空闲唤醒归零是判定移出主 actor 的直接结果——主 run loop 不再被每 250ms 叫醒一次去回答「没变」。`claude` 归零是活性闸的：这台机器上有活着的 Claude Code 会话，而它们活着的时候那条命令一次都不必跑。CPU 从 0.5%–0.8% 到 0.3% 里有 transcript 遍历的 24 毫秒、有不再 fork 的那些进程在父进程这一侧的开销（`NSTask`、管道、回收），也有主 actor 那些唤醒。Mach 略升是屏幕读数那道闸自己的往返，按 1 Hz 取；按 4 Hz 取时它是 107/s，那一版没有留下。
+
+上表**没有**量到屏幕闸真正的那一半——锁屏过夜时以上每一项都是零，而这台机器在测的时候有人在用。
+
+第 4 条同时压住一个会自己长大的东西：第 1 条那些 transcript 每天新增两百多份，而它们进的正是每 60 秒被 stat 一遍的那个集合。
+
+还剩下的：`codex app-server` 是常驻子进程，本条没有动它；菜单栏轮询在**有屏幕**时仍要为那道闸自己的读数付一点钱（107µs，按约 1 Hz 取，一核的 0.011%），换来的是没屏幕时的零，折算见第 7 节。
 
 ### 稳态里另一遍白读：没人会用的已读读数（CR-Fable-041）
 

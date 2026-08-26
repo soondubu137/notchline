@@ -44,6 +44,11 @@ actor ClaudeCodeUsageReader {
     private let tokensFreshness: TimeInterval
     private let retryInterval: TimeInterval
     private let trustCeiling: TimeInterval
+    /// Whether there is a screen the figures could be read on.
+    ///
+    /// See ``startReadIfStale()`` -- this gates the reading itself, not
+    /// what is drawn from what has already been read.
+    private let screenIsAvailable: @Sendable () -> Bool
     private let transcripts: ClaudeCodeUsageTranscripts?
     // Both start as this product's two windows with nothing known about
     // either. `QuotaSnapshot.unavailable` is the single-window form and would
@@ -66,10 +71,29 @@ actor ClaudeCodeUsageReader {
 
     /// - Parameters:
     ///   - freshness: How long an answer stands before the command is run
-    ///     again. Five minutes, not one: each run is a real Claude Code
-    ///     session that costs a subprocess, a few seconds, and a transcript on
-    ///     disk, and it reports a 5-hour window and a 7-day one — neither of
-    ///     which says anything new about the minute just gone.
+    ///     again. Thirty minutes, and the number is set by what the reading
+    ///     costs rather than by what it is worth: measured in Release on
+    ///     2026-08-25, one `claude -p "/usage" --output-format json` is
+    ///     **2.53 s of CPU, 375 MB of peak resident memory, 31.5 K page
+    ///     faults and 35.5 K context switches**, and it leaves a transcript on
+    ///     disk that nothing removes. At the five minutes this used to run at,
+    ///     that is 142 launches and about 360 s of CPU per twelve hours —
+    ///     more than the whole rest of the app spends in the same period, and
+    ///     charged to this app's coalition rather than to `claude`, which is
+    ///     why it never showed up in the process's own numbers.
+    ///
+    ///     What it buys is a 5-hour window and a 7-day one, drawn to the
+    ///     percent. A 5-hour rule moves about 0.3% a minute at the fastest a
+    ///     person can spend it, so half an hour of staleness is at worst a few
+    ///     points on the rule furthest from its reset — against a reading that
+    ///     was never a live figure to begin with. The footer already draws a
+    ///     quota up to a whole freshness window old and says nothing about its
+    ///     age.
+    ///
+    ///     This is a ceiling, not a cadence, in the same sense as everything
+    ///     else here: the reading also runs when the screen comes back after
+    ///     being away, so the figure a user actually looks at is at most one
+    ///     wake old rather than half an hour.
     ///   - tokensFreshness: How long today's token figure stands. Deliberately
     ///     the shorter of the two. It shares a reading with the windows for no
     ///     better reason than that they are drawn together; it comes off the
@@ -83,7 +107,8 @@ actor ClaudeCodeUsageReader {
     ///     decides to log there, so some attempts fail for reasons that are
     ///     gone by the next one, and sitting out a whole freshness window to
     ///     discover that is what the user saw as the figures coming and going.
-    ///     That mattered more once the window became five minutes.
+    ///     That mattered more once the window became five minutes, and more
+    ///     again at thirty.
     ///   - trustCeiling: How long already-parsed windows may still be drawn
     ///     while attempts are failing. The same split the session registry
     ///     makes, for the same reason: `freshness` says when to read again, the
@@ -91,13 +116,26 @@ actor ClaudeCodeUsageReader {
     ///     drawn to the percent and moves over hours, so one unlucky attempt is
     ///     no reason to blank it -- but a `claude` that has been uninstalled is
     ///     every reason, and only a ceiling tells those two apart.
+    ///
+    ///     **It has to clear `freshness`, and that is what sets it.** The
+    ///     ceiling is counted from the last *answer*, and the first failed
+    ///     attempt cannot happen until a whole freshness window after one. At
+    ///     the previous 300/900 the gap left room for two more failures before
+    ///     the windows blanked; left at 900 while freshness became 1800, the
+    ///     very first failed attempt would have arrived already past the
+    ///     ceiling and blanked the quota on one unlucky read — the exact
+    ///     behaviour the split exists to prevent. One further whole window is
+    ///     the rule, so an uninstalled `claude` still blanks: the retry
+    ///     escalation runs about ten attempts inside that hour and none of
+    ///     them answers.
     init(
         clock: any MonitorClock = SystemMonitorClock(),
-        freshness: TimeInterval = 300,
+        freshness: TimeInterval = 1800,
         tokensFreshness: TimeInterval = 60,
         retryInterval: TimeInterval = 5,
-        trustCeiling: TimeInterval = 900,
+        trustCeiling: TimeInterval = 3600,
         workingDirectory: URL? = nil,
+        screenIsAvailable: @escaping @Sendable () -> Bool = { true },
         tokens: ClaudeCodeTokenCounter? = nil,
         transcripts: ClaudeCodeUsageTranscripts? = nil,
         onUpdate: (@Sendable () -> Void)? = nil,
@@ -111,6 +149,7 @@ actor ClaudeCodeUsageReader {
         self.tokensFreshness = tokensFreshness
         self.retryInterval = retryInterval
         self.trustCeiling = trustCeiling
+        self.screenIsAvailable = screenIsAvailable
         let directory = workingDirectory
         let cleaner = transcripts
         self.read = read ?? {
@@ -178,8 +217,14 @@ actor ClaudeCodeUsageReader {
     /// Nil while a reading is out: that one will announce itself, and a
     /// deadline the refresh could not advance is a busy-wait in a deadline's
     /// clothes.
+    ///
+    /// Nil too while there is no screen, for the same reason and a stronger
+    /// one: the deadline would be a wake-up booked to buy a figure nobody can
+    /// look at. ``startReadIfStale()`` would refuse the reading anyway, so a
+    /// deadline left standing here is one the refresh *cannot* advance -- the
+    /// exact shape of busy-wait the paragraph above is about.
     func nextReadDeadline() -> Date? {
-        guard inFlight == nil else { return nil }
+        guard inFlight == nil, screenIsAvailable() else { return nil }
         let deadlines = [
             attemptedAt?.addingTimeInterval(currentInterval),
             tokensReadAt?.addingTimeInterval(tokensFreshness)
@@ -190,10 +235,20 @@ actor ClaudeCodeUsageReader {
     /// Starts a reading unless one is running or nothing has gone stale.
     ///
     /// Two clocks, one reading. Today's tokens come off the transcripts every
-    /// minute; the windows come off the command every five. A pass that only
-    /// the tokens are due for skips the subprocess entirely.
+    /// minute; the windows come off the command every half hour. A pass that
+    /// only the tokens are due for skips the subprocess entirely.
+    ///
+    /// **And nothing is read at all while there is no screen.** Both halves of
+    /// this reading exist to be drawn in the panel's footer, which a user
+    /// reaches by hovering the notch -- so a display that is asleep or a screen
+    /// that is locked means the figures cannot be looked at, not merely that
+    /// they are unlikely to be. Left ungated, an idle machine spent the night
+    /// launching a Node process every half hour and stat-ing every transcript
+    /// on disk every minute, for a footer nobody could open. The wake is an
+    /// edge ``ClaudeCodeMonitorService/stateChangeEvents`` already carries, so
+    /// the first thing that happens when the screen comes back is this reading.
     private func startReadIfStale() -> Task<QuotaSnapshot, Never>? {
-        guard inFlight == nil else { return nil }
+        guard inFlight == nil, screenIsAvailable() else { return nil }
         let now = clock.now()
         let windowsAreStale = attemptedAt
             .map { now.timeIntervalSince($0) >= currentInterval } ?? true

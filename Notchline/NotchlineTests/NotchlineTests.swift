@@ -11466,6 +11466,7 @@ for line in sys.stdin:
         let displayID = CGDirectDisplayID(7)
         nonisolated(unsafe) var listed: [ChromeWindow] = [Self.menuBar(of: display)]
 
+        let screen = StubScreenAvailability()
         let watcher = OverlayConcealmentWatcher(
             // Long enough that the only samples in this test are the ones it
             // asks for. What is under test is which samples are reported, and a
@@ -11474,7 +11475,11 @@ for line in sys.stdin:
             interval: 3_600,
             sampleWindows: { listed },
             boundsOfDisplay: { id in id == displayID ? display : .zero },
-            boundsOfActiveDisplays: { [display] }
+            boundsOfActiveDisplays: { [display] },
+            // Never the machine's own: a suite left with the real
+            // reading passes or fails on whether the developer's
+            // screen happened to be locked while it ran.
+            screenAvailability: screen
         )
 
         var reported: [Bool] = []
@@ -11518,11 +11523,16 @@ for line in sys.stdin:
         let displayID = CGDirectDisplayID(7)
         nonisolated(unsafe) var listed: [ChromeWindow] = [Self.menuBar(of: display)]
 
+        let screen = StubScreenAvailability()
         let watcher = OverlayConcealmentWatcher(
             interval: 3_600,
             sampleWindows: { listed },
             boundsOfDisplay: { _ in display },
-            boundsOfActiveDisplays: { [display] }
+            boundsOfActiveDisplays: { [display] },
+            // Never the machine's own: a suite left with the real
+            // reading passes or fails on whether the developer's
+            // screen happened to be locked while it ran.
+            screenAvailability: screen
         )
 
         var reported: [Bool] = []
@@ -11567,11 +11577,16 @@ for line in sys.stdin:
             Self.menuBar(of: display, slidBy: -1_200)
         ]
 
+        let screen = StubScreenAvailability()
         let watcher = OverlayConcealmentWatcher(
             interval: 3_600,
             sampleWindows: { listed },
             boundsOfDisplay: { _ in display },
-            boundsOfActiveDisplays: { [display] }
+            boundsOfActiveDisplays: { [display] },
+            // Never the machine's own: a suite left with the real
+            // reading passes or fails on whether the developer's
+            // screen happened to be locked while it ran.
+            screenAvailability: screen
         )
 
         var reported: [Bool] = []
@@ -11596,11 +11611,16 @@ for line in sys.stdin:
         let displayID = CGDirectDisplayID(7)
         nonisolated(unsafe) var listed: [ChromeWindow] = [Self.menuBar(of: display)]
 
+        let screen = StubScreenAvailability()
         let watcher = OverlayConcealmentWatcher(
             interval: 3_600,
             sampleWindows: { listed },
             boundsOfDisplay: { _ in display },
-            boundsOfActiveDisplays: { [display] }
+            boundsOfActiveDisplays: { [display] },
+            // Never the machine's own: a suite left with the real
+            // reading passes or fails on whether the developer's
+            // screen happened to be locked while it ran.
+            screenAvailability: screen
         )
 
         var reported: [Bool] = []
@@ -11617,9 +11637,63 @@ for line in sys.stdin:
         watcher.sampleNow()
         #expect(reported == [false, true])
 
-        watcher.consume(staleWindows, ticket: stale)
+        watcher.deliver(staleWindows, ticket: stale)
         #expect(reported == [false, true])
         #expect(watcher.isConcealed)
+
+        watcher.stop()
+    }
+
+    /// The concealment timer does not run through a night with no screen.
+    ///
+    /// A menu bar nobody can see cannot conceal anything, and this was the
+    /// single largest steady-state cost in the process: a `sample` of the live
+    /// Release app put 41% of its CPU in this one call, paid four times a
+    /// second for the life of the app whether or not there was a display awake.
+    ///
+    /// The wake re-arms *and* samples. The display sleeps on one arrangement of
+    /// windows and can come back on another, so waiting a whole interval to
+    /// look would show the overlay over a menu bar that is not there.
+    @Test @MainActor
+    func theConcealmentTimerIsParkedWhileThereIsNoScreen() async {
+        let display = Self.builtInDisplay
+        let displayID = CGDirectDisplayID(7)
+        let samples = CallCounter()
+        let screen = StubScreenAvailability()
+        screen.available = false
+
+        let watcher = OverlayConcealmentWatcher(
+            // Short enough that a timer left running would be unmistakable:
+            // fifteen ticks fit in each of the waits below.
+            interval: 0.02,
+            sampleWindows: {
+                samples.record()
+                return [Self.menuBar(of: display)]
+            },
+            boundsOfDisplay: { _ in display },
+            boundsOfActiveDisplays: { [display] },
+            screenAvailability: screen
+        )
+
+        watcher.observe(displayID: displayID)
+        watcher.start { _ in }
+        // Whatever `observe` and `start` took to order the panel to the state
+        // that already holds. What is under test is that nothing follows them.
+        let atStart = samples.count
+        let readsAtStart = screen.readCount
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(samples.count == atStart)
+        // And the timer is genuinely stopped rather than firing and declining
+        // to sample. The two cost the same in windows read and nothing alike in
+        // wake-ups, and only this can tell them apart: a running timer takes
+        // this reading on every tick, so fifteen of them would land in the wait
+        // above.
+        #expect(screen.readCount == readsAtStart)
+
+        screen.available = true
+        screen.announce()
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(samples.count > atStart)
 
         watcher.stop()
     }
@@ -11628,11 +11702,16 @@ for line in sys.stdin:
     /// answers the same way the predicate does: leave the overlay alone.
     @Test @MainActor
     func aWatcherWithNoDisplayNeverConceals() {
+        let screen = StubScreenAvailability()
         let watcher = OverlayConcealmentWatcher(
             interval: 3_600,
             sampleWindows: { [] },
             boundsOfDisplay: { _ in Self.builtInDisplay },
-            boundsOfActiveDisplays: { [Self.builtInDisplay] }
+            boundsOfActiveDisplays: { [Self.builtInDisplay] },
+            // Never the machine's own: a suite left with the real
+            // reading passes or fails on whether the developer's
+            // screen happened to be locked while it ran.
+            screenAvailability: screen
         )
 
         var reported: [Bool] = []
@@ -12940,10 +13019,12 @@ for line in sys.stdin:
     /// Today's tokens keep their own, shorter clock.
     ///
     /// The two figures share a reading because they are drawn together, not
-    /// because they cost the same. Running the command every five minutes is
-    /// the point of that interval; making the token figure — transcripts, no
-    /// subprocess, and the only one of the two that moves while you work —
-    /// five minutes stale would have been a regression bought with nothing.
+    /// because they cost the same. The command's own interval is set by what a
+    /// `claude` launch costs; making the token figure — transcripts, no
+    /// subprocess, and the only one of the two that moves while you work — as
+    /// stale as that would have been a regression bought with nothing. This
+    /// injects the older, shorter window so the two clocks stay legible in one
+    /// test; what it pins is that they are two.
     @Test @MainActor
     func todaysTokensAreReReadWithoutRunningTheCommandAgain() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
@@ -12974,6 +13055,53 @@ for line in sys.stdin:
         // the queue is empty, so it fails, and the ceiling keeps the windows.
         await clock.advance(by: 240)
         #expect(await reader.quota().remainingPercent == 80)
+    }
+
+    /// No screen, no reading — and the wake buys the one the night did not.
+    ///
+    /// Both halves of this reading are drawn in the panel's footer, which a
+    /// user reaches by hovering the notch. A display that is asleep or a screen
+    /// that is locked therefore means the figures *cannot* be looked at, not
+    /// merely that they are unlikely to be, and the reading is the most
+    /// expensive thing this app does: 2.53 s of CPU and 375 MB of peak resident
+    /// memory per launch, measured in Release on 2026-08-25.
+    @Test @MainActor
+    func noQuotaIsReadWhileThereIsNoScreen() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let responses = TextQueue(items: [
+            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)",
+            "Current session: 30% used · resets Aug 16 at 7:19pm (America/Los_Angeles)"
+        ])
+        let screen = StubScreenAvailability()
+        let reader = ClaudeCodeUsageReader(
+            clock: clock,
+            freshness: 1_800,
+            tokensFreshness: 60,
+            screenIsAvailable: { screen.available },
+            read: { await responses.next() }
+        )
+
+        #expect(await reader.quota().remainingPercent == 80)
+        #expect(await responses.remaining() == 1)
+
+        screen.available = false
+        // Nothing is booked either, because a deadline the refresh cannot
+        // advance is a busy-wait in a deadline's clothes.
+        #expect(await reader.nextReadDeadline() == nil)
+
+        // Twelve hours of freshness windows going by, and not one launch.
+        for _ in 0 ..< 24 {
+            await clock.advance(by: 1_800)
+            #expect(await reader.quota().remainingPercent == 80)
+        }
+        #expect(await responses.remaining() == 1)
+
+        // The screen comes back. The reading the night did not buy is bought
+        // once, with the user -- the wake is one of the refresh's own edges.
+        screen.available = true
+        #expect(await reader.nextReadDeadline() != nil)
+        #expect(await reader.quota().remainingPercent == 70)
+        #expect(await responses.remaining() == 0)
     }
 
     /// A command that outstays its deadline is killed, not waited on.
@@ -16272,6 +16400,7 @@ for line in sys.stdin:
         let registry = ClaudeCodeSessionRegistry(
             clock: clock,
             freshness: 30,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await responses.next() }
         )
 
@@ -16304,6 +16433,7 @@ for line in sys.stdin:
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
         let registry = ClaudeCodeSessionRegistry(
             clock: clock,
+            processStartedAt: noProcessIsVouchedFor,
             read: {
                 // The command is out for four seconds.
                 await clock.advance(by: 4)
@@ -16336,6 +16466,7 @@ for line in sys.stdin:
         let registry = ClaudeCodeSessionRegistry(
             clock: clock,
             freshness: 30,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await responses.next() }
         )
 
@@ -16379,6 +16510,7 @@ for line in sys.stdin:
             clock: clock,
             freshness: 30,
             edgeFloor: 2,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await responses.next() }
         )
 
@@ -16426,6 +16558,7 @@ for line in sys.stdin:
             clock: clock,
             freshness: 30,
             edgeFloor: 2,
+            processStartedAt: noProcessIsVouchedFor,
             read: {
                 // The session file changes while this command is running.
                 await holder.registry?.invalidate()
@@ -16462,6 +16595,7 @@ for line in sys.stdin:
         let registry = ClaudeCodeSessionRegistry(
             clock: clock,
             freshness: 30,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await counter.read() }
         )
 
@@ -16501,6 +16635,7 @@ for line in sys.stdin:
             clock: clock,
             freshness: 30,
             trustCeiling: 90,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await responses.next() }
         )
         #expect(await registry.presence() == .open)
@@ -16531,6 +16666,7 @@ for line in sys.stdin:
         """.utf8))
         let registry = ClaudeCodeSessionRegistry(
             freshness: 30,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await counter.read() }
         )
 
@@ -16569,6 +16705,7 @@ for line in sys.stdin:
             clock: clock,
             freshness: 30,
             trustCeiling: 90,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await responses.next() }
         )
 
@@ -16605,6 +16742,7 @@ for line in sys.stdin:
             freshness: 30,
             edgeFloor: 2,
             trustCeiling: 90,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await responses.next() }
         )
 
@@ -16646,6 +16784,7 @@ for line in sys.stdin:
             clock: clock,
             freshness: 30,
             edgeFloor: 2,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await counter.read() }
         )
 
@@ -16678,6 +16817,136 @@ for line in sys.stdin:
         #expect(await counter.count == 3)
     }
 
+    /// A listed session that is still the process it was is not worth a
+    /// `claude`.
+    ///
+    /// This is the other half of the hold above, and it covers the case the
+    /// hold could not: a list with rows in it, where one of them could have to
+    /// be retired. The only route to that which raises no edge is a `SIGKILL`,
+    /// and a `SIGKILL` is exactly what a `pid` and a start instant can see. So
+    /// the clock still says when the question may be asked and the kernel says
+    /// whether the answer could have changed -- a `sysctl` a session against a
+    /// process tree.
+    @Test @MainActor
+    func aListedSessionStillRunningIsNotWorthACommand() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let listed = Data("""
+        [{"pid": 4242, "cwd": "/a", "kind": "interactive",
+          "startedAt": 1000, "sessionId": "s-1"}]
+        """.utf8)
+        let counter = ReadCounter(answer: listed)
+        let table = StubProcessTable([4_242: Date(timeIntervalSince1970: 9_000)])
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            processStartedAt: table.reader,
+            read: { await counter.read() }
+        )
+
+        #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        #expect(await counter.count == 1)
+
+        // An hour of freshness windows, every one of them past due, with the
+        // session still running. Before this the hour cost 120 `claude`
+        // launches.
+        for _ in 0 ..< 120 {
+            await clock.advance(by: 30)
+            #expect(await registry.liveSessions().first?.sessionID == "s-1")
+        }
+        #expect(await counter.count == 1)
+        // ...and the answer is still evidence, not a stale reading held past
+        // its ceiling: nothing failed, so nothing aged.
+        #expect(await registry.presence() == .open)
+
+        // The session is killed. Its record stays on disk and no edge is
+        // raised -- the kernel losing the process is the whole of the signal.
+        await counter.respond(with: Data("[]".utf8))
+        table.set(4_242, nil)
+        #expect(await registry.liveSessions().isEmpty)
+        #expect(await counter.count == 2)
+    }
+
+    /// A pid that came back as somebody else is a ghost, not a survivor.
+    ///
+    /// The number on its own does not name a process for longer than that
+    /// process lives, so the check pairs it with the instant the kernel says it
+    /// started and refuses the pair when either half moves.
+    @Test @MainActor
+    func aReusedProcessIdentifierCountsAsAGhost() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let counter = ReadCounter(answer: Data("""
+        [{"pid": 4242, "cwd": "/a", "kind": "interactive",
+          "startedAt": 1000, "sessionId": "s-1"}]
+        """.utf8))
+        let table = StubProcessTable([4_242: Date(timeIntervalSince1970: 9_000)])
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            processStartedAt: table.reader,
+            read: { await counter.read() }
+        )
+
+        #expect(await registry.liveSessions().count == 1)
+        #expect(await counter.count == 1)
+
+        // The session dies and something unrelated is handed its number. A
+        // check that asked only "is there a process 4242?" would answer yes.
+        table.set(4_242, Date(timeIntervalSince1970: 9_500))
+        await counter.respond(with: Data("[]".utf8))
+        await clock.advance(by: 31)
+        #expect(await registry.liveSessions().isEmpty)
+        #expect(await counter.count == 2)
+    }
+
+    /// The clock's re-read waits for a screen; an edge does not.
+    ///
+    /// A cadence is a guess about how stale a list has become, and a guess
+    /// bought while the display is asleep is bought for nobody -- the notch it
+    /// would correct is not being drawn. An edge is somebody reporting that the
+    /// list has stopped being true, which is evidence, and evidence is answered
+    /// whether or not anyone is looking.
+    @Test @MainActor
+    func theSessionListIsNotReReadOnTheClockWhileThereIsNoScreen() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let counter = ReadCounter(answer: Data("""
+        [{"pid": 4242, "cwd": "/a", "kind": "interactive",
+          "startedAt": 1000, "sessionId": "s-1"}]
+        """.utf8))
+        let screen = StubScreenAvailability()
+        let registry = ClaudeCodeSessionRegistry(
+            clock: clock,
+            freshness: 30,
+            edgeFloor: 2,
+            screenIsAvailable: { screen.available },
+            processStartedAt: noProcessIsVouchedFor,
+            read: { await counter.read() }
+        )
+
+        #expect(await registry.liveSessions().count == 1)
+        #expect(await counter.count == 1)
+
+        screen.available = false
+        for _ in 0 ..< 20 {
+            await clock.advance(by: 30)
+            #expect(await registry.liveSessions().count == 1)
+        }
+        #expect(await counter.count == 1)
+
+        // A record appearing or going away is still answered, dark screen or
+        // not: the list is now known wrong, and holding a known-wrong list is
+        // not the same trade as declining to re-confirm a right one.
+        await registry.invalidate()
+        #expect(await registry.liveSessions().count == 1)
+        #expect(await counter.count == 2)
+
+        // And the screen coming back is itself one of the refresh's edges, so
+        // the reading the night did not buy is bought once, with the user.
+        screen.available = true
+        await clock.advance(by: 31)
+        #expect(await registry.liveSessions().count == 1)
+        #expect(await counter.count == 3)
+    }
+
     /// A read that fails does not leave the registry holding its silence.
     ///
     /// The hold above keys on an answer, never on the list simply being empty:
@@ -16694,6 +16963,7 @@ for line in sys.stdin:
             clock: clock,
             freshness: 30,
             trustCeiling: 90,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await counter.read() }
         )
 
@@ -16725,7 +16995,9 @@ for line in sys.stdin:
     /// A registry that has never had a successful read knows nothing.
     @Test @MainActor
     func aSessionListThatNeverAnsweredReportsUnknownRatherThanClosed() async {
-        let registry = ClaudeCodeSessionRegistry(read: { nil })
+        let registry = ClaudeCodeSessionRegistry(
+            processStartedAt: noProcessIsVouchedFor,
+            read: { nil })
         #expect(await registry.presence() == .unknown)
         #expect(await registry.liveSessions().isEmpty)
     }
@@ -16856,7 +17128,9 @@ for line in sys.stdin:
              {"pid": 2, "cwd": "/b", "startedAt": 1000, "sessionId": "also"}]
             """.utf8)
         ])
-        let registry = ClaudeCodeSessionRegistry(read: { await responses.next() })
+        let registry = ClaudeCodeSessionRegistry(
+            processStartedAt: noProcessIsVouchedFor,
+            read: { await responses.next() })
         #expect(await registry.refresh().isEmpty)
 
         // The same array with every identity complete is read in full, so what
@@ -16883,7 +17157,8 @@ for line in sys.stdin:
             let responses = ResponseQueue(items: [Data(json.utf8)])
             return ClaudeCodeSessionRegistry(
                 ignoringWorkingDirectory: quota,
-                read: { await responses.next() }
+                processStartedAt: noProcessIsVouchedFor,
+            read: { await responses.next() }
             )
         }
 
@@ -16911,7 +17186,9 @@ for line in sys.stdin:
         [{"pid": 9, "cwd": "\(quota.path)", "kind": "interactive",
           "startedAt": 1000, "sessionId": "ours"}]
         """.utf8)])
-        let unfiltered = ClaudeCodeSessionRegistry(read: { await responses.next() })
+        let unfiltered = ClaudeCodeSessionRegistry(
+            processStartedAt: noProcessIsVouchedFor,
+            read: { await responses.next() })
         #expect(await unfiltered.liveSessions().count == 1)
     }
 
@@ -17139,6 +17416,7 @@ for line in sys.stdin:
             clock: clock,
             freshness: 30,
             trustCeiling: 90,
+            processStartedAt: noProcessIsVouchedFor,
             read: { await counter.read() }
         )
 
@@ -21203,6 +21481,63 @@ private final class StubControllingTerminalGestures:
     }
 }
 
+/// Counts calls from whichever thread makes them.
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+
+    func record() {
+        lock.lock()
+        stored += 1
+        lock.unlock()
+    }
+}
+
+/// A process table the test writes, standing in for the kernel's.
+private final class StubProcessTable: @unchecked Sendable {
+    private let lock = NSLock()
+    private var startedAt: [Int32: Date]
+
+    init(_ startedAt: [Int32: Date] = [:]) {
+        self.startedAt = startedAt
+    }
+
+    /// Reads like ``ControllingTerminalGestureReader/systemProcessStartedAt(forProcessIdentifier:)``:
+    /// an instant while the process is there, nil once it has gone.
+    var reader: @Sendable (Int32) -> Date? {
+        { pid in
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.startedAt[pid]
+        }
+    }
+
+    /// Starts, ends, or replaces the process on a pid.
+    func set(_ pid: Int32, _ startedAt: Date?) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.startedAt[pid] = startedAt
+    }
+}
+
+/// The kernel vouches for none of the pids a registry test names.
+///
+/// Those tests list sessions as `pid: 1`, `pid: 2` and so on, which on a real
+/// machine are `launchd` and its neighbours — every one of them alive. A suite
+/// left with the real reader would therefore find every fake session still
+/// running and skip the re-read most of these tests are about, and it would do
+/// it differently on a machine where those pids happened to be free. Nil is
+/// also the fail-closed answer the registry is written against: a session it
+/// cannot vouch for is one the command has to be asked about, which is the
+/// behaviour every one of these tests was written under.
+private let noProcessIsVouchedFor: @Sendable (Int32) -> Date? = { _ in nil }
+
 /// Stands in for the machine's display and lock state.
 private final class StubScreenAvailability:
     ScreenAvailabilityReporting, @unchecked Sendable {
@@ -21217,7 +21552,26 @@ private final class StubScreenAvailability:
         set { lock.lock(); stored = newValue; lock.unlock() }
     }
 
-    func isAvailable() -> Bool { available }
+    /// How many times the reading has been *taken*.
+    ///
+    /// The only thing that can tell a parked timer from one that is firing and
+    /// declining to sample: both read no windows, and only one of them stops
+    /// waking the machine. See
+    /// ``theConcealmentTimerIsParkedWhileThereIsNoScreen``.
+    var readCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads
+    }
+    nonisolated(unsafe) private var reads = 0
+
+    func isAvailable() -> Bool {
+        lock.lock()
+        reads += 1
+        let answer = stored
+        lock.unlock()
+        return answer
+    }
 
     func changeEvents() -> AsyncStream<Void> {
         AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
