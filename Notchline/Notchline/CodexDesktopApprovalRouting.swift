@@ -68,16 +68,19 @@ struct DesktopApprovalRoutingSnapshot: Equatable, Sendable {
 /// and the row must not start asking the user to clear a prompt nobody will
 /// be shown.
 ///
-/// **What this does not fix.** The pin is only as good as the first look. If
-/// this process's first refresh for a Turn lands after the map has already
-/// flipped, it pins the flipped answer — a window one refresh wide, since a
-/// turn's `UserPromptSubmit` wakes one immediately. Closing it properly means
-/// reading `turn_context` out of the rollout instead, whose cost was measured
-/// the same day over the 136 rollouts on this machine: the last `turn_context`
-/// sits a median 32 KB from EOF, but p90 950 KB and at worst 20 MB, so a
-/// bounded tail scan answers for roughly nine threads in ten and needs a
-/// fallback for the rest. Not worth paying for a window this narrow; it is the
-/// escalation if one ever proves it is.
+/// **The map is the fallback now, not the source.** An earlier version of this
+/// comment left the map as the only source and named its remaining hole — a
+/// Turn whose first refresh lands before Desktop has persisted a switch pins
+/// the stale answer for that Turn's whole life — as an escalation to pay for
+/// only if it ever proved itself. It proved itself: reported 2026-08-25 as
+/// *Approval needed* on rows where nobody was being asked, on sessions whose
+/// mode had been switched from manual to automatic partway through and never on
+/// sessions started in automatic mode. That is the signature of a stale map
+/// exactly, because a session started in automatic mode has nothing to persist.
+///
+/// So ``CodexRolloutTurnReviewerReader`` is asked first, and this holds what it
+/// said. The map answers only while that reading is outstanding and for the
+/// Turns it cannot answer for at all.
 struct TurnApprovalRoutingPin: Sendable {
     /// A Turn, by the only pair that identifies one across threads.
     nonisolated struct TurnIdentity: Hashable, Sendable {
@@ -90,20 +93,68 @@ struct TurnApprovalRoutingPin: Sendable {
         }
     }
 
-    private var answersByTurn: [TurnIdentity: Bool] = [:]
+    /// What is known about one Turn's routing.
+    ///
+    /// The two fields answer different questions and neither implies the other:
+    /// `value` is the answer the row uses, `hasReadRollout` is whether the
+    /// authority has already been asked. A Turn whose rollout answered has
+    /// both; a Turn whose rollout could not be read has only the second, and
+    /// falls back to the map for the rest of its life rather than re-reading a
+    /// file that will not gain the record it is missing.
+    private struct Answer: Sendable {
+        var value: Bool?
+        var hasReadRollout = false
+    }
+
+    private var answersByTurn: [TurnIdentity: Answer] = [:]
 
     nonisolated init() {}
+
+    /// Whether the Turn's own `turn_context` has yet to be looked for.
+    ///
+    /// Asked once per Turn and not once per refresh: the record is written
+    /// *before* the hook that makes this app aware of the Turn — measured
+    /// 2026-08-25 against CLI `0.149.0-alpha.4.3`, `turn_context` at
+    /// `…491.593` and `UserPromptSubmit` at `…491.660`, and again 65 ms apart
+    /// on an `--approve-for-me` run — so a look that finds nothing is looking
+    /// at a rollout that will never carry it, not at one that has not caught
+    /// up.
+    nonisolated func awaitsRolloutReading(forTurn turn: TurnIdentity) -> Bool {
+        !(answersByTurn[turn]?.hasReadRollout ?? false)
+    }
+
+    /// Records what the Turn's own `turn_context` said, or that it said nothing.
+    ///
+    /// `nil` is the second case, and it is deliberately not the same as an
+    /// answer: it closes the reading without claiming anything, leaving the map
+    /// to supply the value exactly as it did before this reading existed.
+    nonisolated mutating func recordRolloutReading(
+        _ approvalsReachTheUser: Bool?,
+        forTurn turn: TurnIdentity
+    ) {
+        guard let approvalsReachTheUser else {
+            answersByTurn[turn, default: Answer()].hasReadRollout = true
+            return
+        }
+        // Overwrites a map answer this Turn may already have been given. That
+        // is the whole point: the map is a fact about the thread now, and this
+        // is the reviewer the running Turn was handed.
+        answersByTurn[turn] = Answer(
+            value: approvalsReachTheUser,
+            hasReadRollout: true
+        )
+    }
 
     /// The answer for this Turn, recording it the first time the Turn is seen.
     nonisolated mutating func approvalsReachTheUser(
         forTurn turn: TurnIdentity,
         in snapshot: DesktopApprovalRoutingSnapshot
     ) -> Bool {
-        if let pinned = answersByTurn[turn] {
+        if let pinned = answersByTurn[turn]?.value {
             return pinned
         }
         let answer = snapshot.approvalsReachTheUser(for: turn.threadID)
-        answersByTurn[turn] = answer
+        answersByTurn[turn, default: Answer()].value = answer
         return answer
     }
 
@@ -115,6 +166,225 @@ struct TurnApprovalRoutingPin: Sendable {
     /// still live.
     nonisolated mutating func retain(turns: Set<TurnIdentity>) {
         answersByTurn = answersByTurn.filter { turns.contains($0.key) }
+    }
+}
+
+/// The reviewer one running Turn was actually handed.
+///
+/// Split from ``DesktopApprovalRoutingProviding`` because the two answer
+/// different questions from different sources: that one reads what Desktop last
+/// recorded about a *thread*, this one reads what Codex wrote down when it
+/// started this *Turn*.
+nonisolated protocol TurnReviewerReading: Sendable {
+    /// Whether an approval on this Turn can still reach the user.
+    ///
+    /// `nil` means the rollout did not say — no such file, no `turn_context`
+    /// near its end, or none recent enough to be this Turn's. It is not an
+    /// answer and must not be treated as one.
+    func approvalsReachTheUser(
+        forTurnStartedAt turnStartedAt: Date,
+        inRolloutAt rolloutPath: String
+    ) async -> Bool?
+}
+
+/// Reads `turn_context.approvals_reviewer` from the tail of a thread's rollout.
+///
+/// **This is the authority, and the only one.** Codex writes a `turn_context`
+/// record at the head of every Turn naming the reviewer that Turn will use, and
+/// that value is what the turn goes on to obey for its whole life — a
+/// `ThreadSettings` override applied mid-turn changes the *thread*, not the
+/// turn in flight (the timings for that are in ``TurnApprovalRoutingPin``).
+/// Desktop's `heartbeat-thread-permissions-by-id` is a copy of the thread's
+/// current setting, written by a different process at a time nobody here
+/// controls; this record is the turn's own.
+///
+/// **Reading it is cheap at the only moment it is read.** The p90 of "how far
+/// is the last `turn_context` from EOF" over this machine's rollouts is ~950 KB
+/// and the worst is 20 MB, but those are rollouts at rest, with a turn's worth
+/// of items appended after the record. This reader looks when the Turn has just
+/// begun, which is when the record is the newest thing in the file: measured
+/// 2026-08-25 against CLI `0.149.0-alpha.4.3`, ~1 KB from EOF at the moment
+/// `UserPromptSubmit` fired. ``maximumTailByteCount`` is sized for the case
+/// where a refresh is late rather than for the case where it is on time.
+///
+/// **And it is read before the app has heard of the Turn.** Same measurement,
+/// twice: `turn_context` at `…491.593` against `UserPromptSubmit` at
+/// `…491.660`, and on an `--approve-for-me` run `…561.167` against `…561.232`.
+/// 65 ms and 67 ms — the record is on disk first, so a look that comes up empty
+/// is looking at a rollout that has nothing to give rather than one that is
+/// behind. That is what lets the caller ask once per Turn instead of once per
+/// refresh.
+actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
+    /// The one reviewer name that means "not the user".
+    ///
+    /// One-sided for the same reason the map is: an unreadable file, a record
+    /// this build does not recognise, or a reviewer a later Codex invents all
+    /// fail to prove "nobody will be asked", and the answer to a failed proof
+    /// is the state that keeps the row honest.
+    nonisolated private static let automaticReviewer = "auto_review"
+    /// How much of the end of the rollout is scanned for the record.
+    nonisolated private static let maximumTailByteCount = 512 * 1_024
+    /// How much older than the Turn its own `turn_context` may be.
+    ///
+    /// The record precedes the Turn's first hook by ~65 ms measured, and the
+    /// Turn's `startedAt` is that hook's arrival, so this Turn's record is
+    /// always a little *older* than `startedAt` and the previous Turn's is
+    /// older by however long the user took to type. Two seconds separates them
+    /// with three orders of magnitude of headroom, and where it does not — two
+    /// Turns opened on one thread inside two seconds — the two share a
+    /// reviewer anyway, because nobody switched a mode in between.
+    nonisolated private static let recordTolerance: TimeInterval = 2
+
+    private enum RolloutReadError: Error {
+        case unsafeFile
+    }
+
+    private struct TurnContextRecord: Decodable {
+        let timestamp: Date
+        let approvalsReviewer: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case timestamp
+            case type
+            case payload
+        }
+
+        private struct Payload: Decodable {
+            let approvalsReviewer: String?
+
+            private enum CodingKeys: String, CodingKey {
+                case approvalsReviewer = "approvals_reviewer"
+            }
+        }
+
+        private enum DecodingFailure: Error {
+            case notATurnContext
+            case unreadableTimestamp
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            guard try container.decode(String.self, forKey: .type)
+                == "turn_context" else {
+                throw DecodingFailure.notATurnContext
+            }
+            let stamp = try container.decode(String.self, forKey: .timestamp)
+            guard let timestamp = CodexRolloutTimestamp.date(from: stamp) else {
+                throw DecodingFailure.unreadableTimestamp
+            }
+            self.timestamp = timestamp
+            approvalsReviewer = try container.decodeIfPresent(
+                Payload.self,
+                forKey: .payload
+            )?.approvalsReviewer
+        }
+    }
+
+    private let fileManager: FileManager
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    func approvalsReachTheUser(
+        forTurnStartedAt turnStartedAt: Date,
+        inRolloutAt rolloutPath: String
+    ) async -> Bool? {
+        guard let record = newestTurnContext(inRolloutAt: rolloutPath) else {
+            return nil
+        }
+        // A record from the Turn before this one describes a reviewer that has
+        // already been superseded, which is the whole failure being fixed here.
+        // Better to say nothing and let the map answer than to pin it.
+        guard record.timestamp
+            >= turnStartedAt.addingTimeInterval(-Self.recordTolerance) else {
+            return nil
+        }
+        guard let reviewer = record.approvalsReviewer else { return nil }
+        return reviewer != Self.automaticReviewer
+    }
+
+    private func newestTurnContext(
+        inRolloutAt rolloutPath: String
+    ) -> TurnContextRecord? {
+        guard let tail = try? readValidatedTail(ofFileAt: rolloutPath) else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        // Backwards: the newest record wins, and stopping at the first match is
+        // what keeps the rest of the tail from being decoded at all.
+        for line in tail.split(separator: UInt8(ascii: "\n")).reversed() {
+            // The decode is the test of what a line is. This only keeps the
+            // other ninety-nine in a hundred from reaching it, and a rollout
+            // line can be tens of kilobytes of assistant text.
+            guard line.range(of: Self.turnContextMarker) != nil else { continue }
+            if let record = try? decoder.decode(
+                TurnContextRecord.self,
+                from: line
+            ) {
+                return record
+            }
+        }
+        return nil
+    }
+
+    /// The substring every `turn_context` line carries, whatever the spacing.
+    nonisolated private static let turnContextMarker = Data("turn_context".utf8)
+
+    /// The last ``maximumTailByteCount`` bytes of the file, minus a partial
+    /// first line.
+    ///
+    /// Validated the way the sibling adapter validates its state file, and for
+    /// the same reason: the path is handed over by the App Server, so it is
+    /// only ever read when it is a regular file this user owns.
+    private func readValidatedTail(ofFileAt path: String) throws -> Data {
+        let url = URL(fileURLWithPath: path)
+        let resourceValues = try url.resourceValues(forKeys: [
+            .fileSizeKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey
+        ])
+        guard resourceValues.isRegularFile == true,
+              resourceValues.isSymbolicLink != true else {
+            throw RolloutReadError.unsafeFile
+        }
+        let attributes = try fileManager.attributesOfItem(atPath: path)
+        if let owner = attributes[.ownerAccountID] as? NSNumber,
+           owner.uint32Value != getuid() {
+            throw RolloutReadError.unsafeFile
+        }
+
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let size = resourceValues.fileSize ?? 0
+        let startsAtHead = size <= Self.maximumTailByteCount
+        if !startsAtHead {
+            try handle.seek(toOffset: UInt64(size - Self.maximumTailByteCount))
+        }
+        let tail = try handle.readToEnd() ?? Data()
+        guard !startsAtHead else { return tail }
+        // A seek lands mid-record, and half a JSON object decodes as nothing.
+        guard let firstBreak = tail.firstIndex(of: UInt8(ascii: "\n")) else {
+            return Data()
+        }
+        return Data(tail[tail.index(after: firstBreak)...])
+    }
+}
+
+/// The one timestamp format every rollout record is stamped with.
+///
+/// `2026-08-26T04:44:51.593Z`: internet date time, fractional seconds, always
+/// UTC. Held here rather than built per read because `ISO8601DateFormatter` is
+/// expensive to create and this one is immutable once configured.
+nonisolated enum CodexRolloutTimestamp {
+    nonisolated private static let formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    nonisolated static func date(from stamp: String) -> Date? {
+        formatter.date(from: stamp)
     }
 }
 

@@ -5979,6 +5979,202 @@ struct NotchlineTests {
         #expect(!retainedTurnAnswer)
     }
 
+    /// The reviewer the running Turn was handed, out of the Turn's own record.
+    ///
+    /// Every timestamp below is relative to the Turn's start because that is
+    /// the relationship the reader depends on: Codex writes `turn_context` at
+    /// the head of the Turn, ~65 ms before the `UserPromptSubmit` that becomes
+    /// `startedAt` (measured 2026-08-25, CLI `0.149.0-alpha.4.3`).
+    @Test @MainActor
+    func rolloutTurnReviewerReadsTheReviewerTheRunningTurnWasHanded() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let stampFormatter = ISO8601DateFormatter()
+        stampFormatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds
+        ]
+        let turnStartedAt = Date()
+        func line(_ object: [String: Any]) throws -> String {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            return String(decoding: data, as: UTF8.self)
+        }
+        func turnContext(
+            reviewer: String?,
+            offsetFromTurnStart: TimeInterval
+        ) throws -> String {
+            var payload: [String: Any] = ["approval_policy": "on-request"]
+            if let reviewer {
+                payload["approvals_reviewer"] = reviewer
+            }
+            return try line([
+                "timestamp": stampFormatter.string(
+                    from: turnStartedAt.addingTimeInterval(offsetFromTurnStart)
+                ),
+                "type": "turn_context",
+                "payload": payload
+            ])
+        }
+        func writeRollout(_ lines: [String]) throws -> String {
+            let file = root.appendingPathComponent("\(UUID().uuidString).jsonl")
+            try Data(lines.joined(separator: "\n").appending("\n").utf8)
+                .write(to: file, options: .atomic)
+            return file.path
+        }
+        // Anything but a `turn_context`, and deliberately carrying the word:
+        // the prefilter is an optimisation, and the decode is what decides.
+        let noise = try line([
+            "timestamp": stampFormatter.string(from: turnStartedAt),
+            "type": "response_item",
+            "payload": ["type": "message", "text": "about the turn_context"]
+        ])
+
+        let reader = CodexRolloutTurnReviewerReader()
+        func read(_ path: String) async -> Bool? {
+            await reader.approvalsReachTheUser(
+                forTurnStartedAt: turnStartedAt,
+                inRolloutAt: path
+            )
+        }
+
+        let automatic = try writeRollout([
+            noise,
+            try turnContext(reviewer: "auto_review", offsetFromTurnStart: -0.065),
+            noise
+        ])
+        #expect(await read(automatic) == false)
+
+        let person = try writeRollout([
+            try turnContext(reviewer: "user", offsetFromTurnStart: -0.065),
+            noise
+        ])
+        #expect(await read(person) == true)
+
+        // A reviewer a later Codex invents proves nothing, so it must not
+        // silence the state.
+        let unrecognised = try writeRollout([
+            try turnContext(reviewer: "team_lead", offsetFromTurnStart: -0.065)
+        ])
+        #expect(await read(unrecognised) == true)
+
+        // The newest record wins over the one the Turn before it wrote.
+        let switched = try writeRollout([
+            try turnContext(reviewer: "user", offsetFromTurnStart: -600),
+            noise,
+            try turnContext(reviewer: "auto_review", offsetFromTurnStart: -0.065)
+        ])
+        #expect(await read(switched) == false)
+
+        // **The reading that must not be made.** Only the previous Turn's
+        // record is on disk, and answering with it is the whole failure this
+        // reader exists to end -- so it says nothing and leaves the map to
+        // answer.
+        let staleOnly = try writeRollout([
+            try turnContext(reviewer: "user", offsetFromTurnStart: -600),
+            noise
+        ])
+        #expect(await read(staleOnly) == nil)
+
+        let silent = try writeRollout([noise, noise])
+        #expect(await read(silent) == nil)
+
+        let reviewerless = try writeRollout([
+            try turnContext(reviewer: nil, offsetFromTurnStart: -0.065)
+        ])
+        #expect(await read(reviewerless) == nil)
+
+        #expect(await read(root.appendingPathComponent("absent.jsonl").path) == nil)
+
+        // A rollout whose head is megabytes away is read from its tail, and the
+        // seek that gets there lands mid-record.
+        let padding = try line([
+            "timestamp": stampFormatter.string(from: turnStartedAt),
+            "type": "response_item",
+            "payload": [
+                "type": "message",
+                "text": String(repeating: "p", count: 8_192)
+            ]
+        ])
+        let paddedLines = Array(repeating: padding, count: 400)
+        let deepInAFile = try writeRollout(
+            paddedLines
+                + [try turnContext(
+                    reviewer: "auto_review",
+                    offsetFromTurnStart: -0.065
+                )]
+        )
+        #expect(await read(deepInAFile) == false)
+
+        // And a record already pushed past the tail window is one this reader
+        // declines to claim anything about.
+        let pastTheWindow = try writeRollout(
+            [try turnContext(reviewer: "auto_review", offsetFromTurnStart: -0.065)]
+                + paddedLines
+        )
+        #expect(await read(pastTheWindow) == nil)
+    }
+
+    /// The rollout answers once, and its answer outranks the map's.
+    @Test @MainActor
+    func approvalRoutingPinPrefersTheRolloutAndFallsBackToTheMap() {
+        var pin = TurnApprovalRoutingPin()
+        let turn = TurnApprovalRoutingPin.TurnIdentity(
+            threadID: "thread-1",
+            turnID: "turn-1"
+        )
+        let mapSaysPerson = DesktopApprovalRoutingSnapshot.unknown
+
+        // A refresh before the rollout path is known still has to answer, and
+        // the map is what it answers with.
+        #expect(pin.awaitsRolloutReading(forTurn: turn))
+        let beforeTheReading = pin.approvalsReachTheUser(
+            forTurn: turn,
+            in: mapSaysPerson
+        )
+        #expect(beforeTheReading)
+
+        // The rollout then says what the Turn was actually handed, and that
+        // replaces the map's answer rather than being ignored as "already
+        // pinned".
+        pin.recordRolloutReading(false, forTurn: turn)
+        let afterTheReading = pin.approvalsReachTheUser(
+            forTurn: turn,
+            in: mapSaysPerson
+        )
+        #expect(!pin.awaitsRolloutReading(forTurn: turn))
+        #expect(!afterTheReading)
+
+        // A rollout that cannot answer closes the reading without claiming
+        // anything: the map goes on answering, pinned for the Turn exactly as
+        // it was before this reading existed.
+        var unreadable = TurnApprovalRoutingPin()
+        unreadable.recordRolloutReading(nil, forTurn: turn)
+        #expect(!unreadable.awaitsRolloutReading(forTurn: turn))
+        let codexReviews = DesktopApprovalRoutingSnapshot(
+            automaticallyReviewedThreadIDs: ["thread-1"]
+        )
+        let fromTheMap = unreadable.approvalsReachTheUser(
+            forTurn: turn,
+            in: codexReviews
+        )
+        let afterTheMapChanged = unreadable.approvalsReachTheUser(
+            forTurn: turn,
+            in: mapSaysPerson
+        )
+        #expect(!fromTheMap)
+        #expect(!afterTheMapChanged)
+
+        // And a forgotten Turn is a fresh question, reading included.
+        unreadable.retain(turns: [])
+        #expect(unreadable.awaitsRolloutReading(forTurn: turn))
+    }
+
     /// The reported bug, end to end.
     ///
     /// Measured 2026-08-24 on thread `01a03241`: started under `user`,
@@ -6100,6 +6296,122 @@ struct NotchlineTests {
         let afterNextTurn = await service.fetchSnapshot()
         await service.disconnect()
         #expect(afterNextTurn.sessions.first?.status == .running)
+    }
+
+    /// The second report, end to end.
+    ///
+    /// Reported 2026-08-25: *Approval needed* on rows where nobody was being
+    /// asked, on sessions whose mode had been switched from manual to automatic
+    /// partway through, and never on sessions started in automatic mode. That
+    /// is a stale map exactly -- a session started in automatic mode has
+    /// nothing for Desktop to persist, so its map entry cannot be behind. Here
+    /// the map is left saying `user`, which is what it says for as long as
+    /// Desktop takes to write the switch down, and the Turn's own
+    /// `turn_context` says otherwise.
+    @Test @MainActor
+    func aTurnHandedToTheReviewerIsNotAnnouncedAsApprovalNeeded() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        let timestamp = Date().timeIntervalSince1970
+        let turnStartedAt = Date(timeIntervalSince1970: timestamp)
+
+        // Desktop's copy of the thread's setting, still carrying what the
+        // session was started with.
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "heartbeat-thread-permissions-by-id": [
+                    "thread-1": ["approvalsReviewer": "user"]
+                ]
+            ]
+        ]).write(to: stateFile, options: .atomic)
+
+        // The Turn's own record, written 65 ms before the hook that starts it.
+        let stampFormatter = ISO8601DateFormatter()
+        stampFormatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds
+        ]
+        let rollout = root.appendingPathComponent("rollout-thread-1.jsonl")
+        try Data((String(
+            decoding: try JSONSerialization.data(withJSONObject: [
+                "timestamp": stampFormatter.string(
+                    from: turnStartedAt.addingTimeInterval(-0.065)
+                ),
+                "type": "turn_context",
+                "payload": ["approvals_reviewer": "auto_review"]
+            ]),
+            as: UTF8.self
+        ) + "\n").utf8).write(to: rollout, options: .atomic)
+
+        func deliver(_ event: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: event)
+                .deliver(to: repository)
+        }
+        try deliver([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ])
+        // The permission pipeline runs for a reviewed call exactly as it does
+        // for one a person is looking at -- measured 2026-08-25 on a
+        // `--approve-for-me` run, `PreToolUse` and `PermissionRequest` 35 ms
+        // apart with nobody to ask and `PostToolUse` 4.8 s later.
+        try deliver([
+            "received_at": timestamp + 1,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 2,
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash"
+        ])
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                .object([
+                    "id": .string("thread-1"),
+                    "ephemeral": .bool(false),
+                    "threadSource": .string("user"),
+                    "path": .string(rollout.path)
+                ])
+            ],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            approvalRouting: CodexDesktopApprovalRoutingRepository(
+                stateFileURL: stateFile
+            ),
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        let snapshot = await snapshotWithSessions(from: service)
+        await service.disconnect()
+        #expect(snapshot.sessions.first?.status == .running)
     }
 
     @Test @MainActor

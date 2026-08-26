@@ -125,6 +125,12 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// call that is still open, which is as true of a request the automatic
     /// reviewer is deciding as of one a person is looking at.
     private let approvalRouting: any DesktopApprovalRoutingProviding
+    /// The reviewer each running Turn was handed, read from its own rollout.
+    ///
+    /// Consulted ahead of `approvalRouting`, which is Desktop's copy of the
+    /// thread's current setting and lags a switch by however long Desktop takes
+    /// to persist one.
+    private let turnReviewer: any TurnReviewerReading
     /// Whether there is a screen the user could read a thread on.
     ///
     /// Only the gate's re-check consults it: a row Desktop still reports unread
@@ -235,6 +241,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             CodexDesktopUnreadStateRepository(),
         approvalRouting: any DesktopApprovalRoutingProviding =
             CodexDesktopApprovalRoutingRepository(),
+        turnReviewer: any TurnReviewerReading = CodexRolloutTurnReviewerReader(),
         screenAvailability: any ScreenAvailabilityReporting =
             ScreenAvailabilityWatcher(),
         clock: any MonitorClock = SystemMonitorClock(),
@@ -259,6 +266,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         self.projectMetadata = projectMetadata
         self.unreadState = unreadState
         self.approvalRouting = approvalRouting
+        self.turnReviewer = turnReviewer
         self.screenAvailability = screenAvailability
         // Background reads land after the snapshot that started them has already
         // been published, so their results need a trigger of their own. The
@@ -954,16 +962,45 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         // panel happens to draw.
         var observedTurns: Set<TurnApprovalRoutingPin.TurnIdentity> = []
 
+        // The reviewer readings first, and all of them, so the loop below --
+        // which mutates the pin and the two gates -- has nothing to await in
+        // the middle of it. Asked for every Turn rather than only for the ones
+        // sitting on an approval, because the question is what this Turn
+        // *started* under and a Turn that has reached Approval needed is
+        // already too late to ask it.
+        for state in states {
+            let turn = TurnApprovalRoutingPin.TurnIdentity(
+                threadID: state.threadID,
+                turnID: state.turnID
+            )
+            guard approvalRoutingPin.awaitsRolloutReading(forTurn: turn) else {
+                continue
+            }
+            // The rollout's own path, as the App Server reports it. A thread
+            // this app has not been handed yet is one it draws no row for
+            // either, so there is nothing to be early for -- and the reading is
+            // simply made on the refresh that does have the path.
+            guard let rolloutPath = threadRecords[state.threadID]?
+                .thread?["path"]?.stringValue else {
+                continue
+            }
+            approvalRoutingPin.recordRolloutReading(
+                await turnReviewer.approvalsReachTheUser(
+                    forTurnStartedAt: state.startedAt,
+                    inRolloutAt: rolloutPath
+                ),
+                forTurn: turn
+            )
+        }
+
         for state in states {
             let turn = TurnApprovalRoutingPin.TurnIdentity(
                 threadID: state.threadID,
                 turnID: state.turnID
             )
             observedTurns.insert(turn)
-            // Asked for every Turn rather than only for the ones sitting on an
-            // approval, because the question is what this Turn *started* under
-            // and a Turn that has reached Approval needed is already too late
-            // to ask it.
+            // Whatever the rollout said, if it said anything. The map answers
+            // for the Turns it could not.
             let approvalsReachTheUser = approvalRoutingPin.approvalsReachTheUser(
                 forTurn: turn,
                 in: approvalRouting
