@@ -46,7 +46,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 官方 [Codex Desktop deep links](https://learn.chatgpt.com/docs/reference/commands#deep-links) 已定义 `codex://threads/<thread-id>`。导航 adapter 已按本节约束实现；Codex 当前仍不提供页面完成渲染的公开回执。
 - 官方 [Codex App Server](https://learn.chatgpt.com/docs/app-server) 当前没有 unread/read/open/current-view 字段或通知。`thread/read` 是读取 Thread 记录，不是标记已读；`thread/loaded/list` 与 `thread/closed` 也不表达蓝点语义。
 - 当前 Desktop 安装包内部把蓝点集合持久化在 `$CODEX_HOME/.codex-global-state.json` 的 `electron-persisted-atom-state.unread-thread-ids-by-host-v1.local`。经产品批准，本字段已作为独立、已登记的私有只读适配器进入生产；它不扩展到其他 Electron 状态或 IPC。
-- 实现必须处理原子替换与短暂主/备份代际差异；活动 Turn 无论蓝点如何都继续显示，只有终态 Turn 在主文件权威快照中从 unread 集合消失后才移除。不得注入 IPC、修改 `app.asar`、使用 Accessibility/AppleScript，或把 Stop/SessionEnd 当作已读。
+- 实现必须处理原子替换与短暂主/备份代际差异；活动 Turn 无论蓝点如何都继续显示，只有终态 Turn 在主文件权威快照中从 unread 集合消失后才移除，**且该快照必须写在这一轮的终止时刻之后**——蓝点集合是 Desktop 内存里的状态在磁盘上的投影，投影落后时它的沉默说的是别的时刻的事（实测 2026-08-26，见 §1.3）。不得注入 IPC、修改 `app.asar`、使用 Accessibility/AppleScript，或把 Stop/SessionEnd 当作已读。
 - Developer ID 直接分发在关闭 App Sandbox 时技术上可读取该路径；Mac App Store sandbox 需要用户选择目录与 security-scoped bookmark。无论分发方式如何，文件可读都不等于接口受支持。
 - 长期方向仍是迁移到 Codex 未来公开的 `hasUnreadTurn` 快照与变化通知；出现等价公开能力时必须在同一改动中移除私有适配器与清单行。
 - **Claude Code 一侧没有等价的 deep link。** `claude-cli://open` 与 `claude://code/new` 都只新建会话，实测 `claude://code/sessions/local_…` 被 Desktop 拒绝。因此那一侧实现为宿主唤起（§14.2），并按 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md) 只对该产品降级。每次 Claude Desktop 更新后复查 `/code/sessions/` 路由是否开始接受本地会话 ID；一旦官方支持出现，应迁移到 deep link 并移除 Apple Events 路径。
@@ -58,6 +58,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
 - 状态根目录是 `process.env.CODEX_HOME ?? ~/.codex`；默认文件为 `.codex-global-state.json`。
 - 未读集合位于 `electron-persisted-atom-state.unread-thread-ids-by-host-v1.<hostID>`；本地 V1 只能消费 `local`，不能合并其他 host。
 - Desktop 自身在状态变化后等待约 `500 ms` 再持久化；写入通过同目录临时文件 `rename` 原子替换主文件，随后独立替换 `.bak`。因此目标 inode 会变化，主文件与 backup 也可能短暂属于不同 generation。
+- **「约 500 ms」是这条延迟的下界，不是上界**（复测于 Desktop `26.820.60940`，2026-08-26）。main 进程把**整张** `electron-persisted-atom-state` 用一个 500 ms 的 trailing debounce 落盘，**没有 max-wait，且所有 persisted atom 共用这一个 debounce**——任何写得比 500 ms 更密的 atom 都会把落盘无限期往后推。composer 草稿 `composer-prompt-drafts-v2` 正是这样一个 atom，由编辑器的 `dispatchTransaction` **每次按键**写一次。实测：在 composer 里连续键入 165 个字符，45.4 秒的窗口内该文件**只被写了一次**，就在停手约半秒之后，打字期间一次都没有。所以蓝点在 Desktop 侧边栏里毫秒级点亮，而这一条 id 整段时间不在文件里。非 atom 的顶层 key（窗口位置、当前 Project 等）走的是立即落盘，会顺带把整张 atom map 刷出去，这使饥饿是间歇性的，也是当初能测到 583 ms 的原因。
 - 这是真实的 Thread 级蓝点集合，没有 Turn id。它只能与“每个 Thread 展示最新活动或未读终态 Turn”的领域模型组合。
 
 生产实现采用以下架构：
@@ -67,7 +68,7 @@ V1 把展开列表实现为 Codex Desktop 当前处理轮次的实时监视器�
    **挂载不是一次性的。** 监听目标不存在（首次运行时 `~/.codex/hooks.json` 还没被写出来）或被删除／替换（卸载后重装、Codex 整体换掉状态目录）都必须能恢复：watcher 收到 `rename`／`delete` 就重开描述符，未读 repository 的 `snapshot` 与 `CodexHookRegistrar.registration()` 也各自在本来就要做的那次读取上调一次 `attachIfNeeded()`；本应用自己 install/uninstall 之后 `invalidateRegistration()` 直接丢掉缓存，重挂由随之而来的那次读取顺带完成。**刻意不设自己的重试定时器**——挂不上的代价因此是每次刷新一个失败的 `open`，而不是一个额外的唤醒源。
 3. 只解析 `local` host 的字符串集合，同时校验所有 host 名称、空 id 与重复 id。读取器拒绝 symlink、非当前用户普通文件、超过 4 MiB 的文件、异常 JSON 与不兼容 schema；不记录原始 JSON 或 Thread id。
 4. 主文件失败时读取 `.bak`，两者失败时保留进程内 last-known-good。但 backup 和 last-known-good 只用于保留数据与诊断，只有 `source == current` 的主文件快照可以做新的隐藏决定；解析失败绝不能解释为空集合。
-5. 活动、Input、Approval 始终显示并清除该 Turn 的终态 gate。终态首次出现且主文件暂未包含 unread 时保留 2 秒，覆盖 Desktop 约 500 ms 的持久化延迟；已经观察过 unread 后再从权威主快照消失则立即隐藏。隐藏 gate 在临时解析失败时保持隐藏，避免 UI 闪回；新终态在失败期间继续显示。
+5. 活动、Input、Approval 始终显示并清除该 Turn 的终态 gate。**权威快照要能对某一轮作数，它的 `modificationDate` 必须不早于该轮的 `terminalBoundaryAt`**（`DesktopUnreadStateSnapshot.currentAsOf`）；更早的那次写入发生在这一轮结束之前，不可能记下过它，因此「id 不在集合里」对它一个字都没说，该行照留并按 1 秒 re-check 等待下一次写入（等文件不等用户，锁屏照等）。在此之上，终态首次出现且主文件暂未包含 unread 时仍保留 2 秒 settling 窗口——但它现在覆盖的只是 Desktop 收到 `turn/completed` 到 renderer 把 atom 推给 main 的那几毫秒，不再是持久化延迟（那条延迟无上界，见上一节；加宽窗口被否决：任何足以覆盖一次打字的窗口，也会把已读的行在通知栏上多留同样久）。已经观察过 unread 后再从权威主快照消失则立即隐藏。隐藏 gate 在临时解析失败时保持隐藏，避免 UI 闪回；新终态在失败期间继续显示。
 6. `MonitorStore` 同时消费目录变化流和原有轮询；统一的 in-flight gate 合并并发刷新。停止监视或关闭集成时清除终态 gate（~~清空列表~~ 该动作已删除，见 §16.2）。
 
 适配器已经覆盖成功、缺失、损坏、backup、last-known-good、schema 不兼容、原子替换和终态竞态 fixture；Desktop 更新后仍必须执行真实 read/unread 与完成/阅读竞态矩阵。目标是 p95 同步不超过 1.5 秒、p99 不超过 2 秒，且任意错误都不提前移除终态行。当前 Developer ID 非沙箱构建可读取该路径；Mac App Store sandbox 仍需要用户选择目录与 security-scoped bookmark，未经实现不得声称支持。

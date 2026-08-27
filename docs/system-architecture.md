@@ -380,7 +380,7 @@ stateDiagram-v2
 - 产品只关心 Turn 是否仍在进行：实时 `Stop` 以及 App Server 的 `completed`、`failed`、`interrupted` 都直接成为 Completed，不再发起 `thread/read` 区分结束原因。
 - App Server 不参与状态推导。Thread payload 只贡献根线程判定、标题与 preview；实测表明它没有任何字段能表达 Turn 级运行时真值，因此原先的 `activeFlags` 纠偏机制已整体删除而非保留为空转代码。
 - 缺失、超时、未知枚举或不满足身份门槛的信号不触发状态变化；当前四态值保持不变。
-- 终态是否留在列表由 `TerminalUnreadMembershipGate` 决定。只有当前主文件的权威 unread 快照能新增隐藏决定；backup、last-known-good 或解析失败只能保守保留。
+- 终态是否留在列表由 `TerminalUnreadMembershipGate` 决定。只有当前主文件的权威 unread 快照能新增隐藏决定；backup、last-known-good 或解析失败只能保守保留。**而且那份快照还必须写在该 Turn 的终止时刻之后**：每份 unread 快照带上自己「完整覆盖到哪一刻」（`DesktopUnreadStateSnapshot.currentAsOf`，Codex 侧取主文件的 `modificationDate`），停在该 Turn 之前的快照描述的是这一轮尚未结束的时刻，它的沉默不是任何证据（实测 2026-08-26，见 [ADR 0002](adr/0002-use-desktop-unread-state-for-monitor-membership.md) 的 2026-08-26 补记）。这样的行照留，并按 1 秒 re-check 等下一次写入——它等的是文件而不是用户，因此锁屏也照等。
 
 ## 4. App Server 传输与恢复边界
 
@@ -428,7 +428,7 @@ flowchart LR
 | 传输分帧 | `AppServerStreamPump` | 在串行 readability queue 内把 stdout 切成有序完整帧，并对单帧上限 fail closed | [`CodexAppServerClient.swift`](../Notchline/Notchline/CodexAppServerClient.swift) |
 | 纯解析 | `CodexSnapshotParser` | 根线程判定、标题、预览、额度解析与排序；不推导状态，唯一一处**减法**是自动审查的 thread 上把 `approvalNeeded` 降为 `running`（由编排器把 thread 归属传进来） | [`LiveCodexMonitorService.swift`](../Notchline/Notchline/LiveCodexMonitorService.swift) |
 | 私有 Project 边界 | `CodexDesktopProjectMetadataRepository` | 只读并严格校验 Desktop Project/Chats 映射 | [`CodexDesktopProjectMetadata.swift`](../Notchline/Notchline/CodexDesktopProjectMetadata.swift) |
-| 私有未读边界 | `CodexDesktopUnreadStateRepository` | 只读 unread 集合、标记来源权威性、发出目录变化事件 | [`CodexDesktopUnreadState.swift`](../Notchline/Notchline/CodexDesktopUnreadState.swift) |
+| 私有未读边界 | `CodexDesktopUnreadStateRepository` | 只读 unread 集合、标记来源权威性、**报出主文件最后写入的时刻**（成员关系门据此拒绝用早于该 Turn 的快照做隐藏决定）、发出目录变化事件 | [`CodexDesktopUnreadState.swift`](../Notchline/Notchline/CodexDesktopUnreadState.swift) |
 | 私有审批归属边界 | `CodexDesktopApprovalRoutingRepository` | 只读同一份 Desktop 状态里的 `heartbeat-thread-permissions-by-id.<threadId>.approvalsReviewer`，回答「这条 thread 的审批会不会问到人」。**只报被证明为 `auto_review` 的 thread**，缺席、不认识的值与读失败都回到原行为；它回答的是「这条 thread 现在」，「这一轮」由 `LiveCodexMonitorService` 侧的 `TurnApprovalRoutingPin` 钉住（另一条可用来源是每份 rollout 的 `turn_context.approvals_reviewer`，实测 2026-08-24 本机 136 份 rollout 里最后一条 `turn_context` 距文件尾中位数 32 KB、p90 950 KB、最大 20 MB，因此有界尾扫只覆盖约九成，暂不采用）；没有自己的 watcher——它与未读集合同一个文件，那边的目录 watcher 已经会为它的每一次写入唤醒刷新 | [`CodexDesktopApprovalRouting.swift`](../Notchline/Notchline/CodexDesktopApprovalRouting.swift) |
 | 私有已读边界（Claude Code） | `ClaudeCodeDesktopReadStateRepository` | 只读 Claude Desktop 的会话记录，按 `cliSessionId` 连接身份，取 `lastFocusedAt` 与 `isArchived`，另取 `sessionId` 供下一行接回身份；**没有记录就是 unknown 而不是未读**；发出账户目录变化事件（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)） | [`ClaudeCodeDesktopReadState.swift`](../Notchline/Notchline/ClaudeCodeDesktopReadState.swift) |
 | 屏幕上是哪个会话 | `ClaudeDesktopFocusLogReader` | 记录只记会话**被放上屏幕**，从不记它被拿下来，所以用户切到新会话的输入框之后，最后被盖章的会话会继续冒充在屏幕上，其终态行会被没人读过就撤掉。Claude Desktop 自己的日志两个方向都说（`setFocusedSession: sessionId=…|null`），从当前末尾向前读、只认本进程启动之后追加的行，**在编排器里只作否决权**：能拦下记录声称的会话，不能提名记录没声称的；读不到就是 `unknown`，即没有这份日志之前的原样行为（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md) 第五条） | [`DesktopDisplayedSession.swift`](../Notchline/Notchline/DesktopDisplayedSession.swift) |

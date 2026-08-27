@@ -1366,13 +1366,25 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             Set(rows.map(\.threadID))
         )
 
+        // Read before the two snapshots below rather than after them, because
+        // it is now part of what they say: both are assembled here, out of
+        // readings this refresh took, so the instant they are a complete
+        // account up to is this refresh's own.
+        //
+        // That is the honest answer and not a convenient one. The Codex file
+        // needs ``DesktopUnreadStateSnapshot/currentAsOf`` because it is a
+        // projection Desktop writes when it gets round to it; nothing here is
+        // a projection of anything -- the verdicts below were computed from
+        // `readState`, the terminal readings and the front, in this call.
+        let now = clock.now()
         let desktopUnreadState = DesktopUnreadStateSnapshot(
             unreadThreadIDs: unreadThreadIDs,
             // A reading that is not current may not hide anything, exactly as
             // on the Codex side. It matters less here -- a focus instant older
             // than the Turn cannot claim the Turn was read, whatever generation
             // it came from -- but the rule is the product's, not the schema's.
-            source: readState.source.isAuthoritative ? .current : .lastKnownGood
+            source: readState.source.isAuthoritative ? .current : .lastKnownGood,
+            currentAsOf: now
         )
         // A terminal verdict carries its own authority rather than Claude
         // Desktop's, and the difference is not cosmetic: a user who has never
@@ -1390,9 +1402,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // verdict.
         let terminalUnreadState = DesktopUnreadStateSnapshot(
             unreadThreadIDs: unreadThreadIDs,
-            source: .current
+            source: .current,
+            currentAsOf: now
         )
-        let now = clock.now()
         for (row, boundary, restsOnTerminal) in judged
         where terminalReadMembershipGate.shouldDisplay(
             sessionID: row.id,

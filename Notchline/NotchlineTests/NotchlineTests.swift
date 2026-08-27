@@ -4246,6 +4246,61 @@ struct NotchlineTests {
         #expect(!snapshot.unreadThreadIDs.contains("thread-remote"))
     }
 
+    /// A reading reaches exactly as far forward as the file it came from was
+    /// last written, and no further.
+    ///
+    /// Codex Desktop rewrites this file whole from one in-memory map, so its
+    /// modification date is the instant its account of the blue dots was
+    /// complete up to -- which is the only thing that makes an *absent* thread
+    /// id mean "read". A file whose date cannot be read reaches nowhere at
+    /// all, fail-closed like every other reading here.
+    @Test @MainActor
+    func desktopUnreadStateReachesOnlyAsFarAsTheFileWasLastWritten() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "unread-thread-ids-by-host-v1": ["local": ["thread-1"]]
+            ]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+        // A whole second, so nothing is asserted about the sub-second
+        // precision the file system happens to keep.
+        let writtenAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: writtenAt],
+            ofItemAtPath: stateFile.path
+        )
+
+        let repository = CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        )
+        let snapshot = await repository.snapshot()
+        #expect(snapshot.source == .current)
+        #expect(snapshot.unreadThreadIDs == ["thread-1"])
+        #expect(
+            snapshot.currentAsOf == writtenAt,
+            "the reading must carry the instant Desktop last wrote the file"
+        )
+
+        let corruptFile = root.appendingPathComponent("corrupt.json")
+        try Data("not-json".utf8).write(to: corruptFile)
+        let unreadable = await CodexDesktopUnreadStateRepository(
+            stateFileURL: corruptFile
+        ).snapshot()
+        #expect(unreadable.source == .unavailable)
+        #expect(
+            unreadable.currentAsOf == .distantPast,
+            "a reading that failed speaks for no Turn at all"
+        )
+    }
+
     @Test @MainActor
     func desktopUnreadStateUsesBackupThenRetainsLastKnownGood() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -4602,14 +4657,8 @@ struct NotchlineTests {
     @Test @MainActor
     func terminalUnreadMembershipHidesOnlyAfterAuthoritativeReadEvidence() {
         let boundary = Date(timeIntervalSince1970: 1_000)
-        let unread = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: ["thread-1"],
-            source: .current
-        )
-        let read = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: [],
-            source: .current
-        )
+        let unread = desktopReading(unread: ["thread-1"], after: boundary)
+        let read = desktopReading(unread: [], after: boundary)
         let unavailable = DesktopUnreadStateSnapshot.unavailable("invalid")
         var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
 
@@ -6712,10 +6761,7 @@ struct NotchlineTests {
             loadedListResults: []
         )
         let unreadState = DesktopUnreadStateStub(
-            DesktopUnreadStateSnapshot(
-                unreadThreadIDs: ["thread-terminal"],
-                source: .current
-            )
+            unreadThreadIDs: ["thread-terminal"]
         )
         let service = LiveCodexMonitorService(
             client: client,
@@ -6752,12 +6798,7 @@ struct NotchlineTests {
             }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        await unreadState.setSnapshot(
-            DesktopUnreadStateSnapshot(
-                unreadThreadIDs: [],
-                source: .current
-            )
-        )
+        await unreadState.setUnread([])
         let afterRead = await service.fetchSnapshot()
         await service.disconnect()
 
@@ -21211,23 +21252,65 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
     }
 }
 
-private actor DesktopUnreadStateStub: DesktopUnreadStateProviding {
-    private var value: DesktopUnreadStateSnapshot
+/// A Desktop unread reading taken *after* the Turn it will be asked about.
+///
+/// The gate refuses to judge a Turn against a reading that stops short of it
+/// (``DesktopUnreadStateSnapshot/currentAsOf``), so every test that is not
+/// about that rule states the ordinary case once, here: Codex Desktop wrote
+/// its file shortly after the Turn ended, which is what it does whenever
+/// nothing is starving the debounce in front of it -- measured at 583 ms.
+private func desktopReading(
+    unread: Set<String>,
+    source: DesktopUnreadStateSnapshot.Source = .current,
+    after boundary: Date
+) -> DesktopUnreadStateSnapshot {
+    DesktopUnreadStateSnapshot(
+        unreadThreadIDs: unread,
+        source: source,
+        currentAsOf: boundary.addingTimeInterval(0.583)
+    )
+}
 
-    init(_ value: DesktopUnreadStateSnapshot) {
-        self.value = value
+private actor DesktopUnreadStateStub: DesktopUnreadStateProviding {
+    private var unreadThreadIDs: Set<String>
+    private var source: DesktopUnreadStateSnapshot.Source
+    /// How far forward the stubbed reading reaches.
+    ///
+    /// `distantFuture` by default, which is what every test that is not about
+    /// ``DesktopUnreadStateSnapshot/currentAsOf`` wants: a reading that
+    /// answers for any Turn the test can produce, the way Desktop's file would
+    /// if it were written the instant Desktop learned of one. A test *about*
+    /// the rule hands it a real instant instead.
+    private var currentAsOf: Date
+
+    init(
+        unreadThreadIDs: Set<String>,
+        source: DesktopUnreadStateSnapshot.Source = .current,
+        currentAsOf: Date = .distantFuture
+    ) {
+        self.unreadThreadIDs = unreadThreadIDs
+        self.source = source
+        self.currentAsOf = currentAsOf
     }
 
     func snapshot() async -> DesktopUnreadStateSnapshot {
-        value
+        DesktopUnreadStateSnapshot(
+            unreadThreadIDs: unreadThreadIDs,
+            source: source,
+            currentAsOf: currentAsOf
+        )
     }
 
     nonisolated func changeEvents() -> AsyncStream<Void> {
         AsyncStream { _ in }
     }
 
-    func setSnapshot(_ snapshot: DesktopUnreadStateSnapshot) {
-        value = snapshot
+    func setUnread(
+        _ unreadThreadIDs: Set<String>,
+        currentAsOf: Date = .distantFuture
+    ) {
+        self.unreadThreadIDs = unreadThreadIDs
+        self.currentAsOf = currentAsOf
     }
 }
 
@@ -22853,10 +22936,7 @@ extension NotchlineTests {
             unreadRecheckInterval: 1
         )
         let start = Date(timeIntervalSince1970: 1_000)
-        let unread = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: ["thread"],
-            source: .current
-        )
+        let unread = desktopReading(unread: ["thread"], after: start)
 
         let displayedAtOnce = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
@@ -22895,10 +22975,7 @@ extension NotchlineTests {
             unreadRecheckInterval: 1
         )
         let start = Date(timeIntervalSince1970: 1_000)
-        let unread = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: ["thread"],
-            source: .current
-        )
+        let unread = desktopReading(unread: ["thread"], after: start)
 
         _ = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
@@ -22932,11 +23009,8 @@ extension NotchlineTests {
             unreadRecheckInterval: 1
         )
         let start = Date(timeIntervalSince1970: 1_000)
-        let unread = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: ["thread"],
-            source: .current
-        )
-        let read = DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+        let unread = desktopReading(unread: ["thread"], after: start)
+        let read = desktopReading(unread: [], after: start)
 
         _ = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
@@ -22964,7 +23038,7 @@ extension NotchlineTests {
         let start = Date(timeIntervalSince1970: 1_000)
         // Authoritative, and Desktop does not consider it unread: the row is
         // inside its settling window and waiting really will hide it.
-        let read = DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+        let read = desktopReading(unread: [], after: start)
 
         let displayed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
@@ -22983,6 +23057,110 @@ extension NotchlineTests {
         #expect(gate.nextDeadline(now: start.addingTimeInterval(2.1)) == nil)
     }
 
+    /// Silence from before the Turn is not evidence that anybody read it.
+    ///
+    /// The row leaves on a thread's *absence* from Desktop's
+    /// unread set, and that absence only means "read" if the reading was taken
+    /// late enough to have heard about the Turn. Desktop's file is a
+    /// projection of dots it holds in memory, written through a trailing
+    /// 500 ms debounce with no maximum wait that every persisted atom it owns
+    /// shares -- and the composer draft is written on every keystroke. So a
+    /// Turn that finished while the user typed in *another* thread had its dot
+    /// up in Desktop's sidebar within milliseconds and stayed out of the file
+    /// for the whole burst: measured at 45.4 seconds, 165 characters, one
+    /// single write at the end of it.
+    ///
+    /// The file parsed the whole time, so it was authoritative; it did not
+    /// name the thread, so the settling window retired the row; and hiding is
+    /// final, so the id arriving afterwards brought nothing back. The user
+    /// watched a row they had never read leave the notch.
+    @Test
+    func terminalGateWillNotRetireATurnAgainstAReadingOlderThanIt() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
+        let boundary = Date(timeIntervalSince1970: 1_000)
+        // Authoritative -- the file parsed -- and last written half a minute
+        // before this Turn ended, which is what a starved debounce leaves
+        // behind. It cannot have recorded the Turn either way.
+        let stale = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: [],
+            source: .current,
+            currentAsOf: boundary.addingTimeInterval(-30)
+        )
+
+        let listed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: boundary, unreadState: stale, now: boundary
+        )
+        #expect(listed)
+
+        // Long past the settling window, which is the point: what used to
+        // retire the row here was time, against a reading that never spoke.
+        let hidden = !gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: boundary, unreadState: stale,
+            now: boundary.addingTimeInterval(600)
+        )
+        #expect(!hidden, "a row nobody has read must not leave on old silence")
+
+        // The user stops typing, Desktop's debounce finally fires, and the
+        // write still does not name the thread -- because they read it inside
+        // the burst and the id was added and cleared without ever reaching
+        // disk. *Now* the silence is about this Turn, and the row goes.
+        let written = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: [],
+            source: .current,
+            currentAsOf: boundary.addingTimeInterval(45)
+        )
+        let hiddenNow = !gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: boundary, unreadState: written,
+            now: boundary.addingTimeInterval(600)
+        )
+        #expect(hiddenNow, "a reading that does reach the Turn still retires it")
+    }
+
+    /// A row waiting on a reading that has not been written yet waits on the
+    /// *file*, and books the same forward-measured re-check as an unreadable
+    /// one.
+    ///
+    /// Not the settling deadline: that instant is in the past and no refresh
+    /// can move it, which is the busy loop wearing a deadline's clothes. And
+    /// not nothing either -- Desktop's write is what clears this, and it lands
+    /// whether or not anybody is at the machine, so a dark screen is no reason
+    /// to stop watching for it.
+    @Test
+    func terminalGateBooksARecheckWhileTheReadingPredatesTheTurn() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
+        let boundary = Date(timeIntervalSince1970: 1_000)
+        let stale = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: [],
+            source: .current,
+            currentAsOf: boundary.addingTimeInterval(-30)
+        )
+
+        let now = boundary.addingTimeInterval(600)
+        let displayed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            terminalBoundaryAt: boundary, unreadState: stale, now: now
+        )
+        #expect(displayed)
+        #expect(
+            gate.nextDeadline(now: now) == now.addingTimeInterval(1),
+            "it waits on the next write, so the re-check is measured from now"
+        )
+        #expect(
+            gate.nextDeadline(now: now, screenIsAvailable: false)
+                == now.addingTimeInterval(1),
+            "this row waits on the file, not on the user"
+        )
+    }
+
     /// Hiding is a decision, not a live readout.
     ///
     /// The gate used to un-hide a row the moment it read as unread again, which
@@ -22999,11 +23177,8 @@ extension NotchlineTests {
             unreadRecheckInterval: 1
         )
         let boundary = Date(timeIntervalSince1970: 1_000)
-        let unread = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: ["thread"],
-            source: .current
-        )
-        let read = DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+        let unread = desktopReading(unread: ["thread"], after: boundary)
+        let read = desktopReading(unread: [], after: boundary)
 
         let listed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
@@ -23053,9 +23228,8 @@ extension NotchlineTests {
             unreadRecheckInterval: 1
         )
         let start = Date(timeIntervalSince1970: 1_000)
-        let unreadable = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: [],
-            source: .lastKnownGood
+        let unreadable = desktopReading(
+            unread: [], source: .lastKnownGood, after: start
         )
 
         let now = start.addingTimeInterval(600)
@@ -23137,9 +23311,7 @@ extension NotchlineTests {
             client: client,
             hookEvents: repository,
             hookRegistrar: installer,
-            unreadState: DesktopUnreadStateStub(
-                DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
-            ),
+            unreadState: DesktopUnreadStateStub(unreadThreadIDs: []),
             clock: clock,
             desktopProcessIdentifierProvider: { 4_242 }
         )
@@ -23303,10 +23475,7 @@ extension NotchlineTests {
             unreadRecheckInterval: 1
         )
         let start = Date(timeIntervalSince1970: 1_000)
-        let unread = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: ["thread"],
-            source: .current
-        )
+        let unread = desktopReading(unread: ["thread"], after: start)
 
         let now = start.addingTimeInterval(600)
         let displayed = gate.shouldDisplay(
@@ -23339,9 +23508,8 @@ extension NotchlineTests {
             unreadRecheckInterval: 1
         )
         let start = Date(timeIntervalSince1970: 1_000)
-        let unreadable = DesktopUnreadStateSnapshot(
-            unreadThreadIDs: [],
-            source: .lastKnownGood
+        let unreadable = desktopReading(
+            unread: [], source: .lastKnownGood, after: start
         )
 
         let now = start.addingTimeInterval(600)
@@ -23365,7 +23533,7 @@ extension NotchlineTests {
     func terminalGateStillClearsItsSettlingWindowThroughALockedScreen() {
         var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
         let start = Date(timeIntervalSince1970: 1_000)
-        let read = DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
+        let read = desktopReading(unread: [], after: start)
 
         _ = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
@@ -23721,10 +23889,7 @@ extension NotchlineTests {
         // Desktop still reports the finished thread unread, which is what puts
         // it in the gate and keeps it there.
         let unreadState = DesktopUnreadStateStub(
-            DesktopUnreadStateSnapshot(
-                unreadThreadIDs: ["thread-frozen"],
-                source: .current
-            )
+            unreadThreadIDs: ["thread-frozen"]
         )
         let desktop = MutableDesktopProcessIdentifier(4_242)
         let service = LiveCodexMonitorService(
@@ -24046,10 +24211,7 @@ extension NotchlineTests {
             loadedListResults: []
         )
         let unreadState = DesktopUnreadStateStub(
-            DesktopUnreadStateSnapshot(
-                unreadThreadIDs: ["thread-unread"],
-                source: .current
-            )
+            unreadThreadIDs: ["thread-unread"]
         )
         let service = LiveCodexMonitorService(
             client: client,
@@ -24594,9 +24756,7 @@ extension NotchlineTests {
         )
         // Desktop is authoritative and reports the thread as read: the user is
         // looking at it. Nothing here is waiting on them.
-        let unreadState = DesktopUnreadStateStub(
-            DesktopUnreadStateSnapshot(unreadThreadIDs: [], source: .current)
-        )
+        let unreadState = DesktopUnreadStateStub(unreadThreadIDs: [])
         let service = LiveCodexMonitorService(
             client: client,
             hookEvents: repository,
