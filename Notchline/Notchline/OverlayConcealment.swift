@@ -215,13 +215,20 @@ nonisolated enum OverlayConcealment {
 /// **Two things bound that cost, and neither was here originally.** The
 /// comparison happens on the sampling queue rather than on the main actor, so
 /// an unchanged reading — which is nearly all of them — never wakes the main
-/// run loop at all; and the timer is parked outright whenever there is no
-/// screen, because a menu bar nobody can see cannot conceal anything. Together
-/// they take this from the single largest steady-state cost in the process —
-/// 41% of its CPU, and four main-thread wake-ups a second for the life of the
-/// app — to something that runs only while somebody is looking. See
+/// run loop at all; and the timer drops to a minute's heartbeat whenever there
+/// is no screen, because a menu bar nobody can see cannot conceal anything.
+/// Together they take this from the single largest steady-state cost in the
+/// process — 41% of its CPU, and four main-thread wake-ups a second for the
+/// life of the app — to something that runs only while somebody is looking. See
 /// ``OverlayConcealmentWatcher/tick()`` and
-/// ``OverlayConcealmentWatcher/armOrPark()`` for the measurements.
+/// ``OverlayConcealmentWatcher/park()`` for the measurements.
+///
+/// **Both of those gates are fail-open, and the second one had to be taught to
+/// be.** Losing the screen puts the overlay *back* on screen and forgets the
+/// last verdict (``OverlayConcealmentWatcher/park()``), because a `concealed`
+/// held through a locked night is not a fact about anything and the state it
+/// leaves behind — the overlay gone, with no Dock tile, menu bar item or window
+/// to ask it back with — is the one this product cannot be left in.
 ///
 /// A ``MenuBarPresence/sliding`` sample is not an answer and is not reported:
 /// the last answer stands until the Space has finished arriving. That is what
@@ -244,10 +251,25 @@ final class OverlayConcealmentWatcher {
     /// never stopped, so an idle machine paid the same 0.21% through a locked
     /// night, and a `sample` of the live app put 41% of the whole process's CPU
     /// in this one call. It is now parked whenever there is no screen — see
-    /// ``armOrPark()``.
+    /// ``park()``.
     nonisolated static let defaultInterval: TimeInterval = 0.25
 
+    /// 60 s: how long a parked watcher may go on believing there is no screen
+    /// after there is one again.
+    ///
+    /// Parking used to be `.distantFuture`, which made
+    /// ``observeScreenAvailability()`` the *only* way back — and two of the
+    /// five notifications it listens to are distributed, which is another
+    /// process's best effort rather than a guarantee. A watcher that missed the
+    /// one edge it was waiting for never sampled again, so the overlay was left
+    /// wherever the last verdict had put it. This is the fail-safe the poll was
+    /// always described as being, at 107µs a minute: one screen reading, no
+    /// window list, and a leeway wide enough that the system can fold the
+    /// wake-up into whatever it was already doing.
+    nonisolated static let defaultParkedInterval: TimeInterval = 60
+
     private let interval: TimeInterval
+    private let parkedInterval: TimeInterval
     private let sampleWindows: @Sendable () -> [ChromeWindow]
     private let boundsOfDisplay: @Sendable (CGDirectDisplayID) -> CGRect
     private let boundsOfActiveDisplays: @Sendable () -> [CGRect]
@@ -308,12 +330,35 @@ final class OverlayConcealmentWatcher {
         /// rest: the timer's queue counts them and the main actor resets them
         /// when it arms.
         var ticksSinceScreenRead = 0
+        /// Whether the timer is on the parked heartbeat rather than the
+        /// sampling interval. Read on the timer's queue so a parked tick can
+        /// tell "still no screen", which is nothing to say, from "the screen is
+        /// back", which is the one thing a parked tick is for.
+        var isParked = false
     }
+
+    /// The last verdict actually put on the panel, so that one overtaken on
+    /// its way there is dropped instead of becoming the last word.
+    ///
+    /// ``verdict(for:ticket:)`` orders the *judging*, and that was taken to be
+    /// enough. It is not: a verdict reached on the timer's queue is applied a
+    /// main-queue hop later, and ``sampleNow()`` — which the wake edge and a
+    /// display change both call — judges *and* applies inline on the main
+    /// actor, so it steps in front of a hop already queued behind it. The older
+    /// verdict then lands last and wins, and it wins against a
+    /// ``SamplingState/lastReported`` that already describes the newer one: the
+    /// panel is ordered out while the state says revealed, and every sample
+    /// afterwards agrees with the state and reports nothing. That is an overlay
+    /// gone for the life of the process, with no gesture that brings it back —
+    /// and the wake edge is exactly where the two paths meet.
+    private var lastAppliedTicket = 0
 
     private(set) var isConcealed = false
 
     init(
         interval: TimeInterval = OverlayConcealmentWatcher.defaultInterval,
+        parkedInterval: TimeInterval =
+            OverlayConcealmentWatcher.defaultParkedInterval,
         sampleWindows: @escaping @Sendable () -> [ChromeWindow] =
             OverlayConcealment.currentWindows,
         boundsOfDisplay: @escaping @Sendable (CGDirectDisplayID) -> CGRect = {
@@ -325,6 +370,7 @@ final class OverlayConcealmentWatcher {
             ScreenAvailabilityWatcher()
     ) {
         self.interval = interval
+        self.parkedInterval = parkedInterval
         self.screenReadEveryNTicks = max(1, Int((1.0 / interval).rounded()))
         self.sampleWindows = sampleWindows
         self.boundsOfDisplay = boundsOfDisplay
@@ -381,19 +427,31 @@ final class OverlayConcealmentWatcher {
 
     /// One sample on the current thread. The timer's path off the main thread
     /// ends in the same ``deliver(_:ticket:)``.
+    ///
+    /// A screen nobody can see is not sampled, for the reason ``park()`` gives:
+    /// the window list of a dark or locked display is not a description of the
+    /// one the user will come back to. The reading that says so costs 107µs and
+    /// is taken on the handful of occasions this is called — a display change,
+    /// a wake edge — rather than on a tick.
     func sampleNow() {
+        guard screenAvailability.isAvailable() else {
+            armOrPark()
+            return
+        }
         deliver(sampleWindows(), ticket: takeTicket())
     }
 
     /// One reading judged and, when it changed the answer, put on the panel.
     ///
     /// The whole of what a tick does once it has its windows, so that the
-    /// ordering rule ``judge(_:ticket:)`` enforces can be asserted directly
+    /// ordering rule ``verdict(for:ticket:)`` enforces can be asserted directly
     /// rather than through a race with a live timer. `internal` for that
     /// reason and no other.
     func deliver(_ windows: [ChromeWindow], ticket: Int) {
-        guard let concealed = judge(windows, ticket: ticket) else { return }
-        apply(concealed)
+        guard let concealed = verdict(for: windows, ticket: ticket) else {
+            return
+        }
+        apply(concealed, ticket: ticket)
     }
 
     /// Claims the next sequence number. `internal` because the ordering rule
@@ -421,32 +479,47 @@ final class OverlayConcealmentWatcher {
     /// The first tick after arming reads it, so a park is never deferred behind
     /// a counter that has just been reset.
     ///
+    /// A parked tick is the other half of this: it reads the screen and
+    /// nothing else, once a ``defaultParkedInterval``, and is what makes the
+    /// poll the fail-safe it is described as being if a notification is missed.
+    ///
     /// (The zero-surcharge version is to have
     /// ``ScreenAvailabilityReporting/changeEvents()`` fire in *both*
     /// directions and read only on its edges. It is deliberately not done here:
     /// that stream is shared with both monitor services, and widening its
     /// contract is a change to their refresh behaviour rather than to this
-    /// file. This poll is also the fail-safe if a notification is ever missed.)
+    /// file.)
     nonisolated private func tick() {
-        let isDueToReadScreen = decisionLock.withLock { () -> Bool in
-            state.ticksSinceScreenRead += 1
-            guard state.ticksSinceScreenRead >= screenReadEveryNTicks else {
-                return false
+        let (isParked, isDueToReadScreen) = decisionLock
+            .withLock { () -> (Bool, Bool) in
+                state.ticksSinceScreenRead += 1
+                // A parked tick *is* the screen reading -- it has no other
+                // business -- so it never waits out the counter.
+                let isDue = state.isParked
+                    || state.ticksSinceScreenRead >= screenReadEveryNTicks
+                if isDue { state.ticksSinceScreenRead = 0 }
+                return (state.isParked, isDue)
             }
-            state.ticksSinceScreenRead = 0
-            return true
+
+        if isDueToReadScreen {
+            let isScreenAvailable = screenAvailability.isAvailable()
+            // Only a crossing has anything to say to the schedule. A parked
+            // heartbeat that finds the screen still away is the whole of what a
+            // locked night now costs, and it does not wake the main actor.
+            if isScreenAvailable == isParked {
+                hopToMain { $0.armOrPark() }
+            }
+            guard isScreenAvailable else { return }
         }
-        if isDueToReadScreen, !screenAvailability.isAvailable() {
-            hopToMain { $0.armOrPark() }
-            return
-        }
+
         // The window list is read here, off the main thread, and so is the
         // verdict. Only a *changed* verdict hops.
         let ticket = takeTicket()
-        guard let concealed = judge(sampleWindows(), ticket: ticket) else {
+        guard let concealed = verdict(for: sampleWindows(), ticket: ticket)
+        else {
             return
         }
-        hopToMain { $0.apply(concealed) }
+        hopToMain { $0.apply(concealed, ticket: ticket) }
     }
 
     /// The one way off this queue, and it is `DispatchQueue.main.async`
@@ -456,8 +529,11 @@ final class OverlayConcealmentWatcher {
     /// to run in that order, and what travels this way is a sequence of
     /// verdicts: apply `concealed` and `revealed` the wrong way round and the
     /// panel stays wrong until the next flip. The ticket in
-    /// ``judge(_:ticket:)`` cannot save that — it orders the *judging*, and by
-    /// here the judging is over. The main queue is FIFO, so it can.
+    /// ``verdict(for:ticket:)`` cannot save that — it orders the *judging*, and
+    /// by here the judging is over. The main queue is FIFO between the hops it
+    /// carries, which is as far as it goes: a verdict reached on the main actor
+    /// itself does not queue behind them, which is what ``lastAppliedTicket``
+    /// is for.
     nonisolated private func hopToMain(
         _ body: @escaping @MainActor (OverlayConcealmentWatcher) -> Void
     ) {
@@ -474,8 +550,12 @@ final class OverlayConcealmentWatcher {
     /// Nil covers three cases that all mean "do not disturb the panel": the
     /// reading was overtaken by a later one, the Space is still carrying the
     /// menu bar past, and the answer is the one already reported.
-    nonisolated private func judge(
-        _ windows: [ChromeWindow],
+    ///
+    /// Reaching a verdict is not applying it — see ``lastAppliedTicket``, which
+    /// is why the ticket travels on to ``apply(_:ticket:)``. `internal` so the
+    /// gap between the two can be opened in a test rather than raced for.
+    nonisolated func verdict(
+        for windows: [ChromeWindow],
         ticket: Int
     ) -> Bool? {
         let displayID = decisionLock.withLock { state.observedDisplayID }
@@ -523,9 +603,14 @@ final class OverlayConcealmentWatcher {
         }
     }
 
-    /// Puts a changed verdict on the panel. The only part still on the main
-    /// actor, and the only part that has to be.
-    private func apply(_ concealed: Bool) {
+    /// Puts a changed verdict on the panel, unless a later one is already
+    /// there. The only part still on the main actor, and the only part that has
+    /// to be.
+    ///
+    /// `internal` for the same reason ``verdict(for:ticket:)`` is.
+    func apply(_ concealed: Bool, ticket: Int) {
+        guard ticket > lastAppliedTicket else { return }
+        lastAppliedTicket = ticket
         isConcealed = concealed
         onChange?(concealed)
     }
@@ -533,20 +618,24 @@ final class OverlayConcealmentWatcher {
     // MARK: - Screen availability
 
     /// Arms the timer while there is a screen and parks it while there is not.
-    ///
-    /// Parked by rescheduling to `.distantFuture` rather than by
-    /// `suspend()`: the two have the same effect on wake-ups and only one of
-    /// them has to be balanced, and an unbalanced `DispatchSourceTimer` traps
-    /// on deallocation.
     private func armOrPark() {
-        guard let timer else { return }
-        guard screenAvailability.isAvailable() else {
-            timer.schedule(deadline: .distantFuture, repeating: .never)
-            return
+        guard timer != nil else { return }
+        if screenAvailability.isAvailable() {
+            arm()
+        } else {
+            park()
         }
-        // The next tick reads the screen rather than waiting out a counter
-        // that has just been reset, so a park is never deferred.
-        decisionLock.withLock { state.ticksSinceScreenRead = screenReadEveryNTicks }
+    }
+
+    /// Puts the timer back on the sampling interval.
+    private func arm() {
+        guard let timer else { return }
+        decisionLock.withLock {
+            state.isParked = false
+            // The next tick reads the screen rather than waiting out a counter
+            // that has just been reset, so a park is never deferred.
+            state.ticksSinceScreenRead = screenReadEveryNTicks
+        }
         timer.schedule(
             deadline: .now() + interval,
             repeating: interval,
@@ -556,6 +645,47 @@ final class OverlayConcealmentWatcher {
         )
     }
 
+    /// Drops the timer to the heartbeat, forgets the last verdict, and puts the
+    /// overlay back on screen.
+    ///
+    /// **The overlay is revealed on the way out, and that is the point.** A
+    /// menu bar nobody can see conceals nothing, so a `concealed` carried into
+    /// a dark or locked screen is not a fact about anything — but it is *held*,
+    /// and the panel is held out with it. Every route back from there runs
+    /// through a notification arriving and a sample agreeing, and the one state
+    /// this product must never be left in is the one where it is gone and
+    /// nothing the user can do asks for it back: there is no Dock tile, no menu
+    /// bar item, and no window to summon. So the screen going away is fail-open
+    /// like every other thing this file cannot judge
+    /// (``OverlayConcealment/menuBarPresence(onDisplay:windows:otherDisplays:)``),
+    /// and the cost is the documented one -- an overlay that may linger over a
+    /// full-screen window for the one sample it takes the wake edge to correct.
+    ///
+    /// Forgetting matters as much as revealing. Left in place, a
+    /// ``SamplingState/lastReported`` of `concealed` would agree with the first
+    /// sample after a wake into a full-screen app and report nothing, leaving
+    /// the overlay on screen over it.
+    ///
+    /// Parked by rescheduling rather than by `suspend()`: the two have the same
+    /// effect on wake-ups and only one of them has to be balanced, and an
+    /// unbalanced `DispatchSourceTimer` traps on deallocation.
+    private func park() {
+        guard let timer else { return }
+        decisionLock.withLock {
+            state.isParked = true
+            state.hasReported = false
+        }
+        timer.schedule(
+            deadline: .now() + parkedInterval,
+            repeating: parkedInterval,
+            // Nothing is waiting on this, so let the system put it wherever it
+            // was already going to wake.
+            leeway: .seconds(15)
+        )
+        guard isConcealed else { return }
+        apply(false, ticket: takeTicket())
+    }
+
     /// Re-arms on the screen coming back, and samples immediately.
     ///
     /// The sample matters as much as the arming: the display slept on one
@@ -563,12 +693,23 @@ final class OverlayConcealmentWatcher {
     /// entered from another machine over screen sharing, a Space switched by a
     /// lock screen — and waiting a whole interval to notice would show the
     /// overlay over a menu bar that is not there.
+    ///
+    /// **The arming does not consult the reading, deliberately.** These edges
+    /// are posted by other processes around a transition this one is watching
+    /// from the outside: `screensDidWake` arrives with the display and the
+    /// session is still locked, and an unlock is announced by `loginwindow`
+    /// rather than by the session dictionary that answers
+    /// ``ScreenAvailabilityReporting/isAvailable()``. An edge that read "still
+    /// no screen" and parked was betting the whole overlay on a *later* edge
+    /// arriving. Arming unconditionally costs one tick — the first one reads
+    /// the screen and parks again if it was right — and owes nothing to the
+    /// order two processes happen to do things in.
     private func observeScreenAvailability() {
         let events = screenAvailability.changeEvents()
         wakeTask = Task { @MainActor [weak self] in
             for await _ in events {
                 guard let self, !Task.isCancelled else { return }
-                self.armOrPark()
+                self.arm()
                 self.sampleNow()
             }
         }

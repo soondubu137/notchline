@@ -12166,6 +12166,206 @@ for line in sys.stdin:
         watcher.stop()
     }
 
+    /// A verdict overtaken between being *reached* and being *applied* is
+    /// dropped, and the overlay does not go missing for the life of the app.
+    ///
+    /// This is the bug the user hit: the overlay was gone after the screen came
+    /// back, and nothing they could click brought it back -- the app had to be
+    /// killed from Activity Monitor.
+    ///
+    /// The ticket orders the judging. It did not order the applying, and the two
+    /// are a main-queue hop apart: the timer judges on its own queue and applies
+    /// later, while ``OverlayConcealmentWatcher/sampleNow()`` -- which the wake
+    /// edge and a display change both call -- judges *and* applies inline on the
+    /// main actor, stepping in front of a hop already queued behind it. The
+    /// older verdict then landed last and won, against a `lastReported` that had
+    /// already moved on: the panel was ordered out while the watcher's own state
+    /// said revealed, so every sample afterwards agreed with the state and
+    /// reported nothing. Waking the screen is exactly where the two paths meet.
+    @Test @MainActor
+    func aVerdictOvertakenBeforeItIsAppliedIsDiscarded() {
+        let display = Self.builtInDisplay
+        let displayID = CGDirectDisplayID(7)
+        nonisolated(unsafe) var listed: [ChromeWindow] = [Self.menuBar(of: display)]
+
+        let screen = StubScreenAvailability()
+        let watcher = OverlayConcealmentWatcher(
+            interval: 3_600,
+            sampleWindows: { listed },
+            boundsOfDisplay: { _ in display },
+            boundsOfActiveDisplays: { [display] },
+            // Never the machine's own: a suite left with the real
+            // reading passes or fails on whether the developer's
+            // screen happened to be locked while it ran.
+            screenAvailability: screen
+        )
+
+        watcher.observe(displayID: displayID)
+        watcher.start { _ in }
+        #expect(!watcher.isConcealed)
+
+        // The timer, on its own queue, reads a display whose menu bar is not
+        // listed and reaches a verdict. The hop carrying it has not run yet.
+        let inFlightTicket = watcher.takeTicket()
+        let inFlight = watcher.verdict(for: [], ticket: inFlightTicket)
+        #expect(inFlight == true)
+
+        // The screen comes back and the wake edge samples on the main actor,
+        // finding the menu bar where it belongs. This is judged *and* applied
+        // before the hop above lands.
+        listed = [Self.menuBar(of: display)]
+        watcher.sampleNow()
+        #expect(!watcher.isConcealed)
+
+        // The hop lands, carrying an answer about a display that is no longer
+        // in that state.
+        watcher.apply(inFlight ?? false, ticket: inFlightTicket)
+        #expect(!watcher.isConcealed)
+
+        // And the overlay is not merely on screen by luck: the watcher agrees
+        // with itself, so a later sample of the same drawn menu bar has nothing
+        // to correct -- which is what used to leave it hidden forever.
+        watcher.sampleNow()
+        #expect(!watcher.isConcealed)
+
+        watcher.stop()
+    }
+
+    /// Losing the screen never leaves the overlay hidden.
+    ///
+    /// A menu bar nobody can see conceals nothing, so a `concealed` carried into
+    /// a dark or locked screen is not a fact about anything -- and the state it
+    /// leaves behind is the one state this product must never be in, because
+    /// there is no Dock tile, no menu bar item and no window to ask the overlay
+    /// back with. Parking is therefore fail-open, like every other reading this
+    /// file cannot make.
+    @Test @MainActor
+    func parkingForWantOfAScreenPutsTheOverlayBack() async {
+        let display = Self.builtInDisplay
+        let displayID = CGDirectDisplayID(7)
+        nonisolated(unsafe) var listed: [ChromeWindow] = [Self.menuBar(of: display)]
+
+        let screen = StubScreenAvailability()
+        let watcher = OverlayConcealmentWatcher(
+            // Short enough that the park below lands well inside the wait.
+            interval: 0.02,
+            sampleWindows: { listed },
+            boundsOfDisplay: { _ in display },
+            boundsOfActiveDisplays: { [display] },
+            screenAvailability: screen
+        )
+
+        watcher.observe(displayID: displayID)
+        watcher.start { _ in }
+
+        // An app takes the display full screen, which is a real concealment.
+        listed = []
+        watcher.sampleNow()
+        #expect(watcher.isConcealed)
+
+        // Then the screen goes -- display asleep, session locked, either way
+        // nobody is looking. The timer's own reading parks it.
+        screen.available = false
+        #expect(await holds { !watcher.isConcealed })
+
+        // And the verdict was forgotten with it, so waking back into the same
+        // full-screen app is reported rather than mistaken for no change.
+        screen.available = true
+        screen.announce()
+        #expect(await holds { watcher.isConcealed })
+
+        watcher.stop()
+    }
+
+    /// A parked watcher comes back on its own, with nothing to tell it.
+    ///
+    /// Two of the five edges ``ScreenAvailabilityWatcher`` listens to are
+    /// distributed notifications -- another process's best effort, not a
+    /// guarantee -- and one of the other three arrives while the session is
+    /// still locked. Parking at `.distantFuture` made a single missed edge the
+    /// end of concealment for the life of the process. The heartbeat is what
+    /// makes the poll the fail-safe it is described as being.
+    @Test @MainActor
+    func aParkedWatcherRearmsWithoutBeingTold() async {
+        let display = Self.builtInDisplay
+        let displayID = CGDirectDisplayID(7)
+        let samples = CallCounter()
+        let screen = StubScreenAvailability()
+        screen.available = false
+
+        let watcher = OverlayConcealmentWatcher(
+            interval: 0.02,
+            parkedInterval: 0.05,
+            sampleWindows: {
+                samples.record()
+                return [Self.menuBar(of: display)]
+            },
+            boundsOfDisplay: { _ in display },
+            boundsOfActiveDisplays: { [display] },
+            screenAvailability: screen
+        )
+
+        watcher.observe(displayID: displayID)
+        watcher.start { _ in }
+        let atStart = samples.count
+
+        // The screen comes back and *no* notification says so.
+        screen.available = true
+        #expect(await holds { samples.count > atStart })
+
+        watcher.stop()
+    }
+
+    /// A wake edge arms the timer without asking whether the screen is back.
+    ///
+    /// These edges are posted by other processes around a transition this one
+    /// watches from outside. `screensDidWake` arrives with the display while the
+    /// session is still locked, and an unlock is announced by `loginwindow`
+    /// rather than by the session dictionary the reading comes from -- so an
+    /// edge that read "still no screen" and parked was betting the overlay on a
+    /// *later* edge arriving, and two of the five are distributed notifications
+    /// that guarantee nothing. Arming costs one tick if the edge was early.
+    @Test @MainActor
+    func aWakeEdgeArmsTheTimerWithoutConsultingTheReading() async {
+        let display = Self.builtInDisplay
+        let displayID = CGDirectDisplayID(7)
+        let samples = CallCounter()
+        let screen = StubScreenAvailability()
+        screen.available = false
+
+        let watcher = OverlayConcealmentWatcher(
+            interval: 0.02,
+            // Long enough that the heartbeat cannot be what rescues this: what
+            // is under test is the edge, not the fail-safe behind it.
+            parkedInterval: 3_600,
+            sampleWindows: {
+                samples.record()
+                return [Self.menuBar(of: display)]
+            },
+            boundsOfDisplay: { _ in display },
+            boundsOfActiveDisplays: { [display] },
+            screenAvailability: screen
+        )
+
+        watcher.observe(displayID: displayID)
+        watcher.start { _ in }
+        let atStart = samples.count
+
+        // The unlock is announced while the session dictionary still says the
+        // screen is locked, and agrees on the reading after this one.
+        screen.becomesAvailableAfterOneReading = true
+        screen.announce()
+
+        // A watcher that parked on the edge's own reading takes the one sample
+        // the edge asks for and then waits for another edge that may never
+        // come, so the third is the one that says the timer is running. Polled
+        // rather than slept out: what is under test is that the samples happen
+        // at all, and a fixed wait would be asserting the suite's own load.
+        #expect(await holds { samples.count > atStart + 2 })
+
+        watcher.stop()
+    }
+
     /// The concealment timer does not run through a night with no screen.
     ///
     /// A menu bar nobody can see cannot conceal anything, and this was the
@@ -22129,10 +22329,24 @@ private final class StubScreenAvailability:
     }
     nonisolated(unsafe) private var reads = 0
 
+    /// Makes the *next* reading the last false one, so a test can put the
+    /// machine in the state it is really in around an unlock: `loginwindow`
+    /// posts the notification, and the session dictionary that answers
+    /// ``isAvailable()`` agrees a moment afterwards.
+    var becomesAvailableAfterOneReading: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return catchesUp }
+        set { lock.lock(); catchesUp = newValue; lock.unlock() }
+    }
+    nonisolated(unsafe) private var catchesUp = false
+
     func isAvailable() -> Bool {
         lock.lock()
         reads += 1
         let answer = stored
+        if catchesUp {
+            stored = true
+            catchesUp = false
+        }
         lock.unlock()
         return answer
     }
