@@ -4095,12 +4095,21 @@ struct NotchlineTests {
             ]
         ])
         try data.write(to: stateFile, options: .atomic)
+        let writtenAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: writtenAt],
+            ofItemAtPath: stateFile.path
+        )
 
         let snapshot = await CodexDesktopApprovalRoutingRepository(
             stateFileURL: stateFile
         ).snapshot()
 
         #expect(snapshot.automaticallyReviewedThreadIDs == ["thread-auto"])
+        #expect(
+            snapshot.currentAsOf == writtenAt,
+            "the map must carry the instant Desktop last wrote the file"
+        )
         #expect(!snapshot.approvalsReachTheUser(for: "thread-auto"))
         #expect(snapshot.approvalsReachTheUser(for: "thread-person"))
         #expect(snapshot.approvalsReachTheUser(for: "thread-future"))
@@ -6099,6 +6108,15 @@ struct NotchlineTests {
             let repository = HookEventRepository(paths: paths)
             try await installer.install()
             let timestamp = Date().timeIntervalSince1970
+            // The reviewer was set some time before this Turn, but the file
+            // carrying it is rewritten whole about half a second into every
+            // Turn Desktop hosts -- sending clears the composer, and the draft
+            // is a persisted atom. That write is the one the map is read from,
+            // and the pin will not take an answer from any other.
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: timestamp + 0.5)],
+                ofItemAtPath: stateFile.path
+            )
             for event in [
                 [
                     "received_at": timestamp,
@@ -6159,24 +6177,39 @@ struct NotchlineTests {
     @Test @MainActor
     func approvalRoutingPinKeepsTheAnswerTheTurnStartedUnder() {
         var pin = TurnApprovalRoutingPin()
+        let turnStart = Date(timeIntervalSince1970: 1_000)
         let firstTurn = TurnApprovalRoutingPin.TurnIdentity(
             threadID: "thread-1",
             turnID: "turn-1"
         )
-        let personReviews = DesktopApprovalRoutingSnapshot.unknown
-        let codexReviews = DesktopApprovalRoutingSnapshot(
-            automaticallyReviewedThreadIDs: ["thread-1"]
+        let personReviews = desktopRouting(
+            automatic: [], forTurnStartedAt: turnStart
+        )
+        let codexReviews = desktopRouting(
+            automatic: ["thread-1"], forTurnStartedAt: turnStart
+        )
+        // Desktop rewrites the map the instant the reviewer changes, so a
+        // switch made five minutes into the turn carries that instant.
+        let codexReviewsFromTheSwitch = desktopRouting(
+            automatic: ["thread-1"],
+            forTurnStartedAt: turnStart,
+            writtenAfter: 300
+        )
+        let personReviewsFromTheSwitch = desktopRouting(
+            automatic: [], forTurnStartedAt: turnStart, writtenAfter: 300
         )
 
         let atTurnStart = pin.approvalsReachTheUser(
             forTurn: firstTurn,
+            startedAt: turnStart,
             in: personReviews
         )
         // Desktop records the switch mid-turn. The turn in flight keeps the
         // reviewer it started with, so the row must too.
         let afterTheSwitch = pin.approvalsReachTheUser(
             forTurn: firstTurn,
-            in: codexReviews
+            startedAt: turnStart,
+            in: codexReviewsFromTheSwitch
         )
         #expect(atTurnStart)
         #expect(afterTheSwitch)
@@ -6186,24 +6219,30 @@ struct NotchlineTests {
         var reversed = TurnApprovalRoutingPin()
         let reversedAtTurnStart = reversed.approvalsReachTheUser(
             forTurn: firstTurn,
+            startedAt: turnStart,
             in: codexReviews
         )
         let reversedAfterTheSwitch = reversed.approvalsReachTheUser(
             forTurn: firstTurn,
-            in: personReviews
+            startedAt: turnStart,
+            in: personReviewsFromTheSwitch
         )
         #expect(!reversedAtTurnStart)
         #expect(!reversedAfterTheSwitch)
 
         // The next turn on the same thread asks again, and gets the answer
         // that is now true.
+        let secondTurnStart = turnStart.addingTimeInterval(600)
         let secondTurn = TurnApprovalRoutingPin.TurnIdentity(
             threadID: "thread-1",
             turnID: "turn-2"
         )
         let nextTurnAnswer = pin.approvalsReachTheUser(
             forTurn: secondTurn,
-            in: codexReviews
+            startedAt: secondTurnStart,
+            in: desktopRouting(
+                automatic: ["thread-1"], forTurnStartedAt: secondTurnStart
+            )
         )
         #expect(!nextTurnAnswer)
 
@@ -6212,11 +6251,15 @@ struct NotchlineTests {
         pin.retain(turns: [secondTurn])
         let forgottenTurnAnswer = pin.approvalsReachTheUser(
             forTurn: firstTurn,
+            startedAt: turnStart,
             in: personReviews
         )
         let retainedTurnAnswer = pin.approvalsReachTheUser(
             forTurn: secondTurn,
-            in: personReviews
+            startedAt: secondTurnStart,
+            in: desktopRouting(
+                automatic: [], forTurnStartedAt: secondTurnStart
+            )
         )
         #expect(forgottenTurnAnswer)
         #expect(!retainedTurnAnswer)
@@ -6363,21 +6406,107 @@ struct NotchlineTests {
         #expect(await read(pastTheWindow) == nil)
     }
 
-    /// The rollout answers once, and its answer outranks the map's.
+    /// A map written outside the Turn's opening moments may not silence it,
+    /// at either end.
+    ///
+    /// **Too old** is the sequence the user hits: switch the thread from
+    /// `auto_review` to yourself, type the prompt, send. The switch reaches
+    /// Desktop's memory at once and its file not at all while the typing lasts
+    /// -- one trailing 500 ms debounce, shared by every persisted atom, and
+    /// the composer draft is written on every keystroke (measured at 45.4
+    /// seconds over 165 characters, Desktop `26.820.60940`, 2026-08-26). The
+    /// map this app then reads still says `auto_review`, and pinning it
+    /// silences every approval dialog the user is being shown for the whole
+    /// Turn.
+    ///
+    /// **Too new** is the case ``TurnApprovalRoutingPin`` was built for, and
+    /// refusing the stale reading must not reopen it: a reviewer switched
+    /// deliberately five minutes in describes the thread, not the Turn in
+    /// flight.
+    ///
+    /// Neither refusal pins, so the write Desktop makes at the start of the
+    /// Turn still answers.
     @Test @MainActor
-    func approvalRoutingPinPrefersTheRolloutAndFallsBackToTheMap() {
+    func approvalRoutingRefusesAMapFromOutsideTheTurnsOpeningMoments() {
         var pin = TurnApprovalRoutingPin()
+        let turnStart = Date(timeIntervalSince1970: 1_000)
         let turn = TurnApprovalRoutingPin.TurnIdentity(
             threadID: "thread-1",
             turnID: "turn-1"
         )
-        let mapSaysPerson = DesktopApprovalRoutingSnapshot.unknown
+
+        // Desktop last wrote this file half a minute before the Turn, and it
+        // still names the thread automatic. It cannot be shown to be current,
+        // so it says nothing.
+        let stale = desktopRouting(
+            automatic: ["thread-1"],
+            forTurnStartedAt: turnStart,
+            writtenAfter: -30
+        )
+        let onTheStaleMap = pin.approvalsReachTheUser(
+            forTurn: turn, startedAt: turnStart, in: stale
+        )
+        #expect(
+            onTheStaleMap,
+            "a map from before the Turn must not silence its approvals"
+        )
+
+        // And it did not pin: the write Desktop makes when the composer is
+        // cleared lands moments later, and that one does answer.
+        let atTheTurnsStart = desktopRouting(
+            automatic: ["thread-1"], forTurnStartedAt: turnStart
+        )
+        let onTheTurnsOwnWrite = pin.approvalsReachTheUser(
+            forTurn: turn, startedAt: turnStart, in: atTheTurnsStart
+        )
+        #expect(
+            !onTheTurnsOwnWrite,
+            "the refusal must not cost the Turn its real answer"
+        )
+
+        // The other end, on a Turn that never got an admissible reading: a map
+        // written well into the Turn describes the thread now, not the Turn.
+        var late = TurnApprovalRoutingPin()
+        let afterASwitch = desktopRouting(
+            automatic: ["thread-1"],
+            forTurnStartedAt: turnStart,
+            writtenAfter: 300
+        )
+        let onASwitchMidTurn = late.approvalsReachTheUser(
+            forTurn: turn, startedAt: turnStart, in: afterASwitch
+        )
+        #expect(
+            onASwitchMidTurn,
+            "a switch made mid-turn must not silence the Turn in flight"
+        )
+
+        // The authority still outranks both refusals.
+        late.recordRolloutReading(false, forTurn: turn)
+        let onTheAuthority = late.approvalsReachTheUser(
+            forTurn: turn, startedAt: turnStart, in: afterASwitch
+        )
+        #expect(!onTheAuthority)
+    }
+
+    /// The rollout answers once, and its answer outranks the map's.
+    @Test @MainActor
+    func approvalRoutingPinPrefersTheRolloutAndFallsBackToTheMap() {
+        var pin = TurnApprovalRoutingPin()
+        let turnStart = Date(timeIntervalSince1970: 1_000)
+        let turn = TurnApprovalRoutingPin.TurnIdentity(
+            threadID: "thread-1",
+            turnID: "turn-1"
+        )
+        let mapSaysPerson = desktopRouting(
+            automatic: [], forTurnStartedAt: turnStart
+        )
 
         // A refresh before the rollout path is known still has to answer, and
         // the map is what it answers with.
         #expect(pin.awaitsRolloutReading(forTurn: turn))
         let beforeTheReading = pin.approvalsReachTheUser(
             forTurn: turn,
+            startedAt: turnStart,
             in: mapSaysPerson
         )
         #expect(beforeTheReading)
@@ -6388,6 +6517,7 @@ struct NotchlineTests {
         pin.recordRolloutReading(false, forTurn: turn)
         let afterTheReading = pin.approvalsReachTheUser(
             forTurn: turn,
+            startedAt: turnStart,
             in: mapSaysPerson
         )
         #expect(!pin.awaitsRolloutReading(forTurn: turn))
@@ -6399,15 +6529,17 @@ struct NotchlineTests {
         var unreadable = TurnApprovalRoutingPin()
         unreadable.recordRolloutReading(nil, forTurn: turn)
         #expect(!unreadable.awaitsRolloutReading(forTurn: turn))
-        let codexReviews = DesktopApprovalRoutingSnapshot(
-            automaticallyReviewedThreadIDs: ["thread-1"]
+        let codexReviews = desktopRouting(
+            automatic: ["thread-1"], forTurnStartedAt: turnStart
         )
         let fromTheMap = unreadable.approvalsReachTheUser(
             forTurn: turn,
+            startedAt: turnStart,
             in: codexReviews
         )
         let afterTheMapChanged = unreadable.approvalsReachTheUser(
             forTurn: turn,
+            startedAt: turnStart,
             in: mapSaysPerson
         )
         #expect(!fromTheMap)
@@ -6441,7 +6573,16 @@ struct NotchlineTests {
             withIntermediateDirectories: true
         )
         let stateFile = root.appendingPathComponent(".codex-global-state.json")
-        func recordReviewer(_ reviewer: String) throws {
+        /// Desktop rewrites this file whole, and *when* it did so is half of
+        /// what the map says: the pin only takes an answer from a write made
+        /// in a Turn's opening moments. So every write here is stamped onto
+        /// the same timeline as the hook payloads below rather than left on
+        /// the wall clock, which would put them all three seconds before the
+        /// second Turn they are supposed to describe.
+        func recordReviewer(
+            _ reviewer: String,
+            writtenAt: TimeInterval
+        ) throws {
             try JSONSerialization.data(withJSONObject: [
                 "electron-persisted-atom-state": [
                     "heartbeat-thread-permissions-by-id": [
@@ -6449,6 +6590,10 @@ struct NotchlineTests {
                     ]
                 ]
             ]).write(to: stateFile, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: writtenAt)],
+                ofItemAtPath: stateFile.path
+            )
         }
 
         let installer = CodexHookRegistrar(paths: paths)
@@ -6460,8 +6605,10 @@ struct NotchlineTests {
                 .deliver(to: repository)
         }
 
-        // The turn starts while the person is the reviewer.
-        try recordReviewer("user")
+        // The turn starts while the person is the reviewer. Sending clears
+        // the composer, which is a persisted atom, so Desktop writes this file
+        // about half a second into the Turn.
+        try recordReviewer("user", writtenAt: timestamp + 0.5)
         try deliver([
             "received_at": timestamp,
             "hook_event_name": "UserPromptSubmit",
@@ -6490,9 +6637,10 @@ struct NotchlineTests {
         )
         #expect(await snapshotWithSessions(from: service).sessions.first?.status == .running)
 
-        // Desktop records the switch. Nothing about the running turn changed:
-        // it goes on asking the person, one call at a time.
-        try recordReviewer("auto_review")
+        // Desktop records the switch, inside this Turn's own window rather
+        // than safely outside it -- the pin has to hold on the answer it took,
+        // not on the switch happening to arrive late.
+        try recordReviewer("auto_review", writtenAt: timestamp + 1.5)
         try deliver([
             "received_at": timestamp + 1,
             "hook_event_name": "PreToolUse",
@@ -6515,12 +6663,15 @@ struct NotchlineTests {
 
         // The *next* turn is the one the switch applies to, and it asks the
         // map again rather than inheriting the answer its predecessor pinned.
+        // Desktop writes the file at this Turn's start as it did at the last
+        // one's, carrying the same reviewer it has held since the switch.
         try deliver([
             "received_at": timestamp + 3,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-1",
             "turn_id": "turn-2"
         ])
+        try recordReviewer("auto_review", writtenAt: timestamp + 3.5)
         try deliver([
             "received_at": timestamp + 4,
             "hook_event_name": "PreToolUse",
@@ -21268,6 +21419,25 @@ private func desktopReading(
         unreadThreadIDs: unread,
         source: source,
         currentAsOf: boundary.addingTimeInterval(0.583)
+    )
+}
+
+/// A Desktop reviewer map, with the instant Desktop wrote the file it came
+/// out of.
+///
+/// The pin only lets a map answer for a Turn when that instant lands in the
+/// Turn's opening moments, so a test that is not about the window states the
+/// ordinary case: Desktop writes this file about half a second into every Turn
+/// it hosts, because sending clears the composer and the draft is a persisted
+/// atom.
+private func desktopRouting(
+    automatic: Set<String>,
+    forTurnStartedAt turnStart: Date,
+    writtenAfter delay: TimeInterval = 0.5
+) -> DesktopApprovalRoutingSnapshot {
+    DesktopApprovalRoutingSnapshot(
+        automaticallyReviewedThreadIDs: automatic,
+        currentAsOf: turnStart.addingTimeInterval(delay)
     )
 }
 

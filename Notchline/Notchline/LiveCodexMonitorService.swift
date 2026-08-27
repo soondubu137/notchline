@@ -1171,9 +1171,12 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             )
             observedTurns.insert(turn)
             // Whatever the rollout said, if it said anything. The map answers
-            // for the Turns it could not.
+            // for the Turns it could not -- and only where it was written late
+            // enough to be describing them, which is why the Turn's own start
+            // goes in with it.
             let approvalsReachTheUser = approvalRoutingPin.approvalsReachTheUser(
                 forTurn: turn,
+                startedAt: state.startedAt,
                 in: approvalRouting
             )
             // Pinned to the turn it was read for. A record left over from

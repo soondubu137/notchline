@@ -25,11 +25,41 @@ nonisolated protocol DesktopApprovalRoutingProviding: Sendable {
 struct DesktopApprovalRoutingSnapshot: Equatable, Sendable {
     /// Threads whose approval requests Codex answers on the user's behalf.
     let automaticallyReviewedThreadIDs: Set<String>
+    /// The instant this reading is a complete account up to.
+    ///
+    /// The same field, for the same reason, as
+    /// ``DesktopUnreadStateSnapshot/currentAsOf``: this map is read out of the
+    /// same `.codex-global-state.json`, and that file is a projection Codex
+    /// Desktop writes through one trailing 500 ms debounce with no maximum
+    /// wait, shared by every persisted atom it owns. The composer draft is one
+    /// of those atoms and the editor writes it on every keystroke, so a user
+    /// who is typing holds the whole file still -- measured at 45.4 seconds
+    /// across 165 characters on Desktop `26.820.60940`, 2026-08-26.
+    ///
+    /// It matters differently here, and the difference is what
+    /// ``TurnApprovalRoutingPin`` acts on. An unread reading taken before a
+    /// Turn ended is *uninformed*: the event had not happened yet. A reviewer
+    /// reading taken before a Turn began is not uninformed at all -- the
+    /// setting existed then, and normally has not changed since. What the
+    /// instant buys is the one sequence that breaks it: change the reviewer,
+    /// type the prompt, send. The change goes into Desktop's memory, the
+    /// typing keeps it off disk, and the Turn starts with this file still
+    /// naming the reviewer the user has just moved away from.
+    let currentAsOf: Date
 
-    nonisolated static let unknown = Self(automaticallyReviewedThreadIDs: [])
+    /// A reading that names nothing and reaches nowhere: no thread is proven
+    /// automatic, and no Turn can be judged against it.
+    nonisolated static let unknown = Self(
+        automaticallyReviewedThreadIDs: [],
+        currentAsOf: .distantPast
+    )
 
-    nonisolated init(automaticallyReviewedThreadIDs: Set<String>) {
+    nonisolated init(
+        automaticallyReviewedThreadIDs: Set<String>,
+        currentAsOf: Date
+    ) {
         self.automaticallyReviewedThreadIDs = automaticallyReviewedThreadIDs
+        self.currentAsOf = currentAsOf
     }
 
     /// Whether an approval request on this thread can still reach the user.
@@ -106,6 +136,18 @@ struct TurnApprovalRoutingPin: Sendable {
         var hasReadRollout = false
     }
 
+    /// How far into a Turn Desktop's map may have been written and still be
+    /// describing what that Turn started under.
+    ///
+    /// The mirror of ``CodexRolloutTurnReviewerReader/recordTolerance``, which
+    /// bounds the same question from the other side, and the same two seconds:
+    /// the write this window is sized for is the one the 500 ms debounce
+    /// releases when sending stops the typing, so there is four times the
+    /// headroom over the delay it has to cover, and a reviewer switched
+    /// deliberately mid-turn is minutes away rather than seconds -- 5:22 and
+    /// 1:08 in the two measured cases.
+    nonisolated private static let mapWindow: TimeInterval = 2
+
     private var answersByTurn: [TurnIdentity: Answer] = [:]
 
     nonisolated init() {}
@@ -146,12 +188,59 @@ struct TurnApprovalRoutingPin: Sendable {
     }
 
     /// The answer for this Turn, recording it the first time the Turn is seen.
+    ///
+    /// - Parameter turnStartedAt: when this Turn began. Only a map Desktop
+    ///   wrote in this Turn's own opening moments may answer for it, and both
+    ///   ends of that window are load-bearing.
+    ///
+    ///   **Too old is the dangerous end.** Desktop's file is a projection
+    ///   written through a debounce that anything typing can starve
+    ///   indefinitely (``DesktopApprovalRoutingSnapshot/currentAsOf``), so a
+    ///   projection from before the Turn can still name the reviewer the user
+    ///   has just moved away from. The sequence is *switch the thread to
+    ///   yourself, type the prompt, send*: the switch went into Desktop's
+    ///   memory, the typing held it off disk, and the map this app then read
+    ///   still said `auto_review`. Pinned, that silenced every approval dialog
+    ///   the user was in fact being shown, for the Turn's whole life.
+    ///
+    ///   **Too new is the end this pin already existed for.** A map written
+    ///   well into the Turn describes a reviewer the user may have changed
+    ///   *since* it started, and the running Turn keeps the one it was handed
+    ///   -- the measured `01a03241` case above, where reading the map at
+    ///   projection time silenced five hand-answered dialogs.
+    ///
+    ///   Neither end pins anything, so a refused reading costs only itself and
+    ///   the next admissible one still answers. The Turn meanwhile reports
+    ///   what this adapter reports for any thread it cannot vouch for: that
+    ///   approvals reach the user.
+    ///
+    ///   **The window is wide enough because Desktop writes this file at the
+    ///   start of every Turn it hosts.** Sending clears the composer, and the
+    ///   draft is a persisted atom -- twice over, through the editor's own
+    ///   `setText("")` and through the reset that follows it -- so the write
+    ///   the debounce has been holding lands about half a second in, carrying
+    ///   whatever the user changed just before they typed. That write is what
+    ///   makes the ordinary case answerable at all, and it is also what
+    ///   repairs the stale value rather than merely refusing it.
+    ///
+    ///   When it does not land -- the user submits here and goes on typing in
+    ///   another thread, which is the same starvation measured on the unread
+    ///   set -- nothing in the window answers and the row shows *Approval
+    ///   needed* until ``CodexRolloutTurnReviewerReader``, which is the
+    ///   authority and does not read this file, answers over the top of it.
+    ///   That is the direction this adapter fails in everywhere else; the
+    ///   other one hides the single state the product exists to show.
     nonisolated mutating func approvalsReachTheUser(
         forTurn turn: TurnIdentity,
+        startedAt turnStartedAt: Date,
         in snapshot: DesktopApprovalRoutingSnapshot
     ) -> Bool {
         if let pinned = answersByTurn[turn]?.value {
             return pinned
+        }
+        let age = snapshot.currentAsOf.timeIntervalSince(turnStartedAt)
+        guard age >= 0, age <= Self.mapWindow else {
+            return true
         }
         let answer = snapshot.approvalsReachTheUser(for: turn.threadID)
         answersByTurn[turn, default: Answer()].value = answer
@@ -492,6 +581,13 @@ actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
     /// the row for a beat — the exact flicker this adapter exists to end —
     /// while a mode the user changed in the meantime is corrected by the next
     /// successful read, which the Desktop's own write triggers.
+    ///
+    /// What it keeps is the map *and* the instant that map was written, so a
+    /// retained reading cannot pass itself off as newer than it is. For a Turn
+    /// that already has its answer this changes nothing; for one still inside
+    /// its opening window it means a failed read can leave the row saying
+    /// *Approval needed* for that beat after all, which is the direction this
+    /// adapter fails in everywhere else.
     private var lastKnownGood: DesktopApprovalRoutingSnapshot?
     private var lastSuccessfulRevision: FileRevision?
 
@@ -534,14 +630,20 @@ actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
         }
 
         do {
-            let data = try readValidatedData(from: stateFileURL)
+            let (data, writtenAt) = try readValidatedData(from: stateFileURL)
             let state = try JSONDecoder().decode(GlobalState.self, from: data)
             let snapshot = DesktopApprovalRoutingSnapshot(
                 automaticallyReviewedThreadIDs: Set(
                     state.reviewersByThreadID
                         .filter { $0.value == Self.automaticReviewer }
                         .keys
-                )
+                ),
+                // Desktop rewrites this file whole, so its modification date
+                // is the instant everything in it was last true. Unreadable
+                // means the reading reaches nowhere, which costs nothing that
+                // is not already lost: a map that cannot be read names no
+                // thread either.
+                currentAsOf: writtenAt ?? .distantPast
             )
             lastKnownGood = snapshot
             lastSuccessfulRevision = currentRevision
@@ -554,7 +656,18 @@ actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
         }
     }
 
-    private func readValidatedData(from url: URL) throws -> Data {
+    /// - Returns: the file's bytes, and the instant it was last written.
+    ///
+    /// The date comes from the same `attributesOfItem` reading as the
+    /// ownership check, before the bytes, for the reason spelled out in
+    /// ``CodexDesktopUnreadStateRepository``: under the atomic replace this
+    /// file arrives by, that order pairs an older date with newer content,
+    /// which can only withhold a subtraction for a moment longer. The other
+    /// order pairs a newer date with content from before the replace, and
+    /// that is the pairing that silences a row.
+    private func readValidatedData(
+        from url: URL
+    ) throws -> (data: Data, writtenAt: Date?) {
         let resourceValues = try url.resourceValues(forKeys: [
             .fileSizeKey,
             .isRegularFileKey,
@@ -579,7 +692,7 @@ actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
         guard data.count <= Self.maximumStateFileSize else {
             throw ApprovalRoutingError.oversizedFile(data.count)
         }
-        return data
+        return (data, attributes[.modificationDate] as? Date)
     }
 
     private func revision(of url: URL) throws -> FileRevision {
