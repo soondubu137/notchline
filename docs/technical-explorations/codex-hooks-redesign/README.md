@@ -6,8 +6,8 @@
 | First recorded | 2026-08-20 |
 | Question | If the Codex hook integration did not exist yet, what would it look like built once, deliberately |
 | Audience | Whoever decides whether to rebuild it, and whoever implements it afterwards |
-| Language | English, by explicit request. Every other document under `docs/` is in Chinese; this one is the exception, not a new convention |
-| Basis | Reading of `HookIntegration.swift`, `AgentHookListener.swift`, `ManagedHooksConfiguration.swift`, `ManagedHooksFileEditor.swift`, `ClaudeCodeHookSetup.swift`, `system-architecture.md` §2/§3/§8, `tech-design.md` §390–418, ADR 0010, ADR 0013, as of commit `604fb6d` |
+| Language | English. Written that way by explicit request while the rest of `docs/` was still Chinese; every document is English now, so this row is only a historical note |
+| Basis | Reading of `HookIntegration.swift`, `AgentHookListener.swift`, `ManagedHooksConfiguration.swift`, `ManagedHooksFileEditor.swift`, `ClaudeCodeHookSetup.swift`, `system-architecture.md` §2/§3/§8, `tech-design.md` §7.1–§7.2, ADR 0010, ADR 0013, as of commit `604fb6d` |
 | Measurements | **None of its own.** Every number quoted here is carried from an existing document or code comment and is attributed at the point of use |
 
 > Directory convention follows [`shared-app-server/README.md`](../shared-app-server/README.md): one second-level directory per exploration, later evidence appended rather than overwriting earlier evidence.
@@ -72,11 +72,13 @@ Three moving parts inside the app — a registrar, a transport, a store — agai
 
 ## 4. Registration, and the contract that shapes everything else
 
-### 4.1 Five definitions
+### 4.1 The registered definitions
 
 `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`. All unmatched.
 
-`SessionEnd` is **not** registered. It is registered today, mapped to a signal, and then does nothing: `HookIntegration.swift` reduces `.sessionEnded` and `.inert` identically — consumed, no state change. It costs one process launch per session end and a sixth definition for the user to trust, and buys nothing. A thread whose session is gone is already retired by App Server membership reconciliation.
+> **Since this was written, `SubagentStart` and `SubagentStop` were added, making seven.** They are the only events that can answer whether work is still in flight after a Thread's own Turn ended (`subagent-row-consistency/README.md` §6.2). Count `managedDefinitions` in `HookIntegration.swift` rather than a number in prose — this line has read five, six and seven at various points.
+
+`SessionEnd` is **not** registered. It is registered today, mapped to a signal, and then does nothing: `HookIntegration.swift` reduces `.sessionEnded` and `.inert` identically — consumed, no state change. It costs one process launch per session end and one more definition for the user to trust, and buys nothing. A thread whose session is gone is already retired by App Server membership reconciliation.
 
 `PreToolUse` and `PostToolUse` stay unmatched, which is ~90% of the event volume. §12.1 records why narrowing them does not work.
 
@@ -152,7 +154,7 @@ The settings card is the projection:
 
 | Registration | Delivery | Card |
 | --- | --- | --- |
-| `complete` | `neverSeen` | Registered. Open `/hooks` in Codex and trust the five definitions |
+| `complete` | `neverSeen` | Registered. Open `/hooks` in Codex and trust the definitions |
 | `complete` | `seen` | Connected |
 | `mismatched` | any | The registration is not what this version needs; turn the switch on to repair it |
 | `absent` | any | Not installed |
