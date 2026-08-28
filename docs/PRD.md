@@ -1,400 +1,408 @@
-# Codex in Notch — 产品需求文档
+# Notchline — Product Requirements
 
-| 字段 | 内容 |
+| Field | Value |
 | --- | --- |
-| 文档状态 | Desktop Project 身份与未读终态自动移除已实现（Codex 与 Claude Code Desktop 托管会话两侧）；真实版本矩阵仍待 Phase 0 验证 |
-| 版本 | 0.11 |
-| 日期 | 2026-08-15 |
-| 目标版本 | V1 MVP |
-| 目标平台 | macOS；带物理刘海与无刘海显示器 |
+| Status | Desktop Project identity and automatic removal of read terminal Turns implemented (Codex and Claude Code desktop-hosted sessions); the real version matrix still awaits Phase 0 verification |
+| Version | 0.12 |
+| Date | 2026-08-28 |
+| Target | V1 MVP |
+| Platform | macOS; displays with and without a physical notch |
 
-## 1. 产品定义
+## 1. What the product is
 
-Codex in Notch 是 Codex Desktop 当前处理轮次的实时汇总中心。它把正在运行、正在等待人工处理，以及已经结束但用户尚未在 Codex Desktop 中阅读的轮次集中显示在屏幕顶部。
+Notchline is a live summary of the Turns a user still needs to attend to, at the top of the screen: Turns that are running, waiting on a person, or finished but not yet read in the product that produced them. The monitored products are Codex Desktop and Claude Code.
 
-产品不是历史会话浏览器，也不管理 Codex 任务。每一行代表一个可以通过同一 `threadId` 返回 Codex Desktop 的根会话；行的状态由该会话当前或最近一个仍在监视生命周期内的处理轮次驱动。
+It is not a history browser and it does not manage tasks. Each row is a root thread that can be returned to under the same identity, and the row's state is driven by that thread's current — or most recent still-monitored — Turn.
 
-带刘海屏幕的收起态与物理刘海融合；无刘海屏幕使用内容驱动宽度的纯黑紧凑组件。两种形态悬停后共享同一个展开组件。
+Collapsed, it merges with the physical notch on a notched screen and uses a content-width black compact component on a notch-less one. Both forms share one expanded component on hover.
 
-**它不在 Dock 里出现。** 应用以 `LSUIElement` 运行：没有 Dock 图标，不进 ⌘-Tab，前台时也没有菜单栏。这是产品形态的直接结果——本产品唯一常驻的界面在刘海里，Dock 里那一格既打不开任何窗口，也不代表一个用户会去「切过去」的应用，它只会让人以为那里有一扇窗可开。代价写在第 11 节：`⌘,` 与 `⌘Q` 随菜单栏一起没有了，打开设置只剩面板上的齿轮，退出只剩设置窗口里的 `Quit`。
+**It does not appear in the Dock.** The app runs as `LSUIElement`: no Dock icon, no ⌘-Tab, and no menu bar even when frontmost. That follows directly from the product's shape — its only permanent interface is in the notch, and a Dock tile there would open no window and would not represent an app anyone switches to; it would only suggest there is a window to open. The cost is in §11: `⌘,` and `⌘Q` go with the menu bar, so settings are reachable only through the panel's gear and quitting only through `Quit` in the settings window.
 
-## 2. 目标
+## 2. Goals
 
-V1 必须做到：
+V1 must:
 
-1. 实时呈现当前 Codex Desktop 账户下所有 Project 与 `Chats` 中需要监视的处理轮次。**监视范围严格限定为本次 Codex in Notch 启动之后开始的 Turn**：应用启动前已在运行、已完成未读或正在等待审批的会话一律不纳入，直到它们产生下一个 lifecycle 事件为止（见第 3 节非目标）。
-2. 会话状态只使用 Running、Input needed、Approval needed 和 Completed 四类。
-3. 让用户点击任意会话行后进入 Codex Desktop 中完全相同的会话。
-4. Running 与其他状态使用同一状态名称机制显示 `Running`；同时为每个未完成轮次显示处理时间，并在收起态右端显示全局最长运行时间（见 8.2）。
-5. 显示当前 Desktop 账户的主额度窗口剩余比例；无法可靠读取时明确显示不可用。
-6. 在应用重启、Codex 重启、账户切换和漏失事件后不展示任何缓存会话；列表从空开始重新累积。
-7. 默认提供有用的当前内容预览，同时允许用户全局隐藏所有预览。
-8. 保持本地优先、低干扰、低资源占用，不申请辅助功能或屏幕录制权限。
+1. Live-present the Turns worth monitoring across every Project and `Chats` under the current account. **The scope is strictly Turns that began after this launch**: anything already running, finished-unread or awaiting approval when the app starts is excluded until it produces its next lifecycle event (§3).
+2. Use only four thread statuses: Running, Input needed, Approval needed, Completed.
+3. Let a click on any row reach exactly the same thread in its product.
+4. Show `Running` through the same status-name mechanism as other statuses, show processing time per unfinished Turn, and show the longest running time at the collapsed right end (§8.2).
+5. Show the current account's primary quota window's remaining share, and say so explicitly when it cannot be read reliably.
+6. Show no cached threads after an app restart, a product restart, an account switch or missed events; the list starts empty and re-accumulates.
+7. Provide a useful current-content preview by default.
+8. Stay local-first, low-interruption and low-cost, requesting neither Accessibility nor Screen Recording permission.
 
-## 3. 非目标
+## 3. Non-goals
 
-V1 不包含：
+V1 does not include:
 
-- 发送新输入、批准权限、回答 Codex 提问、取消、归档或删除会话。
-- 把 CLI、IDE 或子智能体作为独立列表来源。只有已经成为可在 Desktop 中精确导航的同一根会话时，才可能被纳入。（Claude Code 的子智能体同样不单独成行：其事件携带父会话的 `session_id` 与 `prompt_id`，天然并入父轮次。）
-- **Codex 侧边会话（side chat）**，以及任何 App Server 不肯交出的 Thread。side chat 是 Codex Desktop 在一条会话内部开出的临时旁支，按 Codex 自己的说法「关掉应用就消失」、关闭即删除且不可恢复；它是 ephemeral thread，不落盘、不出现在 `thread/list`、`thread/read` 拒绝它、也没有任何 deep link 打得开它。它确实有自己的 thread id 并照常触发 Turn hook，但**把它和它所属的那条会话连起来的东西只存在于 Desktop 进程内存里**，本应用够不着。因此它既不能单独成行（无 Project、无标题、点了没有去处），也不能并入父会话那一行（父是谁问不出来）。这不是暂缓，是能力边界：Codex 哪天把归属说出来，正确答案就是并入父会话那一行，像子智能体一样，而不是新增一种行（见 [ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。
-- 历史会话搜索、最近 N 条或固定时间窗列表。
-- **启动时做任何形式的现状同步（cold-start sync）——两个产品同一条规则。** 应用启动前的所有会话状态——正在运行、已完成未读、正在等待审批——一律无视，直到它们产生下一个 lifecycle 事件。两侧的理由不同：
-  - **Codex 侧是能力边界而非取舍。** 针对 Codex CLI `0.148.0-alpha.9` 在真实运行中的 Turn 上实测，独立 App Server 的 `thread/loaded/list` 为空、所有 Thread 恒为 `notLoaded`、从不出现 `inProgress` Turn，正在运行的 Turn 在持久化数据中甚至被记为 `interrupted`。没有任何受支持的读取能回答“Codex Desktop 此刻在做什么”，因此任何启动列表都只能是猜测。
-  - **Claude Code 侧是那份答案不可信。** 这里确实读得出来：官方会话列表给出存在哪些会话，transcript 给出其中哪些仍在轮次中，产品也一度这样重建（2026-08-19 移除）。问题在于**等待用户期间 transcript 一个字都不写**，所以重建出的轮次只可能是 *Running*——启动瞬间正停在权限请求上的会话会被画成正在干活，而「谁在等我」正是本产品唯一要答对的问题。文件分不开「在等」与「在做」，因此不存在一个更窄的版本可留，只能整条移除；顺带把两个产品的启动规则收回成同一句话。
+- Sending input, granting permission, answering questions, cancelling, archiving or deleting threads.
+- Treating the CLI, an IDE or a subagent as an independent list source. They qualify only once they are the same root thread, exactly navigable in the desktop app. (Claude Code subagents likewise never get their own row: their events carry the parent's `session_id` and `prompt_id` and merge naturally into the parent Turn.)
+- **Codex side chats, and any Thread the App Server will not hand over.** A side chat is a temporary branch Codex Desktop opens inside a thread — by Codex's own words it vanishes when the app closes, and closing deletes it irrecoverably. It is an ephemeral thread: never persisted, absent from `thread/list`, refused by `thread/read`, and opened by no deep link. It does have its own thread id and fires Turn hooks as usual, but **what connects it to the thread it belongs to exists only in Desktop's process memory**, out of this app's reach. So it can neither be its own row (no Project, no title, nowhere to go) nor be folded into the parent's row (the parent cannot be asked for). This is a capability boundary, not a deferral: the day Codex states the parentage, the right answer is to fold it into the parent's row like a subagent, not to add a new kind of row ([ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)).
+- History search, "the last N", or a fixed time window.
+- **Any form of cold-start sync — one rule for both products.** Every thread state predating launch — running, finished-unread, awaiting approval — is ignored until it produces its next lifecycle event. The reasons differ per side:
+  - **On the Codex side it is a capability boundary, not a trade-off.** Measured against Codex CLI `0.148.0-alpha.9` on a genuinely in-flight Turn, a standalone App Server's `thread/loaded/list` is empty, every Thread is permanently `notLoaded`, no `inProgress` Turn ever appears, and a running Turn is even recorded as `interrupted` in persisted data. No supported read answers "what is Codex Desktop doing right now", so any startup list could only be a guess.
+  - **On the Claude Code side the answer is untrustworthy.** Here it genuinely can be read: the official session list gives which sessions exist and transcripts give which are mid-Turn, and the product did rebuild this way (removed 2026-08-19). The problem is that **while waiting on a user, a transcript writes nothing**, so a rebuilt Turn can only ever be *Running* — a session parked on a permission request at launch would be drawn as working, and "who is waiting for me" is the one question this product must get right. The files cannot separate waiting from working, so there is no narrower version to keep and the whole rebuild was removed — which also collapsed both products' startup rules back into one sentence.
 
-  相关取舍与实测记录见 [`system-architecture.md` §2.1](system-architecture.md#21-启动边界不做现状同步)。
-- 通过窗口焦点、路径、标题、时间接近度或 GUI 自动化猜测会话身份、Project、已读状态或导航目标。**例外经产品批准并写在 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md) 里**，只在 Claude Code 一侧成立，Codex 一侧本条禁令原样有效：某个 Turn 结束**之后** Claude Desktop 回到前台，或 Claude Desktop 此刻持有前台且屏幕醒着、未锁、无屏保、会话在 console，而 Desktop 自己的记录与它自己的日志都显示屏幕上的就是那个会话时，该会话算已读。它不是 Codex 那边被禁的「获得焦点即已读」——那句话在 Codex 上只能读成「所有 thread 都已读」，这里说的是 Desktop 自己记录在屏幕上的**那一个**会话，其余一律不受影响。第二条的代价（把窗口留在前台走开的用户会丢一次通知）经产品明确接受。窗口标题、窗口几何、时间接近度、靠等待本身移除、Accessibility 与 GUI 自动化在任何一侧都仍然禁止。
-- 展示原始推理、工具参数、命令输出、文件差异、敏感路径或批准理由。
-- 将正文预览、会话列表快照或旧账户额度持久化。
-- 在 Notch 的被动状态中提供修复、更新或启动 Codex 的按钮。
-- 用模型计算时间、活跃执行时间或会话年龄替代 8.2 定义的墙钟处理时间；也不为无法确定开始时间的轮次推算时长。
+  Trade-offs and measurements in [`system-architecture.md` §2.1](system-architecture.md).
+- Guessing thread identity, Project, read state or navigation target from window focus, paths, titles, temporal proximity or GUI automation. **The exception is product-approved and written in [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)**, holds only on the Claude Code side, and leaves this ban fully in force for Codex: a thread counts as read when Claude Desktop returns to the foreground **after** a Turn ended, or holds the foreground now with the display awake, unlocked, no screen saver and the session on console, while both Desktop's own records and its own log say the session on screen is that one. It is not the "focus means read" banned for Codex — that sentence could only mean "every thread is read" there, whereas this names **the one session** Desktop itself records as on screen and leaves every other untouched. The second rule's cost (a user who leaves the window in front and walks away loses one notification) is explicitly accepted by the product. Window titles, window geometry, temporal proximity, removal by waiting alone, Accessibility and GUI automation remain banned on both sides.
+- Showing raw reasoning, tool arguments, command output, file diffs, sensitive paths or approval rationale.
+- Persisting preview text, thread-list snapshots or an old account's quota.
+- Offering buttons in the notch's passive state to repair, update or launch a product.
+- Substituting model compute time, active execution time or thread age for the wall-clock processing time in §8.2, or extrapolating a duration for a Turn whose start cannot be determined.
 
-## 4. 核心对象与监视范围
+## 4. Core objects and monitoring scope
 
-### 4.1 会话与处理轮次
+### 4.1 Threads and Turns
 
-- 一行永远代表一个可导航根会话（Thread）。
-- **成行的前提是产品先交出这条 Thread。** Hook 给出轮次身份与状态，但「这是不是一个可导航根会话」只有产品自己答得出；没答之前不成行，答了「没有这条 thread」也不成行。这一条 fail closed，与「没问到」同解：一行是一次承诺，点下去要有去处，而拿不到 Thread 就没有任何证据支持这个承诺。代价是一行要等一次本地读取——不是等那条昂贵的全量列表；实测 Codex 在第一个 hook 触发时会话已经落盘可读，所以这次等待是一个本地往返（见 [ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。
-- 一个处理轮次（Turn）从用户提交输入时开始，在 Codex 报告任意执行结束信号时统一进入 Completed。
-- 同一 Thread 的多个 Turn 不产生多行；新 Turn 替换该行的驱动轮次。
-- 子智能体不显示为独立行。
-- Codex 侧边会话不显示为行，从第一个 hook 到最后一个都不显示（第 3 节）。
+- A row is always one navigable root thread.
+- **A row requires the product to hand that Thread over first.** Hooks give Turn identity and status, but only the product can answer "is this a navigable root thread"; before it answers there is no row, and an answer of "no such thread" is no row either. This fails closed, with "never asked" treated identically: a row is a promise that clicking leads somewhere, and without the Thread there is no evidence for that promise. The cost is one local read per row — not the expensive full list; measured, a Codex thread is already persisted and readable when its first hook fires, so this wait is one local round trip ([ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)).
+- A Turn starts when the user submits input and goes to Completed on any execution-finished signal.
+- Several Turns on one Thread never produce several rows; a new Turn replaces the row's driving Turn.
+- Subagents are never their own row.
+- A Codex side chat is never a row, from its first hook to its last (§3).
 
-### 4.2 监视生命周期
+### 4.2 The monitoring lifecycle
 
-一个处理轮次在产品中的可见期为：
+A Turn is visible in the product for as long as:
 
-1. 用户提交输入后立即进入列表。
-2. 尚未进入终态时始终保留。
-3. 进入终态后，只要该产品的桌面端仍认为用户没有看过它，且会话未归档、未删除、仍可导航，就继续保留。
-4. 桌面端表明用户已经看过、会话被归档、删除或失去可导航性时，立即从列表移除。
-5. 用户在终态行上右键时立即移除该行。它是用户说「这一行我不要了」，不是已读证据，因此不改变任何桌面端状态，也不删除会话；作用范围是这一个轮次，同一会话的下一个轮次照常成行。**这一行也不会因为产品自己离开视线而回来**：Codex Desktop 退出、App Server 断连、Claude Code 没有窗口开着，都只是没人上报或行被扣住，不是这一轮结束了；只有在该产品仍然看得见、却不再列出这一轮时，本应用才忘掉这次移除。活动轮次不接受这个动作——那时还没有任何结果被告知过，误触也要等到轮次结束才能恢复。
+1. It enters the list as soon as the user submits.
+2. It stays while it has not reached a terminal state.
+3. Once terminal, it stays while that product's desktop app still believes the user has not seen it and the thread is unarchived, undeleted and still navigable.
+4. It is removed as soon as the desktop app says the user has seen it, or the thread is archived, deleted, or loses navigability.
+5. Right-clicking a terminal row removes it immediately. That is the user saying "I am done with this row", not read evidence, so it changes no desktop state and deletes no thread; it applies to that one Turn, and the thread's next Turn gets a row as usual. **The row also does not come back because the product itself left view**: Codex Desktop quitting, the App Server dropping, or Claude Code having no window open all mean nobody is reporting or the rows are held, not that this Turn ended; this app forgets the removal only once the product is visible again and no longer lists that Turn. Active Turns do not accept the gesture — nothing has been reported yet, so even a misclick can only be undone after the Turn ends.
 
-Codex in Notch 不主动修改已读状态。点击会话成功后，组件收起并等待桌面端发出真实已读变化；Notch 点击本身不等于已读。
+Notchline never changes read state itself. After a successful click the component collapses and waits for a genuine read change from the desktop app; a Notch click is never a read.
 
-**「用户已经看过」按产品各自取源，两者都是登记在 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) 的严格只读适配器。**
+**"The user has seen it" is sourced per product, and both are strictly read-only adapters registered in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md).**
 
-- **Codex**：Desktop 未读集合（蓝点）。只有当前 Desktop 主状态文件成功解析出的未读集合可以成为移除依据。
-- **Claude Code（Desktop 托管会话）**：四条路径，满足其一即为已读。它们是同一句话的四种形状——**答案在用户面前时，用户做了一个只有人会做的动作**。
-  1. Claude Desktop 记录的「最后一次把该会话显示在屏幕上」的时刻**晚于该 Turn 的结束时刻**。比较的左边是本应用自己掌握的 Turn 终止时刻，不是桌面端记录的「最后活动」。
-  2. **Claude Desktop 在该 Turn 结束之后回到前台，且它最后放上屏幕的就是这个会话。** 覆盖「切走、再切回来读」——实测表明这次阅读在磁盘上不留任何痕迹，因此只读文件永远看不见它。要求的是「回到前台」这个跃迁而不是「此刻在前台」，否则把窗口留在前台然后离开座位的用户会被替他读掉。
-  3. **Claude Desktop 持有前台，屏幕醒着、未锁、无屏保、登录会话在 console，而它屏幕上的就是这个会话。** 覆盖「会话本来就在屏幕上、用户压根没离开」——这一种前两条都够不着，因为既没有新的显示，也没有一次回到前台。**这是唯一一条不需要用户做任何事的路径，也因此是唯一一条可能撤掉没人读过的行的路径**：轮次结束那一刻，坐着看完的人和提交完就走的人在任何信号上都没有区别。产品接受这个代价——把窗口留在前台然后走开的用户，在屏幕暗掉或锁上之前会丢掉那一次通知。三条读数负责把「可能在看」和「机器开着」分开；在另一块显示器、另一个 Space 或最小化状态下的窗口无法分辨，那三种情况会被没人看见地撤掉（见 ADR 0012）。
-  4. **该会话曾带着已结束的 Turn 停在 Claude Desktop 的屏幕上，而 Desktop 此后把别的会话放了上去。** 覆盖「读完就去了另一个会话」——Desktop 只记录会话被显示、从不记录它被藏起来，所以被留下的那个会话再也不会被盖章。
-  **第 2、3、4 条共用的那句「屏幕上的就是这个会话」有两个来源，两个都要成立。** Claude Desktop 的记录只记会话**被放上屏幕**、从不记它被拿下来，所以用户切到一个**新会话的输入框**之后，最后被盖章的那个会话会继续冒充在屏幕上——它的终态行会在新会话一开始就被当作读过撤掉，而用户一眼都没看过。Claude Desktop 自己的日志把另一半也说了（屏幕上不是会话时它明说「不是」），因此本产品把它作为**否决**读入：日志说屏幕上不是会话时，这三条一条都不成立；第 4 条另外要求顶替它的是一个**会话**——输入框不是。日志读不到就是没有这份否决，也就是原样行为，因此它只会让行多留，永远不会让行提前消失（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md) 第五条）。代价是：在输入框里待着的那段时间有多长，本产品并不知道，所以「读完答案随手开一个新会话」不再由第 4 条移除那一行，要等第 3 条或该会话自己的下一次提交。
-  用户在 Claude Desktop 归档该会话同样移除。第 3 条会在轮次结束后约 2 秒生效，因此坐在 Claude Desktop 前看着它跑完的用户，行会自己消失，不需要任何操作。
+- **Codex**: the Desktop unread set (the blue dot). Only an unread set successfully parsed from the current main state file may justify removal.
+- **Claude Code (desktop-hosted)**: four paths, any one of which means read. They are one sentence in four shapes — *while the answer was in front of the user, the user did something only a person does*.
+  1. Claude Desktop's record of when it last put that session on screen is **later than the Turn's end**. The left side of that comparison is the Turn end this app holds, not the desktop's "last activity".
+  2. **Claude Desktop returned to the foreground after that Turn ended, and the last session it put on screen is this one.** Covers "switch away, switch back to read" — measured, that reading leaves no trace on disk, so a read-only file adapter can never see it. It requires the *transition* rather than "is in the foreground", or a user who leaves the window in front and walks away is read for.
+  3. **Claude Desktop holds the foreground, the display is awake, unlocked, with no screen saver and the login session on console, and the session on its screen is this one.** Covers "the session was already on screen and the user never left" — unreachable by the first two, since there is neither a new display nor a return to the foreground. **This is the only path requiring nothing of the user, and therefore the only one that can retire an unread row**: at the moment a Turn ends, the person watching and the person who submitted and walked away differ on no signal. The product accepts that cost — someone who leaves the window in front and walks away loses that notification before the screen dims or locks. The three readings separate "might be looking" from "the machine is on"; a window on another display, another Space or minimised cannot be told apart, and those three are retired unseen (ADR 0012).
+  4. **The session once sat on Claude Desktop's screen with an ended Turn, and Desktop has since put another session there.** Covers "read it, then moved to another session" — Desktop records a session being displayed and never being hidden, so the one left behind is never stamped again.
 
-- **Claude Code（终端会话）**：**第五条路径，问的是那个终端而不是 Claude Code。** Claude Code 自己仍然没有任何"已读"概念——会话记录只有 `status` / `waitingFor` / `updatedAt`，不记录焦点——但该会话的**控制终端**记着：内核的 `st_atime` 是最后一次这个会话从这个设备读取的时刻。判定是**该访问时间晚于该 Turn 的结束时刻，并且那个终端所属的应用此刻持有前台（屏幕醒着、未锁、未切走用户），才算已读**。让访问时间前进的事有五种：敲一个键、那个界面拿到前台（`ESC [ I`）、那个界面失去前台（`ESC [ O`）、CLI 自己的查询收到回复，以及**指针划过那个界面**——Claude Code 打开了全动作鼠标上报，最后这一种不需要焦点。**前台那一半正是为它加的**：没有它，双屏下指针只是路过另一块屏上那个从未获得焦点的终端窗口，一行没人读过的终态就会消失（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md) 的 2026-08-20 修正）。**不在屏幕上的界面一个字节也收不到**，所以它仍然天然按会话而不是按应用成立。这一半仍然首先由手势驱动，**不设第三条那种不要求用户做任何事的规则**：前台只是与手势同时要求，光有前台永远不够。
-  **这一条对每个会话都问，不是前四条答不出来时才问。** 开着**远程控制**的会话同时摆在终端和 Claude Desktop 面前，两边由不同手势读，而在终端里读它不会让 Desktop 的记录动一下；写成兜底，那样一行就会为一个永远不会前进的时刻无限期等下去。它只可能对真的有控制终端的会话成立，因此不会波及 Desktop 托管的会话（那些走管道，没有终端）。
-  没有覆盖的是「读完之后继续盯着那个 tab 一动不动」——用户接下来做的任何一件事（敲下一个提示、切 tab、切应用）都会撤掉那一行。**只有既没有 Desktop 记录、也没有控制终端可问的会话**（`-p` 且输出被管道接走）仍然无从回答，它们按既有方式退出：下一次提交、会话消失，或用户手动移除（在该行上右键；~~或清空整张列表~~ 全清已删除）。**`tmux`、`screen` 与 `ssh` 里的会话现在也走这条既有方式**：它们的进程链只通到 `launchd`，宿主应用永远不持有前台，因此第五条对它们不成立。
-  用到的三个调用（`sysctl(KERN_PROC_PID)`、`devname_r`、`stat`）都是公开 BSD 接口。**禁令一条没动**：不猜哪个 tab 在屏幕上，不读窗口焦点、窗口标题或几何，不用固定时间，不把 Notch 点击当已读（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）。
+  **The "the session on screen is this one" that paths 2–4 share has two sources, and both must hold.** Because the records only stamp a session being *put* on screen, a user switching to a **new session's composer** leaves the last-stamped session impersonating the one on screen — and its terminal row is retired as read the moment the new session begins, unseen. Claude Desktop's own log states the other half (when what is on screen is not a session, it says so), so the product reads it as a **veto**: when the log says the screen holds no session, none of the three holds, and path 4 additionally requires the thing displacing it to be a **session** — a composer is not. An unreadable log simply means no veto and therefore the behaviour from before it, so it can only keep a row longer and never retire one early ([ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md) rule 5). The cost: the product does not know how long the user sat in the composer, so "read the answer, then start a new session" is no longer removed by path 4 and waits for path 3 or that session's next submission.
 
-主状态缺失、损坏、权限异常或 schema 不兼容时必须保守保留尚未隐藏的终态会话，不得把解析失败解释为已读；无法回答已读的会话一律保留，不得因为"没说未读"就移除。
+  Archiving the session in Claude Desktop also removes it. Path 3 takes effect about 2 seconds after a Turn ends, so a user sitting in front of Claude Desktop watching it finish sees the row disappear with no action.
 
-### 4.3 范围与 Project
+- **Claude Code (terminal sessions)**: **a fifth path, which asks the terminal rather than Claude Code.** Claude Code still has no concept of read — a session record holds `status` / `waitingFor` / `updatedAt` and no focus — but that session's **controlling terminal** does: the kernel's `st_atime` is the last time this session read from that device. The test is **that access time later than the Turn's end, and that terminal's application holding the foreground right now (display awake, unlocked, not user-switched)**. Five things advance access time: a keystroke, that surface gaining the foreground (`ESC [ I`), that surface losing it (`ESC [ O`), a reply to the CLI's own query, and **the pointer crossing that surface** — Claude Code enables all-motion mouse reporting, and that last one needs no focus. **The foreground half exists for exactly that**: without it, on two displays the pointer merely passing over a never-focused terminal window on the other screen made an unread terminal row disappear (ADR 0012's 2026-08-20 correction). **A surface that is not on screen receives no byte**, so this still holds naturally per session rather than per application. This half remains gesture-driven first and has **no equivalent of path 3's no-action rule**: the foreground is required *alongside* a gesture, and never suffices on its own.
 
-- 监视当前 Codex Desktop 账户下所有 Project 与 `Chats`，不跟随侧边栏当前选择。
-- Project 必须是 Codex Desktop 左侧边栏中用户创建的 Project 实体；它可以对应一个或多个仓库。
-- 无 Project 归属的会话显示 `Chats`。
-- 禁止从 `cwd`、Git 根目录或路径最后一级推导 Project。
-- 当前官方公开支持接口不提供 Desktop Project 身份；经产品批准，可使用 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) 登记的严格只读私有适配器。只有 Desktop 的 `projectless-thread-ids` 明确命中时才显示 `Chats`；缺失或损坏必须显示 `Project unavailable` 并 fail closed。
+  **This is asked of every session, not only when the first four cannot answer.** A session with **remote control** on sits in front of both a terminal and Claude Desktop, read by different gestures, and reading it in the terminal never moves Desktop's record; as a fallback, such a row would wait indefinitely on a timestamp that will never advance. It can only hold for a session that genuinely has a controlling terminal, so it cannot reach desktop-hosted sessions (those run over pipes with no terminal).
 
-## 5. 首次安装引导
+  What is uncovered is "read it, then keep staring at that tab motionless" — anything the user does next (typing the next prompt, switching tab, switching app) retires the row. **Only a session with neither a Desktop record nor a controlling terminal to ask** (`-p` with output piped away) remains unanswerable, and those exit the existing way: next submission, session disappears, or manual removal (right-click on the row; ~~or clearing the whole list~~ — clear-all was removed). **Sessions inside `tmux`, `screen` and `ssh` now use that existing way too**: their process chain reaches only `launchd`, so the host application never holds the foreground and the fifth path cannot hold for them.
 
-首次安装使用独立 macOS 窗口完成三步引导：
+  The three calls used (`sysctl(KERN_PROC_PID)`, `devname_r`, `stat`) are public BSD interfaces. **No ban is relaxed**: no guessing which tab is on screen, no window focus, titles or geometry, no fixed timing, and no treating a Notch click as read ([ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)).
 
-1. **Welcome**：说明产品监视实时轮次、突出人工处理请求并返回相同 Codex 会话的价值。
-2. **Connect to Codex**：准确列出需要读取的本地元数据，并在安装或注册任何用户级集成前取得用户确认。
-3. **Ready**：确认实时状态、Project、未读成员关系、精确导航与主额度窗口能力可用，并说明当前内容预览默认开启。
+A missing, corrupt, permission-denied or schema-incompatible main state must conservatively keep terminal threads that have not yet been hidden, and must never interpret a parse failure as read; a thread whose read state cannot be answered is always kept, and is never removed merely because nothing said it was unread.
 
-设置必须是显式、可逆、由用户确认的流程。应用不得静默修改 Codex 配置、绕过 Codex 的信任机制或自动启动 Codex Desktop。
+### 4.3 Scope and Project
 
-首次引导中的 `Set Up Integration` 与 Settings 中的 `Codex integration` 总开关都把本应用需要的七种 lifecycle event 定义作为一个不可拆分的产品能力管理。开启时安装或修复完整集合；关闭时只移除 Codex in Notch 管理的定义并留在 Settings，不重新进入首次引导。Codex 底层仍按事件类型显示七个定义，首次安装或定义变化后仍必须由用户在 `/hooks` 中审核信任。
+- Monitor every Project and `Chats` under the current Codex Desktop account, without following the sidebar selection.
+- A Project must be a user-created Project entity in the Codex Desktop sidebar, and may span one or more repositories.
+- A thread with no Project shows `Chats`.
+- Deriving a Project from `cwd`, the Git root or the last path component is forbidden.
+- The current officially supported interfaces do not expose Desktop Project identity; with product approval, the strictly read-only private adapter registered in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) may be used. `Chats` shows only on an explicit hit in Desktop's `projectless-thread-ids`; missing or corrupt data must show `Project unavailable` and fail closed.
 
-**这里此前写的是「六种」，而实现一直只注册五条**（`SessionEnd` 是故意不注册的，见 [`tech-design.md`](tech-design.md) §9.3）；本次加入 `SubagentStart` 与 `SubagentStop` 之后是七条，文档与实现在这一处重新对齐。定义集合变化会让已经安装的用户落到 `Repair required`，必须重新在 `/hooks` 中信任一次——这是加定义唯一的代价，并且是设计好的那条路径。
+## 5. First-run onboarding
 
-## 6. 状态模型
+First installation uses a standalone macOS window for three steps:
 
-### 6.1 行级状态
+1. **Welcome**: what the product monitors, how it surfaces requests for a person, and how it returns to the same thread.
+2. **Connect to Codex**: exactly which local metadata will be read, with the user's confirmation taken before any user-level integration is installed or registered.
+3. **Ready**: confirming that live status, Project, unread membership, exact navigation and the primary quota window are available.
 
-| 状态 | 含义 | 行尾显示 |
+Setup must be explicit, reversible and user-confirmed. The app must not silently modify Codex configuration, bypass Codex's trust mechanism, or launch Codex Desktop by itself.
+
+`Set Up Integration` in onboarding and the `Codex integration` master switch in Settings both manage the required lifecycle event definitions as one indivisible product capability. Switching on installs or repairs the complete set; switching off removes only the definitions Notchline manages and stays in Settings rather than returning to onboarding. Codex still shows the definitions individually by event type, and a first install or a changed definition must still be reviewed and trusted by the user under `/hooks`.
+
+> The count of definitions has been wrong in this document more than once — it has read six, five, eleven and twelve — so it is deliberately not restated here. Count them in `HookIntegration.swift`'s `managedDefinitions`; `SessionEnd` is deliberately never registered ([`tech-design.md`](tech-design.md) §9.3). Any change to the set drops already-installed users into `Repair required` and requires re-trusting under `/hooks` — the only cost of adding a definition, and the designed path for it.
+
+## 6. State model
+
+### 6.1 Row status
+
+| Status | Meaning | Row end |
 | --- | --- | --- |
-| `Input needed` | Codex 等待用户回答 | 橙色状态；悬停时显示名称胶囊 |
-| `Approval needed` | Codex 等待权限决定 | 橙色状态；悬停时显示名称胶囊 |
-| `Running` | 当前轮次正在自动处理 | 蓝色 `Running` 状态名称胶囊，始终显示 |
-| `Completed` | 当前轮次已经结束但仍未读 | 绿色状态 |
+| `Input needed` | Waiting for the user to answer | Amber status; name pill on hover |
+| `Approval needed` | Waiting for a permission decision | Amber status; name pill on hover |
+| `Running` | The current Turn is processing automatically | Blue `Running` name pill, always shown |
+| `Completed` | The current Turn has ended but is still unread | Green status |
 
-不存在行级 `Idle` 或行级 `Disconnected`。
+There is no row-level `Idle` and no row-level `Disconnected`.
 
-`Approval needed` 只在当前精确 Turn 存在一个仍未关闭的审批区间时成立，且必须能被同一 `tool_use_id` 的结束事件关闭：专用审批工具自己构成该区间；普通工具（如 Bash 命令）由 `PermissionRequest` 指名、借用该工具仍打开的调用 id 构成。孤立的 `PermissionRequest` 仍不足以证明用户需要操作，因为自动审查可能立即放行。
+`Approval needed` holds only while the exact current Turn has an approval interval still open, and that interval must be closable by an end event with the same `tool_use_id`: a dedicated approval tool forms the interval itself, while an ordinary tool (a Bash command, say) is named by `PermissionRequest` and borrows that tool's still-open call id. A lone `PermissionRequest` is still not proof that a user is needed, because an automatic reviewer may pass it immediately.
 
-**还有一条比区间更靠前的条件：这条 thread 的审批必须真的会问到人。** Codex Desktop 的「Approval for me」（`guardian-approvals` 代理模式，CLI 的 `--approve-for-me`）把每一次审批交给自动审查者，它只有 allow 与 deny 两个结果，没有任何回到人这里的出口。这类 thread 上的审批区间因此永远不是「用户需要操作」，本产品不为它显示 Approval needed，行保持 Running 直到那次调用关闭。只有**被证明**是自动审查的 thread 适用这条；证据缺席、无法辨认或读不到时，行为与从前完全一致。`request_user_input` 不受影响——自动审查者只决定审批，问题仍然只有人能回答，所以 Input needed 在任何设置下都照常出现。`Stop` 或 App Server 的 `completed`、`failed`、`interrupted` 都是同一种产品信号：当前 Turn 已经结束，因此统一进入 Completed。**Claude Code 的用户中断不产生任何信号**——`Esc` 不触发任何 hook——因此那里还有两份非事件的证据算作同一种信号：会话自己不再报告它在工作（`claude agents --json` 的 `status`），以及**桌面端托管的会话**在自己的 transcript 里留下的那条中断记录（那种会话没有终端界面，因而永远不报告 `status`）。两者都只能结束已经开着的 Turn，不能开启或描述任何 Turn；后者指名了它结束的那个 Turn，因而只对那一个成立。**同一份会话状态还回答一件 Claude Code 的 hook 同样不说的事：审批被批准了。** 那里没有任何 hook 对应「人按下批准」，`PermissionRequest` 之后的下一个事件是那次调用自己的 `PostToolUse`，而它落在**工具跑完**的时刻——所以批准一条慢命令会让行在整段执行期间继续写着 Approval needed。会话报告 `busy` 就是「用户面前没有对话框」，它同样只能**结束**一个已经开着的审批等待（轮次自己的和每个子智能体的），一个都开不了。**桌面端托管的会话不报告任何状态，因此这份证据对它同样不存在**——它那一半来自 Claude Desktop 自己记下的对话框应答，走同一个入口、受同样的约束。详见 ADR 0011。
+**There is a condition ahead of the interval: this thread's approvals must actually reach a person.** Codex Desktop's "Approval for me" (`guardian-approvals` agent mode, the CLI's `--approve-for-me`) hands every approval to an automatic reviewer with only allow and deny and no exit back to a person. An approval interval on such a thread is therefore never "a user is needed", the product shows no Approval needed for it, and the row stays Running until the call closes. This applies only to a thread **proven** to be auto-reviewed; with the evidence absent, unrecognisable or unreadable, behaviour is exactly as before. `request_user_input` is unaffected — the reviewer decides approvals only, and a question can still only be answered by a person, so Input needed appears under any setting.
 
-**子智能体不是第五种状态，也不改写 `Stop` 的含义。** 两个产品的会话都可以派生子智能体，而子智能体**活得比派生它的那个 Turn 更久**。Codex 用 `spawn_agent`——实测 2026-08-22（CLI `0.149.0-alpha.4.1`）：22:18:01 派生，主智能体的 Turn 在 22:20:10 结束，子智能体在 22:21:41 才收尾。Claude Code 用 `Agent` 工具，而那次调用在子智能体启动的那一刻就返回——实测 2026-08-23（CLI `2.1.241`）：`Agent` 的 `PreToolUse` 与 `PostToolUse` 相继立刻到达，`SubagentStart` 排在其后，主智能体的 `Stop` 带着 `background_tasks: [{type: "subagent", status: "running"}]` 指名同一个子智能体，`SubagentStop` 在 `Stop` 之后才来。行报告的仍然只有它自己那个 Turn：主智能体的 `Stop` 到达即 Completed，预览是主智能体的最终回答，而不是子智能体后来说的话。子智能体的存在以**随行数据**呈现（第 9.3 节），与终态原因同一条规矩——行上的标记不变。
+`Stop`, and the App Server's `completed`, `failed` and `interrupted`, are one product signal: the current Turn has ended, so all of them go to Completed. **A Claude Code user interrupt produces no signal at all** — `Esc` fires no hook — so two pieces of non-event evidence count as the same signal there: the session no longer reporting that it is working (`claude agents --json`'s `status`), and, for **desktop-hosted sessions**, the interrupt record left in their own transcript (those sessions have no terminal interface and therefore never report `status`). Both may only end an already-open Turn and may never open or describe one; the latter names the Turn it ends and therefore holds only for that one.
 
-**子智能体的事件不得被当成本 Thread 的 Turn 证据，两个产品都是。** Codex 用**父 Thread 的 `session_id`** 加**子智能体自己的 `turn_id`** 给子智能体的 hook 盖章，所以那些事件看上去就像同一条 Thread 上换了一个轮次。按 `turn_id` 接管的规则照单接收会把真正的 Turn id 退休掉，随后主智能体自己的 `Stop` 就被当作迟到事件丢弃——而没有任何东西能再结束剩下的那个轮次：不会再有 hook 提到那个 id，成员关系校正因为 Thread 还在列表里而保留该行，Codex 也没有 `claude agents --json` 那样的活动读数可以兜底。那一行会永远停在 Running。因此判据是 `agent_id`：官方 schema 里它只在子智能体产生该事件时出现，带着它的事件一律不描述本 Thread 的 Turn。
+**The same session status also answers something else Claude Code's hooks do not say: an approval was granted.** No hook corresponds to a person pressing approve, and the next event after `PermissionRequest` is that call's own `PostToolUse`, which lands when **the tool finishes** — so approving a slow command leaves the row reading Approval needed for the whole execution. A session reporting `busy` means "there is no dialogue in front of the user", and it too may only **end** an already-open approval wait (the Turn's own and each subagent's) and can open none. **Desktop-hosted sessions report no status, so this evidence does not exist for them either** — their half comes from the dialogue responses Claude Desktop records itself, through the same entry point and under the same constraints. See ADR 0011.
 
-Claude Code 用**父 Thread 的 `session_id` 加父轮次的 `prompt_id`** 盖章（实测 2026-08-23，CLI `2.1.241`），所以那边的接管缺陷根本不成立——那些事件指的就是已经开着的那个轮次。同一条规则在那里守的是另一样东西：一个 Turn 只有一格「仍打开的调用」和一格「待审批」，而子智能体的调用是穿过它们的第二股流。**代价也因此不同，写在这里而不是藏着**：子智能体自己的 `PermissionRequest` 到不了该行，而在 Claude Code 上父轮次确实被那次 `Agent` 调用挡着——行会画着 Running 或子智能体 badge，而产品其实停在一个对话框上。修它要给 Turn 按 agent 分格，单独排期。
+**A subagent is not a fifth status and does not rewrite what `Stop` means.** Both products' threads can spawn subagents, and a subagent **outlives the Turn that spawned it**. Codex uses `spawn_agent` — measured 2026-08-22 (CLI `0.149.0-alpha.4.1`): spawned at 22:18:01, the main agent's Turn ended 22:20:10, and the subagent finished at 22:21:41. Claude Code uses the `Agent` tool, whose call returns the instant the subagent starts — measured 2026-08-23 (CLI `2.1.241`): the `Agent`'s `PreToolUse` and `PostToolUse` arrive back to back, `SubagentStart` follows, the main agent's `Stop` carries `background_tasks: [{type: "subagent", status: "running"}]` naming that same subagent, and `SubagentStop` comes after `Stop`. The row still reports only its own Turn: the main agent's `Stop` means Completed, and the preview is the main agent's final answer rather than anything the subagent says later. A subagent's existence is presented as **accompanying data** (§9.3), the same rule as a terminal reason — the row's marker does not change.
 
-### 6.2 顶部汇总优先级
+**A subagent's events must never be taken as Turn evidence for this Thread, on either product.** Codex stamps subagent hooks with the **parent Thread's `session_id`** and the **subagent's own `turn_id`**, so those events look exactly like the same Thread changing Turn. Accepting them under the takeover-by-`turn_id` rule retires the real Turn id, after which the main agent's own `Stop` is dropped as a late event — and nothing can ever end the Turn that remains: no hook will mention that id again, membership correction keeps the row because the Thread is still listed, and Codex has no activity reading like `claude agents --json` to fall back on. That row would sit at Running forever. The test is therefore `agent_id`: in the official schema it appears only when a subagent produced the event, and any event carrying it does not describe this Thread's Turn.
 
-汇总顺序为：
+Claude Code stamps with the **parent Thread's `session_id` and the parent Turn's `prompt_id`** (measured 2026-08-23, CLI `2.1.241`), so that takeover defect cannot arise there — those events refer to the Turn already open. The same rule guards something else there: a Turn has one slot for "the call still open" and one for "awaiting approval", and a subagent's calls are a second stream through them. **The cost was different, and it is now paid rather than hidden**: a subagent's own `PermissionRequest` used to be unable to reach the row, so on Claude Code the row read Running or showed a subagent badge while the product was in fact stopped at a dialogue. That is fixed — a Turn now keeps per-agent slots (`AgentWaitSlots`, indexed by `agent_id`), and the badge inverts while the collapsed state summarises as Approval needed (§6.2 band 2, `tech-design.md` §9.2).
+
+### 6.2 Top-level summary priority
+
+The summary order is:
 
 1. Approval needed
 2. Input needed
 3. Running
 4. Completed
 
-**Approval 排在 Input 之前。** 两者都是产品停下来等人，等的却不是同一种东西：Input 是一个用户什么时候来、什么时候答的问题，Approval 是一个智能体过不去、而用户未必愿意让它过去的决定。矩阵按状态画不同图案之后（advance 与 double knock，[`figma-design.md`](figma-design.md) §4.1），这个顺序还多决定一件事——同时握着两种等待的那条 bar 画哪一个图案。它因此必须是值得打断人的那一个，否则状态名说一句、旁边的矩阵画另一句。~~Input 排第一~~ 已作废；它当初的理由是下面第 2 档那条时序规则，而那条规则说的是同一行的两个读数谁更新，不是两行之间谁更重要。
+**Approval comes before Input.** Both are the product stopping to wait for a person, but not for the same thing: Input is a question of when the user arrives and answers, while Approval is a decision the agent cannot get past and the user may not want it to. Since the matrix draws different patterns per status (advance and double knock, [`figma-design.md`](figma-design.md) §4.1), this order also decides which pattern a bar holding both kinds of wait draws — so it has to be the one worth interrupting someone for, or the status name says one thing while the matrix beside it says another. ~~Input first~~ is void; its reasoning was band 2's timing rule below, and that rule is about which of two readings on one row is newer, not which of two rows matters more.
 
-列表为空时，收起态显示的是**在场**而不是我们自己的连接健康：有智能体已连接时显示 `Connected`，一个都没有时显示 `Disconnected`（见 6.3）。
+With the list empty, the collapsed state shows **presence** rather than our own connection health: `Connected` while any agent is connected, `Disconnected` when none is (§6.3).
 
-列表使用同一优先级排序；同优先级按最近可信更新时间降序。状态变化立即重排，但用户正在滚动或悬停列表时不得强制跳动当前视口，应显示轻量的顺序更新提示。
+The list sorts by the same priority, and by most recent trustworthy update descending within a priority. Status changes re-sort immediately, but must never jerk the viewport while the user is scrolling or hovering the list; a lightweight order-updated hint is shown instead.
 
-**汇总与排序读的是派生状态，不是行自己的状态。** 两者在两种行上分叉，都与子智能体有关，两个产品都会走到：
+**The summary and the sort read derived status, not the row's own.** The two diverge on three kinds of row, all caused by subagents, and **both products reach all three**:
 
-1. **还在跑。** 一条 Thread 自己的轮次已经 Completed、而它派生的子智能体还在跑（第 6.1 节）。那一行按 Running 参与汇总与排序——收起态因此写 `Running`，产品标记按 Running 的图案动，该行也与 Running 同档排序而不是沉到列表末尾。
-2. **有人被问。** 这条 Thread 的某个子智能体停在一个审批对话框上。那一行按 **Approval needed** 参与汇总与排序，压过上面那一档——一个在跑的子智能体只是在忙，一个卡在对话框上的子智能体是产品停下来等人，而报告后者正是本产品存在的理由。它**不**压过轮次自己的 Input needed：审批被拒之后两个产品都不发任何事件，所以随后到达的那个提问是更新的事实。**这是本节开头那张表的一条例外，不是它的应用**——表排的是两行之间谁更重要（Approval 在前），这里问的是同一行的两个读数谁还成立（后到的那个），两个问题各有各的答案。把这一档也翻过来，等于把标记按在一个用户早已答过的对话框上。这一档与轮次自己是不是终态无关——子智能体的对话框可以开在主智能体结束之前，也可以开在之后。
+1. **Still working.** A Thread's own Turn is Completed while a subagent it spawned is still running (§6.1). That row participates in the summary and the sort as Running — the collapsed state says `Running`, the product marker animates Running's pattern, and the row sorts in the Running band rather than sinking to the bottom.
+2. **Someone was asked.** One of this Thread's subagents is stopped at an approval dialogue. That row participates as **Approval needed**, beating the band above — a running subagent is merely busy, while one stuck at a dialogue is the product waiting for a person, and reporting the latter is why this product exists. It does **not** beat the Turn's own Input needed: neither product emits an event when an approval is declined, so the question that arrived later is the newer fact. **This is an exception to the table above, not an application of it** — the table ranks which of two rows matters more, while this asks which of two readings of one row still holds (the later one), and those are different questions with different answers. Flipping this band too would pin the marker to a dialogue the user answered long ago. It holds whether or not the Turn itself is terminal — a subagent's dialogue may open before or after the main agent finishes.
+3. **Stopped, waiting on its own work.** A Thread's own Turn is Completed, its subagents have wrapped up, and that Turn's terminal state said "paused" rather than "finished". The row still participates as Running until the Thread's next terminal state says nothing is in flight. **Only Claude Code reaches this band**: its `Stop` carries `background_tasks`, officially described as letting a hook distinguish "the session ended" from "the session is paused waiting for background work to wake it". The band exists because of a momentary error: measured 2026-08-23 (CLI `2.1.241`), only 50 ms separate a subagent's `SubagentStop` from the parent Turn waking (130 ms under `-p`), so a row reading band 1 alone would write `Completed` and then `Running` back inside that instant — a state the Thread never occupied, and every state change is something asking the user to look.
 
-3. **停下来等自己的活。** 一条 Thread 自己的轮次已经 Completed、它派生的子智能体也已经收尾，而那一轮的终态当时说的是「暂停」而不是「结束」。那一行仍按 Running 参与汇总与排序，直到该 Thread 的下一个终态说没有活在飞了。**只有 Claude Code 走得到这一档**：它的 `Stop` 带 `background_tasks`，官方描述就是「让 hook 区分『会话结束了』与『会话正暂停等待后台工作把它叫醒』」。这一档存在的理由是一个只有一瞬的错：实测 2026-08-23（CLI `2.1.241`）子智能体的 `SubagentStop` 与父轮次被叫醒之间只隔 50 ms（`-p` 下 130 ms），只读第 1 档的行会在那一瞬写一次 `Completed` 再写回 `Running`——一个这条 Thread 从未经历过的状态，而每一次状态变化都是一次要用户去看的动静。
+**The row itself changes not one thing in all three cases**: it is still its Turn's status, the preview is still the main agent's final answer, the timer is still stopped, and a right-click still removes it (§9.3).
 
-**三种分叉里行自己都一个字不改**：它仍然是它那一轮的状态，预览仍是主智能体的最终回答，计时仍然停着，右键仍然移除得掉（第 9.3 节）。
+This is an explicit trade-off, and its cost is explicit too: with `SubagentStart` arriving and `SubagentStop` lost forever, the collapsed state sits at `Running` until that Thread leaves the list or the user right-clicks the row away (§9.3). No safe fallback exists — inferring a Turn's end from a timer is forbidden by the architectural invariants, and "how many subagents are running" is in no App Server Thread payload. It is accepted because the two errors differ in frequency: the collapsed state saying `Completed` while work continues is wrong every single time, while a stuck count is occasional and has a human exit. Tracked separately in [#102](https://github.com/soondubu137/notchline/issues/102) (CR-033): first measure whether `SubagentStop` is actually ever lost, and only then write a rule here. A possible exit exists on the Claude Code side that Codex has none of, and that count-based exit is still not taken, recorded there too: both its `Stop` and `SubagentStop` carry `background_tasks` whose `subagent`-typed entries have an `id` equal to `agent_id`, making it an **absolute** reading rather than a running total and therefore incapable of sticking. It is not adopted because it needs measurements of its own — `SubagentStop` still lists the subagent that is stopping (both 2026-08-23 runs), and whether a cancelled `pending` subagent gets a `SubagentStop` has not been measured. **Band 3 above reads the other half of the same field and needs none of those measurements**: it only asks whether that one `Stop`'s own list is empty, never who is in it and never as a count. Its extra cost is one small step in the same direction — when a parent Turn is never woken after `SubagentStop` (the user quits inside those 50 ms, or an update stops waking it), the row sits at `Running` rather than on a number that never reaches zero, and the exit is still right-click removal.
 
-这是一次明写的取舍，代价也明写在这里：`SubagentStart` 到达而 `SubagentStop` 永久丢失时，收起态会长期停在 `Running`，直到该 Thread 离开列表或用户右键移除该行（第 9.3 节）。没有安全的兜底可用——用计时器推断轮次结束被架构不变量禁止，而「正在跑的子智能体数量」不在任何 App Server 的 Thread payload 里。接受它的理由是两种错的频率不同：收起态说 `Completed` 而活还在跑，是每一次都错；计数卡死是偶发，而且有人工出口。这条代价单独跟踪在 [#102](https://github.com/soondubu137/notchline/issues/102)（CR-033）：先实测 `SubagentStop` 到底会不会丢，会丢再回到本节定规则。Claude Code 侧另有一条 Codex 没有的可能出路，那条计数的出路本次仍然没有走，一并记在那里：它的 `Stop` 与 `SubagentStop` 都带 `background_tasks`，其中 `type` 为 `subagent` 的条目的 `id` 就是 `agent_id`，因而是一份**绝对**读数而不是累计值，天生不会卡死。没有采用是因为它需要自己的实测——`SubagentStop` 自己那一条里仍然列着正在停止的那个子智能体（2026-08-23 两次实测都是），而 `pending` 状态的子智能体被取消时会不会补一条 `SubagentStop` 也没测过。**上面第 3 档读的是同一个字段的另一半，而那一半不需要这些实测**：它只问那一条 `Stop` 自己给的列表是不是空的，不问里面是谁，也不拿它当计数用；它多出来的代价是同一个方向上的一小步——`SubagentStop` 之后父轮次永远没有被叫醒时（用户在这 50 ms 里退出，或某次更新不再叫醒），那一行会停在 `Running` 而不是停在一个不会归零的数字上，出口仍然是右键移除。
+### 6.3 Global availability
 
-### 6.3 全局可用性状态
+With two products supported, the collapsed system status narrows to two values. Permanently drawing a dimmed matrix for a product the user never opens is advertising someone else's tool, so the matrix instead reports something the user can verify: **whether any coding agent is connected**. Design and reasoning in [`figma-design.md`](figma-design.md) §6.4–§6.8.
 
-支持两个产品之后，收起态的系统状态收敛为两个。为一个用户从不打开的产品长期画一个变暗的矩阵，就是替别人的工具做广告；矩阵因此改为报告一件用户能自己核对的事——**是否有编码智能体处于已连接状态**。设计与理由见 [`figma-design.md`](figma-design.md) §6.4–§6.8。
-
-| 收起态状态 | 成立条件 |
+| Collapsed status | Holds when |
 | --- | --- |
-| `Connected` | 至少一个产品**已打开且可观察**，且没有任何轮次在进行 |
-| `Disconnected` | 没有任何产品同时满足这两件事 |
+| `Connected` | At least one product is **open and observable**, and no Turn is in progress |
+| `Disconnected` | No product satisfies both |
 
-**已连接 = 已打开 且 可观察。** 两者是彼此独立的事实，可以互相矛盾：两个产品的 hook 注册都要用户先在设置里拨一下开关（[ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)），所以「打开了但监视不到」是普通的首次运行。它读作 `Disconnected`，而这正是这个词的字面意思——你不会与一个从未打开的东西断开，但与一个打开了却够不着的东西确实是断开的。这样就不需要第三个状态。
+**Connected = open AND observable.** These are independent facts and may contradict each other: both products' hook registration requires the user to flip a switch in settings first ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)), so "open but unobservable" is an ordinary first run. It reads as `Disconnected`, which is the literal meaning of the word — you cannot be disconnected from something never opened, but you certainly are from something opened and out of reach. No third state is needed.
 
-下面四种情况因此**退出收起态**，只在展开面板与 Settings 中出现——那里有地方说明该怎么办：
+Four situations therefore **leave the collapsed state** and appear only in the expanded panel and Settings, where there is room to say what to do:
 
-| 场景 | 列表 | 展开文案 | 是否提供操作 |
+| Case | List | Expanded copy | Action offered |
 | --- | --- | --- | --- |
-| 首次尚未集成 | 空 | `Set up integration` | 引导流程中处理 |
-| Codex 版本过旧 | 空 | `Update required` | 否 |
-| Codex 版本未经验证 | 空 | `Version unsupported` | 否 |
-| App Server 无响应、启动失败或连接断开 | 清空 | `Disconnected` | 否 |
+| Not yet integrated | empty | `Set up integration` | handled in onboarding |
+| Codex too old | empty | `Update required` | no |
+| Codex version unverified | empty | `Version unsupported` | no |
+| App Server unresponsive, failed to launch, or dropped | cleared | `Disconnected` | no |
 
-上表的文案都不指名产品：**哪个**产品不健康由 Settings 的产品行逐条列出，展开面板只说发生了什么（见 [`figma-design.md`](figma-design.md) §6.6）。`Connecting to Codex` 被删除而不是搬家：在场由系统 API 直接回答，没有需要向用户解释的等待。`No active sessions` 并入 `Connected`；这次改名值得——`Idle` 描述的是我们看到的空列表，用户无从核对，`Connected` 描述的是用户瞄一眼自己的 Dock 就能核对的事实。
+None of that copy names a product: **which** product is unhealthy is listed row by row in Settings, and the expanded panel says only what happened ([`figma-design.md`](figma-design.md) §6.6). `Connecting to Codex` was deleted rather than moved: presence is answered directly by a system API, so there is no wait to explain. `No active sessions` merged into `Connected`, and that rename is worth it — `Idle` described the empty list we see, which the user cannot verify, while `Connected` describes something they can check with a glance at their own Dock.
 
-Disconnected 是全局集成健康问题，不能用于单会话。进入 Disconnected 时必须清空列表，不显示最后一次可信快照。应用不自动启动 Codex；用户在 Codex 或系统中自行完成相应操作。
+Disconnected is a global integration-health problem and can never apply to one thread. Entering it clears the list rather than showing the last trustworthy snapshot. The app never launches a product; the user does that themselves.
 
-## 7. 当前内容预览
+## 7. Current content preview
 
-预览取的是产品已经显示给用户的那一份内容。两个产品各有来源。
+The preview is what the product has already shown the user. Each product has its own source.
 
-**Codex：**
+**Codex:**
 
-| 状态 | 预览来源 |
+| Status | Preview source |
 | --- | --- |
-| Input needed | 当前向用户提出的问题 |
-| Approval needed | 固定通用文案 `Approval requested` |
-| Running | 最新公开进度；没有时回退到本轮用户输入 |
-| Completed | 最终回答开头 |
+| Input needed | The question currently put to the user |
+| Approval needed | The fixed string `Approval requested` |
+| Running | The latest public progress; falling back to this Turn's user input |
+| Completed | The start of the final answer |
 
-**「最新公开进度」是「正在做的那一步」，不是「刚做完的那一步」。** 举例：智能体先打出「已确认，问题出在 reducer。」再打出「开始修。」，那么在它开始修的这段时间里，行上要写的是「开始修。」。这是这一节从一开始就写的意思，两个产品此前都不满足它，原因各不相同，见 `tech-design.md` 第 11 节：Codex 侧的 `Running` 整轮显示用户自己的 prompt，因为没有任何 Hook 在轮次结束前带助手正文，现在由一次 scope 到本轮的 `thread/items/list` 读取补上；Claude Code 侧正文一直在本进程里，但它不唤醒面板，而工具调用的开合又不改任何行上画出来的字段，于是两次状态变化之间一次重画都不发生，行停在上一次刷新时的那条消息上。
+**"Latest public progress" means the step being taken, not the step just finished.** If the agent prints "Confirmed, the problem is in the reducer." and then "Starting the fix.", the row must read "Starting the fix." for as long as it is fixing. That is what this section has always meant, and neither product met it until recently, for different reasons (`tech-design.md` §11): on the Codex side, `Running` showed the user's own prompt for the whole Turn because no hook carries assistant text before a Turn ends, now supplied by a `thread/items/list` read scoped to this Turn; on the Claude Code side the text was always in this process, but it did not wake the panel, and a tool call opening and closing changes no field the row draws, so no redraw happened between two status changes and the row sat on the message from the last refresh.
 
-**Claude Code：** 助手正文只有一个来源——官方 Hook `MessageDisplay`（官方描述 "While assistant message text is displayed"）送来的 `delta`，即 Claude Code 正打印到屏幕上的助手正文。它不按状态切换，因为这一个来源在四个状态下读法相同：**当前这条消息的开头**。轮次停下时，它精确就是上表 Codex 那一行的「最终回答开头」；轮次进行中，它是「它现在正在说的那段话的开头」。工具调用之间的消息多数短于截断长度。等待审批或等待输入时显示的是引出该问题的正文，**不是**工具参数、被审批的命令或路径。
+**Claude Code:** assistant text has one source — the `delta` from the official `MessageDisplay` hook ("While assistant message text is displayed"), which is the assistant text Claude Code is printing to the screen. It does not switch by status, because that one source reads identically in all four: **the start of the current message**. When a Turn has stopped, that is precisely the Codex row's "start of the final answer"; while a Turn runs, it is the start of what it is saying now. Messages between tool calls are usually shorter than the truncation length. While awaiting approval or input it shows the text that raised the question, **never** tool arguments, the command being approved, or paths.
 
-**本轮还没说过话时，回退到本轮用户输入——与 Codex 那一行同一条规则。** 这一条此前不存在，理由写的是「这个产品一个来源管四个状态」，而那句话把「本轮没有正文」和「有正文」当成了同一件事。实际后果有两种：会话的第一个轮次（或本应用开始监听后的第一个轮次）整段空白，此后的每一个轮次在自己开口之前显示的是**上一轮的收尾语**——行在用「已经结束的工作」描述「正在做的事」，正是本节上面那段话点名的失败。`UserPromptSubmit` 一直带着 `prompt`，取它的代价是每轮一次规范化。
+**When this Turn has not spoken yet, it falls back to this Turn's user input — the same rule as the Codex row.** This did not exist before, on the grounds that one source covered all four statuses, which treated "this Turn has no text" and "it has text" as the same thing. The consequences were two: a session's first Turn (or the first after this app started listening) was blank throughout, and every Turn after it showed **the previous Turn's closing line** until it spoke — the row describing finished work as what is happening now, exactly the failure named above. `UserPromptSubmit` has always carried `prompt`, and taking it costs one normalisation per Turn.
 
-**正文按轮次归属，不只是按会话。** preview store 以会话为键而会话比轮次活得久，所以「本轮说了什么」必须问得出轮次：`MessageDisplay` 上取 `prompt_id`（**不是** `turn_id`——它是唯一同时带这两个键的事件，实测两者不同值），与 reducer 持有的轮次 id 对得上才作为这一行的正文。对不上就当作本轮还没说过话，回退到 prompt。哪一天某个构建不再送 `prompt_id`，没有轮次戳的正文按「谁问都答」处理：宁可晚一个轮次，也不要整行消失。
+**Text is attributed per Turn, not merely per session.** The preview store is keyed by session and a session outlives a Turn, so "what did this Turn say" must be answerable by Turn: `prompt_id` is taken from `MessageDisplay` (**not** `turn_id` — it is the one event carrying both keys, and they measurably differ), and the text counts as the row's only when it matches the Turn id the reducer holds. A mismatch is treated as this Turn not having spoken and falls back to the prompt. Should some build stop sending `prompt_id`, untagged text is treated as answering to anyone: better one Turn late than the whole row gone.
 
-只保留每条消息的**开头** 240 字符，新的 `message_id` 直接替换旧文本。这是一条性能约束：实测（CLI 2.1.234，pty 驱动交互式会话）一条 1561 字符的消息拆成 11 个 delta，间隔 0.20–0.44 秒、均值 0.29 秒送达，所以每个会话占用的内存必须由常数决定，而不是由模型说了多少决定；头部写满之后，后续 delta 在被扫描进任何保留结构之前就停下。
+Only the **first** 240 characters of each message are kept, and a new `message_id` replaces the old text outright. This is a performance constraint: measured (CLI 2.1.234, pty interactive session) a 1561-character message arrives as 11 deltas 0.20–0.44 s apart (mean 0.29 s), so per-session memory must be decided by a constant rather than by how much the model said; once the head is full, later deltas stop before being scanned into any retained structure.
 
-这里不写命令、路径或理由，不是因为不许写，而是因为这条路径没有去取：Codex 侧那次 `thread/items/list` 只挑页里最新的 `agentMessage.text`，`commandExecution` 及其 `aggregatedOutput`、`fileChange`、`mcpToolCall` 一概跳过；`thread/read` 仍恒带 `includeTurns: false`（`tech-design.md` 第 1.1 节）。要显示它们仍然是一个按价值判断的新功能，不是一条被禁止的事。
+Commands, paths and rationale are absent here not because they are forbidden but because this path never fetched them: the Codex `thread/items/list` read takes only the newest `agentMessage.text` on the page and skips `commandExecution` and its `aggregatedOutput`, `fileChange` and `mcpToolCall` entirely, and `thread/read` still always passes `includeTurns: false` (`tech-design.md` §1.1). Showing them would be a new feature judged on its value, not a prohibited act.
 
-预览规范化为单行并在 UI 中 Alpha 渐隐，不显示省略号。
+Previews are normalised to one line and alpha-faded in the UI, with no ellipsis.
 
-**这一节曾经是产品的隐私契约，现在不是了。** 先后写过两句承诺：项目定义阶段由 Codex 提出的「本产品从不接收 Claude Code 的消息正文」（三层实现兜底：事件不注册、解码器没有字段、行构造硬编码无预览），以及它退让之后的「正文到达进程内存，开关关闭时不保留，任何情况下都不落盘」。两句都已删除。
+**This section used to be the product's privacy contract and is not any more.** Two promises were written in turn: "this product never receives Claude Code message text" (with three implementation backstops: the event unregistered, no field in the decoder, and no preview hard-coded into row construction), and, after that gave way, "text reaches process memory, is not retained when the switch is off, and never touches disk under any circumstances". Both are deleted.
 
-理由是这两句从头到尾没有对象。本产品整个跑在用户自己的机器上，**没有任何网络出口**——代码里一个 `URLSession` 都没有，仅有的 socket 是两个产品各自的 Unix domain socket，App Server 是本机子进程。它读到的每一个字节，在它读到之前就已经躺在这台机器上、属于这台机器的主人。把「正文有没有经过磁盘」抬成产品契约，换不来这位主人能察觉的任何东西，只换来对实现的限制：第一句的代价是 [#34](https://github.com/soondubu137/notchline/issues/34) 长期悬而未决，理由是「改动比看上去大」而不是任何用户能察觉的问题。
+The reason is that neither ever had a subject. This product runs entirely on the user's own machine with **no network egress at all** — there is not one `URLSession` in the code, the only sockets are the two products' Unix domain sockets, and the App Server is a local subprocess. Every byte it reads was already on this machine and belonged to its owner before it read it. Elevating "did text pass through disk" into a product contract bought that owner nothing they could perceive, and cost implementation freedom: the first promise left [#34](https://github.com/soondubu137/notchline/issues/34) unresolved for a long time on the grounds that "the change is bigger than it looks" rather than any problem a user could notice.
 
-**正文放在哪里、走哪条路，从此是纯粹的工程问题**，按性能与简单性决定，不得再以隐私为由否决方案。现存的相关约束一条不剩地属于性能：上一段的 240 字符头部、`MessageDisplay` 不进 reducer（它按行上那句话变没变来唤醒面板，而那个频率由 240 字符的上限封住）、交接完成才关闭连接，见 `tech-design.md` 第 11 节。Codex 侧那条只送正文的 `preview.sock` 已经删除——它当初存在只为让那句作废的承诺成立，现在正文和它所属的事件走同一条连接一起到（[ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)）。
+**Where text lives and which path it takes is now purely an engineering question**, decided on performance and simplicity, and may no longer be vetoed on privacy grounds. Every surviving related constraint is a performance one: the 240-character head above, `MessageDisplay` staying out of the reducer (it wakes the panel on whether the row's line changed, a frequency capped by that same 240 characters), and closing the connection only after handover — see `tech-design.md` §11. The Codex-side text-only `preview.sock` is deleted; it existed only to make that void promise hold, and text now arrives on the same connection as the event it belongs to ([ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)).
 
-**没有预览开关。** `Show current content previews` 连同 `PrivacySettings`、Settings 的 `Privacy` 分组、`MonitoredSession.privacySafeTitle` 与两侧监听器的 `setAcceptsText` 一并删除：它唯一的用途是履行上面那条已经作废的承诺。预览始终显示。
+**There is no preview switch.** `Show current content previews`, `PrivacySettings`, Settings' `Privacy` group, `MonitoredSession.privacySafeTitle` and both listeners' `setAcceptsText` are all deleted: their only purpose was honouring that void promise. Previews are always shown.
 
-单独的预览读取失败只隐藏对应预览，不把会话或全局状态改为 Disconnected。
+A single failed preview read hides only that preview and never turns a thread or the global state to Disconnected.
 
-## 8. 标题、额度与未来功能
+## 8. Titles, quota and future capabilities
 
-### 8.1 标题
+### 8.1 Title
 
-优先使用 Codex Desktop 显示的会话标题。Desktop 尚无标题时使用本轮用户输入的安全单行截断；仍不可用时显示 `Untitled`。
+Prefer the thread title the desktop app displays. Where it has none, use a safe single-line truncation of this Turn's user input; where that is unavailable too, show `Untitled`.
 
-### 8.2 处理时间
+### 8.2 Processing time
 
-处理时间已经从"未来考虑"进入产品范围。本节回答此前列为前置条件的五个问题：权威时间语义、等待与睡眠是否计入、可靠数据来源、无障碍文案和持续刷新的资源成本。
+Processing time is in scope. This section answers the five questions previously listed as prerequisites: authoritative time semantics, whether waiting and sleep count, a reliable data source, accessibility copy, and the cost of continuous refresh.
 
-**计时对象与起点**：每个处理轮次一个计时器，起点是该轮次的用户提交时刻。同一 Thread 的下一个 Turn 重新从零开始计时，Turn 内部的继续执行不重置。
+**What is timed, and from when**: one timer per Turn, starting at that Turn's user submission. The Thread's next Turn restarts from zero, and continuing execution inside a Turn does not reset it.
 
-**终点**：只有 Completed 停止计时。Input needed 和 Approval needed 继续计时——用户等待审批的这段时间正是最需要被看见的部分，因此不暂停。
+**When it stops**: only Completed stops the timer. Input needed and Approval needed keep counting — the time a user spends waiting on an approval is exactly the part most worth seeing, so it is not paused.
 
-**墙钟语义**：显示值始终按 `当前时间 - 开始时间` 重新计算，不做累加。等待人工处理、设备睡眠和应用未刷新的时间因此自然计入，与 CONTEXT.md 中"处理时间"的定义一致。
+**Wall-clock semantics**: the displayed value is always recomputed as `now − start`, never accumulated. Time spent waiting on a person, with the device asleep, or with the app not refreshing therefore counts naturally, matching CONTEXT.md's definition.
 
-**展示位置**：展开列表中每一行显示自己的处理时间；未完成行以计时文本本身作为状态标记（等待人工的行为琥珀色 Medium，Running 为暗色 Light），Completed 行不显示计时，只保留绿色状态点。收起态在刘海右侧显示全局最长运行时间，即所有未完成轮次中开始最早的那个；没有未完成轮次、也没有子智能体在跑时该区域整体消失，不留空白翼。展开态不重复显示该汇总值。
+**Where it is shown**: every expanded row shows its own processing time, with unfinished rows using the timer text itself as their status marker (amber Medium while waiting on a person, dark Light while Running) and Completed rows showing no timer, only the green status dot. Collapsed, the right of the notch shows the global longest running time — the earliest-started of all unfinished Turns — and that region disappears entirely, leaving no blank wing, when no Turn is unfinished and no subagent is running. The expanded state does not repeat that summary.
 
-**同一个位置还说另一件事：每个产品还有几个子智能体没结束，一个产品一枚数字 badge。** 数字是该产品的全部子智能体（在等审批／输入的也算在里面），底色说有没有在等你——全在跑是暗底亮字，有一个停下就翻成亮底暗字，数字不变；每枚染它自己那个产品的墨色，Codex 永远在前。完整规则见 [`dual-agent-design.md`](dual-agent-design.md) §10。有 badge 要画时它们排在计时前面；所有轮次都结束而子智能体还在跑或在等审批时没有计时可读，那里只剩 badge——这正是「轮次结束了，可这条 Thread 还没有」在收起态的形状，与展开行里那枚 badge 说的是同一件事。没有子智能体的产品没有 badge，全都没有时该位置与引入子智能体之前完全一致，只有计时。无刘海屏幕的胶囊为计时预留的宽度装得下一枚 badge 与短读数的组合，装不下时胶囊自己变宽，而不是把 badge 裁掉。朗读文案指名产品并用词而不是裸数字（`Codex 3 subagents, Claude Code 4 subagents, waiting for you`）——两枚并排只靠墨色分辨，读不到墨色的人否则只会听见两个数。
+**The same position says one more thing: how many subagents each product still has unfinished, one numeral badge per product.** The number is that product's every subagent (including those waiting on approval or input), and the ground says whether anything is waiting on you — all running is a dark ground with bright text, one stopped inverts it to a bright ground with dark text, and the number does not change. Each badge takes its own product's ink, Codex always first. Full rules in [`dual-agent-design.md`](dual-agent-design.md) §10. Badges sit before the timer when there is one; when every Turn has ended and subagents are still running or waiting, there is no timer to read and only badges remain — which is the collapsed shape of "the Turn ended but this Thread has not", saying the same thing as the in-row badge. A product with no subagents has no badge, and with none at all the position is exactly as it was before subagents existed, showing only the timer. The notch-less pill reserves enough timer width for one badge plus a short reading, and widens itself rather than clipping a badge. Spoken copy names the product and uses words rather than bare numbers (`Codex 3 subagents, Claude Code 4 subagents, waiting for you`) — two side by side are told apart only by ink, and someone who cannot read the ink would otherwise hear two numbers.
 
-**前导翼同时多了一列会话计数点：每个产品的矩阵右侧竖排，一行一点，过三把第三点向下拉长成竖杠。** 整列与矩阵等高，所以它不要任何矩阵原本没有的纵向空间，在每一档菜单栏高度上画法相同；它花的是每个产品标记 `5.66` 的宽度，且这段宽度是预留的：面板在任何会话数下都是同一个宽度，而一行都没有的产品并不画那一列——让出来的宽度落在标记那一组的尾端（紧挨缺口，那里翼的黑接着缺口的黑，看不出来），换来前导的那枚矩阵永不横移。见 [`dual-agent-design.md`](dual-agent-design.md) §11。
+**The leading wing also gained a session-count dot column: one vertical column to the right of each product's matrix, one dot per row, with the third dot stretching into a bar past three.** The column is exactly as tall as the matrix, so it needs no vertical space the matrix did not already have and draws identically at every menu-bar height. It costs `5.66` per product mark, and that width is reserved: the panel is one width at every thread count, and a product with no rows draws no column — the width given up lands after the status name (§11 of `dual-agent-design.md`), in exchange for the leading matrix never moving horizontally.
 
-**未知起点**：无法确定开始时间的轮次不显示任何推测数值，退回状态点。
+**Unknown start**: a Turn whose start cannot be determined shows no guessed value and falls back to the status dot.
 
-**启动前的现状同步两侧都不做，因此也没有启动前轮次的计时。** 启动前就在运行的轮次根本不成行，直到它产生下一个 lifecycle 事件；那时计时从重新观察到的第一个事件起算。Claude Code 侧一度按 transcript 重建（重建出的轮次只可能是 Running，起点取读取窗口内该 prompt id 的最早时间戳），已于 2026-08-19 移除——理由见第 3 节非目标。
+**Neither side does cold-start sync, so there is no timing for pre-launch Turns.** A Turn already running at launch gets no row until it produces its next lifecycle event, and timing then starts from the first re-observed event. The Claude Code side once rebuilt from transcripts (a rebuilt Turn could only be Running, starting from the earliest timestamp for that prompt id in the read window) and that was removed 2026-08-19 — see §3.
 
-**无障碍**：朗读文案使用时长读法而非时钟读法（`5 minutes 12 seconds`，不是 `5:12`）。会话行朗读为 `Project, Title, Status, running for X`；面板整体朗读补充 `longest running for X`。
+**Accessibility**: spoken copy uses duration form rather than clock form (`5 minutes 12 seconds`, not `5:12`). A row reads as `Project, Title, Status, running for X`, and the panel as a whole adds `longest running for X`.
 
-**刷新成本**：只有存在未完成轮次时才存在每秒刷新；全部完成或列表为空时计时任务完全停止，不做空转唤醒。
+**Refresh cost**: per-second refresh exists only while an unfinished Turn exists; with everything finished or the list empty the timing task stops entirely, with no idle wake-ups.
 
-**已知限制**：应用重启不恢复启动前的轮次（见 ADR 0006），因此重启后重新观察到的轮次从其第一个重新观察到的事件开始计时，而不是真实提交时刻。此处宁可少算也不伪造起点。
+**Known limitation**: an app restart does not restore pre-launch Turns (ADR 0006), so a re-observed Turn is timed from its first re-observed event rather than its real submission. Undercounting is preferred to a fabricated start.
 
-### 8.3 主额度窗口
+### 8.3 Primary quota window
 
-- 单一额度圆环代表当前 Codex Desktop 账户标记为 primary 的 rate-limit window，不把它称作通用 token 余额。
-- 账户切换后旧值立即失效。
-- 初次读取失败后静默重试 5 秒；仍失败则立即显示灰色不可用圆环，不保留陈旧值。
-- 额度失败只降级圆环，不清空会话，也不影响真实状态与导航。
+- A single quota ring represents the rate-limit window the current Codex Desktop account marks primary, and is never called a general token balance.
+- An account switch invalidates the old value immediately.
+- A first failed read retries silently after 5 seconds; still failing, it immediately shows a grey unavailable ring rather than keeping a stale value.
+- A quota failure degrades only the ring, never clearing threads and never affecting real status or navigation.
 
-## 9. Notch 与展开列表
+## 9. Notch and expanded list
 
-### 9.1 收起态
+### 9.1 Collapsed
 
-- 带刘海屏幕与真实菜单栏/刘海等高，只在左侧显示 `8 × 8` 汇总圆点、右侧显示 `18 × 18` 额度圆环。
-- 带刘海屏幕另有一种收起形态：`Hide the wings`（第 11 节）打开后两侧的翼都不画，收起态即刘海本身。它与「没有任何产品连接时什么都不画」是同一个形态，区别只在前者由用户选定、对任何状态都成立。量不出刘海确切位置与宽度的屏幕没有这一形态（第 11 节）。
-- 无刘海屏幕使用内容驱动宽度：圆点、条件文本、额度圆环和固定边距；不得为不存在的刘海预留空白。
-- 无刘海 Running 与其他状态一样显示完整英文状态名，即 `Running`。
-- 刘海右侧那个位置由计时与子智能体计数共用，规则见第 8.2 节。
+- On a notched screen it matches the real menu bar / notch height, showing only an `8 × 8` summary dot on the left and an `18 × 18` quota ring on the right.
+- A notched screen has a second collapsed form: with `Hide the wings` (§11) on, neither wing is drawn and the collapsed state is the notch itself. It is the same form as "nothing is drawn when no product is connected", differing only in being user-chosen and holding for every status. Screens where the notch's exact position and width cannot be measured do not have this form (§11).
+- A notch-less screen uses content-driven width: dot, conditional text, quota ring and fixed margins, never reserving blank space for a notch that does not exist.
+- Notch-less Running shows the full status name `Running`, like every other status.
+- The position right of the notch is shared by the timer and subagent counts, per §8.2.
 
-### 9.2 展开态
+### 9.2 Expanded
 
-- 基准宽度为 `520`；若物理中央不可显示区更宽，继续增宽以保证所有状态名完整可见。
-- 顶部汇总区始终等于目标显示器菜单栏高度；参考设计为 `46`。展开时顶部只横向扩张，不增加高度。
-- 会话内容区固定高 `256`；参考总高度为 `302`。
-- 内边距后列表可见宽度为 `508`，最多同时显示三个 `80` 高会话行；更多会话通过垂直滚动查看。行块比面板其余部分宽两个 `6`，行内文字仍落在 `12`，见 [`figma-design.md`](figma-design.md) §3.3。
-- 健康空列表和所有全局可用性状态使用 `520 × 94` 的薄展开层。
-- 面板始终贴住屏幕上沿并锁定水平中心；不得变成独立悬浮卡片。
+- The baseline width is `520`, widening further if the physical central unavailable region is wider, so every status name stays fully visible.
+- The top summary region always equals the target display's menu-bar height, `46` in the reference design. Expanding grows only horizontally, never in height.
+- The session viewport is `80` per row for at most three rows (`240`), the footer is `40`–`84` depending on which products are connected, and the panel height is the menu-bar height plus those two. At the `46` reference that is `520 × 326` for Codex alone, `520 × 340` for Claude Code alone, `520 × 370` for both, and `520 × 314` folded in every shape ([`dual-agent-design.md`](dual-agent-design.md) §5.4). **These are computed, never constants** — `PanelMetrics.expandedHeight(compactHeight:)` — and earlier revisions of this section quoted `256` and `302`, which predate the footer.
+- After padding the list's visible width is `508`, showing at most three `80` rows at once, with more reached by vertical scrolling. The row block is two `6`s wider than the rest of the panel while in-row text still lands at `12`, see [`figma-design.md`](figma-design.md) §3.3.
+- A healthy empty list and every global availability state use the thin expanded layer: a `48` body plus the footer, so `520 × 134` at the reference height. With nothing connected at all the panel expands to the resting pill instead (`MonitorStore.expandsToPillOnly`).
+- The panel always hugs the top edge of the screen and locks to the horizontal centre; it never becomes a free-floating card.
 
-### 9.2.1 面板出现在菜单栏出现的地方
+### 9.2.1 The panel is where the menu bar is
 
-叠层挂在 `.statusBar` 层，比菜单栏还高一级，因此系统从不替它让位：全屏播放的影片上面照样留着刘海。**产品规则是「菜单栏在哪儿，面板就在哪儿」**——菜单栏这一条屏幕归系统的时候，这块叠层不属于用户正在看的东西。
+The overlay hangs at the `.statusBar` level, one above the menu bar, so the system never yields for it: the notch stays over a full-screen film. **The product rule is "wherever the menu bar is, the panel is"** — when the menu bar gives that strip of screen to the system, this overlay is not part of what the user is looking at.
 
-- 目标显示器的菜单栏不再绘制时（该显示器上有应用或视频全屏，或用户把菜单栏设成自动隐藏），面板离屏。
-- **Mission Control（以及 App Exposé、Spaces 切换）不隐藏菜单栏**，菜单栏照常画在缩小的桌面之上；**面板也照常留在屏幕上**。Mission Control 是用户过去看「有什么在跑」的地方，而这正是这块叠层要说的事，把它藏起来等于在最该被看见的时候拿走它。规则因此只有一条：跟着菜单栏走，别的都不判。
-- **按显示器各自成立**：外接屏上的一部全屏影片不影响内建屏刘海里的面板。
-- 面板离屏时先收起。展开是靠指针停留触发、指针离开收起的，被抽走的窗口收不到「离开」，否则它会带着展开态回来。
-- 判定不出目标显示器时不隐藏。两种错法不对等：面板多留在影片上是瑕疵，面板凭空消失则没有任何入口能把它叫回来——刘海本身就是入口。
+- When the target display's menu bar is no longer drawn (an app or video is full-screen there, or the user set the menu bar to auto-hide), the panel goes off screen.
+- **Mission Control (and App Exposé, and Space switching) do not hide the menu bar**, which is still drawn above the shrunken desktops, and **the panel stays on screen too**. Mission Control is where users have always gone to see what is running, which is exactly what this overlay says, so hiding it there removes it at the moment it is most wanted. The rule is therefore only: follow the menu bar and judge nothing else.
+- **It holds per display**: a full-screen film on an external screen does not affect the panel in the built-in screen's notch.
+- The panel collapses before going off screen. Expansion is triggered by pointer dwell and collapsed by the pointer leaving, and a window pulled away never receives the leave, so it would otherwise come back expanded.
+- When the target display cannot be determined, it does not hide. The two errors are not equivalent: a panel left over a film is a blemish, while a panel that vanishes has no entry point to bring it back — the notch *is* the entry point.
 
-### 9.3 会话行
+### 9.3 Session rows
 
-- 左侧依次为 Project、标题、当前内容预览。
-- Running 右侧始终显示状态圆点和 `Running` 状态名称胶囊。
-- 非 Running 默认显示状态圆点，悬停时扩展为状态名称胶囊。
-- **行尾只有一个位置，先给计时**：轮次还在计时的时候那里是处理时间；计时停下之后，如果这条 Thread 还有子智能体在跑或在等审批，那里画**一枚**数字 badge——数字是这一行的全部子智能体，底色说有没有在等你（暗底亮字＝全在跑，亮底暗字＝有一个停在审批或输入上），展开行内永远中性、不染产品色，规则见 [`dual-agent-design.md`](dual-agent-design.md) §10。两者不并存——正在跑的行已经在说这条 Thread 在工作，再画 badge 只是同一句话说两遍，而**计时停下、位置却不空**恰好是「轮次结束了，可这条 Thread 还没有」的唯一形状。没有子智能体或读不到子智能体边界时该位置为空，与引入子智能体之前完全一致。
-- **那一格有两档亮度，而两档说的是很不一样的两件事。** 暗色（Running 的那一档）表示有活在跑，没有人被问任何事。亮色（需要用户处理的那一档，Medium 字重）表示这条 Thread 的某个子智能体**停在一个审批对话框上**：产品不是在忙，是在等人。计时那一格同样两档，规则一致——一条正在计时的行也可能有子智能体卡在对话框上。亮度是这个界面唯一的注意力通道，所以这里不新增记号、不新增颜色；朗读文案补一句 `a subagent is waiting for approval`，因为亮度读不出来。
-- 内容接近尾部控件时连续 Alpha 渐隐；不换行、不增加行高、不显示可见省略号。
-- 行可点击，但不提供批准、输入、取消或其他 Codex 操作。
-- 终态行右键即移除该行，没有中间菜单，也没有二次确认——它不删除任何东西，代价只是这一条已经结束的通知。其余三态不响应右键。**子智能体还在跑的终态行同样可以移除**，尽管收起态正为它写着 `Running`：移除的含义是「这一行我看完了」，用户的判断压过本应用知道的一切；而且计数卡死时（第 6.2 节）它是唯一的人工出口。
-- **行画出来的东西不因派生状态而改变。** 收起态、产品标记与排序改读派生状态（第 6.2 节），行不读：它报告的是它自己那一个轮次，所以状态仍是 Completed，计时仍然停着，预览仍是主智能体的最终回答。把行按在 Running 上会让它永远换不到最终回答、不再可移除、也不再被未读门评估。
-
-## 10. 导航
-
-点击成功的定义按产品成立。
-
-**Codex**：激活 Codex Desktop，并让其显示传入 `threadId` 对应的完全相同会话。
-
-**Claude Code**：唤起该会话的宿主——Desktop 托管的激活 Claude Desktop，终端里的聚焦其标签页。不要求定位到具体会话，因为目前不存在任何受支持的方式做到这一点。
-
-**两个产品都一样：唤起意味着把用户带到那扇窗户所在的桌面。** 宿主的窗口全在别的 Space 上时，只把它设为前台等于把菜单栏换给了一个用户看不见的应用——用户仍然盯着自己那个桌面，屏幕上什么也没有发生。因此点击成功的定义包含「当前 Space 变成宿主窗口所在的那个」；宿主此刻在当前 Space 已经有窗口的，不做任何多余动作（实现见 [`tech-design.md` §14.2](tech-design.md)）。这条不放宽第 4 节那句禁令：切桌面这一步只问窗口服务器「这个 pid 在当前 Space 有没有可见窗口」这一个是非题，不据窗口几何或标题挑选导航目标。
-
-- 直接导航是 Codex 的 V1 发布门槛，不允许以“只打开 Codex 首页”作为成功 fallback。该门槛不适用于 Claude Code（见 [ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)）。
-- 降级不加标记：一行只携带一个标记，而那个标记是计时。差别只在点击后的反馈文案里说明，且该文案必须报告实际做到了什么。
-- 成功后面板收起；等待 Desktop 真实已读事件再移除该行。
-- 失败时面板保持展开、行保持可见并提供非破坏性反馈。
-- 点击前重新确认会话仍存在且可导航——**问的是被点的那一条会话，不是整张列表**；竞态失败后触发集合校正。归档不在这道确认里：它结束的是行的监视生命周期（第 6 节第 4 条），不是会话的可达性，而那件事已经由集合校正拥有——用户还看得见的行就是上一次校正仍然列出的行。把它再问一次的代价是把用户整部会话历史压在一次点击上（[ADR 0018](adr/0018-the-click-asks-about-one-thread.md)：实测 799 条未归档会话时一次点击要等 2.2 秒），而它买回来的只是同一个答案的第二份副本。
-- 不猜测 URL，不写私有 IPC，不使用辅助功能或 GUI 自动化。**Claude Code 的终端标签页聚焦是经产品批准的一条例外**（[ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)）：只通过终端**自己公开的脚本字典**按控制终端设备（tty）问出是哪个标签页并选中它——不点击、不读窗口标题、不读窗口几何、不碰辅助功能。报不出 tty 的终端一律只激活应用；Automation 授权被拒之后不报错、不再弹窗，行为与报不出 tty 的终端相同。辅助功能与屏幕录制权限在两侧都仍然排除。
-
-## 11. 设置
-
-V1 设置窗口只包含已经确认的三组能力：
-
-1. **Display**：三项。其一，选择组件显示在哪个已连接显示器；选择跨启动保留，显示器临时断开时回退到可用屏幕。其二，`Hide the wings`——收起态只留刘海本身，两侧的翼都不画（没有矩阵，也没有计时），面板宽度恒等于遮挡宽度。它**只作用于收起态**：hover 照常落下完整面板，因为刘海是本产品唯一的入口（本节下文：没有菜单栏项，也没有 Dock 图标）。该项跨启动保留，默认关闭。**它只在本应用量得出物理刘海确切位置与宽度时可用**，因为收起翼就是把面板缩到那个形状上，屏幕上不再有第二样东西可以用来定位它；量不出的显示器一律**置灰而不是隐藏**，包括无刘海屏（没有那个形状，收起药丸会把它在菜单栏里的位置一起带走，也不再留下任何可 hover 的形状），以及报了刘海却量不出遮挡宽度的屏（那个形状定位不了，缩上去得到的是一块零宽面板）。偏好本身不清空，换回可用的屏即恢复。其三，`Outline the panel`——沿面板外轮廓画一条 `0.8pt` 细线（不落在像素边界上，因而是带抗锯齿的软边而不是硬边框），**收起态与展开态一视同仁**，颜色取 Running 计时那档灰的四分之三（`#5D5D60`），是推导值而不是新挑的值：边不是信息，它压在所有承载状态的记号之下。**最上沿不画**——那条边属于屏幕而不属于面板，沿它画线读起来是菜单栏上方横了一道；描出来的是两侧的肩、竖边与两个下圆角。它解决的是一个纯观感问题：面板是黑的，壁纸也是黑的时候它就成了一个没有边的形状——展开态读作一个洞，无刘海屏的收起药丸同样如此。该项跨启动保留，默认关闭，**任何显示器都可用**（有边就描得出来，与有没有刘海无关）；唯一不画的场合是 `Hide the wings` 已经生效的收起态——那一形态的面板本体正好等于遮挡，轮廓上还落在亮处的只剩两侧的肩，描出来就是刘海两边各挂一枚灰钩子，而那一形态存在的理由正是「什么标记都不画」。hover 落下的面板有自己的边，描线随之回来。
-2. **Codex integration**：显示连接与兼容状态，以及该产品自己报出的失败（第 12 节）；提供一个总开关同时启停全部七种必需 lifecycle event 定义；提供重新检测。关闭只移除本应用管理的定义并保留用户其他 Hooks；重新开启会安装或修复完整集合。
-3. **Session list**：`Distinguish products` 选择器，四选一——`Name and colour`（默认）、`Name only`、`Badge`、`Colour bar`（四种呈现见 [`dual-agent-design.md`](dual-agent-design.md) §6）。`Name and colour` 只给产品名上色，其后的 Project 仍是普通说明行灰：颜色回答的是「哪个产品」，Project 是这一行自己的主语。控件始终可见，即使标记只在两个产品都已连接时才绘制：一个要等到第二个产品恰好打开才找得到的偏好，用户永远找不到。
-
-设置只影响 Codex in Notch。`Update required`、`Version unsupported` 和 `Disconnected` 不提供操作；它们已退出收起态，只在展开面板与 Settings 的产品行中出现（见 6.3）。
-
-**设置窗口打开时永远在最前，并居中落在 Notchline 所在的那块显示器上。** 本产品唯一常驻的界面在刘海里，请求几乎总是在别的应用处于前台时发出的，而 SwiftUI 只把窗口排到本应用之内——从外面看就是「点了齿轮什么也没发生」。落点取**组件此刻所在的那块显示器**（即 `Show Notchline on` 选中的那块），不是持有键盘焦点的那块：这扇窗里的每一个控件改的都是用户只能在刘海里看见的东西，其中一个控件本身就在选哪块屏，改动与被改的东西该在同一眼里；而且它是一个在排窗过程中不会变的答案，焦点那块屏从来不是——晚读一步读到的就是 Settings 自己那块屏。**每一次打开都居中，不只是跨屏那几次**：代价是用户自己拖过的位置会被覆盖，这是明知而选的一边——一扇有时居中、有时留在上次位置的窗口，是一扇每次都要去找的窗口。**并且是一次干净的出现**：窗口永远在它还看不见的时候被摆好——关掉的那一刻就已经移到当前该去的那块屏，因此下一次打开时第一帧就在正确的位置。摆在它出现之后就是用户看见的那一下闪：窗口先出现在上次关掉的那块屏上，一两帧之后才跳过来（实测约 50 ms）。窗口留在别的 Space 时取到当前 Space，而不是把用户送过去。
-
-**设置窗口由用户打开，不在启动时自己出现。** 启动只画 notch 组件；设置的唯一入口是展开面板顶栏右侧的齿轮——应用没有菜单栏（第 1 节），`Settings…`／`⌘,` 那条 macOS 自己的路随之不存在，`⌘W`、`⌘Q` 同理。**退出也只剩设置窗口里的 `Quit`**：它此前是 Dock 图标右键之外的第二条路，现在是唯一一条。第 5 节的首次引导是唯一不请自来的窗口，它还必须自己把本应用带到前台——后台应用启动时不获得前台，否则那扇窗会开在别人的窗口底下（见 [`system-architecture.md` §5](system-architecture.md)）。这条既是产品判断（本产品是常驻组件，不是一个每次启动都要看一眼的窗口），也是一条实测的启动代价：那个窗口的构建、布局与它引起的 tracking-area 一遍，占一次 Release 启动 CPU 的一半（`0.62 s → 0.32 s`，峰值 `%cpu 55 → 33`），详见 [`system-architecture.md` §6](system-architecture.md)。
-
-## 12. 可靠性与降级
-
-- 应用启动时列表为空，收起态显示 `Disconnected`——此刻确实还没有连上任何东西。App Server 成功返回一次只读校验后进入 Ready；该产品此时若也处于打开状态，收起态转为 `Connected`。该校验只用于区分 Ready 与 Disconnected，**不得据此产出任何会话行**。
-- **在场不得由轮次推断，可观察性也不得由在场推断。** 在场回答「这个产品有没有打开」，Turn reducer 回答「它在做什么」；前者画出矩阵，后者点亮它。Codex 的在场取 `NSRunningApplication`，Claude Code 取活跃会话列表是否非空。由此保留一处刻意的不对称：Codex 的在场在本应用启动的瞬间就可知，而它的轮次不可知（产品刻意不显示启动前的任何东西），所以刚启动的应用可以诚实地显示 `Connected` 而对工作一无所知。
-- **在场的可信度有上限。** Claude Code 的会话列表来自一次外部读取，读取失败时保留上一次结果——这对「行」是对的，一次失败不该退休所有行。但缓存不能无限期地决定 `Connected`：`claude` 被卸载或改名后读取会永久失败。因此「多久重读一次」（30 秒）与「陈旧答案还能被相信多久」（90 秒，即三次连续失败）分开；超过上限时在场为**未知**，未知落到 `Disconnected`。上限约束的是**失败**而不是流逝的时间：读出来是空的、又没有任何边沿说它不对的列表不再按节拍重读——重读一次要启动一棵进程树，而「没开」这个答案的每一种变化都会自己报告（CR-Fable-002，见 `tech-design.md` §15.1）。
-- 启动 cutoff 之前的 Hook、Stop、SessionEnd 或其他 lifecycle 信号不得创建、恢复、终止或修改当前 Turn；当前状态只能来自启动后的实时事件。App Server 数据只能为已由实时事件建立身份的会话补充元数据，永远不能独立创建会话。
-- 用户在 Desktop 中中断后继续同一响应时，即使恢复后的执行使用新的 Turn ID 且没有新的 UserPromptSubmit，启动后携带该新身份的实时 Hook 也必须让同一会话继续保持 Running，并让最终 Stop 正确进入 Completed；旧 Turn 的迟到事件不得覆盖恢复后的 Turn。
-- 首次验证过 Hook 后，应用自身重启不得要求再次产生事件才能恢复连接；恢复必须同时确认当前 Codex Desktop 正在运行。
-- 七种必需定义缺少、重复或 matcher/handler/timeout 被改变时不得显示为已连接；总开关显示 Off，并明确进入可由用户重新开启修复的状态。
-- 实时事件负责即时变化；`thread/list` 等集合校正必须在后台合并，不能阻塞 Connected、Running、Input 或 Approval 的发布。重连、唤醒和低频集合校正负责移除已读、归档、删除或漏失对象。
-- 启动和常规刷新不得逐会话读取详情；状态快照失败时保留该 Turn 的最后一个可信四态值，不能据此制造新的会话状态。
-- 单次 App Server 请求超时保留连接与最近可信状态；若其间没有任何有效响应且连续请求都超时，应重建只读 App Server 传输，再在后续轮询恢复校正。
-- `thread/closed` 不等于删除，不可据此移除。
-- 无法识别的新枚举不触发状态流转，并写入诊断；不能造成崩溃。
-- **诊断必须到达用户看得见的地方，否则等于没有写。** 集成失败在本产品里天然是安静的——失信的 hook 只是停止触发，界面照旧写着 Connected——所以「读不懂的 payload」「注册了却不触发的定义」这类只能由本应用发现的事实，必须出现在 Settings 的该产品行上，并且**按本次运行累计**而不是报一次就清：用户是因为看着不对才去开那个窗口的，那总是在之后（CR-029）。
-- 只有实时会话状态整体不可靠时才进入 Disconnected。
-- Project、未读成员关系与精确导航不得使用近似值降级。精确导航一条只约束 Codex；Claude Code 的降级是**声明过的**能力边界，不是近似值。
-- Desktop 未读私有状态只允许只读消费；目录监听失败时由现有轮询校正，主文件解析失败时不得根据备份、空集合或 last-known-good 新增移除决定。
-
-## 13. 发布门槛
-
-Phase 0 必须证明受支持的集成路径能够可靠取得：
-
-1. Desktop 可导航根会话及稳定 `threadId`。
-2. 活动 Turn 与 Input/Approval/Running/终态事件。
-3. Desktop 未读、归档、删除和 Project 身份。
-4. 当前账户 primary rate-limit window 与账户切换。
-5. `threadId → Desktop 同一会话` 的受支持导航动作（仅 Codex）。
-
-Project、未读成员关系或精确导航任一无法满足时，V1 不得用 cwd、固定时间、焦点或首页 fallback 伪装完成。第 5 条按 ADR 0004 只约束 Codex：Claude Code 的宿主唤起是已接受的降级，不是伪装完成。
-
-## 14. 验收标准
-
-1. 用户提交输入后一秒内出现对应会话行；同一 Thread 的后续 Turn 不产生重复行。
-2. Approval needed、Input needed、Running、Completed 四态及优先级正确（顺序即第 6.2 节那张表）；在审批会问到人的 thread 上，专用审批工具与普通工具（如 Bash 命令）两种审批形态都必须进入 Approval needed，孤立的 PermissionRequest 不误报；在 Desktop 记录为自动审查（`auto_review`）的 thread 上，同样两种形态都不得进入 Approval needed，而 Input needed 不受该设置影响；该设置按**起轮时的取值**对一整轮生效——用户在一轮进行中改动审查者时，正在跑的这一轮仍然沿用它开始时的答案（Codex 本身也是如此），下一轮才改用新的；任意执行结束信号都使当前 Turn 直接进入 Completed。Claude Code 里被用户中断的 Turn 同样必须到达 Completed——包括中断发生在审批对话框打开时，也包括会话由 Claude Code 桌面端托管（那种会话不报告任何工作状态）——尽管那里没有任何 hook 到达。
-3. 活动轮次始终显示；终态轮次在用户看过之后自动移除——Codex 按未读集合，Claude Code Desktop 托管会话按 4.2 的四条路径（显示时刻晚于该轮次终止时刻；或轮次结束后应用回到前台；或应用此刻持有前台且屏幕醒着未锁，且两者屏幕上的都是该会话；或该会话带着已结束的轮次停在屏幕上之后被别的会话顶下去），Claude Code 终端会话按第五条（该会话控制终端的访问时间晚于该轮次终止时刻，且该终端所属应用此刻持有前台、屏幕醒着未锁）。五条互为平级，任一成立即移除。只有既无 Desktop 记录、也无控制终端可问的会话不参与本条，理由见 ADR 0012。
-4. 列表覆盖当前账户所有 Project 与 `Chats`，Project 名称与 Desktop 完全一致。
-5. 应用重启时不显示缓存行，也不恢复任何启动前的会话；列表从空开始，只累积启动后产生 lifecycle 事件的 Turn。
-6. 处理时间按 8.2 计时：未完成行逐秒推进，转入 Approval needed 或 Input needed 后继续计时不暂停，Completed 后停止并让位给状态点；收起态右端显示所有未完成轮次中的最长值，全部完成且没有子智能体在跑时该区域消失；朗读使用时长读法；无未完成轮次时不存在每秒刷新——**子智能体计数单独留在收起态时也不得引入每秒刷新**，它不按时钟变化。
-7. 点击任意行进入同一 `threadId` 会话；打开首页不算通过。
-8. 主额度窗口切换和不可用行为正确；额度失败不影响会话列表。
-9. 关闭预览后无正文泄露，缺失标题显示 `Untitled`，行高和面板几何不变。
-10. Disconnected 清空列表；No active sessions 与四类被动状态不含操作按钮。
-11. 展开基准为 `520 × 302`，顶部参考高 `46` 且只横向扩张；状态名不被物理刘海遮挡。
-12. 三行以上可以垂直滚动，重排不强制打断用户当前滚动位置。
-13. 首次引导在更改集成前明确说明范围并取得用户确认；Settings 中一个总开关原子启停七种必需定义，部分安装失败关闭并可修复，关闭不影响用户其他 Hooks。
-14. Figma 与实现中的所有产品字体统一使用 SF Pro。
-15. 终态行右键立即消失，且不再随后续刷新回来——包括该产品退出、断连或把全部行扣住之后再回来的那一次刷新；同一会话的下一个轮次仍然成行。活动轮次的行右键无反应，左键导航在两种行上都与右键存在与否无关。
-16. 一条 Thread 的某个子智能体停在审批对话框上时（两个产品都会走到，且与该 Thread 自己的轮次是不是终态无关）：收起态与排序按 Approval needed 处理该行，行尾那一格（计时或计数）改用需要用户处理的亮色，朗读文案说出来。该子智能体的调用被批准、该子智能体转去做别的调用（人拒绝时两个产品都不发任何事件），或该子智能体结束，三者任一发生时这一档立即撤销。行自己的状态、预览、计时与可移除性全程不变。在 Desktop 记录为自动审查（`auto_review`）的 Codex thread 上不得进入这一档——那里的子智能体与它的父 thread 由同一个审查者答复。
-17. 一条 Thread 自己的轮次结束、而它派生的子智能体还在跑时（两个产品都会走到）：收起态写 `Running` 并在右端写出仍在跑的子智能体总数（有轮次在计时时写在计时前面），该行与 Running 同档排序，Desktop 报告已读也不把它移除；最后一个子智能体收尾之后，移除窗口从**那一刻**起算而不是从主智能体结束那一刻起算。这段时间里行自己仍然是 Completed：计时停着，预览是主智能体的最终回答，右键仍然可以移除它。
-
-## 15. 设计来源
-
-- Figma 文件：[Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1)
-- `06 — Notch Core`：收起与共享展开核心几何。
-- `07 — Integration States`：额度降级、空与集成状态。
-- `08 — Onboarding`：首次安装三步流程。
-- `09 — Settings`：集成管理。
-
-## 16. 术语与架构决策
-
-- 统一术语见 [`CONTEXT.md`](../CONTEXT.md)。
-- 范围、未读生命周期和 Project 身份见 [`docs/adr`](adr/)。
-- 所有依赖未公开或未承诺兼容的 Codex 实现细节及其版本风险见 [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md)。官方 Hooks、App Server 和 deep link 不因接口类型不同而进入该清单。
+- The left carries Project, title and current content preview in order.
+- Running always shows a status dot and a `Running` name pill on the right.
+- Other statuses show a status dot by default, expanding to a name pill on hover.
+- **The row end has one position and the timer gets it first**: while the Turn is timing that is the processing time; once the timer stops, if the Thread still has subagents running or awaiting approval, **one** numeral badge is drawn there — the number is that row's every subagent, and the ground says whether anything is waiting on you (dark ground with bright text = all running, bright ground with dark text = one stopped at approval or input). In-row it is always neutral and never takes a product colour ([`dual-agent-design.md`](dual-agent-design.md) §10). The two never coexist: a running row already says this Thread is working, so a badge would say it twice, whereas **the timer stopping while the position stays occupied** is the one shape of "the Turn ended but this Thread has not". With no subagents, or with subagent boundaries unreadable, the position is empty and exactly as before subagents existed.
+- **That cell has two brightnesses, saying quite different things.** Dark (Running's) means work is in flight with nobody being asked anything. Bright (the needs-attention one, Medium weight) means one of this Thread's subagents is **stopped at an approval dialogue**: the product is not busy, it is waiting for a person. The timer cell has the same two, under the same rule — a row that is timing may also have a subagent stuck at a dialogue. Brightness is this interface's only attention channel, so no new mark and no new colour are added here; the spoken copy adds `a subagent is waiting for approval`, because brightness cannot be read aloud.
+- Content alpha-fades as it approaches the trailing control, never wrapping, never increasing row height, and never showing a visible ellipsis.
+- Rows are clickable but offer no approve, input, cancel or other product action.
+- Right-clicking a terminal row removes it immediately, with no intermediate menu and no confirmation — it deletes nothing, and the only cost is one finished notification. The other three statuses ignore right-click. **A terminal row with subagents still running can be removed too**, even while the collapsed state reads `Running` for it: removal means "I have seen this row", and the user's judgement outranks everything this app knows — and when a count sticks (§6.2) it is the only human exit.
+- **What the row draws never changes because of derived status.** The collapsed state, product markers and sorting read derived status (§6.2); the row does not. It reports its own Turn, so the status stays Completed, the timer stays stopped and the preview stays the main agent's final answer. Pinning the row to Running would stop it ever reaching the final answer, stop it being removable, and stop the unread gate evaluating it.
+
+## 10. Navigation
+
+A successful click is defined per product.
+
+**Codex**: activate Codex Desktop and make it show exactly the thread for the given `threadId`.
+
+**Claude Code**: raise that thread's host — activate Claude Desktop for a desktop-hosted one, focus its tab for a terminal one. Locating the specific thread is not required, because no supported way to do it exists.
+
+**Both products: raising means taking the user to the desktop that window is on.** When every one of the host's windows is on another Space, merely making it frontmost hands the menu bar to an app the user cannot see — they are still looking at their own desktop, where nothing happened. A successful click therefore includes "the current Space becomes the one holding the host's window"; when the host already has a window in the current Space, nothing extra is done ([`tech-design.md` §14.2](tech-design.md)). This does not relax §4's ban: the Space step asks the window server one yes/no question — does this pid have a visible window in the current Space — and never picks a navigation target by window geometry or title.
+
+- Direct navigation is a V1 release gate for Codex, and "just open the home page" is not an acceptable success fallback. The gate does not apply to Claude Code ([ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)).
+- The degradation carries no marker: a row carries one marker and that marker is the timer. The difference is stated only in the feedback sentence after the click, and that sentence must report what was actually done.
+- The panel collapses on success, and the row is removed only on a genuine read event from the desktop app.
+- On failure the panel stays expanded, the row stays visible, and non-destructive feedback is offered.
+- Before clicking, re-confirm that the thread still exists and is navigable — **asking about the row that was clicked, not the whole list**. A race failure triggers set correction. Archiving is not part of this confirmation: it ends the row's monitoring lifecycle (§4.2 item 4), not the thread's reachability, and that is already owned by set correction — a row the user can still see is a row the last correction still listed. Asking again would put the user's entire history behind one click ([ADR 0018](adr/0018-the-click-asks-about-one-thread.md): measured, 799 unarchived threads make a click wait 2.2 seconds) in exchange for a second copy of the same answer.
+- No URL guessing, no private IPC, no Accessibility and no GUI automation. **Focusing a Claude Code terminal tab is a product-approved exception** ([ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)): only through the terminal's **own public scripting dictionary**, asking which tab holds the controlling terminal device (tty) and selecting it — no clicking, no window titles, no window geometry, no Accessibility. A terminal that cannot report a tty gets only its application activated, and a denied Automation authorisation raises no error and no second prompt, behaving exactly like a terminal with no tty. Accessibility and Screen Recording remain excluded on both sides.
+
+## 11. Settings
+
+The V1 settings window contains three confirmed groups:
+
+1. **Display**: three items. First, which connected display shows the component, remembered across launches and falling back to an available screen while that display is disconnected. Second, `Hide the wings` — the collapsed state keeps only the notch itself with neither wing drawn (no matrix, no timer) and the panel width equal to the occlusion width. It **affects only the collapsed state**: hover still drops the full panel, because the notch is this product's only entry point (no menu bar item, no Dock icon). It is remembered across launches, defaults to off, and **is available only where this app can measure the physical notch's exact position and width**, because collapsing the wings means shrinking the panel onto that shape and nothing else on screen can locate it. Displays where it cannot be measured are **disabled rather than hidden** — including notch-less screens (there is no such shape, and collapsing the pill would take its place in the menu bar with it, leaving nothing to hover) and screens that report a notch but no occlusion width (that shape cannot be located, and collapsing onto it yields a zero-width panel). The preference itself is not cleared and returns on a usable screen. Third, `Outline the panel` — a `0.8 pt` line along the panel's outline (deliberately off the pixel grid, so it is an antialiased soft edge rather than a hard border), **applied identically collapsed and expanded**, coloured three-quarters of the Running timer's grey (`#5D5D60`) as a derived value rather than a newly chosen one: an edge is not information and sits beneath every mark that carries state. **The top edge is not drawn** — that edge belongs to the screen rather than the panel, and a line along it reads as a rule above the menu bar; what is traced is the two shoulders, the vertical edges and the two bottom corners. It solves a purely perceptual problem: the panel is black, and against a black wallpaper it becomes a shape with no edge — expanded it reads as a hole, and so does the notch-less collapsed pill. Remembered across launches, defaulting to off, and **available on every display** (an edge can be traced whether or not there is a notch). The one case it is not drawn is the collapsed state with `Hide the wings` already in effect: there the panel body equals the occlusion exactly, so all that remains lit on the outline is the two shoulders, tracing them as two grey hooks either side of the notch — and that form exists precisely to draw no mark at all. The panel dropped on hover has its own edge, and the outline returns with it.
+2. **Codex integration**: shows connection and compatibility status and that product's own reported failures (§12); offers a master switch that starts and stops all required lifecycle event definitions together; offers a re-check. Switching off removes only the definitions this app manages and leaves the user's other hooks alone; switching back on installs or repairs the complete set.
+3. **Session list**: the `Distinguish products` picker, one of four — `Name and colour` (default), `Name only`, `Badge`, `Colour bar` ([`dual-agent-design.md`](dual-agent-design.md) §4). `Name and colour` colours only the product name, leaving the Project after it in ordinary caption grey: the colour answers which product, and the Project is the row's own subject. The control is always visible even though the marker is drawn only while both products are connected: a preference findable only once a second product happens to be open is a preference nobody ever finds.
+
+Settings affect Notchline only. `Update required`, `Version unsupported` and `Disconnected` offer no actions; they have left the collapsed state and appear only in the expanded panel and Settings' product rows (§6.3).
+
+**The settings window always opens frontmost, centred on the display Notchline is on.** This product's only permanent interface is in the notch, so the request almost always comes while another app is frontmost, and SwiftUI only orders the window within this app — from outside, clicking the gear appears to do nothing. It lands on **the display the component is currently on** (the one selected in `Show Notchline on`), not the one with keyboard focus: every control in that window changes something the user can only see in the notch, one of them chooses which screen that is, and a change should be in the same glance as what it changes. It is also an answer that cannot change during window ordering, which the focused screen never is — read a step late, it reads Settings' own screen. **It centres on every open, not only when the screen changes**: the cost is overriding a position the user dragged, deliberately chosen, because a window that is sometimes centred and sometimes where it was last is a window you have to look for every time. **And it is a clean appearance**: the window is always positioned while still invisible — moved to the currently correct screen the moment it closes — so the next open is already correct on its first frame. Positioning it after it appears is the flash the user sees: it appears on the screen it was last closed on and jumps a frame or two later (measured about 50 ms). If it is on another Space it is brought to the current one, rather than sending the user there.
+
+**The settings window is opened by the user and never appears at launch.** Launch draws only the notch component, and the only entry to settings is the gear at the right of the expanded panel's top bar — the app has no menu bar (§1), so macOS's own `Settings…` / `⌘,` route does not exist, and neither do `⌘W` and `⌘Q`. **Quitting is likewise only `Quit` in the settings window**: previously the second route beside right-clicking the Dock icon, and now the only one. §5's onboarding is the one uninvited window, and it must bring the app to the front itself — a background app does not get the foreground at launch, or that window opens beneath someone else's ([`system-architecture.md` §5](system-architecture.md)). This is both a product judgement (this is a permanent component, not a window to look at on every launch) and a measured launch cost: building and laying out that window, and the tracking-area pass it causes, accounted for half of one Release launch's CPU (`0.62 s → 0.32 s`, peak `%cpu 55 → 33`), see [`system-architecture.md` §6](system-architecture.md).
+
+## 12. Reliability and degradation
+
+- The list is empty at launch and the collapsed state shows `Disconnected` — nothing is connected yet. It becomes Ready once the App Server returns one successful read-only validation, and the collapsed state becomes `Connected` if that product is also open. That validation distinguishes Ready from Disconnected only and **must never produce a thread row**.
+- **Presence must never be inferred from Turns, and observability never from presence.** Presence answers whether a product is open and the Turn reducer answers what it is doing; the former draws the matrix and the latter lights it. Codex's presence comes from `NSRunningApplication` and Claude Code's from whether the active session list is non-empty. One deliberate asymmetry follows: Codex's presence is knowable the instant this app launches while its Turns are not (the product deliberately shows nothing from before launch), so a just-launched app can honestly show `Connected` while knowing nothing about the work.
+- **Presence has a trust ceiling.** Claude Code's session list comes from an external read, and a failed read keeps the previous result — right for rows, since one failure should not retire them all. But a cache cannot decide `Connected` indefinitely: after `claude` is uninstalled or renamed the read fails permanently. So "how often to re-read" (30 seconds) is separated from "how long a stale answer is still believed" (90 seconds, three consecutive failures); past the ceiling presence is **unknown**, and unknown falls to `Disconnected`. The ceiling bounds **failures**, not elapsed time: a list that read as empty with no edge saying otherwise is not re-read on a cadence, because re-reading starts a process tree and every way the "not open" answer can change reports itself (CR-Fable-002, `tech-design.md` §15.1).
+- Hooks, `Stop`, `SessionEnd` or other lifecycle signals from before the launch cutoff must never create, restore, terminate or modify a current Turn; current state comes only from live post-launch events. App Server data may only add metadata to threads whose identity a live event established, and can never create a thread on its own.
+- When a user interrupts in Desktop and then continues the same response, live post-launch hooks carrying the new identity must keep that thread Running even though the resumed execution uses a new Turn ID with no new `UserPromptSubmit`, and the final `Stop` must reach Completed correctly; late events for the old Turn must not overwrite the resumed one.
+- After hooks have been verified once, an app restart must not require a new event before the connection is restored; restoration must also confirm that Codex Desktop is currently running.
+- A missing, duplicated, or matcher/handler/timeout-altered definition must never show as connected; the master switch shows Off and enters a state the user can repair by switching it on again.
+- Live events carry immediate change; set corrections such as `thread/list` must merge in the background and must never block publishing Connected, Running, Input or Approval.
+- Launch and ordinary refresh must never read per-thread detail; when a status snapshot fails, that Turn keeps its last trustworthy value among the four, and no new thread status is invented from it.
+- One App Server request timing out keeps the connection and the last trustworthy state; with no valid response in the meantime and consecutive requests timing out, the read-only transport is rebuilt and correction resumes on later polls.
+- `thread/closed` does not mean deleted and must never justify a removal.
+- An unrecognised new enum triggers no state transition, is written to diagnostics, and must not crash.
+- **A diagnostic must reach somewhere the user can see, or it may as well not exist.** Integration failure in this product is naturally silent — a hook that lost trust simply stops firing while the interface still says Connected — so facts only this app can discover, like an unreadable payload or a registered definition that does not fire, must appear on that product's row in Settings, **accumulated for the run** rather than reported once and cleared: the user opens that window because something looked wrong, which is always afterwards (CR-029).
+- Disconnected is entered only when live thread status as a whole is unreliable.
+- Project, unread membership and exact navigation must never degrade to an approximation. Exact navigation binds Codex only; Claude Code's degradation is a **declared** capability boundary, not an approximation.
+- Desktop unread private state may only be consumed read-only; a failed directory watch is corrected by the existing refresh, and a failed main-file parse must never add a removal decision from a backup, an empty set, or last-known-good.
+
+## 13. Release gates
+
+Phase 0 must prove the supported integration path reliably yields:
+
+1. Desktop navigable root threads with a stable `threadId`.
+2. Active Turns and Input/Approval/Running/terminal events.
+3. Desktop unread, archive, delete and Project identity.
+4. The current account's primary rate-limit window, and account switching.
+5. A supported `threadId → the same Desktop thread` navigation action (Codex only).
+
+If Project, unread membership or exact navigation cannot be met, V1 must not fake completion with cwd, fixed timing, focus or a home-page fallback. Item 5 binds Codex only per ADR 0004: raising a Claude Code host is an accepted degradation, not faked completion.
+
+## 14. Acceptance criteria
+
+1. A row appears within one second of the user submitting, and later Turns on the same Thread produce no duplicate row.
+2. The four statuses and their priority are correct (the §6.2 table). On threads whose approvals reach a person, both approval shapes — a dedicated approval tool and an ordinary tool such as a Bash command — must reach Approval needed, and a lone `PermissionRequest` must not misreport. On a thread Desktop records as `auto_review`, neither shape may reach Approval needed, while Input needed is unaffected by that setting; the setting applies for a whole Turn **as of the value at Turn start**, so changing the reviewer mid-Turn leaves the running Turn on the answer it began with (as Codex itself does) and the next Turn takes the new one. Any execution-finished signal takes the current Turn straight to Completed. A Turn interrupted by the user in Claude Code must also reach Completed — including when the interrupt lands on an open approval dialogue, and including desktop-hosted sessions (which report no working status) — even though no hook arrives there.
+3. Active Turns are always shown; terminal Turns are removed automatically once the user has seen them — Codex by the unread set, Claude Code desktop-hosted sessions by §4.2's four paths, and Claude Code terminal sessions by the fifth (that session's controlling terminal's access time later than the Turn's end, with that terminal's application holding the foreground and the screen awake and unlocked). All five are peers and any one removes. Only a session with neither a Desktop record nor a controlling terminal to ask is out of scope, per ADR 0012.
+4. The list covers every Project and `Chats` under the current account, with Project names identical to Desktop's.
+5. An app restart shows no cached rows and restores no pre-launch thread; the list starts empty and accumulates only Turns producing lifecycle events after launch.
+6. Processing time follows §8.2: unfinished rows advance every second, continue without pausing on entering Approval needed or Input needed, and stop on Completed to give way to the status dot; the collapsed right end shows the longest across unfinished Turns and disappears once everything is finished with no subagent running; spoken copy uses duration form; and no per-second refresh exists with no unfinished Turn — **a subagent count left alone in the collapsed state must not introduce one either**, since it does not change with the clock.
+7. Clicking any row reaches the same thread; opening a home page is not a pass.
+8. Primary quota window switching and unavailability behave correctly, and a quota failure does not affect the thread list.
+9. A missing title shows `Untitled`, and row height and panel geometry are unchanged by it. (The former preview switch is gone — §7 — so there is no preview-off case to check.)
+10. Disconnected clears the list, and neither `Connected` nor the four passive states carry action buttons.
+11. The expanded baseline is `520` wide, the top region is `46` in the reference design and grows only horizontally, and no status name is occluded by the physical notch. Panel height is computed per §9.2 rather than fixed.
+12. More than three rows scroll vertically, and re-sorting never interrupts the user's current scroll position.
+13. Onboarding explains scope and takes confirmation before changing any integration; one master switch in Settings atomically starts and stops the required definitions, a partly failed install switches off and can be repaired, and switching off leaves the user's other hooks untouched.
+14. Every product font in Figma and in the implementation is SF Pro.
+15. Right-clicking a terminal row removes it immediately and it does not return on any later refresh — including the refresh after that product quits, drops, or holds every row back and returns; the thread's next Turn still gets a row. An active Turn's row ignores right-click, and left-click navigation is unaffected on both.
+16. While one of a Thread's subagents is stopped at an approval dialogue (both products reach this, whether or not the Thread's own Turn is terminal): the collapsed state and the sort treat that row as Approval needed, the row-end cell (timer or count) takes the needs-attention brightness, and the spoken copy says so. The band is revoked immediately when that subagent's call is approved, when that subagent moves to another call (neither product emits anything on a human refusal), or when that subagent ends. The row's own status, preview, timer and removability are unchanged throughout. On a Codex thread Desktop records as `auto_review` this band must never be entered — there, a subagent and its parent thread are answered by the same reviewer.
+17. While a Thread's own Turn has ended and subagents it spawned are still running (both products): the collapsed state says `Running` and writes the total still-running subagent count at the right end (before the timer when a Turn is timing), the row sorts in the Running band, and Desktop reporting it read does not remove it. Once the last subagent wraps up, the removal window counts from **that** moment rather than from the main agent finishing. Throughout, the row itself is still Completed: the timer is stopped, the preview is the main agent's final answer, and a right-click still removes it.
+
+## 15. Design sources
+
+- Figma file: [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1)
+- `06 — Notch Core`: collapsed and shared expanded core geometry.
+- `07 — Integration States`: quota degradation, empty and integration states.
+- `08 — Onboarding`: the three-step first-run flow.
+- `09 — Settings`: integration management.
+
+## 16. Terminology and architectural decisions
+
+- Shared terminology is in [`CONTEXT.md`](../CONTEXT.md).
+- Scope, the unread lifecycle and Project identity are in [`docs/adr`](adr/).
+- Every dependency on undocumented or uncommitted implementation details, with its version risk, is in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md). Official Hooks, the App Server and deep links do not enter that list merely for being a different kind of interface.

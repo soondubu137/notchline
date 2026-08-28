@@ -1,330 +1,338 @@
-# 双产品设计 — Codex 与 Claude Code
+# Two-product design — Codex and Claude Code
 
-| 字段 | 内容 |
+| Field | Value |
 | --- | --- |
-| 文档状态 | 视觉与数据口径已定；域层与合并层已落地（`claude-code-integration` 分支），UI 尚未开始；子智能体计数标记（Numeral Chip，§10）已实现 |
-| 版本 | 1.2 |
-| 日期 | 2026-08-23 |
-| Figma | [`10 — Double Apps`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=540-2)；设置项在 [`09 — Settings`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=609-2) |
-| 相关 ADR | [0007](adr/0007-read-claude-code-quota-from-the-cli.md)、[0008](adr/0008-count-today-tokens-cache-inclusive.md)、[0009](adr/0009-resolve-project-per-product.md) |
+| Status | Visuals and data measures settled; domain and merge layers landed; the subagent numeral badge (§10) is implemented |
+| Version | 1.3 |
+| Date | 2026-08-28 |
+| Figma | [`10 — Double Apps`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=540-2); settings in [`09 — Settings`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=609-2) |
+| Related ADRs | [0007](adr/0007-read-claude-code-quota-from-the-cli.md), [0008](adr/0008-count-today-tokens-cache-inclusive.md), [0009](adr/0009-resolve-project-per-product.md) |
 
-## 1. 范围
+## 1. Scope
 
-本文只描述同时监视 Codex 与 Claude Code 时的界面与数据口径。集成可行性、Hook 事件映射与降级导航见 [`technical-explorations/claude-code-support`](technical-explorations/claude-code-support/README.md)；单产品的既有契约仍以 [`figma-design.md`](figma-design.md) 为准，本文只记录相对它的差异。
+This document covers only the interface and data measures when Codex and Claude Code are monitored together. Integration feasibility, hook event mapping and degraded navigation are in [`technical-explorations/claude-code-support`](technical-explorations/claude-code-support/README.md); the single-product contract remains [`figma-design.md`](figma-design.md), and this file records only the differences from it.
 
-**只有一个产品在场时，界面与今天完全一致。** 收起态宽度、展开态高度、行内标记、额度行数都不变，只有色调不同。所有新增元素都以"有两个产品要分辨"为出现条件，这与既有的尾翼规则一致：没有内容可说的翼被移除，而不是留空。判定这一条的依据是**在场**（两个产品都已连接），不是某一刻谁恰好有会话——见 §4。
+**With one product present, the interface is exactly as it is today.** Collapsed width, expanded height, in-row markers and quota line count are unchanged; only the hue differs. Every added element appears only when there are two products to tell apart, consistent with the existing wing rule: a wing with nothing to say is removed, not left blank. That condition is **presence** (both products connected), not who happens to have a thread at a given moment — see §4.
 
-**没有任何智能体打开时，矩阵不再替产品占位。** 收起态的系统状态收敛为 `Disconnected` 与 `Connected` 两个：矩阵不再报告我们自己的连接健康，改为报告用户能自己核对的事——是否有编码智能体处于打开状态。有刘海形态在静息时什么都不画；无刘海形态保留一个不指认任何产品的灰色矩阵，因为菜单栏里消失的控件会带走自己的位置。设计见 `08 — Presence`（`624:1560`），契约写在 [`figma-design.md`](figma-design.md) §6.4–§6.8。
+**With no agent open, the matrix stops holding a place for a product.** The collapsed system status narrows to two values, `Disconnected` and `Connected`: the matrix no longer reports our own connection health but something the user can verify themselves — whether a coding agent is open. The notched form draws nothing at rest; the notch-less form keeps one grey matrix naming no product, because a control that vanishes from the menu bar takes its position with it. Design in `08 — Presence` (`624:1560`), contract in [`figma-design.md`](figma-design.md) §6.4–§6.8.
 
-这是既有约束 2「无内容可说的区域被移除，不是变暗」第一次被应用到矩阵自身：单产品时它不必成立，因为那个产品就是全部；两个产品之后，为用户从不打开的那一个长期变暗，就成了替别人的工具做广告。约束 1 因此多出第三个通道——**在场表示产品是否打开**，色相与亮度的分工不变。
+This is the first time existing constraint 2 ("an area with nothing to say is removed, not dimmed") applies to the matrix itself. It did not need to hold for one product, because that product was everything; with two, permanently dimming one for a product the user never opens amounts to advertising someone else's tool. Constraint 1 therefore gains a third channel — **presence says whether a product is open** — with the hue/brightness division unchanged.
 
-**本文描述的双产品界面已实现**（矩阵成对与色相、行归属三选项与其设置、页脚三条规则、齿轮移入顶栏），与在场制一同落地。Claude Code 行的内容预览（[#34](https://github.com/soondubu137/notchline/issues/34)）也已落地——来源是官方 Hook `MessageDisplay`，两个产品的行现在是同样的三行。导航（[#31](https://github.com/soondubu137/notchline/issues/31)）也已落地：Claude Code 行按进程祖先链找到宿主并唤起它，行上不加任何标记，差别只在点击后的那句反馈里。
+**The two-product interface described here is implemented** (paired matrices and hues, the three row-attribution options and their setting, three footer rules, the gear moved into the top bar), along with presence. Claude Code row previews ([#34](https://github.com/soondubu137/notchline/issues/34)) landed too, sourced from the official `MessageDisplay` hook, so both products' rows are now the same three lines. Navigation ([#31](https://github.com/soondubu137/notchline/issues/31)) landed as well: a Claude Code row finds its host up the process ancestor chain and raises it, with no marker added to the row — the difference lives only in the sentence shown after the click.
 
-判断每个方案时使用的既有约束，均来自当前已发布的界面：
+The existing constraints used to judge each option, all taken from the shipped interface:
 
-1. 色相表示产品，亮度表示是否需要用户处理。两个通道不得互换。
-2. 无内容可说的区域被移除，不是变暗。
-3. 未完成的行只有一个标记。
-4. 宽度由真实渲染文本测量得到，不写死。
-5. 取不到的数据显式降级，不用近似值填补。
+1. Hue means product, brightness means whether the user is needed. The two channels are never swapped.
+2. An area with nothing to say is removed, not dimmed.
+3. An unfinished row carries one marker.
+4. Widths are measured from real rendered text, never hard-coded.
+5. Data that cannot be obtained degrades explicitly and is never filled in with an approximation.
 
-## 2. 颜色
+## 2. Colour
 
-| 用途 | Codex | Claude Code |
+| Use | Codex | Claude Code |
 | --- | --- | --- |
-| 点亮格（`matrixOn`） | `#6CB4FF` | `#D97757` |
-| 熄灭格（`matrixOff`） | `#101B26` | `#21120D` |
-| 行内归属文字（caption 亮度） | `#4D81B7` | `#9C553E` |
+| Lit cell (`matrixOn`) | `#6CB4FF` | `#D97757` |
+| Extinguished cell (`matrixOff`) | `#101B26` | `#21120D` |
+| In-row attribution text (caption brightness) | `#4D81B7` | `#9C553E` |
 
-熄灭色是点亮色的 `15%` 亮度，两组都满足该关系，因此新增产品只增加两个变量。Figma 组件集 `Status Matrix / Claude Code` 由 Codex 版克隆后改色得到，几何与四条逐格透明度曲线完全一致。曲线换过一轮（3×3 的四条换成 4×4 的四条，等待拆成两种画法，见 [`figma-design.md`](figma-design.md) §4.1），两个产品仍然一字不差地共用同一组——**图案说状态，色相说产品**，这条分工是这两个变量能各说各的话的全部原因。
+The extinguished colour is `15%` of the lit one's brightness in both pairs, so a new product adds exactly two variables. The Figma component set `Status Matrix / Claude Code` is a recolour of the Codex one, with identical geometry and identical per-cell opacity curves. The curves changed once (four 3×3 curves became four 4×4 ones, with waiting split into two treatments — [`figma-design.md`](figma-design.md) §4.1) and both products still share them to the letter: **the pattern says the state, the hue says the product**, and that division is the entire reason these two variables can each say their own thing.
 
-## 3. 收起态
+## 3. Collapsed
 
-### 3.1 状态矩阵成对出现
+### 3.1 Matrices appear in pairs
 
-两个矩阵并排位于前导翼，`16.6` 见方，间距 `6`。间距取 `6` 是因为它落在矩阵自身 `5.84` 的格距上，读起来像缺了一列而不是随意的空隙；`4` 会与格内 `0.9` 的间距混同为一个 3×6 网格，`8` 则不再成对。
+Two matrices sit side by side in the leading wing, `16.6` square, `6` apart. The `6` is chosen because it lands on the matrix's own `5.84` cell pitch, so it reads as a missing column rather than an arbitrary gap; `4` would merge with the `0.9` inner gap into a single 3×6 grid, and `8` would stop reading as a pair.
 
-**顺序固定：Codex 在前，Claude Code 在后，与各自状态无关。** 认出两种颜色之后，位置是唯一的身份线索；按紧急度排序会让两个标记在用户正要读取的瞬间互换位置。前导翼从左边缘紧凑排布，因此只有 Claude Code 有会话时，它的矩阵出现在 Codex 矩阵原来的位置。
+**The order is fixed: Codex first, Claude Code second, regardless of their states.** Once the two colours are recognised, position is the only identity cue, and ordering by urgency would swap the two markers at precisely the moment the user is about to read them. The leading wing packs from the left edge, so when only Claude Code has threads its matrix appears where Codex's used to be.
 
-### 3.2 几何
+### 3.2 Geometry
 
-| 项目 | 双产品 | 单产品 |
+| Item | Two products | One product |
 | --- | --- | --- |
-| 前导翼 | `12 + 22.26 + 6 + 22.26 + 8 = 70.5` | `12 + 22.26 + 8 = 42.3` |
-| 刘海形态总宽 | `318.9 × 46`（计时 `1:23`） | `290.7 × 46` |
-| 无刘海形态 | `12 + 标记 + 12 + 状态名 + 32 + 00:00:00 + 12` | 同左，少一个标记与一个间距 |
+| Leading wing | `12 + 22.26 + 6 + 22.26 + 8 = 70.5` | `12 + 22.26 + 8 = 42.3` |
+| Notched total width | `326.9 × 46` (timer `1:23`) | `298.7 × 46` |
+| Notch-less | `12 + mark + 12 + status name + 32 + 00:00:00 + 12` | as left, one mark and one gap fewer |
 
-> **一个「标记」是 `22.26`：矩阵 `16.6` 加上它右侧预留的会话计数点列 `5.66`**（§11）。加入计数之前这两格是 `59.2` / `36.6`，总宽 `307.6` / `285.0`；点列使每个产品的标记宽 `5.66`，且与计数多少无关——这段宽度是**预留**的，一行都没有的产品不画那一列，让出来的宽度落在**状态名之后**而不还给面板（§11）。静息灰标记没有点列，仍是 `16.6`。
+> **A "mark" is `22.26`: the `16.6` matrix plus the `5.66` session-count dot column reserved to its right** (§11). Before counts, those cells were `59.2` / `36.6` and the totals `307.6` / `285.0`. The dot column makes each product's mark `5.66` wider regardless of the count, because that width is **reserved**: a product with no rows draws no column, and the width it gives up lands **after the status name** rather than being returned to the panel (§11). The resting grey mark has no dot column and stays `16.6`.
 
-无刘海形态**不按当前状态变宽**：计时槽一律按最宽的 `00:00:00` 预留，整个工作集合共用最宽可计时状态（`Approval`）算出的那一个宽度——双产品 `217.85 → 218`，单产品 `195.27 → 196`（[`figma-design.md`](figma-design.md) §6.8，`PanelMetrics.fixedCompactWidth`）。有刘海形态仍按真实文本测量后向上取整，上表只记录组成关系。
+The notch-less form **does not widen with the current state**: the timer slot always reserves the widest `00:00:00`, and the whole working set shares the one width computed from the widest timeable status (`Approval`) — `217.85 → 218` for two products and `195.27 → 196` for one ([`figma-design.md`](figma-design.md) §6.8, `PanelMetrics.fixedCompactWidth`). The notched form still measures real text and rounds up; the table records the composition only.
 
-> 两侧内边距从 `24` 收到 `12` 之前，这四个数是 `71.2` / `48.6` / `331.6` / `309`，无刘海一格还写着随状态变化的 `215.6`。
+> Before the side padding went from `24` to `12`, those four numbers were `71.2` / `48.6` / `331.6` / `309`, and the notch-less cell still carried a state-dependent `215.6`.
 
-`Hide the wings`（[`figma-design.md`](figma-design.md) §8.4）打开时上表的有刘海一列整列归零：前导翼与尾翼都不画，刘海形态总宽等于遮挡宽度，与连接了几个产品无关。无刘海一列不受影响——量不出刘海的屏（包括无刘海屏）上那一行在设置里是置灰的。
+With `Hide the wings` ([`figma-design.md`](figma-design.md) §8.4) on, the notched column zeroes out entirely: neither wing is drawn and the notched width equals the occlusion width, regardless of how many products are connected. The notch-less column is unaffected — that row is disabled in settings on screens where the notch cannot be measured, including notch-less ones.
 
-### 3.3 计时与状态名
+### 3.3 Timer and status name
 
-尾翼仍然只有一个计时，取两个产品中最长的未完成处理轮次。两个独立计时并列会被读成故障而不是功能；面板本来就在挑选最早的未完成轮次，只是不再按产品过滤。
+The trailing wing still carries one timer, taking the longest unfinished Turn across both products. Two timers side by side read as a fault rather than a feature, and the panel already picks the earliest unfinished Turn — it simply stops filtering by product.
 
-无刘海形态的状态名仍然只有一个，**保持灰色**，取两个产品中最紧急的状态，顺序沿用 `Input needed > Approval needed > Running > Completed`。
+The notch-less form still carries one status name, **kept grey**, taking the most urgent status across both products in the existing order `Input needed > Approval needed > Running > Completed`.
 
-状态名不着色，有两条独立的理由。其一，矩阵各自运行自己的动画曲线，状态在状态名被读到之前已经由图形表达过了，再给文字上色等于对同一件事做第三次编码。其二，被否决的着色方案编码的其实不是状态而是产品；即便按这个读法它同样冗余——正在闪烁的那个矩阵就是需要用户处理的那个——而且它会把色相和亮度压在同一段短文本上，而亮度是这个界面的注意力通道，也是两者中更重要的一个。着色方案已在 Figma §04 绘出并否决，不作为备选保留。
+The name is not coloured, for two independent reasons. First, each matrix runs its own animation curve, so the state has already been expressed graphically before the name is read, and colouring the text encodes the same thing a third time. Second, the rejected colouring scheme actually encoded the product, not the state — and even read that way it is redundant, since the matrix that is animating is the one needing attention — while pressing hue and brightness onto one short run of text, where brightness is this interface's attention channel and the more important of the two. The coloured variant is drawn and rejected in Figma §04 and is not kept as an alternative.
 
-## 4. 展开态：行归属
+## 4. Expanded: row attribution
 
-处理轮次的排序不变，因此两个产品的行是交错的，每一行都必须说明自己属于谁。**该标记在两个产品都已连接时绘制，与此刻谁有会话无关。**
+Turn ordering is unchanged, so the two products' rows interleave and each row must say whose it is. **The marker is drawn whenever both products are connected, regardless of who currently has threads.**
 
-这一条曾按"两个产品都有会话"判定，是本次修正的。两个产品都开着、Claude Code 的最后一行结束，标记会从所有 Codex 行上一起消失，等下一个 Claude Code 轮次开始再回来——用户无法把这次变化归因于任何自己的动作，而这正是本界面最贵的一类改动（`AGENTS.md` §7 说的是重绘代价，这里说的是注意力代价）。用户要分辨的是"两个产品"，而这件事在两个产品都开着的整段时间里都成立，收起态的矩阵与页脚的规则条也早已按在场绘制（`showsProductAttribution` 与 `footerRules`），行是唯一在回答另一个问题的地方。
+That used to be judged on "both products have threads", and this is the correction. With both products open, the last Claude Code row ending would remove the marker from every Codex row at once until the next Claude Code Turn began — a change the user cannot attribute to anything they did, which is the most expensive class of change on this surface (`AGENTS.md` §7 is about redraw cost; this is about attention cost). What the user needs to tell apart is *two products*, and that is true for the whole time both are open. The collapsed matrices and the footer rules already draw on presence (`showsProductAttribution` and `footerRules`), and rows were the only place answering a different question.
 
-反向的一种情况保留：某个产品已关闭、但它的行还留在列表里时，标记继续画。列表在视觉上仍是混的，就仍然要说明每一行属于谁。
+The reverse case is kept: while a product is closed but its rows are still listed, the marker keeps being drawn. The list is still visually mixed, so it still has to say whose each row is.
 
-四种呈现方式，由设置项选择。前三种全部落在行首的 `11 pt` 说明行上，不向面板增加任何笔画；第四种用一条竖线换回整条说明行：
+Four presentations, chosen by a setting. The first three land on the row's leading `11 pt` caption and add no strokes to the panel; the fourth trades a vertical bar for the whole caption:
 
-| 选项 | 呈现 | 说明 |
+| Option | Presentation | Notes |
 | --- | --- | --- |
-| `Name and colour`（默认） | 说明行前缀 `Codex ·` / `Claude Code ·`，取该产品的 caption 亮度色；**只有前缀上色**，其后的 Project 仍是 `#7C7C80` | 不新增元素、不新增线条；去掉色相后文字仍然成立。颜色说的是「哪个产品」，而 Project 是这一行自己的主语，不是同一句话的第二遍 |
-| `Name only` | 同上，颜色为 `#7C7C80` | 几何完全相同，切换不改变任何宽度；完全不依赖颜色 |
-| `Badge` | 小徽章：暗底亮字 | 高 `16`、圆角 `5`、左右内边距 `6`、`10 pt` Medium；底色 `#101B26` / `#21120D`，文字 `#6CB4FF` / `#D97757` |
-| `Colour bar` | 行首竖条，与行块前缘齐平、与行内文字等高 | `2` 宽、圆角 `1`，高 `53`（说明行 `14` + `2` + 标题 `17` + `2` + 预览 `18`；该行没有预览时 `33`），在 `80` 行内垂直居中，行内 `x = 0`（距面板边 `12`），取产品点亮色 `#6CB4FF` / `#D97757`；说明行退回纯 Project 文本 |
+| `Name and colour` (default) | Caption prefixed `Codex ·` / `Claude Code ·` in that product's caption brightness; **only the prefix is coloured**, and the Project after it stays `#7C7C80` | Adds no element and no line, and still works with hue removed. The colour says which product, while the Project is the row's own subject rather than a second telling of the same sentence |
+| `Name only` | As above, in `#7C7C80` | Geometrically identical, so switching changes no width; entirely colour-independent |
+| `Badge` | A small badge: dark ground, bright text | Height `16`, corner `5`, `6` horizontal padding, `10 pt` Medium; grounds `#101B26` / `#21120D`, text `#6CB4FF` / `#D97757` |
+| `Colour bar` | A leading vertical bar, flush with the row block's leading edge and as tall as the row's text | `2` wide, corner `1`, height `53` (caption `14` + `2` + title `17` + `2` + preview `18`; `33` on a row with no preview), vertically centred in the `80` row at `x = 0` in-row (`12` from the panel edge), in the product's lit colour; the caption reverts to plain Project text |
 
-`Badge` 使矩阵的熄灭色与点亮色分别成为底与字，说明行高度由 `14` 变为 `16`，行内容块由 `53` 变为 `55`，行高仍为 `80`。
+`Badge` makes the matrix's extinguished and lit colours the ground and the text, taking the caption from `14` to `16` and the row's content block from `53` to `55`, with the row height still `80`.
 
-默认取 `Name and colour` 的理由：它是唯一什么都不增加的方案，也是唯一色相只作为强化而非全部信号的方案。代价是横向空间——`Claude Code ·` 约占 `426` 宽说明行中的 `73`，被挤压的是 Project 文本本身；说明行是一行里最不重要的一条，且以渐隐而非省略号收尾，因此可以接受。（`426` = 内容宽 `496` 减去最宽计时 `57.91` 与其 `12` 间距。左右内边距从 `24` 收到 `12` 之前这个数是 `394`。）
+`Name and colour` is the default because it is the only option that adds nothing, and the only one where hue reinforces rather than carries the signal. Its cost is horizontal space — `Claude Code ·` takes about `73` of the caption's `426` — and what gets squeezed is the Project text; the caption is the least important line in a row and ends in a fade rather than an ellipsis, so that is acceptable. (`426` = the `496` content width minus the widest timer `57.91` and its `12` gap. Before the padding went `24 → 12` this was `394`.)
 
-**`Colour bar` 由「已评估但不提供」改为提供，理由不在它自身而在页脚。** 它当初被否掉只有一条：向页脚已有的四条横线再加三条竖线。§5.4 的折叠让那四条横线变成可收起的状态而不是常驻代价，这个计数因此不再固定。它是唯一完全不占说明行的方案，也是唯一会「成组」的方案——同一产品连着几行会读成一块而不是三行。仍然排在第四而不是默认，因为它是纯色相方案：看不见色相时它什么都不剩。
+**`Colour bar` moved from "evaluated, not offered" to offered, for a reason outside itself: the footer.** It was rejected on one count — adding three vertical lines to the footer's existing four horizontal ones. §5.4's folding turns those four into a state that can be put away rather than a permanent cost, so that count is no longer fixed. It is the only option that uses none of the caption, and the only one that **groups**: several consecutive rows of one product read as a block rather than three rows. It still ranks fourth rather than default, because it is purely hue: with hue invisible, nothing is left.
 
-竖条画在行块的**前缘**（行内 `x = 0`），因此行块的缩进就是竖条的位置。它一度沿用行块原本的 `6`，代价是竖条比上方的状态矩阵、下方的额度规则都朝里半个 `12`——面板上唯一一条不与其余竖直边对齐的线。现在只在竖条画出来的形态里把行块缩进改成 `12`，竖条落到那条共用边距上；行内边距同时由 `6` 改为 `8`，因为这一形态下它量的不再是「离面板边多远」而是「离那条 `2pt` 线多远」，`6` 会让线和字读成一个东西。说明行仍保持整宽，行内文字退到 `20` 站到竖条后面。单产品时不画竖条，行块回到 `6` + `6`，文字仍落在 `12`：多出来的那 `6` 是竖条自己的地方，没有竖条就不该占。
+The bar is drawn at the row block's **leading edge** (`x = 0` in-row), so the block's indent is the bar's position. It once inherited the block's `6`, which put the bar half of a `12` inside the status matrix above and the quota rules below — the only vertical line on the panel not aligned with the rest. The block's indent is now `12` in the form that draws the bar, putting it on that shared margin, and the in-row padding goes from `6` to `8`, because in this form it measures distance from that `2 pt` line rather than from the panel edge, and `6` makes line and text read as one thing. The caption keeps its full width, and in-row text moves to `20` to stand behind the bar. With one product no bar is drawn, the block returns to `6` + `6` and text still lands at `12`: the extra `6` is the bar's own space, and without a bar it should not be taken.
 
-**高度取这一行文字的实高，而不是行高的一半。** `40` 是个形状不是个尺寸：它上不到说明行、下不到预览行，读起来是行中间的一个记号而不是这一行自己的前缘。现在从 Project 说明行的顶画到最后一行的底——三行齐全是 `14 + 2 + 17 + 2 + 18 = 53`，没有预览的行是 `33`，跟着这一行真实的内容缩短而不是按固定三行画出去（那会在两行的行上下各多出 `10`，正是这次要修的那种「差一点」）。行高仍是 `80`，两端各留 `13.5`，行块自己的 `12` 圆角照旧避开。这些行高常量因此收在 `PanelMetrics`（`sessionRowCaptionHeight` 等）而不是散在视图里：竖条是照它们量出来的，视图改了这里不改就会画长或画短。`onlyTheTwoNamingStylesPutTheProductOnTheCaption` 锁定四个选项里只有前两个把产品名写进说明行——写错会让产品出现两次，一次是词，一次是条。
+**The height is that row's real text height, not half its row height.** `40` was a shape rather than a size: it reached neither the caption above nor the preview below, reading as a mark in the middle of the row rather than the row's own leading edge. It now runs from the top of the Project caption to the bottom of the last line — `14 + 2 + 17 + 2 + 18 = 53` with all three lines, `33` on a row with no preview — shortening with the row's real content instead of drawing a fixed three lines (which overshot a two-line row by `10` at each end, exactly the "not quite" this change fixes). The row height stays `80` with `13.5` at each end, and the block's own `12` corner still clears it. These constants therefore live in `PanelMetrics` (`sessionRowCaptionHeight` and friends) rather than scattered through views: the bar is measured from them, and a view change without one here draws it too long or too short. `onlyTheTwoNamingStylesPutTheProductOnTheCaption` pins that only the first two of the four options put the product name on the caption — getting it wrong would show the product twice, once as a word and once as a bar.
 
-已评估且仍不提供的两种：每行小矩阵（一行出现第二个标记，必须让计时退回中性来抵偿）、给计时上色（同一段文本同时承担色相与亮度两个通道）。四种方案的完整推理与图见 Figma §06。
+Two options evaluated and still not offered: a small matrix per row (a second marker on a row, requiring the timer to go neutral in compensation), and colouring the timer (one run of text carrying both the hue and the brightness channel). Full reasoning and drawings for all four are in Figma §06.
 
-## 5. 展开态：额度与当日用量
+## 5. Expanded: quota and today's usage
 
-### 5.1 结构
+### 5.1 Structure
 
-每个产品一行规则，每条规则下方紧跟自己的说明；两个当日用量合并为最下面一行。
+One rule per product with its own caption beneath it, and the two daily-usage figures merged into a single bottom line.
 
 ```
-════════════════════════════════════════════  Codex，整宽
+════════════════════════════════════════════  Codex, full width
 72% left · Resets in 3 days 12 hours
-═══════════════────  ═══════════════════────  Claude Code，两个半宽
+═══════════════────  ═══════════════════────  Claude Code, two half widths
 5 h · 59% left · Resets in 2 hours    7 d · 85% left · Resets Friday
 Codex 310.1M · Claude Code 208.6M today
 ```
 
-| 项目 | 值 |
+| Item | Value |
 | --- | --- |
-| Codex 规则 | `496 × 3`，`y = 0` |
-| Codex 说明 | `y = 8` |
-| Claude Code 规则 | `244 + 8 + 244`，`y = 30` |
-| Claude Code 说明 | `y = 38`，左半 `x = 0`，右半 `x = 252` |
-| 当日用量行 | `y = 58` |
-| 页脚总高 | `84`（今天为 `43`） |
-| 展开面板 | `520 × 370`（双产品）／`520 × 326`（单产品） |
+| Codex rule | `496 × 3`, `y = 0` |
+| Codex caption | `y = 8` |
+| Claude Code rules | `244 + 8 + 244`, `y = 30` |
+| Claude Code captions | `y = 38`, left half `x = 0`, right half `x = 252` |
+| Daily usage line | `y = 58` |
+| Footer height | `84` |
+| Expanded panel | `520 × 370` (two products) / `520 × 326` (Codex only) |
 
-Codex 占满整宽是因为它只有一个窗口；Claude Code 被平分是因为它有两个。半宽等分不是为了塞下，而是因为那一侧确实有两个窗口——这是这个结构成立的全部理由。
+Codex takes the full width because it has one window; Claude Code is split because it has two. The halves are equal not to make things fit but because that side genuinely has two windows — which is the whole reason this structure holds.
 
-单产品时页脚形态不同：只有 Codex 时保持今天的一行内联形态（页脚 `40`）；只有 Claude Code 时两个窗口已占满说明行，当日用量仍需单独一行（页脚 `54`）。这一处不对称落在两种单产品形态之间，是本方案已知且已接受的代价。
+Single-product footers differ: Codex alone keeps today's inline form (footer `40`), while Claude Code alone has both windows filling the caption line so daily usage needs a line of its own (footer `54`). That asymmetry between the two single-product forms is known and accepted.
 
-### 5.2 显示哪些窗口
+### 5.2 Which windows are shown
 
-`/usage` 报告三个窗口：`Current session`（5 小时）、`Current week (all models)`、`Current week (<模型>)`。**只画前两个，且固定不变**：左半永远是 5 小时全模型窗口，右半永远是 7 天全模型窗口。
+`/usage` reports three windows: `Current session` (5 hours), `Current week (all models)` and `Current week (<model>)`. **Only the first two are drawn, and fixed**: the left half is always the 5-hour all-models window and the right half always the 7-day all-models window.
 
-按模型的周上限本期忽略。它对不使用该模型的用户恒为零；让某一半在不同时刻报告不同窗口，会让一条本来只用于扫一眼的规则变得必须先读说明才能理解。已知风险照实记录：用完按模型上限的用户会看到两条健康的规则却仍被拒绝。如果实际发生，正确的修法是增加第三个窗口，而不是让第二个窗口变形。
+The per-model weekly cap is ignored for now. It is permanently zero for users who do not use that model, and letting one half report different windows at different times turns a rule meant for a glance into one that must be read first. Known risk, recorded: a user who exhausts the per-model cap sees two healthy rules and is still refused. If that happens, the right fix is a third window, not making the second one change meaning.
 
-百分比按"已用"报告，规则绘制 `100 − used`；重置时间为本地绝对时间戳，按既有风格渲染为相对时间。
+Percentages are reported as *used* and the rules draw `100 − used`; reset times are local absolute timestamps rendered as relative time in the existing style.
 
-### 5.3 设置按钮移入顶栏
+### 5.3 The settings button moves into the top bar
 
-页脚四条说明已占满整条内容宽，设置齿轮移到面板右上角：`46 pt` 菜单栏下为 `32 × 32`，`x = 464`；`24 pt` 菜单栏下缩为 `20 × 20`，`x = 476`。展开态顶栏的尾侧本来就是空的（计时尾翼只在收起态出现），而右上角本就是 macOS 面板放置设置的位置。页脚说明文本因此收回完整的 `496`。
+The four footer captions fill the content width, so the gear moves to the panel's top-right: `32 × 32` at `x = 464` under a `46 pt` menu bar, shrinking to `20 × 20` at `x = 476` under a `24 pt` one. The expanded top bar's trailing side is empty anyway (the timer wing appears only when collapsed), and the top-right is where macOS panels put settings. Footer captions therefore reclaim the full `496`.
 
-> 这三个数在左右内边距 `24 → 12` 之前是 `472`、`440`、`452`。齿轮是尾对齐到内容盒的，`x` 由 `496 − 尺寸` 得到，不是常量。
+> Before the padding went `24 → 12`, those three numbers were `472`, `440` and `452`. The gear is trailing-aligned to the content box, so `x` is `496 − size` rather than a constant.
 
-**该改动对单产品同样生效**，已应用到 `Expanded Footer` 组件与 `Panel` 的三个 Expanded 变体，Figma 中所有展开面板已随之更新。两种模式下位置一致，避免第二个产品出现时齿轮跳位。
+**This applies to single-product too**, and has been applied to the `Expanded Footer` component and `Panel`'s three Expanded variants, so every expanded panel in Figma follows. The position is identical in both modes, so the gear does not jump when a second product appears.
 
-### 5.4 折叠额度块
+### 5.4 Folding the quota block
 
-图与完整推理见 Figma §09。
+Drawings and full reasoning in Figma §09.
 
-三条规则连同说明占 `84`——比三分之二个会话行还多——回答的却是一个偶尔才问的问题。折叠后页脚只留每次打开面板都值得扫一眼的那一个数：当日用量。该行尾端放一个渐显控件，按下把规则带回来，展开后同一枚字形旋转 `180°`。
+Three rules with their captions take `84` — more than two-thirds of a session row — to answer a question that is only asked occasionally. Folded, the footer keeps the one figure worth a glance every time the panel opens: today's usage. A control fades in at the end of that line and brings the rules back, with the same glyph rotating `180°` once expanded.
 
-| 形态 | Codex 单独 | Claude Code 单独 | 双产品 |
+| Form | Codex alone | Claude Code alone | Two products |
 | --- | --- | --- | --- |
-| 展开页脚／面板 | `40` ／ `520 × 326` | `54` ／ `520 × 340` | `84` ／ `520 × 370` |
-| 折叠页脚／面板 | `28` ／ `520 × 314` | `28` ／ `520 × 314` | `28` ／ `520 × 314` |
-| 折叠省下 | `12` | `26` | `56` |
+| Expanded footer / panel | `40` / `520 × 326` | `54` / `520 × 340` | `84` / `520 × 370` |
+| Folded footer / panel | `28` / `520 × 314` | `28` / `520 × 314` | `28` / `520 × 314` |
+| Folding saves | `12` | `26` | `56` |
 
-折叠态下面板恒为 `314`，与哪些产品在连接无关——展开高度第一次不再取决于正在跑什么。展开态的三个高度一个都没变，折叠不向任何一种形态增加高度。
+Folded, the panel is always `314` regardless of which products are connected — the first time expanded height does not depend on what happens to be running. None of the three expanded heights changed, and folding adds height to no form.
 
-**控件。** `16 × 16`，尾对齐到 `496` 内容盒（`x = 480`），垂直居中于它所属的说明行（`y = 行 − 1`）。字形为 `9 × 4.5` 的 chevron，线宽 `1.4`，圆头圆角，取说明行灰 `#7C7C80`，因此不会压过它所在的那一行。折叠时朝下、展开时朝上：面板挂在刘海下方、只能向下生长，箭头指向面板将要移动的方向；折叠态同时也就是各处列表通用的「show more」。**点击区就是 chevron 自己那 `16 × 16`**：同一行上的另一半是当日用量这个读数，让一个数字被点到就改面板高度，对任何想选中它、甚至只是想看清它的人都是个陷阱，因此提示与靶子取同一个方块。悬停时该方块铺一层 `12%` 白底、圆角 `4`，与齿轮同一手法，使唯一可点的区域在按下之前就看得见。
+**The control.** `16 × 16`, trailing-aligned to the `496` content box (`x = 480`), vertically centred on the caption line it belongs to (`y = line − 1`). The glyph is a `9 × 4.5` chevron at `1.4` stroke with round caps and joins, in the caption grey `#7C7C80`, so it never overpowers the line it sits on. It points down when folded and up when expanded: the panel hangs below the notch and can only grow downwards, so the arrow points where the panel is about to move, and the folded state doubles as the "show more" of any list. **The hit area is the chevron's own `16 × 16`**: the other half of that line is the daily-usage reading, and letting a number change the panel height when clicked is a trap for anyone trying to select it or even just read it, so the affordance and the target are the same square. Hovering lays a `12%` white ground with a `4` corner over that square, the same treatment as the gear, so the only clickable region is visible before it is pressed.
 
-**只有 Codex 时的例外。** 单产品单窗口在说明行上留有余地，当日用量一直是内联印在那一行里的（§5.1），因此没有一条「当日用量行」可挂控件。此时**不新增底部区域**——新增一行正好把折叠要省的高度花掉——控件上移到规则下方那条说明行上（`y = 7`），页脚仍为 `40`。折叠后那一行才回来，只承载 `310.1M today` 与控件。所以这一形态折叠只省 `12`：它省下的不是高度，而是那条横线，也正是 §4 的 `Colour bar` 想要回的那一笔。
+**The Codex-only exception.** One product with one window leaves room on the caption line, and daily usage has always been printed inline there (§5.1), so there is no daily-usage line to hang the control on. **No new region is added** — a new line would spend exactly the height folding saves — and the control moves up onto the caption line under the rule (`y = 7`), with the footer still `40`. That line only returns when folded, carrying `310.1M today` and the control. So this form saves only `12`: what it saves is not height but that horizontal line, the same stroke §4's `Colour bar` wants back.
 
-折叠状态是**一个**设置（`quotaFolded`），跨开合记忆，默认展开；不按产品分开，因为两个产品共用同一个页脚。它不进设置窗口——控件就在它作用的那一行上。
+The fold state is **one** setting (`quotaFolded`), remembered across open and close, defaulting to expanded, and not split per product because both products share one footer. It does not appear in the settings window — the control is on the line it affects.
 
-**当日用量行只在有两个产品时写产品名。** 折叠态下只有 Claude Code 时这一行原本会印成 `Claude Code 208.6M today`；一个产品在场时点名它，与会话行早已避免的是同一种冗余（见 §4 的 `showsProductAttribution`），因此改为 `208.6M today`。这条同时作用于展开态的 Claude Code 单产品页脚，是本次一并修正的既有不一致。
+**The daily-usage line names products only when there are two.** Folded with only Claude Code it would print `Claude Code 208.6M today`; naming the one product present is the same redundancy session rows already avoid (§4's `showsProductAttribution`), so it prints `208.6M today`. This also applies to the expanded Claude-Code-only footer, correcting an existing inconsistency.
 
-额度不可用时规则仍然画出（画成空轨道），因此仍然可折——那恰好是用户最可能想收起的一条。只有一条规则都不画时不提供控件，否则折叠只会把自己藏起来。
+When quota is unavailable the rules are still drawn (as empty tracks) and so can still be folded — which is exactly when a user is most likely to want them away. The control is not offered only when no rule is drawn at all, or folding would just hide itself.
 
-`aFoldedFooterIsTheSameHeightForEveryShape` 锁定三种形态折叠后同为 `314`、展开后仍是 `326` / `340` / `370`；`foldingKeepsTodaysTokensInEveryShape` 锁定 Codex 单产品那个例外——展开时没有当日用量行、折叠时必须有。
+`aFoldedFooterIsTheSameHeightForEveryShape` pins all three forms to `314` folded and `326` / `340` / `370` expanded; `foldingKeepsTodaysTokensInEveryShape` pins the Codex-only exception — no daily-usage line when expanded, and one when folded.
 
-## 6. 设置项
+## 6. Settings
 
-设置窗口是单面板，没有侧边栏（见 [`figma-design.md`](figma-design.md) §8.0）。`Session list` 是其中最后一个分组，排在 `Products` 与 `Display` 之后，只含一个弹出菜单：
+The settings window is a single panel with no sidebar ([`figma-design.md`](figma-design.md) §8.0). `Session list` is its last group, after `Products` and `Display`, holding one pop-up:
 
-| 标签 | `Distinguish products` |
+| Label | `Distinguish products` |
 | --- | --- |
-| 说明 | `How a row shows which product it came from.` |
-| 选项 | `Name and colour`（默认）／`Name only`／`Badge`／`Colour bar` |
-| 脚注 | `Only applies when both products are running — with one product there is nothing to tell apart.` |
+| Description | `How a row shows which product it came from.` |
+| Options | `Name and colour` (default) / `Name only` / `Badge` / `Colour bar` |
+| Footnote | `Only applies when both products are running — with one product there is nothing to tell apart.` |
 
-单产品运行时该项仍然可见但无效果。隐藏它会让用户恰好在准备接入第二个产品时找不到它。
+With one product running the setting stays visible but has no effect. Hiding it would make it unfindable at exactly the moment a user is preparing to connect a second product.
 
-两个产品的集成开关不再各占一个分组：`Codex Desktop` 与 `Claude Code` 是 `Products` 卡片里的两行，各带一个 switch，共用一条脚注和一个 `Recheck` 按钮。第三个产品的代价因此是一行。
+The two integration switches no longer take a group each: `Codex Desktop` and `Claude Code` are two rows in the `Products` card, each with a switch, sharing one footnote and one `Recheck` button. A third product therefore costs one row.
 
-## 7. 数据来源与口径
+### 6.1 The Claude Code product row
 
-### 7.1 额度
+Figma §09's `Codex integration` card is built around a switch: flip it and the app writes `~/.codex/hooks.json`. **The Claude Code row is now the same shape** ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)): a second row in the same card, one switch, and flipping it writes `~/.claude/settings.json`.
 
-见 [ADR 0007](adr/0007-read-claude-code-quota-from-the-cli.md)。要点：`claude -p "/usage" --output-format json`，不经过模型，实测约 `4.3` 秒、`total_cost_usd` 为 `0`。**这是后台定时刷新的数据源，不能在展开面板时同步调用**，快照也不等它：`fetchSnapshot` 只交回已知值并在背后开读，读到后通过一条自己的边通知刷新——否则每一行（包括刚被 Hook 事件改动的那些）都要排在一次 `claude` 启动后面。命令跑在自己的 DispatchQueue 上并带截止时间（额度 30 秒、会话列表 10 秒，到点先 SIGTERM 再 SIGKILL）：`Process` 的 `readToEnd`/`waitUntilExit` 是阻塞调用，放在 async 函数里会占住协作线程池的一根线程（每核约一根），而 `claude` 会拉起用户的 MCP server，卡死并非假想——真卡住时那次读取永不返回，额度会冻在最后一个值上，连过期上限都无从触发，只能重启应用。**截止时间必须落在读取上，而不是落在子进程上**（CR-Fable-038）：EOF 不由子进程给出，它在写端的**最后一份拷贝**关闭时才到来，凡是从 `claude` 那里继承了 stdout 的东西都握着一份，杀掉子进程并不会让它们松手。stdout 因此改为本应用自己读（`poll` + `read(2)` 读进一份复用缓冲区），并在三者里最先成立的那一个上停下：EOF、子进程退出后 `0.25` 秒无新字节、或子进程截止时间之后 3 秒。子进程干净退出、只是有个孤儿还攥着管道时那份答案照收；被杀掉则一律算失败，抢在 `SIGKILL` 之前打出来的字节不是答案。判定与后果见 `tech-design.md` §15.2。 **窗口每 300 秒读一次，当日 token 每 60 秒读一次——两者共享一次读取，但不共享节奏。** 命令每跑一次就是一个真实会话：一个子进程、几秒钟，外加一个约 `3 KB` 的 transcript；而它报告的是 5 小时与 7 天两个窗口，对刚过去的这一分钟无话可说。当日 token 来自 transcript 文件而不是该命令，一次约 30 毫秒、不起子进程，且是两者中唯一会在你工作时肉眼可见地变化的数字，把它一并放慢到 5 分钟是白付的退步。**这些 transcript 只统计、不删除。** Settings 里显示它们的总大小，并给一个直接打开该目录的按钮，删不删由用户自己决定。曾经实现过启动时自动清理，被否掉了：Claude Code 给 project 目录起名的规则并未公开，且它同时压平分隔符与空格，因此并非一一对应——实测 2.1.234 上 `…/a b` 与 `…/a-b` 被归进同一个目录。也就是说，装着本应用 transcript 的目录同时可能装着用户真实项目的会话记录；即便逐个文件用 `cwd` 验证归属可以做到，替用户删除会话历史所剩下的那点风险也不值得冒。目录本身仍然靠发现而非推导（命令会报告它自己创建的 `session_id`），理由不变：推错会把用户指向别人的记录。**读不到与读不懂是两件事。** 命令答了、但那段话里已经没有那两行——正是解析器要拒绝的形状变化——立即降级为不可用的完整轨道，不得沿用旧值；命令根本没答上来（进程失败、stdout 上混进了别的日志），则在信任上限（默认 900 秒，约三次读取）内继续画上一次读到的窗口，并在 5 秒后重试（连续失败时逐次翻倍，上限为新鲜期），而不是等满一整个新鲜期。两者的区别是有依据的：一次读取失败会间歇发生且下一次就好了，而按百分点绘制的额度在这几秒里不会有意义地变化——首次失败就清空，正是用户看到数字忽有忽无的原因。超过上限则一律不可用。
+~~This previously needed a card Figma never drew: an in-row disclosure holding a "we do not edit your settings file" explanation, a selectable `Configuration to add`, and `Copy` / `Reveal Settings File` buttons.~~ That card was deleted with ADR 0010, along with the snippet it rendered and the copy button. **There is no asymmetry left to see between the two rows**, and their only difference is one sentence in the footnote: the two switches write different files, and only the Codex one is followed by a trust step.
 
-`~/Library/Application Support/Claude/plan-usage-history.json` 不再使用。
+**One sentence must appear in the footnote**: before changing either file the app copies it beside itself, named after the original plus `.notchline-backup`. The user never asked for those two files — they are this decision's price, so they must be visible before the switch is flipped. **The rule is written to cover both files**: the copy has always been the shared editor's behaviour, done for both products, while the footnote previously mentioned only the Claude Code one. ~~It once required both full names, `settings.json.notchline-backup` and `hooks.json.notchline-backup`, in the footnote~~ — two full names take half the footnote to state two instances of one rule, and a footnote is scanned before flipping a switch rather than consulted for filenames. It now reads "copied beside itself as a `.notchline-backup` file", with the full names left in [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md) and wherever someone genuinely needs to find a file by name.
 
-### 7.2 当日 token
+There are still four states, and the second is still the important one:
 
-见 [ADR 0008](adr/0008-count-today-tokens-cache-inclusive.md)。口径为"全部被处理的输入（含缓存读取）加输出"：
+| State | Copy | Colour |
+| --- | --- | --- |
+| Not registered | Integration is off. | Grey |
+| **Registration does not match this version** | Registration is out of date · turn the switch on to rewrite it. | Orange |
+| Registered and receiving events | Connected · hooks installed. | Green |
+| Registered but the helper could not be installed | Registered · the hook helper could not be set up. | Green dot plus that sentence |
 
-- Codex — `dailyUsageBuckets[].tokens`，按本地日历日键入。
-- Claude Code — `~/.claude/projects/**/*.jsonl` 中每条 assistant 记录的 `message.usage`，取 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens + output_tokens`，按 `timestamp` 前十位分日累加。
+**The second state must exist separately** and cannot be merged with "off". It was the one failure of manual pasting with no symptom; the app can now fix it, but **until the user flips that switch it still has no symptom** — the notch stays empty and nothing anywhere reports it. It has two shapes: a missing event raises no error, Claude Code simply never pushes that transition; and **a complete set of events in a stale handler shape counts too** — most importantly a pre-[ADR 0013](adr/0013-claude-code-hooks-run-a-helper-not-a-port.md) `type: "http"` registration, with every event present and all of them POSTing to a port nobody is listening on, so **every event prints a line in the user's session** while nothing appears on the notch. So the test cannot be "is our handler there" but "is the one that is there the one this version installs": the identity marker has to be loose enough to recognise every shape this app has ever written (which is why that old URL path is still kept, now with the extra use of letting an install strip the dead handler), and a marker that loose cannot tell current from stale. **The only thing that changed is this state's exit**: from "please go back and re-paste" to "turn the switch on" — the switch already reads as off in this state (`isIntegrationEnabled` is false for `repairRequired`), and turning it on strips the old handler and writes the current shape.
 
-该来源由 CLI 自己写入，因此对每一个 Claude Code 用户都成立，包括没有 Claude Desktop 的用户。
+The fourth state changed content but not reasoning: with no port left to be taken, what can fail is **the helper or its socket not installing** (an unwritable support directory). It still has to be said, and the reason is harder — a registration pointing at a script that does not exist makes Claude Code print an `ENOENT` line per event. So `install()` writes the helper first and refuses outright if it cannot, rather than leaving such a registration behind.
+
+## 7. Data sources and measures
+
+### 7.1 Quota
+
+See [ADR 0007](adr/0007-read-claude-code-quota-from-the-cli.md). In short: `claude -p "/usage" --output-format json`, which does not reach a model (measured about `4.3` s with `total_cost_usd` of `0`). **It is a background refresh source and must never be called synchronously when the panel expands**, and the snapshot does not wait for it either: `fetchSnapshot` returns known values and starts the read behind it, signalling a refresh over an edge of its own when it lands — otherwise every row, including ones a hook event just changed, would queue behind a `claude` launch.
+
+The command runs on its own DispatchQueue with a deadline (30 s for quota, 10 s for the session list, SIGTERM then SIGKILL). `Process`'s `readToEnd`/`waitUntilExit` are blocking calls, and inside an async function they occupy a cooperative-pool thread (roughly one per core), and `claude` starts the user's MCP servers, so hanging is not hypothetical — a genuinely hung read never returns, quota freezes on its last value, and not even the staleness ceiling can fire, leaving only an app restart. **The deadline has to land on the read, not on the subprocess** (CR-Fable-038): EOF does not come from the child but from the **last copy** of the write end closing, and anything that inherited stdout from `claude` holds one, so killing the child does not make them let go. stdout is therefore read by this app itself (`poll` + `read(2)` into a reused buffer), stopping at whichever comes first: EOF, `0.25` s with no new bytes after the child exits, or 3 s past the child's deadline. An answer is accepted when the child exited cleanly and merely left an orphan holding the pipe; a killed child always counts as failure, because bytes printed ahead of `SIGKILL` are not an answer. The tests and consequences are in `tech-design.md` §15.2.
+
+**Windows are read every 1800 seconds and only while there is a screen; today's tokens every 60 seconds — they share one read but not one cadence.** Each run of the command is a real session: a subprocess, a couple of seconds, and an approximately `3 KB` transcript — and what it reports is a 5-hour and a 7-day window, which have nothing to say about the last minute. Today's tokens come from transcript files rather than that command, cost about 30 ms with no subprocess, and are the only one of the two that visibly moves while you work, so slowing them to match would be a regression bought with nothing. The 1800-second cadence is set by cost: measured in Release 2026-08-25, one read is 2.53 s of CPU and a 375 MB peak resident, and both rules live in the expanded footer, so with the display asleep or locked they are not "probably unwatched" but unwatchable; the screen waking is a refresh edge, so that read is bought the moment the user returns. The trust ceiling rose from 900 to 3600 with it, because the ceiling counts from the last answer and the first failed attempt cannot happen until a whole freshness window after one.
+
+**Those transcripts are measured, never deleted.** Settings shows their total size with a button to open the directory, and deletion is the user's call. Automatic cleanup at launch was implemented and rejected: Claude Code's project-directory naming rule is undocumented and flattens both separators and spaces, so it is not injective — measured on 2.1.234, `…/a b` and `…/a-b` land in one directory. That directory may therefore hold the user's real session history, and even though per-file `cwd` verification is possible, the remaining risk of deleting session history on a user's behalf is not worth taking. The directory is still found rather than derived (the command reports the `session_id` it created), for the unchanged reason that deriving it wrongly points the user at someone else's records.
+
+**Unreadable and unparseable are different things.** The command answered but those two lines are gone — exactly the shape change the parser must reject — degrades immediately to the full unavailable track and never reuses an old value. The command did not answer at all (process failure, another log mixed into stdout) keeps drawing the last windows within the trust ceiling and retries after 5 s, doubling on consecutive failures up to the freshness window, rather than waiting out a whole window. The distinction is grounded: a failed read happens intermittently and the next one succeeds, while a quota drawn to the percent does not change meaningfully in those seconds — blanking on the first failure is exactly why users saw the numbers coming and going. Past the ceiling it is unavailable regardless.
+
+`~/Library/Application Support/Claude/plan-usage-history.json` is no longer used.
+
+### 7.2 Today's tokens
+
+See [ADR 0008](adr/0008-count-today-tokens-cache-inclusive.md). The measure is "all processed input including cache reads, plus output":
+
+- Codex — `dailyUsageBuckets[].tokens`, keyed by local calendar day.
+- Claude Code — `message.usage` on every assistant record in `~/.claude/projects/**/*.jsonl`, taking `input_tokens + cache_creation_input_tokens + cache_read_input_tokens + output_tokens`, bucketed by the first ten characters of `timestamp`.
+
+That source is written by the CLI itself, so it works for every Claude Code user, including those without Claude Desktop.
 
 ### 7.3 Project
 
-见 [ADR 0009](adr/0009-resolve-project-per-product.md)。Project 按产品解析：Codex 行是 Desktop 中用户创建的 Project 或 `Chats`；Claude Code 行是会话的工作目录（`cwd`），行内显示路径最后一段，完整 `cwd` 作为无障碍名称。[ADR 0003](adr/0003-use-codex-desktop-project-identity.md) 的路径推断禁令自此仅约束 Codex 一侧——它的理由是路径与 Desktop Project 不是一一对应，而 Claude Code 的 `cwd` 本身就是该产品的分组单位。
+See [ADR 0009](adr/0009-resolve-project-per-product.md). Project is resolved per product: a Codex row's is the user-created Desktop Project or `Chats`; a Claude Code row's is the thread's working directory (`cwd`), showing the last path component in-row with the full `cwd` as the accessibility name. [ADR 0003](adr/0003-use-codex-desktop-project-identity.md)'s ban on path inference now binds only the Codex side — its reasoning was that paths do not map one-to-one onto Desktop Projects, whereas Claude Code's `cwd` *is* that product's grouping unit.
 
-## 8. 未决事项
+## 8. Open items
 
-| 事项 | 状态 |
+| Item | Status |
 | --- | --- |
-| 展开态顶栏状态名是否附带产品名 | 待定，构建前重新评估（随 [#35](https://github.com/soondubu137/notchline/issues/35) 一并决定） |
-| 是否超出四个状态（`StopFailure` 带 `error`） | **已定：保持四态。** 只有 Claude Code 能观察到的状态会让这套共享词汇在 Codex 上说谎——用户无法区分「没有失败」与「无法观察到失败」。失败作为终态原因随行，行上的标记不变。字段名是 `error` 而非 `error_type`（CLI 2.1.233 实测） |
-| `dailyUsageBuckets.tokens` 与 CLI `total_tokens` 是否同口径 | 待验证，低优先级；不阻塞任何布局 |
-| 同名目录的两个检出如何消歧 | 未定（[#25](https://github.com/soondubu137/notchline/issues/25) 遗留项） |
-| Claude Code hook 注册由谁写入 | **已定：本应用写。** 与 Codex 同形：一个开关，写 `~/.claude/settings.json`，关掉再取出来；每次写入前把原文件复制到同目录的 `settings.json.notchline-backup`。见 [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)。~~原为「用户自己粘贴，本应用永不写入」（[ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md)）~~——翻案理由是那条自己列的代价：粘贴不完整与形状过时都不报错，本应用看得见却修不动 |
-| 产品改名 | 候选见 Figma §07；`Baton` 为推荐项 |
-| `Disconnected` 这个词是否保留 | **语义已定**（[`figma-design.md`](figma-design.md) §6.7：没有任何智能体**已连接**）。词本身待定，备选 `No agents`、`Nothing running`，上屏后判断 |
-| 双产品无刘海紧凑标签由哪一状态定宽 | **已被在场制吸收，见下。** 成因仍记录在 [#29](https://github.com/soondubu137/notchline/issues/29) |
+| Whether the expanded top bar's status name names the product | Open, to be re-evaluated before building (decided with [#35](https://github.com/soondubu137/notchline/issues/35)) |
+| Whether to exceed four statuses (`StopFailure` carries `error`) | **Decided: keep four.** A status only Claude Code can observe would make the shared vocabulary lie on Codex — the user cannot tell "did not fail" from "cannot observe failure". Failure travels as a terminal reason and the row's marker is unchanged. The field is `error`, not `error_type` (measured on CLI 2.1.233) |
+| Whether `dailyUsageBuckets.tokens` uses the same measure as the CLI's `total_tokens` | Unverified, low priority; blocks no layout |
+| How two checkouts of identically named directories are disambiguated | Undecided ([#25](https://github.com/soondubu137/notchline/issues/25)) |
+| Who writes the Claude Code hook registration | **Decided: this app does.** The same shape as Codex — one switch, writing `~/.claude/settings.json`, taking it back out when off, copying the original to `settings.json.notchline-backup` before every write. See [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md). ~~Previously "the user pastes it and this app never writes" ([ADR 0010](adr/0010-never-write-the-users-claude-code-settings.md))~~ — overturned by a cost it listed itself: an incomplete paste and a stale shape both fail silently, visible to this app and unfixable by it |
+| Product rename | Candidates in Figma §07; `Baton` recommended |
+| Whether the word `Disconnected` is kept | **Semantics decided** ([`figma-design.md`](figma-design.md) §6.7: no agent is **connected**). The word itself is open, with `No agents` and `Nothing running` as alternatives, to be judged on screen |
+| Which status fixes the two-product notch-less compact width | **Absorbed by presence, below.** The cause is recorded in [#29](https://github.com/soondubu137/notchline/issues/29) |
 
-降级导航已确认并接受，且已实现：Claude Code 行只能唤起 Claude Desktop 或聚焦终端，行内不为此增加任何标记。**「聚焦终端」在实现里又分了一层**，也同样不加标记：终端能报出 tty 的（Terminal.app、iTerm2）选中那一个标签页，报不出的（Ghostty 有完整脚本字典却没有 tty，kitty / WezTerm / Alacritty 没有字典）只激活应用。三种结果都由 `NavigationOutcome` 的那句话区分，界面上一个像素都不差——因为一行只带一个标记，而那个标记是计时。
+Degraded navigation is confirmed, accepted and implemented: a Claude Code row can only raise Claude Desktop or focus a terminal, with no marker added for it. **"Focus a terminal" splits once more in the implementation**, also without a marker: terminals that can report a tty (Terminal.app, iTerm2) get the tab selected, and those that cannot (Ghostty has a full scripting dictionary but no tty; kitty / WezTerm / Alacritty have no dictionary) get only the application activated. All three outcomes are distinguished solely by `NavigationOutcome`'s sentence, with not one pixel of difference on screen — because a row carries one marker, and that marker is the timer.
 
-> 未决事项统一跟踪在 GitHub 看板 [soondubu137/projects/2](https://github.com/users/soondubu137/projects/2)，本表只保留设计侧的结论与理由，不重复记录进度。
+> Open items are tracked on the GitHub board [soondubu137/projects/2](https://github.com/users/soondubu137/projects/2); this table keeps only the design-side conclusions and reasoning, never progress.
 
-**紧凑标签定宽状态在双产品下换人。** 单 Codex 时最宽的紧凑状态是 `Approval`，它靠同时占用标签与计时槽取胜，任何不计时的状态都追不上它。加入 Claude Code 后冠军变成一个**不计时**的状态：`Update Claude Code` 比 `Approval` 加计时槽更长。本机实测 13pt Light：`Approval` + 12 + `1:02:03` = 112.3，`Update Claude Code` = 124.8，无刘海药丸宽度因此从 189 变为 202。
+**The compact width-setting status changes hands with two products.** With Codex alone the widest compact status is `Approval`, winning by occupying the label and the timer slot at once, which no untimed status can match. With Claude Code added, the winner becomes an **untimed** status: `Update Claude Code` is longer than `Approval` plus a timer slot. Measured here at 13pt Light: `Approval` + 12 + `1:02:03` = 112.3 against `Update Claude Code` = 124.8, taking the notch-less pill from 189 to 202.
 
-**成因后来查清了**：`updateAgent` 这个状态对 Claude Code **根本不可达**——它存在是因为 Codex Desktop 可能版本过旧，而 Claude Code 是用户自己装的 CLI，没有版本门槛。宽度折叠不区分「哪个产品能到哪个状态」，于是为一个画不出来的标签预留了位置。见 [#29](https://github.com/soondubu137/notchline/issues/29)。
+**The cause was later established**: the `updateAgent` status is **unreachable for Claude Code** — it exists because Codex Desktop may be too old, while Claude Code is a CLI the user installed themselves with no version gate. The width fold did not distinguish which product could reach which status, so it reserved room for a label that can never be drawn. See [#29](https://github.com/soondubu137/notchline/issues/29).
 
-**这条已被在场制吸收。** `Update Claude Code` 随 `Update Codex`、`Unsupported Version` 一起退出收起态（[`figma-design.md`](figma-design.md) §6.6），不再参与定宽；同时单产品工作集合改为共用固定宽度 `220`（§6.4），而 `Update Claude Code` 本机实测 `124.77`，撑到 `24 + 16.62 + 12 + 124.77 + 24 = 201.4`，本来就在 `220` 之内。也就是说即便日后它回到收起态，也不会再改变任何宽度。`PanelMetrics.fixedCompactWidth` 的按产品折叠因此**整个去掉了**：工作集合里已经没有任何一条紧凑标签会指名产品，加宽的理由从「第二个产品的词汇更长」变成「多画了一个矩阵」。它现在按 `(status, matrixCount)` 取值。
+**This has been absorbed by presence.** `Update Claude Code` leaves the collapsed state along with `Update Codex` and `Unsupported Version` ([`figma-design.md`](figma-design.md) §6.6) and no longer sets any width; the single-product working set moved to a shared fixed width of `220` (§6.4), and `Update Claude Code` measures `124.77` here, reaching `24 + 16.62 + 12 + 124.77 + 24 = 201.4`, already inside `220`. So even if it returned to the collapsed state it would change no width. `PanelMetrics.fixedCompactWidth`'s per-product fold was therefore **removed entirely**: no compact label in the working set names a product any more, and the reason for widening changed from "the second product's vocabulary is longer" to "there is one more matrix drawn". It now takes its value from `(status, matrixCount)`.
 
-**后续：展开态也不再指名产品，`configuredAgents` 因此整个消失。** 上一段留给展开面板的那条尾巴——「展开面板仍然会说 `Update Claude Code` 这类指名产品的整句」——已经收掉了。四条指名产品的整句（`Connecting to [产品]`、`Update [产品]`、`[产品] version unsupported`、`[产品] disconnected`）一律改回不指名的通用说法：`Connecting`、`Update required`、`Version unsupported`、`Disconnected`。理由是这四句提供的信息并非必需——**哪个**产品不健康，设置窗口的产品行本来就逐个列着，而刘海不是读这件事的地方。代价是一次点击，收益是展开面板的定宽折叠随之消失：最宽的整句从 `Claude Code version unsupported`（`204.43`）变成 `Version unsupported`（`124.88`），单侧从 `253.03` 收到 `173.48`，装了 Claude Code 的用户每一次展开都少占 `79` 点。`MonitorStore.configuredAgents` 与快照上的 `availabilityAgent`、`statusAgent` 一并删除——它们存在的唯一理由就是让标签说出产品名。（`PanelMetrics.expandedWidth` 当时只剩 `centerOcclusionWidth` 一个参数，现已重新带上 `markCount`：加宽取决于连了几个产品，不取决于装了哪些产品，两者不是一回事。`173.48` 也已作废——那个数按一枚裸矩阵算，且为顶栏说不出的 `Version unsupported` 预留；见 [`figma-design.md`](figma-design.md) §3.2。）
+**Follow-on: the expanded state stops naming products too, so `configuredAgents` disappears entirely.** The loose end the previous paragraph left for the expanded panel — that it would still say whole sentences naming a product, like `Update Claude Code` — has been taken in. All four product-naming sentences (`Connecting to [product]`, `Update [product]`, `[product] version unsupported`, `[product] disconnected`) revert to generic ones: `Connecting`, `Update required`, `Version unsupported`, `Disconnected`. The reasoning is that those four supply information nobody needs — **which** product is unhealthy is already listed row by row in the settings window, and the notch is not where that is read. The cost is one click; the gain is that the expanded panel's width fold disappears with it: the widest sentence goes from `Claude Code version unsupported` (`204.43`) to `Version unsupported` (`124.88`), taking one side from `253.03` to `173.48`, so every expansion is `79` points narrower for a user with Claude Code installed. `MonitorStore.configuredAgents` and the snapshot's `availabilityAgent` and `statusAgent` were deleted with it — their only reason to exist was letting a label say a product's name. (`PanelMetrics.expandedWidth` was briefly left with `centerOcclusionWidth` as its only parameter and now carries `markCount` again: widening depends on how many products are connected, not which are installed, and those are not the same thing. `173.48` is also void — it was computed for a bare matrix and reserved for a `Version unsupported` the top bar cannot say; see [`figma-design.md`](figma-design.md) §3.2.)
 
-## 6.1 Claude Code 产品行（新增面）
+## 9. Relationship to existing documents
 
-Figma §09 的 `Codex integration` 卡片围绕一个开关：拨动它，应用写 `~/.codex/hooks.json`。**Claude Code 那一行现在是同一个形状**（[ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)）：同一张卡片里的第二行，同样一个开关，拨动它，应用写 `~/.claude/settings.json`。
+[`figma-design.md`](figma-design.md) describes the single-product contract, and this file supersedes two parts of it: the settings gear's position (§4.5, now the top-right of the top bar) and the composition of the footer quota lines (§4.3, two rule lines plus a daily-usage line with two products). The rest is unaffected.
 
-~~这里原本需要一张 Figma 未画过的卡片：行内展开，里面是「不编辑你的设置文件」的说明、一段可选中的 `Configuration to add`、以及 `Copy` / `Reveal Settings File` 两个按钮。~~ 那张卡片随 ADR 0010 一起删除了，连同它渲染的片段和复制按钮。**两行并排现在没有不对称可看**，两条产品行的区别只剩脚注里的一句：两个开关写的是不同的文件，而且只有 Codex 那个后面还跟着一步信任。
+The exception is the settings window: `figma-design.md` §8 has been rewritten for macOS 26, with the `Products` group holding both products directly and the `Session list` group coming from §6 here. The settings window's structure, geometry and colour are governed by §8, and this file keeps only the semantics of `Distinguish products`.
 
-**新增一句必须出现在脚注里**：改动任一文件之前，本应用会把它复制到同目录，副本名是原文件名加 `.notchline-backup`。用户没要过这两个文件，它们是这个决定的价格，所以要在用户拨开关之前就看见它们会出现。**规则要写成对两个文件都成立的一句**：副本一直是共享编辑器的行为，两个产品同时在做，脚注此前只提了 Claude Code 那一个。~~此前要求把 `settings.json.notchline-backup` 与 `hooks.json.notchline-backup` 两个全名都列进脚注~~——两个全名占掉脚注一半的长度，念的是同一条规则的两个实例，而脚注是拨开关前扫一眼的东西，不是查文件名的地方；现在写成「copied beside itself as a `.notchline-backup` file」，全名留在 [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md) 和真正要按名字找文件时看的地方。
+## 10. The subagent badge (decided, implemented)
 
-状态仍是四种，第二种仍是重点：
+[`12 — Counting: sessions and subagents`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Notchline-%E2%80%94-V1?node-id=857-2) (`857:2`) supersedes the split treatment of `C — Numeral Chip` on the §11 page. It is still a `15 × 15` filled numeral square with a `4` corner (the badge), numbered with the current count and never spelling out "subagent(s)"; what changed is **what it counts, how many there are, and what colour they are**.
 
-| 状态 | 文案 | 颜色 |
+**One badge, one number, one inversion.**
+
+1. **The number is every subagent**, including those waiting on approval or input — they have not finished either. There is no second badge counting only the waiting ones.
+2. **The ground says whether anything is waiting on you**: all running is a dark ground with bright text, and one stopped at approval or input inverts it to a bright ground with dark text. The number does not move by a pixel.
+3. **Expanded, in-row: one per row, neutral** — ground `#242424` (`NotchPalette.restingInk`'s extinguished colour lifted one step, `MatrixInk.chipFill`), text `#7C7C80`; inverted it becomes ground `#FFFFFF`, text `#0D0D0F`. The row already says which product it belongs to through its attribution marker (§4) or its Project caption, so the badge need not borrow hue to say the same thing again.
+4. **Collapsed: one per product, in that product's ink**, the pair sitting before the timer with Codex always first — the same rule as the leading wing's matrix pair (§3.1), never reordered by urgency. Codex all-running is text `#6CB4FF` on ground `#1F2A35` (the extinguished colour lifted one step), inverting to text `#101B26` on ground `#6CB4FF`; Claude Code is the same shape with `#D97757` / `#30211C` and `#21120D` / `#D97757`. The two products invert independently.
+5. **A product with no subagents has no badge** and no space reserved for one — the same rule as "a product with no threads has no matrix" (§3.1).
+6. **Spacing**: `6` between two badges, taken from the `6` between the two matrices (`PanelMetrics.subagentBadgeSpacing` is literally `compactMatrixSpacing`, not a second number); `8` between a badge and the timer.
+
+**Why hue goes neutral in-row and is applied when collapsed.** Hue is spent only where nothing else can answer "whose is this". A row has already written the product name in the caption above; a collapsed bar has no caption line. One badge, one constraint 1 (hue means product, brightness means whether the user is needed), and two different conclusions purely because the contexts differ.
+
+**Why it is not split in two.** The previous version drew the waiting ones as a separate white badge in front. Its cost is that **at exactly the moment a person is needed**, a row or a bar carries two numbers to read. The ground says this for free and says it faster. Inverting changes no width, so a product going from all-running to something-waiting moves nothing on the bar — the split version did.
+
+**The still-running badge's ground is one step brighter than the extinguished colour.** A badge is a solid `15 × 15` square, not a matrix dot: at that area the extinguished colour reads as a hole in a pure black panel rather than as a mark placed on it. So all three dark grounds (neutral grey and the two products' extinguished colours) are lifted uniformly by `+0.06` per channel (`MatrixInk.chipFill`), preserving both the hues and the neutral's neutrality and keeping all three the same distance from the black behind. The inverted bright ground does not take this step — it is the product's own lit colour (white for the neutral one), because there brightness is the signal. The matrix itself uses neither step; its darkness stays as §2 sets it.
+
+**Implemented**: `SubagentBadge` (a value type of `count` and `wantsAttention`) and `AgentSubagentBadge` (one per product) in `MonitorDomain.swift`; `SubagentBadgeView` / `SubagentBadgeRow` / `SubagentBadgeTint` draw them in `NotchStatusMatrix.swift`; `CompactTrailingReading.badges` and `PanelMetrics.subagentBadgeWidth` / `subagentBadgesWidth` / `compactTrailingReadingWidth` (`MonitorStore.swift`) compose the trailing wing's width. The aggregate is `MonitorStore.compactSubagentBadges`, reading each product's own figure off `presenceMarks` rather than re-summing, so the two ends of one bar cannot give two answers about one list. The in-row badge reads `MonitoredSession.subagentBadge` and still appears on `showsSubagentBadge` (the timer has stopped and subagents remain). Assertions: `theBadgePairIsSpacedLikeTheMatrixPair`, `aWaitingBadgeIsTheSameWidthAsARunningOne`, `theCollapsedBadgesAreOnePerProductInAFixedOrder`.
+
+**Record of the previous version**: page §11 (`812:2`) chose `C — Numeral Chip` from four options, and its rules 1–6 specified "coloured with one product, neutral grey with two", "white is never coloured and always comes first", and "Running and needs-attention are two independent counts with a badge each". All three are superseded here — colouring is now per product (since there is one badge per product, so the "cannot represent anyone" case does not arise), white became the neutral badge's inverted state (in-row only), and the split is cancelled entirely. Reference nodes are `01` (one in-row) and `03` (a collapsed pair and its inversion) under `857:2`.
+
+## 11. Session count dots (decided, implemented)
+
+The other half of the same page (`857:2`): **both the collapsed state and the expanded top bar must say how many rows each product has.**
+
+**Drawn to the right of the matrix, vertically.** The first attempt was a coloured numeral square to the matrix's right, the most literal reading, at the cost of taking the leading wing from `39.2` to `83.2`. The second put it **below** the matrix — free horizontally, but spending height, and the matrix is a fixed `16.6` derived from a 13pt label that does not scale with the menu bar: at the `46` step there is `14.7` below it, and at the `22` step only `2.7`, narrower than a dot. Measured at the `31` step, that row of dots cleared the panel's bottom edge by `2.0`, so two steps shorter it cannot be drawn at all and would have to be omitted entirely on that class of screen — and a count that disappears on a whole class of display is not a count. So it became a **column of dots to the matrix's right**:
+
+| Item | Value (at matrix `16.6`) | Source |
 | --- | --- | --- |
-| 未注册 | Integration is off. | 灰 |
-| **注册与本版本不符** | Registration is out of date · turn the switch on to rewrite it. | 橙 |
-| 已注册且在收事件 | Connected · hooks installed. | 绿 |
-| 已注册但 helper 装不上 | Registered · the hook helper could not be set up. | 绿点＋该句 |
+| Dot diameter | `2.74` | `15` in a `91`-unit viewBox |
+| Column-to-matrix gap | `2.92` | `16` in the same viewBox |
+| Row pitch | `5.84` | `32` in the same viewBox |
+| The "more" bar | `4.93` | `27` in the same viewBox |
+| Column width | `5.66` | `2.92 + 2.74` |
+| Column height | `16.6` | `2 × 5.84 + 4.93`, **exactly the matrix's own height** |
+| Cap | `3` dots | — |
 
-**第二态必须单独存在**，不能与「关着」合并。它原先是手工粘贴唯一没有症状的失败方式；本应用现在修得动它了，但**在用户去拨那个开关之前它照样没有症状**——notch 一直空着，任何地方都不报错。它有两种形状：漏掉一个事件不会报错，Claude Code 只是永远不推送那一类迁移；**事件齐全但 handler 形状过时也算**——最重要的一种就是 [ADR 0013](adr/0013-claude-code-hooks-run-a-helper-not-a-port.md) 之前那份 `type: "http"` 的注册，事件一个不少，却全都 POST 给一个没人听的端口，于是**每个事件在用户会话里打一行**，而 notch 上什么都不出现。因此判定不能只看「我们的 handler 在不在」，而要看「在的那个是不是本版本会装的那个」：identity marker 必须宽到认得出本应用写过的所有形状（旧的那段 URL path 至今留着就是为此，现在它还多一个用途——让安装把那段死 handler 顺手删掉），而一个宽到这个地步的标记分不出当前与过时。**唯一变的是这一态的出路**：从「请你回去重贴」变成「把开关打开」——这一态下开关本来就显示为关（`isIntegrationEnabled` 对 `repairRequired` 为假），打开它就会把旧 handler 剥掉、写下当前形状。
+> **That `91` used to be the matrix's own viewBox and no longer is.** Every number above was originally the matrix's — the dots sat on its row centres and the bar was one of its cells. The matrix became 4×4 and its viewBox is now `123` ([`figma-design.md`](figma-design.md) §4.1), and this column **did not follow**: read in the new units it would give a `2.02` dot with a `2.16` gap, already below the line where a string of them is still countable, and the whole column would shrink from `5.66` to `4.18`, shifting every collapsed width on this surface for a change the dots have no part in. This column counts threads, not cells, so it stays at the size where it can be read. It is still exactly as tall as a mark (`2 × 5.84 + 4.93 = 16.6`), so everything below still holds.
 
-第四态换了内容但没有换理由：现在不再有端口可被占，能失败的是**helper 或它的 socket 装不上**（support 目录不可写）。同样要说出来，而且理由更硬——写下去的注册指着一个不存在的脚本，Claude Code 会为每个事件打一行 `ENOENT`。所以 `install()` 先写 helper，写不出来就整个拒绝，不留下那样一份注册。
+- **One dot per row**, from the top edge at `5.84` pitch. No threads, no dots.
+- **Past three rows, the third dot stretches downwards into a bar** (`dot · dot · dash`), read as "more than three". The column's bottom therefore lands exactly on the matrix's lower edge.
+- **The column is exactly as tall as the matrix, so it needs no vertical space the matrix did not already have** — which is the entire reason it moved from below to the right: the `46` and `22` steps draw identically, and there is no longer an "omitted on short menu bars" cost.
+- **Colour**: the product's own lit colour at `85%`, and it **never animates**. Brightness is this surface's attention channel, and a count is not an attention signal.
+- **The resting grey matrix, which names no product, has no dot column** — there is no product behind it, so there are no rows.
 
-## 9. 与既有文档的关系
+**Why dots rather than §02's "stack rail".** Same position, same pitch; the difference is the mark's shape and size. A `3.5 × 4.93` block — the same shape as a cell, the same height as a cell, separated only by a hairline — reads at real size as the matrix's fourth column; a `2.74` dot, just over half a cell and standing `2.92` off, does not. Both were rendered and compared, and that comparison is where this column's proportions come from.
 
-[`figma-design.md`](figma-design.md) 描述单产品契约，其中两处已被本文取代：设置齿轮的位置（§4.5，现为顶栏右上角）与页脚额度行的构成（§4.3，双产品时为两行规则加当日用量行）。其余部分不受影响。
+**What it costs is width: `5.66` per product mark.** The leading wing goes from `39.2` to `50.5` (two products) and `16.6` to `22.3` (one), the notched total from `307.6` to `318.9` and `285.0` to `290.7`, and the notch-less fixed widths from `218` to `230` and `196` to `201`. The resting grey mark has no dot column, so `Disconnected`'s `136` and the notched resting `246` are unaffected.
 
-例外是设置窗口：`figma-design.md` §8 已按 macOS 26 重写，其中 `Products` 分组直接容纳两个产品，`Session list` 分组来自本文 §6。设置窗口的结构、几何与颜色以 §8 为准，本文只保留 `Distinguish products` 的语义。
+**The trailing wing later took another `8`: the reading's ground** ([`figma-design.md`](figma-design.md) §4.7 / §6.4). The timer reading now sits on a `16`-tall ground with a `4` corner and `4` on each side — filled white while someone is waiting and clear otherwise, with **both cases the same width**, for exactly the reason the dot column reserves rather than flexes. The trailing wing therefore goes `28.4 → 36.4` (timer only), `51.4 → 59.4` (one badge) and `72.4 → 80.4` (two), and the notched total `318.9 → 326.9` (two products) and `290.7 → 298.7` (one), with the notch-less fixed widths `230 → 238` and `201 → 209`. `Disconnected` stays `136`: it never times anything, so it has no reading to give a ground.
 
-## 10. 子智能体徽标（已定，已实现）
+**Reserved in width, packed in drawing.** A connected product with no rows draws no column, so at rest the two matrices sit at their own `6` apart rather than the `11.66` an empty column would force — which is past the "`8` stops reading as a pair" line, and breaks it in precisely the state this surface spends the most time in: connected, with nothing running. But **the panel still computes width as though every mark has a column**, and the width packing gives up is not returned to the panel.
 
-[`12 — Counting: sessions and subagents`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Notchline-%E2%80%94-V1?node-id=857-2)（`857:2`）取代了 §11 页 `C — Numeral Chip` 的拆分画法。仍是一枚 `15 × 15`、圆角 `4` 的填色数字方块（下称 badge），编号即当前 count，不拼「subagent(s)」这个词；**变的是它数什么、有几枚、什么颜色**。
+**The width given up lands after the status name, not before it.** It was first left at the end of the mark group, between the last matrix and the status name: with neither product holding rows, the name sat `12 + 11.3 = 23.3` from the matrix beside it while the two matrices in the same glance were only `6` apart — so the name read not as describing the marks beside it but as belonging to nobody. That cost is permanent, and permanent in the state this surface spends most of its time in. Moved after the name, the gap between them is `expandedReadoutSpacing`'s `12` at every count.
 
-**一枚 badge，一个数字，一次翻转。**
+**The cost is that the name travels with the columns.** It sits after each column, and **a column opening pushes everything after it** — the name is now among that "everything", pushed `5.66` when Codex opens its first thread and `11.3` when both products do, with the cause (that dot) appearing right beside it. The previous version pinned the name separately, which made the one object on this surface that disobeys the packing rule precisely the victim of that blank. What genuinely must not move is **the leading matrix**, and this change does not touch it: the panel still computes width from `marksWidth`, and both that width and both edges are independent of thread count.
 
-1. **数字是全部子智能体**，等待审批／输入的那些也算在里面——它们同样没结束。不存在第二枚 badge 专门数「在等的那几个」。
-2. **底色说「有没有在等你」**：全在跑是暗底亮字，只要有一个停在审批或输入上就翻成亮底暗字。数字一个像素都不动。
-3. **展开态行内：一行一枚，中性色**——底 `#242424`（`NotchPalette.restingInk` 的熄灭色提一档，`MatrixInk.chipFill`）、字 `#7C7C80`；翻转后底 `#FFFFFF`、字 `#0D0D0F`。这一行本身已经用行归属标记（§4）或 Project 文案说明了它属于哪个产品，badge 不需要再借一次色相去说同一件事。
-4. **收起态：一个产品一枚，染该产品的墨色**，两枚并排在计时之前，Codex 永远在前——顺序与前导翼那对矩阵同一条规则（§3.1），不按紧急程度重排。Codex 全在跑是字 `#6CB4FF` / 底 `#1F2A35`（熄灭色提一档），有在等的翻成字 `#101B26` / 底 `#6CB4FF`；Claude Code 同形，`#D97757` / `#30211C` 与 `#21120D` / `#D97757`。两个产品各自翻转，互不影响。
-5. **没有子智能体的产品没有 badge**，也不为它留位置——与「没有会话的产品没有矩阵」（§3.1）同一条。
-6. **间距**：两枚 badge 之间 `6`，取的就是两个矩阵之间那个 `6`（`PanelMetrics.subagentBadgeSpacing` 直接写成 `compactMatrixSpacing`，不是第二个数字）；badge 与计时之间 `8`。
+**The name changes how it is drawn rather than where it is laid out, and this one has to be written explicitly.** Its slot stays at the reserved position and only the glyphs are drawn back over the unused column space (`offset`), so a Status Readout's width is still "reservation + `12` + a word" at every count, and nothing upstream needs re-measuring. The first version drove it from layout: the width change happened inside the mark owning that column, with `.animation(value:)` attached there, and two HStacks away **it did not arrive as an animation** — the mark slid while the name jumped. The eye is on that name at that moment, so it is the one object here that must not inherit its animation: it is now written explicitly with `withAnimation` on `PanelMotion.columnSlot(isOpening:reduceMotion:)`, the column's own curve.
 
-**为什么色相在行内退回中性、在收起态却染上。** 色相只花在「除它以外没有别的东西能回答『这是谁的』」的地方。一行在上一行 caption 里已经写了产品名，收起态的一条 bar 没有 caption 行——同一枚 badge，同一条既有约束 1（色相表示产品，亮度表示是否需要用户处理），两处的结论不同只是因为上下文不同。
+**Direction matters.** Opening has no delay — the room is made and the name travels with it. Closing waits `0.05 s` with the column, because the dot has to fade out first (`0.08 s`), and a name leaving on time would start moving while the dot is still lit and the column has not begun to close, making two movements out of one. Direction is judged by whether the unused span grows or shrinks: shrinking means a column ahead of it opened. Reduce Motion removes the delay along with the rest — a delay buys ordering between two animations, and `0.08 s` has too little left in it to order.
 
-**为什么不拆成两枚。** 上一版把「在等的」单独画成一枚白 badge 排在前面。它的代价是：**恰恰在需要人处理的那一刻**，一行或一条 bar 上出现两个数字要读。底色本来就能免费说清这件事，而且说得更快。翻转不改变宽度，所以一个产品从「全在跑」变成「有人在等」不会让 bar 上任何东西移动——拆分版会。
+**What this buys is the one anchor worth pinning: the leading matrix never moves.** Not when it opens its own first thread, not when the other product opens one, and not when the timer appears — the notched panel is pinned to the cut-out (`x = trailingAnchor + shoulder − width`) and the trailing wing grows and shrinks with the latter two, so a fixed leading wing means a fixed leading edge. A column opening pushes only the marks after it: Codex's dot appearing pushes Claude Code's matrix and its own column, and the last mark's column pushes nothing. The dots do not move either — they stand at a fixed `2.92` off their own matrix, and that matrix has already come to rest before the dot appears. (`size` rounds the whole panel up while the anchor keeps its fraction, so the leading edge still shifts by under `1` at the instant the timer appears. That is existing rounding, unrelated to this column.)
 
-**「仍在跑」那枚 badge 的底色统一比熄灭色亮一档。** badge 是一块 `15 × 15` 的实心方块，不是矩阵里那种点：铺到这个面积上，熄灭色在纯黑面板里读成一个洞，而不是一枚放在面板上的标记。所以三种暗底（中性灰与两个产品的熄灭色）都在原值上按每个通道 `+0.06` 统一朝白提一档（`MatrixInk.chipFill`）：色相与中性灰的中性都原样保留，三者与背后的黑保持同一段距离。翻转后的亮底不走这一档——它取的是产品自己的点亮色（中性那枚取白），因为亮度在这里就是信号本身。矩阵自己两档都不用，它要的暗度按 §2 不变。
+**Its cost lands where nothing can see it.** The width given up accumulates after the status name: on the notched form that is the wing's black meeting the cut-out's black, with no boundary for a blank to show against; on the notch-less pill it is the `32` between the status name and the timer that was already empty (§3.3). Neither is a boundary and both take width for free — the reservation is spent there rather than between two marks that must read as a pair, or between the marks and the name describing them. The collapsed notched form does not draw a status name at all ([`figma-design.md`](figma-design.md) §6.4), so that form is point-for-point as before; what this change is visible in is the notch-less pill and both forms' expanded top bar.
 
-**已落地**：`SubagentBadge`（值类型：`count` 与 `wantsAttention`）与 `AgentSubagentBadge`（一个产品一枚）在 `MonitorDomain.swift`；`SubagentBadgeView`／`SubagentBadgeRow`／`SubagentBadgeTint` 在 `NotchStatusMatrix.swift` 画它；`CompactTrailingReading.badges` 与 `PanelMetrics.subagentBadgeWidth`／`subagentBadgesWidth`／`compactTrailingReadingWidth`（`MonitorStore.swift`）组成尾翼宽度；聚合口径是 `MonitorStore.compactSubagentBadges`，直接读 `presenceMarks` 上每个产品自己的那一份而不是重新求和，避免一条 bar 的两端对同一份列表给出两个答案。行内那枚读 `MonitoredSession.subagentBadge`，出现条件仍是 `showsSubagentBadge`（计时停了且还有子智能体）。断言：`theBadgePairIsSpacedLikeTheMatrixPair`、`aWaitingBadgeIsTheSameWidthAsARunningOne`、`theCollapsedBadgesAreOnePerProductInAFixedOrder`。
+**The opening and closing motion.** Column width opens and closes on `PanelMotion`'s own `0.20 s` curve, and **the status name reads the same declaration** (`PanelMotion.columnSlot`): something pushed stops looking pushed the moment it times itself, and sharing one curve is what makes it one movement rather than two. Dots only fade, never translate — appearing `0.06 s` late over `0.12 s`, so the space is made before anyone lands in it; disappearing, the dot goes first (`0.08 s`) with the column and name following `0.05 s` later, so it does not read as a still-lit dot being squeezed out. Passing three stretches the same capsule taller, with its height animating alongside the offset that keeps the column's bottom on the matrix's lower edge. Reduce Motion uses `PanelMotion`'s `0.08 s` with no delay. Because panel width no longer varies with thread count, this whole movement happens inside the panel and the window takes no part — the dots are drawn at a fixed `2.92` off the matrix with the column width opening beneath them, so neither needs clipping: a dot reaches at most `5.66`, and the next mark is never closer than the `6` that makes them a pair.
 
-**上一版留下的记录**：§11 页（`812:2`）四选一选中 `C — Numeral Chip`，规则 1–6 曾规定「一个产品染色／两个产品退回中性灰」「白色永远不染色且永远排在前面」「Running 与需要处理是两个独立计数各自一枚」。这三条都已被本节取代——染色改为按产品各染各的（因为现在一个产品一枚，不存在「代表不了谁」的情形），白色改为中性 badge 的翻转态（只在行内），拆分整个取消。示范节点见 `857:2` 的 `01`（行内一枚）与 `03`（收起态一对及其翻转）。
+**Implemented**: `PresenceMark.sessionCount` and `.subagents` (`MonitorDomain.swift`) are computed with the mark, and `MonitorAggregation.marks` counts only that product's own rows; `PresenceMark.drawsSessionColumn` says whether a mark draws the column. `SessionCountDots` (`NotchStatusMatrix.swift`) draws it and owns the open/close. `StatusReadout` (`NotchOverlayView.swift`) frames the mark group into the width `PanelMetrics.marksWidth` reserves, aligned to the leading edge, then offsets the status name back by `PanelMetrics.unpackedColumnRoom(_:matrixSize:)` — the reservation and the drawing use the same expression, the width read out is still the reserved one, and no panel width anywhere has to follow. That offset is written explicitly with `onChange` + `withAnimation`, choosing its curve by direction, and the curve is `PanelMotion.columnSlot(isOpening:reduceMotion:)`, shared with `SessionCountDots`' column width. `PanelMetrics.markWidth` / `marksWidth(_:areProductMarks:)` / `sessionDotColumnWidth` compose it into the width, and not one of them can be told how many threads there currently are; the geometry constants are `PanelMetrics.sessionDot*`, all given as ratios of the matrix's size. Assertions: `eachMarkCountsOnlyItsOwnProductsRows`, `theRestingMarkCountsNothing`, `theSessionDotColumnIsExactlyAsTallAsTheMatrix`, `theSessionDotColumnIsReservedInWidthAndPackedInDrawing`, `theStatusNameKeepsOneDistanceFromTheMarkItNames`, `theStatusNameMovesOnTheColumnsOwnCurve`, `theLeadingMatrixNeverMovesWhateverTheCountsDo`.
 
-## 11. 会话计数点（已定，已实现）
-
-同一页（`857:2`）的另一半：**收起态与展开态顶栏都要说出每个产品各有几行**。
-
-**画在矩阵右边，竖着排。** 先画的是矩阵右侧一枚染色数字方块，读起来最直白，代价是前导翼从 `39.2` 涨到 `83.2`。接着改画在矩阵**下方**——宽度上完全免费，但它花的是高度，而矩阵是从 13pt 标签推出来的固定 `16.6`、不随菜单栏缩放：`46` 档矩阵下方剩 `14.7`，`22` 档只剩 `2.7`，比一个点还窄。实测 `31` 档下那排点距面板下沿只有 `2.0`，再矮两档就整排画不下，只能在那一类屏幕上整个省略——一个在一整类显示器上会消失的计数不算计数。所以最终改成矩阵**右侧的一列竖点**：
-
-| 项目 | 值（矩阵 `16.6` 时） | 来源 |
-| --- | --- | --- |
-| 点直径 | `2.74` | `91` 单位 viewBox 里的 `15` |
-| 点列与矩阵的间距 | `2.92` | 同 viewBox 的 `16` |
-| 行距 | `5.84` | 同 viewBox 的 `32` |
-| 「更多」竖杠 | `4.93` | 同 viewBox 的 `27` |
-| 整列宽 | `5.66` | `2.92 + 2.74` |
-| 整列高 | `16.6` | `2 × 5.84 + 4.93`，**正好是矩阵自己的高度** |
-| 上限 | `3` 点 | — |
-
-> **那个 `91` 曾经是矩阵自己的 viewBox，现在不是了。** 上表每一个数原本都是矩阵自己的数——点落在它的行心上，竖杠就是它的一格。矩阵改成 4×4 之后它的 viewBox 是 `123`（[`figma-design.md`](figma-design.md) §4.1），而这一列**没有跟过去**：按新单位读会得到一枚 `2.02` 的点配 `2.16` 的间距，已经在「一串还数得清」那条线之下，而且整列会从 `5.66` 收到 `4.18`，把这个面上每一个收起态宽度都挪一遍，为的是一件点自己没有份的改动。这一列数的是会话不是格子，所以它留在它读得清的那个尺寸上。整列仍然与标记等高（`2 × 5.84 + 4.93 = 16.6`），下面每一条因此原样成立。
-
-- **一行一点**，从上沿开始按 `5.84` 排。没有会话就没有点。
-- **超过三行：第三个点向下拉长成竖杠**（`dot · dot · dash`），读作「多于三」。整列的下端因此正好落在矩阵的下缘上（`2 × 5.84 + 4.93 = 16.6`）。
-- **整列与矩阵等高，所以它不要任何矩阵原本没有的纵向空间**——这正是它从矩阵下方挪到右侧的全部理由：`46` 档与 `22` 档画得一模一样，不再有「矮菜单栏上整排省略」这条代价。
-- **颜色**：产品自己的点亮色，`85%`，**永不参与动画**。亮度是这个面的注意力通道，计数不是注意力信号。
-- **不指名产品的那枚静息灰矩阵没有点列**——它背后没有产品，也就没有行。
-
-**为什么是圆点而不是 §02 里那条「stack rail」。** 两者位置相同、行距相同，差别只在标记的形状与大小：`3.5 × 4.93` 的方块——与格子同形、与格子等高、只隔一道细缝——在真实尺寸下读成矩阵的第四列；`2.74` 的圆点、略过半格、站开 `2.92`，不会。两种都渲染出来看过，这个对比就是这一列的比例的来源。
-
-**它花的是宽度：每个产品的标记 `5.66`。** 前导翼因此从 `39.2` 变为 `50.5`（双产品）、`16.6` 变为 `22.3`（单产品），刘海形态总宽 `307.6 → 318.9`、`285.0 → 290.7`；无刘海定宽 `218 → 230`、`196 → 201`。静息灰标记没有点列，`Disconnected` 的 `136` 与刘海静息的 `246` 都不受影响。
-
-**尾翼后来又要走 `8`：读数的底座**（[`figma-design.md`](figma-design.md) §4.7／§6.4）。计时读数现在落在一枚 `16` 高、圆角 `4`、左右各 `4` 的底座上——等人时填白、其余时候透明，而**两种情况占一样宽**，理由与上一段计数点宁可预留不肯收放的完全一样。尾翼因此 `28.4 → 36.4`（只有计时）、`51.4 → 59.4`（一枚 badge）、`72.4 → 80.4`（两枚）；刘海形态总宽 `318.9 → 326.9`（双产品）、`290.7 → 298.7`（单产品），无刘海定宽 `230 → 238`、`201 → 209`。`Disconnected` 仍是 `136`：它不会计时，也就没有读数可以给底座。
-
-**宽度上预留，画法上收拢。** 已连接但一行都没有的产品不画那一列，所以静息时两个矩阵之间就是它们自己的 `6`，而不是空列撑出来的 `11.66`——后者已经越过「`8` 就不再读成一对」那条线，而且恰好破在这个面待得最久的状态上：连着，什么都没跑。但**面板照旧按「每个标记都有一列」算宽度**，收拢让出来的那段不还给面板。
-
-**让出来的那段落在状态名之后，不落在它前面。** 这一段最初留在标记那一组的尾端，也就是最后一枚矩阵与状态名之间：两个产品都没有行时，状态名与它旁边那枚矩阵之间是 `12 + 11.3 = 23.3`，而同一眼里两枚矩阵之间只有 `6`——名字读起来不像在说旁边那对标记，而像谁都不属于。这个代价是常驻的，且恰好常驻在这个面待得最久的状态上。改为落在状态名之后，两者之间在任何计数下都是 `expandedReadoutSpacing` 的 `12`。
-
-**代价是状态名跟着列走。** 它排在每一列的后面，而**一列打开就推它后面的所有东西**——名字现在也在那个「后面」里，Codex 开出第一个会话推它 `5.66`，两个产品都开推 `11.3`，起因（那枚点）就出现在它旁边。上一版把名字单独钉住，等于让这个面上唯一不服从收拢规则的对象，恰好是那段空白的受害者。真正不能动的是**前导那枚矩阵**，而这一改动碰不到它：面板照旧按 `marksWidth` 算宽，宽度与两条边都与会话数无关。
-
-**名字动的是画法不是布局，而且这一下必须自己写出来。** 它的槽位仍留在预留位置上，只把字形往回画到没人用的那段空列上（`offset`），所以 Status Readout 的宽度在任何计数下都还是「预留 + `12` + 一个词」，上游没有一处需要重新量。第一版是靠布局推的：宽度变化发生在拥有那一列的那枚标记内部，`.animation(value:)` 也挂在那里，隔着两层 HStack 传到名字这里时**没有传成动画**——标记在滑，名字是跳的。眼睛此刻正落在这个名字上，所以它是这个面上最不能靠继承拿到动画的那一个：现在由 `withAnimation` 显式写入，走 `PanelMotion.columnSlot(isOpening:reduceMotion:)`，也就是那一列自己的曲线。
-
-**方向要分。** 开的时候不延迟——房间先让出来，名字与它同时走；关的时候跟着列一起等 `0.05s`，因为点要先淡出去（`0.08s`），一个准时出发的名字会在点还亮着、列还没开始收的时候先动起来，那就成了两段动作。判断方向看的是「没人用的那段变多还是变少」：变少就是有一列在它前面打开了。Reduce Motion 把延迟和其余一起收掉——延迟买的是两个动画之间的先后，而 `0.08s` 里已经没有足够的东西可排先后了。
-
-**这样买到的是唯一值得钉住的那个锚：前导的那枚矩阵永不移动。** 它自己开出第一个会话时不动，另一个产品开出会话时不动，计时出现时也不动——有刘海形态的面板钉在缺口上（`x = trailingAnchor + shoulder - width`），尾翼在后两项里同增同减，所以只要前导翼是定值，前导边就是定值。一列打开只推它后面的标记：Codex 的点出现，推的是 Claude Code 的矩阵连同它自己的点；最后一个标记的那一列谁也不推。点自己也不动——它站在自有矩阵右侧固定的 `2.92` 上，而那枚矩阵在点出现之前就已经停稳了。（`size` 对整块面板向上取整而锚点保留小数，所以计时出现的那一刻前导边仍有不到 `1` 的位移。那是既有的取整，与这一列无关。）
-
-**它的代价落在看不见的地方。** 让出来的宽度积在状态名之后：有刘海形态上那里是翼的黑接着缺口的黑，没有边界可供一段空白显形；无刘海药丸上那里是状态名与计时之间那段本来就空着的 `32`（§3.3）。两处都不是边界，都能白拿宽度——预留花在这儿，而不是花在两枚必须读成一对的标记中间，也不是花在标记与说明它们的那个名字中间。收起态的有刘海形态根本不画状态名（[`figma-design.md`](figma-design.md) §6.4），所以那一形态与之前逐点等同；改动看得见的是无刘海药丸与两种形态的展开态顶栏。
-
-**开合的动作。** 列宽在 `PanelMotion` 自己的 `0.20s` 曲线上开合，**状态名读同一个声明**（`PanelMotion.columnSlot`）：被推的东西一旦自己计时就不再像被推的，两者共用一条曲线才是一段动作而不是两段。点只淡入淡出，从不平移——出现时晚 `0.06s` 起、`0.12s` 淡入，位先让出来再落人；消失时点先走（`0.08s`），列与名字晚 `0.05s` 再动，免得看成一枚还亮着的点被挤没。过三变竖杠是同一枚胶囊长高，高度与那个让整列下端落在矩阵下缘的偏移一起动。Reduce Motion 走 `PanelMotion` 的 `0.08s`，不加延迟。因为面板宽度不再随会话数变化，这一段动作整个发生在面板内部，窗口本身不参与——点画在矩阵右侧固定的 `2.92` 上、列宽在它下面开合，两者因此也不需要裁切：一枚点最远只够到 `5.66`，而下一枚标记从不近于成对的那 `6`。
-
-**已落地**：`PresenceMark.sessionCount` 与 `.subagents`（`MonitorDomain.swift`）随标记一起算出，`MonitorAggregation.marks` 只数该产品自己的行；`PresenceMark.drawsSessionColumn` 说这枚标记该不该画那一列。`SessionCountDots`（`NotchStatusMatrix.swift`）画那一列并负责开合；`StatusReadout`（`NotchOverlayView.swift`）把这一组标记框进 `PanelMetrics.marksWidth` 预留的那段宽度、靠前导边对齐，再把状态名按 `PanelMetrics.unpackedColumnRoom(_:matrixSize:)` 往回 `offset`——预留与画进去用的是同一个表达式，读出的宽度也仍是预留值，任何一处面板宽度都不必跟着改。那一下由 `onChange` + `withAnimation` 显式写入并按方向选曲线，曲线本身是 `PanelMotion.columnSlot(isOpening:reduceMotion:)`，与 `SessionCountDots` 的列宽共用。`PanelMetrics.markWidth`／`marksWidth(_:areProductMarks:)`／`sessionDotColumnWidth` 把它算进宽度组成，其中没有任何一处能被告知当前有几个会话；几何常量是 `PanelMetrics.sessionDot*`，全部按矩阵尺寸的比例给出。断言：`eachMarkCountsOnlyItsOwnProductsRows`、`theRestingMarkCountsNothing`、`theSessionDotColumnIsExactlyAsTallAsTheMatrix`、`theSessionDotColumnIsReservedInWidthAndPackedInDrawing`、`theStatusNameKeepsOneDistanceFromTheMarkItNames`、`theStatusNameMovesOnTheColumnsOwnCurve`、`theLeadingMatrixNeverMovesWhateverTheCountsDo`。
-
-**展开态顶栏只拿点列，不拿 badge。** 顶栏没有计时可以并排，而它正下方的列表马上就会一行一行把子智能体说一遍，顶上再放一对汇总 badge 只是把同一件事说两遍。Status Readout 预留因此从 `107.2` 变为 `118.5`，齿轮仍停在 `464`，无刘海面板仍是 `520 × 370`（有刘海时这 `11.3` 要面板自己让出来，见 [`figma-design.md`](figma-design.md) §3.2）。**状态名的起点跟着实际画出的那几列走**：两个产品都没有行时仍是 `63.2`（`12 + 39.2 + 12`），一个产品有行是 `68.9`，两个都有是 `74.5`。
+**The expanded top bar takes the dot columns but not the badges.** The top bar has no timer to sit beside, and the list directly beneath it is about to name every subagent row by row, so a summary pair up top says the same thing twice. The Status Readout reservation therefore goes from `107.2` to `118.5`, the gear stays at `464`, and the notch-less panel stays `520 × 370` (on a notched display the panel has to yield those `11.3` itself, see [`figma-design.md`](figma-design.md) §3.2). **The status name's start follows the columns actually drawn**: `63.2` with neither product holding rows (`12 + 39.2 + 12`), `68.9` with one, `74.5` with both.
