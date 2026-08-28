@@ -734,16 +734,10 @@ struct SessionCountDots: View {
         .animation(fadeAnimation, value: hasRows)
     }
 
-    /// The slot opening and closing.
-    ///
-    /// Opening, it leads: the room is made and the dot arrives into it.
-    /// Closing, it waits for the dot to go first — a slot seen shutting on a
-    /// mark that is still lit reads as the mark being crushed rather than
-    /// dismissed, which is the wrong thing to say about a session that ended.
+    /// The slot opening and closing, shared with the status name that stands
+    /// after it — see ``PanelMotion/columnSlot(isOpening:reduceMotion:)``.
     private var slotAnimation: Animation {
-        let base = PanelMotion.animation(reduceMotion: reduceMotion)
-        guard !reduceMotion else { return base }
-        return hasRows ? base : base.delay(Self.closingDelay)
+        PanelMotion.columnSlot(isOpening: hasRows, reduceMotion: reduceMotion)
     }
 
     /// The dot arriving and leaving. Fading only — see the type's note.
@@ -770,7 +764,6 @@ struct SessionCountDots: View {
     private static let fadeInDelay: TimeInterval = 0.06
     private static let fadeInDuration: TimeInterval = 0.12
     private static let fadeOutDuration: TimeInterval = 0.08
-    private static let closingDelay: TimeInterval = 0.05
 
     /// The top edge of one mark, centred in its matrix row. The dash takes the
     /// whole row instead of being centred in it, so the run ends on the
@@ -1544,6 +1537,37 @@ enum PanelMotion {
         reduceMotion
             ? CAMediaTimingFunction(name: .easeOut)
             : CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+    }
+
+    /// How long a closing session column waits before it starts shutting.
+    ///
+    /// Long enough for the dot inside it to be most of the way out — see
+    /// ``columnSlot(isOpening:reduceMotion:)``.
+    static let columnClosingDelay: TimeInterval = 0.05
+
+    /// A session column's room opening and closing — and therefore how anything
+    /// standing after that room moves when it does.
+    ///
+    /// Opening, it leads: the room is made and the dot arrives into it. Closing,
+    /// it waits for the dot to go first — a slot seen shutting on a mark that is
+    /// still lit reads as the mark being crushed rather than dismissed, which is
+    /// the wrong thing to say about a session that ended.
+    ///
+    /// **Read by the column and by the status name that follows it**
+    /// (``SessionCountDots``, `StatusReadout`). The name is not moving on its
+    /// own account: it is downstream of the column, so it is being *pushed*, and
+    /// a pushed thing that keeps its own timing stops reading as pushed. Sharing
+    /// one declaration is what makes the room and the name one movement instead
+    /// of two — including on the way out, where a name that left on time would
+    /// set off while the dot was still lit and the room had not begun to close.
+    ///
+    /// Reduce Motion takes the delay away with the rest of it. The delay buys an
+    /// order between two animations, and at `0.08` there is not enough of either
+    /// left to order.
+    static func columnSlot(isOpening: Bool, reduceMotion: Bool) -> Animation {
+        let base = animation(reduceMotion: reduceMotion)
+        guard !reduceMotion else { return base }
+        return isOpening ? base : base.delay(columnClosingDelay)
     }
 }
 

@@ -334,6 +334,11 @@ private struct StatusReadout: View {
     let markSpacing: CGFloat
     let reduceMotion: Bool
 
+    /// How far the label is drawn back over its own slot, animated on the
+    /// column's curve. Held rather than computed so the write that moves it can
+    /// say which way the room went.
+    @State private var slide: CGFloat = 0
+
     var body: some View {
         HStack(spacing: spacing) {
             if drawsMarks {
@@ -365,47 +370,84 @@ private struct StatusReadout: View {
                         }
                     }
                 }
+                // **The anchor.** The marks are given the room every column
+                // would take and packed into it from the leading edge, so the
+                // first matrix stands in one place whatever the counts do: a
+                // column opening pushes only the marks after it, and the last
+                // mark's column pushes nothing.
+                //
+                // This is `PanelMetrics.marksWidth`, the same expression the
+                // panel is measured from (``MonitorStore/currentPanelSize``),
+                // so the room reserved and the room drawn into cannot drift.
+                .frame(width: reservedMarksWidth, alignment: .leading)
             }
 
             if showsText {
-                // **The label rides with the marks.** It is downstream of every
-                // column, and everything downstream of a column moves when that
-                // column opens -- so it takes the same push the marks after it
-                // take, on the same curve, and keeps one distance from the mark
-                // it names at every session count. Held still instead, it sat
-                // `23.3` from the last matrix while the pair sat at their own
-                // `6`, and read as belonging to nothing.
+                // **The label rides with the marks, by its drawing and not by
+                // its layout.** Its slot stays where the reservation put it and
+                // the glyphs are drawn back over the room no column is using,
+                // which is the same trick the dot itself is placed with (see
+                // ``SessionCountDots``) -- and the reason the readout is still
+                // exactly ``PanelMetrics/marksWidth`` plus a gap plus a word,
+                // whatever the counts are doing.
+                //
+                // Everything inside the label is framed to its own glyph raster
+                // rather than to its bounds, and its sweep is installed against
+                // that raster too, so a translation costs it nothing: no
+                // re-rasterising, no sweep rebuilt, no hand-over disturbed.
                 SearchlightLabel(
                     text: text,
                     isSweeping: isActive && !reduceMotion,
                     reduceMotion: reduceMotion
                 )
+                .offset(x: slide)
             }
         }
         .fixedSize(horizontal: true, vertical: false)
-        // **The reservation, spent past the label rather than in front of it.**
-        // The marks are given the room every column would take
-        // (``PanelMetrics/marksWidth``, the same expression the panel is
-        // measured from) and pack into it from the leading edge, so the first
-        // matrix stands in one place whatever the counts do. What they do not
-        // use is this, and it lands here, at the far end of the readout:
-        // against the cut-out on a notched display, in the empty run before the
-        // timer on a pill -- neither of which has a boundary for a gap to show
-        // against. The two together are exactly ``PanelMetrics/marksWidth``, so
-        // the room reserved and the room drawn into still cannot drift and no
-        // panel width answers to a session count.
+        // Moved by an explicit write on the column's own curve rather than by
+        // inheriting one. A packed mark's width change animates inside the mark
+        // that owns it; two stacks out, at the label, that arrived as a jump --
+        // the marks glided and the name snapped. What the eye is on here is the
+        // name, so it is the one thing on this surface that cannot be left to
+        // inherit.
         //
-        // Unanimated on purpose. It moves the readout's trailing edge, which
-        // has a `Spacer` behind it and nothing drawn against it; the edge the
-        // eye is on is the label's, and that one rides the slot's own curve
-        // because the packed marks it follows are what animate.
-        .padding(.trailing, unpackedColumnRoom)
+        // On the readout and not on the label, which is drawn only where there
+        // is room for a word (``showsStatusText``): tracked from inside that
+        // branch, a collapsed notched surface would stop following the counts
+        // and hand the panel a stale offset to open with.
+        .onChange(of: unpackedColumnRoom, initial: true) { previous, room in
+            // The first application is the readout being built, not a column
+            // moving: take the position rather than animating to it.
+            guard previous != room else {
+                slide = -room
+                return
+            }
+            // Less room going unused means a column opened ahead of the label
+            // and is pushing it along.
+            withAnimation(
+                PanelMotion.columnSlot(
+                    isOpening: room < previous,
+                    reduceMotion: reduceMotion
+                )
+            ) {
+                slide = -room
+            }
+        }
     }
 
-    /// The reserved column room no mark is standing in, drawn at the readout's
-    /// trailing end -- see ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``.
+    /// The reserved column room no mark is standing in, which is how far back
+    /// over its own slot the label is drawn -- see
+    /// ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``.
     private var unpackedColumnRoom: CGFloat {
         PanelMetrics.unpackedColumnRoom(marks, matrixSize: matrixSize)
+    }
+
+    /// The room the panel has already reserved for the marks.
+    private var reservedMarksWidth: CGFloat {
+        PanelMetrics.marksWidth(
+            marks.count,
+            areProductMarks: marks.contains { $0.agent != nil }
+        )
     }
 
     /// The label sweeps if *any* mark is in flight. There is one label for both

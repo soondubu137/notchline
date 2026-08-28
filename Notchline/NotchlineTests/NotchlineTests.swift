@@ -2094,6 +2094,37 @@ struct NotchlineTests {
         }
     }
 
+    /// The name moves on the column's own curve, because it is the column
+    /// pushing it.
+    ///
+    /// A pushed thing that keeps its own timing stops reading as pushed, so
+    /// there is one declaration and both the room and the name read it. The
+    /// asymmetry is the part worth pinning: the room leads on the way in and
+    /// waits for the dot on the way out, and the name has to do both.
+    @Test @MainActor
+    func theStatusNameMovesOnTheColumnsOwnCurve() {
+        let base = PanelMotion.animation(reduceMotion: false)
+        // Opening, the room is made first and the dot arrives into it.
+        #expect(PanelMotion.columnSlot(isOpening: true, reduceMotion: false) == base)
+        // Closing, it waits: a name that left on time would set off while the
+        // dot was still lit and the room had not begun to shut.
+        #expect(
+            PanelMotion.columnSlot(isOpening: false, reduceMotion: false)
+                == base.delay(PanelMotion.columnClosingDelay)
+        )
+        #expect(
+            PanelMotion.columnSlot(isOpening: true, reduceMotion: false)
+                != PanelMotion.columnSlot(isOpening: false, reduceMotion: false)
+        )
+
+        // Reduce Motion takes the delay away with the rest of it. The delay
+        // buys an order between two animations, and at `0.08` there is not
+        // enough of either left to order.
+        let reduced = PanelMotion.animation(reduceMotion: true)
+        #expect(PanelMotion.columnSlot(isOpening: true, reduceMotion: true) == reduced)
+        #expect(PanelMotion.columnSlot(isOpening: false, reduceMotion: true) == reduced)
+    }
+
     /// The leading matrix stands in one place, whatever the counts do.
     ///
     /// This is the whole reason the column is reserved rather than packed out

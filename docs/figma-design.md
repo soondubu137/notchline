@@ -173,7 +173,7 @@ bottomCornerRadius = max(0, menuBarHeight) / 4  // 下圆角
 
 ### 4.2 Status Readout
 
-Compact 与 Expanded 两个 Context 都提供完整状态文本。Expanded 组内圆点—名称间距为 `12`，且**在任何会话计数下都是 `12`**：会话计数点列预留而没画出来的那段落在状态名之后，名字因此跟着实际画出的标记走（[`dual-agent-design.md`](dual-agent-design.md) §11）。状态名称不得被物理刘海遮挡。
+Compact 与 Expanded 两个 Context 都提供完整状态文本。Expanded 组内圆点—名称间距为 `12`，且**在任何会话计数下都是 `12`**：会话计数点列预留而没画出来的那段落在状态名之后，名字因此跟着实际画出的标记走，并与那一列共用同一条开合曲线（[`dual-agent-design.md`](dual-agent-design.md) §11）。状态名称不得被物理刘海遮挡。
 
 ### 4.3 Usage Ring 与 Indicator
 
