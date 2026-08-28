@@ -1,119 +1,114 @@
-# Codex in Notch
+# Notchline — Terminology
 
-Codex in Notch 以低干扰方式汇总用户当前仍需要关注的处理轮次，并提供返回原会话的入口。被监视的产品目前是 Codex Desktop 与 Claude Code。
+Notchline summarises, with minimal interruption, the Turns a user still needs to attend to, and offers a way back into the originating Thread. The monitored products are Codex Desktop and Claude Code.
 
-## Language
+Words are settled here. Any naming disagreement in code, docs or commit messages is resolved against this file, and each *Avoid* list is banned wording, not merely discouraged wording.
 
-**产品（Product）**：
-被监视的一个智能体产品，目前是 Codex 与 Claude Code。产品是用户看得见的概念：矩阵的色相、行内归属、页脚的一条额度规则都按产品区分。
-_Avoid_: 后端、数据源、集成、Agent
+## Products and adapters
 
-**提供者（Provider）**：
-应用内部把一个产品的边界信号翻译成 `AgentSnapshot` 的适配器，与产品一一对应。它是实现概念，不出现在任何用户可见文案里。
-_Avoid_: 服务、客户端、Monitor
+**Product** — A monitored agent product; today Codex and Claude Code. A product is user-visible: matrix hue, row attribution and the footer's quota rules are all per product.
+*Avoid:* backend, data source, integration, agent.
 
-**会话（Thread）**：
-一个长期存在、可包含多个处理轮次的 Codex 对话容器。
-_Avoid_: 任务、Session、单次请求
+**Provider** — The in-app adapter that translates one product's boundary signals into an `AgentSnapshot`, one per product. An implementation concept that never appears in user-visible copy.
+*Avoid:* service, client, monitor.
 
-**可导航根会话**：
-不隶属于其他会话，并且能在 Codex Desktop 中以相同身份直接打开的会话。**这是一个要产品自己回答的问题，而且只有肯定回答才算数**：产品交出这条 Thread 并且它通过判定时才是；没问到、或者产品答「没有这条 thread」，都不是（见 [ADR 0017](docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。
-_Avoid_: 相关会话、所有本地会话、子智能体会话
+## Threads and Turns
 
-**侧边会话（Side chat）**：
-在一条会话内部开出的临时旁支，只在父会话的界面里列出，关掉应用即消失。**两个产品各有一个，形状不同，结论相同：本应用对它都不成行。** Codex 的是 ephemeral thread：有自己的 thread id、照常触发 Turn hook，但不落盘、不被列出、`thread/read` 拒绝它、也没有 deep link；把它和父会话连起来的关系只存在于 Desktop 进程内存里。因此它**不是**可导航根会话，也无法归到父会话名下（见 [ADR 0017](docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)）。Claude Code 的是 Claude Desktop 开出的只读 fork（`settingSources: []`、`persistSession: false`），它连本应用的观察面都碰不到：不触发任何 hook、不进 `claude agents --json`、不写 transcript。**那一条不是一条规则挡下来的，是它本来就说不出话**——不需要、也不应该为它写判定。
-_Avoid_: 子会话、临时会话、子智能体
+**Thread** — A long-lived conversation container that may hold many Turns.
+*Avoid:* task, session, single request.
 
-**处理轮次（Turn）**：
-一个会话中由一次用户提交发起、直到成功、失败或取消终态的处理周期。
-_Avoid_: 会话、任务、运行
+**Turn** — One processing cycle inside a Thread, opened by a user submission and closed by success, failure or cancellation.
+*Avoid:* thread, task, run.
 
-**实时监视会话**：
-包含仍处于监视生命周期中的处理轮次的可导航根会话；它是展开列表的一行。
-_Avoid_: 最近会话、历史会话、所有未归档会话
+**Navigable root Thread** — A Thread that belongs to no other Thread and can be opened in its product under the same identity. **The product answers this itself, and only "yes" counts**: the product hands over the Thread and it passes the check. Never asking, or an answer of "no such thread", is not a yes ([ADR 0017](docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)).
+*Avoid:* related thread, all local threads, subagent thread.
 
-**监视生命周期**：
-从用户提交输入开始；活动轮次始终持续，终态轮次在该产品的桌面端已读、归档、删除或失去可导航性时结束。终端里的 Claude Code 会话按它自己的终端回答已读（见「未读终态」）。已读**问不出来**的终态轮次——既没有桌面端记录、也没有控制终端可问的那些——只在该会话的下一次提交、会话消失或用户手动移除时结束。**手动移除**指用户在那一行上右键，或清空整张列表；它只对终态轮次成立，且只结束这一个轮次的行，不删除任何会话，也不声称用户读过。
-_Avoid_: 执行生命周期、固定保留时间、最近 N 条
+**Side chat** — A temporary branch opened inside a Thread, listed only in its parent's UI and gone when the app closes. **Each product has one; they differ in shape and reach the same conclusion — neither can become a row here.** Codex's is an ephemeral thread: it has its own thread id and fires Turn hooks as usual, but is never persisted, never listed, refused by `thread/read`, and has no deep link; its link to the parent exists only in Desktop's process memory. So it is not a navigable root Thread and cannot be filed under its parent (ADR 0017). Claude Code's is a read-only fork opened by Claude Desktop (`settingSources: []`, `persistSession: false`) that never reaches this app's observation surface at all — no hooks, absent from `claude agents --json`, no transcript. **That one is not stopped by a rule; it simply never speaks**, so no check is needed and none is written.
+*Avoid:* sub-thread, temporary thread, subagent.
 
-**当前状态快照**：
-在应用启动、重连或校正时，由当前活动投影与未读终态共同形成的完整观察；它决定当前会话列表与状态。
-_Avoid_: 历史事件回放、旧列表缓存、最近一次事件
+**Live monitored Thread** — A navigable root Thread holding a Turn still inside the monitoring lifecycle. It is one row of the expanded list.
+*Avoid:* recent thread, historical thread, every unarchived thread.
 
-**当前活动投影**：
-随处理轮次开始、等待和结束边界持续更新，只包含此刻仍活动的精确会话与轮次身份；终态和历史对象不属于该集合。
-_Avoid_: 历史事件、旧 Running 缓存、最近活动列表
+**Monitoring lifecycle** — Starts at a user submission. Active Turns always continue; a terminal Turn ends once that product's desktop app records it as read, archived, deleted, or no longer navigable. A Claude Code Thread hosted in a terminal answers "read" from its own terminal (see *Unread terminal state*). A terminal Turn whose read state **cannot be asked about** — no desktop record and no controlling terminal — ends only at the Thread's next submission, when the Thread disappears, or on manual dismissal. **Manual dismissal** is a right-click on the row, or clearing the list; it applies only to terminal Turns, ends only that one Turn's row, deletes no Thread, and claims nothing about the user having read it.
+*Avoid:* execution lifecycle, fixed retention, last N.
 
-**实时生命周期事件**：
-在本次监视运行期间新发生、可对当前状态快照做增量更新的生命周期变化。
-_Avoid_: 历史日志、持久化状态、完整快照
+## Snapshots and events
 
-**历史生命周期事件**：
-发生在本次监视运行之前的一次性生命周期记录；记录本身不能证明任何会话当前仍存在或处于某种状态。
-_Avoid_: 待恢复状态、启动快照、历史 Stop 状态
+**Current state snapshot** — The complete observation formed at launch, reconnect or correction, from the current activity projection together with unread terminal state. It decides the current Thread list and their statuses.
+*Avoid:* historical event replay, cached old list, last event seen.
 
-**未读终态**：
-处理轮次已进入终态，但对应会话仍未被用户查看。**证据按产品各自取源**：Codex 是 Desktop 的未读集合（蓝点）；Claude Code 是四条路径之一，它们是同一句话的四种形状——**答案在用户面前时，用户做了一个只有人会做的动作**：Claude Desktop 记录的「最后一次把该会话显示在屏幕上」的时刻晚于该轮次终止时刻（含归档）；或该轮次结束之后 Claude Desktop 回到前台且它最后显示的就是这个会话；或 Claude Desktop 此刻持有前台、屏幕醒着未锁、而它屏幕上的就是这个会话；或该会话曾带着已结束的轮次停在 Claude Desktop 的屏幕上，而 Desktop 此后把别的会话放了上去。第三条**不要求用户做任何事**，因而也是唯一一条可能撤掉没人读过的行的路径：轮次结束那一刻，盯着看的人和提交完就走的人在任何信号上都没有区别，产品因此不再分辨他们，而是问「答案是否摆在一块有人可能正在看的屏幕上」，并接受走开的那个人丢掉通知。**终端里的 Claude Code 会话有第五条路径，而且不问 Claude Code**：该会话**控制终端的访问时间**晚于该轮次终止时刻即已读——敲键、那个界面拿到前台、那个界面失去前台，都会让内核盖章，而不在屏幕上的界面一个字节也收不到。它同样是「答案在用户面前时，用户做了一个只有人会做的动作」，并且是按会话而不是按应用成立的，因此这一半**不需要**第三条那种不要求任何动作的规则，也不设。**五条互为平级、任一成立即已读**：开着远程控制的会话同时在终端和 Claude Desktop 面前，两边由不同手势读，把第五条写成前四条的兜底会让在终端里读完的那一行永远不走。**只有既没有桌面端记录、也没有控制终端可问的会话**（`-p` 且输出被管道接走）才是无从回答：它们的终态既不是未读也不是已读，那样的行不因已读退出（见 [ADR 0012](docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）。
-_Avoid_: 最近完成、短暂终态、Notch 未读
+**Current activity projection** — Updated continuously at Turn start, wait and end boundaries; it holds only the exact Thread and Turn identities active right now. Terminal and historical objects are not members.
+*Avoid:* historical event, stale Running cache, recent-activity list.
 
-**Project**：
-会话所属的分组，按产品解析。Codex 中是 Codex Desktop 里由用户创建和管理、可以包含一个或多个仓库的会话分组；**Codex 会话的 Project 不得从 `cwd`、Git 根目录或路径名推断**，因为这些对象与用户管理的 Desktop Project 并非一一对应（见 [ADR 0003](docs/adr/0003-use-codex-desktop-project-identity.md)）。Claude Code 中就是会话的工作目录（`cwd`）：它由 Hook payload 直接给出，transcript 也据此归档，是该产品真实存在的分组单位，而不是从路径推断出的近似值（见 [ADR 0009](docs/adr/0009-resolve-project-per-product.md)）。
-_Avoid_: 仓库、workspace、Mock 分组
+**Live lifecycle event** — A lifecycle change occurring during this monitoring run, able to update the current state snapshot incrementally.
+*Avoid:* history log, persisted state, full snapshot.
 
-**Chats**：
-Codex Desktop 中不属于任何 Project 的会话集合。
-_Avoid_: 默认 Project、未知 Project
+**Historical lifecycle event** — A one-off record of a lifecycle change from before this run. The record proves only that a hook configuration once executed; it cannot prove any Thread exists now or is in any state.
+*Avoid:* state awaiting recovery, launch snapshot, historical Stop state.
 
-**会话标题**：
-Codex Desktop 当前为会话显示的标题；尚无标题且不允许使用内容回退时称为 `Untitled`。
-_Avoid_: 文件夹名、仓库名、Mock 标题
+**Unread terminal state** — The Turn has reached a terminal state but its Thread has not been looked at. **Evidence is sourced per product.** Codex uses Desktop's unread set (the blue dot). Claude Code uses any one of five paths, which are one sentence in five shapes — *while the answer was in front of the user, the user did something only a person does*:
 
-**处理时间**：
-与 Codex Desktop 当前处理轮次显示一致的墙钟经过时间，包含等待人工处理和设备睡眠期间。
-_Avoid_: 模型计算时间、活跃执行时间、会话年龄
+1. Claude Desktop's record of when it last put that Thread on screen is later than the Turn's end (archiving included);
+2. after the Turn ended, Claude Desktop returned to the foreground and that Thread was the last one it displayed;
+3. Claude Desktop holds the foreground now, the screen is awake and unlocked, and that Thread is what is on it;
+4. the Thread once sat on Claude Desktop's screen carrying a finished Turn, and Desktop has since put a different Thread there;
+5. **for a Thread hosted in a terminal, without asking Claude Code:** the Thread's **controlling terminal's access time** is later than the Turn's end. Typing, that surface taking the foreground and that surface losing it all make the kernel stamp it, while a surface that is not on screen receives no byte.
 
-**会话状态**：
-实时监视会话当前处理轮次的产品状态，只有四个值：Approval needed、Input needed、Running、Completed（这也是汇总与排序的优先级顺序，[`docs/PRD.md`](docs/PRD.md) §6.2）。缺失、超时或未知信号不创建第五种状态，只保留最后可信值。四态对两个产品是同一套词汇——某个产品能观察到而另一个观察不到的状态，会让这套词汇在另一个产品上说谎（见「终态原因」）。
-_Avoid_: 集成状态、Idle、Disconnected、Unknown、Error、Cancelled
+Path 3 **asks nothing of the user**, which makes it the only path that can retire a row nobody read: at the moment a Turn ends, the person watching and the person who submitted and walked away are identical on every signal, so the product stops telling them apart and asks instead whether the answer is sitting on a screen someone may be looking at — accepting that whoever walked away loses the notification. Path 5 holds per Thread rather than per app, so that half needs no equivalent of path 3 and has none.
 
-**派生状态**：
-「这条 Thread 现在是什么情况」的答案，由**会话状态**加随行数据算出，不是第五种状态。会话状态答的是**这一个轮次**，派生状态答的是**这条 Thread**，两者有两处分叉，都因子智能体而起，**两个产品都会走到**（Codex 用 `spawn_agent` 派生，Claude Code 的 `Agent` 工具调用在子智能体启动的那一刻就返回，所以两边的轮次都可以在自己派生的活还在跑的时候到达 `Stop`）：
+**The five are peers; any one of them means read.** A Thread with remote control on sits in front of both a terminal and Claude Desktop, read by a different gesture on each side, so demoting path 5 to a fallback behind the others would leave a row read in the terminal on the notch forever. **Only a Thread with neither a desktop record nor a controlling terminal** (`-p` with output piped away) is unanswerable: its terminal state is neither read nor unread, and such a row never leaves on read ([ADR 0012](docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)).
+*Avoid:* recently completed, brief terminal state, notch unread.
 
-- **还在干活**：轮次已经 Completed 而子智能体还在跑——会话状态是 Completed（轮次的确结束了），派生状态是 Running（这条 Thread 的确还在工作）。
-- **有人被问**：某个子智能体停在审批对话框上——派生状态是 Approval needed，压过上一条，但不压过轮次自己的 Input needed。**后半句是优先级表的一条例外，不是它的应用**：表排的是两行之间谁更重要（Approval 在前），这里问的是同一行的两个读数谁还成立——审批被拒之后两个产品都不发事件，所以随后到达的那个提问是更新的那一个。这一条与轮次是不是终态无关：对话框可以开在主智能体结束之前，也可以开在之后。
-- **停下来等自己的活**：轮次已经 Completed、子智能体也已经收尾，而那一轮的 `Stop` 当时说的是「暂停」而不是「结束」——派生状态仍是 Running，直到该 Thread 的下一个终态说没有活在飞了。**只有 Claude Code 会走到这一条**，因为只有它说得出来：它的 `Stop` 带 `background_tasks`，官方描述就是「让 hook 区分『会话结束了』与『会话正暂停等待后台工作把它叫醒』」，而它把父轮次叫醒的间隔实测只有 50–130 ms。没有这一条，那 50 ms 里行会写一次 Completed 再写回 Running——一个这条 Thread 从未经历过的状态。
+## Status
 
-读它的只有那些本来就在问后一个问题的规则：汇总状态、产品标记、列表排序、终态未读成员关系门。**行自己画什么绝不读它**——行报告的是它那一个轮次。唯一的例外是行尾那一格的**亮度**：它不改变行画什么，只说出这条 Thread 是不是在等人。
-_Avoid_: 第五态、Thread 状态、Running（不加限定）
+**Thread status** — The product status of a live monitored Thread's current Turn. Four values only: Approval needed, Input needed, Running, Completed — which is also the summary and sort priority order ([`docs/PRD.md`](docs/PRD.md) §6.2). A missing, timed-out or unknown signal creates no fifth status; the last trustworthy value is held. The four are one vocabulary shared by both products: a status one product can observe and the other cannot would make that vocabulary lie on the other (see *Terminal reason*).
+*Avoid:* integration status, Idle, Disconnected, Unknown, Error, Cancelled.
 
-**终态原因**：
-处理轮次进入 Completed 的原因：正常结束，或失败并带一个失败类型。它是随行数据而非第五种状态——Claude Code 的 `StopFailure` 能报告失败，Codex 的 Hook 完全不报告，所以把它做成状态会让 Codex 的行看起来"从不失败"。行上的标记不变，原因以文字呈现，并受预览开关约束。
-_Avoid_: Failed 状态、第五态、Error
+**Derived status** — The answer to "what is going on with this Thread now", computed from Thread status plus accompanying data. It is not a fifth status: Thread status answers for **this one Turn**, derived status answers for **this Thread**. They diverge in three places, all caused by subagents, and **both products reach them** (Codex forks with `spawn_agent`; Claude Code's `Agent` tool call returns the moment the subagent starts, so a Turn on either side can reach `Stop` while work it forked is still running):
 
-**在场（Presence）**：
-某个产品此刻是否处于打开状态，与本应用能否观察它无关。它按产品各自取源：Codex 是应用是否正在运行，Claude Code 是活跃会话列表是否非空——没有应用可问时，会话列表就是在场信号。**在场只回答「有没有打开」，绝不回答「在做什么」**：前者画出矩阵，Turn reducer 点亮它，两者不得重新合并。在场有三个取值——已打开、未打开、未知；未知是唯一答案来源失效超过可信上限时的取值，它与未打开一样不构成「已连接」。
-_Avoid_: 可用性、连接状态、是否有会话在跑
+- **Still working** — the Turn is Completed while a subagent runs on. Thread status is Completed (the Turn did end); derived status is Running (the Thread is indeed still working).
+- **Someone was asked** — a subagent is stopped at an approval dialogue. Derived status is Approval needed, which beats the case above but does not beat the Turn's own Input needed. **That last clause is an exception to the priority table, not an application of it**: the table ranks which of two rows matters more (Approval first), whereas here two readings of the same row compete, and since neither product emits an event when an approval is declined, the question that arrived later is the one still standing. This holds whether or not the Turn is terminal — the dialogue may open before or after the main agent finishes.
+- **Stopped, waiting on its own work** — the Turn is Completed, subagents have wrapped up, and that Turn's `Stop` meant "paused" rather than "finished". Derived status stays Running until the Thread's next terminal state says nothing is in flight. **Only Claude Code reaches this**, because only it can say so: its `Stop` carries `background_tasks`, documented precisely so a hook can tell "the session ended" from "the session is paused, waiting for background work to wake it", and the measured gap before the parent Turn wakes is only 50–130 ms. Without this case, the row would write Completed and then write Running back inside that 50 ms — a state the Thread never occupied.
 
-**已连接**：
-某个产品同时**已打开**且**可观察**。两者是独立事实并且可以互相矛盾——打开了但 hook 未注册就是普通的首次运行——所以只有两者都成立才算已连接。
-_Avoid_: 已打开、集成可用、Ready
+Only the rules already asking that second question read it: summary status, product markers, list sorting, and the terminal-unread membership gate. **What a row draws never reads it** — a row reports its one Turn. The single exception is the **brightness** of the trailing cell, which does not change what the row draws and only says whether this Thread is waiting on a person.
+*Avoid:* fifth status, Thread status, unqualified "Running".
 
-**汇总状态**：
-由所有实时监视会话归并得到、显示在顶部的单一状态。跨产品归并：任一产品有会话时按会话优先级取值；所有产品都没有会话时，收起态取值只有两个——有产品**已连接**时是 `Connected`，一个都没有时是 `Disconnected`。集成可用性不再在收起态说话，只在展开面板与设置中说明原因。
-_Avoid_: 全局会话、连接状态、Idle
+**Terminal reason** — Why a Turn reached Completed: it finished normally, or it failed with a failure type. This is accompanying data, not a fifth status — Claude Code's `StopFailure` can report failure and Codex's hooks report none at all, so making it a status would make Codex rows look as though they never fail. The row's marker is unchanged; the reason is shown as text, subject to the preview switch.
+*Avoid:* Failed status, fifth status, Error.
 
-**断开（Disconnected）**：
-作为**汇总状态**时，它的含义是「没有任何编码智能体处于已连接状态」，而不是「没有任何编码智能体打开」——打开了却够不着的东西，确实是断开的。作为**单个产品**的事实时，指该产品的实时监视集成不再可靠，因而不能可信地产生它的会话集合；此时它的矩阵与行一起消失——与"该产品没有会话"同形，因为对用户来说结论相同。失去观察是过渡而不是状态：矩阵先落到各自的熄灭色（保留色相，因而看得出是哪个产品暗了），行随之排空，随后整体落到 `Disconnected`。
-_Avoid_: 单会话未知、额度不可用、预览不可用、全局断开、没有智能体打开
+## Connectivity
 
-**集成可用性**：
-本应用与某一个产品之间的实时观察和导航契约是否可用，按产品各自成立。
-_Avoid_: 会话状态、额度状态、全局可用性
+**Presence** — Whether a product is open right now, independent of whether this app can observe it. Sourced per product: Codex by whether the app is running, Claude Code by whether the active-session list is non-empty — with no app to ask, the session list is the presence signal. **Presence answers only "is it open", never "what is it doing"**: presence draws the matrix and the Turn reducer lights it, and the two must not be recombined. It has three values — open, not open, and unknown; unknown is what it takes when the only source of an answer has been failing past the trustworthy limit, and like "not open" it does not amount to Connected.
+*Avoid:* availability, connection state, whether any thread is running.
 
-**当前内容预览**：
-产品已经显示给用户的 prompt、进度、错误或最终回答的短片段。原始推理与工具细节不在其中——这条通道没有去取它们，不是它们被禁止（见 [`docs/PRD.md`](docs/PRD.md) 第 7 节）。
-_Avoid_: 智能体思考、raw reasoning、完整正文
+**Connected** — A product that is both **open** and **observable**. These are independent facts and may contradict each other — open but with hooks unregistered is an ordinary first run — so only both together count as Connected.
+*Avoid:* open, integration available, Ready.
 
-**主额度窗口**：
-当前 Codex Desktop 账户标记为 primary、由单一额度圆环表达的 rate-limit window。
-_Avoid_: token 余额、总额度、最紧张窗口
+**Integration availability** — Whether the live observation and navigation contract between this app and one product holds. Established per product.
+*Avoid:* thread status, quota status, global availability.
+
+**Summary status** — The single status shown at the top, merged from all live monitored Threads across products. With Threads present in any product, it takes the value by Thread priority; with no Threads anywhere, the collapsed state has just two values — `Connected` if any product is connected, `Disconnected` if none is. Integration availability no longer speaks in the collapsed state; it explains itself in the expanded panel and in settings.
+*Avoid:* global thread, connection state, Idle.
+
+**Disconnected** — As a **summary status** it means "no coding agent is connected", not "no coding agent is open" — something open but out of reach is genuinely disconnected. As a fact about **one product** it means that product's live monitoring integration is no longer reliable and so cannot produce its Thread set trustworthily; its matrix then disappears along with its rows, indistinguishable from "that product has no Threads", because for the user the conclusion is the same. Losing observation is a transition, not a state: each matrix falls to its own extinguished colour first (keeping its hue, so it stays visible which product went dark), the rows drain after it, and only then does the whole fall to `Disconnected`.
+*Avoid:* single-thread unknown, quota unavailable, preview unavailable, global disconnect, no agent open.
+
+## Content
+
+**Project** — The grouping a Thread belongs to, resolved per product. In Codex it is the Thread grouping the user creates and manages in Codex Desktop, which may span one or more repositories; **a Codex Thread's Project must never be inferred from `cwd`, the Git root or a path name**, as those do not map one-to-one onto a user-managed Desktop Project ([ADR 0003](docs/adr/0003-use-codex-desktop-project-identity.md)). In Claude Code it is simply the Thread's working directory (`cwd`): the hook payload states it directly and transcripts are filed by it, so it is a grouping that genuinely exists in that product rather than an approximation read off a path ([ADR 0009](docs/adr/0009-resolve-project-per-product.md)).
+*Avoid:* repository, workspace, mock grouping.
+
+**Chats** — The set of Codex Desktop Threads belonging to no Project.
+*Avoid:* default Project, unknown Project.
+
+**Thread title** — The title Codex Desktop currently displays for the Thread; `Untitled` where there is none yet and a content fallback is not permitted.
+*Avoid:* folder name, repository name, mock title.
+
+**Processing time** — Wall-clock elapsed time matching what Codex Desktop shows for the current Turn, including time spent waiting on a person and time the device spent asleep.
+*Avoid:* model compute time, active execution time, thread age.
+
+**Current content preview** — A short fragment of the prompt, progress, error or final answer the product has already shown the user. Raw reasoning and tool detail are not in it because this channel never fetched them, not because they are forbidden ([`docs/PRD.md`](docs/PRD.md) §7).
+*Avoid:* agent thinking, raw reasoning, full body.
+
+**Primary quota window** — The rate-limit window the current Codex Desktop account marks as primary, expressed by the single quota ring.
+*Avoid:* token balance, total quota, tightest window.

@@ -1,231 +1,148 @@
-# Codex in Notch — Agent Constraints
+# Notchline — Agent Constraints
 
-This file applies to the whole repository, including every subdirectory. Any agent working here must follow the constraints below.
-
----
+This file applies to the whole repository, including every subdirectory.
 
 ## 1. What this project is
 
-A macOS overlay that sits at the top of the screen. It summarizes, with minimal interruption, the Codex Desktop turns the user still needs to attend to, and offers a way back into the originating thread. Collapsed, it hugs the notch or menu bar; on hover it expands into a list of live monitored threads.
+A macOS overlay at the top of the screen. It summarises, with minimal interruption, the Turns from Codex Desktop and Claude Code that the user still needs to attend to, and offers a way back into the originating Thread. Collapsed, it hugs the notch or menu bar; on hover it expands into a list of live monitored Threads.
 
-**Terminology comes before code.** Words like *thread*, *turn*, *monitoring lifecycle*, *current activity projection*, *unread terminal state*, and *integration availability* have precise definitions in this project. Read [`CONTEXT.md`](CONTEXT.md) before writing code, docs, or a commit message. Do not fall back on "task", "session", "run", or "recent threads" — those are explicitly banned alternatives.
+**Terminology comes before code.** *Thread*, *Turn*, *monitoring lifecycle*, *current activity projection*, *unread terminal state*, *presence* and *integration availability* have precise definitions here. Read [`CONTEXT.md`](CONTEXT.md) before writing code, docs or a commit message, and honour its banned alternatives.
 
-The product surface — every string a user can read, including accessibility labels, diagnostics and the Info.plist usage descriptions — is written in British English. The docs are written in Chinese; commit messages and this file are in English. Match whatever you are editing.
-
----
+Language: every user-readable string — accessibility labels, diagnostics, Info.plist usage descriptions — is British English. `CONTEXT.md`, this file, the README and commit messages are English; the documents under `docs/` are Chinese. Match whatever you are editing.
 
 ## 2. Project and commands
 
 | Item | Value |
 | --- | --- |
-| Project | `Notchline/Notchline.xcodeproj` |
-| Scheme | `Notchline` (the only one) |
+| Project / scheme | `Notchline/Notchline.xcodeproj`, scheme `Notchline` (the only one) |
 | Targets | `Notchline`, `NotchlineTests`, `NotchlineUITests` |
 | Minimum OS | macOS 26.5 |
-| Test framework | Swift Testing (`@Test` / `#expect`), not XCTest |
 | Bundle ID | `com.yinfenglu.Notchline` |
-
-Build:
+| Unit test framework | Swift Testing (`@Test` / `#expect`), not XCTest |
 
 ```bash
 xcodebuild build -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS'
+xcodebuild test  -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS' -only-testing:NotchlineTests
 ```
 
-Unit tests (507 cases today, a few seconds on a warm build):
+The unit suite takes a few seconds on a warm build. Anything performance-related must be measured under **Release** (`-configuration Release`); Debug numbers mean nothing here.
 
-```bash
-xcodebuild test -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS' -only-testing:NotchlineTests
-```
+**There is no CI and no lint configuration.** Running the tests locally before committing is the only gate.
 
-Anything performance-related must be measured under **Release** (`-configuration Release`). Debug numbers mean nothing here.
-
-**There is no CI and no lint configuration in this repository.** Running the tests locally before committing is the only gate — do not assume something else will catch it.
-
-The scheme is not shared (`xcuserdata/` is ignored), so Xcode regenerates it on open. If a clean checkout ever reports "scheme not found", share the scheme into `xcshareddata/xcschemes/` rather than re-tracking user state.
-
----
+The scheme is not shared (`xcuserdata/` is ignored), so Xcode regenerates it on open. If a clean checkout reports "scheme not found", share the scheme into `xcshareddata/xcschemes/` rather than re-tracking user state.
 
 ## 3. Document map
 
-Each document owns a specific scope. When a change lands in one of these scopes, update that document **in the same change**.
+Each document owns a scope. A change landing in one of these scopes updates that document **in the same change**.
 
 | Document | Authoritative for |
 | --- | --- |
-| [`CONTEXT.md`](CONTEXT.md) | Terminology. Any naming disagreement is settled here |
-| [`docs/PRD.md`](docs/PRD.md) | Product contract: monitoring scope, state model, previews, navigation, release gates, acceptance criteria |
+| [`CONTEXT.md`](CONTEXT.md) | Terminology; any naming disagreement is settled there |
+| [`docs/PRD.md`](docs/PRD.md) | Product contract: monitoring scope, state model, previews, navigation, release gates |
+| [`docs/dual-agent-design.md`](docs/dual-agent-design.md) | How the two products share one surface: hue, attribution, quota, subagent counts |
 | [`docs/figma-design.md`](docs/figma-design.md) | Visual and interaction spec, Figma file structure, legal component variants |
-| [`docs/system-architecture.md`](docs/system-architecture.md) | The structure of the implementation **as it actually is**: refresh timing, component responsibilities, rendering and performance boundaries |
-| [`docs/tech-design.md`](docs/tech-design.md) | Detailed design of interfaces, protocols, data flow, and failure recovery |
-| [`docs/adr/`](docs/adr/) | High-impact technical decisions and their trade-offs (monitoring scope, unread semantics, Project identity, navigation gate, fail-closed behavior, snapshot rebuild) |
-| [`docs/non-public-codex-integration-features.md`](docs/non-public-codex-integration-features.md) | Every feature that depends on non-public Codex implementation details (see §8) |
-| [`docs/technical-explorations/`](docs/technical-explorations/) | **Open research, not decisions.** Do not treat anything here as implemented or approved |
-| [`docs/development-guideline.md`](docs/development-guideline.md) | The end-to-end process: requirements → design → validation → implementation → release |
-
-`docs/development-guideline.md` is deliberately local-only and not tracked in git, so that link resolves on the maintainer's machine and nowhere else. Everything else in the table is in the repository.
-
----
+| [`docs/system-architecture.md`](docs/system-architecture.md) | The implementation **as it actually is**: refresh timing, responsibilities, rendering and performance boundaries, the architectural invariants |
+| [`docs/tech-design.md`](docs/tech-design.md) | Interfaces, protocols, data flow, failure recovery |
+| [`docs/integration-settings-behaviour.md`](docs/integration-settings-behaviour.md) | What the settings toggles actually do to the user's hook configuration |
+| [`docs/artifacts.md`](docs/artifacts.md) | Every file this app creates or edits, inside its container and outside it |
+| [`docs/adr/`](docs/adr/) | High-impact decisions and their trade-offs |
+| [`docs/non-public-codex-integration-features.md`](docs/non-public-codex-integration-features.md) | Every feature depending on non-public Codex implementation details (§7) |
+| [`docs/technical-explorations/`](docs/technical-explorations/) | **Open research, not decisions.** Nothing here is implemented or approved |
+| `docs/development-guideline.md` | The end-to-end process. Deliberately local-only and untracked |
 
 ## 4. Where the issue list lives
 
-Known issues are **not** tracked in documents inside this repository. The former `docs/current-issues.md` was migrated to a GitHub board and deleted on 2026-08-16:
+Known issues live on a GitHub board, not in this repository — the former `docs/current-issues.md` was migrated and deleted on 2026-08-16.
 
-- Board: <https://github.com/users/soondubu137/projects/2> (numbering convention, priority definitions, and fix order live in the board README)
+- Board (numbering, priorities, fix order): <https://github.com/users/soondubu137/projects/2>
 - Issues: <https://github.com/soondubu137/notchline/issues>
 
-The `CR-xxx` numbers carried over, and commit messages in git history reference them directly. File newly discovered problems as issues on the board — **do not reconstruct an issue-list file under `docs/`**. When fixing one, reference its number in the commit subject, e.g. `(CR-023)`.
-
-Design conclusions, measured boundaries, and architectural constraints still live in `docs/`. Only the *open defects* moved.
-
----
+The `CR-xxx` numbers carried over and git history references them. File newly found problems there — **do not reconstruct an issue list under `docs/`** — and append the number to the commit subject, e.g. `(CR-023)`. Design conclusions and measured boundaries still belong in `docs/`; only open defects moved.
 
 ## 5. How to work here
 
 ### 5.1 Branches and commits
 
-- **Commit directly on `master`.** Do not create a feature branch unless explicitly asked. History here is linear and this is a solo project.
-- **Commit a significant change as soon as it is finished, without being asked.** An issue fixed, a feature implemented, a document rewritten — commit it once it builds and the tests pass, rather than leaving the work sitting in the tree. Trivial edits in passing can wait for the change they belong to.
-- **Pushing is a separate authorization and still has to be asked for.** Committing is not.
-- One reviewed, complete change per commit. Do not bundle unrelated edits.
-- Commit messages are in English:
-  - The subject is imperative and describes the **outcome**, not the mechanism — `Stop the refresh loop spinning on a deadline it cannot clear`, not `Fix bug in refresh loop`.
-  - The body explains **why**: what triggered it, what was measured, what was rejected, what limitation remains. If it turns out an earlier conclusion was wrong, say so in the body and say where it was wrong.
-  - Append `(CR-xxx)` to the subject when the change closes a board issue.
+- **Commit directly on `master`.** No feature branch unless asked; history here is linear and this is a solo project.
+- **Commit a significant change as soon as it is finished, without being asked** — once it builds and the tests pass. Trivial edits in passing can wait for the change they belong to.
+- **Pushing is a separate authorisation and still has to be asked for.** Committing is not.
+- One reviewed, complete change per commit; no unrelated edits bundled in.
+- Commit messages are English. The subject is imperative and names the **outcome**, not the mechanism — `Stop the refresh loop spinning on a deadline it cannot clear`, not `Fix bug in refresh loop`. The body explains **why**: what triggered it, what was measured, what was rejected, what limitation remains. If an earlier conclusion turned out wrong, say so and say where.
 
 ### 5.2 The contracts are not binding
 
-The design documents under `docs/` and the assertions in `NotchlineTests.swift` are **not constraints you have to honor**. If a better implementation requires breaking one, break it and update the contract in the same change.
+The documents under `docs/` and the assertions in `NotchlineTests.swift` are not constraints you must honour. If a better implementation requires breaking one, break it and update the contract in the same change, under two conditions:
 
-Two conditions:
-
-1. **State the conflict and the reasoning explicitly.** The judgment call should be visible, not silent.
-2. **Prefer rewriting a test so it pins the real invariant** over deleting it. For example, "never calls `thread/read`" was rewritten as "never requests Turn detail" (`includeTurns: false`, no `thread/items/list`) — which is stronger than the proxy it replaced.
+1. **State the conflict and the reasoning explicitly** — the judgement call should be visible, not silent.
+2. **Prefer rewriting a test so it pins the real invariant** over deleting it. "Never calls `thread/read`" became "never requests Turn detail" (`includeTurns: false`, no `thread/items/list`), which is stronger than the proxy it replaced.
 
 ### 5.3 Leave nothing behind
 
-A task is not finished while its scaffolding is still on the machine. When the work is done, remove what was only there to do it:
-
-- Probe scripts, captured output and throwaway tests written to measure something. Keep the *conclusion* — in a commit body, a document, or a test that stays — and delete the apparatus.
-- Transcripts and session folders left in `~/.claude/projects/` by any `claude` this task started. Those are this app's own probe leavings, not the user's work.
-- Temporary trees under the session scratchpad.
-
-Anything that belongs to the user rather than to the task is not covered by this: ask before removing it.
+A task is not finished while its scaffolding is still on the machine. Remove probe scripts, captured output and throwaway tests — keep the *conclusion* in a commit body, a document or a test that stays, and delete the apparatus. Remove transcripts and session folders left in `~/.claude/projects/` by any `claude` this task started, and temporary trees under the session scratchpad. Anything belonging to the user rather than to the task is not covered: ask first.
 
 ### 5.4 Before changing code
 
-Read the existing implementation and the existing tests before proposing anything. Nearly every simplification-shaped thing in this repository is held in place by a measurement or an edge case — §6 of `docs/system-architecture.md` contains an entire passage overturning an earlier conclusion in that same document.
-
----
+Read the existing implementation and its tests first. Nearly every simplification-shaped thing here is held in place by a measurement or an edge case — §6 of `docs/system-architecture.md` contains a passage overturning an earlier conclusion in that same document.
 
 ## 6. Architectural invariants
 
-All nine are in [`docs/system-architecture.md`](docs/system-architecture.md) §7. These three groups are the ones most easily violated without realizing it:
+The full list lives in [`docs/system-architecture.md`](docs/system-architecture.md) §7 and is authoritative. These are the ones most easily violated without noticing:
 
-### 6.1 Boundaries do not leak
-
-- **One orchestration center.** Decisions spanning data sources belong in `LiveCodexMonitorService`. The UI, the file adapters, and the transport do not assemble state from each other.
-- **One Turn reducer.** Hook events enter only `HookEventRepository`. Replay, reordering, duplication, and exact-identity rules do not get scattered into the view layer.
+- **One orchestration centre.** Decisions spanning data sources belong in `LiveCodexMonitorService`. UI, file adapters and transport do not assemble state from each other.
+- **One Turn reducer.** Hook events enter only `HookEventRepository`. A second source may *retire* a Turn, but never open, name or describe one, and only inside that actor with its ordering guards.
 - **One UI data contract.** Layers above consume `MonitorSnapshot` and nothing else.
-- **Private dependencies stop at the boundary.** The `.codex-global-state.json` schema exists only inside the two read-only repositories; the domain layer sees Project resolution and an unread set tagged with its authority, nothing more.
-- **The UI stays passive.** SwiftUI renders and emits user intent. It does not parse protocols or read files.
-
-### 6.2 State is never guessed
-
-- **Recovery logic does not fabricate business state.** Timeouts, liveness probes, caching, and disconnect grace periods decide only whether to keep or rebuild a connection. They never use a timer to infer Running, Approval, read, or Project.
-- **Historical events carry no business semantics.** A history file proves only that a hook configuration once executed. It cannot prove that any thread exists right now or is in any particular state. The current list comes only from a current runtime snapshot, or from live events observed since this process started.
-- **Failures fail closed.** A parse failure must never be reported as a valid empty value, as `Chats`, or as any other success state. Thread status holds its last trustworthy value; only an unresponsive App Server justifies global Disconnected.
-
-### 6.3 Concurrency
-
-Order-sensitive state machines (byte-stream framing) stay on the queue that already serializes them — do not move them into an actor. CPU-heavy decoding does not stay on an actor, where it would block timeout and connection management.
-
----
+- **Private dependencies stop at the boundary.** The `.codex-global-state.json` schema exists only inside the two read-only repositories; the domain layer sees Project resolution and an unread set tagged with its authority.
+- **The UI stays passive.** SwiftUI renders and emits user intent; it does not parse protocols or read files.
+- **State is never guessed.** Timeouts, liveness probes, caching and disconnect grace periods decide only whether to keep or rebuild a connection — never to infer Running, Approval, read or Project.
+- **Historical events carry no business semantics.** A history file proves only that a hook configuration once executed. The current list comes only from a current runtime snapshot or from live events seen since this process started.
+- **Failures fail closed.** A parse failure is never reported as a valid empty value, as `Chats`, or as any other success. Thread status holds its last trustworthy value; only an unresponsive App Server justifies global Disconnected.
+- **Editing the user's files parses, never coerces.** Touch only the keys this app manages and preserve structures you do not understand.
+- **Order-sensitive state machines stay on the queue that serialises them** (byte-stream framing) — not in an actor. CPU-heavy decoding does not stay on an actor, where it would block timeout and connection management.
 
 ## 7. Overlay rendering: the most expensive class of mistake here
 
-**No continuously running SwiftUI animation is allowed in the overlay.** Persistent motion is drawn on `CALayer` and evaluated by the render server.
+**No continuously running SwiftUI animation is allowed in the overlay.** Persistent motion is drawn on `CALayer` and evaluated by the render server. The measurements behind this — and the full rendering boundary — are in `docs/system-architecture.md` §6; the headline is 11.8% CPU for two `TimelineView` animations against 0.0%–0.4% for the same motion on Core Animation.
 
-This is a measurement, not a preference (Release build, status pinned to `.running`, toggled one variable at a time):
+The test is not "is this animation expensive to draw?" but **"does it tick continuously?"** Cost is not proportional to what is on screen: the expense is re-rendering the whole overlay every frame, including `PanelContour` and all text measurement. Removing three layers of Gaussian blur bought back 2 points of 11.8%, and lowering the refresh rate bought nothing.
 
-| Configuration | CPU |
-| --- | --- |
-| Indicator off, searchlight off | 0.0% |
-| Both on (original `TimelineView` implementation) | 11.8% |
-| Expanded panel + two rows sweeping | 15.3% |
-| Everything moved to Core Animation | 0.0%–0.4% |
+**The full rule: overlay re-render count is driven by whether the layout changed, not by whether the content changed.** The once-a-second elapsed readout obeys it too — published through `@Published` it cost 4.7%; subscribing to `MonitorStore.elapsedTick` (which SwiftUI does not observe) and drawing into a layer, with `elapsedLayoutRevision` published only when the readout's **reserved width** changes, it costs 0.0%.
 
-The test is not "is this animation expensive to draw?" but **"does it tick continuously?"** Cost is not proportional to what is on screen: the real expense is re-rendering the entire overlay every frame, including the custom `PanelContour` shape and all text measurement. Removing three layers of Gaussian blur bought back only 2 points out of 11.8%. Lowering the refresh rate does not help either — redraws are driven by the panel being marked as needing display, not by the view's own tick.
-
-**The full form of the rule: overlay re-render count should be driven by whether the layout changed, not by whether the content changed.** The once-a-second elapsed readout is subject to it too. It used to publish through `@Published`, and every publish re-evaluated the whole overlay at roughly 20ms — measured at 4.7%. It now subscribes to `MonitorStore.elapsedTick`, which SwiftUI does not observe, and draws itself into a layer; the store publishes `elapsedLayoutRevision` only when the readout's **reserved width** changes. Same scenario: 4.7% → 0.0%.
-
-**A readout that goes *absent* is a layout change, and the width signature cannot see it.** `elapsedLayoutRevision` is bumped only when a readout's reserved width changes, which is right for digits and wrong for presence: a row draws `ElapsedReadout` or the untimed dot depending on whether the store answers with a reading at all, and `0:09` → nothing → `0:00` is the same width from end to end, so no re-render is ever asked for and the dot stays for the rest of the turn. The rule the store keeps instead is that a turn with a known start is never answered "not timed": the shared tick advances once a second, so a start later than the last tick means the tick has not caught up, not that the turn is untimed, and it is clamped to the turn's own start (`MonitorStore.readableNow`). Measured on a Release build 2026-08-24 — without the clamp a running row lost its timer permanently while the collapsed pill, whose own readout stayed mounted, went on counting.
+**A readout that goes *absent* is a layout change that the width signature cannot see.** `0:09` → nothing → `0:00` is one width from end to end, so nothing asks for a re-render and the untimed dot stays for the rest of the Turn. The rule the store keeps instead: a Turn with a known start is never answered "not timed" — a start later than the last tick means the shared tick has not caught up, so it is clamped to the Turn's own start (`MonitorStore.readableNow`).
 
 ### How to measure: `ps %cpu` will lie to you
 
-- For **steady-state** cost, `ps %cpu` is accurate. The table above was measured that way.
-- For **burst** cost, you must diff cumulative CPU time (`ps -o time`). One expand/collapse transition measures about 92 ms of CPU but shows up as 0.1%–0.3% on `ps %cpu`, which reads as nothing at all.
-
-Picking the wrong tool produces a confident "there is no cost left" that is simply false.
-
-### What the tests cannot protect
-
-Existing tests assert that `NotchStatusMatrix` and the two layer-backed labels are still driven by `CAAnimation` and still have their masks, so reverting them to SwiftUI fails to compile. But **adding a new continuous animation somewhere else in the panel is not caught by anything** — that dimension is held only by this section and by the comments on the views.
-
-Separately, `SearchlightLabel`'s font and `PanelMetrics.statusLabelFont` are two independent declarations of the same `NSFont`. Change one and the drawn label no longer matches the panel width reserved for it.
+Steady-state cost reads accurately on `ps %cpu`. **Burst cost does not** — diff cumulative CPU time (`ps -o time`) instead. One expand/collapse transition is about 92 ms of CPU but shows up as 0.1%–0.3%, which reads as nothing at all. Picking the wrong tool produces a confident "there is no cost left" that is simply false.
 
 ### Panel state is written on the main actor, and only Release can prove it
 
-Every property the overlay renders from must be written on the main actor. `@Published` sends `objectWillChange` from `willSet`; a write on any other thread lets SwiftUI re-render on the main thread *before* the property has been stored, so `body` reads the previous value and nothing invalidates it again. The panel then draws the wrong state until an unrelated publish repairs it — measured as a collapsed notch carrying the expanded header's gear where its timer belongs, on roughly one hover burst in three.
+Every property the overlay renders from must be written on the main actor. `@Published` sends `objectWillChange` from `willSet`, so a write off the main thread lets SwiftUI re-render *before* the property is stored: `body` reads the previous value and nothing invalidates it again. The panel then draws the wrong state until an unrelated publish repairs it — measured as a collapsed notch carrying the expanded header's gear where its timer belongs, on roughly one hover burst in three.
 
-**The annotations do not give you this.** `MonitorStore` is `@MainActor`, `scheduleHoverAction`'s action is `@MainActor`, and its `Task` is started from a `@MainActor` method — and under `SWIFT_APPROACHABLE_CONCURRENCY` the task body is `nonisolated(nonsending)`, so the hop back after an `await` is elided by the optimiser. Work that resumes from a suspension and then touches store state needs an explicit `await MainActor.run { … }`.
+**The annotations do not give you this.** `MonitorStore` is `@MainActor` and the hover action is started from a `@MainActor` method, but under `SWIFT_APPROACHABLE_CONCURRENCY` the task body is `nonisolated(nonsending)` and the optimiser elides the hop back. Work that resumes from a suspension and then touches store state needs an explicit `await MainActor.run { … }`.
 
-Nothing in `NotchlineTests` can catch this. The elision is an `-O` behaviour, so it does not exist in Debug, and `@testable import` needs `-enable-testing`, which Release does not build with — `xcodebuild test -configuration Release` fails to compile the suite. The test that exists (`hoverExpansionIsWrittenOnTheMainActorWhenTheDwellWakesOffIt`) pins the invariant against a wrongly-placed write and nothing more.
+Nothing in `NotchlineTests` can catch this: the elision is an `-O` behaviour absent in Debug, and `@testable import` needs `-enable-testing`, which Release does not build with. `hoverExpansionIsWrittenOnTheMainActorWhenTheDwellWakesOffIt` pins the invariant against a wrongly-placed write and nothing more. The Release reproduction is manual and worth keeping: run the Release app, post one `UserPromptSubmit` payload into `agents/claudeCode/hook.sock` so a row is timed, drive the pointer on and off in bursts of 1–3 passes with dwells jittered across 0.08–0.55 s, settle, and screenshot the collapsed panel. A status label or gear on a 39 pt panel is the failure — on a notched display the label hides behind the cut-out, so the trailing-wing gear is the visible half. Unfixed it appeared three times in ten bursts; fixed it survived a hundred and twenty.
 
-The Release reproduction is manual, and it is worth keeping: run the Release app, post one `UserPromptSubmit` payload into `agents/claudeCode/hook.sock` so a row is timed, then drive the pointer on and off the panel in bursts of 1–3 passes with dwells jittered across 0.08–0.55s, settle, and screenshot the collapsed panel. A status label or a gear drawn on a 39pt-tall panel is the failure. Note that on a notched display the status label lands *behind* the cut-out, so the gear in the trailing wing is the only half of it a person sees. Unfixed, it appeared three times in ten bursts; fixed, it survived a hundred and twenty.
+### What the tests cannot protect
 
----
+Tests assert that `NotchStatusMatrix` and the two layer-backed labels are still driven by `CAAnimation` and still have their masks, so reverting them to SwiftUI fails to compile. **A new continuous animation elsewhere in the panel is caught by nothing** — that dimension is held only by this section and the comments on the views. Separately, `SearchlightLabel`'s font and `PanelMetrics.statusLabelFont` are two independent declarations of the same `NSFont`; change one and the drawn label no longer matches the width reserved for it.
 
-## 8. Registry of Codex integrations without official public support
+## 8. Codex integrations without official public support
 
-### 8.1 Mandatory rules
+Prefer Codex capabilities that are publicly defined and supported: App Server, Hooks, public CLI/SDK interfaces, official deep links.
 
-- Prefer, by default, Codex integration capabilities that are defined and publicly supported in the official documentation and current public schema: App Server, Hooks, public CLI/SDK interfaces, and official deep links.
-- Any production feature that depends on **Codex implementation details not supported by official public documentation or public schema** must add or update [`docs/non-public-codex-integration-features.md`](docs/non-public-codex-integration-features.md) in the same change. Do not defer the registry update to a later task.
-- **Do not register a feature merely because it is not implemented through the App Server.** Features built on official Hooks, official deep links, or other publicly supported interfaces do not belong in the registry unless the implementation also depends on additional private details.
-- Non-public dependencies that must be registered include, but are not limited to:
-  - Codex Desktop private files, state schemas, IPC, in-bundle resource paths, or undocumented fields;
-  - bundle identifiers, file locations, payload fields, or process behavior not promised by official documentation;
-  - behavior observed through reverse engineering or experiment that has not entered any official public contract.
-- When changing an existing non-public feature's schema keys, file paths, protocol, version baseline, implementation, failure signals, conservative degradation, or code location, update the corresponding registry row in the same change.
-- If an equivalent publicly supported capability appears later, migrate to the official interface and, in the same change, update or remove the registry row along with the old private implementation and its tests.
+Any production feature depending on **Codex implementation details not covered by official public documentation or public schema** must add or update [`docs/non-public-codex-integration-features.md`](docs/non-public-codex-integration-features.md) in the same change. That includes private files, state schemas, IPC, in-bundle resource paths, undocumented fields, bundle identifiers, payload fields or process behaviour not promised by documentation, and anything learnt by reverse engineering that has not entered a public contract. **Do not register a feature merely for not going through the App Server** — features on official Hooks or deep links belong there only if they also depend on private details.
 
-### 8.2 Minimum content per entry
+Each entry states what the feature is, why the public interfaces cannot deliver it, and how it is actually implemented, plus the dependency level, the signal that a Desktop update has broken it, the conservative degradation, and navigable code and test paths. Vague wording that conceals the real private dependency is not acceptable.
 
-1. What the feature is;
-2. why the publicly supported interfaces cannot fully implement it;
-3. how it is actually implemented.
-
-Each entry should also record the dependency level, the signal that it has broken after a Desktop update, the conservative degradation behavior, and directly navigable code and test paths. Vague wording that conceals the real private dependency is not acceptable.
-
-### 8.3 Implementation and verification procedure
-
-1. Before implementing, check the official Codex documentation, the current public schema, and the existing registry to confirm the capability gap still exists.
-2. While designing, keep publicly supported interfaces and non-public data sources clearly separated. Do not dress private behavior up as a public contract.
-3. For private schema or file dependencies, add tests for success, absence, corruption, and version incompatibility, and behave fail-closed.
-4. Before finishing, check that code, tests, the PRD, the technical design, and the registry agree, and verify that the registry's relative links still resolve.
-5. State in the delivery notes whether this change added, modified, migrated, or removed a Codex integration lacking official public support. If it did none of those, say so explicitly after checking.
+Procedure: confirm the capability gap still exists before implementing; keep public interfaces and private sources clearly separated in the design; for private schema or file dependencies add tests for success, absence, corruption and version incompatibility, and fail closed; before finishing, check that code, tests, PRD, tech design and registry agree and that the registry's relative links resolve. When an equivalent public capability appears, migrate and remove the old row, implementation and tests together. Say in the delivery notes whether this change added, modified, migrated or removed such an integration — and if it did none of those, say so explicitly after checking.
 
 **A missing registry update means the change is not finished.**
 
----
-
 ## 9. Definition of done
 
-A change is not finished until all of the following hold:
-
 1. `xcodebuild test -only-testing:NotchlineTests` passes in full.
-2. New logic has tests, and any old assertion that was broken has been rewritten to pin the real invariant rather than deleted.
-3. Every document whose scope in §3 the change touched was updated **in the same change**.
+2. New logic has tests, and any broken assertion was rewritten to pin the real invariant rather than deleted.
+3. Every document whose §3 scope the change touched was updated in the same change.
 4. If the change touches a non-public Codex dependency, the §8 registry is updated — or checked and explicitly declared not applicable.
-5. Performance-related changes carry measured Release numbers, and state whether the steady-state or the burst method was used.
-6. The diff contains no debugging code, temporary files, or unrelated edits.
+5. Performance-related changes carry measured Release numbers and state whether the steady-state or the burst method was used.
+6. The diff contains no debugging code, temporary files or unrelated edits.
 7. The delivery notes say what changed, why, what was rejected, and what limitations remain.
