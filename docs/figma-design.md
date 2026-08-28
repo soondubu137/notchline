@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | V1 SwiftUI 四态契约已同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个，在场与宽度已实现、画法待 [#35](https://github.com/soondubu137/notchline/issues/35)；子智能体标记已收敛为**一枚 badge、一个总数、底色翻转**，收起态一个产品一枚并各染其墨；前导翼每个矩阵右侧新增一列竖排会话计数点（与矩阵等高，每个标记 `+5.66` 宽），均已实现（§4.6，[`dual-agent-design.md`](dual-agent-design.md) §10–§11）；外部 Figma 的 `807:91`／`807:102`／`808:527` 仍是旧文字变体，待下一次同步换成 `12 — Counting: sessions and subagents` 里对应的变体 |
+| 文档状态 | V1 SwiftUI 四态契约已同步；状态矩阵已换为 4×4 的四条新曲线、等待拆为 Input／Approval 两种画法（§4.1），外部 Figma 组件集待同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个，在场与宽度已实现、画法待 [#35](https://github.com/soondubu137/notchline/issues/35)；子智能体标记已收敛为**一枚 badge、一个总数、底色翻转**，收起态一个产品一枚并各染其墨；前导翼每个矩阵右侧新增一列竖排会话计数点（与矩阵等高，每个标记 `+5.66` 宽），均已实现（§4.6，[`dual-agent-design.md`](dual-agent-design.md) §10–§11）；外部 Figma 的 `807:91`／`807:102`／`808:527` 仍是旧文字变体，待下一次同步换成 `12 — Counting: sessions and subagents` 里对应的变体 |
 | 版本 | 1.4 |
 | 日期 | 2026-08-23 |
 | 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
@@ -143,6 +143,30 @@ bottomCornerRadius = max(0, menuBarHeight) / 4  // 下圆角
 - Disconnected 不用于会话行。
 - **系统级取值收敛为两个**：`Disconnected` 与 `Connected`（§6.4）。`Idle` 并入 `Connected`，`Connecting`、`Update Required`、`Unsupported Version`、`Setup Required` 退出收起态（§6.6），只在展开面板与设置中出现，组件变体因此保留。
 
+#### 状态矩阵的五种画法
+
+标记本身是一块 **4×4** 的矩阵，几何比例与它 3×3 时一字不差：格 `27`、步距 `32`、圆角 `2`，四格一边，viewBox 因此从 `91` 变成 `123`。标记外形不变——`PanelMetrics.statusMatrixSize` 仍是 `16.6`，它买到的那一格从 `4.92` 缩到 `3.64`。四条动画曲线是 `design/assets/matrix-states/` 里那四个 SVG，逐格透明度按 30fps 给出：
+
+| 画法 | 状态 | 周期 | 图案 | 最暗 |
+| --- | --- | --- | --- | --- |
+| Radar | Running | `1.2s`（36 帧） | 一道光束绕标记中心顺时针扫；光束扫过某一格时该格到满，随后按 10.2 帧（`341ms`）的时间常数指数落回 `0.139`。每一格的相位就是它自己那一格中心相对标记中心的方位角 | `0.139` |
+| Double knock | Approval needed | `1.2s`（36 帧） | 整块矩阵一起到满，敲两下、隔 `300ms`，每下按 3 帧衰减；随后 `900ms` 停在 `0.05` | `0.05` |
+| Advance | Input needed | `0.8s`（24 帧） | 上三行一次亮一整列，每列 `200ms`，从左到右；底行不参与，恒定停在 `0.3` | `0.05` |
+| Lull | Completed | `2s`（60 帧） | 一道波峰沿反对角线（也就是 mark 自己那条接缝）走过标记，六步走完用掉 60 帧里的 48.7 帧；波峰过后那一格落到 `0.182`，在谷底待约四分之三秒 | `0.182` |
+| （静止） | Connected / Disconnected | — | 不动 | `0.18` |
+
+**Input 与 Approval 分成了两种图案。** 它们此前共用一次闪烁，收起态因此只能说「有事等你」而说不出是哪一种事；两种图案之后，标记说得出「键盘能答的问题」与「过不去的决定」的分别，而这正是用户决定现在要不要放下手里的事的依据。代价是引导里那一行从四个规格件变成五个（§7），以及汇总优先级从此还多决定一件事——同时握着两种等待的那条 bar 画哪一个图案，见 [`PRD.md`](PRD.md) §6.2（Approval 在 Input 之前）。
+
+**四种画法各有各的暗处，因此不再需要为了可读性偏离设计稿。** 上一版的两条轨道（等待与终态）在代码里被改成落到 `0.100` 而不是稿子给的 `0.200`，理由是稿子让所有暗格歇在同一档，「在等你」与「什么都没在跑」一样黑。这四个文件自己就落在三个不同的档上——knock 与 advance 的 `0.05`、radar 的 `0.139`、lull 的 `0.182`——两种等待都落在静息的 `0.18` 之下，所以光凭暗度仍然分得出一枚在等用户的标记和一枚只是在场的标记，代码里那条偏离整个撤掉了。终态是唯一一个不再靠暗度区分的：lull 的谷底就是 `0.182`，跟静息同高；分开它们的是动——波峰按反对角线错开，所以完成态的标记总有一格在 `0.86` 以上，而静息的一动不动。
+
+**接缝方向从此有别的证人。** 四种旧图案上下都对称，`isFlipped` 画反了只有引导里那条对角线看得出来（§7）。新的四种里有三种不对称：radar 会倒着扫，advance 的底行会跑到顶上，lull 会走错一条对角线。`theSplitMatrixCutsOnTheSameDiagonalAsTheMark` 仍然是最直接的那条断言，`eachStateDrawsThePatternItsDesignFileDraws` 逐格锁住四条轨道与它们的相位。
+
+**辉光沿用旧画法，没有跟着换。** 那四个文件各带一层 `feGaussianBlur stdDeviation=12.65`（约 `0.09` 格）、alpha `0.55`；代码画的仍是三层模糊加一层实拷贝，最宽一层是 `10.5/27` 格。换过去在 `800px` 的稿子上是对的，在 `16.6pt` 的标记上会把辉光收到 `0.33pt`，也就是几乎没有——而辉光在这个尺寸上正是让一块 `3.64pt` 的格在壁纸上还站得住的东西。图案换了，画图案的那层没换。
+
+**4×4 没有带着会话计数点一起走。** 点列仍按 `91` 的那套单位量（点 `2.74`、间距 `2.92`、竖杠 `4.93`、整列 `5.66`），理由与取值见 [`dual-agent-design.md`](dual-agent-design.md) §11 与 `PanelMetrics.sessionDotViewBox` 上的注释：按新单位读会得到一枚 `2.02` 的点，已经数不清了。
+
+实现：`MatrixGrid`（几何）、`MatrixTrack`（四条曲线与三条相位规则）、`NotchMatrixState`（状态到画法）、`MatrixIndicatorView`（图层与辉光），全部在 `NotchStatusMatrix.swift`。
+
 ### 4.2 Status Readout
 
 Compact 与 Expanded 两个 Context 都提供完整状态文本。Expanded 组内圆点—名称间距为 `12`；状态名称不得被物理刘海遮挡。
@@ -186,7 +210,7 @@ PRD 8.2 与技术设计第 12 节已明确权威时间语义、等待/睡眠行�
 
 **同一件事在收起态是另一种画法，两处规矩都不同：那里 badge 与计时并存，而且一个产品一枚、各染各的墨色。** 行尾的一个位置属于一行，收起态的尾翼属于整张列表，所以它说的是总数，也没有「同一句话说两遍」的问题——计时说的是最长的那个轮次，badge 说的是每个产品还有几个子智能体没结束。有 badge 要画时它们排在计时前面，Codex 永远在前（与前导翼那对矩阵同一条顺序规则，不按紧急程度重排）；所有轮次都结束而子智能体还在跑或在等审批时没有计时可读，尾翼只剩 badge。染色规则与展开行相反：**每枚 badge 染它自己那个产品的墨色**（Codex 字 `#6CB4FF` / 底 `#1F2A35`，翻转后字 `#101B26` / 底 `#6CB4FF`；Claude Code `#D97757` / `#30211C` 与 `#21120D` / `#D97757`），因为一条 bar 上没有 caption 行，墨色是唯一能回答「这是谁的」的东西。没有子智能体的产品没有 badge，也不为它留位置。两枚 badge 之间是 `6`（取的就是两个矩阵之间那个 `6`），badge 与计时之间是 `8`。**翻转不改变宽度**：一个产品从「全在跑」变成「有人在等」时 bar 上没有任何东西移动。收起态写 `Running` 而尾翼没有计时读数，是这一形态的正常样子而不是缺口（[`PRD.md`](PRD.md) §6.2）。**还有一种更短的形态：`Running` 而整条尾翼什么都没有。** 它出现在 Claude Code 的子智能体收尾到父轮次被叫醒之间——实测 50–130 ms——此刻既没有轮次在计时，也没有子智能体可数，而这条 Thread 确实还在工作（`PRD.md` §6.2 第 3 档）。它太短，不值得为它画一个变体：要点是尾翼**空**着不等于状态词错了，读到这个组合时不要去补一个占位读数。SwiftUI 实现：`CompactTrailingReading.badges`／`PanelMetrics.subagentBadgeWidth`／`subagentBadgesWidth`／`compactTrailingReadingWidth`（`MonitorStore.swift`），聚合口径见 `MonitorStore.compactSubagentBadges`。**外部 Figma 待清理**：`115:82`（Panel）上的 `808:527`（`「2 │ 1:23」` 合成读数）同样待换成 `12 — Counting: sessions and subagents` `03` 节里对应的胶囊变体。
 
-**前导翼多了一样东西：每个矩阵右侧一列竖排的会话计数点。** 一行一点，从上沿开始排在矩阵自己那三行的行心上，超过三行时第三个点向下拉长成一道 `4.93` 的竖杠读作「多于三」；颜色是该产品的点亮色 `85%`，永不参与矩阵的动画。**整列与矩阵等高**（`2 × 5.84 + 4.93 = 16.6`），所以它不要任何矩阵原本没有的纵向空间——`46` 档与 `22` 档画得一模一样。它花的是宽度：每个产品的标记因此从 `16.6` 变为 `22.26`（间距 `2.92` + 点 `2.74`），**且不论几个会话都是这个宽度，连接了却一行都没有时画一列空的**——让它随计数收放会在会话开始或最后一行被移除时把矩阵本身横向挪一段。下面那张几何表里的「状态矩阵」因此一律读作「标记 `22.26`」，静息灰标记除外（它背后没有产品，仍是 `16.6`）。完整规则、取值与它先后被画在矩阵右侧一枚数字方块、矩阵下方一排横点这两处的原因，见 [`dual-agent-design.md`](dual-agent-design.md) §11。
+**前导翼多了一样东西：每个矩阵右侧一列竖排的会话计数点。** 一行一点，从上沿开始按 `5.84` 的步距排，三点排满整个标记的高度，超过三行时第三个点向下拉长成一道 `4.93` 的竖杠读作「多于三」；这个步距是矩阵还是 3×3 时它自己的行距，矩阵改成 4×4 之后点列**没有跟着改**（§4.1）；颜色是该产品的点亮色 `85%`，永不参与矩阵的动画。**整列与矩阵等高**（`2 × 5.84 + 4.93 = 16.6`），所以它不要任何矩阵原本没有的纵向空间——`46` 档与 `22` 档画得一模一样。它花的是宽度：每个产品的标记因此从 `16.6` 变为 `22.26`（间距 `2.92` + 点 `2.74`），**且不论几个会话都是这个宽度，连接了却一行都没有时画一列空的**——让它随计数收放会在会话开始或最后一行被移除时把矩阵本身横向挪一段。下面那张几何表里的「状态矩阵」因此一律读作「标记 `22.26`」，静息灰标记除外（它背后没有产品，仍是 `16.6`）。完整规则、取值与它先后被画在矩阵右侧一枚数字方块、矩阵下方一排横点这两处的原因，见 [`dual-agent-design.md`](dual-agent-design.md) §11。
 
 收起态在刘海右侧显示全局最长运行时间，与左翼状态读数构成两翼；没有未完成轮次、也没有子智能体在跑时右翼整体消失，避免渲染出第二个假刘海。展开态不重复该汇总值。计时文本使用等宽数字，因此右翼宽度只在进位时变化。
 
@@ -383,10 +407,10 @@ Input needed
 
 1. **Hero**：应用图标 `52` 加一句话，不重复窗口标题。
 2. **`Connect your agents`**：`ProductConnectionRows`——与设置窗口**同一个视图**，不是它的副本。**两行各一个 switch**（[ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)）；~~此前是 Codex 一个 switch、Claude Code 一个 `Set Up…`，两行并排正是 ADR 0010 的不对称唯一被看见的地方~~——那处不对称已经没有了。脚注写清两个开关写进 `~/.codex/hooks.json` 与 `~/.claude/settings.json` 的定义可逆、不动用户自己的设置与 hooks，并写明改动任一文件之前会先在同目录复制出一份 `.notchline-backup` 副本；尾部是 `Recheck`：Codex 那个开关打开还不是终点，它按定义在文件里的位置记信任，要用户在 `/hooks` 里信任之后跑过一轮，那一行才会说 `Connected`。Claude Code 没有这一步。
-3. **`Reading the notch`**：四个规格件加四个状态名，**没有解释句**——一个叫 `Running` 的状态不需要一句话说明有一轮正在跑。规格件按 `PanelMetrics.statusMatrixSize`（`16.6`）画在一小块黑底上，是实物而不是示意图，并且**是活的**：轨道是 render server 上的图层动画，`Connected` 自己就不动（它的 state 没有 period）。
+3. **`Reading the notch`**：五个规格件加五个状态名，**没有解释句**——一个叫 `Running` 的状态不需要一句话说明有一轮正在跑。规格件按 `PanelMetrics.statusMatrixSize`（`16.6`）画在一小块黑底上，是实物而不是示意图，并且**是活的**：轨道是 render server 上的图层动画，`Connected` 自己就不动（它的 state 没有 period）。
 4. **颜色键**：两个单色规格件加两个产品名，落在与上面四列相同的栅格上。
 
-**规格件按 mark 的对角线切成两色**（Codex 在上、Claude Code 在下），这是引导独有的画法：刘海上每个矩阵只属于一个产品，因为色相正是用来分辨两个矩阵的。切开是为了让一行四个讲完四种图案，而不是两行八个——那会说成图案随产品而变，而它并不变。实现见 `NotchPalette.MatrixSplit` 与 `MatrixIndicatorView.trailingHalf`；接缝方向由 `theSplitMatrixCutsOnTheSameDiagonalAsTheMark` 锁定，因为四种图案上下都对称，`isFlipped` 画反了没有任何别的东西会发现。
+**规格件按 mark 的对角线切成两色**（Codex 在上、Claude Code 在下），这是引导独有的画法：刘海上每个矩阵只属于一个产品，因为色相正是用来分辨两个矩阵的。切开是为了让一行五个讲完五种画法，而不是两行十个——那会说成图案随产品而变，而它并不变。实现见 `NotchPalette.MatrixSplit` 与 `MatrixIndicatorView.trailingHalf`；接缝方向由 `theSplitMatrixCutsOnTheSameDiagonalAsTheMark` 锁定。它此前是 `isFlipped` 唯一的证人（旧的四种图案上下都对称），现在不是了——四种画法里有三种不对称，见 §4.1。
 
 窗口不请求辅助功能或屏幕录制，也不承诺静默绕过 Codex 信任。底部一行是那句只读声明加主按钮 `Start`，**不设门槛**：一个产品都没连也可以进去，刘海会照实说 `Disconnected`。
 
@@ -580,6 +604,8 @@ Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
 - [x] 子智能体标记收敛为一枚 badge：数字是全部子智能体，底色翻转说有没有在等人；展开行内中性，收起态一个产品一枚各染其墨、Codex 在前（§4.6，[`dual-agent-design.md`](dual-agent-design.md) §10）。由 `theCollapsedBadgesAreOnePerProductInAFixedOrder`、`aWaitingBadgeIsTheSameWidthAsARunningOne` 锁定。
 - [x] 会话计数点画成矩阵右侧一列竖点，一行一点、过三把第三点向下拉长成竖杠；**整列与矩阵等高**，因此在每一档菜单栏上画法相同（[`dual-agent-design.md`](dual-agent-design.md) §11）。由 `theSessionDotColumnIsExactlyAsTallAsTheMatrix` 锁定。
 - [x] 点列按每个产品标记 `+5.66` 预留，静息灰标记没有；前导翼因此是「每个标记数」的一个定值，不随会话数变化。连接但无会话时那一列**不画**，让出来的宽度落在标记那一组的尾端而不还给面板——静息时一对矩阵之间因此是它们自己的 `6`，而前导的那枚矩阵在任何会话数下都不横移。由 `theSessionDotColumnIsReservedInWidthAndPackedInDrawing` 与 `theLeadingMatrixNeverMovesWhateverTheCountsDo` 锁定。~~连接但无会话时画一列空的~~ 已作废：空列把成对的 `6` 撑到 `11.66`，越过了不再读成一对的那条线。~~原画在矩阵下方、宽度全免~~ 已作废：那一处花的是高度，而 `22` 档菜单栏在矩阵下方只剩 `2.7`，比一个点还窄，只能整排省略。
+- [x] 状态矩阵改为 4×4，四条逐格曲线换成 `design/assets/matrix-states/` 里那四个文件（radar／double knock／advance／lull），等待拆成 Input 与 Approval 两种画法，引导那一行随之从四个规格件变成五个（§4.1、§7）。由 `eachStateDrawsThePatternItsDesignFileDraws` 逐格锁定四条轨道与它们的相位。
+- [ ] **外部 Figma 待清理**：`Status Matrix / Codex` 与 `Status Matrix / Claude Code` 两个组件集仍是 3×3、仍只有四个变体（等待共用一个）。下一次同步应按 §4.1 重画为 4×4 并拆出 Input／Approval 两个变体；在完成前以 `design/assets/matrix-states/` 与代码为准。
 - [ ] `12 — Counting: sessions and subagents` 的规范尚未回灌到 `Session Row`（`112:28`）、`Panel`（`115:82`）与 `Status Readout` 这三个跨页组件集；页面上的示范节点是当前事实来源。
 - [ ] 收起态计时变体的文字层改为 hug contents（见 4.6），消除固定文本宽度带来的整体偏宽。
 - [ ] 刘海计时变体中的计时 TEXT 在渲染中不可见（节点数据正确、坐标与实现一致，`24` 高面板中同一文本正常）；需在 Figma 桌面端确认是渲染问题还是文件缺陷。

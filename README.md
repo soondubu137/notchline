@@ -22,18 +22,24 @@ Selecting a row returns to its host. Notchline does not send input, grant approv
 
 <!-- TODO: Add `docs/assets/readme-expanded-panel.png` here. Capture one expanded panel with both products present and three non-sensitive rows spanning an attention state, Running, and Completed. Include a preview, elapsed time, a subagent count, and the usage footer; crop to the overlay. -->
 
-Collapsed, the overlay uses a 3×3 status matrix for each connected product:
+Collapsed, the overlay uses a 4×4 status matrix for each connected product. Each state has its own pattern, so the notch can be read without reading its label:
 
 <table>
 <tr>
-<td><img src="docs/assets/matrix-running.svg" width="260" alt="Running: a diagonal checkerboard sweep across the 3×3 matrix"></td>
-<td><img src="docs/assets/matrix-attention.svg" width="260" alt="Input needed or Approval needed: the centre cell and surrounding cells flash"></td>
+<td><img src="docs/assets/matrix-running.svg" width="260" alt="Running: a beam sweeps clockwise around the matrix and each cell fades behind it"></td>
+<td><img src="docs/assets/matrix-approval.svg" width="260" alt="Approval needed: the whole matrix flashes twice in quick succession, then holds dark"></td>
 </tr>
 <tr>
-<td><img src="docs/assets/matrix-completed.svg" width="260" alt="Completed: the whole matrix pulses slowly"></td>
+<td><img src="docs/assets/matrix-input.svg" width="260" alt="Input needed: a lit column steps from left to right above a dim, unmoving bottom row"></td>
+<td><img src="docs/assets/matrix-completed.svg" width="260" alt="Completed: one slow wave crosses the matrix diagonally, then the matrix rests"></td>
+</tr>
+<tr>
 <td><img src="docs/assets/matrix-idle.svg" width="260" alt="Connected with no monitored Turn: dim and static"></td>
+<td></td>
 </tr>
 </table>
+
+When more than one Turn is waiting, the notch shows the most demanding one: approval before input, input before running, running before completed.
 
 <!-- TODO: Add `docs/assets/readme-collapsed-layouts.png` here. Show the physical-notch and notch-less collapsed layouts side by side at the same scale, with product matrices, elapsed time, subagent count, and the usage ring visible. -->
 

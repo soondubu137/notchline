@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800"
+     role="img" aria-label="Notchline Running state matrix - Radar">
+  <title>Notchline — Running — Radar</title>
+  <desc>4x4 state matrix, 36 frames at 30fps (1200ms loop). Ink #D97757 over #21120D.</desc>
+  <defs>
+    <filter id="glow" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="12.65" result="b"/>
+      <feComponentTransfer in="b" result="halo">
+        <feFuncA type="linear" slope="0.55"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="800" height="800" rx="56" fill="#000000"/>
+  <g fill="#21120D">
+    <rect x="80" y="80" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="246.5" y="80" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="412.99" y="80" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="579.49" y="80" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="80" y="246.5" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="246.5" y="246.5" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="412.99" y="246.5" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="579.49" y="246.5" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="80" y="412.99" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="246.5" y="412.99" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="412.99" y="412.99" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="579.49" y="412.99" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="80" y="579.49" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="246.5" y="579.49" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="412.99" y="579.49" width="140.50" height="140.50" rx="10.40"/>
+    <rect x="579.49" y="579.49" width="140.50" height="140.50" rx="10.40"/>
+  </g>
+  <g fill="#D97757" filter="url(#glow)">
+    <rect x="80" y="80" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".351;.329;.308;.29;.273;.258;.244;.231;.22;.21;.201;.192;.184;.177;.171;.165;.16;.155;.151;.147;.144;.141;.138;.971;.89;.818;.752;.692;.638;.589;.544;.504;.467;.434;.403;.376"/>
+    </rect>
+    <rect x="246.5" y="80" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".423;.394;.367;.343;.321;.302;.284;.268;.253;.24;.227;.216;.207;.198;.189;.182;.175;.169;.164;.158;.154;.15;.146;.143;.14;.137;.942;.865;.794;.731;.673;.62;.573;.53;.491;.455"/>
+    </rect>
+    <rect x="412.99" y="80" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".559;.517;.479;.445;.413;.385;.359;.336;.315;.296;.279;.263;.249;.236;.224;.213;.204;.195;.187;.18;.173;.167;.162;.157;.153;.149;.145;.142;.139;1;.917;.842;.774;.712;.656;.605"/>
+    </rect>
+    <rect x="579.49" y="80" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".692;.638;.589;.544;.504;.467;.434;.403;.376;.351;.329;.308;.29;.273;.258;.244;.231;.22;.21;.201;.192;.184;.177;.171;.165;.16;.155;.151;.147;.144;.141;.138;.971;.89;.818;.752"/>
+    </rect>
+    <rect x="80" y="246.5" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".296;.279;.263;.249;.236;.224;.213;.204;.195;.187;.18;.173;.167;.162;.157;.153;.149;.145;.142;.139;1;.917;.842;.774;.712;.656;.605;.559;.517;.479;.445;.413;.385;.359;.336;.315"/>
+    </rect>
+    <rect x="246.5" y="246.5" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".351;.329;.308;.29;.273;.258;.244;.231;.22;.21;.201;.192;.184;.177;.171;.165;.16;.155;.151;.147;.144;.141;.138;.971;.89;.818;.752;.692;.638;.589;.544;.504;.467;.434;.403;.376"/>
+    </rect>
+    <rect x="412.99" y="246.5" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".692;.638;.589;.544;.504;.467;.434;.403;.376;.351;.329;.308;.29;.273;.258;.244;.231;.22;.21;.201;.192;.184;.177;.171;.165;.16;.155;.151;.147;.144;.141;.138;.971;.89;.818;.752"/>
+    </rect>
+    <rect x="579.49" y="246.5" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".865;.794;.731;.673;.62;.573;.53;.491;.455;.423;.394;.367;.343;.321;.302;.284;.268;.253;.24;.227;.216;.207;.198;.189;.182;.175;.169;.164;.158;.154;.15;.146;.143;.14;.137;.942"/>
+    </rect>
+    <rect x="80" y="412.99" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".24;.227;.216;.207;.198;.189;.182;.175;.169;.164;.158;.154;.15;.146;.143;.14;.137;.942;.865;.794;.731;.673;.62;.573;.53;.491;.455;.423;.394;.367;.343;.321;.302;.284;.268;.253"/>
+    </rect>
+    <rect x="246.5" y="412.99" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".21;.201;.192;.184;.177;.171;.165;.16;.155;.151;.147;.144;.141;.138;.971;.89;.818;.752;.692;.638;.589;.544;.504;.467;.434;.403;.376;.351;.329;.308;.29;.273;.258;.244;.231;.22"/>
+    </rect>
+    <rect x="412.99" y="412.99" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".151;.147;.144;.141;.138;.971;.89;.818;.752;.692;.638;.589;.544;.504;.467;.434;.403;.376;.351;.329;.308;.29;.273;.258;.244;.231;.22;.21;.201;.192;.184;.177;.171;.165;.16;.155"/>
+    </rect>
+    <rect x="579.49" y="412.99" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".142;.139;1;.917;.842;.774;.712;.656;.605;.559;.517;.479;.445;.413;.385;.359;.336;.315;.296;.279;.263;.249;.236;.224;.213;.204;.195;.187;.18;.173;.167;.162;.157;.153;.149;.145"/>
+    </rect>
+    <rect x="80" y="579.49" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".21;.201;.192;.184;.177;.171;.165;.16;.155;.151;.147;.144;.141;.138;.971;.89;.818;.752;.692;.638;.589;.544;.504;.467;.434;.403;.376;.351;.329;.308;.29;.273;.258;.244;.231;.22"/>
+    </rect>
+    <rect x="246.5" y="579.49" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".187;.18;.173;.167;.162;.157;.153;.149;.145;.142;.139;1;.917;.842;.774;.712;.656;.605;.559;.517;.479;.445;.413;.385;.359;.336;.315;.296;.279;.263;.249;.236;.224;.213;.204;.195"/>
+    </rect>
+    <rect x="412.99" y="579.49" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".164;.158;.154;.15;.146;.143;.14;.137;.942;.865;.794;.731;.673;.62;.573;.53;.491;.455;.423;.394;.367;.343;.321;.302;.284;.268;.253;.24;.227;.216;.207;.198;.189;.182;.175;.169"/>
+    </rect>
+    <rect x="579.49" y="579.49" width="140.50" height="140.50" rx="10.40">
+      <animate attributeName="opacity" calcMode="discrete" repeatCount="indefinite"
+               dur="1.2s" values=".151;.147;.144;.141;.138;.971;.89;.818;.752;.692;.638;.589;.544;.504;.467;.434;.403;.376;.351;.329;.308;.29;.273;.258;.244;.231;.22;.21;.201;.192;.184;.177;.171;.165;.16;.155"/>
+    </rect>
+  </g>
+</svg>

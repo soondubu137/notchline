@@ -241,8 +241,9 @@ enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         // §9.2) -- so the wait that follows it is the only thing that proves
         // the human answered. Without this pair the row keeps saying Approval
         // needed while the agent is asking a question, which is the one fact
-        // the product exists to get right, and aggregation ranks it below the
-        // Input it actually is (PRD §6.2).
+        // the product exists to get right. This is a rule about *sequence*
+        // within one turn, not about rank: across rows, aggregation ranks
+        // approval above input (PRD §6.2).
         case (.running, .inputNeeded), (.inputNeeded, .inputNeeded),
              (.approvalNeeded, .inputNeeded):
             return .inputNeeded
@@ -994,10 +995,14 @@ enum MonitorAggregation {
     ) -> SessionStatus {
         // Someone is being asked something, which outranks whether anything is
         // still working — a thread can be both at once, and only one of them
-        // needs the user. Input still outranks approval, exactly as it does
-        // within a turn (`PRD.md` §6.2, and `SessionStatus.transitioned`):
-        // a refused approval is never closed by either product, so the question
-        // that follows it is the more current fact.
+        // needs the user. Input still wins here, and that is not the table
+        // being contradicted: the table ranks approval first (`PRD.md` §6.2)
+        // but it ranks *two rows* against each other, and this is one row
+        // against itself. A refused approval is never closed by either product,
+        // so a question that arrived afterwards is the more current fact about
+        // the same thread — reporting the approval would be reporting a dialog
+        // the user has already answered. Same rule, same reason, as
+        // `SessionStatus.transitioned`.
         if session.subagentsAwaitingApproval, session.status != .inputNeeded {
             return .approvalNeeded
         }
@@ -1017,6 +1022,14 @@ enum MonitorAggregation {
 
     /// Rows first, availability second.
     ///
+    /// **Approval leads the table.** Both waits stop the product, but they ask
+    /// for different things: an input wait is a question the user answers when
+    /// they get to it, an approval wait is a decision the agent cannot proceed
+    /// past and one the user may not want made. Now that the mark draws the two
+    /// with different patterns — the knock against the advance
+    /// (`NotchStatusMatrix.swift`) — the order also decides which of them a bar
+    /// holding both shows, so it has to be the one worth interrupting for.
+    ///
     /// A live turn always outranks another product's unhealthy availability.
     /// Without that, a user who has merely seen the second product's settings
     /// row — and therefore has one agent reporting `setupRequired` — would find
@@ -1027,8 +1040,8 @@ enum MonitorAggregation {
         sessions: [MonitoredSession]
     ) -> MonitorStatus {
         let priority: [SessionStatus] = [
-            .inputNeeded,
             .approvalNeeded,
+            .inputNeeded,
             .running,
             .completed
         ]
@@ -1096,8 +1109,8 @@ enum MonitorAggregation {
         _ rhs: MonitoredSession
     ) -> Bool {
         let priority: [SessionStatus: Int] = [
-            .inputNeeded: 0,
-            .approvalNeeded: 1,
+            .approvalNeeded: 0,
+            .inputNeeded: 1,
             .running: 2,
             .completed: 3
         ]

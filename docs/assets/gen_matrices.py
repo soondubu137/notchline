@@ -1,103 +1,167 @@
-import textwrap
+"""Regenerate the README's status-matrix thumbnails.
+
+The patterns are the ones in `design/assets/matrix-states/`, reduced to two
+products side by side on a card. Keep this in step with `MatrixTrack` in
+`Notchline/Notchline/NotchStatusMatrix.swift`: same waveforms, same offsets,
+same periods. The Swift side is the one the product ships; this file only has
+to draw the same thing at a size a README can show.
+"""
+
+import math
+import os
 
 CELL = 27
 GAP = 5
 PITCH = CELL + GAP
 RADIUS = 2
-SIDE = 91  # 3*PITCH - GAP
+SIDE = 4
+VIEW = SIDE * PITCH - GAP  # 123
 
 CODEX_ON = "#6CB4FF"
 CODEX_OFF = "#101B26"
 CLAUDE_ON = "#D97757"
 CLAUDE_OFF = "#21120D"
 
-RUNNING_EVEN = [0.500,0.371,0.250,0.146,0.067,0.017,0.000,0.017,0.067,0.146,0.250,0.371,0.500,0.629,0.750,0.854,0.933,0.983,1.000,0.983,0.933,0.854,0.750,0.629]
-RUNNING_ODD  = [0.757,0.859,0.937,0.985,1.000,0.981,0.929,0.848,0.743,0.622,0.492,0.363,0.243,0.141,0.063,0.015,0.000,0.019,0.071,0.152,0.257,0.378,0.508,0.637]
-ATTENTION_RING   = [0.100]*16 + [1.000,0.981,0.963,0.944,0.925,0.906,0.887,0.869]
-ATTENTION_CENTRE = [1.000,0.981,0.963,0.944,0.925,0.906,0.887,0.869,0.850,0.831,0.813,0.794,0.775,0.756,0.738,0.719,0.700,0.681,0.663,0.644,0.625,0.606,0.588,0.569]
-COMPLETED = [0.550,0.667,0.775,0.868,0.939,0.984,1.000,0.984,0.939,0.868,0.775,0.667,0.550,0.433,0.325,0.232,0.161,0.116,0.100,0.116,0.161,0.232,0.325,0.433]
-INACTIVE = [0.180]
+# Radar: full brightness as the beam crosses, then an exponential fall to a
+# 0.139 floor with a 10.2-frame time constant.
+RADAR = [
+    1.0, 0.93, 0.853, 0.784, 0.721, 0.664, 0.613, 0.566,
+    0.523, 0.485, 0.45, 0.418, 0.389, 0.363, 0.34, 0.318,
+    0.299, 0.281, 0.265, 0.251, 0.238, 0.226, 0.215, 0.205,
+    0.196, 0.188, 0.181, 0.174, 0.168, 0.163, 0.158, 0.153,
+    0.149, 0.146, 0.142, 0.139,
+]
+# Advance: one column at full for a quarter of the loop, the rest dark.
+ADVANCE = [1.0] * 6 + [0.05] * 18
+ADVANCE_BASELINE = 0.3
+# Double knock: two beats 300 ms apart, each falling away over three frames,
+# then 900 ms at the darkest level on the surface.
+KNOCK = [
+    1.0, 1.0, 0.731, 0.538, 0.399, 0.3, 0.229, 0.179, 0.142,
+    1.0, 1.0, 0.731, 0.538, 0.399, 0.3, 0.229, 0.179, 0.142,
+    0.116, 0.097, 0.084, 0.074, 0.067, 0.062, 0.059, 0.056, 0.055,
+    0.053, 0.052, 0.052, 0.051, 0.051, 0.051, 0.05, 0.05, 0.05,
+]
+# Lull: a crest crossing the anti-diagonal, then about three quarters of a
+# second in the trough.
+LULL = [
+    0.359, 0.407, 0.454, 0.505, 0.561, 0.616, 0.673, 0.73, 0.784, 0.834,
+    0.884, 0.918, 0.952, 0.975, 0.988, 1.0, 0.988, 0.975, 0.952, 0.918,
+    0.884, 0.834, 0.784, 0.73, 0.673, 0.616, 0.561, 0.505, 0.454, 0.407,
+    0.359, 0.325, 0.291, 0.263, 0.242, 0.22, 0.21, 0.199, 0.192, 0.188,
+    0.183, 0.183, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.183,
+    0.183, 0.188, 0.192, 0.199, 0.21, 0.22, 0.242, 0.263, 0.291, 0.325,
+]
+INACTIVE = [0.18]
 
-def fmt(values):
-    return ";".join(f"{v:.3f}" for v in values)
+PERIODS = {"running": 1.2, "input": 0.8, "approval": 1.2, "completed": 2.0}
+
+
+def delayed(track, offset):
+    return [track[(n - offset) % len(track)] for n in range(len(track))]
+
+
+def radar_offset(row, col):
+    """The frame the beam reaches this cell on: its bearing, swept clockwise."""
+    centre = (SIDE - 1) / 2
+    bearing = math.atan2(row - centre, col - centre) % (2 * math.pi)
+    return math.ceil(bearing / (2 * math.pi) * len(RADAR)) % len(RADAR)
+
+
+def lull_offset(row, col):
+    """The crest crosses the six diagonal steps in 48.7 of the 60 frames."""
+    return round((row + col) * 48.7 / 6)
+
 
 def cell_track(index, state):
-    row, col = divmod(index, 3)
+    row, col = divmod(index, SIDE)
     if state == "running":
-        return RUNNING_EVEN if (row + col) % 2 == 0 else RUNNING_ODD
-    if state == "attention":
-        return ATTENTION_CENTRE if index == 4 else ATTENTION_RING
+        return delayed(RADAR, radar_offset(row, col))
+    if state == "input":
+        if row == SIDE - 1:
+            return [ADVANCE_BASELINE]
+        return delayed(ADVANCE, col * len(ADVANCE) // SIDE)
+    if state == "approval":
+        return KNOCK
     if state == "completed":
-        return COMPLETED
+        return delayed(LULL, lull_offset(row, col))
     return INACTIVE
 
-def period(state):
-    return {"running": 1.0, "attention": 1.2, "completed": 1.2}.get(state)
 
-def matrix_group(x, y, on_color, off_color, state, anim_id_prefix):
+def fmt(values):
+    # The loop is closed with a repeat of the opening frame, as the app does,
+    # so N frames play across N intervals instead of N-1.
+    return ";".join(f"{v:.3f}" for v in [*values, values[0]])
+
+
+def matrix_group(x, y, on_color, off_color, state):
     parts = [f'<g transform="translate({x},{y})">']
-    for index in range(9):
-        row, col = divmod(index, 3)
-        cx = col * PITCH
-        cy = row * PITCH
+    for index in range(SIDE * SIDE):
+        row, col = divmod(index, SIDE)
+        cx, cy = col * PITCH, row * PITCH
         track = cell_track(index, state)
         parts.append(
-            f'<rect x="{cx}" y="{cy}" width="{CELL}" height="{CELL}" rx="{RADIUS}" ry="{RADIUS}" fill="{off_color}"/>'
+            f'<rect x="{cx}" y="{cy}" width="{CELL}" height="{CELL}" '
+            f'rx="{RADIUS}" ry="{RADIUS}" fill="{off_color}"/>'
         )
         opening = (
-            f'<rect x="{cx}" y="{cy}" width="{CELL}" height="{CELL}" rx="{RADIUS}" ry="{RADIUS}" '
-            f'fill="{on_color}" opacity="{track[0]:.3f}"'
+            f'<rect x="{cx}" y="{cy}" width="{CELL}" height="{CELL}" '
+            f'rx="{RADIUS}" ry="{RADIUS}" fill="{on_color}" '
+            f'opacity="{track[0]:.3f}"'
         )
         if len(track) > 1:
-            p = period(state)
             parts.append(
-                opening + f'>'
-                f'<animate attributeName="opacity" values="{fmt(track)}" dur="{p}s" '
-                f'repeatCount="indefinite" calcMode="linear"/></rect>'
+                opening + ">"
+                f'<animate attributeName="opacity" values="{fmt(track)}" '
+                f'dur="{PERIODS[state]}s" repeatCount="indefinite" '
+                f'calcMode="linear"/></rect>'
             )
         else:
-            parts.append(opening + '/>')
-    parts.append('</g>')
+            parts.append(opening + "/>")
+    parts.append("</g>")
     return "\n    ".join(parts)
+
 
 def build(state, title, caption):
     gap_between = 40
     pad = 22
     label_h = 22
     top_pad = 30
-    width = pad * 2 + SIDE * 2 + gap_between
-    height = top_pad + SIDE + label_h + 34
+    width = pad * 2 + VIEW * 2 + gap_between
+    height = top_pad + VIEW + label_h + 34
     bg = "#0B0B0D"
     stroke = "#232326"
+    font = (
+        "-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif"
+    )
 
     codex_x = pad
-    claude_x = pad + SIDE + gap_between
+    claude_x = pad + VIEW + gap_between
     matrix_y = top_pad
 
-    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="{title}: Codex and Claude Code status matrix">
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="{title}: Codex and Claude Code status matrix">
   <rect x="0" y="0" width="{width}" height="{height}" rx="14" ry="14" fill="{bg}" stroke="{stroke}" stroke-width="1"/>
-  <text x="{width/2}" y="20" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="600" fill="#E7E7EA">{title}</text>
-  {matrix_group(codex_x, matrix_y, CODEX_ON, CODEX_OFF, state, "codex")}
-  {matrix_group(claude_x, matrix_y, CLAUDE_ON, CLAUDE_OFF, state, "claude")}
-  <text x="{codex_x + SIDE/2}" y="{matrix_y + SIDE + 20}" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#4D81B7">Codex</text>
-  <text x="{claude_x + SIDE/2}" y="{matrix_y + SIDE + 20}" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#9C553E">Claude Code</text>
-  <text x="{width/2}" y="{height - 12}" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="10.5" fill="#6C6C72">{caption}</text>
+  <text x="{width / 2}" y="20" text-anchor="middle" font-family="{font}" font-size="13" font-weight="600" fill="#E7E7EA">{title}</text>
+  {matrix_group(codex_x, matrix_y, CODEX_ON, CODEX_OFF, state)}
+  {matrix_group(claude_x, matrix_y, CLAUDE_ON, CLAUDE_OFF, state)}
+  <text x="{codex_x + VIEW / 2}" y="{matrix_y + VIEW + 20}" text-anchor="middle" font-family="{font}" font-size="11" fill="#4D81B7">Codex</text>
+  <text x="{claude_x + VIEW / 2}" y="{matrix_y + VIEW + 20}" text-anchor="middle" font-family="{font}" font-size="11" fill="#9C553E">Claude Code</text>
+  <text x="{width / 2}" y="{height - 12}" text-anchor="middle" font-family="{font}" font-size="10.5" fill="#6C6C72">{caption}</text>
 </svg>
 '''
-    return svg
+
 
 states = [
-    ("running", "Running", "Diagonal sweep — a turn is executing"),
-    ("attention", "Input needed / Approval needed", "Ring flash — the turn is waiting on you"),
-    ("completed", "Completed", "Slow breath — finished, still unread"),
+    ("running", "Running", "Radar — a beam sweeps, each cell holds its afterglow"),
+    ("approval", "Approval needed", "Double knock — two beats, then a silence"),
+    ("input", "Input needed", "Advance — a column steps across a held baseline"),
+    ("completed", "Completed", "Lull — one crest down the diagonal, then a trough"),
     ("idle", "Connected, no active turn", "Dim and still — the product is open, nothing is running"),
 ]
 
-import os
 outdir = os.path.dirname(os.path.abspath(__file__))
 for state, title, caption in states:
-    svg = build(state, title, caption)
     path = os.path.join(outdir, f"matrix-{state}.svg")
-    with open(path, "w") as f:
-        f.write(svg)
+    with open(path, "w") as handle:
+        handle.write(build(state, title, caption))
     print("wrote", path)

@@ -254,12 +254,15 @@ struct NotchlineTests {
 
     /// The legend's seam runs the way the app's own mark does.
     ///
-    /// This is the first asymmetric thing the matrix has ever drawn. All four
-    /// patterns are symmetric top to bottom — a checkerboard, a centre cell,
-    /// and two uniform fields — so the view's `isFlipped` has never been
-    /// observable and nothing would have caught it being wrong. The seam
-    /// would: mirrored, it runs upper-left to lower-right and the legend stops
-    /// looking like the icon.
+    /// The seam was once the only asymmetric thing the matrix drew: the four
+    /// old patterns were all symmetric top to bottom — a checkerboard, a
+    /// centre cell, and two uniform fields — so the view's `isFlipped` was
+    /// never observable and nothing would have caught it being wrong. Three of
+    /// the four patterns are asymmetric now (the radar would sweep the wrong
+    /// way, the advance's baseline row would sit on top, the lull would cross
+    /// the wrong diagonal), so `isFlipped` has other witnesses. The seam is
+    /// still the sharpest of them: mirrored, it runs upper-left to lower-right
+    /// and the legend stops looking like the icon.
     ///
     /// Asserted on the path rather than on rendered pixels because the path is
     /// what the code decides; the row and column arithmetic beside it is the
@@ -273,12 +276,14 @@ struct NotchlineTests {
         // Row 0 is the top row, which is what makes "above" mean above.
         #expect(MatrixIndicatorView(frame: .zero).isFlipped)
 
-        // Three cells a side, three on the seam itself.
-        let sides = (0 ..< 9).map { MatrixIndicatorView.DiagonalSide.of(cell: $0) }
+        // Six cells a side, four on the seam itself.
+        let sides = (0 ..< MatrixGrid.cellCount)
+            .map { MatrixIndicatorView.DiagonalSide.of(cell: $0) }
         #expect(sides == [
-            .above, .above, .onSeam,
-            .above, .onSeam, .below,
-            .onSeam, .below, .below
+            .above, .above, .above, .onSeam,
+            .above, .above, .onSeam, .below,
+            .above, .onSeam, .below, .below,
+            .onSeam, .below, .below, .below
         ])
 
         // The trailing half is the lower-right one: y grows downwards, so the
@@ -296,6 +301,102 @@ struct NotchlineTests {
         #expect(half.contains(CGPoint(x: edge * 0.5, y: edge * 0.9)))
         #expect(!half.contains(CGPoint(x: edge * 0.5, y: edge * 0.1)))
         #expect(!half.contains(CGPoint(x: edge * 0.1, y: edge * 0.5)))
+    }
+
+    /// Each state draws the pattern its design file draws.
+    ///
+    /// The four files in `design/assets/matrix-states/` are the contract, and
+    /// what makes them checkable is that each writes one waveform sixteen
+    /// times at sixteen offsets. The code holds the waveform once and computes
+    /// the offsets, so the offsets are the half that can drift silently — a
+    /// sign flipped on the radar's bearing sweeps it anticlockwise and still
+    /// looks like a radar. They are transcribed here from the files.
+    ///
+    /// Read off the layers rather than off ``NotchMatrixState/track(forCell:)``
+    /// so that what is asserted is what the render server is actually given,
+    /// closing keyframe and all.
+    @Test @MainActor
+    func eachStateDrawsThePatternItsDesignFileDraws() throws {
+        /// The lit cells of one mark, in row-major order.
+        func cells(_ state: NotchMatrixState) throws -> [CALayer] {
+            let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
+            view.apply(state: state, size: 16, isAnimated: true, ink: NotchPalette.codexInk)
+            // The unlit bed is first and never animates; any lit pass will do.
+            let passes = try #require(view.layer?.sublayers)
+            return try #require(passes.last?.sublayers)
+        }
+        func values(_ cell: CALayer) throws -> [Double] {
+            let animation = try #require(
+                cell.animation(forKey: "notch.matrix.opacity") as? CAKeyframeAnimation
+            )
+            return try #require(animation.values as? [NSNumber]).map(\.doubleValue)
+        }
+
+        // Radar: 36 frames, and the frame each cell lights on is the bearing of
+        // its centre from the mark's, swept clockwise.
+        let radar = try cells(.running)
+        #expect(radar.count == MatrixGrid.cellCount)
+        let radarPeaks = [
+            23, 26, 29, 32,
+            20, 23, 32, 35,
+            17, 14, 5, 2,
+            14, 11, 8, 5
+        ]
+        for (index, cell) in radar.enumerated() {
+            let track = try values(cell)
+            // 36 frames plus the repeat of frame 0 that closes the loop.
+            #expect(track.count == 37)
+            #expect(track.first == track.last)
+            #expect(track[radarPeaks[index]] == 1)
+            // And it decays to the radar's own floor, never to black.
+            #expect(track.min() == 0.139)
+        }
+
+        // Advance: one column at full for a quarter of the loop, left to
+        // right, over a bottom row that holds and never animates.
+        let advance = try cells(.inputNeeded)
+        for (index, cell) in advance.enumerated() {
+            let row = index / MatrixGrid.side
+            let column = index % MatrixGrid.side
+            guard row < MatrixGrid.side - 1 else {
+                #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
+                #expect(cell.opacity == 0.3)
+                continue
+            }
+            let track = try values(cell)
+            #expect(track.count == 25)
+            let lit = track.indices.filter { track[$0] == 1 }
+            #expect(lit == Array(column * 6 ..< column * 6 + 6) + (column == 0 ? [24] : []))
+            #expect(track.min() == 0.05)
+        }
+
+        // Double knock: every cell together, twice, 300ms apart.
+        let knock = try cells(.approvalNeeded)
+        let knockTrack = try values(knock[0])
+        #expect(knockTrack.count == 37)
+        #expect(knockTrack.indices.filter { knockTrack[$0] == 1 } == [0, 1, 9, 10, 36])
+        for cell in knock {
+            #expect(try values(cell) == knockTrack)
+        }
+
+        // Lull: the crest crosses the anti-diagonal, so a cell's track is the
+        // first cell's delayed by its own diagonal's share of those 48.7
+        // frames, and cells on one diagonal are the same track exactly.
+        let lull = try cells(.completed)
+        let first = try values(lull[0])
+        #expect(first.count == 61)
+        // Full at the crest, and down to the trough the design file rests at
+        // — which is also the level an inactive mark holds, so it is the crest
+        // crossing the mark, not the mark's darkness, that tells a finished
+        // turn from an idle one.
+        #expect(first.max() == 1)
+        #expect(first.min() == 0.182)
+        let lullDelays = [0, 8, 16, 24, 32, 41, 49]
+        for (index, cell) in lull.enumerated() {
+            let delay = lullDelays[index / MatrixGrid.side + index % MatrixGrid.side]
+            let expected = (0 ... 60).map { first[(($0 - delay) % 60 + 60) % 60] }
+            #expect(try values(cell) == expected)
+        }
     }
 
     /// Two marks showing the same pattern show it in sync.
@@ -343,7 +444,9 @@ struct NotchlineTests {
         let claudeCode = try beginTimes(of: .running, ink: NotchPalette.claudeCodeInk)
 
         // Every lit cell in a mark is anchored together, as it always was.
-        #expect(codex.count == 9 * 4)
+        // The phase each cell then shows is baked into its own track, not into
+        // its `beginTime`, so the anchor stays one number per mark.
+        #expect(codex.count == MatrixGrid.cellCount * 4)
         #expect(claudeCode.count == codex.count)
         let codexPhase = try #require(codex.first)
         let claudePhase = try #require(claudeCode.first)
@@ -368,9 +471,9 @@ struct NotchlineTests {
         #expect(offGrid(claudePhase - codexPhase, period) < 1e-9)
 
         // The anchor itself: the last whole-period boundary at or before now,
-        // never ahead of it, never a full period behind. Both periods the
+        // never ahead of it, never a full period behind. Every period the
         // states use, because 1.2 is the one floating point rounds.
-        for period in [1.0, 1.2] {
+        for period in [0.8, 1.2, 3.0] {
             let anchor = MatrixIndicatorView.phaseAnchor(for: period, now: 10.7)
             #expect(anchor <= 10.7)
             #expect(10.7 - anchor < period)
@@ -3899,6 +4002,75 @@ struct NotchlineTests {
                 makeAgentSnapshot(.claudeCode, sessions: [claudeInput])
             ]).status == .inputNeeded
         )
+    }
+
+    /// Approval outranks input across rows, and input outranks approval within
+    /// one. Both rules exist, and they are not the same rule.
+    ///
+    /// **Across rows** the question is which of two waits is worth showing when
+    /// only one can be: an input wait is answered whenever the user gets to it,
+    /// an approval wait is a decision the agent cannot proceed past. Since the
+    /// mark started drawing the two with different patterns, this order also
+    /// decides which pattern a bar holding both runs, so the summary sentence
+    /// and the mark beside it cannot disagree.
+    ///
+    /// **Within one row** the question is which of two readings is still true.
+    /// A refused approval is never closed by either product, so a question that
+    /// arrived after one is the more current fact about that thread and input
+    /// keeps winning there. Flipping the table without noticing the difference
+    /// would put a mark back on a dialog the user has already answered.
+    @Test @MainActor
+    func approvalOutranksInputAcrossRowsButNotWithinOne() {
+        let now = Date()
+        func session(
+            _ agent: AgentKind,
+            _ id: String,
+            _ status: SessionStatus,
+            awaitingApproval: Int = 0
+        ) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id,
+                turnID: "turn-\(id)",
+                projectName: "notchline",
+                title: id,
+                preview: nil,
+                status: status,
+                startedAt: now,
+                subagentsAwaitingApprovalCount: awaitingApproval
+            )
+        }
+
+        // Two rows, one of each, on one product and then across two.
+        let input = session(.codex, "input", .inputNeeded)
+        let approval = session(.codex, "approval", .approvalNeeded)
+        #expect(
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, sessions: [input, approval])
+            ]).status == .approvalNeeded
+        )
+        let claudeApproval = session(.claudeCode, "cc", .approvalNeeded)
+        #expect(
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, sessions: [input]),
+                makeAgentSnapshot(.claudeCode, sessions: [claudeApproval])
+            ]).status == .approvalNeeded
+        )
+
+        // And the list sorts by the same table, so the row the notch is
+        // reporting is the row at the top of the list.
+        #expect(MonitorAggregation.rowOrder(approval, input))
+        #expect(!MonitorAggregation.rowOrder(input, approval))
+
+        // One row that is both: its own turn is asking a question while a
+        // subagent sits on a dialog. The question came second, so it wins.
+        let asking = session(.claudeCode, "both", .inputNeeded, awaitingApproval: 1)
+        #expect(asking.subagentsAwaitingApproval)
+        #expect(MonitorAggregation.effectiveStatus(of: asking) == .inputNeeded)
+        // The same row without the question reports the dialog, as it must --
+        // otherwise the exception above would be swallowing the flag whole.
+        let notAsking = session(.claudeCode, "both", .running, awaitingApproval: 1)
+        #expect(MonitorAggregation.effectiveStatus(of: notAsking) == .approvalNeeded)
     }
 
     @Test @MainActor

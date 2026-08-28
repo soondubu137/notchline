@@ -468,15 +468,26 @@ enum PanelMetrics {
         return badgesWidth + subagentBadgeTimerSpacing + timerWidth
     }
 
-    /// The session-count dots, in the matrix's own `91`-unit viewBox.
+    /// The session-count dots, in a `91`-unit viewBox of their own.
     ///
-    /// **They belong to the matrix, so they are measured in its units.** The
-    /// matrix is `27`-unit cells on a `32`-unit pitch (`NotchStatusMatrix`); a
-    /// dot is `15` of those units across, the column stands `16` clear of the
-    /// mark, and past three the third dot stretches to a full cell's `27`. At
-    /// the surface's `16.6` matrix that is `2.74`, `2.92` and `4.93`.
+    /// **They are measured as thirds of the mark.** A dot is `15` of these
+    /// units across, the column stands `16` clear of the mark, and past three
+    /// the third dot stretches to `27`. At the surface's `16.6` mark that is
+    /// `2.74`, `2.92` and `4.93`.
     ///
-    /// **The column is exactly as tall as the matrix.** Two pitches and a cell
+    /// `91` was the matrix's own viewBox when it was 3×3 — `27`-unit cells on
+    /// a `32`-unit pitch, three to a side — and every figure here was the
+    /// matrix's own: the dots sat on its row centres and the dash was one of
+    /// its cells. The matrix is 4×4 now (`MatrixGrid`) and its viewBox is
+    /// `123`, and these figures deliberately did **not** follow it there.
+    /// Reading them in the new units would put a `2.02` dot beside a `2.16`
+    /// gap, which is under the size at which a run of them can be counted at
+    /// all — and it would narrow the column from `5.66` to `4.18`, moving
+    /// every collapsed width on the surface for a change the dots are not
+    /// party to. The count is the one thing here that is not the matrix's to
+    /// say, so it keeps the size it was legible at.
+    ///
+    /// **The column is exactly as tall as the mark.** Two pitches and a dash
     /// is `16.6` — the same identity the horizontal arrangement had, stood on
     /// its end. That is what makes this placement work on a menu bar of any
     /// height: the dots ask for no room the mark did not already have, so a
@@ -495,11 +506,11 @@ enum PanelMetrics {
     static func sessionDotGap(matrixSize: CGFloat) -> CGFloat {
         matrixSize * 16 / sessionDotViewBox
     }
-    /// The matrix's own row pitch, which the dots are centred on.
+    /// The pitch the dots are centred on: three of them span the whole mark.
     static func sessionDotPitch(matrixSize: CGFloat) -> CGFloat {
         matrixSize * 32 / sessionDotViewBox
     }
-    /// One matrix cell, which is how long the "and more" dash is drawn.
+    /// How long the "and more" dash is drawn.
     static func sessionDotDashLength(matrixSize: CGFloat) -> CGFloat {
         matrixSize * 27 / sessionDotViewBox
     }
@@ -535,8 +546,11 @@ enum PanelMetrics {
     ///
     /// Three, because a fourth will not fit beside the matrix without shrinking
     /// every dot below the size at which they can be counted — the column is
-    /// the mark's own height and the dots sit on its own row pitch. Past this
-    /// the third dot stretches into a dash and the run means "more than three".
+    /// the mark's own height and three dots and a dash is what that height
+    /// divides into. Past this the third dot stretches into a dash and the run
+    /// means "more than three". The matrix behind them has four rows now, and
+    /// this is still three: the dots count sessions, not cells, and they were
+    /// never made countable by lining up with anything.
     static let sessionDotCap = 3
 
         /// Compact content trailing the notch, including its own trailing padding.

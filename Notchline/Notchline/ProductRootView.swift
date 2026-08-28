@@ -132,19 +132,26 @@ private struct OnboardingView: View {
     }
 }
 
-/// The four appearances, live.
+/// The five appearances, live.
 ///
 /// They animate here for the same reason they animate in the notch: the
-/// pattern *is* the motion, and a still checkerboard says far less than a
-/// moving one. It costs nothing to run — the tracks are layer animations on
-/// the render server, and `Connected` holds by itself because its state has no
-/// period at all.
+/// pattern *is* the motion, and a still grid says far less than a moving one.
+/// It costs nothing to run — the tracks are layer animations on the render
+/// server, and `Connected` holds by itself because its state has no period at
+/// all.
+///
+/// **Five, not four.** This row used to read `Input · Approval` under a single
+/// specimen because the two states drew the same flash. They draw the advance
+/// and the knock now, so one chip could only teach one of them; the names go
+/// short — `Input`, `Approval`, matching what the notch itself says when it is
+/// short of room — rather than the row going to two lines.
 private struct MatrixLegend: View {
     @EnvironmentObject private var store: MonitorStore
 
     private static let states: [(NotchMatrixState, String)] = [
         (.running, "Running"),
-        (.needsAttention, "Input · Approval"),
+        (.approvalNeeded, "Approval"),
+        (.inputNeeded, "Input"),
         (.completed, "Completed"),
         (.inactive, "Connected")
     ]
@@ -178,10 +185,10 @@ private struct MatrixLegend: View {
 ///
 /// The specimens above carry both colours at once, which shows that there are
 /// two but not which is which. This row answers only that, and it sits on the
-/// same four columns as the legend so the two chips line up under specimens
+/// same five columns as the legend so the two chips line up under specimens
 /// rather than floating between them.
 private struct ProductColourKey: View {
-    private static let products: [AgentKind?] = [.codex, nil, .claudeCode, nil]
+    private static let products: [AgentKind?] = [.codex, nil, .claudeCode, nil, nil]
 
     var body: some View {
         HStack(spacing: 0) {

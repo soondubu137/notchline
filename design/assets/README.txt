@@ -23,6 +23,23 @@ Colours
                     notchline-icon-macos.svg
                     notchline-icon-1024 / 512 / 256 / 128 .png
 
+matrix-states/      The collapsed overlay's status matrix, one animated SVG
+                    per state. 4x4, drawn in Claude Code's terracotta over
+                    #21120D; Codex runs the same four patterns in its own
+                    blue, because the pattern says the state and the hue says
+                    the product.
+                    notchline-running-radar.svg           1200ms, 36 frames
+                    notchline-approval-double-knock.svg   1200ms, 36 frames
+                    notchline-input-advance.svg            800ms, 24 frames
+                    notchline-completed-lull.svg          2000ms, 60 frames
+                    Each file writes one waveform sixteen times at sixteen
+                    offsets. The app holds the waveform once and computes the
+                    offsets: MatrixTrack in NotchStatusMatrix.swift, spelled
+                    out in docs/figma-design.md section 4.1.
+                    loaders-wtf-import.js is where the four came from: paste it
+                    into the console at loaders.wtf to get the whole candidate
+                    sheet back, these four among them.
+
 Typeface
   Wordmark is set in Encode Sans, Medium (500), tracked +1.2% in the
   horizontal lockup. Free via Google Fonts.
