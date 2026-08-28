@@ -778,7 +778,9 @@ enum NotchMatrixState: Equatable {
 /// four sit at three floors of their own — `0.05` under the knock and
 /// between the advance's columns, `0.139` behind the radar, `0.182` at the
 /// bottom of the lull — so a mark asking something of the user is legible
-/// from the darkness alone and there is nothing left to correct.
+/// from the darkness alone and there is nothing left to correct. What moves
+/// to keep that true is the resting level, which threads between them; see
+/// ``MatrixTrack/inactiveLevel``.
 private enum MatrixTrack {
     /// **Radar**, 36 frames over `1.2s`.
     ///
@@ -844,17 +846,26 @@ private enum MatrixTrack {
         0.183, 0.183, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.183,
         0.183, 0.188, 0.192, 0.199, 0.210, 0.220, 0.242, 0.263, 0.291, 0.325
     ]
-    /// Connected and disconnected hold still at a level the two states that
-    /// ask something of the user fall well below.
+    /// Connected and disconnected hold still at a level no live pattern
+    /// rests at.
     ///
-    /// It sits above the `0.05` the knock and the advance drop to, so
-    /// darkness alone still separates a mark waiting on the user from one
-    /// that is merely present. It no longer separates a finished turn: the
-    /// lull's trough is `0.182`, which is this level. Motion separates those
-    /// two instead — the crest is staggered across the anti-diagonals, so
-    /// some cell of a completed mark is always at `0.86` or above, while an
-    /// inactive one never moves at all.
-    static let inactiveLevel = 0.180
+    /// It threads between the floors the four patterns fall to: above the
+    /// `0.05` the knock and the advance drop to, below the `0.182` the
+    /// lull's trough holds, and just above the radar's `0.139`. Only the
+    /// first of those three gaps is a difference the eye reads as darkness,
+    /// and it is the one that has to be — a mark waiting on the user is
+    /// three times darker than a resting one, and "the agent wants you"
+    /// against "nothing is happening" is the pair it would be worst to
+    /// confuse. The other two are ordering rather than contrast, and they do
+    /// not have to carry weight on their own: the radar and the lull are
+    /// never at their floors everywhere at once, so a live mark always has a
+    /// lit cell somewhere and a still one never does.
+    ///
+    /// It was `0.180` while the lull rested at `0.343`. The design file
+    /// brought that trough down to `0.182`, which would have left the two
+    /// indistinguishable, so the level came down with it rather than the
+    /// ordering being given up.
+    static let inactiveLevel = 0.150
 
     /// The frame the beam reaches this cell on.
     ///

@@ -385,10 +385,7 @@ struct NotchlineTests {
         let lull = try cells(.completed)
         let first = try values(lull[0])
         #expect(first.count == 61)
-        // Full at the crest, and down to the trough the design file rests at
-        // — which is also the level an inactive mark holds, so it is the crest
-        // crossing the mark, not the mark's darkness, that tells a finished
-        // turn from an idle one.
+        // Full at the crest, and down to the trough the design file rests at.
         #expect(first.max() == 1)
         #expect(first.min() == 0.182)
         let lullDelays = [0, 8, 16, 24, 32, 41, 49]
@@ -397,6 +394,27 @@ struct NotchlineTests {
             let expected = (0 ... 60).map { first[(($0 - delay) % 60 + 60) % 60] }
             #expect(try values(cell) == expected)
         }
+
+        // Connected and disconnected: a still, held between the floors the
+        // four live patterns fall to. The ordering is the claim, not the
+        // number — a mark waiting on the user must be darker than a resting
+        // one, and a finished turn must never be darker — and it is what a
+        // revised design file moves without touching the resting level, which
+        // is how the lull came to rest at `0.182` against a resting `0.180`.
+        // So it is read off the tracks rather than retyped.
+        let inactive = try cells(.inactive)
+        for cell in inactive {
+            #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
+        }
+        let resting = Double(inactive[0].opacity)
+        let advanceFloor = try #require(values(advance[0]).min())
+        let knockFloor = try #require(values(knock[0]).min())
+        let radarFloor = try #require(values(radar[0]).min())
+        let lullFloor = try #require(first.min())
+        #expect(advanceFloor < resting)
+        #expect(knockFloor < resting)
+        #expect(radarFloor < resting)
+        #expect(resting < lullFloor)
     }
 
     /// Two marks showing the same pattern show it in sync.

@@ -52,7 +52,9 @@ LULL = [
     0.183, 0.183, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.183,
     0.183, 0.188, 0.192, 0.199, 0.21, 0.22, 0.242, 0.263, 0.291, 0.325,
 ]
-INACTIVE = [0.18]
+# Connected and disconnected: a still, threaded between the live floors —
+# above the 0.05 the knock and the advance fall to, below the lull's 0.182.
+INACTIVE = [0.15]
 
 PERIODS = {"running": 1.2, "input": 0.8, "approval": 1.2, "completed": 2.0}
 
