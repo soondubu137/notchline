@@ -1276,10 +1276,12 @@ struct HookTurnState: Sendable {
     /// what clears one clears the other, so the stuck-state risk stays the
     /// single one already accepted in `PRD.md` §6.2.
     ///
-    /// A count, not a boolean, since `dual-agent-design.md` §10: the numeral
-    /// chip that replaces this thread's trailing mark draws this figure on its
-    /// own leading (white) chip, separately from ``runningSubagentIDs``'s
-    /// count on the trailing one.
+    /// A count in the reducer, a flag on the surface, since
+    /// `dual-agent-design.md` §10. The badge that draws this thread's trailing
+    /// mark carries ``runningSubagentIDs``'s count — waiting subagents
+    /// included — and says *whether* any of them is stopped by flipping its
+    /// ground rather than by drawing a second figure. The reducer has a real
+    /// count here and keeps one; only `> 0` is ever drawn from it.
     nonisolated var subagentsAwaitingApprovalCount: Int {
         subagentSlots.filter { agentID, slots in
             runningSubagentIDs.contains(agentID) && slots.pendingApproval != nil

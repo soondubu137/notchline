@@ -41,15 +41,19 @@ enum NotchPalette {
         }
         /// How far ``spent`` travels from unlit towards lit.
         private static let spentLift = 0.12
-        /// The running subagent chip's fill.
+        /// A subagent badge's dim ground, which is the one it has while
+        /// everything it counts is running.
         ///
-        /// The chip is a flat tile with a numeral on it, not a dot, and at
+        /// The badge is a flat tile with a numeral on it, not a dot, and at
         /// the unlit colour that tile read as a hole in the panel rather than
         /// as a mark sitting on it. So it is lifted a little towards white --
         /// every channel by the same amount, which leaves each product's hue
         /// and the resting grey's neutrality where they were and gives all
         /// three the same distance from the black behind them. Still plainly
-        /// the dim end of the pair the attention chip's white leads.
+        /// the dim end of the pair the flipped ground leads.
+        ///
+        /// The bright end does *not* come from here: it is the ink's own lit
+        /// colour, unlifted, because there brightness is the signal itself.
         var chipFill: Color {
             Color(
                 red: offRed + Self.chipLift,
@@ -178,11 +182,14 @@ enum NotchPalette {
     )
     /// Session title — the one element that stays bright.
     static let sessionTitle = Color.white.opacity(0.98)
-    /// The subagent attention chip's numeral, drawn on ``spotlight`` white.
+    /// A neutral subagent badge's numeral once its ground has flipped, drawn
+    /// on ``spotlight`` white.
     ///
-    /// `dual-agent-design.md` §10. Not ``label`` or pure black: the chip
+    /// `dual-agent-design.md` §10. Not ``label`` or pure black: the badge
     /// inverts the same way the row's own attention state already does
-    /// elsewhere on this surface, and this is that inversion's dark end.
+    /// elsewhere on this surface, and this is that inversion's dark end. A
+    /// product-tinted badge inverts within its own ink instead and never
+    /// reaches this value.
     static let chipOnLight = Color(red: 0.05, green: 0.05, blue: 0.06)
 
     static let matrixOffLayerColor = CGColor(
@@ -424,97 +431,251 @@ struct UsageMeter: View {
     }
 }
 
-/// Which colour a subagent numeral chip draws in.
+/// Which ink a subagent badge draws in.
 ///
-/// `dual-agent-design.md` §10: hue on this chip only ever answers "can this
-/// mark honestly speak for one product right now" — never "which state is
-/// this". State is ``attention`` versus everything else, and it is answered
-/// by which chip a count is drawn on, not by tint.
-enum SubagentChipTint: Equatable {
-    /// The attention chip's colour, always -- never product-tinted (rule 4).
-    case attention
-    /// The running chip's colour when it cannot honestly speak for one
-    /// product: two products connected in the collapsed pill (rule 2), or an
-    /// expanded row regardless of how many products are connected (rule 3) --
-    /// the row already names its product elsewhere.
+/// `dual-agent-design.md` §10: hue on this badge only ever answers "whose is
+/// this" — never "what state is this". State is the ground's brightness, and
+/// it flips within whichever ink the badge already has.
+enum SubagentBadgeTint: Equatable {
+    /// A session row's badge, always. The row names its product on the caption
+    /// line above, so hue here would spend a channel saying the same thing
+    /// twice.
     case neutral
-    /// The running chip's colour when exactly one product is connected in the
-    /// collapsed pill (rule 1).
+    /// The collapsed surface's badge, one per product. A bar has no caption
+    /// line, so ink is the only thing on it that can say whose.
     case product(AgentKind)
 
-    var fill: Color {
+    private var ink: NotchPalette.MatrixInk {
         switch self {
-        case .attention: NotchPalette.spotlight
-        case .neutral: NotchPalette.restingInk.chipFill
-        case .product(let agent): NotchPalette.ink(for: agent).chipFill
+        case .neutral: NotchPalette.restingInk
+        case .product(let agent): NotchPalette.ink(for: agent)
         }
     }
 
-    var text: Color {
+    /// The ground. Dim while everything is running, bright the moment one of
+    /// them is stopped on a question.
+    ///
+    /// The bright end is the ink's own lit colour for a product badge and the
+    /// surface's white for a neutral one — the resting grey has no lit colour
+    /// of its own (it cannot light, because nothing is connected to light it),
+    /// so brightness there is the same white every other attention signal on
+    /// this surface uses.
+    func fill(wantsAttention: Bool) -> Color {
+        guard wantsAttention else { return ink.chipFill }
         switch self {
-        case .attention: NotchPalette.chipOnLight
-        case .neutral: NotchPalette.label
-        case .product(let agent): NotchPalette.ink(for: agent).on
+        case .neutral: return NotchPalette.spotlight
+        case .product: return ink.on
+        }
+    }
+
+    /// The numeral, which is always whichever end of the pair the ground is
+    /// not.
+    func text(wantsAttention: Bool) -> Color {
+        guard wantsAttention else {
+            switch self {
+            case .neutral: return NotchPalette.label
+            case .product: return ink.on
+            }
+        }
+        switch self {
+        case .neutral: return NotchPalette.chipOnLight
+        case .product: return ink.off
         }
     }
 }
 
-/// One subagent numeral chip: a filled, rounded tile holding a bare count.
+/// One subagent badge: a filled, rounded tile holding a bare count.
 ///
-/// `dual-agent-design.md` §10. Sized to `PanelMetrics.subagentChipWidth`
+/// `dual-agent-design.md` §10. Sized to `PanelMetrics.subagentBadgeWidth`
 /// explicitly rather than left to hug its own text: the collapsed pill's
 /// width is composed from that same measurement, and a view free to size
 /// itself independently could drift from it by a point SwiftUI's own text
 /// layout and `NSString`'s measurement disagree on.
-struct SubagentChip: View {
-    let count: Int
-    let tint: SubagentChipTint
+///
+/// **The count is every subagent, and the ground is the only other thing this
+/// says.** There is no second badge for the waiting ones: a badge is drawn on
+/// exactly the rows and bars that already need a person's attention, and two
+/// numerals there would be two things to read at the worst moment to be
+/// reading.
+struct SubagentBadgeView: View {
+    let badge: SubagentBadge
+    let tint: SubagentBadgeTint
 
     var body: some View {
-        Text("\(count)")
+        Text("\(badge.count)")
             .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(tint.text)
+            .foregroundStyle(tint.text(wantsAttention: badge.wantsAttention))
             .frame(
-                width: PanelMetrics.subagentChipWidth(count),
-                height: PanelMetrics.subagentChipMinSize
+                width: PanelMetrics.subagentBadgeWidth(badge.count),
+                height: PanelMetrics.subagentBadgeMinSize
             )
             .background(
                 RoundedRectangle(
-                    cornerRadius: PanelMetrics.subagentChipCornerRadius,
+                    cornerRadius: PanelMetrics.subagentBadgeCornerRadius,
                     style: .continuous
                 )
-                .fill(tint.fill)
+                .fill(tint.fill(wantsAttention: badge.wantsAttention))
             )
-            // Spoken by the row or the panel header, which say what each
-            // figure counts -- this mark alone is a bare number with colour
-            // as its only label, which VoiceOver cannot read.
+            // Spoken by the row or the panel header, which say what the figure
+            // counts and whose it is -- this mark alone is a bare number with
+            // colour as its only label, which VoiceOver cannot read.
             .accessibilityHidden(true)
     }
 }
 
-/// The white-then-grey/tinted chip pair, wherever it is drawn.
+/// The collapsed surface's badges: one per product, tinted, Codex leading.
 ///
-/// `dual-agent-design.md` §10, rules 5–6. A chip whose count is zero is not
-/// drawn at all -- see ``SubagentChipCounts`` -- and the attention chip always
-/// leads when both are present.
-struct SubagentChipCluster: View {
-    let counts: SubagentChipCounts
-    /// ``.neutral`` for a row always, and for the collapsed pill while two
-    /// products are connected; ``.product(_:)`` only for the collapsed pill
-    /// with exactly one product connected. Never ``.attention`` -- that tint
-    /// belongs to the other chip alone.
-    let runningTint: SubagentChipTint
+/// `dual-agent-design.md` §10. Spaced at the matrices' own `6`, because this
+/// pair is that pair read at the other end of the bar.
+struct SubagentBadgeRow: View {
+    let badges: [AgentSubagentBadge]
 
     var body: some View {
-        HStack(spacing: PanelMetrics.subagentChipSpacing) {
-            if counts.attention > 0 {
-                SubagentChip(count: counts.attention, tint: .attention)
-            }
-            if counts.running > 0 {
-                SubagentChip(count: counts.running, tint: runningTint)
+        HStack(spacing: PanelMetrics.subagentBadgeSpacing) {
+            ForEach(badges, id: \.agent) { mark in
+                SubagentBadgeView(badge: mark.badge, tint: .product(mark.agent))
             }
         }
     }
+}
+
+/// The session-count dots that stand beside one status matrix.
+///
+/// `dual-agent-design.md` §11. One dot per row, packed from the top edge and
+/// centred on the matrix's own three rows; past three the third stretches into
+/// a dash a full cell long, which finishes flush with the matrix's lower edge
+/// and means "more than three".
+///
+/// **A column exactly as tall as the mark it belongs to.** Two row pitches and
+/// a cell is the matrix's own height, so this asks for no vertical room the
+/// mark did not already have and draws identically on a `46` pt menu bar and a
+/// `22` pt one. Under the matrix — where this was drawn first — it needed
+/// `5.66` of clearance below the mark, which the short bars have not got.
+///
+/// **The column owns the gap that separates it from its matrix, and collapses
+/// with it.** A product with no rows takes no width here at all. Together the
+/// gap and the dot are `PanelMetrics.sessionDotColumnWidth`, which is why they
+/// open and close as one value rather than as a spacing plus a view — half a
+/// column is a dot standing at the wrong distance from its own mark.
+///
+/// The panel does not narrow when this closes; `StatusReadout` has already been
+/// given the room and the slack falls at the trailing end of the marks. So what
+/// an opening column moves is only what comes *after* it, and the last mark's
+/// column moves nothing at all.
+///
+/// **Dots only fade; matrices only move.** The dot is drawn at a fixed `2.92`
+/// from the matrix that owns it — offset rather than laid out, so the column's
+/// width can grow underneath it without carrying it along. That matrix is
+/// already standing still by the time the dot appears, so the dot appears in
+/// the place it will keep. Nothing in this view translates.
+///
+/// The offset overhangs the column while it is opening, and is allowed to: a
+/// dot reaches `5.66` from its matrix and the next mark is never nearer than
+/// the pair's own `6`, so the overhang has nothing to collide with and needs no
+/// clip. Clipping instead would wipe the dot in from its leading edge, which is
+/// the one motion this view is arranged to avoid.
+struct SessionCountDots: View {
+    let count: Int
+    /// Which product's rows these are, for the ink. The resting grey has no
+    /// product and never draws this view at all.
+    let agent: AgentKind
+    let matrixSize: CGFloat
+    var reduceMotion: Bool = false
+
+    private var hasRows: Bool { count > 0 }
+    private var columnWidth: CGFloat {
+        hasRows ? PanelMetrics.sessionDotColumnWidth(matrixSize: matrixSize) : 0
+    }
+    private var gap: CGFloat { PanelMetrics.sessionDotGap(matrixSize: matrixSize) }
+    private var diameter: CGFloat { PanelMetrics.sessionDotDiameter(matrixSize: matrixSize) }
+    private var pitch: CGFloat { PanelMetrics.sessionDotPitch(matrixSize: matrixSize) }
+    private var dashLength: CGFloat { PanelMetrics.sessionDotDashLength(matrixSize: matrixSize) }
+    private var isPastCap: Bool { count > PanelMetrics.sessionDotCap }
+    private var drawnCount: Int { min(count, PanelMetrics.sessionDotCap) }
+
+    var body: some View {
+        dots
+            // Rendered at its resting distance from the matrix, and rendered
+            // there whatever the slot is currently doing: `offset` moves the
+            // drawing and not the layout, so the width below can open and close
+            // under a dot that never moves.
+            .offset(x: gap)
+            .frame(width: columnWidth, alignment: .leading)
+            .animation(slotAnimation, value: columnWidth)
+            .accessibilityHidden(true)
+    }
+
+    private var dots: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(0..<drawnCount, id: \.self) { index in
+                let isDash = isPastCap && index == PanelMetrics.sessionDotCap - 1
+                Capsule(style: .continuous)
+                    .fill(NotchPalette.ink(for: agent).on.opacity(Self.opacity))
+                    .frame(width: diameter, height: isDash ? dashLength : diameter)
+                    .offset(y: dotOffset(index))
+                    // The third dot becoming the dash is one capsule growing,
+                    // not a swap: the height and the offset that keeps its run
+                    // ending on the matrix's lower edge move together.
+                    .animation(dashAnimation, value: isDash)
+            }
+        }
+        .frame(width: diameter, height: matrixSize, alignment: .topLeading)
+        .opacity(hasRows ? 1 : 0)
+        .animation(fadeAnimation, value: hasRows)
+    }
+
+    /// The slot opening and closing.
+    ///
+    /// Opening, it leads: the room is made and the dot arrives into it.
+    /// Closing, it waits for the dot to go first — a slot seen shutting on a
+    /// mark that is still lit reads as the mark being crushed rather than
+    /// dismissed, which is the wrong thing to say about a session that ended.
+    private var slotAnimation: Animation {
+        let base = PanelMotion.animation(reduceMotion: reduceMotion)
+        guard !reduceMotion else { return base }
+        return hasRows ? base : base.delay(Self.closingDelay)
+    }
+
+    /// The dot arriving and leaving. Fading only — see the type's note.
+    ///
+    /// It trails the opening rather than matching it, because the slot's curve
+    /// is a hard ease-out that is most of the way open early: run the two
+    /// together and the dot is at full ink inside a slot that has not finished
+    /// making room for it. Leaving is quicker than arriving, for the reason
+    /// every other reading on this surface fades out quicker than it fades in —
+    /// something starting is worth catching and something ending is not.
+    private var fadeAnimation: Animation {
+        guard !reduceMotion else {
+            return .easeOut(duration: PanelMotion.reducedDuration)
+        }
+        return hasRows
+            ? .easeOut(duration: Self.fadeInDuration).delay(Self.fadeInDelay)
+            : .easeOut(duration: Self.fadeOutDuration)
+    }
+
+    private var dashAnimation: Animation? {
+        reduceMotion ? nil : PanelMotion.animation(reduceMotion: false)
+    }
+
+    private static let fadeInDelay: TimeInterval = 0.06
+    private static let fadeInDuration: TimeInterval = 0.12
+    private static let fadeOutDuration: TimeInterval = 0.08
+    private static let closingDelay: TimeInterval = 0.05
+
+    /// The top edge of one mark, centred in its matrix row. The dash takes the
+    /// whole row instead of being centred in it, so the run ends on the
+    /// matrix's own lower edge rather than short of it.
+    private func dotOffset(_ index: Int) -> CGFloat {
+        let row = CGFloat(index) * pitch
+        guard !(isPastCap && index == PanelMetrics.sessionDotCap - 1) else { return row }
+        return row + (dashLength - diameter) / 2
+    }
+
+    /// **Steady, and a little under full.** The dots take no part in the
+    /// matrix's breathe or flash: brightness is this surface's attention
+    /// channel and a count is not an attention signal, so a mark that pulsed
+    /// with the grid beside it would be claiming to be one.
+    private static let opacity: Double = 0.85
 }
 
 /// What the 3×3 indicator is doing, independent of which status drove it.

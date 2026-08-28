@@ -66,8 +66,12 @@ struct NotchlineTests {
     /// same composition re-measured, not a relaxation of it.
     @Test @MainActor
     func theFixedCompactWidthsAreTheOnesTheDesignMeasured() {
-        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) == 196)
-        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2) == 218)
+        // `201` / `230` since each product mark reserves the `5.655` column
+        // its session dots stand in (`dual-agent-design.md` §11); they were
+        // `196` / `218` before the count existed. The resting form draws no
+        // column, so `136` is untouched.
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) == 201)
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2) == 230)
         #expect(
             PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) == 136
         )
@@ -86,7 +90,10 @@ struct NotchlineTests {
     func theFixedWidthFitsEveryWorkingStatusWithItsLongestTimer() {
         var widest: CGFloat = 0
         for status in PanelMetrics.workingStatuses {
+            // The chrome carries one matrix; the mark's own dot column is the
+            // other half of what a working pill has to hold.
             let needed = PanelMetrics.compactChromeWidth
+                + PanelMetrics.sessionDotColumnWidth()
                 + PanelMetrics.compactContentWidth(status)
             #expect(needed <= PanelMetrics.fixedCompactWidth(for: status, matrixCount: 1))
             widest = max(widest, needed)
@@ -406,6 +413,74 @@ struct NotchlineTests {
         let resting = try #require(nothing.presenceMarks.first)
         #expect(resting.isResting)
         #expect(resting.status == .disconnected)
+    }
+
+    /// Each mark counts its own product's rows and its own product's
+    /// subagents, and nothing of the other's.
+    ///
+    /// `dual-agent-design.md` §§10-11. Both figures ride on the mark rather
+    /// than being re-summed by whatever draws them, so the dots under a matrix
+    /// and the badge past the cut-out can never disagree about the same list.
+    @Test @MainActor
+    func eachMarkCountsOnlyItsOwnProductsRows() throws {
+        func session(
+            _ agent: AgentKind,
+            _ id: String,
+            subagents: Int = 0,
+            waiting: Int = 0
+        ) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "p", title: "t",
+                preview: nil, status: .running, startedAt: nil,
+                runningSubagentCount: subagents,
+                subagentsAwaitingApprovalCount: waiting
+            )
+        }
+
+        let merged = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: [
+                    session(.codex, "a", subagents: 2),
+                    session(.codex, "b", subagents: 1),
+                    session(.codex, "c")
+                ]
+            ),
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                sessions: [session(.claudeCode, "d", subagents: 4, waiting: 2)]
+            )
+        ])
+
+        let marks = merged.presenceMarks
+        #expect(marks.map(\.agent) == [.codex, .claudeCode])
+        // Three rows against one: the dots under each matrix, not a shared
+        // total drawn twice.
+        #expect(marks.map(\.sessionCount) == [3, 1])
+        // Codex is carrying three subagents across two of its rows and none of
+        // them is stopped; Claude Code is carrying four on one row and two of
+        // those are. The badge counts every subagent either way -- the two
+        // waiting ones are inside the `4`, not beside it.
+        #expect(marks.map(\.subagents) == [
+            SubagentBadge(count: 3),
+            SubagentBadge(count: 4, wantsAttention: true)
+        ])
+    }
+
+    /// The resting mark counts nothing, because nothing is connected to have
+    /// rows or subagents in the first place.
+    @Test @MainActor
+    func theRestingMarkCountsNothing() throws {
+        let nothing = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
+        ])
+        let resting = try #require(nothing.presenceMarks.first)
+        #expect(resting.isResting)
+        #expect(resting.sessionCount == 0)
+        #expect(resting.subagents == .empty)
     }
 
     /// One product's turn must not light the other product's mark.
@@ -757,9 +832,11 @@ struct NotchlineTests {
                 drawsCompactMarks: true
             ).width
         }
+        // One more mark is one more matrix, its own dot column, and the pair
+        // gap between them.
         let step = width(markCount: 2) - width(markCount: 1)
         #expect(
-            abs(step - (PanelMetrics.statusMatrixSize + PanelMetrics.compactMatrixSpacing))
+            abs(step - (PanelMetrics.markWidth() + PanelMetrics.compactMatrixSpacing))
                 <= 1
         )
         // The pair spacing lands on the matrix's own cell pitch so the gap reads
@@ -1671,14 +1748,17 @@ struct NotchlineTests {
         // shoulder off the cut-out's flare. No text is measured on a notched
         // compact panel, so this width is exact -- and it is the one number a
         // Figma variant can be checked against directly. `12` padding + `16.6`
-        // matrix + `8` clearance + the `200` cut-out is `236.6`, which was the
-        // `237` this asserted before the step; the step is `46 / 16`, and the
-        // sum ceils to `240`.
+        // matrix + `5.655` dot column + `8` clearance + the `200` cut-out is
+        // `242.255`; the step is `46 / 16`, and the sum ceils to `246`. It was
+        // `240` before each product mark reserved a column for its session
+        // dots, and `237` before the step existed at all.
         let notchedIdle = width(geometry: .notched, trailingText: nil, compactHeight: 46)
-        #expect(notchedIdle == 240)
+        #expect(notchedIdle == 246)
         #expect(
             notchedIdle == ceil(
-                236.6 + PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 46)
+                12 + PanelMetrics.marksWidth(1) + PanelMetrics.expandedNotchClearance
+                    + 200
+                    + PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 46)
             )
         )
 
@@ -1702,6 +1782,270 @@ struct NotchlineTests {
         #expect(
             width(geometry: .noNotch, trailingText: nil, compactHeight: 24)
                 == width(geometry: .noNotch, trailingText: "1:23", compactHeight: 24)
+        )
+    }
+
+    /// The session count stands beside the matrix in a column exactly as tall
+    /// as the matrix, so it asks for no room the mark did not already have.
+    ///
+    /// **That identity is the whole placement argument.** Two row pitches and
+    /// one cell is the matrix's own height, so the column draws the same on a
+    /// `46` pt menu bar and a `22` pt one. Under the matrix -- where this was
+    /// drawn first -- it needed `5.66` of clearance below the mark, which the
+    /// short bars have not got, and had to be dropped there entirely.
+    @Test @MainActor
+    func theSessionDotColumnIsExactlyAsTallAsTheMatrix() {
+        let size = PanelMetrics.statusMatrixSize
+
+        #expect(
+            abs(
+                2 * PanelMetrics.sessionDotPitch(matrixSize: size)
+                    + PanelMetrics.sessionDotDashLength(matrixSize: size)
+                    - size
+            ) < 0.001
+        )
+        // Which is what makes every menu bar the app supports draw it alike:
+        // the column never asks for more than the mark beside it already does.
+        for bar in [46.0, 38.0, 32.0, 28.0, 24.0, 22.0] as [CGFloat] {
+            #expect(size <= bar, "the mark itself fits every supported bar")
+        }
+        // A dot is shorter than the cell it is centred in, so a run of three
+        // dots is shorter still than the run that ends in a dash.
+        #expect(
+            PanelMetrics.sessionDotDiameter(matrixSize: size)
+                < PanelMetrics.sessionDotDashLength(matrixSize: size)
+        )
+
+        // The figures `dual-agent-design.md` §11 draws, in the matrix's own
+        // 91-unit viewBox.
+        #expect(abs(PanelMetrics.sessionDotDiameter(matrixSize: size) - 2.74) < 0.01)
+        #expect(abs(PanelMetrics.sessionDotGap(matrixSize: size) - 2.92) < 0.01)
+        #expect(abs(PanelMetrics.sessionDotDashLength(matrixSize: size) - 4.93) < 0.01)
+        // And they scale with the mark, because they are shares of it.
+        #expect(
+            abs(
+                PanelMetrics.sessionDotDiameter(matrixSize: size * 2)
+                    - 2 * PanelMetrics.sessionDotDiameter(matrixSize: size)
+            ) < 0.001
+        )
+    }
+
+    /// The column is reserved in the width and packed in the drawing.
+    ///
+    /// The panel holds room for every mark's column at every session count, so
+    /// its width never answers to the counts; the marks are packed into that
+    /// room from the leading edge, so an empty column costs no gap between two
+    /// marks and the leftover falls at the trailing end instead.
+    @Test @MainActor
+    func theSessionDotColumnIsReservedInWidthAndPackedInDrawing() {
+        let size = PanelMetrics.statusMatrixSize
+        let column = PanelMetrics.sessionDotColumnWidth()
+
+        #expect(
+            abs(
+                column
+                    - (PanelMetrics.sessionDotGap(matrixSize: size)
+                        + PanelMetrics.sessionDotDiameter(matrixSize: size))
+            ) < 0.001
+        )
+        // `5.66` against the `22` a numeral beside the matrix wanted.
+        #expect(abs(column - 5.66) < 0.01)
+
+        // A product mark carries the column; the resting grey has no product
+        // behind it and so no rows it could ever count.
+        #expect(PanelMetrics.markWidth(isProductMark: true) == size + column)
+        #expect(PanelMetrics.markWidth(isProductMark: false) == size)
+        #expect(
+            PanelMetrics.marksWidth(2)
+                == 2 * (size + column) + PanelMetrics.compactMatrixSpacing
+        )
+        #expect(PanelMetrics.marksWidth(1, areProductMarks: false) == size)
+
+        // The room is the widest the marks ever draw: every mark's column, at
+        // once. Nothing about this expression can be told how many sessions
+        // there are, which is the point -- the panel cannot answer to a count
+        // it is never given.
+        #expect(
+            PanelMetrics.marksWidth(2)
+                == 2 * size + 2 * column + PanelMetrics.compactMatrixSpacing
+        )
+        // Packed into that room the pair sits at the gap it was tuned to sit
+        // at; held open, it sat at nearly twice that, past the `8` at which
+        // the pair stops reading as a pair.
+        #expect(column + PanelMetrics.compactMatrixSpacing > 8)
+        // And the slack a missing column leaves is never wide enough for a dot
+        // to reach the next mark: the pair gap outruns the whole column, so the
+        // dot is drawn where it belongs with nothing to collide with.
+        #expect(PanelMetrics.compactMatrixSpacing > column)
+
+        // The pair gap still binds the pair more loosely than a column is
+        // bound to its own matrix, which is what keeps the grouping readable.
+        #expect(
+            PanelMetrics.compactMatrixSpacing
+                > 2 * PanelMetrics.sessionDotGap(matrixSize: size) - 0.001
+        )
+
+        // The no-notch pill is one fixed width per mark count, and the resting
+        // form -- which draws no column -- is untouched by any of this.
+        #expect(
+            PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2)
+                - PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1)
+                == ceil(size + PanelMetrics.compactMatrixSpacing + column)
+        )
+        #expect(PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) == 136)
+        // And it takes no session count at all: a centred pill that resized
+        // with the rows would move both its edges and everything between them,
+        // to save a gap that reads there as spacing before a label.
+    }
+
+    /// The leading matrix stands in one place, whatever the counts do.
+    ///
+    /// This is the whole reason the column is reserved rather than packed out
+    /// of the panel. The panel's leading edge is `trailingAnchor + shoulder -
+    /// width`, and both of those answer to the trailing wing identically, so
+    /// the edge is fixed exactly as long as the *leading* wing is -- which it
+    /// now is, at every session count. A column opening therefore pushes only
+    /// the marks after it, and the leading matrix sits `12` from an edge that
+    /// does not move.
+    @Test @MainActor
+    func theLeadingMatrixNeverMovesWhateverTheCountsDo() {
+        let notched = makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 38, hasNotch: true)
+        let store = MonitorStore(displays: [notched], services: [])
+
+        func leadingEdge() -> CGFloat {
+            OverlayPanelLayout.frame(
+                on: notched.frame,
+                panelSize: store.currentPanelSize,
+                surfaceShoulder: store.surfaceShoulderRadius,
+                trailingAnchor: store.currentPanelTrailingAnchor
+            ).minX
+        }
+        // Untimed on purpose. A timed turn also opens the *trailing* wing, and
+        // `size` ceils the whole panel while the anchor does not, so the timer
+        // arriving can shift the leading edge by up to that rounding -- an
+        // existing quantisation with nothing to do with the columns. This test
+        // is about the columns, so it holds the trailing wing still and asserts
+        // the edge exactly; the timer's own rounding is checked at the end.
+        func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "p", title: "t",
+                preview: nil, status: .running, startedAt: nil
+            )
+        }
+
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
+        store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
+        #expect(store.presenceMarks.count == 2)
+        #expect(store.presenceMarks.allSatisfy { !$0.drawsSessionColumn })
+        let anchored = leadingEdge()
+
+        // Claude Code opens one: the trailing mark's own column, which pushes
+        // nothing. Then Codex opens one, which pushes Claude Code's mark along
+        // but not its own. Then both, then back to nothing.
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [session(.claudeCode, "a")])
+        )
+        #expect(store.presenceMarks.map(\.drawsSessionColumn) == [false, true])
+        #expect(leadingEdge() == anchored)
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex, "b")])
+        )
+        #expect(store.presenceMarks.map(\.drawsSessionColumn) == [true, true])
+        #expect(leadingEdge() == anchored)
+
+        // Four sessions apiece -- past the cap, where the third dot is a dash.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: (0..<4).map { session(.codex, "c\($0)") }
+            )
+        )
+        #expect(leadingEdge() == anchored)
+
+        // And all the way back down.
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
+        store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
+        #expect(store.presenceMarks.allSatisfy { !$0.drawsSessionColumn })
+        #expect(leadingEdge() == anchored)
+
+        // A timed turn opens the trailing wing, which the anchor and the width
+        // answer to identically -- so the edge would be exact here too but for
+        // `size` rounding the panel up while the anchor keeps its fraction.
+        // Under a point, and the columns contribute none of it.
+        let timed = MonitoredSession(
+            agent: .codex,
+            threadID: "timed", turnID: "u", projectName: "p", title: "t",
+            preview: nil, status: .running, startedAt: Date()
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [timed])
+        )
+        #expect(store.compactTimerText != nil)
+        #expect(abs(leadingEdge() - anchored) < 1)
+    }
+
+    /// The collapsed badge pair is spaced like the matrix pair, because it is
+    /// that pair read at the other end of the bar.
+    ///
+    /// One expression rather than two equal numbers: the next time either gap
+    /// is tuned, the two ends of one bar have to move together.
+    @Test @MainActor
+    func theBadgePairIsSpacedLikeTheMatrixPair() {
+        #expect(PanelMetrics.subagentBadgeSpacing == PanelMetrics.compactMatrixSpacing)
+        // Two badges are two widths and one gap -- never a third slot held open
+        // for a product with nothing in flight.
+        let pair = [
+            AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 3)),
+            AgentSubagentBadge(agent: .claudeCode, badge: SubagentBadge(count: 4))
+        ]
+        #expect(
+            PanelMetrics.subagentBadgesWidth(pair)
+                == PanelMetrics.subagentBadgeWidth(3)
+                    + PanelMetrics.subagentBadgeSpacing
+                    + PanelMetrics.subagentBadgeWidth(4)
+        )
+        #expect(
+            PanelMetrics.subagentBadgesWidth([pair[0]])
+                == PanelMetrics.subagentBadgeWidth(3)
+        )
+        #expect(PanelMetrics.subagentBadgesWidth([]) == 0)
+        // An empty badge is not a badge: it contributes no width and no gap.
+        #expect(
+            PanelMetrics.subagentBadgesWidth(
+                pair + [AgentSubagentBadge(agent: .claudeCode, badge: .empty)]
+            )
+                == PanelMetrics.subagentBadgesWidth(pair)
+        )
+    }
+
+    /// Flipping the ground costs nothing, which is the point of flipping it.
+    ///
+    /// The badge says "one of these is stopped on a question" without drawing a
+    /// second figure, so a product that starts waiting must not move anything
+    /// on the bar. A split pair would have.
+    @Test @MainActor
+    func aWaitingBadgeIsTheSameWidthAsARunningOne() {
+        let running = [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 4))]
+        let waiting = [
+            AgentSubagentBadge(
+                agent: .codex,
+                badge: SubagentBadge(count: 4, wantsAttention: true)
+            )
+        ]
+        #expect(
+            PanelMetrics.subagentBadgesWidth(running)
+                == PanelMetrics.subagentBadgesWidth(waiting)
+        )
+        #expect(
+            PanelMetrics.compactTrailingReadingWidth(
+                CompactTrailingReading(badges: running, timerText: "1:23")
+            )
+                == PanelMetrics.compactTrailingReadingWidth(
+                    CompactTrailingReading(badges: waiting, timerText: "1:23")
+                )
         )
     }
 
@@ -10659,9 +11003,10 @@ for line in sys.stdin:
         ))
         // Finished, and saying what is still in flight beside it.
         #expect(session.status == .completed)
-        #expect(session.showsSubagentChips)
-        #expect(session.subagentsStillRunningCount == 1)
-        #expect(session.subagentsAwaitingApprovalCount == 0)
+        #expect(session.showsSubagentBadge)
+        // One badge carrying every subagent, on the dim ground: none of them
+        // is stopped on a question.
+        #expect(session.subagentBadge == SubagentBadge(count: 1))
 
         // 91 seconds later on the measurement, and the terminal it arrives with
         // is `SubagentStop` -- `Stop` carries no `agent_id` and never describes
@@ -10681,7 +11026,7 @@ for line in sys.stdin:
             from: turn, thread: codexRootThread(id: parent), projectName: "tikzcd-editor"
         ))
         #expect(session.status == .completed)
-        #expect(!session.showsSubagentChips)
+        #expect(!session.showsSubagentBadge)
     }
 
     /// A subagent that is still working while its parent turn is not finished
@@ -10727,7 +11072,7 @@ for line in sys.stdin:
         ))
         #expect(session.status == .running)
         #expect(session.runningSubagentCount == 2)
-        #expect(!session.showsSubagentChips)
+        #expect(!session.showsSubagentBadge)
 
         await send([
             "hook_event_name": "Stop", "session_id": "s", "turn_id": "t"
@@ -10736,9 +11081,8 @@ for line in sys.stdin:
         session = try #require(CodexSnapshotParser.session(
             from: turn, thread: codexRootThread(id: "s"), projectName: "P"
         ))
-        #expect(session.showsSubagentChips)
-        #expect(session.subagentsStillRunningCount == 2)
-        #expect(session.subagentsAwaitingApprovalCount == 0)
+        #expect(session.showsSubagentBadge)
+        #expect(session.subagentBadge == SubagentBadge(count: 2))
 
         // A subagent is not ended by the user typing again, so it survives the
         // turn boundary that the turn it was spawned by does not.
@@ -18011,7 +18355,7 @@ for line in sys.stdin:
         #expect(
             abs(
                 (twoOpen - oneOpen)
-                    - (PanelMetrics.statusMatrixSize + PanelMetrics.compactMatrixSpacing)
+                    - (PanelMetrics.markWidth() + PanelMetrics.compactMatrixSpacing)
             ) <= 1
         )
     }
@@ -24585,14 +24929,17 @@ extension NotchlineTests {
             observedAt: clock.now()
         )
         await clock.settle()
-        // The collapsed surface's chip cluster is a total across the list --
-        // unlike a row's own trailing slot, it does not wait for a row's turn
-        // to stop timing before counting that row's subagents.
+        // The collapsed surface's badge is a total across one product's rows
+        // -- unlike a row's own trailing slot, it does not wait for a row's
+        // turn to stop timing before counting that row's subagents.
         #expect(
             store.compactTrailingReading
-                == CompactTrailingReading(chips: SubagentChipCounts(running: 1), timerText: "0:30")
+                == CompactTrailingReading(
+                    badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 1))],
+                    timerText: "0:30"
+                )
         )
-        #expect(store.spokenRunningSubagentText == "1 subagent")
+        #expect(store.spokenRunningSubagentText == "Codex 1 subagent")
 
         // The main agent's `Stop` lands. The row is Completed and the clock has
         // stopped -- both correct -- and the thread is still working.
@@ -24612,9 +24959,9 @@ extension NotchlineTests {
         #expect(store.compactTimerStart == nil)
         #expect(
             store.compactTrailingReading
-                == CompactTrailingReading(chips: SubagentChipCounts(running: 2))
+                == CompactTrailingReading(badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))])
         )
-        #expect(store.spokenRunningSubagentText == "2 subagents")
+        #expect(store.spokenRunningSubagentText == "Codex 2 subagents")
         // The row itself is untouched: `effectiveStatus` must not reach it.
         #expect(store.sessions.first?.status == .completed)
         #expect(store.elapsedText(for: try #require(store.sessions.first)) == nil)
@@ -24664,15 +25011,93 @@ extension NotchlineTests {
         )
         await clock.settle()
         #expect(store.compactRunningSubagentCount == 3)
+        // Three rows of one product, summed onto that product's single badge.
         #expect(
             store.compactTrailingReading
-                == CompactTrailingReading(chips: SubagentChipCounts(running: 3))
+                == CompactTrailingReading(
+                    badges: [
+                        AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 3))
+                    ]
+                )
         )
 
         store.hidesCompactWings = true
         #expect(store.hidesCompactSurface, "the display can honour it")
         #expect(store.compactRunningSubagentCount == 0)
         #expect(store.compactTrailingReading == .empty)
+    }
+
+    /// Two products get two badges, in `AgentKind` order and never in
+    /// urgency's, each carrying only its own product's subagents.
+    ///
+    /// `dual-agent-design.md` §10. The badges are the matrices read at the
+    /// other end of the bar: once the two hues are learned, position is the
+    /// other half of what identifies a mark, so the one that wants the user
+    /// must not jump to the front.
+    @Test @MainActor
+    func theCollapsedBadgesAreOnePerProductInAFixedOrder() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 3_000))
+        let store = MonitorStore(
+            displays: [makeDisplay(id: "d", ordinal: 1, menuBarHeight: 46, hasNotch: true)],
+            services: [],
+            clock: clock
+        )
+
+        // Codex is running three subagents quietly; Claude Code is running four
+        // and two of those are stopped on a prompt. The urgent product is the
+        // trailing one and must stay there.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                sessions: [
+                    makeSession(status: .completed, startedAt: nil, runningSubagentCount: 3)
+                ]
+            ),
+            observedAt: clock.now()
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                sessions: [
+                    MonitoredSession(
+                        agent: .claudeCode,
+                        threadID: "cc", turnID: "u", projectName: "p", title: "t",
+                        preview: nil, status: .completed, startedAt: nil,
+                        runningSubagentCount: 4,
+                        subagentsAwaitingApprovalCount: 2
+                    )
+                ]
+            ),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+
+        #expect(
+            store.compactSubagentBadges == [
+                AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 3)),
+                AgentSubagentBadge(
+                    agent: .claudeCode,
+                    badge: SubagentBadge(count: 4, wantsAttention: true)
+                )
+            ]
+        )
+        // Both figures are totals of their own product, never of the list.
+        #expect(store.compactRunningSubagentCount == 7)
+        // Spoken with the product named, because two badges side by side are
+        // told apart by ink alone.
+        #expect(
+            store.spokenRunningSubagentText
+                == "Codex 3 subagents, Claude Code 4 subagents, waiting for you"
+        )
+
+        // A product with nothing in flight has no badge, and no slot is held
+        // open where it would have been.
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, sessions: []),
+            observedAt: clock.now()
+        )
+        await clock.settle()
+        #expect(store.compactSubagentBadges.map(\.agent) == [.claudeCode])
     }
 
     /// A row saying work is still in flight sorts with the working ones.
@@ -25004,33 +25429,33 @@ extension NotchlineTests {
         // can produce -- that is what the reservation is for.
         #expect(pill(CompactTrailingReading(timerText: "1:23")) == pill(.empty))
         #expect(pill(CompactTrailingReading(timerText: "10:00:00")) == pill(.empty))
-        // A chip cluster beside a short reading still fits inside it.
+        // A badge beside a short reading still fits inside it.
         #expect(
             pill(
                 CompactTrailingReading(
-                    chips: SubagentChipCounts(running: 2),
+                    badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))],
                     timerText: "1:23"
                 )
             )
                 == pill(.empty)
         )
-        // A chip cluster beside a long reading does not, and the pill takes it.
+        // A badge beside a long reading does not, and the pill takes it.
         #expect(
             pill(
                 CompactTrailingReading(
-                    chips: SubagentChipCounts(running: 2),
+                    badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))],
                     timerText: "1:23:45"
                 )
             )
                 > pill(.empty)
         )
 
-        // The notched panel hangs it off the cut-out instead, so every chip
-        // cluster widens the wing.
+        // The notched panel hangs it off the cut-out instead, so every badge
+        // widens the wing.
         #expect(
             PanelMetrics.compactTrailingWidth(
                 trailing: CompactTrailingReading(
-                    chips: SubagentChipCounts(running: 2),
+                    badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))],
                     timerText: "1:23"
                 )
             )
@@ -25040,7 +25465,9 @@ extension NotchlineTests {
         )
         #expect(
             PanelMetrics.compactTrailingWidth(
-                trailing: CompactTrailingReading(chips: SubagentChipCounts(running: 2))
+                trailing: CompactTrailingReading(
+                    badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))]
+                )
             )
                 > PanelMetrics.compactTrailingWidth(trailing: .empty)
         )
@@ -25169,8 +25596,8 @@ extension NotchlineTests {
             startedAt: turn.startedAt,
             runningSubagentCount: turn.runningSubagentIDs.count
         )
-        #expect(session.showsSubagentChips)
-        #expect(session.subagentsStillRunningCount == 1)
+        #expect(session.showsSubagentBadge)
+        #expect(session.subagentBadge == SubagentBadge(count: 1))
         #expect(MonitorAggregation.effectiveStatus(of: session) == .running)
 
         try deliver([
@@ -25404,9 +25831,11 @@ extension NotchlineTests {
             subagentsAwaitingApprovalCount: turn.subagentsAwaitingApprovalCount
         )
         #expect(waiting.status == .completed, "the row still reports its own turn")
-        #expect(waiting.showsSubagentChips)
+        #expect(waiting.showsSubagentBadge)
+        // The one subagent it has is the one stopped on the prompt, so the
+        // badge still reads `1` and its ground flips rather than splitting.
+        #expect(waiting.subagentBadge == SubagentBadge(count: 1, wantsAttention: true))
         #expect(waiting.subagentsAwaitingApprovalCount == 1)
-        #expect(waiting.subagentsStillRunningCount == 0)
         #expect(MonitorAggregation.effectiveStatus(of: waiting) == .approvalNeeded)
 
         // Approved. `PostToolUse` names the same call and the same agent, which
@@ -26270,9 +26699,11 @@ extension NotchlineTests {
         )
         await clock.settle()
         #expect(store.status == .approvalNeeded)
+        // The one subagent it has is the one on the prompt: the badge reads
+        // its whole count and flips its ground rather than splitting.
         #expect(
             store.compactTrailingReading
-                == CompactTrailingReading(chips: SubagentChipCounts(attention: 1)),
+                == CompactTrailingReading(badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 1, wantsAttention: true))]),
             "no turn is being timed"
         )
 
@@ -26443,7 +26874,7 @@ extension NotchlineTests {
         // The row draws nothing in the trailing slot — its own turn really did
         // finish and it has no subagent left to name — and the thread is still
         // working, so the collapsed summary must not say otherwise.
-        #expect(!row(turn).showsSubagentChips)
+        #expect(!row(turn).showsSubagentBadge)
         #expect(
             MonitorAggregation.effectiveStatus(of: row(turn)) == .running,
             "the parent is re-entered 50 ms from here; Completed is a state the thread is never in"

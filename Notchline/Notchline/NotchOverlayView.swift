@@ -68,10 +68,10 @@ struct NotchOverlayView: View {
         // because a bare duration beside a summary status is unattributable.
         let elapsed = store.spokenLongestElapsedText.map { ", longest running for \($0)" }
             ?? ""
-        // The collapsed slot draws two bare chips; spoken, each has to say
-        // what it counts -- and together they are the only thing on the
-        // surface saying work is still in flight once every turn has
-        // finished.
+        // The collapsed slot draws one bare badge per product, told apart by
+        // ink alone; spoken, each has to name its product and say what it
+        // counts -- and together they are the only thing on the surface saying
+        // work is still in flight once every turn has finished.
         let subagents = store.spokenRunningSubagentText.map { ", \($0)" } ?? ""
         return "Codex, \(store.sessions.count) related sessions, status "
             + "\(store.statusDisplayName)\(elapsed)\(subagents), \(usage)"
@@ -238,20 +238,17 @@ private struct OverlayHeader: View {
             // shows no empty second cut-out. The expanded view times each row
             // individually instead.
             //
-            // The chip cluster and the timer are two views sharing one slot,
-            // not one raster the way the count used to be baked into the
-            // timer's own prefix: the chips are a static reading that only
-            // changes when a subagent starts or stops, and drawing them apart
-            // from the timer's once-a-second layer keeps that layer from
-            // re-rastering on every chip change and vice versa.
+            // The badges and the timer are two views sharing one slot, not
+            // one raster the way the count used to be baked into the timer's
+            // own prefix: a badge is a static reading that only changes when a
+            // subagent starts, stops or is stopped on a question, and drawing
+            // it apart from the timer's once-a-second layer keeps that layer
+            // from re-rastering on every badge change and vice versa.
             if !store.isExpanded {
-                HStack(spacing: PanelMetrics.subagentChipTimerSpacing) {
-                    let chips = store.compactSubagentChipCounts
-                    if !chips.isEmpty {
-                        SubagentChipCluster(
-                            counts: chips,
-                            runningTint: store.compactSubagentRunningTint
-                        )
+                HStack(spacing: PanelMetrics.subagentBadgeTimerSpacing) {
+                    let badges = store.compactSubagentBadges
+                    if !badges.isEmpty {
+                        SubagentBadgeRow(badges: badges)
                     }
                     if let startedAt = store.compactTimerStart {
                         ElapsedReadout(
@@ -320,14 +317,43 @@ private struct StatusReadout: View {
                     // Order is `AgentKind`'s and never urgency's, so a mark
                     // never moves out from under the eye reading it.
                     ForEach(marks, id: \.agent) { mark in
-                        NotchStatusMatrix(
-                            state: NotchMatrixState(mark.status),
-                            size: matrixSize,
-                            isAnimated: !reduceMotion,
-                            agent: mark.agent
-                        )
+                        // A product's mark is the matrix and the column of
+                        // session dots beside it; the resting grey is the
+                        // matrix alone, because nothing is connected behind it
+                        // to have rows. Spacing is zero here because the column
+                        // owns the gap it stands off by, so the two collapse
+                        // together at no rows -- see ``SessionCountDots``.
+                        HStack(spacing: 0) {
+                            NotchStatusMatrix(
+                                state: NotchMatrixState(mark.status),
+                                size: matrixSize,
+                                isAnimated: !reduceMotion,
+                                agent: mark.agent
+                            )
+                            if let agent = mark.agent {
+                                SessionCountDots(
+                                    count: mark.sessionCount,
+                                    agent: agent,
+                                    matrixSize: matrixSize,
+                                    reduceMotion: reduceMotion
+                                )
+                            }
+                        }
                     }
                 }
+                // **The anchor.** The marks are given the room every column
+                // would take and packed into it from the leading edge, so the
+                // first matrix stands in one place whatever the counts do: a
+                // column opening pushes only the marks after it, and the last
+                // mark's column pushes nothing. What is left over falls here,
+                // at the trailing end -- against the cut-out on a notched
+                // display, before the label on a pill -- rather than between
+                // two marks that have to read as a pair.
+                //
+                // This is `PanelMetrics.marksWidth`, the same expression the
+                // panel is measured from (``MonitorStore/currentPanelSize``),
+                // so the room reserved and the room drawn into cannot drift.
+                .frame(width: reservedMarksWidth, alignment: .leading)
             }
 
             if showsText {
@@ -344,6 +370,14 @@ private struct StatusReadout: View {
     /// The label sweeps if *any* mark is in flight. There is one label for both
     /// products and it takes the most urgent status, so it has to follow the
     /// most urgent mark rather than a single product's.
+    /// The room the panel has already reserved for the marks.
+    private var reservedMarksWidth: CGFloat {
+        PanelMetrics.marksWidth(
+            marks.count,
+            areProductMarks: marks.contains { $0.agent != nil }
+        )
+    }
+
     private var isActive: Bool {
         marks.contains { NotchMatrixState($0.status).isActive }
     }
@@ -650,12 +684,13 @@ private struct SessionRow: View {
         // time. The row draws the elapsed value, so the label must carry it too.
         let elapsed = store.spokenElapsedText(for: session).map { ", running for \($0)" }
             ?? ""
-        // The drawn form is two bare chips in the slot the timer had; spoken,
-        // each has to say what it counts and not just how many.
+        // The drawn form is one bare badge in the slot the timer had, with a
+        // ground that flips rather than a second figure; spoken, it has to say
+        // what it counts and, when the ground has flipped, that it is waiting.
         let subagents = session.spokenSubagentSummary.map { ", \($0)" } ?? ""
         // Brightness cannot be read out on its own, so a blocked subagent
         // still needs a word even while the row is timed and its own mark is
-        // the bright clock rather than a chip -- a running row draws its
+        // the bright clock rather than a badge -- a running row draws its
         // timer bright and would otherwise say nothing about why.
         let blocked = session.status.keepsTiming && session.subagentsAwaitingApproval
             ? ", a subagent is waiting for approval"
@@ -785,17 +820,12 @@ private struct SessionStatusControl: View {
                 tint: tint,
                 weight: weight
             )
-        } else if session.showsSubagentChips {
-            // Rule 3 of `dual-agent-design.md` §10: an expanded row's chip is
-            // always neutral grey, whatever else is connected -- the row
-            // already names its product on the caption above.
-            SubagentChipCluster(
-                counts: SubagentChipCounts(
-                    attention: session.subagentsAwaitingApprovalCount,
-                    running: session.subagentsStillRunningCount
-                ),
-                runningTint: .neutral
-            )
+        } else if session.showsSubagentBadge {
+            // `dual-agent-design.md` §10: an expanded row's badge is always
+            // neutral, whatever else is connected -- the row already names its
+            // product on the caption above. One badge carrying the whole
+            // count, with the ground saying whether any of them is stopped.
+            SubagentBadgeView(badge: session.subagentBadge, tint: .neutral)
         } else if session.status.keepsTiming {
             // Unfinished but its start was never observed — unreachable with
             // hook-sourced data, and it must not be left unmarked when previews

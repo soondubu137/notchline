@@ -432,13 +432,14 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// turn's terminal — so this is true of finished rows and running ones
     /// alike.
     ///
-    /// **A count, not a `Bool`, since `dual-agent-design.md` §10.** The old
-    /// text mark only ever spelled out one number and going-to-look was the
-    /// same action at one as at three, so the second figure went undrawn. The
-    /// numeral chip that replaced it draws two figures side by side — this one
-    /// on its leading (white) chip, ``runningSubagentCount`` less this one on
-    /// its trailing (grey or product-tinted) chip — so both are real counts
-    /// now, not a count and a flag standing in for one.
+    /// **A count in the model, a flag on the surface, since
+    /// `dual-agent-design.md` §10.** The badge that draws it carries
+    /// ``runningSubagentCount`` — every subagent, waiting ones included — and
+    /// says *whether* any of them is stopped by flipping its ground rather
+    /// than by drawing a second figure. So only `> 0` is ever read for
+    /// drawing. It stays a count because the reducers genuinely have one and
+    /// because it is what ``subagentsAwaitingApproval`` is derived from, which
+    /// the status and ordering rules below do read.
     let subagentsAwaitingApprovalCount: Int
     /// Whether this row's turn ended by pausing rather than by finishing.
     ///
@@ -493,54 +494,41 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// Whether one of those subagents is sitting on a permission prompt.
     nonisolated var subagentsAwaitingApproval: Bool { subagentsAwaitingApprovalCount > 0 }
 
-    /// Subagents that are working and not stopped on a permission prompt --
-    /// the figure the trailing (grey or product-tinted) chip draws.
+    /// What the row's badge draws: every subagent in flight, and whether any
+    /// of them is stopped on a question.
     ///
-    /// ``runningSubagentCount`` counts every subagent this thread has started
-    /// and not yet seen stop, which includes the ones blocked on a dialog.
-    /// Split from ``subagentsAwaitingApprovalCount`` so the two chips never
-    /// double-count the same subagent.
-    nonisolated var subagentsStillRunningCount: Int {
-        max(0, runningSubagentCount - subagentsAwaitingApprovalCount)
+    /// One badge carrying the whole count, never two. Splitting the waiting
+    /// ones onto a badge of their own put two numerals on exactly the rows
+    /// that need a person — the moment a row is hardest to read quickly —
+    /// and the ground already carries that fact for nothing.
+    nonisolated var subagentBadge: SubagentBadge {
+        SubagentBadge(
+            count: runningSubagentCount,
+            wantsAttention: subagentsAwaitingApproval
+        )
     }
 
-    /// Whether the row draws the subagent chip cluster in place of its timer.
+    /// Whether the row draws its subagent badge in place of its timer.
     ///
     /// `false` while the turn is still timing. The row's one mark is the
     /// elapsed readout and this does not displace it: a running row already
-    /// says the thread is working, so the chips would only be a second mark
+    /// says the thread is working, so the badge would only be a second mark
     /// saying the same thing. Once the clock stops, the slot the timer had is
-    /// where they go — a finished row that draws nothing there reads as
+    /// where it goes — a finished row that draws nothing there reads as
     /// finished, and with a subagent still working that is not what happened.
-    nonisolated var showsSubagentChips: Bool {
+    nonisolated var showsSubagentBadge: Bool {
         !status.keepsTiming && hasRunningSubagent
     }
 
-    /// The spoken form of the row's subagent chips, since VoiceOver cannot
-    /// read the white/grey split the chips draw with colour alone.
+    /// The spoken form of the row's badge, since VoiceOver cannot read a
+    /// flipped ground.
     ///
-    /// `nil` under the same guard as ``showsSubagentChips``. Speaks both
-    /// figures when both are non-zero -- `dual-agent-design.md` §10 draws them
-    /// as two chips for exactly this reason, so a summary that only spoke one
-    /// would say less than the mark it is standing in for.
+    /// `nil` under the same guard as ``showsSubagentBadge``. Speaks the count
+    /// the badge draws and then the state its ground draws, in that order,
+    /// because that is the order the badge answers them in.
     nonisolated var spokenSubagentSummary: String? {
-        guard showsSubagentChips else { return nil }
-        var parts: [String] = []
-        if subagentsAwaitingApprovalCount > 0 {
-            parts.append(
-                subagentsAwaitingApprovalCount == 1
-                    ? "1 waiting for you"
-                    : "\(subagentsAwaitingApprovalCount) waiting for you"
-            )
-        }
-        if subagentsStillRunningCount > 0 {
-            parts.append(
-                subagentsStillRunningCount == 1
-                    ? "1 still running"
-                    : "\(subagentsStillRunningCount) still running"
-            )
-        }
-        return parts.joined(separator: ", ")
+        guard showsSubagentBadge else { return nil }
+        return subagentBadge.spokenSummary
     }
 
     /// The row's identity, and the key for the dismissed set, the terminal
@@ -555,31 +543,48 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     }
 }
 
-/// The two figures the subagent numeral chip draws, wherever it draws them.
+/// What one subagent badge draws, wherever it is drawn.
 ///
-/// One row's trailing slot and the collapsed surface's trailing wing both
-/// draw this same shape (`dual-agent-design.md` §10): a white chip for
-/// ``attention``, leading, and a grey-or-product-tinted chip for ``running``,
-/// trailing. A chip whose count is zero is not drawn at all -- the pair is
-/// never padded out to two just to keep a position stable, because an empty
-/// chip would be a mark that means nothing.
-nonisolated struct SubagentChipCounts: Equatable, Sendable {
-    /// Subagents stopped on a permission prompt. Draws the white, never-tinted
-    /// leading chip.
-    var attention: Int = 0
-    /// Subagents working and not stopped on a dialog. Draws the trailing chip,
-    /// grey in an expanded row always, and grey or product-tinted in the
-    /// collapsed pill depending on how many products are connected.
-    var running: Int = 0
+/// One badge, one number, one flip (`dual-agent-design.md` §10). ``count`` is
+/// every subagent in flight — the ones stopped on a question included, because
+/// they have not finished either — and ``wantsAttention`` is the only other
+/// thing the mark says. A badge whose count is zero is not drawn at all: an
+/// empty badge would be a mark that means nothing.
+///
+/// The same value serves both places the badge appears. A session row draws it
+/// neutral, because the row already names its product a line above; the
+/// collapsed surface draws one per product, tinted, because a bar has no
+/// caption line and hue is the only thing there that can say whose.
+nonisolated struct SubagentBadge: Equatable, Sendable {
+    /// Every subagent this badge speaks for, waiting ones included.
+    var count: Int = 0
+    /// Whether any one of them is stopped on an approval or an input. Draws
+    /// the bright ground and the dark numeral; false draws the dark ground and
+    /// the bright numeral.
+    var wantsAttention: Bool = false
 
-    static let empty = SubagentChipCounts()
+    static let empty = SubagentBadge()
 
-    var isEmpty: Bool { attention == 0 && running == 0 }
-    /// How many chips this pair draws -- 0, 1 or 2 -- which is what both the
-    /// view and ``PanelMetrics`` need to lay them out and measure them alike.
-    var chipCount: Int {
-        (attention > 0 ? 1 : 0) + (running > 0 ? 1 : 0)
+    var isEmpty: Bool { count == 0 }
+
+    /// The spoken form, since VoiceOver cannot read a flipped ground.
+    var spokenSummary: String? {
+        guard count > 0 else { return nil }
+        let subagents = count == 1 ? "1 subagent" : "\(count) subagents"
+        return wantsAttention ? "\(subagents), waiting for you" : subagents
     }
+}
+
+/// One product's badge, kept with the product whose ink it draws in.
+///
+/// The collapsed surface draws these in ``AgentKind`` order and never in
+/// urgency's, exactly as the matrices at the other end of the bar are ordered:
+/// once the two hues are learned, position is the other half of what
+/// identifies a mark, and re-sorting would swap them under the eye reading
+/// them.
+nonisolated struct AgentSubagentBadge: Equatable, Sendable {
+    let agent: AgentKind
+    let badge: SubagentBadge
 }
 
 /// One rate-limit window, and what is left of it.
@@ -791,6 +796,45 @@ nonisolated struct PresenceMark: Equatable, Sendable {
     /// This product's own status. Each matrix runs its own curve — the pair is
     /// two independent readouts, not one aggregate drawn twice.
     let status: MonitorStatus
+    /// How many rows this product has, drawn as dots beside its matrix.
+    ///
+    /// **The count that costs almost no width.** A numeral beside the matrix
+    /// was drawn first and lengthened the leading wing by `44` for the pair.
+    /// What replaced it is a column of dots standing on the matrix's own row
+    /// pitch, packed from the top edge, capped at three with the third
+    /// stretching into a dash past that — `5.66` of wing, and no height at all
+    /// (`dual-agent-design.md` §11).
+    ///
+    /// Zero for the resting mark, which has no product and therefore no rows.
+    let sessionCount: Int
+    /// Every subagent this product has in flight, and whether any of them is
+    /// stopped on a question.
+    ///
+    /// Summed across this product's rows: the collapsed surface speaks for the
+    /// whole list the way the summary status and the one timer already do, but
+    /// per product rather than across both, because the badge that draws it is
+    /// tinted and a mixed total could not honestly take either ink.
+    let subagents: SubagentBadge
+
+    /// Whether this mark has a session column to stand beside it.
+    ///
+    /// The column is the count's, not the matrix's: a product with nothing open
+    /// packs to its matrix alone so the pair keeps the `6` that binds it. The
+    /// resting grey never has one. Surfaces that hold the column open anyway
+    /// are the fixed-width ones — see ``MonitorStore/reservesSessionColumns``.
+    var drawsSessionColumn: Bool { agent != nil && sessionCount > 0 }
+
+    nonisolated init(
+        agent: AgentKind?,
+        status: MonitorStatus,
+        sessionCount: Int = 0,
+        subagents: SubagentBadge = .empty
+    ) {
+        self.agent = agent
+        self.status = status
+        self.sessionCount = sessionCount
+        self.subagents = subagents
+    }
 
     var isResting: Bool { agent == nil }
 }
@@ -1010,13 +1054,16 @@ enum MonitorAggregation {
             return [PresenceMark(agent: nil, status: .disconnected)]
         }
         return connected.map { snapshot in
-            PresenceMark(
+            // This product's own rows only. A Codex turn must not light Claude
+            // Code's mark, and it must not be counted under one either.
+            let own = sessions.filter { $0.agent == snapshot.agent }
+            return PresenceMark(
                 agent: snapshot.agent,
-                // This product's own rows only. A Codex turn must not light
-                // Claude Code's mark.
-                status: status(
-                    agents: [snapshot],
-                    sessions: sessions.filter { $0.agent == snapshot.agent }
+                status: status(agents: [snapshot], sessions: own),
+                sessionCount: own.count,
+                subagents: SubagentBadge(
+                    count: own.reduce(0) { $0 + $1.runningSubagentCount },
+                    wantsAttention: own.contains { $0.subagentsAwaitingApproval }
                 )
             )
         }

@@ -133,21 +133,24 @@ struct DisplayOption: Identifiable {
     }
 }
 
-/// The collapsed surface's trailing wing: a subagent chip cluster sharing one
-/// slot with the elapsed timer, exactly as the plain string this replaced
-/// (`compactTrailingText`) used to share it.
+/// The collapsed surface's trailing wing: one subagent badge per product,
+/// sharing a slot with the elapsed timer exactly as the plain string this
+/// replaced (`compactTrailingText`) used to share it.
 ///
-/// One value rather than two views for the same reason the old string was
-/// one: the panel's width is measured from it, so a chip cluster and a timer
-/// that could independently disagree about what they drew would leave the
-/// width composed from two readings instead of one.
+/// One value rather than several views for the same reason the old string was
+/// one: the panel's width is measured from it, so badges and a timer that
+/// could independently disagree about what they drew would leave the width
+/// composed from several readings instead of one.
 struct CompactTrailingReading: Equatable {
-    var chips: SubagentChipCounts = .empty
+    /// In ``AgentKind`` order, Codex leading, and only for products that
+    /// actually have a subagent in flight — a product with none has no badge,
+    /// and no slot is held open for it.
+    var badges: [AgentSubagentBadge] = []
     var timerText: String?
 
     static let empty = CompactTrailingReading()
 
-    var isEmpty: Bool { chips.isEmpty && timerText == nil }
+    var isEmpty: Bool { badges.isEmpty && timerText == nil }
 }
 
 enum PanelMetrics {
@@ -381,69 +384,165 @@ enum PanelMetrics {
         return width
     }
 
-    /// The marks themselves: one matrix each, with the pair spacing between.
+    /// One drawn mark's width, at the widest that mark ever draws.
+    ///
+    /// A product's mark is its matrix plus the column of session dots beside it
+    /// (``sessionDotColumnWidth``), reserved whether or not that product has
+    /// rows right now. The resting grey has no product behind it and therefore
+    /// no rows it could ever count, so it is the matrix alone.
+    ///
+    /// **Reserved here and packed in the view**, which is the whole of the
+    /// arrangement: the panel is one width in every session state, and the room
+    /// a missing column is not using shows up as slack at the trailing end of
+    /// the marks rather than as width the panel gives back. See
+    /// ``sessionDotColumnWidth(matrixSize:)``.
+    static func markWidth(isProductMark: Bool = true) -> CGFloat {
+        statusMatrixSize + (isProductMark ? sessionDotColumnWidth() : 0)
+    }
+
+    /// The marks themselves: one each, with the pair spacing between.
     ///
     /// `6` because it lands on the matrix's own `5.84` cell pitch, so the gap
     /// reads as a missing column rather than an arbitrary space. `4` merges the
-    /// pair into one 3×6 grid; `8` stops reading as a pair at all.
-    static func marksWidth(_ markCount: Int) -> CGFloat {
+    /// pair into one 3×6 grid; `8` stops reading as a pair at all. It stays `6`
+    /// now that each mark carries a dot column: the column stands `2.92` from
+    /// its own matrix, so the pair gap is still more than twice the gap that
+    /// binds a column to the mark it belongs to.
+    /// This is the width the marks are *given*, at every session count. What
+    /// they draw inside it is packed from the leading edge, so the first
+    /// matrix stands in one place for the life of the panel.
+    static func marksWidth(_ markCount: Int, areProductMarks: Bool = true) -> CGFloat {
         guard markCount > 0 else { return 0 }
-        return CGFloat(markCount) * statusMatrixSize
+        return CGFloat(markCount) * markWidth(isProductMark: areProductMarks)
             + CGFloat(markCount - 1) * compactMatrixSpacing
     }
 
-    /// The subagent numeral chip: font, minimum size, and the padding that
-    /// lets a two-digit count grow it rather than clip it.
+    /// The subagent badge: font, minimum size, and the padding that lets a
+    /// two-digit count grow it rather than clip it.
     ///
-    /// `dual-agent-design.md` §10 draws the chip at a fixed `15 × 15` for the
+    /// `dual-agent-design.md` §10 draws the badge at a fixed `15 × 15` for the
     /// single-digit counts every mockup shows; that figure is this type's
     /// floor rather than a hardcoded width -- `figma-design.md` §4.6's one
     /// lesson is that a slot must grow to fit what it actually draws, and a
     /// count of `10` or more is real once a thread has spawned enough
     /// subagents.
-    static let subagentChipFont = NSFont.systemFont(ofSize: 9, weight: .semibold)
-    static let subagentChipMinSize: CGFloat = 15
-    static let subagentChipCornerRadius: CGFloat = 4
-    static let subagentChipHorizontalPadding: CGFloat = 4
-    /// Between the two chips, when both are drawn.
-    static let subagentChipSpacing: CGFloat = 4
-    /// Between the chip cluster and the timer it shares the trailing slot
-    /// with.
-    static let subagentChipTimerSpacing: CGFloat = 8
+    static let subagentBadgeFont = NSFont.systemFont(ofSize: 9, weight: .semibold)
+    static let subagentBadgeMinSize: CGFloat = 15
+    static let subagentBadgeCornerRadius: CGFloat = 4
+    static let subagentBadgeHorizontalPadding: CGFloat = 4
+    /// Between the collapsed surface's two badges.
+    ///
+    /// ``compactMatrixSpacing``, not a second number: the badge pair is the
+    /// matrix pair read at the other end of the bar, so it is spaced the way
+    /// that pair is. Tying them together is also what stops the two ends of
+    /// one bar drifting apart the next time either is tuned.
+    static var subagentBadgeSpacing: CGFloat { compactMatrixSpacing }
+    /// Between the badges and the timer they share the trailing slot with.
+    static let subagentBadgeTimerSpacing: CGFloat = 8
 
-    /// One chip's width, hugging its digits at the minimum size and growing
+    /// One badge's width, hugging its digits at the minimum size and growing
     /// only when a wider count needs it.
-    static func subagentChipWidth(_ count: Int) -> CGFloat {
-        let measured = textWidth("\(count)", font: subagentChipFont)
-            + subagentChipHorizontalPadding * 2
-        return max(subagentChipMinSize, ceil(measured))
+    static func subagentBadgeWidth(_ count: Int) -> CGFloat {
+        let measured = textWidth("\(count)", font: subagentBadgeFont)
+            + subagentBadgeHorizontalPadding * 2
+        return max(subagentBadgeMinSize, ceil(measured))
     }
 
-    /// The chip cluster's width -- zero, one or two chips, spaced apart when
-    /// both are drawn. A chip whose count is zero contributes nothing: see
-    /// ``SubagentChipCounts``.
-    static func subagentChipsWidth(_ counts: SubagentChipCounts) -> CGFloat {
-        var widths: [CGFloat] = []
-        if counts.attention > 0 { widths.append(subagentChipWidth(counts.attention)) }
-        if counts.running > 0 { widths.append(subagentChipWidth(counts.running)) }
+    /// What the badges occupy together, spaced apart when there are two. A
+    /// product with nothing in flight contributes nothing: see
+    /// ``CompactTrailingReading/badges``.
+    static func subagentBadgesWidth(_ badges: [AgentSubagentBadge]) -> CGFloat {
+        let widths = badges.filter { !$0.badge.isEmpty }
+            .map { subagentBadgeWidth($0.badge.count) }
         guard !widths.isEmpty else { return 0 }
-        return widths.reduce(0, +) + CGFloat(widths.count - 1) * subagentChipSpacing
+        return widths.reduce(0, +) + CGFloat(widths.count - 1) * subagentBadgeSpacing
     }
 
-    /// Everything the trailing slot actually draws: the chip cluster, the
-    /// timer, and the gap between them when both are present.
+    /// Everything the trailing slot actually draws: the badges, the timer, and
+    /// the gap between them when both are present.
     static func compactTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
-        let chipsWidth = subagentChipsWidth(trailing.chips)
-        guard let timerText = trailing.timerText else { return chipsWidth }
+        let badgesWidth = subagentBadgesWidth(trailing.badges)
+        guard let timerText = trailing.timerText else { return badgesWidth }
         let timerWidth = textWidth(timerText, font: timerFont)
-        guard chipsWidth > 0 else { return timerWidth }
-        return chipsWidth + subagentChipTimerSpacing + timerWidth
+        guard badgesWidth > 0 else { return timerWidth }
+        return badgesWidth + subagentBadgeTimerSpacing + timerWidth
     }
 
-    /// Compact content trailing the notch, including its own trailing padding.
+    /// The session-count dots, in the matrix's own `91`-unit viewBox.
+    ///
+    /// **They belong to the matrix, so they are measured in its units.** The
+    /// matrix is `27`-unit cells on a `32`-unit pitch (`NotchStatusMatrix`); a
+    /// dot is `15` of those units across, the column stands `16` clear of the
+    /// mark, and past three the third dot stretches to a full cell's `27`. At
+    /// the surface's `16.6` matrix that is `2.74`, `2.92` and `4.93`.
+    ///
+    /// **The column is exactly as tall as the matrix.** Two pitches and a cell
+    /// is `16.6` — the same identity the horizontal arrangement had, stood on
+    /// its end. That is what makes this placement work on a menu bar of any
+    /// height: the dots ask for no room the mark did not already have, so a
+    /// `22` pt bar draws them exactly as a `46` pt one does. Under the matrix
+    /// they needed `5.66` of vertical clearance that a short bar has not got,
+    /// and were dropped there entirely.
+    ///
+    /// What it costs instead is `sessionDotColumnWidth` on the leading wing,
+    /// per product mark — `5.66`, against the `22` a numeral beside the matrix
+    /// wanted.
+    static let sessionDotViewBox: CGFloat = 91
+    static func sessionDotDiameter(matrixSize: CGFloat) -> CGFloat {
+        matrixSize * 15 / sessionDotViewBox
+    }
+    /// From the matrix's trailing edge to the column of dots.
+    static func sessionDotGap(matrixSize: CGFloat) -> CGFloat {
+        matrixSize * 16 / sessionDotViewBox
+    }
+    /// The matrix's own row pitch, which the dots are centred on.
+    static func sessionDotPitch(matrixSize: CGFloat) -> CGFloat {
+        matrixSize * 32 / sessionDotViewBox
+    }
+    /// One matrix cell, which is how long the "and more" dash is drawn.
+    static func sessionDotDashLength(matrixSize: CGFloat) -> CGFloat {
+        matrixSize * 27 / sessionDotViewBox
+    }
+    /// The room one product mark reserves beside its matrix for the dots.
+    ///
+    /// **Reserved in the width, packed in the drawing.** A product with no rows
+    /// draws no column, so a pair at rest sits at its own `6` rather than at
+    /// the `11.66` an empty column put between them — past the `8` at which
+    /// ``marksWidth`` records that the pair stops reading as a pair at all, in
+    /// exactly the state the bar is in most of the time. But the *panel* keeps
+    /// the room either way, and the marks are packed from their leading edge
+    /// inside it, so what a missing column gives up becomes slack at the
+    /// trailing end of the marks instead of width off the panel.
+    ///
+    /// **Which buys the one anchor worth having.** The leading matrix never
+    /// moves — not when its own product opens a session, not when the other one
+    /// does, not when the timer arrives. A column opening pushes only the marks
+    /// after it, and a column belonging to the last mark pushes nothing at all.
+    /// The dot itself never moves either: it stands a fixed `2.92` from the
+    /// matrix that owns it, and that matrix has already stopped moving by the
+    /// time the dot appears. ``SessionCountDots`` draws that.
+    ///
+    /// **And it costs no motion the eye can find.** The slack lands between the
+    /// last mark and the cut-out, where the wing's black runs into the
+    /// cut-out's own — there is no boundary there for a gap to be visible
+    /// against. It is the one place on this surface that can absorb width for
+    /// free, which is why the reservation is spent there rather than between
+    /// two marks that have to read as a pair.
+    static func sessionDotColumnWidth(matrixSize: CGFloat = statusMatrixSize) -> CGFloat {
+        sessionDotGap(matrixSize: matrixSize) + sessionDotDiameter(matrixSize: matrixSize)
+    }
+    /// How many dots are drawn before the run stops counting exactly.
+    ///
+    /// Three, because a fourth will not fit beside the matrix without shrinking
+    /// every dot below the size at which they can be counted — the column is
+    /// the mark's own height and the dots sit on its own row pitch. Past this
+    /// the third dot stretches into a dash and the run means "more than three".
+    static let sessionDotCap = 3
+
+        /// Compact content trailing the notch, including its own trailing padding.
     ///
     /// Zero unless the collapsed surface has a reading to put there -- an
-    /// elapsed value, a subagent chip cluster, or both. The usage ring used
+    /// elapsed value, a subagent badge, or both. The usage ring used
     /// to sit here unconditionally, which meant an idle notched display
     /// rendered a blank wing that read as a second, fake notch.
     static func compactTrailingWidth(trailing: CompactTrailingReading) -> CGFloat {
@@ -551,7 +650,7 @@ enum PanelMetrics {
     /// only has to clear.
     ///
     /// Only the trailing side takes it, and only while that side is empty. A
-    /// wing wide enough for a timer or a chip cluster is already well clear of
+    /// wing wide enough for a timer or a badge is already well clear of
     /// the flare, and the leading side is either such a wing or the resting
     /// form that is meant to be invisible.
     ///
@@ -678,7 +777,7 @@ enum PanelMetrics {
     ///   one are the same width — the grey resting mark occupies the single
     ///   slot rather than adding one.
     /// - Parameter trailing: What the trailing slot actually draws, when that
-    ///   is more than an elapsed value. A subagent chip cluster sits in the
+    ///   is more than an elapsed value. A subagent badge sits in the
     ///   same slot and can be wider than the reservation, and a no-notch pill
     ///   is the one shape with no cut-out to hang a wing off -- what does not
     ///   fit inside its width is simply clipped. Defaults to empty, which is
@@ -688,6 +787,9 @@ enum PanelMetrics {
         matrixCount: Int,
         trailing: CompactTrailingReading = .empty
     ) -> CGFloat {
+        // `compactChromeWidth` already carries one matrix, so the marks past
+        // the first are added here -- and every drawn product mark reserves
+        // its dot column, which the resting grey does not.
         let extraMatrices = CGFloat(max(0, matrixCount - 1))
             * (statusMatrixSize + compactMatrixSpacing)
         guard status != .disconnected else {
@@ -697,8 +799,10 @@ enum PanelMetrics {
                     + extraMatrices
             )
         }
+        let dotColumns = CGFloat(max(0, matrixCount)) * sessionDotColumnWidth()
         return ceil(
             compactChromeWidth
+                + dotColumns
                 + workingContentWidth(trailing: trailing)
                 + extraMatrices
         )
@@ -754,7 +858,7 @@ enum PanelMetrics {
     ///
     /// The reservation is what keeps the pill still while digits change, and it
     /// is an upper bound for an elapsed value alone. It is not one for the
-    /// subagent chip cluster that shares the slot, and reserving room for it
+    /// subagent badge that shares the slot, and reserving room for it
     /// permanently would widen every pill for a reading almost no collapsed
     /// surface will ever show. So the slot grows to fit that reading and
     /// shrinks back when it goes -- a movement caused by something appearing,
@@ -1323,15 +1427,19 @@ final class MonitorStore: ObservableObject {
     ///
     /// The formatter emits digits and colons in tabular figures, so a string's
     /// character count *is* its rendered width; comparing counts is comparing
-    /// widths without measuring text once a second. The chip counts are
+    /// widths without measuring text once a second. The badge counts are
     /// included directly, rather than measured, for the same reason: a count
     /// changing is a width-affecting event whether or not its digit count
-    /// happens to change too.
+    /// happens to change too. Each badge's flip goes in beside its count
+    /// because a badge that changes ground without changing width still has
+    /// to redraw.
     private func publishTick(_ now: Date) {
         elapsedTick.send(now)
 
-        let chips = compactSubagentChipCounts
-        var signature = [chips.attention, chips.running, compactTimerText?.count ?? -1]
+        var signature = compactSubagentBadges.flatMap {
+            [$0.badge.count, $0.badge.wantsAttention ? 1 : 0]
+        }
+        signature.append(compactTimerText?.count ?? -1)
         signature.append(contentsOf: sessions.map { elapsedText(for: $0)?.count ?? -1 })
         guard signature != elapsedLayoutSignature else { return }
         elapsedLayoutSignature = signature
@@ -1499,63 +1607,51 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// Subagents still in flight across every listed row, split into the
-    /// figures the two chips draw (`dual-agent-design.md` §10).
+    /// One badge per product with a subagent in flight, in ``AgentKind``
+    /// order (`dual-agent-design.md` §10).
     ///
-    /// A total across every row, because the collapsed surface speaks for the
-    /// whole list the way the summary status and the one timer already do —
-    /// across both products, which both report subagent boundaries.
-    var compactSubagentChipCounts: SubagentChipCounts {
-        guard !hidesCompactSurface else { return .empty }
-        let attention = sessions.reduce(0) { $0 + $1.subagentsAwaitingApprovalCount }
-        let running = sessions.reduce(0) { $0 + $1.subagentsStillRunningCount }
-        return SubagentChipCounts(attention: attention, running: running)
-    }
-
-    /// The collapsed pill's running chip colour -- rules 1–2 of
-    /// `dual-agent-design.md` §10.
-    ///
-    /// Tinted only while the pill can honestly speak for one product: exactly
-    /// one connected. Two connected, or none, and it goes neutral -- neither
-    /// ink would be accurate, so neither is used.
-    var compactSubagentRunningTint: SubagentChipTint {
-        guard connectedAgents.count == 1, let only = connectedAgents.first else {
-            return .neutral
+    /// Read straight off ``presenceMarks`` rather than re-summed here: the
+    /// marks already carry each product's total and already sit in the order
+    /// the badges have to draw in, and deriving the badges from anything else
+    /// would let the two ends of the bar disagree about the same list.
+    var compactSubagentBadges: [AgentSubagentBadge] {
+        guard !hidesCompactSurface else { return [] }
+        return presenceMarks.compactMap { mark in
+            guard let agent = mark.agent, !mark.subagents.isEmpty else { return nil }
+            return AgentSubagentBadge(agent: agent, badge: mark.subagents)
         }
-        return .product(only)
     }
 
-    /// Every subagent still in flight across every listed row, counting both
-    /// chips together. Kept for VoiceOver's total and for callers that only
-    /// need to know whether the collapsed surface has anything to say here.
+    /// Every subagent still in flight across every listed row, both products
+    /// together. Kept for VoiceOver's total and for callers that only need to
+    /// know whether the collapsed surface has anything to say here.
     var compactRunningSubagentCount: Int {
-        let chips = compactSubagentChipCounts
-        return chips.attention + chips.running
+        compactSubagentBadges.reduce(0) { $0 + $1.badge.count }
     }
 
     /// Everything the collapsed surface draws in the slot after the notch: a
-    /// subagent chip cluster, the elapsed timer, or both sharing the slot.
+    /// one subagent badge per product, the elapsed timer, or both sharing the slot.
     ///
     /// One value rather than two views, because it is one reading: the panel
     /// width is measured from it, and the elapsed half redraws itself once a
     /// second inside its own raster instead of laying out a stack every tick.
     var compactTrailingReading: CompactTrailingReading {
-        CompactTrailingReading(chips: compactSubagentChipCounts, timerText: compactTimerText)
+        CompactTrailingReading(badges: compactSubagentBadges, timerText: compactTimerText)
     }
 
-    /// The spoken form of ``compactSubagentChipCounts``, since VoiceOver
-    /// cannot read the white/grey split the chips draw with colour alone.
+    /// The spoken form of ``compactSubagentBadges``, since VoiceOver can read
+    /// neither a flipped ground nor which product a hue belongs to.
+    ///
+    /// Names the product each badge belongs to, because two badges drawn side
+    /// by side are told apart by ink alone, and a reader who cannot see the
+    /// ink would otherwise hear two bare numbers.
     var spokenRunningSubagentText: String? {
-        let chips = compactSubagentChipCounts
-        guard !chips.isEmpty else { return nil }
-        var parts: [String] = []
-        if chips.attention > 0 {
-            parts.append(chips.attention == 1 ? "1 waiting for you" : "\(chips.attention) waiting for you")
+        let spoken = compactSubagentBadges.compactMap { mark -> String? in
+            guard let summary = mark.badge.spokenSummary else { return nil }
+            return "\(mark.agent.displayName) \(summary)"
         }
-        if chips.running > 0 {
-            parts.append(chips.running == 1 ? "1 subagent" : "\(chips.running) subagents")
-        }
-        return parts.joined(separator: ", ")
+        guard !spoken.isEmpty else { return nil }
+        return spoken.joined(separator: ", ")
     }
 
     /// The instant the compact readout counts from, or nil when there is nothing
