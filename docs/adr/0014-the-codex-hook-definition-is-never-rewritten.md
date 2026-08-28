@@ -1,6 +1,6 @@
 # The Codex hook definition is never rewritten once written
 
-The five definitions this app registers in `~/.codex/hooks.json` **never change their content after first installation**. Changing behaviour means changing the script a definition points at, not the definition.
+The definitions this app registers in `~/.codex/hooks.json` — seven of them today — **never change their content after first installation**. Changing behaviour means changing the script a definition points at, not the definition.
 
 ## Why
 
