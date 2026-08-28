@@ -840,17 +840,55 @@ enum NotchMatrixState: Equatable {
         }
     }
 
-    /// Loop length, or `nil` when the state is a still.
+    /// What the mark draws.
     ///
-    /// Three lengths for four patterns, and the pairing is the design's:
+    /// Four of the five states draw one pattern each, whatever the surface is
+    /// doing. `inactive` draws two, and `awakeAgent` is which: nil for the
+    /// still, and the product that owns the mark for the glimmer.
+    func pattern(awakeAgent: AgentKind?) -> MatrixPattern {
+        switch self {
+        case .running: .radar
+        case .inputNeeded: .advance
+        case .approvalNeeded: .doubleKnock
+        case .completed: .lull
+        case .inactive: awakeAgent.map(MatrixPattern.glimmer) ?? .still
+        }
+    }
+}
+
+/// What the mark is actually doing, which is not quite what state it is in.
+///
+/// The five states drew five patterns until the glimmer, and a pattern was
+/// only ever a state read out loud. The glimmer is the first that is not: it
+/// is what `inactive` draws **while the panel is open**, and the state cannot
+/// know that because it is a reading of one product's sessions and the panel
+/// is a reading of where the pointer is. So the two are separate types, and
+/// the one number the surface has to get right — the loop length — belongs
+/// to the pattern rather than to the state that asked for it.
+enum MatrixPattern: Equatable {
+    case radar
+    case advance
+    case doubleKnock
+    case lull
+    /// The idle mark, awake because someone is looking at it.
+    ///
+    /// It carries whose mark it is because two idle marks must not glimmer
+    /// together — see ``MatrixTrack/glimmerStagger``.
+    case glimmer(AgentKind)
+    case still
+
+    /// Loop length, or `nil` for the still.
+    ///
+    /// Four lengths for five patterns, and the pairing is the design's:
     /// the radar and the knock share `1.2`, so a bar showing one of each is
     /// showing two things on one grid rather than two clocks.
     var period: TimeInterval? {
         switch self {
-        case .running, .approvalNeeded: 1.2
-        case .inputNeeded: 0.8
-        case .completed: 2.0
-        case .inactive: nil
+        case .radar, .doubleKnock: 1.2
+        case .advance: 0.8
+        case .lull: 2.0
+        case .glimmer: 4.0
+        case .still: nil
         }
     }
 }
@@ -949,6 +987,82 @@ private enum MatrixTrack {
         0.183, 0.183, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.183,
         0.183, 0.188, 0.192, 0.199, 0.210, 0.220, 0.242, 0.263, 0.291, 0.325
     ]
+    /// **Glimmer**, 120 frames over `4s`, and the only one of the five held as
+    /// its rule rather than as a curve.
+    ///
+    /// A soft highlight drifts over the mark: a Gaussian `1.25` cells wide
+    /// whose centre travels a 1:2 Lissajous figure, once down and up the rows
+    /// while it goes twice across the columns. A cell is as bright as the
+    /// highlight is close, so it rises to full as the highlight passes over it
+    /// and falls back to `0.15` when the highlight is elsewhere. There is no
+    /// beat anywhere in it and nothing ever arrives: it reads as idle rather
+    /// than as waiting, which is the whole of what it has to say.
+    ///
+    /// **The other four are one curve plus an offset; this one cannot be.**
+    /// Their highlights travel in one dimension — round a bearing, across a
+    /// column, along the diagonal — so every cell sees the same curve and
+    /// only its own place decides when. This one travels in two, so a cell in
+    /// the middle of the figure is passed close and often while a corner is
+    /// passed far and rarely, and the sixteen curves genuinely differ in
+    /// shape. What survives being read is the figure, so the figure is what
+    /// is written down and the curves are sampled off it — rounded to the
+    /// same three decimals `notchline-connected-glimmer.svg` writes, so the
+    /// file and this are the same numbers rather than merely close ones.
+    static let glimmer: [[Double]] = (0 ..< MatrixGrid.cellCount).map { index in
+        let row = Double(index / MatrixGrid.side)
+        let column = Double(index % MatrixGrid.side)
+        return (0 ..< glimmerFrames).map { frame in
+            let turn = 2 * .pi * Double(frame) / Double(glimmerFrames)
+            let centre = Double(MatrixGrid.side - 1) / 2
+            let distance = hypot(
+                row - (centre + glimmerTravel * sin(turn)),
+                column - (centre + glimmerTravel * sin(2 * turn + glimmerSkew))
+            )
+            let alpha = glimmerFloor
+                + glimmerSwing * exp(-pow(distance / glimmerSpread, 2))
+            return (alpha * 1000).rounded() / 1000
+        }
+    }
+    /// The glimmer at 30fps, like the other four.
+    static let glimmerFrames = 120
+    /// How far the highlight's centre travels from the mark's, in cells.
+    ///
+    /// Past the outer cells (`1.6` against the `1.5` that would reach them),
+    /// so the highlight leaves the mark entirely at each end of its travel
+    /// rather than turning round inside it. That is what gives the pattern its
+    /// dark moments without any cell being told to go dark.
+    private static let glimmerTravel = 1.6
+    /// How far into its own loop the horizontal travel is when the vertical
+    /// travel starts, in radians.
+    ///
+    /// Without it the figure would be a symmetric bow retraced identically
+    /// each way, and the highlight would visibly reverse along its own path.
+    /// Offset, the two crossings differ and the path reads as a wander.
+    private static let glimmerSkew = 1.0
+    /// The highlight's width, in cells: the distance at which it has fallen to
+    /// `1/e` of its peak.
+    ///
+    /// A little wider than the pitch, so a cell is never lit entirely alone --
+    /// the mark shows a soft patch moving over it rather than a bright dot
+    /// hopping between sixteen positions.
+    private static let glimmerSpread = 1.25
+    /// The dim field the highlight moves over, which is the level a still mark
+    /// holds at — see ``inactiveLevel``.
+    ///
+    /// **The glimmer starts and ends where the still already was.** The panel
+    /// opening is not news about the product, so the mark it wakes must not
+    /// appear to change state: it rises out of the level it was resting at and
+    /// sinks back to it, and a cell the highlight is not near is drawing
+    /// exactly what it drew before the pointer arrived.
+    private static let glimmerFloor = inactiveLevel
+    /// How far the highlight lifts a cell above that field.
+    ///
+    /// Floor plus swing is exactly `1`, so the highlight's peak is full and
+    /// the pattern spans the whole range the other four span. The brightest
+    /// frame the design file actually draws is `0.998`, because the highlight
+    /// crosses a cell's centre between two frames rather than on one.
+    private static let glimmerSwing = 1 - glimmerFloor
+
     /// Connected and disconnected hold still at a level no live pattern
     /// rests at.
     ///
@@ -997,6 +1111,38 @@ private enum MatrixTrack {
     static func lullOffset(row: Int, column: Int) -> Int {
         Int((Double(row + column) * 48.7 / 6).rounded())
     }
+
+    /// How far each product's glimmer is set behind the product before it in
+    /// ``AgentKind``'s fixed order, as a share of the loop.
+    ///
+    /// **Every other pattern is deliberately in sync across marks** — two
+    /// products running the same curve out of step read as noise rather than
+    /// as one state said twice, which is what
+    /// ``MatrixIndicatorView/phaseAnchor(for:now:)`` exists for. The glimmer
+    /// is the exception, because it is the one pattern that says nothing is
+    /// happening: two idle marks rising and falling together would be a
+    /// rhythm, and a rhythm is the thing the pattern is careful not to have.
+    /// Staggered, the pair reads as two quiet things rather than as one
+    /// pulse drawn twice.
+    ///
+    /// **A third, and not a half.** The obvious stagger for two products is
+    /// half the loop, and on this figure it is the one value that fails: the
+    /// horizontal travel goes round twice per loop, so half a loop leaves it
+    /// exactly where it was and mirrors only the vertical. The two highlights
+    /// would sit in the same column moving oppositely, and — because the mark
+    /// is symmetric top to bottom — the two marks' total brightness would rise
+    /// and fall in perfect lockstep, which is precisely the pulse being
+    /// avoided. A third is coprime with that doubling, so neither the figure
+    /// nor its half repeats between the marks; it holds for a third product
+    /// too, which a half never could.
+    static let glimmerStagger = 1.0 / 3
+
+    /// The frame this product's highlight enters the figure on.
+    static func glimmerOffset(for agent: AgentKind) -> Int {
+        let rank = AgentKind.allCases.firstIndex(of: agent) ?? 0
+        let frames = Double(rank) * glimmerStagger * Double(glimmerFrames)
+        return Int(frames.rounded()) % glimmerFrames
+    }
 }
 
 private extension [Double] {
@@ -1007,8 +1153,8 @@ private extension [Double] {
     }
 }
 
-private extension NotchMatrixState {
-    /// One cell's whole opacity track: the state's curve, delayed by the
+extension MatrixPattern {
+    /// One cell's whole opacity track: the pattern's curve, delayed by the
     /// number of frames this cell's place in the grid asks for.
     ///
     /// The track is handed to Core Animation as keyframes rather than sampled
@@ -1021,21 +1167,29 @@ private extension NotchMatrixState {
         let row = index / MatrixGrid.side
         let column = index % MatrixGrid.side
         switch self {
-        case .running:
+        case .radar:
             return MatrixTrack.radar
                 .delayed(by: MatrixTrack.radarOffset(row: row, column: column))
-        case .inputNeeded:
+        case .advance:
             // The bottom row is the baseline the advance crosses above.
             return row == MatrixGrid.side - 1
                 ? [MatrixTrack.advanceBaseline]
                 : MatrixTrack.advance
                     .delayed(by: MatrixTrack.advanceOffset(column: column))
-        case .approvalNeeded:
+        case .doubleKnock:
             return MatrixTrack.doubleKnock
-        case .completed:
+        case .lull:
             return MatrixTrack.lull
                 .delayed(by: MatrixTrack.lullOffset(row: row, column: column))
-        case .inactive:
+        case let .glimmer(agent):
+            // The product's stagger goes into the track and not into the
+            // animation's `beginTime`, for the same reason a cell's own phase
+            // does: the anchor stays one number per mark, on the grid every
+            // other mark is on, and what differs between two marks is the
+            // curve each draws rather than the clock each keeps.
+            return MatrixTrack.glimmer[index]
+                .delayed(by: MatrixTrack.glimmerOffset(for: agent))
+        case .still:
             return [MatrixTrack.inactiveLevel]
         }
     }
@@ -1058,11 +1212,28 @@ struct NotchStatusMatrix: View {
     var isAnimated = true
     /// Which product this mark belongs to, or nil for the resting grey.
     var agent: AgentKind?
+    /// Whether the panel this mark sits on is open — which is to say, whether
+    /// the pointer is on the notch and someone is looking at the mark.
+    ///
+    /// It changes nothing except for an idle mark, which glimmers rather than
+    /// holding still while it is true. Every other state is a reading of the
+    /// product and says the same thing whether or not anyone is there to
+    /// read it.
+    var isPanelOpen = false
     /// Draw one specimen for both products instead, cut on the mark's diagonal.
     ///
     /// Only the first-run legend passes this; on the surface a mark always
     /// belongs to one product. When set it replaces `agent`'s ink entirely.
     var split: NotchPalette.MatrixSplit?
+
+    /// The product whose idle mark should wake, if any.
+    ///
+    /// **Only a product's mark glimmers.** The resting grey is drawn when
+    /// nothing is connected at all, and its two colours are the same colour,
+    /// so a curve run through it would move nothing but the glow around it —
+    /// half an effect, saying that something might happen behind a mark that
+    /// exists to say nothing can.
+    private var awakeAgent: AgentKind? { isPanelOpen ? agent : nil }
 
     var body: some View {
         MatrixIndicator(
@@ -1070,6 +1241,7 @@ struct NotchStatusMatrix: View {
             size: size,
             isAnimated: isAnimated,
             ink: NotchPalette.ink(for: agent),
+            awakeAgent: awakeAgent,
             split: split
         )
         .frame(width: size, height: size)
@@ -1082,6 +1254,7 @@ private struct MatrixIndicator: NSViewRepresentable {
     let size: CGFloat
     let isAnimated: Bool
     let ink: NotchPalette.MatrixInk
+    let awakeAgent: AgentKind?
     let split: NotchPalette.MatrixSplit?
 
     func makeNSView(context: Context) -> MatrixIndicatorView {
@@ -1094,6 +1267,7 @@ private struct MatrixIndicator: NSViewRepresentable {
             size: size,
             isAnimated: isAnimated,
             ink: ink,
+            awakeAgent: awakeAgent,
             split: split
         )
     }
@@ -1134,6 +1308,7 @@ final class MatrixIndicatorView: NSView {
     private var appliedSize: CGFloat = 0
     private var appliedIsAnimated = true
     private var appliedInk = NotchPalette.codexInk
+    private var appliedAwakeAgent: AgentKind?
     private var appliedSplit: NotchPalette.MatrixSplit?
 
     // Row 0 is the top row, as in the SVG.
@@ -1154,12 +1329,14 @@ final class MatrixIndicatorView: NSView {
         size: CGFloat,
         isAnimated: Bool,
         ink: NotchPalette.MatrixInk,
+        awakeAgent: AgentKind? = nil,
         split: NotchPalette.MatrixSplit? = nil
     ) {
         guard state != appliedState
             || size != appliedSize
             || isAnimated != appliedIsAnimated
             || ink != appliedInk
+            || awakeAgent != appliedAwakeAgent
             || split != appliedSplit else {
             return
         }
@@ -1167,6 +1344,7 @@ final class MatrixIndicatorView: NSView {
         appliedSize = size
         appliedIsAnimated = isAnimated
         appliedInk = ink
+        appliedAwakeAgent = awakeAgent
         appliedSplit = split
         rebuild()
     }
@@ -1188,6 +1366,17 @@ final class MatrixIndicatorView: NSView {
         }
 
         root.sublayers?.forEach { $0.removeFromSuperlayer() }
+
+        // **A mark that cannot move cannot glimmer.** With motion off the
+        // pattern would come out as one arbitrary frame of a wandering
+        // highlight — a scatter of brightnesses saying nothing — where the
+        // still it replaces is the honest reading of an idle product. So the
+        // panel being open wakes nothing here, which is also the right answer:
+        // the glimmer is the mark acknowledging the pointer, and a surface
+        // that has been asked to hold still acknowledges it by holding still.
+        let pattern = state.pattern(
+            awakeAgent: appliedIsAnimated ? appliedAwakeAgent : nil
+        )
 
         // Proportions come straight from the design file's viewBox, by way of
         // ``MatrixGrid``: 27-unit cells on a 32-unit pitch, 2-unit corner
@@ -1266,10 +1455,10 @@ final class MatrixIndicatorView: NSView {
                     height: cell
                 )
 
-                let track = state.track(forCell: index)
+                let track = pattern.track(forCell: index)
                 // The still the design file shows: every track's t=0 frame.
                 cellLayer.opacity = Float(track.first ?? 1)
-                if animated, let period = state.period, track.count > 1 {
+                if animated, let period = pattern.period, track.count > 1 {
                     cellLayer.add(
                         Self.trackAnimation(track: track, period: period),
                         forKey: "notch.matrix.opacity"

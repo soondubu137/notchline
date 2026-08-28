@@ -308,22 +308,36 @@ struct NotchlineTests {
 
     /// Each state draws the pattern its design file draws.
     ///
-    /// The four files in `design/assets/matrix-states/` are the contract, and
-    /// what makes them checkable is that each writes one waveform sixteen
-    /// times at sixteen offsets. The code holds the waveform once and computes
-    /// the offsets, so the offsets are the half that can drift silently — a
-    /// sign flipped on the radar's bearing sweeps it anticlockwise and still
-    /// looks like a radar. They are transcribed here from the files.
+    /// The files in `design/assets/matrix-states/` are the contract, and what
+    /// makes four of the five checkable is that each writes one waveform
+    /// sixteen times at sixteen offsets. The code holds the waveform once and
+    /// computes the offsets, so the offsets are the half that can drift
+    /// silently — a sign flipped on the radar's bearing sweeps it
+    /// anticlockwise and still looks like a radar. They are transcribed here
+    /// from the files.
     ///
-    /// Read off the layers rather than off ``NotchMatrixState/track(forCell:)``
+    /// The glimmer is the fifth and has no single waveform to transcribe: its
+    /// highlight travels in two dimensions, so the code holds the figure and
+    /// samples the sixteen curves off it. What can drift there is the figure's
+    /// own shape, so what is asserted is the shape's consequences — the range
+    /// it spans, the floor it shares with the still it replaces, and the
+    /// symmetry a 1:2 figure has and no other would.
+    ///
+    /// Read off the layers rather than off ``MatrixPattern/track(forCell:)``
     /// so that what is asserted is what the render server is actually given,
     /// closing keyframe and all.
     @Test @MainActor
     func eachStateDrawsThePatternItsDesignFileDraws() throws {
         /// The lit cells of one mark, in row-major order.
-        func cells(_ state: NotchMatrixState) throws -> [CALayer] {
+        func cells(_ state: NotchMatrixState, awakeAgent: AgentKind? = nil) throws -> [CALayer] {
             let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-            view.apply(state: state, size: 16, isAnimated: true, ink: NotchPalette.codexInk)
+            view.apply(
+                state: state,
+                size: 16,
+                isAnimated: true,
+                ink: NotchPalette.codexInk,
+                awakeAgent: awakeAgent
+            )
             // The unlit bed is first and never animates; any lit pass will do.
             let passes = try #require(view.layer?.sublayers)
             return try #require(passes.last?.sublayers)
@@ -418,6 +432,180 @@ struct NotchlineTests {
         #expect(knockFloor < resting)
         #expect(radarFloor < resting)
         #expect(resting < lullFloor)
+
+        // Glimmer: the same idle mark, awake because the panel is open. A
+        // highlight wanders over a field held at exactly the level the still
+        // was at, so opening the panel lifts the mark without changing what it
+        // says the product is doing.
+        let glimmer = try cells(.inactive, awakeAgent: .codex)
+        let glimmerTracks = try glimmer.map { try values($0) }
+        for track in glimmerTracks {
+            // 120 frames plus the repeat of frame 0 that closes the loop.
+            #expect(track.count == 121)
+            #expect(track.first == track.last)
+            // Never below the level the still it replaces was holding at.
+            #expect(track.min() ?? 0 >= resting - 1e-6)
+        }
+        // And the field the highlight moves over *is* that level: a cell the
+        // highlight has left far enough behind rests exactly where it rested
+        // before the panel opened, so opening the panel lifts the mark without
+        // moving its floor. Only the cells the figure swings clear of ever get
+        // that far — the ones it passes through keep a little of its tail all
+        // loop — so this is a claim about the pattern's floor, not every
+        // cell's.
+        let floors: [Double] = glimmerTracks.compactMap { $0.min() }
+        let glimmerFloor = try #require(floors.min())
+        #expect(abs(glimmerFloor - resting) < 1e-6)
+        // Normalised: the floor is the resting level and the highlight's peak
+        // is full. `0.998` and not `1` because the highlight crosses a cell's
+        // centre between two frames rather than on one — the ceiling is the
+        // figure's, and 30fps is where it is read.
+        let peaks: [Double] = glimmerTracks.compactMap { $0.max() }
+        let brightest = try #require(peaks.max())
+        #expect(abs(brightest - 1) < 0.005)
+
+        // The figure crosses the columns twice for every once it crosses the
+        // rows, so half a loop later the highlight is at the mirrored row and
+        // the same column: the bottom two rows draw the top two, half a loop
+        // on. Nothing else about the pattern would produce that, which is what
+        // makes it worth asserting — a 1:1 figure or a different skew would
+        // still look like a wandering highlight and fail here.
+        for column in 0 ..< MatrixGrid.side {
+            for (top, bottom) in [(0, 3), (1, 2)] {
+                let above: [Double] = glimmerTracks[top * MatrixGrid.side + column]
+                let below: [Double] = glimmerTracks[bottom * MatrixGrid.side + column]
+                let halfALoopOn: [Double] = (0 ... 120).map { above[($0 + 60) % 120] }
+                #expect(below == halfALoopOn)
+            }
+        }
+
+        // And the mark is never all at once at the floor: at every frame some
+        // cell is most of the way up. A glimmering mark that momentarily went
+        // flat would be indistinguishable from the still it replaces.
+        for frame in 0 ... 120 {
+            let frameCells: [Double] = glimmerTracks.map { $0[frame] }
+            let lit: Double = frameCells.max() ?? 0
+            #expect(lit > 0.7)
+        }
+    }
+
+    /// Two idle marks glimmer, but never together.
+    ///
+    /// Every other pattern is deliberately in sync across marks, which is what
+    /// `marksShowingTheSamePatternShowItInSync` pins. The glimmer is the one
+    /// exception, because it is the one pattern that says nothing is
+    /// happening: two idle marks rising and falling as one would be a rhythm,
+    /// and a rhythm is what the pattern is careful not to have.
+    ///
+    /// The stagger is a third of the loop and not a half, and this is where
+    /// that matters. Half a loop is the obvious answer for two products and
+    /// the one value that fails on this figure — the columns are crossed twice
+    /// per loop, so half a loop moves the highlight only in the rows, and
+    /// because the mark is symmetric top to bottom the two marks' brightness
+    /// would then match frame for frame.
+    @Test @MainActor
+    func twoIdleMarksGlimmerOutOfPhaseWithEachOther() throws {
+        func glimmer(_ agent: AgentKind) throws -> (tracks: [[Double]], begin: [CFTimeInterval]) {
+            let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
+            view.apply(
+                state: .inactive,
+                size: 16,
+                isAnimated: true,
+                ink: NotchPalette.ink(for: agent),
+                awakeAgent: agent
+            )
+            let passes = try #require(view.layer?.sublayers)
+            let cells = try #require(passes.last?.sublayers)
+            let animations = try cells.map {
+                try #require($0.animation(forKey: "notch.matrix.opacity") as? CAKeyframeAnimation)
+            }
+            let tracks: [[Double]] = try animations.map {
+                let numbers = try #require($0.values as? [NSNumber])
+                return numbers.map(\.doubleValue)
+            }
+            return (tracks, animations.map(\.beginTime))
+        }
+
+        let codex = try glimmer(.codex)
+        let claudeCode = try glimmer(.claudeCode)
+
+        // The clock is still shared: one anchor per mark, on the same grid, as
+        // it is for every other pattern. What differs is the curve each mark
+        // draws, not the time each keeps — the same division of labour a
+        // cell's own phase already uses.
+        let anchor = try #require(codex.begin.first)
+        #expect(codex.begin.allSatisfy { $0 == anchor })
+        #expect(claudeCode.begin.allSatisfy { $0 == anchor })
+
+        // A third of the loop: Claude Code's highlight is where Codex's was
+        // 40 frames ago, cell for cell.
+        for (mine, theirs) in zip(codex.tracks, claudeCode.tracks) {
+            let aThirdLater: [Double] = (0 ... 120).map {
+                mine[(($0 - 40) % 120 + 120) % 120]
+            }
+            #expect(theirs == aThirdLater)
+        }
+
+        // What that buys, which the stagger alone does not say: the two marks
+        // are never as bright as each other. Total brightness is what the eye
+        // reads at this size — the cells are 3.64pt — so this is the claim
+        // that the pair does not pulse as one.
+        func brightness(_ tracks: [[Double]], at frame: Int) -> Double {
+            tracks.reduce(0) { $0 + $1[frame] }
+        }
+        for frame in 0 ..< 120 {
+            let mine: Double = brightness(codex.tracks, at: frame)
+            let theirs: Double = brightness(claudeCode.tracks, at: frame)
+            #expect(abs(mine - theirs) > 0.001)
+        }
+
+        // And the half-loop stagger that would have been the obvious choice
+        // fails exactly that test: the mark's brightness has half the loop's
+        // period, so two marks half a loop apart breathe as one.
+        let halfALoop: [[Double]] = codex.tracks.map { track in
+            (0 ... 120).map { track[($0 + 60) % 120] }
+        }
+        for frame in 0 ..< 120 {
+            let mine: Double = brightness(codex.tracks, at: frame)
+            let mirrored: Double = brightness(halfALoop, at: frame)
+            #expect(abs(mine - mirrored) < 1e-9)
+        }
+    }
+
+    /// A mark asked to hold still holds still, panel open or not.
+    ///
+    /// The glimmer is the mark acknowledging the pointer, and with motion off
+    /// there is no way to acknowledge it: a single frame of a wandering
+    /// highlight is a scatter of brightnesses saying nothing, where the still
+    /// it would replace is the honest reading of an idle product.
+    @Test @MainActor
+    func anIdleMarkDoesNotGlimmerUnderReduceMotion() throws {
+        func opacities(isAnimated: Bool, isPanelOpen: Bool) throws -> [CALayer] {
+            let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
+            view.apply(
+                state: .inactive,
+                size: 16,
+                isAnimated: isAnimated,
+                ink: NotchPalette.codexInk,
+                awakeAgent: isPanelOpen ? .codex : nil
+            )
+            let passes = try #require(view.layer?.sublayers)
+            return try #require(passes.last?.sublayers)
+        }
+
+        let stillLevel = Float(MatrixPattern.still.track(forCell: 0)[0])
+        for cell in try opacities(isAnimated: false, isPanelOpen: true) {
+            #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
+            #expect(cell.opacity == stillLevel)
+        }
+        // The panel being shut stops it for everyone, motion or not.
+        for cell in try opacities(isAnimated: true, isPanelOpen: false) {
+            #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
+        }
+        // And with both, it moves.
+        for cell in try opacities(isAnimated: true, isPanelOpen: true) {
+            #expect(cell.animation(forKey: "notch.matrix.opacity") != nil)
+        }
     }
 
     /// Two marks showing the same pattern show it in sync.
@@ -480,7 +668,7 @@ struct NotchlineTests {
         // every grid, but it is however long the process has been up behind
         // the clock, which is exactly the "phase records when it was built"
         // the fix removes.
-        let period = try #require(NotchMatrixState.running.period)
+        let period = try #require(MatrixPattern.radar.period)
         for (phase, builtAt) in [(codexPhase, builtCodexAt), (claudePhase, builtClaudeAt)] {
             #expect(offGrid(phase, period) < 1e-9)
             #expect(phase <= builtAt)
