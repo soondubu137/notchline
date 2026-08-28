@@ -1,0 +1,14 @@
+<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="123" height="123" viewBox="0 0 123 123">
+  <rect x="0" y="0" width="27" height="27" rx="2" fill="#000000" fill-opacity="1"></rect>
+  <rect x="0" y="32" width="27" height="27" rx="2" fill="#000000" fill-opacity="0.75"></rect>
+  <rect x="0" y="64" width="27" height="27" rx="2" fill="#000000" fill-opacity="0.5"></rect>
+  <rect x="32" y="0" width="27" height="27" rx="2" fill="#000000" fill-opacity="1"></rect>
+  <rect x="32" y="32" width="27" height="27" rx="2" fill="#000000" fill-opacity="0.75"></rect>
+  <rect x="32" y="64" width="27" height="27" rx="2" fill="#000000" fill-opacity="0.5"></rect>
+  <rect x="64" y="32" width="27" height="27" rx="2" fill="#000000" fill-opacity="0.5"></rect>
+  <rect x="64" y="64" width="27" height="27" rx="2" fill="#000000" fill-opacity="0.75"></rect>
+  <rect x="64" y="96" width="27" height="27" rx="2" fill="#000000" fill-opacity="1"></rect>
+  <rect x="96" y="32" width="27" height="27" rx="2" fill="#000000" fill-opacity="0.5"></rect>
+  <rect x="96" y="64" width="27" height="27" rx="2" fill="#000000" fill-opacity="0.75"></rect>
+  <rect x="96" y="96" width="27" height="27" rx="2" fill="#000000" fill-opacity="1"></rect>
+</svg>
