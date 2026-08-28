@@ -1438,9 +1438,11 @@ struct NotchlineTests {
 
     /// Growing under a still pointer is not an invitation to reopen.
     ///
-    /// The re-check corrects one direction only. Escape collapses the panel out
-    /// from under a pointer that is still resting on the notch, and reading
-    /// that pointer as a fresh hover would reopen what the key just closed.
+    /// The re-check corrects one direction only. ``MonitorStore/collapse()``
+    /// closes the panel out from under a pointer that is still resting on the
+    /// notch -- the concealment watcher calls it when the menu bar goes -- and
+    /// reading that pointer as a fresh hover would reopen the panel over the
+    /// full-screen window it was just closed for.
     @Test @MainActor
     func aResizeUnderAStillPointerNeverReopensAClosedPanel() async {
         let display = makeDisplay(

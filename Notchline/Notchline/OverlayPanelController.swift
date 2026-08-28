@@ -7,7 +7,6 @@ final class OverlayPanelController {
     private let store: MonitorStore
     private let panel: OverlayPanel
     private var cancellables = Set<AnyCancellable>()
-    private var localEventMonitor: Any?
     private var screenParametersObserver: NSObjectProtocol?
     private var pendingFrameUpdate: DispatchWorkItem?
     private var pendingFrameUpdateShouldAnimate: Bool?
@@ -42,16 +41,12 @@ final class OverlayPanelController {
 
         configurePanel()
         bindStore()
-        installEventMonitors()
         observeScreenChanges()
         observeConcealment()
     }
 
     deinit {
         pendingFrameUpdate?.cancel()
-        if let localEventMonitor {
-            NSEvent.removeMonitor(localEventMonitor)
-        }
         if let pointerReentryMonitor {
             NSEvent.removeMonitor(pointerReentryMonitor)
         }
@@ -305,21 +300,6 @@ final class OverlayPanelController {
         guard let pointerReentryMonitor else { return }
         NSEvent.removeMonitor(pointerReentryMonitor)
         self.pointerReentryMonitor = nil
-    }
-
-    private func installEventMonitors() {
-        localEventMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: .keyDown
-        ) { [weak self] event in
-            guard let self else { return event }
-
-            if event.type == .keyDown, event.keyCode == 53, self.store.isExpanded {
-                self.store.collapse()
-                return nil
-            }
-
-            return event
-        }
     }
 
     private func observeConcealment() {

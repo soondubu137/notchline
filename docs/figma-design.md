@@ -576,9 +576,19 @@ Do not add login items, animation, notification, model selection or other unconf
 - Hover intent, reference `150 ms`.
 - Expansion, reference `180–220 ms`.
 - Collapse `250 ms` after the pointer leaves.
-- Escape collapses immediately.
 - Every intermediate frame keeps the same `maxY`. Horizontally, the expanded and notch-less forms keep the same `midX`, while the notched collapsed form anchors to the cut-out's right edge (§3.4).
 - Reduce Motion uses a short cross-fade, never a visible spring or scale.
+
+**There is no keyboard collapse, and there cannot be one here.** This list used to promise `Escape collapses immediately`, and the code carried an `NSEvent` local monitor for it that had never once run in normal use. A local monitor sees only events routed to this application, and this application is never the one they are routed to: the overlay is a `.nonactivatingPanel` whose `canBecomeKey` is `false`, so keystrokes go to whichever app holds the foreground — which, the panel being opened by hover, is always some other app. Measured with the panel expanded and Ghostty in front: `Escape` did not reach the monitor and the panel stayed open.
+
+Both ways of reaching it were measured and both are worse than the loss:
+
+- **Letting the panel become key.** It works — `Escape` arrives and collapses the panel — but the panel then takes *every* keystroke. An inert `F13` sent while `lsappinfo front` still reported Ghostty landed in this app instead, and it kept arriving after the panel had collapsed. That is a person's typing disappearing into a notch overlay, which is not a trade any collapse gesture is worth.
+- **A global key monitor.** `NSEvent.addGlobalMonitorForEvents` delivers key events only to a process trusted for Accessibility. This app takes no Accessibility permission at all — see [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md), where "no Accessibility, no GUI automation" is part of what the read-state path is measured against — and one convenience gesture is not what spends that.
+
+A third option, a Carbon `RegisterEventHotKey` held only while the panel is open, was rejected rather than disproved: it needs no permission and would deliver this line as written, but it takes `Escape` away from the frontmost app for as long as the pointer rests on the notch, and a process that dies before releasing it leaves `Escape` dead machine-wide until relaunch.
+
+The panel already collapses `250 ms` after the pointer leaves, and the pointer is by definition on the panel while it is open, so what is lost is a gesture whose whole saving is not moving the mouse.
 
 #### Handing the status name between the two forms
 

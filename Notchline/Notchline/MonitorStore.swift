@@ -2210,9 +2210,10 @@ final class MonitorStore: ObservableObject {
     ///
     /// Only the leaving direction is corrected. A pointer that the panel has
     /// *grown* under has not asked for anything, and re-expanding on it would
-    /// undo `collapse()`: Escape shrinks the panel out from under a pointer
-    /// that is still sitting on the notch, and that pointer must not
-    /// immediately reopen what it just closed.
+    /// undo ``collapse()``, which is a decision taken for a reason the pointer
+    /// knows nothing about: the concealment watcher closes the panel when the
+    /// menu bar goes, and a pointer left resting on the notch by that must not
+    /// reopen what was just closed over a full-screen window.
     func panelResized(to windowFrame: NSRect, pointerAt pointer: NSPoint) {
         guard isExpanded else { return }
         guard !OverlayPanelLayout.bodyContainsPointer(
