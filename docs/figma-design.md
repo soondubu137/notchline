@@ -1,678 +1,668 @@
-# Codex in Notch — Figma 设计规范
+# Notchline — Figma design specification
 
-| 字段 | 内容 |
+| Field | Value |
 | --- | --- |
-| 文档状态 | V1 SwiftUI 四态契约已同步；状态矩阵已换为 4×4 的四条新曲线、等待拆为 Input／Approval 两种画法（§4.1），外部 Figma 组件集待同步；设置窗口已按 macOS 26 重做；系统状态收敛为 `Disconnected` / `Connected` 两个，在场与宽度已实现、画法待 [#35](https://github.com/soondubu137/notchline/issues/35)；子智能体标记已收敛为**一枚 badge、一个总数、底色翻转**，收起态一个产品一枚并各染其墨；前导翼每个矩阵右侧新增一列竖排会话计数点（与矩阵等高，每个标记 `+5.66` 宽），均已实现（§4.6，[`dual-agent-design.md`](dual-agent-design.md) §10–§11）；外部 Figma 的 `807:91`／`807:102`／`808:527` 仍是旧文字变体，待下一次同步换成 `12 — Counting: sessions and subagents` 里对应的变体；**会话行的四个状态改为靠读数底座的轮廓分辨、正文行探照灯恢复、收起态读数取同一枚底座并永久预留其 `8`**（§4.7／§4.8／§6.4，Figma `14 — Telling row states apart`），三项均已实现，无刘海定宽因此为 `209` / `238` / `136` |
-| 版本 | 1.5 |
-| 日期 | 2026-08-27 |
-| 文件 | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
+| Status | The V1 SwiftUI four-status contract is in sync. The status matrix is now 4×4 on four new curves with waiting split into Input and Approval treatments (§4.1); the external Figma component sets still need syncing. The settings window is rebuilt for macOS 26. System status has narrowed to `Disconnected` / `Connected`, with presence and widths implemented. The subagent marker has converged to **one badge, one total, an inverting ground**, one per product when collapsed, each in its own ink. Each matrix in the leading wing has gained a vertical session-count dot column to its right (as tall as the matrix, `+5.66` per mark). All implemented (§4.6, [`dual-agent-design.md`](dual-agent-design.md) §10–§11). External Figma `807:91` / `807:102` / `808:527` are still the old text variants, to be swapped for the ones in `12 — Counting: sessions and subagents` at the next sync. **The four row states are now told apart by the reading's ground, the body-line searchlight is restored, and the collapsed reading takes the same ground with its `8` permanently reserved** (§4.7 / §4.8 / §6.4, Figma `14 — Telling row states apart`), all three implemented, so the notch-less fixed widths are `209` / `238` / `136` |
+| Version | 1.6 |
+| Date | 2026-08-28 |
+| File | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
 
-## 1. 设计原则
+## 1. Design principles
 
-1. 顶部组件是当前处理轮次的实时汇总中心，不是历史入口。
-2. 带刘海与无刘海的收起几何不同，但展开后共享同一内容结构。
-3. 展开组件始终贴住屏幕上沿、锁定水平中心；顶部汇总区只横向扩张。
-4. 状态、额度、Project、标题、当前内容和处理时间都来自真实 Codex Desktop 语义，不使用近似值。
-5. 无法可靠取得的数据明确降级，不用 Mock、缓存或近似值填补。
-6. 所有 Figma 文字统一使用 SF Pro；不得继续引入 Inter、SF Compact 或其他产品字体。
+1. The top component is a live summary of current Turns, not an entry point into history.
+2. Notched and notch-less collapsed geometry differ, but both share one expanded content structure.
+3. The expanded component always hugs the top edge and locks to the horizontal centre; the top summary region grows only horizontally.
+4. Status, quota, Project, title, current content and processing time all come from real product semantics, never approximations.
+5. Data that cannot be obtained reliably degrades explicitly, and is never filled in with mock, cached or approximate values.
+6. Every Figma text layer uses SF Pro; Inter, SF Compact and other product typefaces must not be introduced.
 
-## 2. Figma 文件结构
+## 2. Figma file structure
 
-| Page | 作用 | 关键节点 |
+| Page | Purpose | Key nodes |
 | --- | --- | --- |
-| `00 — Cover & Notes` | 文件说明 | — |
-| `01 — Getting Started` | 使用说明 | — |
-| `02 — Foundations` | 颜色、布局、字体、Motion、响应式圆角 | `99:38`, `99:39`, `287:2` |
-| `03 — Status Components` | Status Dot、Readout、Usage Ring、Badge | `108:18`, `153:202`, `154:24` |
-| `04 — Session Row` | 会话行、列表和状态名称胶囊；`807:91`／`807:102` 是 Completed 行的子智能体尾部变体（§4.6） | `112:28`, `140:201`, `198:72`, `807:91`, `807:102` |
-| `05 — Panel` | 收起与展开 Panel 变体；`808:527` 是 no-notch 收起态计数+计时合成读数变体（§4.6） | `115:82`, `300:253`, `300:263`, `808:527` |
-| `06 — Notch Core` | 核心产品状态与不同菜单栏高度参考 | `118:73`, `185:292`, `304:630`, `304:641` |
-| `07 — Integration States` | 局部降级；预览隐藏与薄层状态已退休或并入两个系统状态，见 §6.6 | `227:3`, `307:30` |
-| `08 — Onboarding` | 首次安装三步流程 | `232:95` |
-| `09 — Settings` | macOS 26 设置窗口（浅色／深色）、集成管理与 `Session list` 分组 | `609:2`（现行）；`233:3`、`591:2`（v1 参考） |
-| `10 — Double Apps` | 双产品（Codex + Claude Code）设计；`08 — Presence` 定义收起态的在场规则 | `540:2`、`624:1560` |
-| `11 — Subagent UI Concepts` | 子智能体标记候选评审。选中的 `C — Numeral Chip` 已被 `12` 页取代（拆成两枚的画法整个作废），全页仅作评审记录 | `812:2`、`815:116` |
-| `12 — Counting: sessions and subagents` | **现行**。子智能体徽标（一枚、总数、底色翻转、收起态一个产品一枚各染其墨）与会话计数点（矩阵右侧一列竖点，与矩阵等高，过三向下拉长成竖杠）；`02` 节记录六种画法的取舍（含已作废的「矩阵下方」），`04` 节是「过三怎么办」的四选一记录。规则见 [`dual-agent-design.md`](dual-agent-design.md) §10–§11 | `857:2` |
-| `13 — State matrices: the four marks` | 收起态四个轮次状态各自的动画标记（Radar／Double Knock／Advance／Lull），4×4 网格、`16.6` 足迹不变 | `920:2` |
-| `14 — Telling row states apart` | **现行**。展开面板行怎么区分四个状态：读数底座（§4.7）、正文行探照灯（§4.8）、收起态读数同样取底座并永久预留它的 `8`（§6.4）。`05` 节记录被否掉的五个替代方案 | `932:2` |
+| `00 — Cover & Notes` | File notes | — |
+| `01 — Getting Started` | Usage notes | — |
+| `02 — Foundations` | Colour, layout, type, motion, responsive corners | `99:38`, `99:39`, `287:2` |
+| `03 — Status Components` | Status Dot, Readout, Usage Ring, Badge | `108:18`, `153:202`, `154:24` |
+| `04 — Session Row` | Session row, list and status name pill; `807:91` / `807:102` are the Completed row's subagent trailing variants (§4.6) | `112:28`, `140:201`, `198:72`, `807:91`, `807:102` |
+| `05 — Panel` | Collapsed and expanded Panel variants; `808:527` is the no-notch collapsed count+timer composite reading (§4.6) | `115:82`, `300:253`, `300:263`, `808:527` |
+| `06 — Notch Core` | Core product states and menu-bar height references | `118:73`, `185:292`, `304:630`, `304:641` |
+| `07 — Integration States` | Partial degradation; hidden previews and the thin-layer states are retired or merged into the two system states (§6.6) | `227:3`, `307:30` |
+| `08 — Onboarding` | The first-run flow | `232:95`, `750:2` |
+| `09 — Settings` | The macOS 26 settings window (light and dark), integration management and the `Session list` group | `609:2` (current); `233:3`, `591:2` (v1 reference) |
+| `10 — Double Apps` | Two-product (Codex + Claude Code) design; `08 — Presence` defines the collapsed presence rules | `540:2`, `624:1560` |
+| `11 — Subagent UI Concepts` | Subagent marker candidate review. The chosen `C — Numeral Chip` is superseded by page `12` (the split treatment is void entirely); kept as a review record | `812:2`, `815:116` |
+| `12 — Counting: sessions and subagents` | **Current.** The subagent badge (one, a total, an inverting ground, one per product in its own ink when collapsed) and the session-count dots (a vertical column right of the matrix, as tall as it, the third dot stretching into a bar past three). §02 records the trade-offs across six treatments (including the void "below the matrix"), and §04 is the four-way record of "what to do past three". Rules in [`dual-agent-design.md`](dual-agent-design.md) §10–§11 | `857:2` |
+| `13 — State matrices: the four marks` | The four collapsed Turn statuses' animated marks (Radar / Double Knock / Advance / Lull), 4×4 grid, `16.6` footprint unchanged | `920:2` |
+| `14 — Telling row states apart` | **Current.** How expanded rows distinguish the four states: the reading's ground (§4.7), the body-line searchlight (§4.8), and the collapsed reading taking the same ground with its `8` permanently reserved (§6.4). §05 records the five rejected alternatives | `932:2` |
 
-本文描述单产品契约。同时监视 Codex 与 Claude Code 时的设计见 [`dual-agent-design.md`](dual-agent-design.md)，其中两处已取代本文：设置齿轮的位置（见 4.5，现为展开态顶栏右上角，单产品同样生效）与双产品页脚的额度构成（见 4.3）。其余部分不受影响。
+This file describes the single-product contract. The design for monitoring Codex and Claude Code together is in [`dual-agent-design.md`](dual-agent-design.md), which supersedes two things here: the settings gear's position (§4.5, now the expanded top bar's top-right, applying to single-product too) and the two-product footer's quota composition (§4.3). Everything else is unaffected.
 
-当前 SwiftUI 与本文只承认四个会话状态变体：Running、Input needed、Approval needed、Completed。外部 Figma 中超过这四类的历史会话状态变体不再属于产品契约，需在下一次 Figma 同步中删除；在完成前以本文和代码为准。`Usage Ring` 的 7 个合法变体、`Usage Indicator` 的 4 个合法变体及 `Panel` 的 8 个合法变体（2026-08-23 新增 `808:527`，见 §4.6）不受本次状态收敛影响。
+The current SwiftUI and this document recognise four session status variants only: Running, Input needed, Approval needed, Completed. Historical session-status variants beyond those four in the external Figma are no longer part of the product contract and should be deleted at the next sync; until then this document and the code govern. `Usage Ring`'s 7 legal variants, `Usage Indicator`'s 4, and `Panel`'s 8 (with `808:527` added 2026-08-23, §4.6) are unaffected by that narrowing.
 
 ## 3. Foundations
 
 ### 3.1 Typography
 
-Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `SF Pro`：
+The file's local text styles and every existing and new text layer use `SF Pro`:
 
-| 用途 | 字重 | 基准字号 / 行高 |
+| Use | Weight | Size / line height |
 | --- | --- | --- |
-| 大标题 | Bold | `24–32 / 29–38` |
-| Panel/窗口标题 | Semibold | `13–15 / 17–20` |
-| 会话标题 | Medium | `13 / 17` |
-| 正文与预览 | Regular | `12–14 / 16–20` |
-| Project / 辅助信息 | Regular | `11 / 14–15` |
-| 状态标签 | Semibold | `13 / 16` |
+| Large title | Bold | `24–32 / 29–38` |
+| Panel / window title | Semibold | `13–15 / 17–20` |
+| Session title | Medium | `13 / 17` |
+| Body and preview | Regular | `12–14 / 16–20` |
+| Project / secondary | Regular | `11 / 14–15` |
+| Status label | Semibold | `13 / 16` |
 
-字体不存在时必须先安装 SF Pro，再编辑文件；不得以相似字体永久替代。当前设计环境已经提供所需 Regular、Medium、Semibold 和 Bold 字重。
+If the font is absent, install SF Pro before editing the file; a similar typeface must never be a permanent substitute. The current design environment provides the required Regular, Medium, Semibold and Bold weights.
 
-**已知例外：`609:2` 上的 `closing note` 两条文字（浅色 `665:3`／`665:5`，深色 `667:3`／`667:5`）当前是 Inter Regular。** 通过 MCP 编辑时，`listAvailableFontsAsync()` 会列出 SF Pro 且 `loadFontAsync` 不报错，但字形度量取不到：`characters` 写进去了，节点宽度与渲染却停在旧值——同一个按钮实测 SF Pro 下仍是 `49 pt` 的 `Recheck`，换成 Inter 立刻重排为 `115 pt` 的 `Quit Codex in Notch`。两害相权：留在 SF Pro，板上会把一句**不存在的文案**画给每一个看它的人；换成 Inter，板读得对而字体错一处。选后者，并记在验证清单里，等在装有 SF Pro 的 Figma 桌面端重新键入。这条例外原先只覆盖这四个节点，不放宽 §1.6 的规则——2026-08-23 同步子智能体支持时，同一个渲染限制在新增节点上复现（见下一条），例外范围相应扩大，规则本身不变。
+**Known exception: the two `closing note` texts on `609:2` (light `665:3` / `665:5`, dark `667:3` / `667:5`) are currently Inter Regular.** Editing over MCP, `listAvailableFontsAsync()` lists SF Pro and `loadFontAsync` does not error, but glyph metrics come back empty: `characters` is written while node width and rendering stay at the old values — measured, the same button still read as the `49 pt` `Recheck` under SF Pro and immediately reflowed to the `115 pt` `Quit Codex in Notch` under Inter. Of the two harms: staying on SF Pro draws **copy that does not exist** for everyone who looks at the board, while switching to Inter reads correctly with one wrong font. The latter is chosen, recorded on the verification checklist, and awaits re-typing in a Figma desktop client that has SF Pro.
 
-**例外扩大（2026-08-23，子智能体支持同步）：** `112:28`（Session Row）新增的两个尾部文字节点（`807:101`「2 subagents」、`807:112`「1 subagent」，见 §4.4／§4.6）与 `115:82`（Panel）新增的 `808:562`（no-notch 收起态尾翼「2 │ 1:23」的合成读数）同一个原因改用 Inter：这三处都是**全新文案**，不是编辑已有 SF Pro 节点——但用 `figma.createText()` 以 SF Pro 新建文字节点同样不渲染（空白、零宽度），不止已有节点编辑失效那一种情况，说明这个限制覆盖新建与编辑两条路径。`808:562` 另有第二处例外：分隔符实现应为 `U+2502`（BOX DRAWINGS LIGHT VERTICAL），但 Inter 在本文件中没有这个字形（渲染为空白），暂以 ASCII `|` 代替。三个节点的 `description` 字段各自记着同样的说明与待办。这条不是先例——不因为好用就继续拿 Inter 顶新文案，只在同一个渲染限制再次挡住 SF Pro 时才这样做，且必须现场记录。
+**Exception widened (2026-08-23, subagent support sync):** the two new trailing text nodes on `112:28` (Session Row) — `807:101` "2 subagents" and `807:112` "1 subagent" (§4.4 / §4.6) — and `808:562` on `115:82` (Panel, the no-notch collapsed trailing wing's composite "2 │ 1:23") moved to Inter for the same reason. All three are **new copy** rather than edits of existing SF Pro nodes — but creating a text node in SF Pro with `figma.createText()` does not render either (blank, zero width), so the limitation covers creation as well as editing. `808:562` has a second exception: the separator should be `U+2502` (BOX DRAWINGS LIGHT VERTICAL), which Inter does not have in this file (it renders blank), so ASCII `|` stands in for now. All three nodes carry the same note and to-do in their `description`. This is not a precedent — Inter is not to be used for new copy because it is convenient, only when the same rendering limitation blocks SF Pro again, and it must be recorded on the spot.
 
-### 3.2 Color
+### 3.2 Colour
 
-- Panel 背景：纯黑或现有 `surface/notch` / `surface/panel` token。
-- Panel 外轮廓描线（可选，默认不画）：`#5D5D60`（Running 计时那档灰的四分之三），`0.8pt`，画在轮廓内侧，且不画最上沿（§8.4）。
-- Primary text：白色（暗色 Panel）或近黑色（原生窗口）。
-- Secondary text：中性灰。
-- Running：蓝色。
-- Input/Approval：橙色。
-- Completed：绿色。
-- Disconnected/版本不可用：紫色。
+- Panel background: pure black, or the existing `surface/notch` / `surface/panel` tokens.
+- Panel outline stroke (optional, off by default): `#5D5D60` (three-quarters of the Running timer's grey), `0.8 pt`, drawn inside the contour, and never along the top edge (§8.4).
+- Primary text: white on the dark panel, near-black in native windows.
+- Secondary text: neutral grey.
+- Running: blue. Input/Approval: amber. Completed: green. Disconnected / version unavailable: purple.
 
-以上 token 服务于 Notch 组件。**原生窗口（设置、Onboarding）另有一套集合 `Color / macOS Window`**，它是本文件里唯一带 `Light` / `Dark` 两个 mode 的集合，承载 macOS 窗口自己的语义：`window/bg`、`window/titlebar`、`window/stroke`、`group/bg`、`group/stroke`、`separator`、`text/primary｜secondary｜tertiary`、`accent`、`control/bg`、`control/stroke`、`switch/off-track`、`knob`、`status/green`、`product/codex`、`product/claude`。原生窗口的浅色与深色必须由这一套集合的 mode 切换产生，不得复制成两批硬编码颜色。
+Those tokens serve the notch component. **Native windows (Settings, Onboarding) have their own set, `Color / macOS Window`**, the only set in this file with `Light` and `Dark` modes, carrying macOS window semantics: `window/bg`, `window/titlebar`, `window/stroke`, `group/bg`, `group/stroke`, `separator`, `text/primary｜secondary｜tertiary`, `accent`, `control/bg`, `control/stroke`, `switch/off-track`, `knob`, `status/green`, `product/codex`, `product/claude`. Native light and dark must come from that set's modes, never from two hard-coded copies.
 
 ### 3.3 Layout tokens
 
-| 项目 | 值 |
+| Item | Value |
 | --- | --- |
-| Notch compact | `348 × 46` 参考基线 |
-| No-notch `Running` compact | `168 × 46` 参考基线；`24` 高菜单栏时为 `168 × 24` |
-| No-notch Input needed compact | `200 × 46` 参考基线 |
-| Shared expanded | `520 × 302` 参考基线 |
-| No-notch expanded / `24` 高菜单栏 | `520 × 280` 参考基线 |
-| Expanded header | 宽 `520`、高为真实 `menuBarHeight`；`46` 高时内容宽 `496` |
-| Expanded content region | `256` 高 |
+| Expanded header | `520` wide, height = the real `menuBarHeight`; content width `496` at `46` |
 | Session viewport | `508 × 240` |
 | Session row | `508 × 80` |
-| Thin expanded state | `520 × 94` |
-| Horizontal Panel padding | `12` |
-| Session row gutter / padding | `6` + `6`；画 `Colour bar` 时 `12` + `8`，见下 |
+| Horizontal panel padding | `12` |
+| Session row gutter / padding | `6` + `6`; `12` + `8` while drawing `Colour bar`, below |
 | Status dot | `8 × 8` |
 | Usage ring | `18 × 18`, stroke `2` |
-| Row badge | `24` 高 |
+| Row badge | `24` tall |
 
-> **上表前五行是 V1 的参考基线，已被组成关系取代。** 收起态宽度现在由 `PanelMetrics` 按实测文本组合后向上取整，不再有「参考基线」：无刘海单产品整个工作集合是一个定宽 `209`（`Running` 与 `Input needed` 因此同宽，不是 `168` 与 `200`），双产品 `238`，`Disconnected` `136`（§6.4「固定工作宽度」）；有刘海形态是两翼加遮挡，随缺口宽度与菜单栏高度一起变：`200 × 46` 的缺口下单产品静息 `246`、双产品 `274`，加 `1:23` 计时后 `299` / `327`（§5）。**这些是某一档缩放的数，不是「本机」的数**——缺口是实测来的，换一档缩放就换一组：本机当前测到的是 `220 × 38`，对应 `265` / `293` 与 `319` / `347`。前三个数在读数底座（§4.7）出现之前是 `201` / `230` / `136`，在会话计数点列出现之前是 `196` / `218` / `240`；`Disconnected` 两次都不变——它既没有点列也没有读数。展开态高度是 `menuBarHeight + 视口 240 + 页脚`，`46` 高菜单栏下为 `326`（仅 Codex）、`340`（仅 Claude Code）、`370`（两个都在）、`314`（折叠额度块），不是 `302`。保留这几行只为对照历史文件，读数请以 §5、§6.4、§6.8 为准。
+> **Collapsed and expanded overall sizes are no longer tokens; they are compositions.** Earlier revisions of this table carried `348 × 46`, `168 × 46`, `200 × 46`, `520 × 302`, a `256` content region and a `520 × 94` thin state, and every one of those is stale. Collapsed widths are composed by `PanelMetrics` from measured text and rounded up: the notch-less single-product working set is one fixed `209` (so `Running` and `Input needed` are the same width, not `168` and `200`), two products `238`, and `Disconnected` `136` (§6.4). The notched form is two wings plus the occlusion, varying with the cut-out and the menu bar: under a `200 × 46` cut-out, resting is `246` for one product and `274` for two, becoming `299` / `327` with a `1:23` timer (§5). **Those are the numbers for one scaling step, not for "this machine"** — the cut-out is measured, and another step gives another set: this machine currently measures `220 × 38`, giving `265` / `293` and `319` / `347`. The first three were `201` / `230` / `136` before the reading's ground (§4.7) and `196` / `218` / `240` before the session-count dots; `Disconnected` is unchanged by both, having neither a dot column nor a reading. **Expanded height is `menuBarHeight + 240 viewport + footer`**, so at a `46` menu bar it is `326` (Codex only), `340` (Claude Code only), `370` (both) and `314` (quota block folded) — never `302`. The thin expanded state is a `48` body plus the footer, `134` at that height. Read §5, §6.4 and §6.8 for current numbers; these notes exist only to date older files.
 
-**会话行比面板其余部分宽两个 `6`。** 行块从面板边缘缩进 `6` 而不是 `12`，好让 hover 的填充不撞到边；行自己再补回 `6`，于是行内文字仍然落在 `12`——与 header 里的状态矩阵、页脚里的额度规则同一条边距上。两个数因此是互相定义的（`PanelMetrics.sessionRowGutter` 与 `sessionRowPadding = expandedHorizontalPadding − sessionRowGutter`），不是两个各写死的 `6`；`aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` 锁定这条关系。行块 `520 − 6 − 6 = 508`，内容盒 `520 − 12 − 12 = 496`。
+**A session row is two `6`s wider than the rest of the panel.** The row block is inset `6` from the panel edge rather than `12`, so the hover fill does not hit the edge, and the row adds `6` back, putting in-row text at `12` — the same margin as the header's status matrix and the footer's quota rules. The two numbers are therefore defined by each other (`PanelMetrics.sessionRowGutter` and `sessionRowPadding = expandedHorizontalPadding − sessionRowGutter`) rather than being two hard-coded `6`s; `aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` pins the relationship. The row block is `520 − 6 − 6 = 508` and the content box `520 − 12 − 12 = 496`.
 
-**画 `Colour bar` 竖条时缩进改为 `12` + `6`。** 竖条就画在行块前缘，所以行块的缩进就是竖条的位置：留在 `6` 上，它比上方状态矩阵、下方额度规则都朝里半个 `12`，差一点对齐比不对齐更像做错。因此只在竖条**画出来的时候**（两个产品都在，见 [`dual-agent-design.md`](dual-agent-design.md) §4）行块让出整 `12`，行内边距同时由 `6` 改为 `8`——它此时不再是「离面板边多远」而是「离那条 `2pt` 线多远」，`6` 会让线和字读成一个东西——行内文字因此落在 `20`，站到竖条后面而不是骑在上面；行块此时 `520 − 12 − 12 = 496`，与内容盒同宽。单产品时没有竖条，行块回到 `6` + `6`，文字仍落在 `12`。这条几何由 `MonitorStore.sessionRowGutter` 与 `sessionRowPadding` 提供，`theAttributionRailLandsOnThePanelsOwnMargin` 与 `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn` 锁定。
+**Drawing the `Colour bar` changes the inset to `12` + `8`.** The bar is drawn at the row block's leading edge, so the block's inset is the bar's position: left at `6` it sits half a `12` inside the status matrix above and the quota rules below, and nearly-aligned reads worse than not aligned. So **only while the bar is drawn** (both products connected, [`dual-agent-design.md`](dual-agent-design.md) §4) the block gives up a full `12`, and the in-row padding goes from `6` to `8` — it now measures distance from that `2 pt` line rather than from the panel edge, and `6` makes line and text read as one thing — putting in-row text at `20`, standing behind the bar rather than riding on it. The block is then `520 − 12 − 12 = 496`, the same as the content box. With one product there is no bar, the block returns to `6` + `6`, and text still lands at `12`. This geometry comes from `MonitorStore.sessionRowGutter` and `sessionRowPadding`, pinned by `theAttributionRailLandsOnThePanelsOwnMargin` and `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn`.
 
-目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。例如无刘海 `24` 高菜单栏的展开参考尺寸为 `520 × 280`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed` 等最长状态名完整位于可显示区域。单侧按顶栏**实际画出来的那一侧**算：`12 + 标记 + 12 + 最长可达状态名 + 8`。
+When the target display's menu bar is not `46`, the top summary region uses the real height and the total is that plus the viewport and footer. With a physical notch, width also grows with the central unavailable region so that the longest reachable status names stay fully inside the displayable area. One side is computed from **the side actually drawn** in the top bar: `12 + marks + 12 + longest reachable status name + 8`.
 
-- 标记是 `PanelMetrics.marksWidth(markCount)`，含每个产品预留的会话计数点列（§4.6）：单产品 `22.26`，双产品 `50.51`。
-- 「最长可达」指 `MonitorAggregation.status` 能给出的那几个，最长是 `Approval needed`（`102`，按标签自己的取整宽度）。`Version unsupported`（`125`）等四句只在设置窗口出现，顶栏无从说出，**不参与预留**。
+- Marks are `PanelMetrics.marksWidth(markCount)`, including each product's reserved session-count dot column (§4.6): `22.26` for one product, `50.51` for two.
+- "Longest reachable" means what `MonitorAggregation.status` can actually produce, the longest being `Approval needed` (`102` at the label's own ceiled width). The four sentences like `Version unsupported` (`125`) appear only in the settings window, cannot be said by the top bar, and **are not reserved for**.
 
-于是单产品单侧 `156.25`、双产品 `184.51`：`200` 遮挡下单产品仍取 `520` 基线，双产品为 `570`；`220` 遮挡下分别是 `533` 与 `590`。
+So one side is `156.25` for one product and `184.51` for two: under a `200` occlusion, one product still takes the `520` baseline and two take `570`; under `220`, `533` and `590`.
 
-**面板居中，因此只能对称加宽——这是有意的。** 展开态的面板钉在显示器中线上（`OverlayPanelLayout.frame` 在展开时收到的 `trailingAnchor` 是 `nil`），所以前导侧每多要一点，尾侧就跟着拿走一点：前导侧要 `184.51`，尾侧只放一枚齿轮（`12 + 27.6 + 8 = 47.6`），双产品时因此有约 `137` 的宽度没有东西可放。像收起态那样把面板钉在缺口上（`trailingAnchor = centerOcclusionMaxX + 尾翼`）可以各侧按各自所需给宽——`184.51 + 220 + 47.6 = 452`，落在 `520` 基线之下，缺口那条分支就再也不会触发，单双产品都停在 `520`。**该方案已评估并否决**：展开的面板要居中于显示器，对称加宽是意图而不是疏漏，代价（本机 `220` 缺口下双产品 `590` 而非 `520`）是知情接受的。
+**The panel is centred, so it can only widen symmetrically — deliberately.** The expanded panel is pinned to the display's centreline (`OverlayPanelLayout.frame` receives a `nil` `trailingAnchor` while expanded), so every extra point the leading side wants is taken from the trailing side too: the leading side wants `184.51` while the trailing holds only a gear (`12 + 27.6 + 8 = 47.6`), leaving about `137` with nothing to put in it under two products. Pinning to the cut-out as the collapsed form does (`trailingAnchor = centerOcclusionMaxX + trailing wing`) would let each side take what it needs — `184.51 + 220 + 47.6 = 452`, under the `520` baseline, so the cut-out branch would never fire and both cases would stay at `520`. **Evaluated and rejected**: an expanded panel is meant to be centred on the display, symmetric widening is the intent rather than an oversight, and the cost (`590` rather than `520` under this machine's `220` cut-out with two products) is knowingly accepted.
 
-**缺口本身确实是居中的，这一条不必再担心。** 收起态刻意不假设它居中（它读 `centerOcclusionMaxX` 把右缘钉上去），展开态则假设。实测本机：`frame (0, 0, 1800, 1169)`，左右 `auxiliaryTopLeftArea` / `auxiliaryTopRightArea` 各 `790` 宽，缺口 `790…1010`，中心 `900`，与显示器中线之差 `0.0000`。真实硬件上这个假设不欠什么；理论上能差的只有 `(frame 宽 − 缺口宽)` 为奇数那几档缩放的半点取整，而面板自己的 `ceil` 已经留下 `0.25`–`0.49` 的余量。
+**The cut-out really is centred, so this needs no further worry.** The collapsed form deliberately does not assume it (it reads `centerOcclusionMaxX` and pins the right edge there); the expanded form does. Measured here: `frame (0, 0, 1800, 1169)`, `auxiliaryTopLeftArea` and `auxiliaryTopRightArea` `790` wide each, cut-out `790…1010`, centre `900`, differing from the display centreline by `0.0000`. On real hardware the assumption costs nothing; in theory it could differ by half a point at scaling steps where `(frame width − cut-out width)` is odd, and the panel's own `ceil` already leaves `0.25`–`0.49` of slack.
 
-> **这条加宽现在取决于连了几个产品，之前不取决于。** 旧式子按一枚裸矩阵 `16.6` 算，是单产品无点列时代的写法；同一个式子又按 `MonitorStatus.allCases` 折最长名，为顶栏说不出的 `Version unsupported` 多留了 `23.3`。多留的那段恰好盖住了第二枚矩阵的 `22.6`（余 `0.72`），直到点列的 `11.31` 把它透支 `10.59`——`200` 遮挡、两个产品、`Approval needed` 时，最后 `2.57` 落在刘海底下，`8` 的净空更是早就没了。两处一起改：一侧按 `marksWidth` 量，折的集合收到顶栏真能说出的那几个。由 `everySentenceTheExpandedHeaderCanSayClearsTheCutOut` 与 `theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames` 锁定；它替换掉的那条断言拿 `expandedStatusReadoutWidth` 当「所需宽度」，与被检查的式子是同一个，因此在任何标记数下都只会通过。
+> **This widening now depends on how many products are connected, and did not before.** The old expression computed from one bare `16.6` matrix, written in the single-product era with no dot columns, and folded the longest name over `MonitorStatus.allCases`, reserving `23.3` extra for a `Version unsupported` the top bar cannot say. That over-reservation happened to cover the second matrix's `22.6` (with `0.72` to spare) until the dot columns' `11.31` overdrew it by `10.59` — under a `200` occlusion with two products at `Approval needed`, the last `2.57` fell under the notch, with the `8` of clearance long gone. Both were fixed together: a side is measured from `marksWidth`, and the fold narrowed to what the top bar can genuinely say. Pinned by `everySentenceTheExpandedHeaderCanSayClearsTheCutOut` and `theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames`; the assertion they replaced used `expandedStatusReadoutWidth` as the "required width", which is the same expression it was checking, so it passed at any mark count.
 
-Panel 外轮廓有**两个**圆角，因为刘海本身有两个：侧边与屏幕上沿相接处是一段向外的小凹弧，下面两角是它的两倍。两者都不是常数，而是菜单栏高度的固定比例：
+The panel outline has **two** corner radii, because the notch has two: where the sides meet the top of the screen there is a small outward fillet, and the two lower corners are twice it. Neither is a constant; both are fixed ratios of the menu-bar height:
 
 ```text
-shoulderRadius   = max(0, menuBarHeight) / 8    // 上凹弧，也是窗口每侧多出的「肩」
-bottomCornerRadius = max(0, menuBarHeight) / 4  // 下圆角
+shoulderRadius     = max(0, menuBarHeight) / 8    // the upper fillet, and the "shoulder" each side of the window
+bottomCornerRadius = max(0, menuBarHeight) / 4    // the lower corners
 ```
 
-**比例而非常数**，是因为硬件就是这样：刘海是一块毫米数固定的缺口，带刘海屏的菜单栏正好与它等高（差一个点，见 §3.4），两者在缩放变粗时一起在点单位上缩小——*More Space* 下 `220 × 38`，默认 `185 × 32`，再到 *Larger Text* 的 `127 × 22`。写死一个半径只在某一档缩放上对，其余每一档都偏圆；旧写法在带刘海屏固定 `10`，在默认缩放下就比真实缺口圆 `25%`，在 `22` 档上圆到近乎胶囊。
+**Ratios rather than constants**, because the hardware is: the notch is a cut-out of fixed millimetres, a notched screen's menu bar is exactly as tall as it (to within a point, §3.4), and both shrink together in points as scaling coarsens — `220 × 38` under *More Space*, `185 × 32` by default, `127 × 22` at *Larger Text*. A hard-coded radius is right at one step and too round at every other; the old code fixed `10` on notched screens, which is `25%` rounder than the real cut-out at default scaling and nearly a capsule at `22`.
 
-比例取自 Iconfactory 的 Notchmeister——它把轮廓直接描在硬件缺口上，`notchUpperRadius = 4`、`notchLowerRadius = 8`，对应默认的 `185 × 32` 缺口。上凹弧与 Apple 自带机型图标（`com.apple.macbookpro-14-2021`）中量到的 `13.5%` 一致；图标把下圆角画得更圆（约 `40%`），但那是插画尺度上的夸张，以描线为准。两段都是**正圆弧**（`0.5523` 控制柄），与缺口边缘一致。
+The ratios come from Iconfactory's Notchmeister, which traces the outline directly onto the hardware cut-out: `notchUpperRadius = 4` and `notchLowerRadius = 8` for the default `185 × 32`. The upper fillet matches the `13.5%` measured in Apple's own machine icon (`com.apple.macbookpro-14-2021`); the icon draws the lower corners rounder (about `40%`), but that is illustration-scale exaggeration and the trace governs. Both arcs are **true circular arcs** (`0.5523` control handles), matching the cut-out's edge.
 
-参考值：`38 → 4.75 / 9.5`、`32 → 4 / 8`、`28 → 3.5 / 7`、`24 → 3 / 6`、`22 → 2.75 / 5.5`、`19 → 2.375 / 4.75`。带刘海与无刘海用同一条规则——无刘海形态模仿的正是同一个缺口，且新的下圆角比例（`25%`）与旧公式的 `26.32%` 几乎重合，所以外接屏的观感不变，变的是上凹弧减半。Figma 的响应式示例（`287:8`、`287:12`、`287:16`）仍是旧的单圆角 `10 / 6.316 / 5`，**尚未同步**。
+Reference values: `38 → 4.75 / 9.5`, `32 → 4 / 8`, `28 → 3.5 / 7`, `24 → 3 / 6`, `22 → 2.75 / 5.5`, `19 → 2.375 / 4.75`. Notched and notch-less use one rule — the notch-less form imitates that same cut-out, and the new lower ratio (`25%`) almost coincides with the old formula's `26.32%`, so external displays look unchanged and only the upper fillet halves. Figma's responsive examples (`287:8`, `287:12`, `287:16`) are still the old single radius `10 / 6.316 / 5` and **are not yet synced**.
 
-### 3.4 面板本体、窗口与刘海对齐
+### 3.4 Panel body, window and notch alignment
 
-`PanelContour` 只有最上沿一条边铺满它拿到的矩形，随后向内收成竖直边：直边落在矩形内缩一个肩宽（即 `shoulderRadius`）的位置，两侧各留出一个「肩」，画回菜单栏的那道凹弧就在肩里。
+Only `PanelContour`'s top edge fills the rectangle it is given; below that it narrows to vertical sides inset by one shoulder width (`shoulderRadius`), leaving a "shoulder" each side that holds the fillet back up to the menu bar.
 
-因此本文件所有参考尺寸描述的都是**面板本体**——真正画出来的那块黑色——而承载它的 `NSPanel` 窗口左右各宽一个肩宽（`OverlayPanelLayout.frame(on:panelSize:surfaceShoulder:trailingAnchor:)` 的 `surfaceShoulder`）。按本体尺寸开窗口就是错的：收起态的右缘会落进刘海里一个肩宽，底部圆角再吃掉一个半径，看上去像刘海右下角被咬掉一块。
+So every reference size in this file describes the **panel body** — the black that is actually drawn — while the `NSPanel` carrying it is one shoulder wider on each side (`OverlayPanelLayout.frame(on:panelSize:surfaceShoulder:trailingAnchor:)`'s `surfaceShoulder`). Opening the window at body size is simply wrong: the collapsed form's right edge falls a shoulder inside the notch and the bottom corner eats a radius more, so the notch's lower-right looks bitten off.
 
-带刘海的收起面板**以缺口的右缘为锚**：`NSScreen.auxiliaryTopRightArea.minX` 加尾翼宽度，不再由屏幕中心加位移推导。旧写法只有在缺口正好居中、且本体宽度不取整时才与之等价；取整的余量现在落在前导翼上——那里是留白，吃得下半个点，与硬件对齐的右缘吃不下。展开态与无刘海形态仍然锁定屏幕水平中心。
+The notched collapsed panel is **anchored to the cut-out's right edge**: `NSScreen.auxiliaryTopRightArea.minX` plus the trailing wing's width, no longer derived from screen centre plus an offset. The old form was equivalent only when the cut-out was exactly centred and the body width was not rounded; rounding slack now lands in the leading wing, which is whitespace and can absorb half a point, whereas a hardware-aligned right edge cannot. The expanded and notch-less forms still lock to the screen's horizontal centre.
 
-**面板高度取的是菜单栏占掉的那条带，带刘海屏也一样。** `NSScreen` 给得出两个数，它们差一个点：`safeAreaInsets.top` 是摄像头那块缺口，而 `frame.maxY - visibleFrame.maxY` 是菜单栏**占掉**的高度，多出来的一点是 `visibleFrame` 在菜单栏下面给窗口内容留的缝。14 吋 M3 Pro 在 *More Space* 下实测：安全区 `38`、占用 `39`。
+**Panel height is the band the menu bar occupies, on notched screens too.** `NSScreen` gives two numbers a point apart: `safeAreaInsets.top` is the camera cut-out, and `frame.maxY - visibleFrame.maxY` is the height the menu bar **occupies**, the extra point being the gap `visibleFrame` leaves below the menu bar for window content. Measured on a 14-inch M3 Pro under *More Space*: safe area `38`, occupied `39`.
 
-`menuBarHeight` 取两者中较大的那个，于是面板在带刘海屏比硬件缺口高出一个点（2x 下两个像素）。这是刻意的：所有屏幕一个口径，收起态就是「填满它所在的那条菜单栏」，而按缺口取高度会让面板看起来比刘海矮一截。由 `aNotchedPanelIsAsTallAsTheBandTheMenuBarOccupies` 锁定。
+`menuBarHeight` takes the larger, so the panel is one point taller than the hardware cut-out on a notched screen (two pixels at 2x). That is deliberate: one rule for every screen, where collapsed means "fill the menu bar band it is in", and taking height from the cut-out would make the panel look shorter than the notch. Pinned by `aNotchedPanelIsAsTallAsTheBandTheMenuBarOccupies`.
 
-**尾翼为空时，右缘并不正好压在报告出的那条边上，而是再往外走一小步**：`菜单栏高度 / 16`（`PanelMetrics.winglessTrailingOvershoot(menuBarHeight:)`，`38` 档为 `2.375`，`22` 档为 `1.375`）。`auxiliaryTopLeftArea` / `auxiliaryTopRightArea` 把缺口描述成一个矩形，硬件不是：缺口与屏幕上沿相接的地方玻璃向外翻出去，那一段的黑比矩形更宽。右缘正好落在报告值上时，肩部那道凹弧的上半截就画在这段翻边后面，读起来像面板在刘海之前就断了，而不是从刘海里接出来。它是 `Outline the panel`（§8.4）之后才看得见的：被切掉的是那条发丝线，纯黑本来就无从对照。
+**With an empty trailing wing, the right edge does not sit exactly on the reported edge but steps a little past it**: `menuBarHeight / 16` (`PanelMetrics.winglessTrailingOvershoot(menuBarHeight:)`, `2.375` at `38` and `1.375` at `22`). `auxiliaryTopLeftArea` / `auxiliaryTopRightArea` describe the cut-out as a rectangle and the hardware is not one: where the cut-out meets the top of the screen the glass flares outwards, and the black there is wider than the rectangle. With the right edge exactly on the reported value, the upper half of the shoulder's fillet is drawn behind that flare, reading as the panel stopping short of the notch rather than continuing out of it. It is visible only once `Outline the panel` (§8.4) is on: what is cut is the hairline, and pure black has nothing to compare against.
 
-这段翻边**读不出来**，所以这是一个刻意的挪动量而不是推导值：系统只给这一个矩形，截图也不是第二意见——帧缓冲一直画到刘海底下，截那一条得到的是壁纸而不是人眼看到的黑。真要拿到轮廓就得按机型记硬件尺寸，而这块面板只需要「越过它」。取菜单栏高度的比例与两个圆角同理（§3.3）：挡住它的是毫米数固定的硬件，缩放变粗时两者在点单位上一起缩小。
+That flare **cannot be read**, so this is a deliberate nudge rather than a derived value: the system gives only the rectangle, and a screenshot is no second opinion — the framebuffer draws right under the notch, so capturing that strip yields wallpaper rather than the black a person sees. Getting the real outline would mean per-model hardware dimensions, and this panel only needs to *clear* it. Taking a ratio of the menu-bar height follows the same logic as the two corner radii (§3.3): what occludes it is hardware of fixed millimetres, and both shrink together in points as scaling coarsens.
 
-只有尾侧走这一步，也只在尾侧为空时走：画得下计时或 badge 的尾翼早已远远越过翻边，前导侧要么是同样越过的翼，要么是本来就该看不见的静息形态。后一种（`drawsCompactMarks == false`，即静息与 `Hide the wings`）**仍然正好压在报告值上**——那一形态的本体就是缺口本身，往外挪一步会在刘海边上挂出一条黑边。面板把这一步吃进自己的宽度里，锚与窗口一起变宽，所以左缘和从左缘量起的记号都不动。由 `aWinglessTrailingEdgeStepsClearOfTheCutOut` 锁定。
+Only the trailing side takes this step, and only when that wing is empty: a wing wide enough to draw a timer or a badge has long since cleared the flare, and the leading side is either a wing that clears it too or a resting form that should not be visible anyway. That latter case (`drawsCompactMarks == false`, meaning resting and `Hide the wings`) **does sit exactly on the reported value** — that form's body is the cut-out itself, and stepping outwards would hang a black edge beside the notch. The panel absorbs the step into its own width, widening the anchor and window together, so the left edge and everything measured from it stay put. Pinned by `aWinglessTrailingEdgeStepsClearOfTheCutOut`.
 
-内容（含 `12` 水平内距）在本体内排布，所以内距是从黑色边缘量起的；指针响应区域同样只覆盖本体，肩部把点击让给它盖住的菜单栏项。
+Content (including the `12` horizontal padding) is laid out inside the body, so padding is measured from the black edge; the pointer region likewise covers only the body, with the shoulders yielding clicks to the menu bar items beneath them.
 
-## 4. 核心组件
+## 4. Core components
 
 ### 4.1 Status Dot
 
-`Status Dot` 包含两类互不混用的状态：会话级 Running、Input Needed、Approval Needed、Completed，以及系统级 Idle、Connecting、Disconnected、Update Required、Unsupported Version、Setup Required。
+`Status Dot` holds two families that are never mixed: session-level Running, Input Needed, Approval Needed, Completed; and system-level Idle, Connecting, Disconnected, Update Required, Unsupported Version, Setup Required.
 
-- Idle（旧名）只用于健康空集合的汇总，现已并入 `Connected`；变体保留见下一条。
-- Disconnected 不用于会话行。
-- **系统级取值收敛为两个**：`Disconnected` 与 `Connected`（§6.4）。`Idle` 并入 `Connected`，`Connecting`、`Update Required`、`Unsupported Version`、`Setup Required` 退出收起态（§6.6），只在展开面板与设置中出现，组件变体因此保留。
+- Idle (the old name) was only ever the summary for a healthy empty set and has merged into `Connected`.
+- Disconnected is never used on a session row.
+- **System-level values have narrowed to two**: `Disconnected` and `Connected` (§6.4). `Idle` merged into `Connected`, and `Connecting`, `Update Required`, `Unsupported Version` and `Setup Required` have left the collapsed state (§6.6), appearing only in the expanded panel and Settings, so their component variants are kept.
 
-#### 状态矩阵的五种画法
+#### The matrix's five treatments
 
-标记本身是一块 **4×4** 的矩阵，几何比例与它 3×3 时一字不差：格 `27`、步距 `32`、圆角 `2`，四格一边，viewBox 因此从 `91` 变成 `123`。标记外形不变——`PanelMetrics.statusMatrixSize` 仍是 `16.6`，它买到的那一格从 `4.92` 缩到 `3.64`。四条动画曲线是 `design/assets/matrix-states/` 里那四个 SVG，逐格透明度按 30fps 给出：
+The mark is a **4×4** matrix whose geometric ratios are identical to its 3×3 form: cell `27`, pitch `32`, corner `2`, four to a side, so the viewBox goes from `91` to `123`. The mark's outer size is unchanged — `PanelMetrics.statusMatrixSize` is still `16.6` — and the cell it buys shrinks from `4.92` to `3.64`. The four animation curves are the four SVGs in `design/assets/matrix-states/`, with per-cell opacity at 30fps:
 
-| 画法 | 状态 | 周期 | 图案 | 最暗 |
+| Treatment | Status | Period | Pattern | Darkest |
 | --- | --- | --- | --- | --- |
-| Radar | Running | `1.2s`（36 帧） | 一道光束绕标记中心顺时针扫；光束扫过某一格时该格到满，随后按 10.2 帧（`341ms`）的时间常数指数落回 `0.139`。每一格的相位就是它自己那一格中心相对标记中心的方位角 | `0.139` |
-| Double knock | Approval needed | `1.2s`（36 帧） | 整块矩阵一起到满，敲两下、隔 `300ms`，每下按 3 帧衰减；随后 `900ms` 停在 `0.05` | `0.05` |
-| Advance | Input needed | `0.8s`（24 帧） | 上三行一次亮一整列，每列 `200ms`，从左到右；底行不参与，恒定停在 `0.3` | `0.05` |
-| Lull | Completed | `2s`（60 帧） | 一道波峰沿反对角线（也就是 mark 自己那条接缝）走过标记，六步走完用掉 60 帧里的 48.7 帧；波峰过后那一格落到 `0.182`，在谷底待约四分之三秒 | `0.182` |
-| （静止） | Connected / Disconnected | — | 不动 | `0.15` |
+| Radar | Running | `1.2 s` (36 frames) | A beam sweeps clockwise about the mark's centre; a cell reaches full as the beam crosses it, then decays exponentially back to `0.139` with a 10.2-frame (`341 ms`) time constant. Each cell's phase is the bearing of its own centre from the mark's centre | `0.139` |
+| Double knock | Approval needed | `1.2 s` (36 frames) | The whole matrix reaches full, knocks twice `300 ms` apart with a 3-frame decay each, then rests at `0.05` for `900 ms` | `0.05` |
+| Advance | Input needed | `0.8 s` (24 frames) | The top three rows light one full column at a time, `200 ms` each, left to right; the bottom row does not take part and rests at `0.3` | `0.05` |
+| Lull | Completed | `2 s` (60 frames) | A crest travels the anti-diagonal (the mark's own seam) in six steps using 48.7 of the 60 frames; a cell falls to `0.182` behind the crest and sits at the trough for about three-quarters of a second | `0.182` |
+| (still) | Connected / Disconnected | — | Does not move | `0.15` |
 
-**Input 与 Approval 分成了两种图案。** 它们此前共用一次闪烁，收起态因此只能说「有事等你」而说不出是哪一种事；两种图案之后，标记说得出「键盘能答的问题」与「过不去的决定」的分别，而这正是用户决定现在要不要放下手里的事的依据。代价是引导里那一行从四个规格件变成五个（§7），以及汇总优先级从此还多决定一件事——同时握着两种等待的那条 bar 画哪一个图案，见 [`PRD.md`](PRD.md) §6.2（Approval 在 Input 之前）。
+**Input and Approval became two patterns.** They previously shared one flash, so the collapsed state could say "something wants you" but not which kind; with two patterns the mark distinguishes "a question the keyboard can answer" from "a decision it cannot get past", which is what a user needs to decide whether to put down what they are doing. The cost is that onboarding's row goes from four swatches to five (§7), and the summary priority now also decides which pattern a bar holding both kinds of wait draws — see [`PRD.md`](PRD.md) §6.2 (Approval before Input).
 
-**四种画法各有各的暗处，因此不再需要为了可读性偏离设计稿。** 上一版的两条轨道（等待与终态）在代码里被改成落到 `0.100` 而不是稿子给的 `0.200`，理由是稿子让所有暗格歇在同一档，「在等你」与「什么都没在跑」一样黑。这四个文件自己就落在三个不同的档上——knock 与 advance 的 `0.05`、radar 的 `0.139`、lull 的 `0.182`——静息的那一档穿在它们中间，所以光凭暗度仍然分得出一枚在等用户的标记和一枚只是在场的标记，代码里那条偏离整个撤掉了。
+**Each treatment has its own darkness, so readability no longer requires deviating from the design files.** The previous version's two tracks (waiting and terminal) were changed in code to bottom out at `0.100` rather than the file's `0.200`, because the file rested every dark cell at one level and "waiting for you" was as black as "nothing running". These four files rest at three different levels — `0.05` for knock and advance, `0.139` for radar, `0.182` for lull — with the resting level threaded between them, so darkness alone still separates a mark waiting on the user from one that is merely present, and that deviation was removed entirely.
 
-**静息从 `0.18` 下调到 `0.15`。** 这一档不出自任何设计稿——`matrix-states/` 里没有静止那一张——所以它是跟着四条活轨道走的：`0.18` 定在 lull 还歇在 `0.343` 的时候，而改稿后的 lull 谷底是 `0.182`，两者就此同高，「这一轮结束了」与「什么都没在跑」在谷底一样暗。下调之后次序回来了：两种等待的 `0.05` 在它之下，lull 的 `0.182` 在它之上，radar 的 `0.139` 也在它之下。三道缝里只有第一道是眼睛真读得出的暗度差——等用户的标记比静息的暗三倍，而这一对正是最不能混的一对；另外两道只是次序，不必自己扛事：radar 与 lull 都不会十六格同时落到谷底，所以活着的标记总有一格亮着，静息的一格都不亮。锁在 `eachStateDrawsThePatternItsDesignFileDraws` 里的是这个次序，不是这三个数。
+**Resting moved from `0.18` to `0.15`.** That level comes from no design file — there is no still frame in `matrix-states/` — so it follows the four live tracks. `0.18` was set while lull still rested at `0.343`, and the redrawn lull's trough is `0.182`, making "this Turn ended" and "nothing is running" equally dark at the trough. Lowering it restores the ordering: both waits' `0.05` below it, lull's `0.182` above it, radar's `0.139` below. Only the first of those three gaps is a darkness difference the eye genuinely reads — a mark waiting on the user is three times darker than resting, and that is the pair that must never be confused. The other two are ordering and need not carry weight on their own: neither radar nor lull ever has all sixteen cells at the trough, so a live mark always has a lit cell while a resting one has none. What `eachStateDrawsThePatternItsDesignFileDraws` pins is that ordering, not these three numbers.
 
-**接缝方向从此有别的证人。** 四种旧图案上下都对称，`isFlipped` 画反了只有引导里那条对角线看得出来（§7）。新的四种里有三种不对称：radar 会倒着扫，advance 的底行会跑到顶上，lull 会走错一条对角线。`theSplitMatrixCutsOnTheSameDiagonalAsTheMark` 仍然是最直接的那条断言，`eachStateDrawsThePatternItsDesignFileDraws` 逐格锁住四条轨道与它们的相位。
+**The seam direction now has other witnesses.** The four old patterns were vertically symmetric, so a wrong `isFlipped` showed only on onboarding's diagonal (§7). Three of the four new ones are asymmetric: radar sweeps backwards, advance's bottom row moves to the top, and lull walks the wrong diagonal. `theSplitMatrixCutsOnTheSameDiagonalAsTheMark` is still the most direct assertion, and `eachStateDrawsThePatternItsDesignFileDraws` pins all four tracks and their phases cell by cell.
 
-**辉光沿用旧画法，没有跟着换。** 那四个文件各带一层 `feGaussianBlur stdDeviation=12.65`（约 `0.09` 格）、alpha `0.55`；代码画的仍是三层模糊加一层实拷贝，最宽一层是 `10.5/27` 格。换过去在 `800px` 的稿子上是对的，在 `16.6pt` 的标记上会把辉光收到 `0.33pt`，也就是几乎没有——而辉光在这个尺寸上正是让一块 `3.64pt` 的格在壁纸上还站得住的东西。图案换了，画图案的那层没换。
+**The glow keeps the old treatment and did not change with them.** Each file carries one `feGaussianBlur stdDeviation=12.65` layer (about `0.09` cells) at alpha `0.55`; the code still draws three blur layers plus a solid copy, the widest at `10.5/27` cells. Adopting the file's version is right on an `800px` board and would shrink the glow to `0.33 pt` on a `16.6 pt` mark — effectively none — while the glow at this size is exactly what lets a `3.64 pt` cell hold up against a wallpaper. The pattern changed; the layer drawing it did not.
 
-**4×4 没有带着会话计数点一起走。** 点列仍按 `91` 的那套单位量（点 `2.74`、间距 `2.92`、竖杠 `4.93`、整列 `5.66`），理由与取值见 [`dual-agent-design.md`](dual-agent-design.md) §11 与 `PanelMetrics.sessionDotViewBox` 上的注释：按新单位读会得到一枚 `2.02` 的点，已经数不清了。
+**4×4 did not take the session-count dots with it.** The dot column still measures in the `91` units (dot `2.74`, gap `2.92`, bar `4.93`, column `5.66`), for the reasoning and values in [`dual-agent-design.md`](dual-agent-design.md) §11 and the comment on `PanelMetrics.sessionDotViewBox`: read in the new units it would give a `2.02` dot, already uncountable.
 
-实现：`MatrixGrid`（几何）、`MatrixTrack`（四条曲线与三条相位规则）、`NotchMatrixState`（状态到画法）、`MatrixIndicatorView`（图层与辉光），全部在 `NotchStatusMatrix.swift`。
+Implementation: `MatrixGrid` (geometry), `MatrixTrack` (the four curves and three phase rules), `NotchMatrixState` (status to treatment) and `MatrixIndicatorView` (layers and glow), all in `NotchStatusMatrix.swift`.
 
 ### 4.2 Status Readout
 
-Compact 与 Expanded 两个 Context 都提供完整状态文本。Expanded 组内圆点—名称间距为 `12`，且**在任何会话计数下都是 `12`**：会话计数点列预留而没画出来的那段落在状态名之后，名字因此跟着实际画出的标记走，并与那一列共用同一条开合曲线（[`dual-agent-design.md`](dual-agent-design.md) §11）。状态名称不得被物理刘海遮挡。
+Both the Compact and Expanded contexts carry full status text. In Expanded the dot-to-name gap is `12`, **and it is `12` at every session count**: the reserved-but-undrawn part of the dot column lands after the status name, so the name follows the marks actually drawn and shares their open/close curve ([`dual-agent-design.md`](dual-agent-design.md) §11). A status name must never be occluded by the physical notch.
 
-### 4.3 Usage Ring 与 Indicator
+### 4.3 Usage Ring and Indicator
 
-- `100%` 时为全亮环；剩余量降低时，暗色弧从十二点方向逆时针增长，亮色弧同步逆时针缩短，非满环两端为圆头。
-- 亮色整环与暗色弧共用 `9pt` 中心线半径和 `2pt` 居中描边；暗色弧不得向内缩小。
-- `0%` 为全暗环；Unavailable 同样只显示完整轨道色，但其数值文案为 `--`，不得与真实 `0%` 混淆。
-- `> 50%` 白色，`15%–50%` 橙色，`< 15%` 红色。
-- Unavailable 为灰色圆环，不显示伪造百分比。
-- Expanded leading value 始终为剩余百分比；Running 不替换额度文本。
+- At `100%` it is a fully lit ring; as the remainder falls, a dark arc grows anticlockwise from twelve o'clock while the lit arc shortens to match, and a partial ring has round caps.
+- The lit full ring and the dark arc share a `9 pt` centreline radius and a `2 pt` centred stroke; the dark arc must never shrink inwards.
+- `0%` is a fully dark ring. Unavailable also shows only the full track colour, but its value reads `--` and must never be confused with a real `0%`.
+- `> 50%` white, `15%–50%` amber, `< 15%` red.
+- Unavailable is a grey ring and never shows a fabricated percentage.
+- The expanded leading value is always the remaining percentage; Running does not replace the quota text.
 
-Figma `Usage Ring` 组件集（`108:18`）包含 `100`、`72`、`50`、`32`、`10`、`0` 与 `Unavailable` 七个变体；`Usage Indicator`（`153:202`）包含 Healthy、Warning、Critical 与 Unavailable 四个变体。
+The Figma `Usage Ring` set (`108:18`) has seven variants — `100`, `72`, `50`, `32`, `10`, `0` and `Unavailable` — and `Usage Indicator` (`153:202`) has four: Healthy, Warning, Critical, Unavailable.
 
 ### 4.4 Session Row
 
-每行左侧依次显示 Project、标题、当前内容；右侧为状态控件。
+Each row shows Project, title and current content on the left, with the status control on the right.
 
-- Running 始终显示蓝色 `Running` 状态名称 Badge。
-- 非 Running 默认显示圆点，Hover 显示状态名称 Badge。
-- 左侧文字接近尾部控件时 Alpha 渐隐，不换行、不显示省略号。
-- 最多三行可见；更多行使用垂直滚动。
+- Running always shows the blue `Running` status name badge.
+- Other statuses show a dot by default, expanding to the name badge on hover.
+- Left-hand text alpha-fades as it nears the trailing control, never wrapping and never showing an ellipsis.
+- At most three rows are visible; more scroll vertically.
 
 ### 4.5 Panel
 
-Panel 组件集保留 Notch Compact、No Notch Compact 和 Expanded。Expanded 的正式参考尺寸已经从 `444 × 310` 修正为 `520 × 302`：
+The Panel set keeps Notch Compact, No Notch Compact and Expanded.
 
-- header 高度从 `54` 修正为 `46`。
-- 展开时 header 只横向扩张。
-- 内容区使用 `256`，三行视口使用 `240`，底部保留 `15`。
-- 现有 `06 — Notch Core` Running Desktop 画板已按 `1512` 屏幕重新居中到 `x = 496`。
+- The header is `46` in the reference design (the real menu-bar height in practice), and expanding grows it only horizontally.
+- The session viewport is `240` (three `80` rows).
+- **Total expanded height is composed, never a constant**: `menuBarHeight + 240 + footer`, which is `326` / `340` / `370` / `314` at the `46` reference (§3.3). Earlier revisions of this section carried `444 × 310` and then `520 × 302` with a `256` content region; all three predate the footer.
+- The existing `06 — Notch Core` Running Desktop board has been re-centred to `x = 496` for a `1512` screen.
 
-Figma `Panel` 组件集（`115:82`）使用 `Mode`、`Content` 与 `Menu Bar` 属性，共七个合法变体。除 `46` 高参考外，还包含无刘海 `24` 高菜单栏的 Compact Running（`300:253`，`168 × 24`，圆角 `6.316`）和 Expanded（`300:263`，`520 × 280`，圆角 `6.316`）。所有变体均使用与 SwiftUI `PanelContour` 相同的外轮廓，而不是普通 RoundedRectangle。
+The Figma `Panel` set (`115:82`) uses `Mode`, `Content` and `Menu Bar` properties. Besides the `46` reference it includes the notch-less `24` menu bar's Compact Running (`300:253`, corner `6.316`) and Expanded (`300:263`, corner `6.316`). Every variant uses the same outer contour as SwiftUI's `PanelContour`, never a plain rounded rectangle.
 
-### 4.6 处理时间
+### 4.6 Processing time
 
-PRD 8.2 与技术设计第 12 节已明确权威时间语义、等待/睡眠行为、无障碍文案与刷新成本，处理时间因此进入产品范围。它不是独立的 Runtime Badge：未完成会话行以计时文本本身作为状态标记，一行永远只有一个标记。~~等待人工的行为琥珀色 Medium，Running 为暗色 Light，Completed 行不显示计时，只保留绿色状态点。~~ **这一句的三种画法已被底座取代，见 §4.7。**
+PRD §8.2 and the technical design settled authoritative time semantics, waiting/sleep behaviour, accessibility copy and refresh cost, so processing time is in scope. It is not a separate runtime badge: an unfinished row uses the timer text itself as its status marker, and a row only ever carries one marker. ~~Waiting on a person is amber Medium, Running is dark Light, and Completed shows no timer, only the green dot.~~ **Those three treatments are superseded by the ground, §4.7.**
 
-### 4.7 读数的底座：四个状态靠轮廓分辨
+### 4.7 The reading's ground: four states told apart by outline
 
-**旧画法用「有没有」和「亮不亮」两个通道，而两个都是比较。** 「没有计时」只有在旁边那行有计时时才读作已完成；「计时是白的」只有在旁边那行更暗时才读作在等人。遮住相邻的行，或者列表里恰好每行都是同一个状态，两个问题就都答不上来——这正是这两个状态难找的原因，而不是它们画得不够亮。
+**The old treatment used two channels, presence and brightness, and both are comparisons.** "No timer" reads as finished only when the row beside it has one; "the timer is white" reads as waiting only when the row beside it is darker. Cover the neighbours, or let the list happen to hold one state throughout, and neither question can be answered — which is why those two states were hard to find, not that they were drawn too dimly.
 
-**改为给读数一个底座，一个槽位、一枚标记、三种轮廓**（Figma `14 — Telling row states apart`）：
+**Instead the reading gets a ground: one slot, one mark, three outlines** (Figma `14 — Telling row states apart`):
 
-| 状态 | 画法 | 墨色 |
+| Status | Treatment | Ink |
 | --- | --- | --- |
-| Running | 裸读数，没有底座 | `#7C7C80` Light 13，等宽数字 |
-| Approval / Input needed | 同一个读数落在白底上 | 底 `#FFFFFF`、字 `#0D0D0F` Medium |
-| Completed | 读数落在暗底上，内容是**这一轮花了多久** | 底 `行底色 + 0.06`（黑底上即 `#242424`）、字 `#7C7C80` Light |
+| Running | A bare reading, no ground | `#7C7C80` Light 13, monospaced digits |
+| Approval / Input needed | The same reading on a white ground | ground `#FFFFFF`, text `#0D0D0F` Medium |
+| Completed | The reading on a dark ground, holding **how long this Turn took** | ground `row ground + 0.06` (so `#242424` on black), text `#7C7C80` Light |
 
-底座就是 §4.6 那枚子智能体 badge 放大到读数宽度：同样 `16` 高、圆角 `4`、左右各 `4`。它本来就是「一枚读数落在会翻转的底上」，现在这枚标记同时替这一轮和它派生的子智能体回答，因此**两者在同一行上组合起来不需要任何特例**——完成行还有子智能体在跑时，槽位仍然归 badge，轮廓不变，只是里面从时长换成计数。
+The ground is §4.6's subagent badge scaled to the reading's width: the same `16` height, `4` corner and `4` each side. It was always "a reading on a ground that inverts", and that one mark now answers for both this Turn and the subagents it spawned, so **combining them on one row needs no special case at all** — a finished row with subagents still running keeps the slot for the badge, the outline unchanged, with a count inside instead of a duration.
 
-三条派生规则：
+Three derived rules:
 
-- **Running 是唯一裸着的**。一组轮廓需要有一个成员是「什么都没有」，而它应该是占据列表大多数的那个状态；这也是收起态最常画的形态，两个界面因此在最常见的那一行上仍然一致。
-- **暗底是对行底色的一次 `0.06` 抬升，不是写死的值**。行在指针下会亮到 `#2B2B2E`、按下时 `#3A3A3D`，都比写死的 `#242424` 亮——写死的话，标记恰好在指针落上去的那一刻变成一个洞。取「墨色与行底色中较亮的一个」再抬升，静息时仍是历来的 `#242424`，随行一起升。这条同时修好了子智能体 badge：它此前就是写死值，一直有这个毛病。由 `theDimGroundStaysAboveTheRowItIsDrawnOn` 锁定。
-- **完成行拿回一个数字**。槽位总得画点什么，而唯一诚实的东西本来就已经算出来又被丢掉了：这一轮花了多久，是这块表面别处都不报告的事实，也是把标记从「缺席」变成「记录」的东西。它取自轮次自己的最后一个事件（`MonitoredSession.finishedAt`），那个戳记刻意不随子智能体的动静前移，正是这个读数需要的性质。由 `aFinishedRowDrawsTheLengthOfTheTurnItRan` 锁定。
+- **Running is the only bare one.** A family of outlines needs one member that is "nothing at all", and it should be the state that occupies most of the list; it is also the collapsed state's most-drawn form, so the two interfaces stay consistent on the most common row.
+- **The dark ground is a `0.06` lift of the row's ground, not a fixed value.** A row brightens to `#2B2B2E` under the pointer and `#3A3A3D` when pressed, both above a hard-coded `#242424` — so hard-coded, the mark would turn into a hole at exactly the moment the pointer lands on it. Taking the brighter of the ink and the row ground and lifting that keeps the historical `#242424` at rest and rises with the row. This also fixed the subagent badge, which was hard-coded and had the same flaw. Pinned by `theDimGroundStaysAboveTheRowItIsDrawnOn`.
+- **A finished row gets a number back.** The slot has to draw something, and the only honest thing was already computed and thrown away: how long this Turn took — a fact nothing else on this surface reports, and what turns the mark from an absence into a record. It comes from the Turn's own last event (`MonitoredSession.finishedAt`), a stamp deliberately not moved forward by subagent activity, which is exactly the property this reading needs. Pinned by `aFinishedRowDrawsTheLengthOfTheTurnItRan`.
 
-**收起态用同一套，且底座的 `8` 永远预留**。理由见 §6.4。
+**The collapsed state uses the same family, and the ground's `8` is always reserved.** See §6.4.
 
-### 4.8 探照灯：正文行的第三个通道
+### 4.8 The searchlight: the body line's third channel
 
-**未完成轮次的正文行有一道白色扫光横过，完成的没有。** 底座回答「是哪一个状态」，扫光回答「还在跑还是已经结束」——它是这里唯一不用正眼看就读得到的通道，而菜单栏面板本来就是余光在看的东西。
+**An unfinished Turn's body line has a white sweep crossing it, and a finished one does not.** The ground answers which state; the sweep answers running versus ended — the one channel here readable without looking directly at it, and a menu-bar panel is looked at peripherally by nature.
 
-- 只有正文行（当前内容）扫光；标题与说明行任何状态下都不扫。
-- 只在会计时的三个状态下扫：Running、Input needed、Approval needed。
-- **完成轮次即使还有子智能体在跑也不扫。** 扫光跟着轮次而不是线程：它横过的那行字是这一轮自己的最终输出，还在飞的东西由槽位里的 badge 去说。
-- Reduce Motion 下整个关掉——正因为如此，底座必须能独自把状态说清楚，这两个通道在不同条件下失效才有意义。
-- 画法：同一批字形的第二份白色栅格，被一条渐变带遮罩（`0 / 0.40 / 0.50 / 0.60 / 1`，峰在中间），在 render server 上以 `2 s` 线性循环平移；带宽是它横过的宽度的四倍，所以峰要到循环的 40% 才到达字形。相位取自时钟而不是安装时刻，因此每行同相，正文被替换也不会重启循环（`NotchTextRaster.installSweep`）。
+- Only the body line (current content) sweeps; the title and caption never sweep in any state.
+- It sweeps only in the three timed states: Running, Input needed, Approval needed.
+- **A finished Turn does not sweep even with subagents still running.** The sweep follows the Turn, not the thread: the line it crosses is this Turn's own final output, and what is still in flight is said by the badge in the slot.
+- Reduce Motion turns it off entirely — which is precisely why the ground must state the status on its own; two channels only help if they fail under different conditions.
+- Treatment: a second white raster of the same glyphs, masked by a gradient band (`0 / 0.40 / 0.50 / 0.60 / 1`, peak in the middle), translated on the render server on a `2 s` linear loop; the band is four times the width it crosses, so the peak reaches the glyphs only at 40% of the loop. Phase comes from the clock rather than install time, so every row is in phase and replacing the text does not restart the loop (`NotchTextRaster.installSweep`).
 
-由 `sessionRowTextSweepsOnlyWhileItsTurnIsUnfinished` 与 `onlyAnUnfinishedTurnSweepsItsBody` 锁定。这道扫光原先就在设计文件里，页面 `12`、`14` 上每一行示范行都画着它；产品侧曾在 `bc3735e` 拿掉，现已恢复。
+Pinned by `sessionRowTextSweepsOnlyWhileItsTurnIsUnfinished` and `onlyAnUnfinishedTurnSweepsItsBody`. The sweep was always in the design files, drawn on every example row on pages `12` and `14`; the product side removed it in `bc3735e` and it is now restored.
 
-**行尾那个位置在计时停下之后还有一句话可说，而且只有一句——`N subagents` 这样的文字标记已换成一枚数字 badge（`15 × 15`、圆角 `4`，[`dual-agent-design.md`](dual-agent-design.md) §10）。** 这条 Thread 的 Turn 已经结束、但它派生的子智能体还在跑或在等审批时（两个产品都会走到），同一个位置画一枚 `SubagentBadgeView`：**数字是全部子智能体**（在等的也算），**底色说有没有在等你**——全在跑是底 `#242424`、字 `#7C7C80`，只要有一个停在审批或输入上就翻成底 `#FFFFFF`、字 `#0D0D0F`。永远只有一枚，不拆成「在等的」与「在跑的」两枚：拆分恰好在需要人处理的那一刻往行尾放两个数字，而底色本来就能免费说清同一件事。展开态里这枚 badge 永远是中性色、不染产品墨——这一行本身已经用行归属标记或 Project 文案说明了产品，不需要 badge 再借一次色相。这**不违反「一行只有一个标记」**——位置只有一个，先给计时，计时没有了才轮到它，badge 与计时永不并存。正在跑的行不画 badge——那一行已经在说这条 Thread 在工作了。产品理由与状态语义见 [`PRD.md`](PRD.md) §6.1 与 §9.3。SwiftUI 实现：`SubagentBadgeView`（`NotchStatusMatrix.swift`），数据来自 `MonitoredSession.subagentBadge`（`MonitorDomain.swift`）。**外部 Figma 待清理**：`112:28`（Session Row）上的 `807:91`／`807:102` 仍是旧文字标记，下一次同步应换成对应的 badge 变体，参照 `12 — Counting: sessions and subagents` 的 `01` 节。
+**The row-end position has one more thing to say once the timer stops, and only one — a text marker like `N subagents` is replaced by a numeral badge** (`15 × 15`, corner `4`, [`dual-agent-design.md`](dual-agent-design.md) §10). While this Thread's Turn has ended and subagents it spawned are still running or waiting on approval (both products reach this), the same position draws a `SubagentBadgeView`: **the number is every subagent** (waiting ones included), and **the ground says whether anything is waiting on you** — all running is ground `#242424` with text `#7C7C80`, and one stopped at approval or input inverts it to ground `#FFFFFF` with text `#0D0D0F`. There is only ever one, never split into "waiting" and "running": splitting puts two numbers at the row end at exactly the moment a person is needed, and the ground says the same thing for free. In the expanded state this badge is always neutral and never takes a product ink — the row has already said which product through its attribution marker or Project caption. This **does not violate "one marker per row"** — there is one position, the timer gets it first, and the badge only follows once there is no timer; the two never coexist. A running row draws no badge, because it is already saying this Thread is working. Product reasoning and status semantics in [`PRD.md`](PRD.md) §6.1 and §9.3. SwiftUI: `SubagentBadgeView` (`NotchStatusMatrix.swift`), data from `MonitoredSession.subagentBadge` (`MonitorDomain.swift`). **External Figma to clean up**: `807:91` / `807:102` on `112:28` are still the old text markers and should become the badge variants at the next sync, per `12 — Counting: sessions and subagents` §01.
 
-**同一件事在收起态是另一种画法，两处规矩都不同：那里 badge 与计时并存，而且一个产品一枚、各染各的墨色。** 行尾的一个位置属于一行，收起态的尾翼属于整张列表，所以它说的是总数，也没有「同一句话说两遍」的问题——计时说的是最长的那个轮次，badge 说的是每个产品还有几个子智能体没结束。有 badge 要画时它们排在计时前面，Codex 永远在前（与前导翼那对矩阵同一条顺序规则，不按紧急程度重排）；所有轮次都结束而子智能体还在跑或在等审批时没有计时可读，尾翼只剩 badge。染色规则与展开行相反：**每枚 badge 染它自己那个产品的墨色**（Codex 字 `#6CB4FF` / 底 `#1F2A35`，翻转后字 `#101B26` / 底 `#6CB4FF`；Claude Code `#D97757` / `#30211C` 与 `#21120D` / `#D97757`），因为一条 bar 上没有 caption 行，墨色是唯一能回答「这是谁的」的东西。没有子智能体的产品没有 badge，也不为它留位置。两枚 badge 之间是 `6`（取的就是两个矩阵之间那个 `6`），badge 与计时之间是 `8`。**翻转不改变宽度**：一个产品从「全在跑」变成「有人在等」时 bar 上没有任何东西移动。收起态写 `Running` 而尾翼没有计时读数，是这一形态的正常样子而不是缺口（[`PRD.md`](PRD.md) §6.2）。**还有一种更短的形态：`Running` 而整条尾翼什么都没有。** 它出现在 Claude Code 的子智能体收尾到父轮次被叫醒之间——实测 50–130 ms——此刻既没有轮次在计时，也没有子智能体可数，而这条 Thread 确实还在工作（`PRD.md` §6.2 第 3 档）。它太短，不值得为它画一个变体：要点是尾翼**空**着不等于状态词错了，读到这个组合时不要去补一个占位读数。SwiftUI 实现：`CompactTrailingReading.badges`／`PanelMetrics.subagentBadgeWidth`／`subagentBadgesWidth`／`compactTrailingReadingWidth`（`MonitorStore.swift`），聚合口径见 `MonitorStore.compactSubagentBadges`。**外部 Figma 待清理**：`115:82`（Panel）上的 `808:527`（`「2 │ 1:23」` 合成读数）同样待换成 `12 — Counting: sessions and subagents` `03` 节里对应的胶囊变体。
+**The same fact is drawn differently when collapsed, under two different rules: there the badge and the timer coexist, and there is one per product, each in its own ink.** The row-end position belongs to one row while the collapsed trailing wing belongs to the whole list, so it states totals and has no "saying it twice" problem — the timer describes the longest Turn while the badges describe how many subagents each product still has. Badges sit before the timer, Codex always first (the same ordering rule as the leading wing's matrix pair, never reordered by urgency); with every Turn ended and subagents still running or waiting there is no timer to read and only badges remain. The colouring rule is the inverse of the expanded row's: **each badge takes its own product's ink** (Codex text `#6CB4FF` / ground `#1F2A35`, inverting to `#101B26` / `#6CB4FF`; Claude Code `#D97757` / `#30211C` and `#21120D` / `#D97757`), because a bar has no caption line and ink is the only thing that can answer whose it is. A product with no subagents has no badge and no space reserved. Two badges are `6` apart (taken from the `6` between the matrices) and a badge is `8` from the timer. **Inverting changes no width**: nothing on the bar moves when a product goes from all-running to something-waiting. A collapsed state reading `Running` with no timer in the trailing wing is that form's normal appearance, not a gap ([`PRD.md`](PRD.md) §6.2). **There is an even shorter form: `Running` with an entirely empty trailing wing.** It appears between a Claude Code subagent wrapping up and the parent Turn waking — measured 50–130 ms — when nothing is timing and no subagent is countable while the Thread really is still working (`PRD.md` §6.2 band 3). It is too brief to warrant a variant; the point is that an **empty** trailing wing does not mean the status word is wrong, so do not add a placeholder reading when you see that combination. SwiftUI: `CompactTrailingReading.badges` / `PanelMetrics.subagentBadgeWidth` / `subagentBadgesWidth` / `compactTrailingReadingWidth` (`MonitorStore.swift`), aggregated by `MonitorStore.compactSubagentBadges`. **External Figma to clean up**: `808:527` on `115:82` (the `2 │ 1:23` composite reading) likewise needs the capsule variant from `12 — Counting: sessions and subagents` §03.
 
-**前导翼多了一样东西：每个矩阵右侧一列竖排的会话计数点。** 一行一点，从上沿开始按 `5.84` 的步距排，三点排满整个标记的高度，超过三行时第三个点向下拉长成一道 `4.93` 的竖杠读作「多于三」；这个步距是矩阵还是 3×3 时它自己的行距，矩阵改成 4×4 之后点列**没有跟着改**（§4.1）；颜色是该产品的点亮色 `85%`，永不参与矩阵的动画。**整列与矩阵等高**（`2 × 5.84 + 4.93 = 16.6`），所以它不要任何矩阵原本没有的纵向空间——`46` 档与 `22` 档画得一模一样。它花的是宽度：每个产品的标记因此从 `16.6` 变为 `22.26`（间距 `2.92` + 点 `2.74`），**且不论几个会话都是这个宽度**——让面板随计数收放会在会话开始或最后一行被移除时把矩阵本身横向挪一段。预留归预留，连接了却一行都没有的产品**不画**那一列（空列会把成对的 `6` 撑到 `11.66`），让出来的宽度落在**状态名之后**，不落在标记与状态名之间。下面那张几何表里的「状态矩阵」因此一律读作「标记 `22.26`」，静息灰标记除外（它背后没有产品，仍是 `16.6`）。完整规则、取值与它先后被画在矩阵右侧一枚数字方块、矩阵下方一排横点这两处的原因，见 [`dual-agent-design.md`](dual-agent-design.md) §11。
+**The leading wing gained one more thing: a vertical column of session-count dots right of each matrix.** One dot per row from the top edge at `5.84` pitch, three dots filling the mark's height, and past three rows the third stretches into a `4.93` bar meaning "more than three". That pitch was the matrix's own row pitch while it was 3×3, and the dot column **did not follow** the matrix to 4×4 (§4.1). The colour is the product's lit colour at `85%`, and it never joins the matrix's animation. **The column is exactly as tall as the matrix** (`2 × 5.84 + 4.93 = 16.6`), so it needs no vertical space the matrix did not already have and draws identically at the `46` and `22` steps. What it costs is width: each product's mark goes from `16.6` to `22.26` (gap `2.92` + dot `2.74`), **and it is that width at any session count** — letting the panel flex with the count would shift the matrix itself sideways when a thread starts or the last row is removed. Reserved is reserved, but a connected product with no rows **does not draw** the column (an empty one would stretch the paired `6` to `11.66`), and the width it gives up lands **after the status name**, not between the marks and the name. So "status matrix" in the geometry tables below always reads as "mark `22.26`", except the resting grey mark (no product behind it, so still `16.6`). Full rules, values, and why it was first drawn as a numeral square right of the matrix and then as a row of dots below it, in [`dual-agent-design.md`](dual-agent-design.md) §11.
 
-收起态在刘海右侧显示全局最长运行时间，与左翼状态读数构成两翼；没有未完成轮次、也没有子智能体在跑时右翼整体消失，避免渲染出第二个假刘海。展开态不重复该汇总值。计时文本使用等宽数字，因此右翼宽度只在进位时变化。
+Collapsed, the right of the notch shows the global longest running time, forming the second wing beside the leading status readout; with no unfinished Turn and no subagent running, that wing disappears entirely rather than rendering a second false notch. The expanded state does not repeat that summary. Timer text uses monospaced digits, so the trailing wing's width changes only when a digit is added.
 
-**前导翼的处置按形态分开**（§6.4）：没有任何智能体已连接时，有刘海形态连前导翼一起去掉、只剩 `200` 遮挡；无刘海形态保留前导翼，画一个灰色矩阵加 `Disconnected`——菜单栏里消失的控件会带走自己的位置，因此这里保住位置比省掉一条翼更重要。
+**The leading wing is handled per form** (§6.4): with no agent connected, the notched form drops the leading wing too and keeps only the `200` occlusion, while the notch-less form keeps it, drawing a grey matrix plus `Disconnected` — a control that vanishes from the menu bar takes its position with it, so holding the position matters more than saving a wing.
 
-收起态宽度不是设计常量：实现按真实渲染文本测量后向上取整，宽度是布局的结果而不是谁定下的数值。因此 **Figma 变体中的计时与状态文字层必须 hug contents，不得写死宽度**。写死是唯一需要记住的失败模式——上一次同步把计时 TEXT 固定为 `34`（自然宽约 `28.6`），刘海计时变体因此整体偏宽 `5.4`；无刘海一对同样因固定文本宽度偏出十余 pt。
+Collapsed width is not a design constant: the implementation measures real rendered text and rounds up, so width is the result of layout rather than a number someone chose. **Figma variants' timer and status text layers must therefore hug contents and never have a fixed width.** Fixed width is the one failure mode worth remembering — a previous sync fixed the timer TEXT at `34` (natural width about `28.6`), making the notched timer variant `5.4` too wide overall, and the notch-less pair likewise ran over by more than ten points.
 
-可以直接对照的固定值只有一处：刘海形态左翼 = `12` padding + `22.26` 标记（矩阵 `16.6` + 点列 `5.66`，见上）+ `8` clearance = `42.26`，加 `200` 遮挡后本体为 `242.26`；尾翼为空时右缘还要外挪 `菜单栏高度 / 16`（§3.4），`46` 档下为 `2.875`，取整后收起态总宽为 `246`（`240` 是点列出现之前的值，`237` 是再往前没有外挪那一步时的）。这一串是 `200 × 46` 那一档的算式，本机当前实测 `220 × 38`，同样的算式给出 `42.26 + 220 + 2.375 = 265`。尾翼从 `x = 250.26` 开始（`42.26 + 200 + 8`），宽度随它实际画出的内容变化——`CompactTrailingReading` 把 badge 的宽度（`PanelMetrics.subagentBadgesWidth`）与计时文本的宽度合成一个读数（`compactTrailingReadingWidth`），badge 出现或多一枚时同样只是这个合成宽度变长，右翼跟着变宽。单枚 badge 量的是自己的数字加左右各 `4` 内边距，下限 `15 × 15`（两位数会把它撑宽，而不是溢出裁切）；两枚 badge 之间空 `6`（`PanelMetrics.subagentBadgeSpacing` 直接写成 `compactMatrixSpacing`），badge 与计时之间空 `8`。无刘海那个定宽为计时预留的槽位是 `00:00:00`（Medium）；badge 与计时的组合装不下时让胶囊自己变宽，而不是把 badge 裁掉——那是**唯一**一处内容能推动这个定宽的地方，为一个几乎不会出现的读数长期加宽每一个菜单栏里的胶囊才是更糟的那一边。由 `theCollapsedCountGrowsTheSlotItSharesWithTheTimer` 锁定。无刘海形态不再按内容组合：整个工作集合共用一个定宽（§6.4「固定工作宽度」），也不再有随菜单栏高度变化的宽度下限——除了 §3.4 那一步外挪量，`PanelMetrics` 中没有任何一处拿菜单栏高度算宽度，它只决定面板高度与圆角；那一步是个例外，因为它挡的是硬件形状，与两个圆角同理。这些关系由 `compactGeometryComposesTheNotchWings` 锁定，其余宽度不写入契约。
+One fixed value can be checked directly: the notched form's leading wing = `12` padding + `22.26` mark (matrix `16.6` + dot column `5.66`) + `8` clearance = `42.26`, giving a `242.26` body with a `200` occlusion; with an empty trailing wing the right edge also steps out by `menuBarHeight / 16` (§3.4), which is `2.875` at `46`, so the rounded collapsed width is `246` (`240` predates the dot column and `237` predates the step). That series is the arithmetic for the `200 × 46` step; this machine currently measures `220 × 38`, and the same arithmetic gives `42.26 + 220 + 2.375 = 265`. The trailing wing starts at `x = 250.26` (`42.26 + 200 + 8`) and its width follows what it actually draws — `CompactTrailingReading` composes the badges' width (`PanelMetrics.subagentBadgesWidth`) and the timer text's into one reading (`compactTrailingReadingWidth`), so a badge appearing or a second one arriving simply lengthens that composite and the wing follows. One badge measures its own digits plus `4` padding each side with a `15 × 15` floor (two digits widen it rather than overflowing); two badges are `6` apart (`PanelMetrics.subagentBadgeSpacing` is literally `compactMatrixSpacing`), and a badge is `8` from the timer. The notch-less fixed width reserves a `00:00:00` (Medium) timer slot; when a badge-plus-timer combination does not fit, the pill widens rather than clipping the badge — the **only** place content moves that fixed width, because permanently widening every menu-bar pill for a reading that almost never appears is the worse side. Pinned by `theCollapsedCountGrowsTheSlotItSharesWithTheTimer`. The notch-less form otherwise no longer composes by content: the whole working set shares one fixed width (§6.4), and there is no longer a menu-bar-height-dependent minimum — apart from §3.4's step, nothing in `PanelMetrics` computes width from the menu-bar height, which decides only panel height and corners; that step is the exception because it clears a hardware shape, like the two radii. These relationships are pinned by `compactGeometryComposesTheNotchWings`, and no other width enters the contract.
 
-> 本段此前写过两轮旧数字：`18.4` / `50.4` / `251` 是矩阵改用 `16.6`（`13 × 1.2778`，见 `PanelMetrics.statusMatrixSize`）之前的；`48.6` / `249` 是两侧内边距还是 `24` 时的。内边距收到 `12` 之后（`PanelMetrics.expandedHorizontalPadding`），左翼为 `36.6`、本体为 `236.6`；`compactGeometryComposesTheNotchWings` 此前断言的 `237` 就是它取整的结果，加上 §3.4 的外挪量之后改断言 `240`。§6.4 的宽度表用 `16.62` 记 `16.6` 这同一个值；两者差 `0.02`，ceil 之后的宽度完全相同，所以下表不受影响。尾翼的组成关系此前是拼一整串文本（`2 │ 1:23`）后整体测量宽度；换成 badge 加计时两个读数分别测量、相加取代之后，两种算法在纯计时读数（没有 badge）上给出同一个数字，`theCollapsedCountGrowsTheSlotItSharesWithTheTimer` 与 `compactGeometryComposesTheNotchWings` 两条断言都是在这次改动后重新跑过的。
+> This paragraph has carried two rounds of older numbers: `18.4` / `50.4` / `251` predate the matrix moving to `16.6` (`13 × 1.2778`, `PanelMetrics.statusMatrixSize`), and `48.6` / `249` date from `24` side padding. After padding narrowed to `12` (`PanelMetrics.expandedHorizontalPadding`) the leading wing is `36.6` and the body `236.6`; `compactGeometryComposesTheNotchWings` previously asserted the `237` that rounds to, and asserts `240` after §3.4's step. §6.4's width table writes `16.62` for this same `16.6`; the `0.02` difference gives identical widths after `ceil`, so that table is unaffected. The trailing wing's composition was previously a single measured string (`2 │ 1:23`); replacing it with two separately measured readings summed gives the same number for a pure timer reading, and both `theCollapsedCountGrowsTheSlotItSharesWithTheTimer` and `compactGeometryComposesTheNotchWings` were re-run after that change.
 
-## 5. 实时监视列表
+## 5. The live monitored list
 
-### 5.1 成员语义
+### 5.1 Membership semantics
 
-一行代表一个可导航根 Thread。Running、Input needed、Approval needed 始终显示；Completed 只在该产品的桌面端仍认为用户没看过时显示，桌面端已读、归档、删除或失去可导航性后自动移除。**终端里的 Claude Code 会话没有已读可读**，它的 Completed 行留到该会话的下一次提交、会话消失或用户手动移除（在该行上右键；~~清空列表~~ 全清已删除，见 §8.2）为止（见 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)）——注释卡必须写出这条差异，否则设计稿看起来像是所有行都会自己消失。
+A row is a navigable root Thread. Running, Input needed and Approval needed are always shown; Completed shows only while that product's desktop app still believes the user has not seen it, and is removed automatically once it is read, archived, deleted or no longer navigable. **A Claude Code session in a terminal is answered by its terminal** (ADR 0012's fifth path); only a session with neither a Desktop record nor a controlling terminal keeps its Completed row until that session's next submission, the session disappearing, or manual removal (right-click on the row; ~~clear the list~~ — clear-all was removed, §8.2). The annotation cards must state that difference, or the board looks as though every row disappears by itself.
 
-列表覆盖当前 Desktop 账户所有 Project 与 `Chats`，不跟随侧边栏选择，不展示子智能体，也不承担历史浏览。
+The list covers every Project and `Chats` under the current account, does not follow the sidebar selection, never shows subagents, and does not serve as a history browser.
 
-### 5.2 排序
+### 5.2 Sorting
 
 ```text
-Input needed
-> Approval needed
+Approval needed
+> Input needed
 > Running
 > Completed
 ```
 
-同级按最近可信更新时间降序。排序实时变化，但不得在用户滚动或悬停时强制改变当前视口锚点。
+Ties sort by most recent trustworthy update, descending. Sorting updates live, but must never force the viewport anchor to move while the user is scrolling or hovering.
 
-### 5.3 当前内容
+### 5.3 Current content
 
-| 状态 | 内容 |
+| Status | Content |
 | --- | --- |
-| Input needed | 当前问题 |
-| Approval needed | 固定 `Approval requested` |
-| Running | 最新公开进度，回退到本轮输入 |
-| Completed | final answer 开头；没有时保留最后公开进度 |
+| Input needed | The current question |
+| Approval needed | The fixed `Approval requested` |
+| Running | The latest public progress, falling back to this Turn's input |
+| Completed | The start of the final answer; failing that, the last public progress |
 
-这四行取的都是产品已经显示给用户的那一份。raw reasoning、工具参数、命令输出和 diff 不在其中，不是因为不许取，而是因为这条路径没有去取它们——要显示得先加一次读取，那是一个按价值判断的新功能（见 [`PRD.md`](PRD.md) 第 7 节）。
+All four take what the product has already shown the user. Raw reasoning, tool arguments, command output and diffs are absent not because they are forbidden but because this path never fetched them — showing them would mean adding a read, which is a new feature judged on its value ([`PRD.md`](PRD.md) §7).
 
 ## 6. Integration States
 
-`07 — Integration States`（`227:3`）包含：
+`07 — Integration States` (`227:3`) holds:
 
-### 6.1 Content previews hidden（已退休）
+### 6.1 Content previews hidden (retired)
 
-板上这一格画的是预览开关关闭后的行。该开关连同它兑现的隐私承诺已经删除（[`PRD.md`](PRD.md) 第 7 节），预览始终显示，因此这一格不再对应任何可达状态。板上保留，不再是验收项。
+This cell drew a row with the preview switch off. That switch and the privacy promise it honoured are both deleted ([`PRD.md`](PRD.md) §7) and previews are always shown, so the cell no longer corresponds to any reachable state. Kept on the board, no longer an acceptance item.
 
 ### 6.2 Quota unavailable
 
-额度环为灰色 unavailable，但会话列表、状态和点击能力继续工作。该场景表达局部降级，不是 Disconnected。
+The quota ring is a grey unavailable while the thread list, statuses and click behaviour keep working. This expresses partial degradation, never Disconnected.
 
 ### 6.3 Monitoring lifecycle
 
-注释卡明确：提交输入后入列；活动 Turn 始终保留；终态只在桌面端仍未读时保留；已读、归档、删除或失去可导航性后自动移除；Notch 不主动标记已读；**已读无从回答的终态行（终端里的 Claude Code 会话）不参与自动移除**。
+The annotation card states: a Turn enters on submission; an active Turn is always kept; a terminal Turn is kept only while the desktop app still shows it unread; it is removed automatically on read, archive, delete or loss of navigability; the notch never marks anything read; and **a terminal row whose read state cannot be answered does not take part in automatic removal**.
 
-### 6.4 在场：两个系统状态
+### 6.4 Presence: two system states
 
-设计见 `10 — Double Apps` 的 `08 — Presence`（`624:1560`）。
+Design in `10 — Double Apps`'s `08 — Presence` (`624:1560`).
 
-支持两个产品之后，应用不能再假设用户在用哪一个，因此为从不打开的产品长期变暗的矩阵必须去掉。但菜单栏里消失的控件会把自己的位置一起带走，而无刘海屏幕没有可以藏身的缺口——药丸必须留在原地。解法是让矩阵不再报告我们自己的连接健康，改为报告一件用户能自己核对的事：**是否有编码智能体处于打开状态**。
+With two products supported, the app can no longer assume which one the user uses, so a matrix permanently dimmed for a product they never open has to go. But a control that vanishes from the menu bar takes its position with it, and a notch-less screen has no cut-out to hide behind — the pill must stay put. The solution is for the matrix to stop reporting our own connection health and report something the user can verify instead: **whether any coding agent is open**.
 
-系统状态因此从六个收敛为两个：
+System states therefore narrow from six to two:
 
-| 状态 | 成立条件 | 收起态 |
+| Status | Holds when | Collapsed |
 | --- | --- | --- |
-| `Disconnected` | 没有任何编码智能体处于已连接状态（§6.7） | 有刘海：什么都不画。无刘海：一个灰色矩阵加状态名，替药丸守住位置 |
-| `Connected` | 至少一个智能体已连接，且没有任何一个在工作 | 该产品自己的矩阵，熄灭态；没有计时，因为没有未完成轮次 |
-| 四个会话状态 | 有处理轮次在进行 | 不变：Running、Input needed、Approval needed、Completed |
+| `Disconnected` | No coding agent is connected (§6.7) | Notched: draw nothing. Notch-less: a grey matrix plus the status name, holding the pill's position |
+| `Connected` | At least one agent is connected and none is working | That product's own matrix, extinguished; no timer, since no Turn is unfinished |
+| The four session statuses | A Turn is in progress | Unchanged: Running, Input needed, Approval needed, Completed |
 
-`Idle` 并入 `Connected`，这次改名值得：`Idle` 描述的是我们自己看到的空列表，用户无从核对；`Connected` 描述的是用户瞄一眼自己的 Dock 就能核对的事实。
+`Idle` merged into `Connected`, and that rename is worth it: `Idle` described the empty list we see, which the user cannot verify, while `Connected` describes something they can check with a glance at their own Dock.
 
-矩阵因此承载三个通道，而不是两个：
+The matrix therefore carries three channels rather than two:
 
-| 通道 | 含义 |
+| Channel | Meaning |
 | --- | --- |
-| **在场** | 该产品是否打开。新增——这正是旧设计没有的通道，此前靠「永远画一个熄灭矩阵」假装 |
-| 色相 | 哪个产品。不变 |
-| 亮度 | 是否需要用户处理。不变 |
+| **Presence** | Whether that product is open. New — the channel the old design lacked and faked by always drawing an extinguished matrix |
+| Hue | Which product. Unchanged |
+| Brightness | Whether the user is needed. Unchanged |
 
-灰色不是第四种颜色，而且它是整个界面上**最暗**的东西：`#151515` 是仍然处在两个产品熄灭色亮度之下（或持平）的最亮中性灰——相对亮度 `0.0075`，对 `#21120D` 的 `0.0079` 与 `#101B26` 的 `0.0104`。这样「有智能体已连接」永远不会看起来比「什么都没连接」更暗。产品内部的点亮／熄灭关系保留原有的 `15%` 规则不变。
+Grey is not a fourth colour, and it is the **darkest** thing in the interface: `#151515` is the brightest neutral grey still at or below both products' extinguished brightness — relative luminance `0.0075`, against `#21120D`'s `0.0079` and `#101B26`'s `0.0104`. So "an agent is connected" can never look darker than "nothing is connected". Within a product, the lit/extinguished `15%` relationship is unchanged.
 
-静息与 hover：
+Resting and hover:
 
-| 形态 | 静息 | hover |
+| Form | Resting | Hover |
 | --- | --- | --- |
-| 有刘海 | 什么都不画，只占 `200` 遮挡 | 药丸横向展开为 `400 × 46`，绕过刘海：前导侧灰色矩阵与状态名，尾侧齿轮 |
-| 无刘海 | `160 × 46`，灰色矩阵 + `Disconnected` | 横向展开为 `208 × 46`，尾部加齿轮 |
+| Notched | Draws nothing, occupying only the `200` occlusion | The pill expands horizontally around the notch: grey matrix and status name leading, gear trailing |
+| Notch-less | Grey matrix + `Disconnected` | Expands horizontally, adding the gear at the trailing end |
 
-**「有刘海、静息」这一格也是 `Hide the wings` 打开后的收起态。** 该偏好（§8.4）把这一格从「没有任何产品连接时」推广到任何时候：矩阵与计时都不画，收起态宽度恒等于遮挡宽度。它只改收起态，hover 那一列一个字都不变。因此这一格的两条理由也原样继承——有刘海屏的缺口本来就是屏幕上的一个形状，旁边再放一个不携带信息；缺口量不出来的屏（无刘海，或报了刘海却量不出遮挡宽度）没有可以缩上去的形状，所以那一行在设置里是置灰的。
+**The "notched, resting" cell is also the collapsed state with `Hide the wings` on.** That preference (§8.4) generalises this cell from "no product connected" to any time: neither matrix nor timer is drawn and the collapsed width equals the occlusion. It changes only the collapsed state; the hover column is unchanged. Both of this cell's reasons carry over unchanged — a notched screen's cut-out is already a shape on the screen and a second one beside it carries no information; and a screen whose cut-out cannot be measured (notch-less, or reporting a notch without an occlusion width) has no shape to shrink onto, which is why that row is disabled in settings.
 
-**hover 只横向展开药丸，不落下面板。** 没有智能体连接时面板里没有内容可放，展开的唯一目的是让齿轮可达；原因写在 Settings 里，齿轮离它只有一个动作。
+**Hover only expands the pill; it does not drop the panel.** With no agent connected there is nothing to put in a panel, and the only point of expanding is to make the gear reachable; the reason lives in Settings, one action away.
 
-> **实现记录：** 上表的 `400 × 46` / `208 × 46` 与本节 §6.8 清单里的 `400.6 × 46` / `224.6 × 46` 互相矛盾，两处都没有给出组成关系。实现按本文其余宽度一致的办法**按组成计算**（`PanelMetrics.restingExpandedWidth`）：前导内边距 `12` + 矩阵 `16.6` + 间距 `12` + `Disconnected` `82.96` + 间距 `12` + 齿轮 + 尾部内边距 `12`，有刘海形态在中间插入 `8 + 遮挡 + 8`。齿轮随菜单栏缩放（`46pt` 下 `32`，`24pt` 下 `20`，见 [`dual-agent-design.md`](dual-agent-design.md) §5.3），因此本机 `46pt` 菜单栏下得到无刘海 `179.56 → 180`、有刘海（`200` 遮挡）`395.56 → 396`。内边距还是 `24` 时这条关系给出的是 `204` / `420`，那两个数已经过期；`10 — Double Apps` 的 `08 — Presence` 已按 `396` / `180` 重画。上屏后若与图不符，改的应是这条组成关系，而不是把数字写死。
+> **Implementation record:** the `400 × 46` / `208 × 46` above and the `400.6 × 46` / `224.6 × 46` in §6.8's checklist contradict each other, and neither gives a composition. The implementation **computes it** like every other width here (`PanelMetrics.restingExpandedWidth`): leading padding `12` + matrix `16.6` + gap `12` + `Disconnected` `82.96` + gap `12` + gear + trailing padding `12`, with the notched form inserting `8 + occlusion + 8` in the middle. The gear scales with the menu bar (`32` at `46 pt`, `20` at `24 pt`, [`dual-agent-design.md`](dual-agent-design.md) §5.3), giving `179.56 → 180` notch-less and `395.56 → 396` notched (`200` occlusion) under this machine's `46 pt` menu bar. At `24` padding the same relationship gave `204` / `420`, now expired; `08 — Presence` has been redrawn at `396` / `180`. If the screen disagrees with the board, change this composition rather than hard-coding a number.
 
-**第一个打开的产品接管灰槽，而不是并排新增。** 灰色表示「没有产品」，一旦有产品在场，就没有「没有产品」可画；第二个产品才新增一槽。关闭时逐步反向。
+**The first product to open takes over the grey slot rather than being added beside it.** Grey means "no product", and once a product is present there is no "no product" to draw; a second slot appears only for a second product. Closing reverses step by step.
 
-#### 固定工作宽度
+#### The fixed working width
 
-无刘海药丸在**单产品的整个工作集合内不改变宽度**：`Connected`、`Running`、`Approval`、`Input`，以及计时最长到 `00:00:00` 的情况，全部使用同一个宽度。只有第二个智能体连接时才加宽，且只加一个矩阵。`Disconnected` 是唯一允许更窄的状态——它后面不会来计时，撑开只会在短状态名旁留下可见的空药丸。
+The notch-less pill **does not change width across the whole single-product working set**: `Connected`, `Running`, `Approval`, `Input`, and timers up to `00:00:00` all use one width. It widens only when a second agent connects, and only by one matrix. `Disconnected` is the one state allowed to be narrower — no timer will follow it, and stretching it would leave a visibly empty pill beside a short name.
 
-宽度用 `NSFont.systemFont(ofSize: 13)` 与 `monospacedDigitSystemFont` 在本机实测，即应用真正渲染的字体：
+Widths are measured on this machine with `NSFont.systemFont(ofSize: 13)` and `monospacedDigitSystemFont`, the fonts the app actually renders:
 
-| 组成 | 值 |
+| Component | Value |
 | --- | --- |
-| 前导内边距 | `12` |
-| 状态矩阵 | `16.62` |
-| 间距 | `12` |
-| 最宽紧凑状态名 `Approval`（**最宽的可计时状态**，见下注） | `52.74` |
-| clearance | `32` |
-| 最宽计时 `00:00:00`（等宽数字，Medium） | `57.91` |
-| 读数底座左右各 `4`（§4.7，**画不画都预留**） | `8` |
-| 尾部内边距 | `12` |
-| **固定工作宽度** | **`203.27` → `204`** |
+| Leading padding | `12` |
+| Status matrix | `16.62` |
+| Gap | `12` |
+| Widest compact name `Approval` (**the widest timeable status**, see below) | `52.74` |
+| Clearance | `32` |
+| Widest timer `00:00:00` (monospaced, Medium) | `57.91` |
+| The reading ground's `4` each side (§4.7, **reserved whether drawn or not**) | `8` |
+| Trailing padding | `12` |
+| **Fixed working width** | **`203.27` → `204`** |
 
-其余全部落在它之内：`Completed 118.43`、`Connected 118.67`、`Input + 00:00:00 + 底座 180.98`、`Running + 00:00:00 + 底座 199.52`、`Approval + 00:00:00 + 底座 203.27`。双产品为 `225.89 → 226`（一个矩阵加一个 `6` 间距）；`Disconnected` 为 `135.58 → 136`——它不会计时，因此既不预留计时槽也不预留底座。加上每个产品标记那列会话计数点（`5.655`，[`dual-agent-design.md`](dual-agent-design.md) §11）后，实际值是 `209` / `238` / `136`。
+Everything else falls inside it: `Completed 118.43`, `Connected 118.67`, `Input + 00:00:00 + ground 180.98`, `Running + 00:00:00 + ground 199.52`, `Approval + 00:00:00 + ground 203.27`. Two products is `225.89 → 226` (one matrix plus a `6` gap), and `Disconnected` is `135.58 → 136` — it never times anything, so it reserves neither the timer slot nor the ground. Adding each product mark's session-count dot column (`5.655`, [`dual-agent-design.md`](dual-agent-design.md) §11) gives the actual `209` / `238` / `136`.
 
-**底座画不画都占这 `8`。** 它只在等人的时候填成白色，但如果那一刻才向外要 `8`，整条 bar 上每个标记都会在恰好需要注意力的瞬间挪一下——这正是 [`dual-agent-design.md`](dual-agent-design.md) §10 为 badge 翻转拒绝过的移动，也是 §11 里计数点列宁可预留不肯收放的同一条理由。买一次，永久，翻转就只是换个颜色。由 `theCompactReadingReservesItsGroundWhetherOrNotItIsFilled` 锁定。
+**The ground occupies its `8` whether drawn or not.** It fills white only while someone is waiting, but asking for `8` at that moment would shift every mark on the bar at exactly the instant attention is needed — the movement [`dual-agent-design.md`](dual-agent-design.md) §10 rejected for the badge's inversion, and §11's reason for the dot column reserving rather than flexing. Bought once, permanently, so inverting is only a colour change. Pinned by `theCompactReadingReservesItsGroundWhetherOrNotItIsFilled`.
 
-两侧内边距从 `24` 收到 `12` 之前，这三个宽度分别是 `220`、`242` 和 `160`；表里其余每一项都没有变，差额就是两个 `12`。
+Before the side padding narrowed from `24` to `12`, those three widths were `220`, `242` and `160`; nothing else in the table changed, and the difference is two `12`s.
 
-**`Approval` 是最宽的可计时状态，不是最宽的状态名。** `Connected`（`66.05`）与 `Completed`（`65.81`）都比 `Approval`（`52.74`）长，但两者都不会计时，所以都输给「`Approval` 再加计时槽」。把计时槽预留在最长的*名字*后面而不是最长的*可计时状态*后面，会多留约 `13pt`——对一个常驻菜单栏的药丸来说是看得见的。实现按状态各自计算（`PanelMetrics.compactContentWidth`），由 `theFixedWidthFitsEveryWorkingStatusWithItsLongestTimer` 指名锁定。
+**`Approval` is the widest *timeable* status, not the widest name.** `Connected` (`66.05`) and `Completed` (`65.81`) are both longer than `Approval` (`52.74`), but neither times anything, so both lose to "`Approval` plus a timer slot". Reserving the timer slot after the longest *name* rather than the longest *timeable status* would waste about `13 pt` — visible on a pill that lives in the menu bar. The implementation computes per status (`PanelMetrics.compactContentWidth`), pinned by name in `theFixedWidthFitsEveryWorkingStatusWithItsLongestTimer`.
 
-计时在预留空间内**右对齐**且使用等宽数字，因此轮次跨过一小时时数字只向左长进本来就空着的位置，药丸不动，菜单栏里它左边的图标也不动。
+The timer is **right-aligned** in its reserved space with monospaced digits, so a Turn crossing an hour grows leftwards into space that was already empty: the pill does not move, and neither do the menu-bar icons to its left.
 
-这同时了结了 [`dual-agent-design.md`](dual-agent-design.md) §8 里登记的那条：`Update Claude Code` 曾把双产品药丸从 `189` 顶到 `202`。它退出收起态后不再参与定宽；即便日后回来也仍然装得下——`12 + 16.62 + 12 + 124.77 + 12 = 177.4`，在 `196` 之内。（`Update Claude Code` 本机实测 `124.77`，与 §8 已记录的 `124.8` 一致，这是上表其余数字可信的依据。）这一整段现在只剩历史意义：`Update Claude Code` 这个标签本身已经不存在，`updateAgent` 无论收起还是展开都说不指名产品的 `Update` / `Update required`，见 §6.6。
+This also closes the item registered in [`dual-agent-design.md`](dual-agent-design.md) §8: `Update Claude Code` once pushed the two-product pill from `189` to `202`. Having left the collapsed state it no longer sets any width, and it would still fit if it returned — `12 + 16.62 + 12 + 124.77 + 12 = 177.4`, inside `196`. (Measured here, `Update Claude Code` is `124.77`, matching the `124.8` recorded in §8, which is why the rest of that table is trustworthy.) The whole paragraph is now historical: the label itself no longer exists, and `updateAgent` says the product-free `Update` / `Update required` collapsed and expanded alike (§6.6).
 
-### 6.5 openness 如何判定
+### 6.5 How openness is decided
 
-两个信号在代码里都已存在，且都不是为此新写的——一个用于退休会话已死的行（`SessionEnd` 被刻意不注册），另一个本来就是每次刷新都要取的：
+Both signals already existed in the code and neither was written for this — one retires the rows of dead sessions (`SessionEnd` is deliberately unregistered), and the other was already fetched every refresh:
 
-| 产品 | 「打开」的含义 | 来源 | 现有实现 |
+| Product | What "open" means | Source | Implementation |
 | --- | --- | --- | --- |
-| Codex Desktop | 应用正在运行 | `NSRunningApplication.runningApplications(withBundleIdentifier:)`；每次刷新取一次，本来就已经在取，用于把实时 Hook 绑定到同一个 Desktop 进程生命周期 | `LiveCodexMonitorService.swift:990` |
-| Claude Code | 至少有一个活跃会话 | `claude agents --json`，经 `ClaudeCodeSessionListing.liveSessions()`。没有应用可问，会话列表就是在场信号 | `ClaudeCodeSessionRegistry.swift` |
+| Codex Desktop | The app is running | `NSRunningApplication.runningApplications(withBundleIdentifier:)`, fetched once per refresh and already fetched, to bind live hooks to one Desktop process lifetime | `LiveCodexMonitorService.desktopProcessIdentifier()` |
+| Claude Code | At least one active session | `claude agents --json` through `ClaudeCodeSessionListing.liveSessions()`. With no app to ask, the session list is the presence signal | `ClaudeCodeSessionRegistry.swift` |
 
-`ClaudeCodeSessionRegistry` 自己的契约就是这里需要的那条界线：它的输出无论会话正在处理还是空闲都逐字节相同——它回答「有哪些会话」，Turn reducer 回答「它们在做什么」。**在场画出矩阵，reducer 点亮它**，两者不得重新合并。
+`ClaudeCodeSessionRegistry`'s own contract is exactly the line needed here: its output is byte-identical whether a session is working or idle — it answers which sessions exist, and the Turn reducer answers what they are doing. **Presence draws the matrix and the reducer lights it**, and the two must not be recombined.
 
-`Connected` 继承 tech-design 已经为 `Idle` 写下的规则：只有当前态来源确认集合确实为空时，空集合才能被读成「没有东西在工作」，绝不能在看不见时这样读；否则 `Connected` 就成了新的谎言。
+`Connected` inherits the rule already written for `Idle`: an empty set may be read as "nothing is working" only when a current-state source confirms it really is empty, and never while we cannot see — otherwise `Connected` becomes the new lie.
 
-有一处不对称值得刻意保留：Codex 的在场在本应用启动的瞬间就可知，它的处理轮次不可知（产品刻意不显示启动前的任何东西）。因此刚启动的应用可以诚实地为 Codex 显示 `Connected`，而此时它对工作还一无所知——这比今天显示一片空白严格更好。
+One asymmetry is deliberately kept: Codex's presence is knowable the instant this app launches while its Turns are not (the product deliberately shows nothing from before launch). So a just-launched app can honestly show `Connected` for Codex while knowing nothing about the work — strictly better than today's blank.
 
-在场的可信度按产品不同，只有 Claude Code 一侧需要额外规则：`NSRunningApplication` 是内核事实，不存在缓存与过期；`claude agents --json` 背后是 `~/.claude/sessions/<pid>.json`，每个会话一个文件，**没有心跳字段，mtime 也不更新**，因此文件本身无法自行过期。两处后果：
+Presence trustworthiness differs per product, and only the Claude Code side needs extra rules: `NSRunningApplication` is a kernel fact with no cache and no staleness, whereas `claude agents --json` is backed by `~/.claude/sessions/<pid>.json`, one file per session, with **no heartbeat field and no mtime update**, so the files cannot expire themselves. Two consequences:
 
-1. **幽灵会话——已实测，官方命令自己做掉了，而且用的正是那条正确的判据。** 被 `SIGKILL` 的会话确实来不及删除自己的文件，所以这个担心是对的；但 `claude agents --json` 并不会列出它。实测 2.1.229：把一个活会话的文件逐字节复制、**只改 `procStart`**，它就从输出里消失；写一个指向活着但不相干进程（`pid 1`）的会话文件，同样消失。也就是说该命令按 `pid` + `procStart` 成对校验——正是这里需要的判据，也正是只查 `kill(pid, 0)` 会被 PID 回收骗过的那一条。
+1. **Ghost sessions — measured, and the official command already handles them, using exactly the right test.** A `SIGKILL`ed session genuinely cannot delete its own file, so the concern was right; but `claude agents --json` does not list it. Measured on 2.1.229: copying a live session's file byte for byte and **changing only `procStart`** makes it vanish from the output, and writing a session file pointing at a live but unrelated process (`pid 1`) does the same. So the command validates `pid` + `procStart` as a pair — the test needed here, and the one a bare `kill(pid, 0)` would be fooled by through PID reuse.
 
-    因此本应用**不重做、也不应重做**这条校验：`--json` 根本不输出 `procStart`，要自己判断就必须改去直接读 `~/.claude/sessions/<pid>.json` 这套私有 schema，等于为了复制一条已经正确的公开实现而登记一项非公开依赖（`AGENTS.md` §8）。结论记在 [`ClaudeCodeSessionRegistry.swift`](../Notchline/Notchline/ClaudeCodeSessionRegistry.swift) 的 `runOfficialCommand` 注释里。
-2. **我们自己的缓存没有上限。** `ClaudeCodeSessionRegistry.refresh()` 在读取失败时返回上一次结果且不更新 `readAt`。这对「行」是对的（一次失败不该退休所有行），但在场现在决定 `Connected` 与 `Disconnected`：只要 `claude` 被卸载或改名，读取会永久失败，而药丸会永远显示 `Connected`。因此「多久重读一次」（`freshness`，`30` 秒）与「陈旧答案还能被相信多久」必须分开，后者建议 `90` 秒（三次连续失败）。
+    This app therefore **does not and should not redo** that check: `--json` does not output `procStart` at all, so judging it ourselves would mean reading the private `~/.claude/sessions/<pid>.json` schema — registering a non-public dependency to duplicate a public implementation that is already correct (`AGENTS.md` §8). The conclusion is recorded on `runOfficialCommand` in [`ClaudeCodeSessionRegistry.swift`](../Notchline/Notchline/ClaudeCodeSessionRegistry.swift).
+2. **Our own cache had no ceiling.** `ClaudeCodeSessionRegistry.refresh()` returns the previous result on a failed read without updating `readAt`. That is right for rows (one failure should not retire them all), but presence now decides `Connected` versus `Disconnected`: once `claude` is uninstalled or renamed the read fails permanently and the pill would show `Connected` forever. So "how often to re-read" (`freshness`, `30` seconds) is separated from "how long a stale answer is still believed" (`90` seconds, three consecutive failures).
 
-超过上限时在场是**未知**，而未知落到 `Disconnected`。按 §6.7 的语义这不是妥协而是字面真相：我们确实没有任何可用的连接。这与 tech-design 为 `Idle` 写下的规则是同一条，只是对称地用在非空集合上。
+Past the ceiling, presence is **unknown**, and unknown falls to `Disconnected`. Under §6.7's semantics that is not a compromise but the literal truth: we have no usable connection at all. It is the same rule written for `Idle`, applied symmetrically to a non-empty set.
 
-### 6.6 已退休的薄层状态
+### 6.6 Retired thin-layer states
 
-| 已退休 | 去处 |
+| Retired | Where it went |
 | --- | --- |
-| 静息的熄灭产品矩阵 | 直接删除。灰槽不指认任何产品 |
-| `Idle` / `No active sessions` | 并入 `Connected`（§6.4） |
-| `Connecting to Codex` | 删除。在场由系统 API 直接回答，没有需要向用户解释的等待 |
-| `Update Codex` | 设置里的产品行，以及用户打开时的展开面板；名字里的产品已去掉，见下 |
-| `Codex version unsupported` | 同上 |
-| `Set up integration` | 引导流程，以及设置里的开关 |
+| The resting extinguished product matrix | Deleted. The grey slot names no product |
+| `Idle` / `No active sessions` | Merged into `Connected` (§6.4) |
+| `Connecting to Codex` | Deleted. Presence is answered directly by a system API, so there is no wait to explain |
+| `Update Codex` | Settings' product rows, and the expanded panel when the user opens it; the product name is gone from it, below |
+| `Codex version unsupported` | As above |
+| `Set up integration` | Onboarding, and the settings switch |
 
-`Codex disconnected` 不退休，而是被重新定义为 `Disconnected`，见 §6.7。薄层 `520 × 94` 只保留给展开面板。
+`Codex disconnected` is not retired but redefined as `Disconnected`, §6.7. The thin layer is kept for the expanded panel only, and its height is composed (§3.3), not the `520 × 94` this section used to quote.
 
-**去处保留，但去到那里的句子不再指名产品。** `Connecting to [产品]`、`Update [产品]`、`[产品] version unsupported`、`[产品] disconnected` 四句一律改为 `Connecting`、`Update required`、`Version unsupported`、`Disconnected`：**哪个**产品不健康是设置窗口的事，那里逐行列着每个产品和它自己的状态，刘海不必替它说。这条同时了结了展开面板的按产品定宽（§3.3）——最宽的整句从 `Claude Code version unsupported` 变成 `Version unsupported`，单侧收窄 `79.55`。
+**The destinations remain, but the sentences reaching them no longer name a product.** `Connecting to [product]`, `Update [product]`, `[product] version unsupported` and `[product] disconnected` all become `Connecting`, `Update required`, `Version unsupported` and `Disconnected`: **which** product is unhealthy is the settings window's job, where each product is listed with its own status, and the notch need not say it for them. This also closes the expanded panel's per-product width fold (§3.3) — the longest sentence goes from `Claude Code version unsupported` to `Version unsupported`, narrowing one side by `79.55`.
 
-### 6.7 `Disconnected` 的定义
+### 6.7 What `Disconnected` means
 
-在场与可观察性现在是两件独立的事实，因此可以互相矛盾。「打开了但监视不到」是普通的首次运行，而不是边缘情况：两个产品的 hook 注册都由用户在设置里拨一下开关才发生（[ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)），所以一台刚装好的机器上，产品开着而这里够不着它是常态。~~此前这句的理由是 Claude Code 的注册留给用户自己粘贴（ADR 0010）；写入能力收回来之后理由变了，结论一个字没动。~~两个状态必须覆盖它，且不能变成三个。
+Presence and observability are now independent facts and can therefore contradict each other. "Open but unobservable" is an ordinary first run rather than an edge case: both products' hook registration happens only once the user flips a switch in settings ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)), so on a freshly set-up machine the product being open while this app cannot reach it is the norm. ~~That sentence used to be justified by Claude Code's registration being left for the user to paste (ADR 0010); with writing taken back the justification changed and the conclusion did not.~~ Two states must cover it without becoming three.
 
-**已定：`Disconnected` 的含义是「没有任何编码智能体处于已连接状态」，而不是「没有任何编码智能体打开」。** 这一行改动买到很多：智能体已打开却不可达时状态仍然为真；不需要第三个状态；而且这个词终于名副其实——你不会与一个从未打开的东西断开，但与一个打开了却够不着的东西确实是断开的。原因写在设置里，hover 展开距离它只有一个动作。
+**Decided: `Disconnected` means "no coding agent is connected", not "no coding agent is open".** That one change buys a lot: the status stays true when an agent is open but unreachable; no third state is needed; and the word finally means what it says — you cannot be disconnected from something never opened, but you certainly are from something opened and out of reach. The reason lives in Settings, one hover-expansion away.
 
-失去观察是**过渡而不是状态**：矩阵先落到各自的熄灭色（保留色相，因而看得出是哪个产品暗了），行随之排空，随后整体落到 `Disconnected`。
+Losing observation is a **transition, not a state**: each matrix first falls to its own extinguished colour (keeping its hue, so it is visible which product went dark), the rows drain after it, and only then does the whole fall to `Disconnected`.
 
-### 6.8 已知代价与未决
+### 6.8 Known costs and open items
 
-已定：`Disconnected` 的语义（§6.7）、灰色取最暗（§6.4）、单产品工作集合共用一个宽度（§6.4）。
+Settled: `Disconnected`'s semantics (§6.7), grey being the darkest value (§6.4), and one shared width across the single-product working set (§6.4).
 
-**`Connecting` 算不算已连接：已定为不算。** §6.5 说刚启动的应用可以诚实地为 Codex 显示 `Connected`，§6.7 说「打开了但监视不到」读作 `Disconnected`；App Server 尚在连接的那几秒同时落在两句话之间。取「不算」，因为 §6.7 的定义是字面的——观察契约还没建立，就还没连上——而且反过来做等于在没有证据时报告一个业务状态，正是 `AGENTS.md` §6.2 禁止的猜测。代价接近于零：有刘海形态静息时本来就什么都不画，所以正在连接的产品是「还没有标记」而不是「一个错的标记」，标记随契约一起到达。§6.5 那段不对称仍然成立，它讲的是轮次不可知而非连接未建立。
+**Whether `Connecting` counts as connected: decided, it does not.** §6.5 says a just-launched app can honestly show `Connected` for Codex, and §6.7 says "open but unobservable" reads as `Disconnected`; the seconds while the App Server is still connecting fall between those sentences. "Does not count" is taken, because §6.7's definition is literal — the observation contract is not yet established, so nothing is connected — and the reverse would report a business state with no evidence, exactly the guess `AGENTS.md` §6.2 forbids. The cost is near zero: the notched form draws nothing at rest anyway, so a connecting product is "no mark yet" rather than "a wrong mark", and the mark arrives with the contract. §6.5's asymmetry still holds; it is about Turns being unknowable, not about a connection not yet made.
 
-剩下三条：
+Three remain:
 
-- **`Disconnected` 这个词本身。** 它现在指认的是一次真实的连接失败，反对意见因此弱了很多；但它仍然是新用户在「一切正常、只是还没打开任何东西」时读到的第一句话。备选 `No agents`、`Nothing running`，上屏后再判断。
-- **有刘海形态在静息时没有任何绘制**，因此 `Disconnected` 是一个只在无刘海形态与 hover 时可见的状态名；两种形态第一次在「系统状态是否可见」上产生差异，而不只是画法不同。
-- **已死会话会占住一个槽。** `SIGKILL` 不报告任何东西，因此在场必须校正而不只是订阅（§6.5）。
+- **The word `Disconnected` itself.** It now names a real connection failure, so the objection is much weaker; but it is still the first sentence a new user reads when everything is fine and they simply have not opened anything. Alternatives `No agents` and `Nothing running`, to be judged on screen.
+- **The notched form draws nothing at rest**, so `Disconnected` is a status name visible only in the notch-less form and on hover — the first time the two forms differ in whether a system status is visible at all, rather than merely in treatment.
+- **A dead session holds a slot.** `SIGKILL` reports nothing, so presence must be corrected rather than merely subscribed to (§6.5).
 
-## 7. 首次安装引导
+## 7. First-run onboarding
 
-现行设计是 `08 — Onboarding` 上的 `First run — one window`（`750:2`），**一个 `580` 宽的窗口**，浅色与深色是同一批节点。`232:95` 的三窗口流程保留为 v1 参考，不再是验收对象。
+The current design is `First run — one window` (`750:2`) on `08 — Onboarding`, **one `580`-wide window**, with light and dark as one set of nodes. `232:95`'s three-window flow is kept as a v1 reference and is no longer an acceptance target.
 
-三个窗口各自只承载一个决定：价值、同意、确认。但同意就是那个开关，确认就是那一行变绿——另外两个窗口是围着两个控件说的话。合成一页之后，腾出的位置留给了这个流程从来没讲过的东西：刘海到底画了什么。
+Each of the three windows carried one decision: value, consent, confirmation. But consent *is* the switch and confirmation *is* that row turning green — the other two windows were words around two controls. Merged onto one page, the space freed goes to something this flow never explained: what the notch is actually drawing.
 
-窗口用的是设置窗口的全部形状（§8.0：`22` 组间距、`8` 组标题到卡片、卡片圆角 `12`、行内边距 `14 × 11`、胶囊按钮），因为它**就会变成**设置窗口——同一个 scene 在 `hasCompletedOnboarding` 前后分别显示 `OnboardingView` 与 `AppSettingsView`，第二次打开时不该有任何东西移动过位置。标题栏写 `Welcome to Notchline`，内容区不再有第二个标题。
+The window uses the settings window's whole shape (§8.0: `22` group spacing, `8` from group title to card, `12` card corner, `14 × 11` row padding, capsule buttons), because it **becomes** the settings window — the same scene shows `OnboardingView` before `hasCompletedOnboarding` and `AppSettingsView` after, and nothing should have moved by the second opening. The title bar reads `Welcome to Notchline`, and the content area has no second heading.
 
-自上而下：
+Top to bottom:
 
-1. **Hero**：应用图标 `52` 加一句话，不重复窗口标题。
-2. **`Connect your agents`**：`ProductConnectionRows`——与设置窗口**同一个视图**，不是它的副本。**两行各一个 switch**（[ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)）；~~此前是 Codex 一个 switch、Claude Code 一个 `Set Up…`，两行并排正是 ADR 0010 的不对称唯一被看见的地方~~——那处不对称已经没有了。脚注写清两个开关写进 `~/.codex/hooks.json` 与 `~/.claude/settings.json` 的定义可逆、不动用户自己的设置与 hooks，并写明改动任一文件之前会先在同目录复制出一份 `.notchline-backup` 副本；尾部是 `Recheck`：Codex 那个开关打开还不是终点，它按定义在文件里的位置记信任，要用户在 `/hooks` 里信任之后跑过一轮，那一行才会说 `Connected`。Claude Code 没有这一步。
-3. **`Reading the notch`**：五个规格件加五个状态名，**没有解释句**——一个叫 `Running` 的状态不需要一句话说明有一轮正在跑。规格件按 `PanelMetrics.statusMatrixSize`（`16.6`）画在一小块黑底上，是实物而不是示意图，并且**是活的**：轨道是 render server 上的图层动画，`Connected` 自己就不动（它的 state 没有 period）。
-4. **颜色键**：两个单色规格件加两个产品名，落在与上面四列相同的栅格上。
+1. **Hero**: the `52` app icon and one sentence, not repeating the window title.
+2. **`Connect your agents`**: `ProductConnectionRows` — the **same view** as the settings window, not a copy. **A switch on each of the two rows** ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)); ~~previously a switch for Codex and a `Set Up…` for Claude Code, the two rows side by side being the only place ADR 0010's asymmetry was visible~~ — that asymmetry is gone. The footnote states that both switches write reversible definitions into `~/.codex/hooks.json` and `~/.claude/settings.json`, touch neither the user's own settings nor their hooks, and copy either file beside itself as a `.notchline-backup` before changing it; the trailing control is `Recheck`, because turning the Codex switch on is not the end — Codex keys trust to a definition's position in the file, so the user must trust it under `/hooks` and run a Turn before that row says `Connected`. Claude Code has no such step.
+3. **`Reading the notch`**: five swatches and five status names, **with no explanatory sentences** — a status called `Running` does not need a sentence saying a Turn is running. Swatches are drawn at `PanelMetrics.statusMatrixSize` (`16.6`) on a small black ground, the real thing rather than a diagram, and **they are live**: the tracks are layer animations on the render server, and `Connected` simply does not move (its state has no period).
+4. **A colour key**: two single-colour swatches and two product names, on the same grid as the row above.
 
-**规格件按 mark 的对角线切成两色**（Codex 在上、Claude Code 在下），这是引导独有的画法：刘海上每个矩阵只属于一个产品，因为色相正是用来分辨两个矩阵的。切开是为了让一行五个讲完五种画法，而不是两行十个——那会说成图案随产品而变，而它并不变。实现见 `NotchPalette.MatrixSplit` 与 `MatrixIndicatorView.trailingHalf`；接缝方向由 `theSplitMatrixCutsOnTheSameDiagonalAsTheMark` 锁定。它此前是 `isFlipped` 唯一的证人（旧的四种图案上下都对称），现在不是了——四种画法里有三种不对称，见 §4.1。
+**The swatches are split along the mark's diagonal into two colours** (Codex above, Claude Code below), a treatment unique to onboarding: each matrix on the notch belongs to one product, since hue is exactly what distinguishes two matrices. Splitting lets one row of five explain five treatments rather than two rows of ten, which would imply the pattern varies by product when it does not. Implementation in `NotchPalette.MatrixSplit` and `MatrixIndicatorView.trailingHalf`; the seam direction is pinned by `theSplitMatrixCutsOnTheSameDiagonalAsTheMark`. It used to be `isFlipped`'s only witness (the four old patterns were vertically symmetric) and is not any more — three of the four new treatments are asymmetric, §4.1.
 
-窗口不请求辅助功能或屏幕录制，也不承诺静默绕过 Codex 信任。底部一行是那句只读声明加主按钮 `Start`，**不设门槛**：一个产品都没连也可以进去，刘海会照实说 `Disconnected`。
+The window requests neither Accessibility nor Screen Recording, and promises no silent bypass of Codex's trust step. The bottom row is that read-only statement plus the primary `Start` button, **with no gate**: it can be entered with no product connected at all, and the notch will honestly say `Disconnected`.
 
-## 8. 设置
+## 8. Settings
 
-现行设计是 `09 — Settings` 上的 `609:2`（`Settings — redesigned for macOS 26`），按 macOS 26 视觉语言重做，包含浅色与深色两个完整窗口，以及预览关闭状态的两个局部切片。`233:3` 与 `591:2` 保留为 v1 参考，不再是验收对象。
+The current design is `609:2` (`Settings — redesigned for macOS 26`) on `09 — Settings`, rebuilt in the macOS 26 visual language, with complete light and dark windows plus two partial slices of the previews-off state. `233:3` and `591:2` are kept as v1 references and are no longer acceptance targets.
 
-### 8.0 窗口结构
+### 8.0 Window structure
 
-设置窗口是**单面板，没有侧边栏**。V1 只有三个已确认分组，用一个只有一项的 source list 承载它们，等于宣告一套并不存在的导航，还逼内容区重复一个 `General` 大标题。窗口标题因此按 HIG 写作 `Codex in Notch Settings`，内容区不再有第二个标题。
+The settings window is a **single panel with no sidebar**. V1 has three confirmed groups, and carrying them in a one-item source list declares a navigation that does not exist while forcing the content area to repeat a `General` heading. The window title is therefore `Notchline Settings` per the HIG, with no second heading in the content area.
 
-| 项目 | 值 |
+| Item | Value |
 | --- | --- |
-| 窗口宽度 | `580`（与 Onboarding 窗口同宽） |
-| 窗口圆角 | `26` |
-| 标题栏 | 高 `52`，与窗口同色；内容滚动到其下方之前不画分隔线 |
-| 交通灯 | 直径 `12`，间距 `20`，`x = 20` |
-| 内容边距 | 左右 `24`，上 `20`，下 `22` |
-| 分组间距 | `22`；组标题与卡片之间 `8` |
-| 卡片 | 圆角 `12`，1px hairline 描边，极轻投影 |
-| 行内边距 | 左右 `14`，上下 `11`；主标签与说明行间距 `2` |
-| Switch | `38 × 22`，滑块 `18` |
-| 按钮与弹出菜单 | 胶囊圆角；弹出菜单尾部是强调色 `18 × 18` 双箭头 chip |
+| Window width | `580` (same as the onboarding window) |
+| Window corner | `26` |
+| Title bar | `52` tall, the window's own colour; no separator until content scrolls beneath it |
+| Traffic lights | `12` diameter, `20` apart, `x = 20` |
+| Content margins | `24` sides, `20` top, `22` bottom |
+| Group spacing | `22`; `8` from group title to card |
+| Card | `12` corner, 1px hairline stroke, very light shadow |
+| Row padding | `14` sides, `11` top and bottom; `2` between the main label and its caption |
+| Switch | `38 × 22`, knob `18` |
+| Buttons and pop-ups | Capsule corners; a pop-up ends in an accent `18 × 18` double-chevron chip |
 
-板上三个分组自上而下是 `Products`、`Session list`、`Privacy`；实现现在是 `Products`、`Display`、`Session list` —— `Privacy` 已删除（§8.3），`Display` 板上没有（§8.4）。每个分组的形状都是「小标题 + 一张圆角卡片 + 卡片下方的脚注文字」。脚注取代了 v1 的蓝色提示条——macOS 用脚注而不是色块陈述后果，色块在原生窗口里只会读作一个没人点得动的控件。
+The board's three groups top to bottom are `Products`, `Session list` and `Privacy`; the implementation has `Products`, `Display` and `Session list` — `Privacy` is deleted (§8.3) and `Display` is not on the board (§8.4). Each group is "a small heading, one rounded card, and footnote text beneath the card". The footnote replaces v1's blue hint bar — macOS states consequences in a footnote rather than a colour block, and a colour block in a native window only reads as a control nobody can press.
 
-窗口最后一行是 `closing note`：左边是那句只读声明，右边是胶囊按钮 `Quit Codex in Notch`。它与 `Recheck` 同形不是巧合——两者都是「说明文字尾部挂一个它所说的那个动作」。退出不属于任何一个分组：它不是一项设置，而它要收走的那个组件也没有自己的窗口可关，Settings 是唯一能承载它的界面。这一行不加内缩（分组脚注的 `2 pt` 左内缩只属于分组），因此它与三个组标题落在同一条竖线上。
+The window's last row is the `closing note`: the read-only statement on the left and the capsule `Quit Notchline` on the right. Sharing a shape with `Recheck` is no accident — both are "explanatory text with the action it describes on the end". Quitting belongs to no group: it is not a setting, and the component it takes away has no window of its own to close, so Settings is the only interface that can carry it. This row takes no indent (the group footnotes' `2 pt` left indent belongs to the groups), so it sits on the same vertical line as the three group titles.
 
-所有主标签共用同一左缩进：产品行的绿色状态点移到说明行行首，而不是站在产品名左边，因此三张卡片的标题列在同一条竖线上。
+Every main label shares one left indent: a product row's green status dot moves to the start of its caption rather than standing left of the product name, so all three cards' title columns align.
 
-浅色与深色是**同一批节点**：颜色全部绑定到两模式集合 `Color / macOS Window`（`Light` / `Dark`），深色窗口是浅色窗口的 clone 加一次 mode override。改一次颜色两边同时生效，不存在两套值漂移的可能。实现侧对应 [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift) 的 `MacOSWindowColor`：每个 token 是一个 `NSColor(name:dynamicProvider:)`，一次声明同时回答两种外观，这是两模式集合在代码里的等价物。状态点例外，取系统色 —— `status/green` 的两个值本来就是 `systemGreen` 的两个值，用系统色还能跟随「增强对比度」。
+Light and dark are **one set of nodes**: every colour binds to the two-mode `Color / macOS Window` set, and the dark window is a clone of the light one plus a mode override. Changing a colour once changes both, and two sets of values cannot drift apart. The implementation counterpart is `MacOSWindowColor` in [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift): each token is an `NSColor(name:dynamicProvider:)`, one declaration answering both appearances, the code equivalent of a two-mode set. The status dot is the exception and takes the system colour — `status/green`'s two values are already `systemGreen`'s two, and the system colour also follows Increase Contrast.
 
-**标题栏按 macOS 自己的样子渲染，不按本表这一行。** 板上的标题栏与窗口同色、高 `52`、不画分隔线；SwiftUI 持有 scene 窗口的标题栏并在每次布局重新应用自己的配置，`titlebarAppearsTransparent`、`backgroundColor`、`titlebarSeparatorStyle` 与 `.fullSizeContentView` 实测全部无效。剩下的做法是 `.hiddenTitleBar` 加自绘 `52` 色带与居中标题——那会让「用原生控件而不是它们的近似物」这个论点里最显眼的一块变成唯一的近似物。因此标题栏保持系统材质，`52` 是板上的排版约定而不是验收项。
+**The title bar renders as macOS's own, not as this table's row.** The board's title bar is the window's colour, `52` tall, with no separator; SwiftUI owns the scene window's title bar and re-applies its own configuration on every layout, and `titlebarAppearsTransparent`, `backgroundColor`, `titlebarSeparatorStyle` and `.fullSizeContentView` all measurably have no effect. What remains is `.hiddenTitleBar` plus a self-drawn `52` band and centred title — which would make the most conspicuous part of "use real controls, not approximations of them" the one approximation. So the title bar keeps the system material, and `52` is a board typography convention rather than an acceptance item.
 
-**窗口如何出现：永远在最前，居中落在 Notchline 所在的那块屏幕上。** 板上没有这一条，它是交互而不是版面，写在这里因为它决定用户第一眼在哪看到这扇窗。本应用唯一常驻的界面在刘海里，所以打开 Settings 的请求几乎总是在别的应用处于前台时发出——SwiftUI 只把窗口排到本应用之内，从外面看就是「点了齿轮什么也没发生」。因此打开时先激活应用，再把窗口排到最前。落点取**组件此刻所在的那块显示器**（`Show Notchline on` 选中的那块，按标识符而不是按 frame 匹配到 `NSScreen`），而不是持有键盘焦点的那块：这扇窗改的每一样东西都只在刘海里看得见，其中一项就是「刘海在哪块屏」；而且它是一个在排窗过程中不会变的答案，焦点那块屏从来不是——晚一步问，答案就是 Settings 自己那块屏，等于把问题重述一遍。**每次打开都放一次**，不再只在跨屏时放：横向居中、余量的三分之一留在上方，也就是 macOS 自己居中窗口的落点；代价是用户自己拖过的位置会被覆盖，这是明知而选的一边。选中的那块屏此刻不存在（刚被拔掉，store 还没跟上）时退到 `NSScreen.main`。**摆放永远发生在窗口还看不见的时候**：视图刚进入窗口时摆一次（早于 SwiftUI 把它排上屏），窗口每次被隐藏时再摆一次，于是下一次出现的第一帧就在正确位置；摆在出现之后就是用户看到的那一下闪。窗口留在别的 Space 时取到当前 Space，而不是把用户送过去。实现见 [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift) 的 `SettingsWindowPresenter` 与 `SettingsWindowPlacement`。
+**How the window appears: always frontmost, centred on the display Notchline is on.** This is not on the board because it is interaction rather than layout, and it is recorded here because it decides where the user first sees this window. This app's only permanent interface is in the notch, so a request to open Settings almost always comes while another app is frontmost — and SwiftUI only orders the window within this app, so from outside, clicking the gear appears to do nothing. Opening therefore activates the app first and then orders the window to the front. It lands on **the display the component is currently on** (the one selected in `Show Notchline on`, matched to an `NSScreen` by identifier rather than frame) rather than the one holding keyboard focus: everything this window changes is visible only in the notch, one of those things being which screen the notch is on; and it is an answer that cannot change during window ordering, which the focused screen never is — asked a step late, the answer is Settings' own screen, which merely restates the question. **It is placed on every open**, no longer only when the screen changes: horizontally centred with a third of the slack above, which is where macOS centres windows itself; the cost is overriding a position the user dragged, knowingly chosen. If the selected screen does not exist at that moment (just unplugged, with the store not yet caught up) it falls back to `NSScreen.main`. **Placement always happens while the window is invisible**: once as the view enters the window (before SwiftUI orders it on screen) and again every time the window is hidden, so the next appearance is correct on its first frame; placing it after it appears is the flash the user sees. If it is on another Space it is brought to the current one rather than sending the user there. Implementation: `SettingsWindowPresenter` and `SettingsWindowPlacement` in [`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift).
 
 ### 8.1 Products
 
-`Codex Desktop` 与 `Claude Code` 是同一张卡片里的两行，不是两个分组。加入第三个产品的代价是一行，而不是一个新面板。
+`Codex Desktop` and `Claude Code` are two rows in one card, not two groups. A third product costs a row, not a new panel.
 
-- 每行左侧是产品名，说明行以状态点开头，写连接结论与能力信息（`Connected · compatible version`、`Connected · hooks installed`）。
-- **说明行下面还可以再有一行，写该产品自己报出的失败，板上没有，这是实现与板不一致的第三处。** 例如 `Ignored 2 hook payloads that could not be read.`、`Claude Code is not running the PreToolUse hook, so Input needed and Approval needed cannot be shown.` 它**只在有话说的时候出现**：一行为了不存在的失败常驻的空行，读起来就像那个失败正在发生。这一行是本窗口里唯一为「报告失败」而存在的东西——集成失败在本产品里天然安静，界面会照旧写着 `Connected`——所以它按本次运行累计、而不是报一次就清（[`PRD.md`](PRD.md) 第 12 节、CR-029）。它与 `Quota reading transcripts` 那一行的「卡片会自己长出一行」是同一个代价，区别在于这一行长出来的时候，用户正需要它。
-- Codex 行右侧是一个原生 macOS switch，启停该产品所需的 lifecycle event 定义；切换进行中 disabled。
-- **Claude Code 行也是一个 switch，实现与板上的双 switch 就此对上了。** ~~此前那一行没有 switch：ADR 0010 决定本应用永不写 `~/.claude/settings.json`，于是它的尾部是胶囊按钮 `Set Up…`，展开卡片内的粘贴路径、JSON 片段、`Copy` 与 `Reveal Settings File`；两行并排是那处不对称唯一被看见的地方。~~ [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md) 把写入能力收了回来，粘贴卡片、片段与两个按钮一并删除。板上原本注为「若日后恢复写入能力」的那个形态，就是现在的实现。
-- 卡片下方脚注说明每个开关只安装 Notchline 需要的定义（Codex **七项**），关闭时移除，用户其他设置与 hooks 不受影响，并写明改动任一文件之前会先把它复制到同目录，副本名是原文件名加 `.notchline-backup`。此前这里只写了 Claude Code 那一份，而 Codex 那份副本一直在写；~~再之前是把 `hooks.json.notchline-backup` 与 `settings.json.notchline-backup` 两个全名都列出来~~——两个全名念的是同一条规则的两个实例，却占掉脚注一半的长度，全名留在 [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)。这里此前写的是「六项」，与实现不符：`CodexHookVocabulary.managedDefinitions` 当时注册的是 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`Stop` 五项，`SessionEnd` 是**故意不注册**的；加入 `SubagentStart` 与 `SubagentStop` 之后是七项。Claude Code 那边是十三项：`Notification` 的类型实测完毕后已退掉注册（CC-011），`SessionEnd` 同样故意不注册，而 `SubagentStart` 与 `SubagentStop` 在那边也注册——它的 `Agent` 调用同样会留下活得比轮次更久的子智能体。
-- **卡片里还多一行 `Quota reading transcripts`，板上没有，这是实现与板不一致的第二处。** 读取 Claude Code 额度的每一次调用都是一个真实会话，因而在 Claude Code 自己的 project 目录里留下一份约 `3 KB` 的 transcript，没有任何东西会清掉它们。这一行报出它们的总大小（`43.2 MB`），尾部是文件夹图标按钮 `Show in Finder`（见下一条）。**只报大小，不报个数。** 曾经写作 `43.2 MB · 1,284 files`，而个数那一半回答的是没人会问的问题：这一行存在是为了让人判断这堆残留值不值得去清，散落在多少个文件里并不改变那个判断；真想数的人离那个目录只有一个按钮。
-  **这一行从第一次刷新起就在，哪怕那时还没有数字可写。** 那个目录不是推导出来的而是找出来的——要等一次额度读取跑完（几秒的子进程）才知道它在哪。在此之前这一行原本根本不存在，于是卡片会在用户刚把窗口打开时自己长出一行来。现在改为把状态画出来：数字的位置写 `Calculating…`，`Show in Finder` 同时置灰（此刻它没有地方可去，一个揭示不了任何东西的按钮比一个明显还没准备好的按钮更糟）；读取落地后换成数字并恢复可点。读取已经跑完却仍未找到目录——机器上没有 `claude` 就是这种情况——写 `Unavailable` 而不是继续写 `Calculating…`：后者是一句关于正在进行的工作的话，而那件工作已经结束了（CC-020）。
-  **只报不删，这是决定而不是省事。** Claude Code 给 project 目录起名的规则未公开，且压平分隔符与空格后并非一一对应（实测 `…/a b` 与 `…/a-b` 同属一个目录），因此那个目录里可能同时躺着用户真实项目的会话记录。把数字摆在用户眼前、并把门打开，比替他们删要正确。这一行与 `Display` 分组同类：既有行为在新形状里的安置，不是往设置里塞新功能。
-- **卡片里三行各有一个 `Show in Finder`，是一个文件夹图标而不是一行字，板上没有，这是实现与板不一致的第四处。** 每一行都在讲磁盘上的一个地方：两个产品行讲的是各自 hooks 注册所在的那个文件（`~/.codex/hooks.json`、`~/.claude/settings.json`），`Quota reading transcripts` 讲的是额度读取留下 transcript 的那个目录。点下去打开那个文件所在的文件夹，并在里面选中它。
-  **图标而不是胶囊按钮，理由是数量。** 这个动作原本只有 transcripts 那一行有，写作胶囊按钮 `Reveal in Finder`；三行都有之后，同一句话在一张卡片里竖着写三遍，而且就压在每个产品行真正要讲的那个开关旁边。图标用四分之一的宽度承载同一个动作，句子搬进 tooltip（`Show in Finder`）。**它同时是无障碍标签**：按钮由 `Label` 加 `.iconOnly` 画出而不是一个裸 `Image`，因此 VoiceOver 念的是 `Show in Finder`，不是某个 SF Symbol 的名字。
-  **不画边框，鼠标移上去才有底。** 符号按 `12 × 12` 量着画（实测落在 `12 × 9.5`，第二个数是文件夹自身的长宽比装进方框的结果），点击区 `22 × 22`（那是点击区不是画面：按图形自身尺寸取点击区，就成了一个要瞄准的东西）。**「`12` 号字」与「`12` 点大的图标」不是一回事**：SF Symbol 写 `.system(size: 12)` 是让它跟 `12` 号**正文**并排时协调，`folder` 在那个配置下实测 `17 × 13`；因此这里用 `resizable` 把字形自身的框缩进 `12 × 12`，写下的数字就是屏幕上的尺寸，底是圆角 `5` 的一块，浅色 `black 7%`、深色 `white 10%`，只在 hover 时出现；置灰时连 hover 底也不给——按不动的东西不该在指针下亮起来。围着一个符号画一圈胶囊，等于在开关旁边再立一个形状与它争这一行的主控件位置；不画边框，它就读作它本来的样子——一个通往别处的入口，而「可以按」这件事在有人问的那一刻（指针移上去）才回答。
-  **位置在每一行的最后，开关之后。** 三行都以它收尾，因此三个图标落在同一条尾缘上、竖成一列——这只有在它后面不再有别的东西时才成立。~~此前放在开关之前，理由是「开关该留在尾缘」；代价是 transcripts 那一行没有开关，它的图标落在尾缘上，三个图标站在两个横坐标上。~~ 那一处不齐换成了「开关不在尾缘」：开关因此整体内移一个固定步长，仍然自成一列，而一个连边框都不画的符号不会被读成这一行的主控件。三个同类图标对不齐，比开关离尾缘一段距离更显眼。
-  **文件可能根本不存在，而那是常态不是错误。** `~/.codex/hooks.json` 与 `~/.claude/settings.json` 都要等有人（本应用或用户）往里写过东西才存在，因此开关从没打开过的那一行指着的是一个末端没有文件的路径，而 `activateFileViewerSelecting` 对这种路径什么也不做、且不出声。于是：文件在就选中它，文件不在就打开本该装着它的那个文件夹，两者都不在才置灰——置灰的判据仍然是「有没有地方可去」这一个来源，与 transcripts 那一行同一条规则（CC-020）。
-- `Recheck` 是脚注行尾部的胶囊按钮，重新检测能力。
-- Off 后保持 Settings 可达；再次 On 安装或修复完整集合。首次安装或定义变化后的 `/hooks` 信任仍由 Codex 处理。
+- Each row has the product name on the left and a caption beginning with a status dot, stating the connection conclusion and capability (`Connected · compatible version`, `Connected · hooks installed`).
+- **Beneath that caption there can be one more line, carrying failures that product reported itself — not on the board, the third divergence.** For example `Ignored 2 hook payloads that could not be read.` or `Claude Code is not running the PreToolUse hook, so Input needed and Approval needed cannot be shown.` It **appears only when there is something to say**: a permanent empty line for a failure that is not happening reads as though it is. This line is the only thing in this window that exists to report failure — integration failure in this product is naturally silent and the interface goes on saying `Connected` — so it accumulates for the run rather than reporting once and clearing ([`PRD.md`](PRD.md) §12, CR-029). It costs the same as the `Quota reading transcripts` row's "the card grows a line by itself", with the difference that when this line grows, the user needs it.
+- The Codex row's trailing control is a native macOS switch that starts and stops that product's required lifecycle event definitions, disabled while a change is in flight.
+- **The Claude Code row is a switch too, so the implementation and the board's two switches now agree.** ~~That row previously had no switch: ADR 0010 decided this app would never write `~/.claude/settings.json`, so it ended in the capsule `Set Up…` opening an in-card paste path with a JSON snippet, `Copy` and `Reveal Settings File`; the two rows side by side were the only visible sign of that asymmetry.~~ [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md) took writing back, and the paste card, snippet and two buttons are deleted. The form the board annotated as "if writing is ever restored" is the current implementation.
+- The card's footnote explains that each switch installs only the definitions Notchline needs, removes them when off, and leaves the user's other settings and hooks untouched, and states that either file is copied beside itself as a `.notchline-backup` before any change. It previously named only the Claude Code copy while the Codex one was already being written; ~~before that it listed both `hooks.json.notchline-backup` and `settings.json.notchline-backup` in full~~ — two full names state two instances of one rule while taking half the footnote, so the full names live in [ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md). **The definition counts are deliberately not restated here**: this line has read six, five, eleven and twelve at various times, always one event behind the code. Count them in `HookIntegration.swift`'s two `managedDefinitions`; `SessionEnd` is deliberately unregistered on both sides, and `Notification` was withdrawn on the Claude Code side after its types were measured (CC-011).
+- **The card also holds a `Quota reading transcripts` row, not on the board, the second divergence.** Every Claude Code quota read is a real session and therefore leaves an approximately `3 KB` transcript in Claude Code's own project directory, which nothing ever cleans. This row reports their total size (`43.2 MB`), ending in a folder icon button (below). **Size only, never a file count.** It once read `43.2 MB · 1,284 files`, and the count half answers a question nobody asks: this row exists so someone can judge whether the leftovers are worth clearing, and how many files they are spread across does not change that judgement; anyone who really wants to count is one button from the directory.
+  **The row is present from the first refresh, even with no number to write.** That directory is found rather than derived — it takes a completed quota read (a subprocess of a few seconds) to know where it is. Before that the row simply did not exist, so the card grew a line by itself just as the user opened the window. It now draws the state instead: `Calculating…` where the number goes, with `Show in Finder` disabled (it has nowhere to go, and a button that reveals nothing is worse than one plainly not ready); once the read lands it becomes the number and the button is enabled. Where the read has completed and the directory still cannot be found — the case on a machine with no `claude` — it reads `Unavailable` rather than continuing to say `Calculating…`, which is a statement about work in progress that has already finished (CC-020).
+  **Report, never delete — a decision, not laziness.** Claude Code's project-directory naming rule is undocumented and is not injective after flattening separators and spaces (measured, `…/a b` and `…/a-b` share one directory), so that directory may also hold the user's real session history. Putting the number in front of the user and opening the door is more correct than deleting for them. This row is the same kind of thing as the `Display` group: existing behaviour given a place in the new shape, not a new feature pushed into settings.
+- **All three rows carry a `Show in Finder` — a folder icon rather than a line of text, not on the board, the fourth divergence.** Each row is about a place on disk: the two product rows about the file holding their hooks registration (`~/.codex/hooks.json`, `~/.claude/settings.json`), and `Quota reading transcripts` about the directory the quota reads leave transcripts in. Pressing it opens the containing folder and selects the file.
+  **An icon rather than a capsule button, because of the count.** The action was originally only on the transcripts row, written as the capsule `Reveal in Finder`; with all three rows carrying it, the same sentence appears three times down one card, pressed right against the switch each product row is really about. The icon carries the same action in a quarter of the width, with the sentence moved into a tooltip (`Show in Finder`). **It is also the accessibility label**: the button is drawn as a `Label` with `.iconOnly` rather than a bare `Image`, so VoiceOver reads `Show in Finder` rather than an SF Symbol's name.
+  **No border, and a ground only under the pointer.** The symbol is drawn measured at `12 × 12` (landing at `12 × 9.5`, the second number being the folder's own aspect fitted into that box), with a `22 × 22` hit area (that is the hit area, not the picture: taking the hit area from the graphic's own size makes it something to aim at). **"12-point type" and "a 12-point icon" are not the same thing**: writing `.system(size: 12)` on an SF Symbol makes it sit well beside `12`-point *body text*, and `folder` measures `17 × 13` in that configuration; so `resizable` fits the glyph's own box into `12 × 12` and the number written is the size on screen. The ground is a `5`-corner patch, `black 7%` in light and `white 10%` in dark, appearing only on hover; when disabled there is no hover ground either — something that cannot be pressed should not light up under the pointer. Drawing a capsule around a symbol erects a second shape beside the switch competing to be the row's main control; with no border it reads as what it is, a way through to somewhere else, and "you can press this" is answered at the moment someone asks (the pointer arriving).
+  **It goes last in each row, after the switch.** All three rows end with it, so the three icons sit on one trailing edge in a column — which only holds if nothing follows them. ~~It was previously before the switch, on the grounds that the switch belongs on the trailing edge; the cost was that the transcripts row has no switch, so its icon sat on the trailing edge and the three icons stood at two different x positions.~~ That misalignment was traded for "the switch is not on the trailing edge": the switch moves inwards by a fixed step and still forms its own column, and a symbol with no border is not read as the row's main control. Three matching icons failing to align is more conspicuous than a switch standing off the trailing edge.
+  **The file may not exist at all, and that is normal rather than an error.** Both `~/.codex/hooks.json` and `~/.claude/settings.json` exist only once someone (this app or the user) has written to them, so a row whose switch was never turned on points at a path with no file at the end, and `activateFileViewerSelecting` does nothing for such a path, silently. So: select the file if it is there, open the folder that should contain it if it is not, and disable only when neither exists — the disabled test still coming from one source, "is there anywhere to go", the same rule as the transcripts row (CC-020).
+- `Recheck` is the capsule at the end of the footnote row, re-detecting capability.
+- Settings stays reachable after switching off; switching on again installs or repairs the complete set. The `/hooks` trust step after a first install or a changed definition is still Codex's.
 
 ### 8.2 Session list
 
-弹出菜单 `Distinguish products`，值为 `Name and colour`（默认）／`Name only`／`Badge`／`Colour bar`，语义见 [`dual-agent-design.md`](dual-agent-design.md) §6。脚注说明它只在两个产品都已连接时有效果（不要求两个产品此刻都有会话，见 [`dual-agent-design.md`](dual-agent-design.md) §4）；单产品时该项仍然可见但无效果，隐藏它会让用户恰好在准备接入第二个产品时找不到它。
+The `Distinguish products` pop-up, valued `Name and colour` (default) / `Name only` / `Badge` / `Colour bar`, with semantics in [`dual-agent-design.md`](dual-agent-design.md) §4. The footnote explains it takes effect only while both products are connected (not requiring both to have threads right now, [`dual-agent-design.md`](dual-agent-design.md) §4); with one product it stays visible but has no effect, since hiding it would make it unfindable exactly when a user is preparing to connect a second product.
 
-**卡片只有这一行。** ~~卡片里还有第二行 `Clear the session list`，尾部胶囊按钮 `Clear`，列表为空时 disabled。它在 v1 是 Codex 卡片里的一枚破坏性按钮；产品分组现在只讲产品，而这个动作的对象是会话列表，它属于这里。板上没有这一行，因为板只画了三个已确认的**设置**，而这是一个动作。~~ 在终态行上右键移除单行（§17）之后这一行被删掉，**功能本身也一并删除，而不是只把入口撤走**（`tech-design.md` §16.2 记了删掉的符号）：两者本就共用同一份移除记录，而右键是在用户看着那一行的时候给出的；一个设置窗口里的「全清」要先把窗口打开，然后对一批用户此刻没有在看的行动手，其中可能有一行是他还没读的答案。卡片因此回到板上的形状——只有 `Distinguish products` 一行。
+**The card has only this row.** ~~It also held `Clear the session list` with a trailing capsule `Clear`, disabled with an empty list. In v1 that was a destructive button inside the Codex card; the product group now discusses products only, and this action's object is the session list, so it belonged here. It was not on the board, because the board drew three confirmed settings and this is an action.~~ It was deleted once right-click removal of a single terminal row existed, and **the feature itself was deleted rather than merely its entry point** (`tech-design.md` §16.2 records the removed symbols): the two always shared one removal record, and a right-click is given while the user is looking at that row, whereas a clear-all in a settings window has to be opened first and then acts on a set of rows the user is not looking at, one of which may be an answer they have not read.
 
-### 8.3 Privacy（已删除）
+### 8.3 Privacy (deleted)
 
-板上有这一组，实现里没有。`Show current content previews` 唯一的用途是兑现一条已经作废的隐私承诺（[`PRD.md`](PRD.md) 第 7 节），开关、`PrivacySettings` 与 `privacySafeTitle` 回退一并删除，窗口因此少一组。板上保留为历史形态。
+The board has this group and the implementation does not. `Show current content previews` existed only to honour a privacy promise that is now void ([`PRD.md`](PRD.md) §7), and the switch, `PrivacySettings` and the `privacySafeTitle` fallback are deleted with it, leaving the window one group shorter. Kept on the board as a historical form.
 
 ### 8.4 Display
 
-板上没有这一组，实现里有，位置在 `Products` 与 `Session list` 之间。卡片里现在是三行。
+Not on the board, present in the implementation, between `Products` and `Session list`. The card now holds three rows.
 
-`Show Codex in Notch on` 是一个已经存在的控件：组件只出现在一台显示器上，由用户选定，说明行报出该显示器的形态与真实菜单栏高度（`Notch display · 39 pt menu bar`）。删掉它会拿走一个真实功能，所以它按同一形状留下——小标题、一张卡片。**没有脚注**：~~脚注写的是「组件占用所选显示器的菜单栏，并随之取得它的几何——一处要绕开的缺口，或者没有缺口时的一枚胶囊」。~~两行的说明行都已经就当前选中的那台显示器报出了结论——形态与菜单栏高度，以及为什么这块屏上收不起翼，脚注只是把同一件事抽象地再说一遍。
+`Show Notchline on` is an existing control: the component appears on one display, chosen by the user, with the caption reporting that display's form and real menu-bar height (`Notch display · 39 pt menu bar`). Deleting it would take away a real feature, so it keeps the same shape — a small heading and one card. **No footnote**: ~~the footnote used to say the component occupies the selected display's menu bar and takes its geometry from it, a cut-out to work around or a pill where there is none.~~ Both rows' captions already report the conclusion for the currently selected display — its form, its menu-bar height, and why the wings cannot be hidden on this screen — and the footnote only restated the same thing abstractly.
 
 #### `Hide the wings`
 
-| 标签 | `Hide the wings` |
+| Label | `Hide the wings` |
 | --- | --- |
-| 控件 | 原生 macOS switch，默认 off，跨启动记忆（`hidesCompactWings`） |
-| 说明（有刘海） | `Collapsed, Notchline is the cut-out and nothing else — no marks and no timer. Hovering still opens the panel.` |
-| 说明（无刘海，置灰） | `Needs a notched display. Without a cut-out to hide behind there would be nothing left to hover.` |
-| 说明（有刘海但量不出，置灰） | `This display reports a notch but not where it is, so there is nothing to shrink the collapsed component onto.` |
+| Control | Native macOS switch, default off, remembered across launches (`hidesCompactWings`) |
+| Caption (notched) | `Collapsed, Notchline is the cut-out and nothing else — no marks and no timer. Hovering still opens the panel.` |
+| Caption (notch-less, disabled) | `Needs a notched display. Without a cut-out to hide behind there would be nothing left to hover.` |
+| Caption (notched but unmeasurable, disabled) | `This display reports a notch but not where it is, so there is nothing to shrink the collapsed component onto.` |
 
-收起态因此只剩刘海本身：两侧的翼都不画，前导侧没有矩阵，尾侧没有计时，面板本体宽度正好等于遮挡宽度、尾边落在刘海右边缘上。这**不是一个新形态**：§6.4 的「有刘海、静息、什么都不画」画的就是它，这一项只是把那个形态从「没有产品连接时」推广到任何时候。
+The collapsed state is then the notch alone: neither wing is drawn, no matrix leading and no timer trailing, with the panel body's width exactly the occlusion width and its trailing edge on the cut-out's right edge. This **is not a new form**: §6.4's "notched, resting, draws nothing" is that form, and this preference merely generalises it from "no product connected" to any time.
 
-**只作用于收起态。** hover 照常落下面板，面板照常带着矩阵、会话行与齿轮。刘海是本产品唯一的入口——没有菜单栏项，也没有 Dock 图标（[`PRD.md`](PRD.md) 第 11 节）——把它一起收掉就等于把应用藏死了。
+**It affects the collapsed state only.** Hover still drops the panel, with its matrices, session rows and gear. The notch is this product's only entry point — no menu bar item, no Dock icon ([`PRD.md`](PRD.md) §11) — so hiding it too would hide the app for good.
 
-**可用的条件是「量得出的刘海」，不是「报得出的刘海」。** 收起翼意味着把面板本体缩到硬件自己的那个形状上，因此本应用必须确切知道那个形状在哪、有多宽——屏幕上不再有第二样东西可以用来定位它。两种显示器因此不满足条件，理由是同一条说两遍：
+**The condition is a *measurable* notch, not a *reported* one.** Hiding the wings means shrinking the panel body onto the hardware's own shape, so this app must know exactly where and how wide that shape is — nothing else on screen can locate it. Two kinds of display therefore fail the condition, for one reason stated twice:
 
-- **无刘海屏**：根本没有那个形状。收起药丸会把它在菜单栏里的位置一起带走，而且屏幕上不再有任何形状可供 hover。
-- **报了刘海却量不出遮挡宽度的屏**：那个形状本应用定位不了。它本来就因为这一条被当作**模拟刘海**布局（§6.4 与 `PanelMetrics.size`），再往一个宽度读作 `0` 的缺口上缩，得到的是一块零宽面板——什么都不画，也没有东西可以 hover。
+- **A notch-less screen**: there is no such shape. Collapsing the pill would take its menu-bar position with it, leaving no shape on screen to hover.
+- **A screen reporting a notch with no occlusion width**: this app cannot locate that shape. It is already treated as a **simulated notch** layout for exactly that reason (§6.4 and `PanelMetrics.size`), and shrinking onto a cut-out whose width reads `0` yields a zero-width panel — nothing drawn, and nothing to hover.
 
-**两种情况都置灰而不是隐藏，而且偏好本身不清空。** 隐藏的代价写在 §8.2 同一条论证里：只在有刘海时才出现的开关，恰好在用户刚把外接显示器插上、正想找它的那一刻不见了。置灰的行还照旧说明它会做什么、以及为什么这块屏上做不到——**两种原因分开写**，不并成一句关于缺口的话：内建屏报了刘海却定位不了，与外接显示器根本没有刘海，是两种处境，而在一台 MacBook 上看到 `Needs a notched display` 底下压着一个灰开关，用户只会得出「这应用坏了」。偏好属于用户而不属于此刻插着哪块屏，因此换屏只置灰，换回来即恢复。
+**Both are disabled rather than hidden, and the preference is not cleared.** The cost of hiding is the same argument as §8.2's: a switch that appears only on a notched display vanishes exactly as the user plugs in an external display and goes looking for it. A disabled row still explains what it would do and why this screen cannot — **with the two reasons written separately** rather than merged into one sentence about cut-outs: a built-in screen that reports a notch it cannot locate and an external display with no notch at all are different situations, and seeing `Needs a notched display` under a greyed switch on a MacBook only tells the user the app is broken. The preference belongs to the user rather than to whichever screen is plugged in, so changing screens only disables it and changing back restores it.
 
 #### `Outline the panel`
 
-| 标签 | `Outline the panel` |
+| Label | `Outline the panel` |
 | --- | --- |
-| 控件 | 原生 macOS switch，默认 off，跨启动记忆（`drawsSurfaceOutline`） |
-| 说明 | `A hairline edge, for dark wallpapers.` |
-| tooltip | `Traces the sides and lower corners in a grey just off Notchline's own black, collapsed and expanded alike.` |
+| Control | Native macOS switch, default off, remembered across launches (`drawsSurfaceOutline`) |
+| Caption | `A hairline edge, for dark wallpapers.` |
+| Tooltip | `Traces the sides and lower corners in a grey just off Notchline's own black, collapsed and expanded alike.` |
 
-沿 `PanelContour` 画一条 `0.8pt` 细线，**收起态与展开态一视同仁**——理由是面板背后的壁纸，而壁纸不会因为 hover 而改变。`0.8pt` 不落在像素边界上：2x 下它盖住一个像素再多半个，因此这条线是带抗锯齿的、不是硬边。这是要的样子而不是疏忽——一条硬的单像素线读作「画了一道边框」，糊一点才读作「这块黑到此为止」。
+A `0.8 pt` line along `PanelContour`, **applied identically collapsed and expanded** — the reason is the wallpaper behind the panel, and a wallpaper does not change on hover. `0.8 pt` does not land on the pixel grid: at 2x it covers one pixel and half of its neighbour, so the line is antialiased rather than hard. That is the intent rather than an oversight — a hard single-pixel line reads as "a border has been drawn", while a softer one reads as "this black ends here".
 
-**颜色是推导出来的，不是挑出来的：Running 计时那档灰的四分之三**（`#5D5D60`，`NotchPalette.surfaceEdge` = `label × 0.75`）。这个系数是看出来的：`× 0.5`（`#3E3E40`）在只是偏暗、并非纯黑的壁纸上几乎看不见，不调暗又读作一个记号，现取两者的中点。推导而不是新写一个值，是为了让这条边不可能漂出自己的色相——它用的仍是这块表面最暗的文字用的那个中性灰，只是一路调暗到不再像一个记号、而像一条边界为止。**边不是信息**：它存在只是为了让这块黑在暗壁纸上还有个形状，因此它应该压在所有承载状态的记号**之下**，而不是与其中最暗的那个并排。
+**The colour is derived rather than chosen: three-quarters of the Running timer's grey** (`#5D5D60`, `NotchPalette.surfaceEdge` = `label × 0.75`). The coefficient was judged by eye: `× 0.5` (`#3E3E40`) is nearly invisible on a wallpaper that is merely dark rather than black, while undimmed it reads as a mark, so the midpoint is taken. Deriving rather than writing a new value keeps this edge from drifting out of its own hue — it is still the neutral grey the darkest text on this surface uses, dimmed until it stops reading as a mark and starts reading as a boundary. **An edge is not information**: it exists only so this black still has a shape on a dark wallpaper, so it should sit **beneath** every mark that carries state rather than beside the dimmest of them.
 
-**描在轮廓内侧，不是骑在轮廓上。** 实现是「按两倍宽度描边，再用同一条路径裁回去」：`PanelContour` 的下沿正好落在面板自己的边界上，而 overlay 又裁到那个边界，居中描边会被裁掉外侧一半——下沿只剩半条，与两侧竖边不等粗。宽度是常数而不是菜单栏高度的比例：两个圆角跟着硬件的形状走，而一条边界没有理由因为菜单栏变高就变粗。
+**Stroked inside the contour, not straddling it.** The implementation strokes at double width and clips back with the same path: `PanelContour`'s bottom edge lands exactly on the panel's own boundary and the overlay clips to that boundary, so a centred stroke would lose its outer half and leave the bottom edge half as thick as the vertical sides. The width is a constant rather than a ratio of the menu-bar height: the two corner radii follow the hardware's shape, while a boundary has no reason to thicken because the menu bar got taller.
 
-**最上沿不画。** 那条边不是这块面板的，是屏幕的：面板从显示器最顶上挂下来，沿着它画一条线，读起来是「菜单栏上方横了一道」而不是「底下这个东西的边界」。因此描线取的是一条**开口路径**——从右上角起，走完肩、竖边与下圆角，到左上角止，两端与顶齐平地截断（`PanelContour.spansTopEdge`，填充与裁剪仍用闭合的那条）。描出来的是两侧的肩、两条竖边与两个下圆角。
+**The top edge is not drawn.** That edge is not the panel's but the screen's: the panel hangs from the very top of the display, and a line along it reads as "a rule above the menu bar" rather than "the boundary of the thing beneath". So the stroke takes an **open path** — from the top-right corner, through the shoulder, vertical edge and lower corner, ending at the top-left, truncated flush with the top at both ends (`PanelContour.spansTopEdge`, with fill and clipping still using the closed path). What is traced is the two shoulders, the two vertical edges and the two lower corners.
 
-**任何显示器都可用，不置灰。** 与 `Hide the wings` 相反：那一项要求一个量得出的缺口，而这一项只要求有一条边——有刘海没刘海、收起展开，都有。
+**Available on every display, never disabled.** The opposite of `Hide the wings`: that needs a measurable cut-out, while this needs only an edge — and there is one notched or not, collapsed or expanded.
 
-**唯一不画的场合是 `Hide the wings` 已经生效的收起态。** 那一形态的面板本体正好等于遮挡宽度，整条轮廓上还落在亮处的只剩两侧的肩，描出来就是刘海两边各挂一枚灰钩子——偏偏是那个「什么标记都不画」才是全部意义的形态。所以两项偏好不打架：那一形态在屏幕上时描线让位，hover 落下的面板有自己的边，描线随之回来（`MonitorStore.showsSurfaceOutline`，由 `theOutlineIsRememberedAndStandsDownOnlyForTheHiddenCompactSurface` 锁定）。
+**The one case it is not drawn is the collapsed state with `Hide the wings` already in effect.** That form's panel body is exactly the occlusion width, so all that remains lit on the outline is the two shoulders, tracing as two grey hooks either side of the notch — in the very form whose entire point is drawing no mark at all. So the two preferences do not fight: while that form is on screen the stroke stands down, and the panel dropped on hover has its own edge, so the stroke returns with it (`MonitorStore.showsSurfaceOutline`, pinned by `theOutlineIsRememberedAndStandsDownOnlyForTheHiddenCompactSurface`).
 
-这不是「加入尚未确认的功能」的例外：下面那条禁止的是把没定过的功能塞进设置，而 `Show Codex in Notch on` 是既有功能在新形状里的安置，`Hide the wings` 与 `Outline the panel` 是同一张卡片上就近增加的两项显示偏好——它们不新增任何被监视的对象，也不改变任何状态判定，只决定这块表面画多少。板与窗口的差异记在这里，等板更新时一起消掉。
+This is not an exception to "do not add unconfirmed features": the rule below forbids pushing undecided features into settings, whereas `Show Notchline on` is existing behaviour given a place in the new shape, and `Hide the wings` and `Outline the panel` are two display preferences added alongside it on the same card — they add no monitored object and change no status decision, deciding only how much of this surface is drawn. Divergences between board and window are recorded here to be resolved when the board is updated.
 
-不在 V1 设置画板中加入登录启动、动画、通知、模型选择或其他尚未确认的功能。
+Do not add login items, animation, notification, model selection or other unconfirmed features to the V1 settings board.
 
-## 9. 交互
+## 9. Interaction
 
-### 9.1 展开/收起
+### 9.1 Expand / collapse
 
-- Hover intent 参考 `150 ms`。
-- 展开参考 `180–220 ms`。
-- 鼠标离开后参考 `250 ms` 收起。
-- Escape 立即收起。
-- 所有中间帧保持相同 `maxY`。水平方向上，展开态与无刘海形态保持相同 `midX`；带刘海的收起态锚定缺口右缘（§3.4）。
-- Reduce Motion 下使用短淡入淡出，不使用明显弹簧或缩放。
+- Hover intent, reference `150 ms`.
+- Expansion, reference `180–220 ms`.
+- Collapse `250 ms` after the pointer leaves.
+- Escape collapses immediately.
+- Every intermediate frame keeps the same `maxY`. Horizontally, the expanded and notch-less forms keep the same `midX`, while the notched collapsed form anchors to the cut-out's right edge (§3.4).
+- Reduce Motion uses a short cross-fade, never a visible spring or scale.
 
-#### 状态名在两种形态之间的交接
+#### Handing the status name between the two forms
 
-收起时状态名同时换字与换宽：`Approval needed` → `Approval`、`Input needed` → `Input`、`Update required` → `Update`。两件事必须走同一条曲线。字先换、宽后收，短字形就会被拉伸到旧读数的宽度再挤回自己——字形层原先按 `bounds` 定框，而 `CALayer` 的 `contentsGravity` 默认就是拉伸。
+Collapsing changes the word and the width at once: `Approval needed` → `Approval`, `Input needed` → `Input`, `Update required` → `Update`. Both must run on one curve. Change the word first and narrow after, and the short glyphs are stretched to the old reading's width and squeezed back — the glyph layer was framed by `bounds`, and `CALayer`'s `contentsGravity` stretches by default.
 
-约定：
+The conventions:
 
-- 字形永远按**自己的光栅尺寸**定框，左对齐、垂直居中。被动画的只有它外面的视图，视图对字形做裁剪；被裁掉的部分正是那句「所有中间帧保持相同 `maxY`」在水平方向上的对应物。
-- 旧读数留在新读数**之上**淡出，时长与曲线与面板一致（`PanelMotion`：`200 ms` / `cubic-bezier(0.22, 1, 0.36, 1)`，Reduce Motion 为 `80 ms`）。收起时被丢掉的那个词就在关闭的边缘下淡出，而不是凭空消失。
-- **一个读数是另一个的前缀时，新读数不淡入。** 共有的字形是同一批像素、同一个位置，再叠一层淡入只会让一个从没动过的词暗下去一趟（合成后最低约 75%）。只有两个真正不同的读数（`Running` → `Approval`）才双向交叉淡化。
-- Reduce Motion 缩短这次交接而不是取消它：该设置要免掉的是位移，淡化正是用来替代位移的那个东西——面板还在收、字却已经硬切，并不是更安静的做法。
-- 计时读数与会话行正文**不参与**交接：它们按自己的节奏整帧替换，替换频率高于淡化时长时叠加起来会糊成一片（见 `system-architecture.md` 第 6 节）。
+- Glyphs are always framed at **their own raster size**, leading-aligned and vertically centred. Only the view around them is animated, and the view clips the glyphs; what is clipped is the horizontal counterpart of "every intermediate frame keeps the same `maxY`".
+- The old reading fades out **above** the new one, at the panel's own duration and curve (`PanelMotion`: `200 ms` / `cubic-bezier(0.22, 1, 0.36, 1)`, `80 ms` under Reduce Motion). The word being dropped fades out under the closing edge rather than vanishing.
+- **When one reading is a prefix of the other, the new one does not fade in.** The shared glyphs are the same pixels in the same place, and another fade layer only dims a word that never moved (about 75% at the composite minimum). Only genuinely different readings (`Running` → `Approval`) cross-fade both ways.
+- Reduce Motion shortens this handover rather than cancelling it: what that setting removes is displacement, and the fade is what replaces displacement — the panel still closing while the word hard-cuts is not the quieter option.
+- The timer reading and session row body text **do not take part**: they are replaced whole-frame on their own cadence, and overlapping fades at a rate faster than the fade duration smear (see `system-architecture.md` §6).
 
-### 9.2 会话点击
+### 9.2 Clicking a session
 
-- 点击成功进入相同 Desktop Thread 并收起 Panel。
-- Notch 点击本身不改变已读；等待 Desktop 蓝点消失事件。
-- 导航失败时 Panel 与行保持，不把打开首页当作成功。
-- 会话行不提供批准、回答、取消或归档操作。
-- **终态行右键即移除该行**，不弹菜单、不做二次确认：面板在指针离开后就收起，一个只有一项的菜单要用第二次点击去换一个不删除任何东西的动作。其余三态不装这个响应，因此右键落空而不是落在一个决定什么都不做的处理器上。板上没有这一条，因为它没有可画的形态。
+- A successful click reaches the same Desktop thread and collapses the panel.
+- A Notch click never changes read state; it waits for the blue dot to disappear.
+- On a failed navigation the panel and the row stay, and opening a home page is never counted as success.
+- Session rows offer no approve, answer, cancel or archive action.
+- **A right-click on a terminal row removes it**, with no menu and no confirmation: the panel collapses as soon as the pointer leaves, and a one-item menu would spend a second click on an action that deletes nothing. The other three statuses install no such response, so a right-click falls through rather than landing on a handler that decides to do nothing. Not on the board, because it has no form to draw.
 
-## 10. 无障碍
+## 10. Accessibility
 
-- 所有状态必须有文字或可访问名称，不能只依赖颜色。
-- 系统级状态与四个会话级状态使用不同文案与语义。
-- 长状态名称在带刘海 Expanded 几何中必须完整可读。
-- Reduce Motion 不影响状态可理解性。
+- Every status must have text or an accessible name, never colour alone.
+- System-level and the four session-level statuses use distinct copy and semantics.
+- Long status names must be fully readable in the notched expanded geometry.
+- Reduce Motion must not affect the comprehensibility of any status.
 
-旁白示例：
+Spoken examples:
 
 ```text
-Codex，三个当前轮次，状态需要输入，额度剩余百分之七十二
-确认未读生命周期，Project Codex in Notch，需要输入
-等待审批，Chats，需要批准
+Notchline, three current Turns, status input needed, quota 72 percent remaining
+Confirm the unread lifecycle, Project Notchline, input needed
+Awaiting approval, Chats, approval needed
 ```
 
-**子智能体 badge 与会话计数点都不能只靠颜色说话。** badge 的数字读得出来，但「底色翻了」读不出来，所以它的朗读文案把状态补成词：一行是 `3 subagents, waiting for you`（`MonitoredSession.spokenSubagentSummary`），收起态还要指名产品，因为两枚并排只靠墨色分辨——`Codex 3 subagents, Claude Code 4 subagents, waiting for you`（`MonitorStore.spokenRunningSubagentText`）。两处的 badge 视图本身都是 `accessibilityHidden`，由包着它的行或顶栏统一说出来，避免同一个数字被读两遍。会话计数点目前不单独朗读：它数的是列表里有几行，而列表本身就在下面逐行读得到。
+**Neither the subagent badge nor the session-count dots may speak through colour alone.** The badge's number can be read, but "the ground inverted" cannot, so its spoken copy states the state as a word: a row reads `3 subagents, waiting for you` (`MonitoredSession.spokenSubagentSummary`), and the collapsed state also names the product, because two side by side are told apart only by ink — `Codex 3 subagents, Claude Code 4 subagents, waiting for you` (`MonitorStore.spokenRunningSubagentText`). Both badge views are `accessibilityHidden`, spoken by the row or top bar containing them, so one number is never read twice. The session-count dots are not spoken separately: they count how many rows the list has, and the list itself is read row by row below.
 
-## 11. 验证清单
+## 11. Verification checklist
 
-- [x] 展开宽度 `520`，参考高度 `302`。
-- [x] header 固定参考 `46`，只横向扩张。
-- [x] 三行 `508 × 80` 视口与滚动契约。
-- [x] SF Pro 文件级字体统一。
-- [x] Quota unavailable 局部降级。
-- [x] ~~No active sessions、Connecting、Disconnected、Update、unsupported、setup 薄层。~~ 收敛为 `Disconnected` 与 `Connected` 两个系统状态，见 §6.4 与 §6.6。
-- [x] 收起态在场规则与开合序列（§6.4，`624:1560`）：矩阵随智能体打开与关闭出现和离开，第一个产品接管灰槽。**画法已随 [#35](https://github.com/soondubu137/notchline/issues/35) 落地**：每个已连接产品一个矩阵，各自跑自己的曲线；无产品时一个灰色静息标记；有刘海形态静息时整条前导翼消失。
-- [x] hover 只横向展开药丸、不落下面板；展开尾部为齿轮。**宽度改为按组成计算**，原因见 §6.4 的实现记录。
-- [x] `Disconnected` 按 §6.7 重定义为「没有任何智能体已连接」；灰色取 `#151515`，为界面上最暗值（§6.4）。
-- [x] 无刘海药丸在单产品工作集合内固定为 `196`，双产品 `218`，`Disconnected` 为 `136`；宽度用系统字体本机实测（§6.4）。
-- [ ] 会话行里的 `alpha fade mask` 仍是 `273` 定宽。行从 `472` 一路走到 `508`、内边距又从 `16` 收到 `6` 之后，渐隐的收尾离右缘比原先远了 `56`；遮罩应该跟着行走，或改为距右缘定距。
-- [x] 会话行的边距拆成 `6` 行块缩进 + `6` 行内边距，行内文字因此与状态矩阵、额度规则同落在 `12`（§3.3）；由 `aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel` 锁定。
-- [x] 折叠额度块（[`dual-agent-design.md`](dual-agent-design.md) §5.4，Figma §09）：折叠后页脚 `28`、面板恒为 `520 × 314`；`quota fold` 控件 `16 × 16`，两个状态由同一枚 chevron 旋转 `180°` 得到。**已实现**；点击区就是 chevron 那 `16 × 16`（悬停铺 `12%` 白底、圆角 `4`），状态存于 `quotaFolded`。
-- [x] `Colour bar` 作为第四个 `Distinguish products` 选项（[`dual-agent-design.md`](dual-agent-design.md) §4，Figma §06）：`2` 宽竖条、圆角 `1`，行内 `x = 0`，高度取该行文字的实高（三行 `53`、无预览行 `33`），不再是行高的一半 `40`。**已实现**；`Distinguish products` 弹出菜单现在是四项。画竖条的那一形态里行块缩进为 `12`、行内边距为 `8`（§3.3），竖条因此与状态矩阵、额度规则同落一条边距。
-- [ ] §3.3 的三条 compact 参考基线（`348 × 46`、`168 × 46`、`200 × 46`）在这次改动前就与文件里的组件不一致，本次未一并修正；组件当前是 `237`（刘海静息）、`285`（刘海计时）与 `165`（无刘海）。
-- [ ] `Disconnected` 这个词是否保留（备选 `No agents`、`Nothing running`），上屏后判断。
-- [x] ~~Claude Code 在场的第一条校正：按 `pid` + `procStart` 成对过滤幽灵会话。~~ **实测后撤销：`claude agents --json` 自己就是这么校验的**，而且它不输出 `procStart`，自己重做只能改读私有 schema。见 §6.5。
-- [x] Claude Code 在场的第二条校正：为陈旧缓存设上限（`90` 秒 = 三次连续失败），超过后在场为未知并落到 `Disconnected`。`freshness` 与 `trustCeiling` 现在是两个参数。
-- [x] 首次安装三步流程。
-- [x] Settings 预览 On/Off 与集成管理。
-- [x] Settings 已按 macOS 26 重做为单面板窗口，浅色与深色由 `Color / macOS Window` 的两个 mode 驱动。**实现已落地**（[`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift)），与板不一致之处均已记录：标题栏保持系统材质（§8.0）、Claude Code 行是 `Set Up…` 而不是 switch（§8.1）、Products 卡片多一行 `Quota reading transcripts`（§8.1）、产品行说明行下多一行失败报告（§8.1）、Products 三行各多一个 `Show in Finder` 文件夹图标（§8.1）、多一个 `Display` 分组、且该分组是三行而不是一行（§8.4）、少一个 `Privacy` 分组（§8.3）。~~多一行 `Clear the session list`（§8.2）~~ 这一处已经消掉：那一行被右键移除单行取代后删除。
-- [ ] 在装有 SF Pro 的 Figma 桌面端打开 `609:2`，确认字形正常渲染、多行脚注的换行落位与预期一致。
-- [ ] 同一次打开时，把 `closing note` 的四条 Inter 文字（`665:3`、`665:5`、`667:3`、`667:5`）重新键入为 SF Pro Regular，原因见 §3.1。
-- [x] 会话行已同步 Running／等待人工／Completed 三种计时表现，一行只有一个标记。
-- [x] 那一枚标记改为「读数 + 底座」，三种轮廓：裸读数／白底／暗底，完成行的底座里是这一轮花了多久（§4.7）。**已实现**；由 `aFinishedRowDrawsTheLengthOfTheTurnItRan` 与 `theDimGroundStaysAboveTheRowItIsDrawnOn` 锁定。
-- [x] 正文行探照灯恢复：未完成轮次扫，完成轮次（包括还有子智能体在跑的）不扫，Reduce Motion 下关闭（§4.8）。**已实现**；由 `sessionRowTextSweepsOnlyWhileItsTurnIsUnfinished` 与 `onlyAnUnfinishedTurnSweepsItsBody` 锁定。
-- [x] 收起态读数取同一枚底座，中性不染墨，`8` 永久预留因此翻转不移动任何东西（§6.4）。**已实现**；由 `theCompactReadingReservesItsGroundWhetherOrNotItIsFilled` 锁定。无刘海定宽因此为 `209` / `238` / `136`。
-- [ ] Figma `04 — Session Row`（`112:28`）与 `05 — Panel`（`115:82`）两个组件集尚未回灌页面 `14` 的底座画法；页面上的示范节点是当前事实来源。
-- [x] 子智能体标记收敛为一枚 badge：数字是全部子智能体，底色翻转说有没有在等人；展开行内中性，收起态一个产品一枚各染其墨、Codex 在前（§4.6，[`dual-agent-design.md`](dual-agent-design.md) §10）。由 `theCollapsedBadgesAreOnePerProductInAFixedOrder`、`aWaitingBadgeIsTheSameWidthAsARunningOne` 锁定。
-- [x] 会话计数点画成矩阵右侧一列竖点，一行一点、过三把第三点向下拉长成竖杠；**整列与矩阵等高**，因此在每一档菜单栏上画法相同（[`dual-agent-design.md`](dual-agent-design.md) §11）。由 `theSessionDotColumnIsExactlyAsTallAsTheMatrix` 锁定。
-- [x] 点列按每个产品标记 `+5.66` 预留，静息灰标记没有；前导翼因此是「每个标记数」的一个定值，不随会话数变化。连接但无会话时那一列**不画**，让出来的宽度落在**状态名之后**而不还给面板——静息时一对矩阵之间因此是它们自己的 `6`，状态名与它旁边那枚矩阵之间在任何计数下都是 `12`，而前导的那枚矩阵在任何会话数下都不横移。由 `theSessionDotColumnIsReservedInWidthAndPackedInDrawing`、`theStatusNameKeepsOneDistanceFromTheMarkItNames` 与 `theLeadingMatrixNeverMovesWhateverTheCountsDo` 锁定。~~让出来的宽度落在标记与状态名之间~~ 已作废：两个产品都没有行时那里是 `23.3`，而同一眼里两枚矩阵之间只有 `6`，名字读起来不属于任何东西。~~连接但无会话时画一列空的~~ 已作废：空列把成对的 `6` 撑到 `11.66`，越过了不再读成一对的那条线。~~原画在矩阵下方、宽度全免~~ 已作废：那一处花的是高度，而 `22` 档菜单栏在矩阵下方只剩 `2.7`，比一个点还窄，只能整排省略。
-- [x] 状态矩阵改为 4×4，四条逐格曲线换成 `design/assets/matrix-states/` 里那四个文件（radar／double knock／advance／lull），等待拆成 Input 与 Approval 两种画法，引导那一行随之从四个规格件变成五个（§4.1、§7）。由 `eachStateDrawsThePatternItsDesignFileDraws` 逐格锁定四条轨道与它们的相位。
-- [ ] **外部 Figma 待清理**：`Status Matrix / Codex` 与 `Status Matrix / Claude Code` 两个组件集仍是 3×3、仍只有四个变体（等待共用一个）。下一次同步应按 §4.1 重画为 4×4 并拆出 Input／Approval 两个变体；在完成前以 `design/assets/matrix-states/` 与代码为准。
-- [ ] `12 — Counting: sessions and subagents` 的规范尚未回灌到 `Session Row`（`112:28`）、`Panel`（`115:82`）与 `Status Readout` 这三个跨页组件集；页面上的示范节点是当前事实来源。
-- [ ] 收起态计时变体的文字层改为 hug contents（见 4.6），消除固定文本宽度带来的整体偏宽。
-- [ ] 刘海计时变体中的计时 TEXT 在渲染中不可见（节点数据正确、坐标与实现一致，`24` 高面板中同一文本正常）；需在 Figma 桌面端确认是渲染问题还是文件缺陷。
-- [ ] 外部 Figma 文件中的历史 Runtime Badge 变体已删除；计时不是独立徽标，而是未完成行的唯一状态标记。
-- [x] Usage Ring 已同步为从十二点逆时针增长的暗色消耗弧，并覆盖 `100`、`0` 与 Unavailable 边界。
-- [ ] Panel 外轮廓在 Figma 中仍是单圆角（`38 → 10`、`24 → 6.316`、`19 → 5`），需按 §3.3 改为上下两个半径：肩 `menuBarHeight / 8`、下角 `menuBarHeight / 4`，并覆盖 `38`、`32`、`24`、`22` 四档。**`10 — Double Apps` 已改完**：该页 27 个 `surface / PanelContour` 矢量按 `46` 高菜单栏重绘为肩 `5.75`、下角 `11.5`（顺带修掉了旧路径右下角一个不是正圆弧的控制柄）。剩下 `Panel` 组件集本身（`115:82`）与 §3.3 的响应式示例（`287:8`、`287:12`、`287:16`）——组件集跨页共用，改它会动到其余页面，所以单列。
-- [x] Figma 组件集结构合法，且同步范围内无 Inter、旧尺寸或旧计时文案残留。
-- [ ] 从外部 Figma 删除不属于四态模型的历史会话状态变体。
-- [ ] 不同真实菜单栏高度与至少两种物理刘海设备的原生几何验证。
-- [ ] 真实 Codex 集成事件、Project、未读和精确导航的 Phase 0 能力验证。
+- [x] Expanded width `520`; **height composed as `menuBarHeight + 240 + footer`** (§3.3), not a constant — the `302` this line used to carry predates the footer.
+- [x] Header at the real menu-bar height (`46` reference), growing only horizontally.
+- [x] Three `508 × 80` rows and the scrolling contract.
+- [x] File-wide SF Pro.
+- [x] Quota unavailable as partial degradation.
+- [x] ~~No active sessions, Connecting, Disconnected, Update, unsupported, setup thin layers.~~ Narrowed to the two system states `Disconnected` and `Connected`, §6.4 and §6.6.
+- [x] Collapsed presence rules and the open/close sequence (§6.4, `624:1560`): matrices appear and leave as agents open and close, and the first product takes over the grey slot. **The treatment landed with [#35](https://github.com/soondubu137/notchline/issues/35)**: one matrix per connected product each running its own curve, one grey resting mark when there is none, and the whole leading wing gone at rest in the notched form.
+- [x] Hover expands the pill horizontally only and does not drop the panel, with the gear at the trailing end. **Width is computed by composition**, §6.4's implementation record.
+- [x] `Disconnected` redefined per §6.7 as "no agent is connected"; grey is `#151515`, the darkest value in the interface (§6.4).
+- [x] The notch-less pill is one fixed width across the single-product working set, currently `209`, with two products `238` and `Disconnected` `136` (§6.4) — measured with the system font on this machine. (This line previously carried `196` / `218`, which predate the reading's ground.)
+- [ ] The session row's `alpha fade mask` is still a fixed `273`. After the row went from `472` to `508` and padding narrowed from `16` to `6`, the fade ends `56` further from the right edge than it did; the mask should follow the row, or be measured from the trailing edge.
+- [x] Row margins split into a `6` block gutter plus `6` in-row padding, so in-row text lands at `12` with the status matrix and quota rules (§3.3); pinned by `aRowsTextLandsOnTheSameMarginAsTheRestOfThePanel`.
+- [x] Folding the quota block ([`dual-agent-design.md`](dual-agent-design.md) §5.4, Figma §09): folded footer `28` and panel always `520 × 314`; the control is `16 × 16`, its two states one chevron rotated `180°`. **Implemented**; the hit area is that `16 × 16` (hover lays a `12%` white ground at corner `4`), state in `quotaFolded`.
+- [x] `Colour bar` as the fourth `Distinguish products` option ([`dual-agent-design.md`](dual-agent-design.md) §4, Figma §06): a `2`-wide bar, corner `1`, in-row `x = 0`, height taken from the row's real text height (`53` with three lines, `33` with no preview), no longer half the row height at `40`. **Implemented**; the pop-up now has four items, and in that form the block inset is `12` with `8` in-row padding (§3.3), putting the bar on the same margin as the status matrix and quota rules.
+- [ ] §3.3's compact reference baselines disagreed with the file's components before this change and were not corrected with it; the components are currently `237` (notched resting), `285` (notched with timer) and `165` (notch-less).
+- [ ] Whether the word `Disconnected` is kept (alternatives `No agents`, `Nothing running`), to be judged on screen.
+- [x] ~~First Claude Code presence correction: filter ghost sessions by `pid` + `procStart`.~~ **Withdrawn after measurement: `claude agents --json` validates exactly that itself**, and does not output `procStart`, so redoing it would mean reading a private schema. §6.5.
+- [x] Second Claude Code presence correction: a ceiling on the stale cache (`90` seconds = three consecutive failures), past which presence is unknown and falls to `Disconnected`. `freshness` and `trustCeiling` are now two parameters.
+- [x] The first-run flow.
+- [x] Settings integration management.
+- [x] Settings rebuilt for macOS 26 as a single-panel window, with light and dark driven by `Color / macOS Window`'s two modes. **Implemented** ([`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift)), with every divergence from the board recorded: the title bar keeps the system material (§8.0), the Products card has an extra `Quota reading transcripts` row (§8.1), product rows have an extra failure-report line beneath the caption (§8.1), all three Products rows have a `Show in Finder` folder icon (§8.1), there is an extra `Display` group of three rows rather than one (§8.4), and there is no `Privacy` group (§8.3). ~~An extra `Clear the session list` row (§8.2)~~ is resolved — deleted once right-click removal replaced it. ~~The Claude Code row is `Set Up…` rather than a switch (§8.1)~~ is also resolved: it is a switch, and the board's two switches now match the implementation (ADR 0016).
+- [ ] Open `609:2` in a Figma desktop client with SF Pro and confirm glyphs render and multi-line footnote wrapping lands as expected.
+- [ ] In the same session, re-type the `closing note`'s four Inter texts (`665:3`, `665:5`, `667:3`, `667:5`) as SF Pro Regular, per §3.1.
+- [x] Session rows carry Running / waiting-on-a-person / Completed timer treatments, with one marker per row.
+- [x] That marker is now "a reading plus a ground" in three outlines — bare, white, dark — with the finished row's ground holding how long the Turn took (§4.7). **Implemented**; pinned by `aFinishedRowDrawsTheLengthOfTheTurnItRan` and `theDimGroundStaysAboveTheRowItIsDrawnOn`.
+- [x] The body-line searchlight is restored: unfinished Turns sweep, finished ones (including those with subagents still running) do not, and Reduce Motion turns it off (§4.8). **Implemented**; pinned by `sessionRowTextSweepsOnlyWhileItsTurnIsUnfinished` and `onlyAnUnfinishedTurnSweepsItsBody`.
+- [x] The collapsed reading takes the same ground, neutral and uninked, with its `8` permanently reserved so inverting moves nothing (§6.4). **Implemented**; pinned by `theCompactReadingReservesItsGroundWhetherOrNotItIsFilled`, giving the notch-less fixed widths `209` / `238` / `136`.
+- [ ] Figma `04 — Session Row` (`112:28`) and `05 — Panel` (`115:82`) have not been back-filled with page `14`'s ground treatment; the page's example nodes are the current source of truth.
+- [x] The subagent marker converged to one badge: the number is every subagent and the ground inverts to say whether anything is waiting; neutral in an expanded row, one per product in its own ink when collapsed with Codex first (§4.6, [`dual-agent-design.md`](dual-agent-design.md) §10). Pinned by `theCollapsedBadgesAreOnePerProductInAFixedOrder` and `aWaitingBadgeIsTheSameWidthAsARunningOne`.
+- [x] The session count is drawn as a vertical dot column right of the matrix, one dot per row, the third stretching into a bar past three; **the column is exactly as tall as the matrix**, so it draws identically at every menu-bar height ([`dual-agent-design.md`](dual-agent-design.md) §11). Pinned by `theSessionDotColumnIsExactlyAsTallAsTheMatrix`.
+- [x] The column is reserved at `+5.66` per product mark and absent from the resting grey mark, so the leading wing is a constant per mark count and does not vary with thread count. Connected with no threads **draws no column**, and the width given up lands **after the status name** rather than being returned to the panel — so at rest a matrix pair is its own `6` apart, the status name is `12` from the mark beside it at every count, and the leading matrix never moves horizontally at any thread count. Pinned by `theSessionDotColumnIsReservedInWidthAndPackedInDrawing`, `theStatusNameKeepsOneDistanceFromTheMarkItNames` and `theLeadingMatrixNeverMovesWhateverTheCountsDo`. ~~The width given up lands between the marks and the status name~~ is void: with neither product holding rows that gap was `23.3` while two matrices in the same glance were `6` apart, so the name read as belonging to nothing. ~~Connected with no threads draws an empty column~~ is void: an empty column stretched the paired `6` to `11.66`, past the line where they stop reading as a pair. ~~Originally drawn below the matrix, free in width~~ is void: that spends height, and a `22` menu bar leaves only `2.7` below the matrix, narrower than a dot, forcing the whole row to be omitted.
+- [x] The status matrix is 4×4 on the four per-cell curves in `design/assets/matrix-states/` (radar / double knock / advance / lull), with waiting split into Input and Approval treatments, so onboarding's row goes from four swatches to five (§4.1, §7). Pinned cell by cell, with phases, by `eachStateDrawsThePatternItsDesignFileDraws`.
+- [ ] **External Figma to clean up**: the `Status Matrix / Codex` and `Status Matrix / Claude Code` sets are still 3×3 with four variants (waiting shared). The next sync should redraw them 4×4 per §4.1 and split out Input and Approval; until then `design/assets/matrix-states/` and the code govern.
+- [ ] `12 — Counting: sessions and subagents`'s specification has not been back-filled into the cross-page `Session Row` (`112:28`), `Panel` (`115:82`) and `Status Readout` sets; the page's example nodes are the current source of truth.
+- [ ] Collapsed timer variants' text layers should hug contents (§4.6), removing the overall over-width caused by fixed text widths.
+- [ ] The timer TEXT in the notched timer variant does not render (node data correct, coordinates matching the implementation, and the same text fine in a `24`-tall panel); confirm in a Figma desktop client whether this is a rendering problem or a file defect.
+- [ ] Historical Runtime Badge variants deleted from the external Figma; the timer is not a separate badge but an unfinished row's only status marker.
+- [x] The Usage Ring is synced to a dark consumption arc growing anticlockwise from twelve o'clock, covering the `100`, `0` and Unavailable boundaries.
+- [ ] The panel outline in Figma is still a single radius (`38 → 10`, `24 → 6.316`, `19 → 5`) and needs §3.3's two radii — shoulder `menuBarHeight / 8`, lower corner `menuBarHeight / 4` — across the `38`, `32`, `24` and `22` steps. **`10 — Double Apps` is done**: that page's 27 `surface / PanelContour` vectors are redrawn for a `46` menu bar at shoulder `5.75` and lower corner `11.5` (incidentally fixing a lower-right control handle in the old path that was not a true circular arc). What remains is the `Panel` set itself (`115:82`) and §3.3's responsive examples (`287:8`, `287:12`, `287:16`) — the set is shared across pages, so changing it touches the others, hence listing it separately.
+- [x] Figma component set structure is legal, with no Inter, old sizes or old timer copy left inside the synced scope.
+- [ ] Delete historical session-status variants outside the four-status model from the external Figma.
+- [ ] Native geometry verification at different real menu-bar heights and on at least two physically notched devices.
+- [ ] Phase 0 capability verification of real integration events, Project, unread state and exact navigation.
 
-## 12. 实现映射
+## 12. Implementation mapping
 
-产品与技术行为以 [`PRD.md`](PRD.md)、[`tech-design.md`](tech-design.md)、[`CONTEXT.md`](../CONTEXT.md) 和 [`docs/adr`](adr/) 为准。Figma 节点用于视觉与布局验收，不作为 Codex 协议事实来源。
+Product and technical behaviour are governed by [`PRD.md`](PRD.md), [`tech-design.md`](tech-design.md), [`CONTEXT.md`](../CONTEXT.md) and [`docs/adr`](adr/). Figma nodes are for visual and layout acceptance and are never a source of truth about a product's protocol.
