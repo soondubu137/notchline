@@ -573,6 +573,41 @@ enum PanelMetrics {
     static func sessionDotColumnWidth(matrixSize: CGFloat = statusMatrixSize) -> CGFloat {
         sessionDotGap(matrixSize: matrixSize) + sessionDotDiameter(matrixSize: matrixSize)
     }
+    /// The column room the marks were given and are not drawing into.
+    ///
+    /// ``marksWidth`` gives every mark its column at every session count and
+    /// the drawing packs the empty ones out, so this is the difference between
+    /// the two -- and the only question left is what that slack sits in front
+    /// of. It sits in front of nothing: it falls *past* the status label rather
+    /// than between the label and the marks, so the label keeps one distance
+    /// from the mark it names whatever the counts do.
+    ///
+    /// **Because the label is downstream of a column, and everything
+    /// downstream of a column moves.** Held in front of the label, the
+    /// reservation put `23.3` between the last matrix and a word describing it
+    /// while the pair sat at their own `6` -- the label read as belonging to
+    /// nothing, in the state this surface spends most of its time in, and it
+    /// read that way in every frame of it. Spent past the label instead, the
+    /// gap is `expandedReadoutSpacing` at every count, and the label moves
+    /// `sessionDotColumnWidth` when a column opens ahead of it: the same push
+    /// the marks after that column already take, on the same curve, at the
+    /// moment the dot causing it appears alongside. What must not move is the
+    /// *leading* matrix, and nothing here touches it -- the panel is still
+    /// measured from ``marksWidth``, so its width and both its edges are the
+    /// same as they were.
+    ///
+    /// Takes the marks rather than a count so the readout that draws this and
+    /// the assertion that checks it read the same expression: which marks have
+    /// a column is ``PresenceMark/drawsSessionColumn``'s answer, and the
+    /// resting grey never had one to miss.
+    static func unpackedColumnRoom(
+        _ marks: [PresenceMark],
+        matrixSize: CGFloat = statusMatrixSize
+    ) -> CGFloat {
+        let missing = marks.filter { $0.agent != nil && !$0.drawsSessionColumn }.count
+        return CGFloat(missing) * sessionDotColumnWidth(matrixSize: matrixSize)
+    }
+
     /// How many dots are drawn before the run stops counting exactly.
     ///
     /// Three, because a fourth will not fit beside the matrix without shrinking

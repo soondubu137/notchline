@@ -2022,6 +2022,78 @@ struct NotchlineTests {
         // to save a gap that reads there as spacing before a label.
     }
 
+    /// The status name keeps one distance from the mark it names.
+    ///
+    /// The reservation has to be spent somewhere, and where it is spent is the
+    /// whole of this: in front of the label it put `23.3` between the last
+    /// matrix and the word describing it while the pair beside it sat at their
+    /// own `6`, permanently and in the state this surface is in most of the
+    /// time. Past the label it costs the label a push when a column opens ahead
+    /// of it -- the same push every mark after that column already takes.
+    @Test @MainActor
+    func theStatusNameKeepsOneDistanceFromTheMarkItNames() {
+        let column = PanelMetrics.sessionDotColumnWidth()
+        let gap = PanelMetrics.expandedReadoutSpacing
+
+        func marks(_ counts: [Int]) -> [PresenceMark] {
+            counts.enumerated().map { index, count in
+                PresenceMark(
+                    agent: AgentKind.allCases[index],
+                    status: .running,
+                    sessionCount: count
+                )
+            }
+        }
+        /// Where the label starts, measured from the panel's leading edge: the
+        /// inset, the room the marks actually draw into, and the one gap.
+        func labelOrigin(_ marks: [PresenceMark]) -> CGFloat {
+            PanelMetrics.expandedHorizontalPadding
+                + PanelMetrics.marksWidth(marks.count)
+                - PanelMetrics.unpackedColumnRoom(marks)
+                + gap
+        }
+
+        // Every product mark missing its column contributes one column's room.
+        #expect(PanelMetrics.unpackedColumnRoom(marks([0, 0])) == 2 * column)
+        #expect(PanelMetrics.unpackedColumnRoom(marks([1, 0])) == column)
+        #expect(PanelMetrics.unpackedColumnRoom(marks([0, 1])) == column)
+        #expect(PanelMetrics.unpackedColumnRoom(marks([1, 4])) == 0)
+        // The resting grey has no product behind it and so no column to miss.
+        #expect(
+            PanelMetrics.unpackedColumnRoom([PresenceMark(agent: nil, status: .disconnected)])
+                == 0
+        )
+
+        // The label sits one `expandedReadoutSpacing` past whatever the marks
+        // last drew -- which is the matrix itself when that product has no
+        // rows, and its column when it has.
+        #expect(abs(labelOrigin(marks([0, 0])) - (12 + (2 * 16.6 + 6) + gap)) < 0.001)
+        #expect(abs(labelOrigin(marks([0, 0])) - 63.2) < 0.001)
+        // It moves by exactly one column when one opens ahead of it, and by
+        // both when both do. Held still, it was at `74.5` in all three.
+        #expect(abs(labelOrigin(marks([1, 0])) - labelOrigin(marks([0, 0])) - column) < 0.001)
+        #expect(abs(labelOrigin(marks([1, 1])) - labelOrigin(marks([0, 0])) - 2 * column) < 0.001)
+        #expect(abs(labelOrigin(marks([1, 1])) - 74.5) < 0.05)
+        // Past the dash cap it stops moving: the column is one width at every
+        // count above zero.
+        #expect(labelOrigin(marks([4, 9])) == labelOrigin(marks([1, 1])))
+
+        // And none of it reaches the panel. The reservation is the same number
+        // it always was -- the packed marks and this slack are the two halves
+        // of it -- so no width and neither edge answers to a session count.
+        for counts in [[0, 0], [1, 0], [0, 1], [2, 3], [9, 9]] {
+            let drawn = PanelMetrics.marksWidth(counts.count)
+                - PanelMetrics.unpackedColumnRoom(marks(counts))
+            #expect(
+                abs(
+                    drawn + PanelMetrics.unpackedColumnRoom(marks(counts))
+                        - PanelMetrics.marksWidth(counts.count)
+                ) < 0.001
+            )
+            #expect(drawn <= PanelMetrics.marksWidth(counts.count))
+        }
+    }
+
     /// The leading matrix stands in one place, whatever the counts do.
     ///
     /// This is the whole reason the column is reserved rather than packed out

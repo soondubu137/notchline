@@ -365,22 +365,16 @@ private struct StatusReadout: View {
                         }
                     }
                 }
-                // **The anchor.** The marks are given the room every column
-                // would take and packed into it from the leading edge, so the
-                // first matrix stands in one place whatever the counts do: a
-                // column opening pushes only the marks after it, and the last
-                // mark's column pushes nothing. What is left over falls here,
-                // at the trailing end -- against the cut-out on a notched
-                // display, before the label on a pill -- rather than between
-                // two marks that have to read as a pair.
-                //
-                // This is `PanelMetrics.marksWidth`, the same expression the
-                // panel is measured from (``MonitorStore/currentPanelSize``),
-                // so the room reserved and the room drawn into cannot drift.
-                .frame(width: reservedMarksWidth, alignment: .leading)
             }
 
             if showsText {
+                // **The label rides with the marks.** It is downstream of every
+                // column, and everything downstream of a column moves when that
+                // column opens -- so it takes the same push the marks after it
+                // take, on the same curve, and keeps one distance from the mark
+                // it names at every session count. Held still instead, it sat
+                // `23.3` from the last matrix while the pair sat at their own
+                // `6`, and read as belonging to nothing.
                 SearchlightLabel(
                     text: text,
                     isSweeping: isActive && !reduceMotion,
@@ -389,19 +383,34 @@ private struct StatusReadout: View {
             }
         }
         .fixedSize(horizontal: true, vertical: false)
+        // **The reservation, spent past the label rather than in front of it.**
+        // The marks are given the room every column would take
+        // (``PanelMetrics/marksWidth``, the same expression the panel is
+        // measured from) and pack into it from the leading edge, so the first
+        // matrix stands in one place whatever the counts do. What they do not
+        // use is this, and it lands here, at the far end of the readout:
+        // against the cut-out on a notched display, in the empty run before the
+        // timer on a pill -- neither of which has a boundary for a gap to show
+        // against. The two together are exactly ``PanelMetrics/marksWidth``, so
+        // the room reserved and the room drawn into still cannot drift and no
+        // panel width answers to a session count.
+        //
+        // Unanimated on purpose. It moves the readout's trailing edge, which
+        // has a `Spacer` behind it and nothing drawn against it; the edge the
+        // eye is on is the label's, and that one rides the slot's own curve
+        // because the packed marks it follows are what animate.
+        .padding(.trailing, unpackedColumnRoom)
+    }
+
+    /// The reserved column room no mark is standing in, drawn at the readout's
+    /// trailing end -- see ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``.
+    private var unpackedColumnRoom: CGFloat {
+        PanelMetrics.unpackedColumnRoom(marks, matrixSize: matrixSize)
     }
 
     /// The label sweeps if *any* mark is in flight. There is one label for both
     /// products and it takes the most urgent status, so it has to follow the
     /// most urgent mark rather than a single product's.
-    /// The room the panel has already reserved for the marks.
-    private var reservedMarksWidth: CGFloat {
-        PanelMetrics.marksWidth(
-            marks.count,
-            areProductMarks: marks.contains { $0.agent != nil }
-        )
-    }
-
     private var isActive: Bool {
         marks.contains { NotchMatrixState($0.status).isActive }
     }

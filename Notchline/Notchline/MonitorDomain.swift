@@ -863,8 +863,10 @@ nonisolated struct PresenceMark: Equatable, Sendable {
     ///
     /// The column is the count's, not the matrix's: a product with nothing open
     /// packs to its matrix alone so the pair keeps the `6` that binds it. The
-    /// resting grey never has one. Surfaces that hold the column open anyway
-    /// are the fixed-width ones — see ``MonitorStore/reservesSessionColumns``.
+    /// resting grey never has one. The *panel* holds every column open anyway
+    /// (``PanelMetrics/marksWidth(_:areProductMarks:)``); what the packing
+    /// leaves over is drawn past the status label rather than in front of it —
+    /// see ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``.
     var drawsSessionColumn: Bool { agent != nil && sessionCount > 0 }
 
     nonisolated init(
