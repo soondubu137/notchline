@@ -66,12 +66,15 @@ struct NotchlineTests {
     /// same composition re-measured, not a relaxation of it.
     @Test @MainActor
     func theFixedCompactWidthsAreTheOnesTheDesignMeasured() {
-        // `201` / `230` since each product mark reserves the `5.655` column
-        // its session dots stand in (`dual-agent-design.md` §11); they were
-        // `196` / `218` before the count existed. The resting form draws no
-        // column, so `136` is untouched.
-        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) == 201)
-        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2) == 230)
+        // `209` / `238` since the trailing reading reserves its ground's `8`
+        // whether or not the ground is filled (`figma-design.md` page 14) —
+        // the room a waiting turn's white tile needs, bought once so that the
+        // flip moves nothing. They were `201` / `230` before it, and `196` /
+        // `218` before each product mark reserved the `5.655` column its
+        // session dots stand in (`dual-agent-design.md` §11). The resting form
+        // has no reading and no column, so `136` is untouched by both.
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) == 209)
+        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2) == 238)
         #expect(
             PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) == 136
         )
@@ -2167,6 +2170,80 @@ struct NotchlineTests {
                 == PanelMetrics.compactTrailingReadingWidth(
                     CompactTrailingReading(badges: waiting, timerText: "1:23")
                 )
+        )
+    }
+
+    /// The bar's reading carries its ground's room whether or not it is filled.
+    ///
+    /// `figma-design.md` page 14. The ground is what tells a waiting turn from
+    /// a running one on a notched display, where nothing else on that side of
+    /// the cut-out says so -- and it must cost the same either way, or every
+    /// mark on the bar moves at the exact moment attention is being asked for.
+    /// The same promise ``aWaitingBadgeIsTheSameWidthAsARunningOne`` keeps for
+    /// the badge beside it.
+    @Test @MainActor
+    func theCompactReadingReservesItsGroundWhetherOrNotItIsFilled() {
+        let reading = CompactTrailingReading(timerText: "1:23")
+        let bare = ("1:23" as NSString).size(
+            withAttributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .light)
+            ]
+        ).width
+        #expect(
+            PanelMetrics.compactTrailingReadingWidth(reading)
+                == bare + PanelMetrics.readingGroundWidthCost
+        )
+        // The reservation holds the widest reading *with* its ground, so a
+        // pill sized from it can draw the ground without growing.
+        #expect(
+            PanelMetrics.compactTrailingSlotWidth(trailing: .empty)
+                >= PanelMetrics.compactTrailingReadingWidth(
+                    CompactTrailingReading(timerText: "00:00:00")
+                )
+        )
+        // Badges are unaffected: only the reading has a ground of its own.
+        let badges = [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 3))]
+        #expect(
+            PanelMetrics.compactTrailingReadingWidth(
+                CompactTrailingReading(badges: badges, timerText: nil)
+            ) == PanelMetrics.subagentBadgesWidth(badges)
+        )
+    }
+
+    /// A tile has to stay above whatever it is drawn on.
+    ///
+    /// The dim ground was a fixed `#242424`, and a session row lights past that
+    /// under the pointer -- so the one mark on the row turned into a hole at
+    /// the exact moment the pointer was on it. Lifting off the brighter of the
+    /// ink and the row keeps the resting value and rises with the row.
+    @Test @MainActor
+    func theDimGroundStaysAboveTheRowItIsDrawnOn() {
+        let ink = NotchPalette.restingInk
+        func luminance(_ color: Color) -> Double {
+            let components = NSColor(color).usingColorSpace(.sRGB)!
+            return Double(
+                components.redComponent
+                    + components.greenComponent
+                    + components.blueComponent
+            )
+        }
+        // On black it is exactly what it has always been: the unlit grey lifted.
+        #expect(abs(luminance(ink.chipFill(over: .black)) - 3 * (0x24 / 255.0)) < 0.02)
+        for ground in [
+            NotchPalette.SurfaceGround.black,
+            .rowHovered,
+            .rowPressed
+        ] {
+            #expect(luminance(ink.chipFill(over: ground)) > luminance(ground.color))
+        }
+        // And it only ever rises, so hovering a row never dims its mark.
+        #expect(
+            luminance(ink.chipFill(over: .rowPressed))
+                > luminance(ink.chipFill(over: .rowHovered))
+        )
+        #expect(
+            luminance(ink.chipFill(over: .rowHovered))
+                > luminance(ink.chipFill(over: .black))
         )
     }
 
@@ -9052,7 +9129,8 @@ struct NotchlineTests {
         view.apply(
             text: text,
             font: font,
-            color: NotchPalette.labelDrawingColor
+            color: NotchPalette.labelDrawingColor,
+            sweeps: false
         )
 
         // Narrower than the glyphs, which is the case the fade exists for.
@@ -9063,9 +9141,12 @@ struct NotchlineTests {
 
         let root = try #require(view.layer)
         let sublayers = try #require(root.sublayers)
-        // One layer, not two: the bright swept copy the row used to carry is
-        // gone, so live progress text is drawn once and left still.
-        #expect(sublayers.count == 1)
+        // Two copies of the glyphs: the dim one, and the bright one the
+        // searchlight uncovers a slice of at a time. The bright copy is drawn
+        // on a still row too and hidden there, so a turn changing state costs
+        // a flag rather than a texture upload.
+        #expect(sublayers.count == 2)
+        #expect(try #require(sublayers.last).isHidden)
 
         // Only what the row can show is drawn. The remainder sits behind the
         // fade, so drawing it would upload a texture per update for pixels that
@@ -9087,6 +9168,64 @@ struct NotchlineTests {
         let fadeStart = try #require(locations.dropFirst().first).doubleValue
         #expect(fadeStart > 0)
         #expect(fadeStart < 1)
+    }
+
+    /// The row's body line sweeps while its turn is unfinished.
+    ///
+    /// `figma-design.md` page 14. Motion is the channel that answers *live or
+    /// finished* without being looked at directly, which is how a menu-bar
+    /// panel is actually watched. It runs on the render server for the reason
+    /// `system-architecture.md` §6 gives, and its band is bounded to the row
+    /// rather than to the glyphs -- a 240-character body is three times the
+    /// row, so a band scaled to the text spends most of its loop off-screen.
+    @Test @MainActor
+    func sessionRowTextSweepsOnlyWhileItsTurnIsUnfinished() throws {
+        let font = NSFont.systemFont(ofSize: 13, weight: .light)
+        let text = "A preview long enough to run past the row it is drawn in"
+        let view = SessionRowTextView()
+        view.apply(
+            text: text,
+            font: font,
+            color: NotchPalette.labelDrawingColor,
+            sweeps: true
+        )
+        let rowWidth = view.intrinsicContentSize.width / 2
+        view.frame = NSRect(x: 0, y: 0, width: rowWidth, height: 18)
+        view.layout()
+
+        let root = try #require(view.layer)
+        let sublayers = try #require(root.sublayers)
+        let highlight = try #require(sublayers.last)
+        #expect(!highlight.isHidden)
+        // Drawn in the searchlight white, whatever the dim copy underneath is.
+        let bright = try Self.alphaExtremes(
+            of: unsafeDowncast(try #require(highlight.contents) as AnyObject, to: CGImage.self)
+        )
+        #expect(bright.maximum > 0.5)
+
+        // The band crosses the row, not the string.
+        let band = try #require(highlight.mask as? CAGradientLayer)
+        #expect(band.frame.width == rowWidth * 4)
+        let sweep = try #require(
+            band.animation(forKey: NotchTextRaster.sweepAnimationKey)
+        )
+        #expect(sweep.repeatCount == .infinity)
+        #expect(sweep.duration == SessionRowTextView.sweepPeriod)
+        // Phase comes from the clock rather than from the moment of
+        // installation: a running turn replaces this text every few seconds,
+        // and a loop restarted more often than the 40% it takes the peak to
+        // arrive would mean the highlight is never drawn at all.
+        #expect(sweep.beginTime > 0)
+
+        // The turn ends: the band stops and the bright copy goes away.
+        view.apply(
+            text: text,
+            font: font,
+            color: NotchPalette.labelDrawingColor,
+            sweeps: false
+        )
+        #expect(highlight.isHidden)
+        #expect(band.animation(forKey: NotchTextRaster.sweepAnimationKey) == nil)
     }
 
     @Test @MainActor
@@ -12395,6 +12534,103 @@ for line in sys.stdin:
             initialSnapshot: makeSessionSnapshot([]),
             clock: clock
         )
+    }
+
+    /// A finished row draws the length of the turn it ran, and that figure is
+    /// stopped rather than paused.
+    ///
+    /// `figma-design.md` page 14. The slot used to draw nothing at all, which
+    /// made `Completed` findable only by checking the rows around it for a
+    /// timer this one lacked. What it draws now is measured between the turn's
+    /// own two stamps, so it does not move as the clock does -- and it is the
+    /// only place on this surface that reports how long a turn took.
+    @Test @MainActor
+    func aFinishedRowDrawsTheLengthOfTheTurnItRan() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let store = makeIdleStore(clock: clock)
+        let started = Date(timeIntervalSince1970: 1_000)
+        let finished = started.addingTimeInterval(83)
+
+        let done = MonitoredSession(
+            threadID: "t",
+            turnID: "u",
+            projectName: "Chats",
+            title: "Done",
+            preview: nil,
+            status: .completed,
+            startedAt: started,
+            finishedAt: finished
+        )
+        #expect(store.finishedElapsedText(for: done) == "1:23")
+        #expect(store.spokenFinishedElapsedText(for: done) == "1 minute 23 seconds")
+        // Stopped, not paused: the tick moving does not move the reading.
+        await clock.advance(by: 600)
+        #expect(store.finishedElapsedText(for: done) == "1:23")
+
+        // A running turn has no such reading -- its live one is `elapsedText`.
+        let running = MonitoredSession(
+            threadID: "t",
+            turnID: "u",
+            projectName: "Chats",
+            title: "Running",
+            preview: nil,
+            status: .running,
+            startedAt: started,
+            finishedAt: nil
+        )
+        #expect(store.finishedElapsedText(for: running) == nil)
+
+        // Nor has a finished turn whose end was never observed. A duration
+        // would have to be invented, and the slot draws nothing instead --
+        // which is what it did for every finished row before this.
+        let unobserved = MonitoredSession(
+            threadID: "t",
+            turnID: "u",
+            projectName: "Chats",
+            title: "Done",
+            preview: nil,
+            status: .completed,
+            startedAt: started,
+            finishedAt: nil
+        )
+        #expect(store.finishedElapsedText(for: unobserved) == nil)
+        #expect(
+            store.finishedElapsedText(
+                for: makeSession(status: .completed, startedAt: nil)
+            ) == nil
+        )
+    }
+
+    /// The searchlight follows the turn, and the badge follows the thread.
+    ///
+    /// A finished turn's body is the answer it produced. It does not sweep even
+    /// while subagents it started are still working: the text the band would
+    /// cross is that turn's own final output, and the badge in the slot is what
+    /// speaks for what is still in flight. Reduce Motion takes the channel away
+    /// entirely, which is why the reading's ground has to say the state alone.
+    @Test @MainActor
+    func onlyAnUnfinishedTurnSweepsItsBody() {
+        let store = makeIdleStore(clock: TestClock(now: Date()))
+        let started = Date()
+        for status in [SessionStatus.running, .inputNeeded, .approvalNeeded] {
+            #expect(store.sweepsBody(for: makeSession(status: status, startedAt: started)))
+        }
+        #expect(!store.sweepsBody(for: makeSession(status: .completed, startedAt: started)))
+
+        // The one that is easy to get wrong: the thread is still working and
+        // the row says so with its badge, but the turn has ended.
+        let finishedWithSubagents = makeSession(
+            status: .completed,
+            startedAt: started,
+            runningSubagentCount: 2
+        )
+        #expect(!store.sweepsBody(for: finishedWithSubagents))
+        #expect(finishedWithSubagents.showsSubagentBadge)
+
+        store.reduceMotion = true
+        for status in SessionStatus.allCases {
+            #expect(!store.sweepsBody(for: makeSession(status: status, startedAt: started)))
+        }
     }
 
     private func makeSession(

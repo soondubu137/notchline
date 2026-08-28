@@ -55,10 +55,21 @@ enum NotchPalette {
         /// The bright end does *not* come from here: it is the ink's own lit
         /// colour, unlifted, because there brightness is the signal itself.
         var chipFill: Color {
+            chipFill(over: .black)
+        }
+        /// The same ground on a surface that is not black.
+        ///
+        /// **A tile has to stay above whatever it is drawn on.** A session row
+        /// lights to `#2B2B2E` under the pointer and `#3A3A3D` while pressed,
+        /// both of which are brighter than the resting `#242424` this returns
+        /// on black -- so a fixed value turns into a hole at the exact moment
+        /// the pointer is on it. Lifting off the brighter of the two keeps the
+        /// value it has always had at rest and lets it rise with the row.
+        func chipFill(over ground: NotchPalette.SurfaceGround) -> Color {
             Color(
-                red: offRed + Self.chipLift,
-                green: offGreen + Self.chipLift,
-                blue: offBlue + Self.chipLift
+                red: min(1, max(offRed, ground.red) + Self.chipLift),
+                green: min(1, max(offGreen, ground.green) + Self.chipLift),
+                blue: min(1, max(offBlue, ground.blue) + Self.chipLift)
             )
         }
         /// How far ``chipFill`` is lifted off the unlit colour towards white.
@@ -128,6 +139,25 @@ enum NotchPalette {
 
         /// The pairing the icon uses: Codex leading, Claude Code trailing.
         static let products = MatrixSplit(above: codexInk, below: claudeCodeInk)
+    }
+
+    /// A surface a tile can be drawn on, so the tile can be told what it has
+    /// to stay above.
+    ///
+    /// Only the session row is ever anything but black, and only while the
+    /// pointer is on it — but that is the one moment a mark must not vanish,
+    /// so the grounds live here rather than as literals at the two views that
+    /// draw them.
+    nonisolated struct SurfaceGround: Equatable, Sendable {
+        let red, green, blue: Double
+
+        var color: Color { Color(red: red, green: green, blue: blue) }
+
+        /// The notch's own surface, and a session row at rest.
+        static let black = SurfaceGround(red: 0, green: 0, blue: 0)
+        /// A session row under the pointer, and one being pressed.
+        static let rowHovered = SurfaceGround(red: 0.17, green: 0.17, blue: 0.18)
+        static let rowPressed = SurfaceGround(red: 0.23, green: 0.23, blue: 0.24)
     }
 
     /// The ink for one product, or the resting grey when no product owns the mark.
@@ -214,6 +244,14 @@ enum NotchPalette {
     )
     static let spotlightDrawingColor = NSColor.white
     static let sessionTitleDrawingColor = NSColor.white.withAlphaComponent(0.98)
+    /// ``chipOnLight`` for the layer-backed readings, which draw through
+    /// AppKit rather than SwiftUI.
+    static let chipOnLightDrawingColor = NSColor(
+        srgbRed: 0.05,
+        green: 0.05,
+        blue: 0.06,
+        alpha: 1
+    )
 }
 
 /// Elapsed time for a turn.
@@ -228,6 +266,14 @@ enum NotchPalette {
 /// approval, where nothing else was happening at all.
 struct ElapsedReadout: View {
     let startedAt: Date
+    /// The instant the turn ended, on the rows where it has.
+    ///
+    /// A finished row draws how long its turn took, and that figure must not
+    /// move: with an end the reading is measured between the turn's own two
+    /// stamps and the tick is ignored, so every refresh draws the same value
+    /// for as long as the row is listed. Nil while a turn is running, where
+    /// the tick is what advances it.
+    var stoppedAt: Date?
     let tick: AnyPublisher<Date, Never>
     var tint: NSColor = NotchPalette.labelDrawingColor
     var weight: NSFont.Weight = .light
@@ -243,6 +289,7 @@ struct ElapsedReadout: View {
     var body: some View {
         ElapsedReadoutRepresentable(
             startedAt: startedAt,
+            stoppedAt: stoppedAt,
             tick: tick,
             tint: tint,
             weight: weight,
@@ -256,6 +303,7 @@ struct ElapsedReadout: View {
 
 private struct ElapsedReadoutRepresentable: NSViewRepresentable {
     let startedAt: Date
+    let stoppedAt: Date?
     let tick: AnyPublisher<Date, Never>
     let tint: NSColor
     let weight: NSFont.Weight
@@ -268,6 +316,7 @@ private struct ElapsedReadoutRepresentable: NSViewRepresentable {
     func updateNSView(_ view: ElapsedReadoutView, context: Context) {
         view.configure(
             startedAt: startedAt,
+            stoppedAt: stoppedAt,
             tint: tint,
             weight: weight,
             prefix: prefix,
@@ -288,6 +337,9 @@ final class ElapsedReadoutView: NSView {
     private let glyphLayer = CALayer()
     private var subscription: AnyCancellable?
     private var startedAt: Date?
+    /// Set on a reading that has stopped, which is then measured against this
+    /// rather than against the tick.
+    private var stoppedAt: Date?
     private var font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .light)
     private var tint = NotchPalette.labelDrawingColor
     private var prefix = ""
@@ -320,6 +372,7 @@ final class ElapsedReadoutView: NSView {
 
     func configure(
         startedAt: Date,
+        stoppedAt: Date? = nil,
         tint: NSColor,
         weight: NSFont.Weight,
         prefix: String = "",
@@ -327,13 +380,25 @@ final class ElapsedReadoutView: NSView {
     ) {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: weight)
         let changed = startedAt != self.startedAt
+            || stoppedAt != self.stoppedAt
             || tint != self.tint
             || font != self.font
             || prefix != self.prefix
         self.startedAt = startedAt
+        self.stoppedAt = stoppedAt
         self.tint = tint
         self.font = font
         self.prefix = prefix
+
+        // A stopped reading takes no tick: it is measured between the turn's
+        // own two stamps, so a subscription would wake this view once a second
+        // to redraw a figure that cannot have changed. One that had a tick and
+        // has stopped drops it here, which is the turn ending under the row.
+        guard stoppedAt == nil else {
+            subscription = nil
+            render(at: lastTick)
+            return
+        }
 
         guard subscription == nil else {
             if changed { render(at: lastTick) }
@@ -369,7 +434,7 @@ final class ElapsedReadoutView: NSView {
         // assumes every reading starts at.
         let elapsed = SessionElapsedFormatter.elapsed(
             since: startedAt,
-            now: max(now, startedAt)
+            now: stoppedAt ?? max(now, startedAt)
         )
         let text = elapsed.map { prefix + $0 } ?? ""
         let scale = window?.backingScaleFactor ?? 2
@@ -460,8 +525,13 @@ enum SubagentBadgeTint: Equatable {
     /// of its own (it cannot light, because nothing is connected to light it),
     /// so brightness there is the same white every other attention signal on
     /// this surface uses.
-    func fill(wantsAttention: Bool) -> Color {
-        guard wantsAttention else { return ink.chipFill }
+    ///
+    /// `over` is the surface the badge is drawn on, which is black everywhere
+    /// but a session row under the pointer. Only the dim end reads it: the
+    /// bright end is a signal and has to be the same white, or the same lit
+    /// hue, wherever it appears.
+    func fill(wantsAttention: Bool, over ground: NotchPalette.SurfaceGround = .black) -> Color {
+        guard wantsAttention else { return ink.chipFill(over: ground) }
         switch self {
         case .neutral: return NotchPalette.spotlight
         case .product: return ink.on
@@ -500,6 +570,8 @@ enum SubagentBadgeTint: Equatable {
 struct SubagentBadgeView: View {
     let badge: SubagentBadge
     let tint: SubagentBadgeTint
+    /// What the badge is drawn on, so its dim ground can stay above it.
+    var ground: NotchPalette.SurfaceGround = .black
 
     var body: some View {
         Text("\(badge.count)")
@@ -514,12 +586,50 @@ struct SubagentBadgeView: View {
                     cornerRadius: PanelMetrics.subagentBadgeCornerRadius,
                     style: .continuous
                 )
-                .fill(tint.fill(wantsAttention: badge.wantsAttention))
+                .fill(tint.fill(wantsAttention: badge.wantsAttention, over: ground))
             )
             // Spoken by the row or the panel header, which say what the figure
             // counts and whose it is -- this mark alone is a bare number with
             // colour as its only label, which VoiceOver cannot read.
             .accessibilityHidden(true)
+    }
+}
+
+/// The ground an elapsed reading sits on, which is how the surface tells the
+/// four session states apart (`figma-design.md` page 14).
+///
+/// **One slot, one mark, three silhouettes.** A reading with no ground is a
+/// turn still running; on white it is a turn stopped on something only a
+/// person can answer; on the dim ground it is a turn that has finished, and
+/// the figure inside it is how long that took. Presence and brightness alone
+/// could not say this: both are comparisons, and a row read on its own — or a
+/// list where every row happens to be in the same state — answered neither.
+///
+/// It is deliberately the ``SubagentBadgeView`` tile at reading width, down to
+/// the radius and the padding. That badge already draws a figure on a ground
+/// that flips when a person is wanted; this is the same mark answering for the
+/// turn as well as for the subagents it spawned, which is also why the two
+/// compose without a rule of their own on the row that draws both.
+struct ReadingGround<Content: View>: View {
+    /// The ground itself. `.clear` is a drawn state and not an absence: the
+    /// collapsed bar reserves this room whether or not it fills it, so that a
+    /// turn which starts waiting changes a colour and moves nothing.
+    let fill: Color
+    /// Fixed on the surfaces whose width is composed rather than hugged.
+    var width: CGFloat?
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .padding(.horizontal, PanelMetrics.readingGroundPadding)
+            .frame(width: width, height: PanelMetrics.readingGroundHeight)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: PanelMetrics.readingGroundCornerRadius,
+                    style: .continuous
+                )
+                .fill(fill)
+            )
     }
 }
 
@@ -1794,23 +1904,35 @@ final class SweepingLabelView: NSView {
 /// A session row's title or preview: one line, never truncated with an ellipsis,
 /// fading out where it runs past the row instead.
 ///
-/// Layer-backed for the same reason the notch readout is — a running turn
-/// replaces its body text constantly, and the expanded panel shows up to three
-/// rows at once — but it also owns the trailing fade its caller used to apply.
-/// A SwiftUI `.mask` over an AppKit view is not dependable, and the fade is the
-/// row's own behaviour rather than the caller's, so it lives on the layer now.
+/// Layer-backed for the same reason the notch readout is — a sweeping row cost
+/// ~7% of a core as a `TimelineView`, a running turn replaces its body text
+/// constantly, and the expanded panel shows up to three rows at once — but it
+/// also owns the trailing fade its caller used to apply. A SwiftUI `.mask` over
+/// an AppKit view is not dependable, and the fade is the row's own behaviour
+/// rather than the caller's, so both masks live on the layer: the fade on the
+/// container, the sweep on the bright copy.
 struct SessionRowText: View {
     let text: String
     let font: NSFont
     let color: NSColor
     let lineHeight: CGFloat
+    /// Whether a highlight crosses these glyphs.
+    ///
+    /// The row's body line only, and only while its turn is unfinished. It is
+    /// the channel that answers *live or finished* — the one thing here that
+    /// can be read without looking straight at the panel, which is how a
+    /// menu-bar surface is actually watched. A finished row's body is the
+    /// answer its turn produced, and a highlight moving across a finished
+    /// answer says work is happening where none is.
+    var sweeps = false
 
     var body: some View {
         SessionRowTextRepresentable(
             text: text,
             font: font,
             color: color,
-            lineHeight: lineHeight
+            lineHeight: lineHeight,
+            sweeps: sweeps
         )
         .frame(height: lineHeight)
     }
@@ -1821,13 +1943,14 @@ private struct SessionRowTextRepresentable: NSViewRepresentable {
     let font: NSFont
     let color: NSColor
     let lineHeight: CGFloat
+    let sweeps: Bool
 
     func makeNSView(context: Context) -> SessionRowTextView {
         SessionRowTextView()
     }
 
     func updateNSView(_ view: SessionRowTextView, context: Context) {
-        view.apply(text: text, font: font, color: color)
+        view.apply(text: text, font: font, color: color, sweeps: sweeps)
     }
 
     func sizeThatFits(
@@ -1845,20 +1968,29 @@ private struct SessionRowTextRepresentable: NSViewRepresentable {
 }
 
 final class SessionRowTextView: NSView {
+    /// Loop length of one traverse, the notch label's own.
+    static let sweepPeriod: TimeInterval = 2
     /// Distance over which the last glyphs fade out, matching the gradient the
     /// caller used to apply as a separate SwiftUI mask.
     private static let trailingFadeWidth: CGFloat = 48
 
     private let baseLayer = CALayer()
+    private let highlightLayer = CALayer()
+    private let sweepMask = NotchTextRaster.makeSweepMask()
     private let fadeMask = CAGradientLayer()
     private var appliedText = ""
     private var appliedFont = NSFont.systemFont(ofSize: 13, weight: .light)
     private var appliedColor = NSColor.white
+    private var appliedSweeps = false
     private var renderedScale: CGFloat = 0
     /// The glyph size actually drawn, which is the natural text size clipped to
     /// the row. Only this much is ever visible, and every byte beyond it is a
     /// texture upload per update that nothing can see.
     private var renderedGlyphSize: CGSize = .zero
+    /// Geometry the running sweep was built for, so an unchanged one is left
+    /// alone rather than torn down and rebuilt on every text update.
+    private var installedSweepWidth: CGFloat?
+    private var installedSweepHeight: CGFloat?
 
     override var isFlipped: Bool { true }
 
@@ -1874,7 +2006,9 @@ final class SessionRowTextView: NSView {
             CGColor(gray: 0, alpha: 0)
         ]
 
+        highlightLayer.mask = sweepMask
         layer?.addSublayer(baseLayer)
+        layer?.addSublayer(highlightLayer)
         // Sized to the row, so it clips the overflow as well as fading it.
         layer?.mask = fadeMask
     }
@@ -1886,24 +2020,28 @@ final class SessionRowTextView: NSView {
         NotchTextRaster.textSize(appliedText, font: appliedFont)
     }
 
-    func apply(text: String, font: NSFont, color: NSColor) {
-        guard text != appliedText
+    func apply(text: String, font: NSFont, color: NSColor, sweeps: Bool) {
+        let textChanged = text != appliedText
             || font != appliedFont
             || color != appliedColor
-        else { return }
+        guard textChanged || sweeps != appliedSweeps else { return }
 
         appliedText = text
         appliedFont = font
         appliedColor = color
+        appliedSweeps = sweeps
 
-        // No `invalidateIntrinsicContentSize` here on purpose. This view is
-        // always given the width it is offered, so its intrinsic size never
-        // decides the layout -- invalidating it only makes SwiftUI re-measure
-        // and re-lay-out the subtree, once per row for every update, and a
-        // running turn's body text updates constantly.
-        renderedScale = 0
-        renderedGlyphSize = .zero
-        redrawGlyphs()
+        if textChanged {
+            // No `invalidateIntrinsicContentSize` here on purpose. This view is
+            // always given the width it is offered, so its intrinsic size never
+            // decides the layout -- invalidating it only makes SwiftUI re-measure
+            // and re-lay-out the subtree, once per row for every update, and a
+            // running turn's body text updates constantly.
+            renderedScale = 0
+            renderedGlyphSize = .zero
+            redrawGlyphs()
+        }
+        highlightLayer.isHidden = !sweeps
         layout()
     }
 
@@ -1937,11 +2075,45 @@ final class SessionRowTextView: NSView {
             height: glyphs.height
         )
         baseLayer.frame = glyphFrame
+        highlightLayer.frame = glyphFrame
 
         fadeMask.frame = bounds
         let width = max(bounds.width, 1)
         let fadeStart = max(0, width - Self.trailingFadeWidth) / width
         fadeMask.locations = [0, NSNumber(value: fadeStart), 1]
+
+        if appliedSweeps {
+            // The sweep crosses what is *visible*, not the whole string. A
+            // 240-character body line is three times the row, so a band scaled
+            // to the glyphs spends most of its loop off-screen -- the highlight
+            // degrades to a 0.13s flicker once every two seconds. Bounding it to
+            // the row keeps one full, even pass however long the text is.
+            //
+            // It also makes the sweep's geometry independent of the text, which
+            // is what lets the reinstall below be skipped: a running turn
+            // replaces this text constantly, and re-adding the animation each
+            // time is a CATransaction commit per row per update.
+            let sweepWidth = min(glyphs.width, bounds.width)
+            let sweepHeight = glyphs.height
+            if sweepWidth != installedSweepWidth
+                || sweepHeight != installedSweepHeight
+                || sweepMask.animation(
+                    forKey: NotchTextRaster.sweepAnimationKey
+                ) == nil {
+                installedSweepWidth = sweepWidth
+                installedSweepHeight = sweepHeight
+                NotchTextRaster.installSweep(
+                    on: sweepMask,
+                    across: sweepWidth,
+                    height: sweepHeight,
+                    period: Self.sweepPeriod
+                )
+            }
+        } else {
+            installedSweepWidth = nil
+            installedSweepHeight = nil
+            sweepMask.removeAnimation(forKey: NotchTextRaster.sweepAnimationKey)
+        }
 
         CATransaction.commit()
     }
@@ -1958,6 +2130,7 @@ final class SessionRowTextView: NSView {
 
         guard !appliedText.isEmpty else {
             baseLayer.contents = nil
+            highlightLayer.contents = nil
             renderedGlyphSize = .zero
             return
         }
@@ -1979,6 +2152,18 @@ final class SessionRowTextView: NSView {
             text: appliedText,
             font: appliedFont,
             color: appliedColor,
+            size: size,
+            scale: scale
+        )
+        // The bright copy, which the band uncovers a slice of at a time. Drawn
+        // even on a row that is not sweeping: `highlightLayer` is hidden there,
+        // and rasterising on the transition instead would cost a texture upload
+        // at the moment a turn changes state.
+        highlightLayer.contentsScale = scale
+        highlightLayer.contents = NotchTextRaster.glyphImage(
+            text: appliedText,
+            font: appliedFont,
+            color: NotchPalette.spotlightDrawingColor,
             size: size,
             scale: scale
         )

@@ -250,11 +250,35 @@ private struct OverlayHeader: View {
                     if !badges.isEmpty {
                         SubagentBadgeRow(badges: badges)
                     }
+                    // The reading takes the panel row's ground, on the same
+                    // terms and neutral rather than tinted — it is the longest
+                    // unfinished turn anywhere and belongs to no one product,
+                    // so a hue would claim an owner it has not got. The bar
+                    // needs it more than the panel does: on a notched display
+                    // the collapsed surface draws no status text at all
+                    // (``showsStatusText``), so this reading is the only still
+                    // thing on its side of the cut-out and until now it said
+                    // the same thing whatever the state was.
+                    //
+                    // The ground is `.clear` rather than absent while nothing
+                    // is waiting, so the room it takes is the same either way
+                    // and a turn that starts waiting changes a colour without
+                    // moving a mark. `PanelMetrics.compactTrailingReadingWidth`
+                    // reserves that room to match.
                     if let startedAt = store.compactTimerStart {
-                        ElapsedReadout(
-                            startedAt: startedAt,
-                            tick: store.elapsedTick.eraseToAnyPublisher()
-                        )
+                        let wantsPerson = store.compactReadingWantsPerson
+                        ReadingGround(
+                            fill: wantsPerson ? NotchPalette.spotlight : .clear
+                        ) {
+                            ElapsedReadout(
+                                startedAt: startedAt,
+                                tick: store.elapsedTick.eraseToAnyPublisher(),
+                                tint: wantsPerson
+                                    ? NotchPalette.chipOnLightDrawingColor
+                                    : NotchPalette.labelDrawingColor,
+                                weight: wantsPerson ? .medium : .light
+                            )
+                        }
                     }
                 }
             }
@@ -688,6 +712,11 @@ private struct SessionRow: View {
         // ground that flips rather than a second figure; spoken, it has to say
         // what it counts and, when the ground has flipped, that it is waiting.
         let subagents = session.spokenSubagentSummary.map { ", \($0)" } ?? ""
+        // A finished row draws how long its turn took, and a ground cannot be
+        // heard any more than a flip can. Said as a length rather than as a
+        // reading, and in the past tense, because that is what it is.
+        let took = store.spokenFinishedElapsedText(for: session)
+            .map { ", took \($0)" } ?? ""
         // Brightness cannot be read out on its own, so a blocked subagent
         // still needs a word even while the row is timed and its own mark is
         // the bright clock rather than a badge -- a running row draws its
@@ -696,7 +725,7 @@ private struct SessionRow: View {
             ? ", a subagent is waiting for approval"
             : ""
         return "\(session.projectName), \(session.title), "
-            + "\(session.status.displayName)\(elapsed)\(subagents)\(blocked)\(preview)"
+            + "\(session.status.displayName)\(elapsed)\(took)\(subagents)\(blocked)\(preview)"
     }
 }
 
@@ -733,13 +762,14 @@ private struct SessionRowContent: View {
                             text: preview,
                             font: .systemFont(ofSize: 13, weight: .light),
                             color: NotchPalette.labelDrawingColor,
-                            lineHeight: PanelMetrics.sessionRowPreviewHeight
+                            lineHeight: PanelMetrics.sessionRowPreviewHeight,
+                            sweeps: sweepsBody
                         )
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                SessionStatusControl(session: session)
+                SessionStatusControl(session: session, ground: ground)
                     .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, store.sessionRowPadding)
@@ -778,54 +808,65 @@ private struct SessionRowContent: View {
     /// while two products are connected and there is something to tell apart.
     private var drawsRail: Bool { store.showsSessionRowRail }
 
-    private var backgroundColor: Color {
-        if isPressed {
-            return Color(red: 0.23, green: 0.23, blue: 0.24)
-        }
-        if isHovered {
-            return Color(red: 0.17, green: 0.17, blue: 0.18)
-        }
+    private var sweepsBody: Bool { store.sweepsBody(for: session) }
+
+    /// What the row is drawing behind its marks, so a tile can stay above it.
+    private var ground: NotchPalette.SurfaceGround {
+        if isPressed { return .rowPressed }
+        if isHovered { return .rowHovered }
         return .black
     }
+
+    private var backgroundColor: Color { ground.color }
 }
 
 private struct SessionStatusControl: View {
     @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
+    /// What the row is drawing behind this mark.
+    var ground: NotchPalette.SurfaceGround = .black
 
     // One mark per row at most, and no hue — this surface says everything with
-    // brightness and motion, and the amber and green dots were the only two
-    // colours left on it. A row that wants the user counts in bright white; a
-    // running row counts dim; a finished row shows nothing, because its still
-    // body and absent timer already say so and the dot was a redundant third.
+    // brightness and shape, and the amber and green dots were the only two
+    // colours left on it. What changed in `figma-design.md` page 14 is that the
+    // mark now has three silhouettes rather than one drawn three ways: a bare
+    // reading while the turn runs, the same reading on white while it wants a
+    // person, and on a dim ground once it has finished.
     //
-    // A finished row with a subagent still working is the one exception, and it
-    // does not break the rule: the slot the timer had is not empty yet, it says
-    // what is still in flight. The turn's own clock has stopped — it really did
-    // end — but the thread has not, and a row that showed nothing there would
-    // read as finished while work it started was still running.
+    // **Presence and brightness were both comparisons, and that was the bug.**
+    // "No timer" only reads as finished beside a row that has one, and a white
+    // timer only reads as waiting beside a dimmer one — so a row read on its
+    // own, or a list where every row happens to be in the same state, answered
+    // neither question. A ground is a silhouette, which one row can answer
+    // alone. It is the ``SubagentBadgeView`` tile at reading width, which is
+    // also why the two compose here without a case of their own.
     //
-    // **That count has both brightnesses, and which one it gets is the whole
-    // difference between two very different situations.** Dim, it means work is
-    // in flight and nobody is needed. Bright, it means one of those subagents is
-    // stopped on a permission prompt and the product is waiting for the person —
-    // measured on both products, and reachable on a Completed row because a
-    // subagent's dialog can open after the parent turn's terminal. The row's own
-    // state is untouched either way; see ``wantsAttention``.
+    // A finished row with a subagent still working keeps the badge in this
+    // slot, as before: the turn's own clock has stopped — it really did end —
+    // but the thread has not, and the badge is already this tile, so the
+    // silhouette is unchanged and only what sits inside it differs.
+    //
+    // **The ground has both states, and which one it gets is the whole
+    // difference between two very different situations.** Dim, work is in
+    // flight and nobody is needed. Bright, something here is stopped on a
+    // question — the turn itself, or a subagent of it, which is reachable on a
+    // Completed row because a subagent's dialog can open after the parent
+    // turn's terminal. The row's own state is untouched either way; see
+    // ``wantsAttention``.
     var body: some View {
         if let startedAt = store.elapsedStart(for: session) {
-            ElapsedReadout(
-                startedAt: startedAt,
-                tick: store.elapsedTick.eraseToAnyPublisher(),
-                tint: tint,
-                weight: weight
-            )
+            reading(startedAt: startedAt, stoppedAt: nil)
         } else if session.showsSubagentBadge {
             // `dual-agent-design.md` §10: an expanded row's badge is always
             // neutral, whatever else is connected -- the row already names its
             // product on the caption above. One badge carrying the whole
             // count, with the ground saying whether any of them is stopped.
-            SubagentBadgeView(badge: session.subagentBadge, tint: .neutral)
+            SubagentBadgeView(badge: session.subagentBadge, tint: .neutral, ground: ground)
+        } else if let span = store.finishedElapsed(for: session) {
+            // What the turn took, which the slot used to throw away. No other
+            // part of this surface reports it, and it is what turns the mark
+            // from an absence into a record.
+            reading(startedAt: span.start, stoppedAt: span.end)
         } else if session.status.keepsTiming {
             // Unfinished but its start was never observed — unreachable with
             // hook-sourced data, and it must not be left unmarked when previews
@@ -835,6 +876,34 @@ private struct SessionStatusControl: View {
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)
         }
+    }
+
+    /// The reading, on the ground its state gives it.
+    ///
+    /// Running is the one state drawn bare: a set of silhouettes needs one
+    /// member that is nothing, and it should be the state that fills most of
+    /// the list.
+    @ViewBuilder
+    private func reading(startedAt: Date, stoppedAt: Date?) -> some View {
+        let readout = ElapsedReadout(
+            startedAt: startedAt,
+            stoppedAt: stoppedAt,
+            tick: store.elapsedTick.eraseToAnyPublisher(),
+            tint: tint,
+            weight: weight
+        )
+        if let fill = groundFill {
+            ReadingGround(fill: fill) { readout }
+        } else {
+            readout
+        }
+    }
+
+    /// The ground under the reading, or nil on the one state that has none.
+    private var groundFill: Color? {
+        if wantsAttention { return NotchPalette.spotlight }
+        guard !session.status.keepsTiming else { return nil }
+        return NotchPalette.restingInk.chipFill(over: ground)
     }
 
     /// Whether this row wants the person, from either of the two places that
@@ -853,10 +922,14 @@ private struct SessionStatusControl: View {
             || session.subagentsAwaitingApproval
     }
 
+    /// The reading is always whichever end of the pair its ground is not.
+    ///
+    /// Brightness is still the attention channel; it has moved from the four
+    /// glyph strokes onto the filled area behind them, which is the whole of
+    /// what makes it legible at a glance instead of only in comparison.
     private var tint: NSColor {
-        // Brightness is the attention channel, the same one the searchlight uses.
         wantsAttention
-            ? NotchPalette.spotlightDrawingColor
+            ? NotchPalette.chipOnLightDrawingColor
             : NotchPalette.labelDrawingColor
     }
 

@@ -440,6 +440,28 @@ enum PanelMetrics {
     /// Between the badges and the timer they share the trailing slot with.
     static let subagentBadgeTimerSpacing: CGFloat = 8
 
+    /// The ground an elapsed reading sits on, which is what tells the four
+    /// session states apart (`figma-design.md` page 14).
+    ///
+    /// **The badge's own tile, at reading width.** Presence and brightness were
+    /// the only two channels the slot used, and both are comparisons: a row
+    /// with no timer only reads as finished beside a row that has one, and a
+    /// white timer only reads as waiting beside a dimmer one. Cover the
+    /// neighbours and neither answer survives. A ground is a silhouette, which
+    /// one row can answer on its own -- bare while the turn runs, white while
+    /// it wants a person, dim once it has finished.
+    ///
+    /// Deliberately the same geometry as ``subagentBadgeCornerRadius`` and
+    /// ``subagentBadgeHorizontalPadding`` rather than numbers of its own: the
+    /// badge already draws a reading on a ground that flips when a person is
+    /// wanted, and this is that mark answering for the turn as well as for its
+    /// subagents. Two marks in one family, not two families.
+    static let readingGroundHeight: CGFloat = 16
+    static var readingGroundCornerRadius: CGFloat { subagentBadgeCornerRadius }
+    static var readingGroundPadding: CGFloat { subagentBadgeHorizontalPadding }
+    /// What a ground adds to the reading it wraps.
+    static var readingGroundWidthCost: CGFloat { readingGroundPadding * 2 }
+
     /// One badge's width, hugging its digits at the minimum size and growing
     /// only when a wider count needs it.
     static func subagentBadgeWidth(_ count: Int) -> CGFloat {
@@ -460,10 +482,19 @@ enum PanelMetrics {
 
     /// Everything the trailing slot actually draws: the badges, the timer, and
     /// the gap between them when both are present.
+    ///
+    /// **The reading carries its ground's room whether or not the ground is
+    /// drawn.** A bar whose reading gained `8` at the moment a turn started
+    /// waiting would move every mark on it at exactly the moment the surface
+    /// is asking for attention -- which is the movement `dual-agent-design.md`
+    /// §10 already refused for the badge flip beside it, and the reason the
+    /// session-dot column is reserved rather than packed (§11). So the room is
+    /// bought once, permanently, and the flip is a change of colour and
+    /// nothing else.
     static func compactTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
         let badgesWidth = subagentBadgesWidth(trailing.badges)
         guard let timerText = trailing.timerText else { return badgesWidth }
-        let timerWidth = textWidth(timerText, font: timerFont)
+        let timerWidth = textWidth(timerText, font: timerFont) + readingGroundWidthCost
         guard badgesWidth > 0 else { return timerWidth }
         return badgesWidth + subagentBadgeTimerSpacing + timerWidth
     }
@@ -877,8 +908,13 @@ enum PanelMetrics {
     /// surface will ever show. So the slot grows to fit that reading and
     /// shrinks back when it goes -- a movement caused by something appearing,
     /// which is the one kind this surface already accepts.
+    ///
+    /// The reservation carries the reading's ground for the reason
+    /// ``compactTrailingReadingWidth`` does: the room is the same whether the
+    /// ground is filled or clear, so a turn that starts waiting moves nothing.
     static func compactTrailingSlotWidth(trailing: CompactTrailingReading) -> CGFloat {
         let reservation = textWidth(timerSlotTemplate, font: timerSlotFont)
+            + readingGroundWidthCost
         guard !trailing.isEmpty else { return reservation }
         return max(reservation, compactTrailingReadingWidth(trailing))
     }
@@ -1702,6 +1738,63 @@ final class MonitorStore: ObservableObject {
             since: session.startedAt,
             now: Self.readableNow(timerNow, forStart: session.startedAt)
         )
+    }
+
+    /// What a finished row's slot draws: the length of the turn that ended.
+    ///
+    /// **A reading that has stopped, not one that is paused.** It is measured
+    /// between the turn's own two stamps and never against the tick, so it is
+    /// the same figure on every refresh for as long as the row is listed --
+    /// which is the whole of what makes it read as a record rather than as a
+    /// clock somebody forgot to restart.
+    ///
+    /// `nil` on a row that is still timing (its live reading is
+    /// ``elapsedText(for:)``) and on one whose end was never observed, where a
+    /// duration would have to be invented.
+    func finishedElapsed(for session: MonitoredSession) -> (start: Date, end: Date)? {
+        guard !session.status.keepsTiming,
+              let startedAt = session.startedAt,
+              let finishedAt = session.finishedAt,
+              finishedAt >= startedAt
+        else { return nil }
+        return (startedAt, finishedAt)
+    }
+
+    /// ``finishedElapsed(for:)`` as the row draws it.
+    func finishedElapsedText(for session: MonitoredSession) -> String? {
+        guard let span = finishedElapsed(for: session) else { return nil }
+        return SessionElapsedFormatter.elapsed(since: span.start, now: span.end)
+    }
+
+    /// ``finishedElapsed(for:)`` as VoiceOver has to hear it.
+    func spokenFinishedElapsedText(for session: MonitoredSession) -> String? {
+        guard let span = finishedElapsed(for: session) else { return nil }
+        return SessionElapsedFormatter.spokenElapsed(since: span.start, now: span.end)
+    }
+
+    /// Whether a row's body line carries the searchlight.
+    ///
+    /// **The row's own turn is the only input.** A finished turn's body is the
+    /// answer it produced, and it does not sweep even while subagents it
+    /// started are still working: the text the band would cross is that turn's
+    /// own final output, and the badge in the slot is what speaks for what is
+    /// still in flight.
+    ///
+    /// Motion answers *live or finished*, which is the one thing here that can
+    /// be read without looking straight at the panel. It is also the channel
+    /// Reduce Motion takes away, which is why the reading's ground has to say
+    /// the state on its own rather than lean on this.
+    func sweepsBody(for session: MonitoredSession) -> Bool {
+        session.status.keepsTiming && !reduceMotion
+    }
+
+    /// Whether the collapsed reading draws its ground filled.
+    ///
+    /// The bar's own aggregate, not the subagent flip beside it: each badge on
+    /// that bar already answers for its product, and the reading is the one
+    /// thing there that speaks for the turns.
+    var compactReadingWantsPerson: Bool {
+        status.wantsPerson
     }
 
     /// The instant a readout is drawn at, never earlier than the turn it draws.

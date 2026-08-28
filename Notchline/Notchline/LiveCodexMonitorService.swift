@@ -2123,7 +2123,12 @@ enum CodexSnapshotParser {
             status: status,
             startedAt: state.startedAt,
             runningSubagentCount: state.runningSubagentIDs.count,
-            subagentsAwaitingApprovalCount: subagentsAwaitingApprovalCount
+            subagentsAwaitingApprovalCount: subagentsAwaitingApprovalCount,
+            // How long the turn took, for the row that draws it once the clock
+            // has stopped. `lastEventAt` is the turn's own last moment and is
+            // held there against a subagent's chatter, which is what makes it
+            // an end rather than a moving target.
+            finishedAt: status == .completed ? state.lastEventAt : nil
         )
     }
 

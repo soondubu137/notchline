@@ -1655,7 +1655,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // Claude Code opens next. The `Stop` that finished this turn said
             // which of the two terminals it was, and a turn that stopped in
             // order to wait is not a thread that has finished.
-            isPausedForBackgroundWork: turn.pausedForBackgroundWork
+            isPausedForBackgroundWork: turn.pausedForBackgroundWork,
+            // How long the turn took, for the row that draws it once the clock
+            // has stopped. `lastEventAt` is the turn's own last moment and is
+            // held there against a subagent's chatter, which is what makes it
+            // an end rather than a moving target on the rows this product can
+            // leave working after their turn.
+            finishedAt: turn.status == .completed ? turn.lastEventAt : nil
         )
     }
 

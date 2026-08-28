@@ -159,6 +159,16 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
+    /// Whether the collapsed surface is reporting that a person is wanted.
+    ///
+    /// What the bar's own reading answers with its ground. Deliberately the
+    /// aggregate turn state and not the subagent flip beside it: each badge on
+    /// that bar already flips on its own product's account, and the reading is
+    /// the one thing there that speaks for the turns.
+    var wantsPerson: Bool {
+        self == .inputNeeded || self == .approvalNeeded
+    }
+
     var isRunning: Bool {
         self == .running
     }
@@ -212,6 +222,20 @@ enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     /// seeing -- so the timer deliberately does not pause for it.
     var keepsTiming: Bool {
         self != .completed
+    }
+
+    /// Whether this turn is stopped on something only a person can answer.
+    ///
+    /// The attention channel, in one place rather than spelled out at each of
+    /// the surfaces that reads it. Brightness is what this surface says it
+    /// with -- a reading's ground flips to white here and stays dim otherwise.
+    ///
+    /// This is the turn's own answer only. A row can want a person on its
+    /// subagents' account while its turn is in neither of these states, so the
+    /// row combines this with ``MonitoredSession/subagentsAwaitingApproval``
+    /// rather than reading it alone.
+    var wantsPerson: Bool {
+        self == .inputNeeded || self == .approvalNeeded
     }
 
     var monitorStatus: MonitorStatus {
@@ -462,6 +486,22 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// ``runningSubagentCount`` was on this one until its two boundaries were
     /// registered.
     let isPausedForBackgroundWork: Bool
+    /// When this turn ended, for the rows that have ended.
+    ///
+    /// **The one fact a finished row still owns.** Its slot used to draw
+    /// nothing at all, which made `Completed` findable only by checking the
+    /// rows around it for a timer this one lacked; it now draws how long the
+    /// turn took, which needs an end as well as a ``startedAt``.
+    ///
+    /// Taken from the turn's own last event rather than from a stamp of its
+    /// own. That stamp is deliberately immune to a subagent's chatter -- see
+    /// ``HookTurnState/lastSubagentBoundaryAt`` -- which is exactly the
+    /// property this reading depends on: a finished turn whose subagents are
+    /// still working must not go on counting.
+    ///
+    /// `nil` on every unfinished row, where the clock is still running and the
+    /// reading comes from ``startedAt`` and the tick instead.
+    let finishedAt: Date?
 
     nonisolated init(
         agent: AgentKind = .codex,
@@ -474,7 +514,8 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         startedAt: Date?,
         runningSubagentCount: Int = 0,
         subagentsAwaitingApprovalCount: Int = 0,
-        isPausedForBackgroundWork: Bool = false
+        isPausedForBackgroundWork: Bool = false,
+        finishedAt: Date? = nil
     ) {
         self.agent = agent
         self.threadID = threadID
@@ -487,6 +528,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.runningSubagentCount = runningSubagentCount
         self.subagentsAwaitingApprovalCount = subagentsAwaitingApprovalCount
         self.isPausedForBackgroundWork = isPausedForBackgroundWork
+        self.finishedAt = finishedAt
     }
 
     /// Whether the row says work is still in flight beside its own turn.
