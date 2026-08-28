@@ -26277,7 +26277,16 @@ extension NotchlineTests {
         let repository = HookEventRepository(paths: paths)
         try await installer.install()
 
-        let now = Date()
+        // The window this is about is two seconds wide and the assertions
+        // below wait on a socket, so the clock has to be the test's: on the
+        // system clock the second wait raced that window, and a slow machine
+        // read the row after it had closed rather than inside it. Every
+        // timestamp in this test -- the payload stamps, the thread's
+        // `updatedAt` and the service's own `now` -- comes off this one
+        // instant, so the arithmetic the gate does is fixed before the first
+        // `fetchSnapshot`.
+        let clock = TestClock()
+        let now = clock.now()
         func deliver(_ body: [String: Any], secondsAgo: TimeInterval) throws {
             var payload = body
             payload["received_at"] = now.addingTimeInterval(-secondsAgo)
@@ -26316,6 +26325,7 @@ extension NotchlineTests {
             hookEvents: repository,
             hookRegistrar: installer,
             unreadState: unreadState,
+            clock: clock,
             desktopProcessIdentifierProvider: { 4_242 }
         )
         defer { Task { await service.disconnect() } }
