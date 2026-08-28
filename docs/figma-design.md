@@ -100,7 +100,14 @@ Figma 文件中的本地 Text Styles 与所有已有/新增文字层均使用 `S
 
 **画 `Colour bar` 竖条时缩进改为 `12` + `6`。** 竖条就画在行块前缘，所以行块的缩进就是竖条的位置：留在 `6` 上，它比上方状态矩阵、下方额度规则都朝里半个 `12`，差一点对齐比不对齐更像做错。因此只在竖条**画出来的时候**（两个产品都在，见 [`dual-agent-design.md`](dual-agent-design.md) §4）行块让出整 `12`，行内边距同时由 `6` 改为 `8`——它此时不再是「离面板边多远」而是「离那条 `2pt` 线多远」，`6` 会让线和字读成一个东西——行内文字因此落在 `20`，站到竖条后面而不是骑在上面；行块此时 `520 − 12 − 12 = 496`，与内容盒同宽。单产品时没有竖条，行块回到 `6` + `6`，文字仍落在 `12`。这条几何由 `MonitorStore.sessionRowGutter` 与 `sessionRowPadding` 提供，`theAttributionRailLandsOnThePanelsOwnMargin` 与 `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn` 锁定。
 
-目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。例如无刘海 `24` 高菜单栏的展开参考尺寸为 `520 × 280`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed`、`Version unsupported` 等最长状态名完整位于可显示区域。状态名不再指名产品（§6.6），因此这条加宽只取决于遮挡宽度，与用户装了哪些产品无关：单侧为 `12 + 16.6 + 12 + 124.88 + 8 = 173.48`，`520` 的基线要到遮挡超过 `173` 才被顶开。
+目标显示器菜单栏高度不是 `46` 时，顶部汇总区使用真实菜单栏高度，总高度为 `menuBarHeight + 256`。例如无刘海 `24` 高菜单栏的展开参考尺寸为 `520 × 280`。带物理刘海时，宽度还要根据中央不可显示区继续增加，确保 `Approval needed`、`Input needed` 等最长状态名完整位于可显示区域。单侧按顶栏**实际画出来的那一侧**算：`12 + 标记 + 12 + 最长可达状态名 + 8`。
+
+- 标记是 `PanelMetrics.marksWidth(markCount)`，含每个产品预留的会话计数点列（§4.6）：单产品 `22.26`，双产品 `50.51`。
+- 「最长可达」指 `MonitorAggregation.status` 能给出的那几个，最长是 `Approval needed`（`102`，按标签自己的取整宽度）。`Version unsupported`（`125`）等四句只在设置窗口出现，顶栏无从说出，**不参与预留**。
+
+于是单产品单侧 `156.25`、双产品 `184.51`：`200` 遮挡下单产品仍取 `520` 基线，双产品为 `570`；`220` 遮挡下分别是 `533` 与 `590`。
+
+> **这条加宽现在取决于连了几个产品，之前不取决于。** 旧式子按一枚裸矩阵 `16.6` 算，是单产品无点列时代的写法；同一个式子又按 `MonitorStatus.allCases` 折最长名，为顶栏说不出的 `Version unsupported` 多留了 `23.3`。多留的那段恰好盖住了第二枚矩阵的 `22.6`（余 `0.72`），直到点列的 `11.31` 把它透支 `10.59`——`200` 遮挡、两个产品、`Approval needed` 时，最后 `2.57` 落在刘海底下，`8` 的净空更是早就没了。两处一起改：一侧按 `marksWidth` 量，折的集合收到顶栏真能说出的那几个。由 `everySentenceTheExpandedHeaderCanSayClearsTheCutOut` 与 `theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames` 锁定；它替换掉的那条断言拿 `expandedStatusReadoutWidth` 当「所需宽度」，与被检查的式子是同一个，因此在任何标记数下都只会通过。
 
 Panel 外轮廓有**两个**圆角，因为刘海本身有两个：侧边与屏幕上沿相接处是一段向外的小凹弧，下面两角是它的两倍。两者都不是常数，而是菜单栏高度的固定比例：
 

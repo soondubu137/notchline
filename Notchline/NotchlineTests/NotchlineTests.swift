@@ -2423,7 +2423,19 @@ struct NotchlineTests {
             centerOcclusionWidth: 0,
             compactHeight: 24
         )
+        // Two marks, because that is now what decides whether a cut-out
+        // outgrows the baseline at all: one product's readout fits inside `520`
+        // beside a `200` cut-out, and the panel stays at the baseline there.
         let notchedSize = PanelMetrics.size(
+            geometry: .notched,
+            isExpanded: true,
+            statusReadoutText: "Running",
+            trailing: .empty,
+            centerOcclusionWidth: 200,
+            compactHeight: 38,
+            matrixCount: 2
+        )
+        let notchedSingle = PanelMetrics.size(
             geometry: .notched,
             isExpanded: true,
             statusReadoutText: "Running",
@@ -2434,28 +2446,113 @@ struct NotchlineTests {
 
         #expect(noNotchSize.width == 520)
         #expect(notchedSize.width > noNotchSize.width)
+        #expect(notchedSingle.width == noNotchSize.width)
         #expect(noNotchSize.height == 24 + PanelMetrics.expandedContentHeight)
         #expect(notchedSize.height == 38 + PanelMetrics.expandedContentHeight)
     }
 
-    /// Every state's sentence clears a wide cut-out — and the width that
-    /// clears them no longer depends on which products are set up.
+    /// Every sentence this header can say clears the cut-out, at every mark
+    /// count — measured the way the header *draws* it.
+    ///
+    /// What this replaces built its `required` out of
+    /// ``PanelMetrics/expandedStatusReadoutWidth(status:markCount:)``, the same
+    /// expression the width is composed from, so it could only ever pass: it
+    /// checked the formula against itself, and went on passing while a second
+    /// matrix and then two session columns arrived on the side it was
+    /// measuring. Nothing about the mark count could reach it.
+    ///
+    /// This one composes the leading side the way `StatusReadout` does, and
+    /// takes the glyphs at the width the *label* rasterises them —
+    /// ``NotchTextRaster/textSize(_:font:)``, which ceils where `PanelMetrics`
+    /// did not, so a reservation a fraction short of the drawing fails here.
     @Test
-    func expandedWidthKeepsEveryStatusNameClearOfWideNotch() {
-        let centerOcclusionWidth: CGFloat = 220
-        let width = PanelMetrics.expandedWidth(
-            centerOcclusionWidth: centerOcclusionWidth
-        )
-        let availableSideWidth = (width - centerOcclusionWidth) / 2
+    func everySentenceTheExpandedHeaderCanSayClearsTheCutOut() {
+        // The font `StatusReadout` leaves `SearchlightLabel` to default to.
+        let font = NSFont.systemFont(ofSize: 13, weight: .light)
 
-        // Only the status readout flanks the notch now; usage moved to the
-        // footer.
-        for status in MonitorStatus.allCases {
-            let requiredWidth = PanelMetrics.expandedHorizontalPadding
-                + PanelMetrics.expandedStatusReadoutWidth(status: status)
-                + PanelMetrics.expandedNotchClearance
-            #expect(requiredWidth <= availableSideWidth)
+        // One product and both; cut-outs from `Larger Text` (`127`) up to
+        // `More Space` (`220`), taking in the `168` at which the old width
+        // started drawing the sentence under the hardware.
+        for markCount in 1...AgentKind.allCases.count {
+            for occlusion in [127, 152, 168, 200, 220] as [CGFloat] {
+                let width = PanelMetrics.expandedWidth(
+                    centerOcclusionWidth: occlusion,
+                    markCount: markCount
+                )
+                // The expanded panel is centred on the display rather than
+                // pinned to the cut-out, so each side gets half of what the
+                // cut-out leaves.
+                let availableSideWidth = (width - occlusion) / 2
+
+                for status in PanelMetrics.workingStatuses {
+                    let drawn = PanelMetrics.expandedHorizontalPadding
+                        + PanelMetrics.marksWidth(markCount)
+                        + PanelMetrics.expandedReadoutSpacing
+                        + NotchTextRaster.textSize(
+                            status.displayName,
+                            font: font
+                        ).width
+                    #expect(
+                        drawn + PanelMetrics.expandedNotchClearance
+                            <= availableSideWidth
+                    )
+                }
+            }
         }
+    }
+
+    /// The width answers to the marks, and stops paying for sentences the
+    /// header cannot say.
+    ///
+    /// Both halves are the same correction. Reserving for one bare matrix was
+    /// `33.9` short of what two products draw; folding over
+    /// `MonitorStatus.allCases` was `23.3` long, for a `Version unsupported`
+    /// no aggregate can produce. The long half covered the short one until the
+    /// session columns arrived, and then it did not.
+    @Test
+    func theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames() {
+        // At a `200` cut-out this was `547` whatever was connected. Measured
+        // against what the header draws, one product does not need the cut-out
+        // branch at all and takes the baseline; two ask for more than the `547`
+        // that was not enough for them.
+        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 200, markCount: 1) == 520)
+        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 200, markCount: 2) == 570)
+        // The widest cut-out this app has measured, where one product needs the
+        // branch too.
+        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 220, markCount: 1) == 533)
+        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 220, markCount: 2) == 590)
+        // No cut-out, no sum: the baseline stands whatever is connected.
+        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 0, markCount: 2) == 520)
+
+        // What the second mark costs the side is the mark and the pair gap --
+        // the column included, because the panel reserves every mark's column
+        // whatever the counts are doing (§11).
+        #expect(
+            abs(
+                PanelMetrics.expandedStatusReadoutWidth(status: .approvalNeeded, markCount: 2)
+                    - PanelMetrics.expandedStatusReadoutWidth(status: .approvalNeeded, markCount: 1)
+                    - (PanelMetrics.statusMatrixSize
+                        + PanelMetrics.compactMatrixSpacing
+                        + PanelMetrics.sessionDotColumnWidth())
+            ) < 0.001
+        )
+
+        // The set the fold runs over is the aggregate's own, and the names it
+        // leaves out are the wide ones: `Version unsupported` alone would add
+        // `23` to each side, `46` to the panel, for a sentence this header has
+        // no way to reach.
+        #expect(!PanelMetrics.workingStatuses.contains(.unsupportedVersion))
+        #expect(!PanelMetrics.workingStatuses.contains(.setupRequired))
+        let widestReachable = PanelMetrics.workingStatuses
+            .map { PanelMetrics.expandedStatusReadoutWidth(status: $0, markCount: 2) }
+            .max() ?? 0
+        #expect(
+            widestReachable
+                < PanelMetrics.expandedStatusReadoutWidth(
+                    status: .unsupportedVersion,
+                    markCount: 2
+                )
+        )
     }
 
     @Test

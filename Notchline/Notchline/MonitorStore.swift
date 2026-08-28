@@ -768,7 +768,10 @@ enum PanelMetrics {
                 )
             }
             return CGSize(
-                width: expandedWidth(centerOcclusionWidth: centerOcclusionWidth),
+                width: expandedWidth(
+                    centerOcclusionWidth: centerOcclusionWidth,
+                    markCount: matrixCount
+                ),
                 height: compactHeight + expandedContentHeight
             )
         }
@@ -954,7 +957,14 @@ enum PanelMetrics {
         return max(reservation, compactTrailingReadingWidth(trailing))
     }
 
-    /// What the collapsed surface can say while an agent is connected.
+    /// What either surface can say while an agent is connected.
+    ///
+    /// Both read the same aggregate (`MonitorStore.status`), so this is the
+    /// collapsed pill's vocabulary and the expanded header's alike — the pill
+    /// draws the short name and the header the long one. `Disconnected` is out
+    /// of both: with nothing connected the collapsed form is the resting pill
+    /// and the expanded form is that same pill widened
+    /// (``MonitorStore/expandsToPillOnly``), and neither is sized from here.
     static let workingStatuses = MonitorStatus.collapsedReachable
         .subtracting([.disconnected])
 
@@ -981,28 +991,66 @@ enum PanelMetrics {
     /// that no status label names a product, every configured set folds to the
     /// same number and the widest name is `Version unsupported` for everybody.
     /// A Claude Code user's panel is ~79pt narrower for it.
-    static func expandedWidth(centerOcclusionWidth: CGFloat) -> CGFloat {
+    /// - Parameter markCount: How many marks the header draws, which is how
+    ///   many products are connected. The resting form never reaches here — it
+    ///   expands to the pill instead — so every mark this sizes for is a
+    ///   product's, and every one of them reserves its session column.
+    static func expandedWidth(
+        centerOcclusionWidth: CGFloat,
+        markCount: Int = 1
+    ) -> CGFloat {
         guard centerOcclusionWidth >= 1 else {
             return expandedBaselineWidth
         }
 
         // Only the status readout flanks the notch now — the usage readout that
         // used to claim the trailing side moved into the footer.
-        let widestStatusReadout = MonitorStatus.allCases
-            .map(expandedStatusReadoutWidth(status:))
+        //
+        // **Only what this header can actually say**, which is
+        // ``MonitorAggregation/status(agents:sessions:)``'s answer and nothing
+        // else. The fold used to run over `MonitorStatus.allCases` and reserved
+        // for `Version unsupported` — `23.3` wider than `Approval needed`, and
+        // a sentence no aggregate can produce. That is the same over-reservation
+        // ``fixedCompactWidth(for:matrixCount:trailing:)`` was rid of for the
+        // collapsed pill (issue #29), left standing here because nothing was
+        // measuring the other side of the sum.
+        let widestStatusReadout = workingStatuses
+            .map { expandedStatusReadoutWidth(status: $0, markCount: markCount) }
             .max() ?? 0
         let requiredSideWidth = expandedHorizontalPadding
             + widestStatusReadout
             + expandedNotchClearance
+        // Doubled because the expanded panel is centred on the display rather
+        // than pinned to the cut-out (``MonitorStore/currentPanelTrailingAnchor``
+        // is nil while expanded), so the leading side can only be widened by
+        // widening both. The trailing side needs a gear and no more.
         let notchSafeWidth = centerOcclusionWidth + requiredSideWidth * 2
 
         return ceil(max(expandedBaselineWidth, notchSafeWidth))
     }
 
-    static func expandedStatusReadoutWidth(status: MonitorStatus) -> CGFloat {
-        statusMatrixSize
+    /// One reading beside the cut-out, composed the way `StatusReadout`
+    /// composes it: the marks at the room the panel reserves them, the gap, and
+    /// the sentence.
+    ///
+    /// **The marks, not one matrix.** This was `statusMatrixSize` — correct
+    /// when there was one product and nothing standing beside its matrix, and
+    /// quietly wrong from the second matrix onwards. It survived the pair
+    /// because the fold above was reserving for a sentence the header cannot
+    /// say, and that accident covered the second matrix's `22.6` with `0.72` to
+    /// spare; the session columns' `11.31` (§11) is what overdrew it. On a
+    /// `200` cut-out that put the last `2.57` of `Approval needed` behind the
+    /// hardware, with the `8` of clearance gone before it.
+    static func expandedStatusReadoutWidth(
+        status: MonitorStatus,
+        markCount: Int = 1
+    ) -> CGFloat {
+        marksWidth(markCount)
             + expandedReadoutSpacing
-            + textWidth(status.displayName, font: statusLabelFont)
+            // Ceiled, because the label rasterises its glyphs at a ceiled width
+            // (``NotchTextRaster/textSize(_:font:)``) and a reservation a
+            // fraction short of what is drawn is short.
+            + ceil(textWidth(status.displayName, font: statusLabelFont))
     }
 
     private static func textWidth(_ text: String, font: NSFont) -> CGFloat {
