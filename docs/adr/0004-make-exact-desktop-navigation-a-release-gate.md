@@ -1,7 +1,7 @@
-# 将精确 Desktop 会话导航作为发布门槛（仅 Codex）
+# Make exact Desktop navigation a release gate (Codex only)
 
-每个 Codex 列表行都承诺返回产生该状态的同一 Codex Desktop 会话，因此 V1 只接受受支持的 `threadId → Desktop 同一页面` 导航契约。只打开 Codex 首页、按标题搜索、猜测 URL、调用私有 IPC 或用辅助功能点击都被拒绝；如果目标 Codex 版本没有可验证的精确导航能力，该版本不能被标记为 V1 支持。
+Every Codex row promises a return to the same Codex Desktop Thread that produced its state, so V1 accepts only a supported `threadId → the same Desktop page` contract. Opening the Codex home page, searching by title, guessing a URL, calling private IPC, or clicking through Accessibility are all rejected. A Codex version with no verifiable exact navigation cannot be marked as supported by V1.
 
-**该门槛按产品成立，只约束 Codex。** Claude Code 目前不存在任何受支持的方式聚焦一个已经存在的会话——官方 deep link 只能新建——所以把这条无条件地套用到第二个产品，等于用一个并不存在的能力去阻塞它。Claude Code 行的成功定义因此降级为唤起其宿主：Desktop 托管的会话激活 Claude Desktop，终端里的会话聚焦其标签页。降级是**不加标记**的：一行只携带一个标记，而那个标记是计时。因此点击后的那句反馈是唯一能说出差别的地方，它必须报告实际做到了什么，而不是照抄 Codex 的说法（见 `NavigationOutcome`）。
+**The gate holds per product and binds only Codex.** Claude Code has no supported way to focus a Thread that already exists — the official deep link can only create a new one — so applying this unconditionally to the second product would block it on a capability that does not exist. Success for a Claude Code row is therefore reduced to raising its host: a Desktop-hosted Thread activates Claude Desktop, a terminal Thread focuses its tab. The reduction carries **no marker**: a row carries one marker and that marker is its timer. The sentence shown after the click is the only place the difference can be stated, so it must report what was actually done rather than copy Codex's wording (see `NavigationOutcome`).
 
-一旦官方为本地会话提供 deep link，Claude Code 应迁移过去，本条降级随之作废。
+Once an official deep link to a local Thread exists, Claude Code migrates to it and this reduction lapses.

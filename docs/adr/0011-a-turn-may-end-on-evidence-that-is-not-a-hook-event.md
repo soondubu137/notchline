@@ -1,93 +1,93 @@
-# 一个 Turn 可以由「不是 Hook 事件」的证据结束
+# A Turn may end on evidence that is not a Hook event
 
-Claude Code 里用户按 `Esc` 中断一个轮次时，**不会有任何 hook 到达**。实测 2.1.235（2026-08-18）：CLI 的 hook 事件表共 31 个事件，其中没有任何一个表示取消或中断；查询循环的每一条中断路径都在跑 `Stop` hook 之前就返回了（子 agent 的 `SubagentStop` 反而会跑，代码里那行日志写着 `SubagentStop on interrupted query failed`——主 agent 没有对应物）。中断后到达的下一个事件是会话退出时的 `SessionEnd`。
+When a user presses `Esc` to interrupt a Turn in Claude Code, **no hook arrives at all**. Measured on 2.1.235 (2026-08-18): the CLI's hook event table has 31 events and none of them means cancelled or interrupted, and every interrupt path in the query loop returns before the `Stop` hook runs (a subagent's `SubagentStop` does run — the log line in the code reads `SubagentStop on interrupted query failed` — with no main-agent counterpart). The next event after an interrupt is `SessionEnd` when the session exits.
 
-因此那一行会停在中断发生时的状态：*Running* 且计时继续；如果 `Esc` 落在审批对话框上，它会永远停在 **Approval needed**——一个明确要求用户去处理、而没有任何人在等的状态。（当时的启动前重建同样受影响：中断在 transcript 里就是一条普通的 `user` 记录，带着被中断那一轮的 prompt id，所以重建也会把它读成「还在跑」。那条重建已于 2026-08-19 移除，本决定的其余部分不依赖它。）
+So the row freezes in whatever state the interrupt caught it: *Running* with its timer still counting, or — if `Esc` landed on an approval dialogue — permanently at **Approval needed**, a state that explicitly asks the user to act while nobody is waiting.
 
-## 决定
+## Decision
 
-**允许一份非事件的证据结束一个已经开着的 Turn，且只允许结束。** 那份证据是 Claude Code 会话自己报告的工作状态：`claude agents --json` 除身份之外还给出 `status`（`busy` / `waiting` / `idle` / `shell`）与 `waitingFor`。当会话报告 `idle` 或 `shell` 而 reducer 手里还开着这个会话的轮次时，该轮次进入 Completed。
+**Allow one non-event piece of evidence to end an already-open Turn, and only to end it.** That evidence is the working status a Claude Code session reports about itself: besides identity, `claude agents --json` gives `status` (`busy` / `waiting` / `idle` / `shell`) and `waitingFor`. When a session reports `idle` or `shell` while the reducer still holds an open Turn for it, that Turn goes to Completed.
 
-四条边界，缺一不可：
+Four boundaries, all required:
 
-1. **它不能开启、命名或描述任何 Turn。** 这份读数里没有轮次身份，一个字都没有。它只能对 reducer 已经持有的那个轮次说一句「不再有人在做它了」。Running / Input needed / Approval needed 仍然只由 Hook 决定。
-2. **它在 reducer 内部生效**：`HookEventRepository.endTurnsForStoppedSessions(_:)`。「只有一个 Turn reducer」因此在字面上仍然成立——服务层交出的是一件关于**会话**的事实，不是一个改好的轮次。Codex 侧的 `removeThreads(notIn:snapshotStartedAt:)` 早已是同样的形状：第二个来源在同一个 actor 里、带顺序护栏地退休东西。
-3. **顺序护栏：读数必须整段晚于该轮次的最后一个事件**，比较用命令**开始**运行的时刻，而不是它答复的时刻。列表最多缓存 30 秒，手里的答案常常比之后到达的事件旧；用答复时刻比较，一次跨越提交瞬间的读取会把它根本没看见的那个轮次报成空闲。
-4. **只有肯定的停止才作数。** `busy` 与 `waiting` 是会话在工作——`waiting` 时轮次活着，只是停在用户面前，那是 reducer 自己的状态，不容这份读数覆盖。**完全没有这个字段**同样什么都不做：桌面端托管的会话永远没有它（见 #41，它把 CLI 跑成 `stream-json`，没有终端界面，而这个字段正是终端界面写出来的），旧版本 CLI 也没有。沉默不是「空闲」的另一种说法。
+1. **It may not open, name or describe any Turn.** This reading contains no Turn identity whatsoever. It can only tell the reducer, about a Turn it already holds, that nobody is working on it any more. Running / Input needed / Approval needed remain Hook-decided.
+2. **It takes effect inside the reducer**: `HookEventRepository.endTurnsForStoppedSessions(_:)`. "One Turn reducer" therefore still holds literally — the service layer hands over a fact about a **session**, not an amended Turn. The Codex side's `removeThreads(notIn:snapshotStartedAt:)` has long had the same shape: a second source retiring something inside the same actor, behind an ordering guard.
+3. **Ordering guard: the reading must be entirely later than the Turn's last event**, comparing against the moment the command **started** running, not when it answered. The list is cached for up to 30 seconds and the answer in hand is often older than events that arrive afterwards; comparing at answer time would let a read spanning a submission report a Turn it never saw as idle.
+4. **Only a positive stop counts.** `busy` and `waiting` mean the session is working — under `waiting` the Turn is alive and merely parked in front of the user, which is the reducer's own state and not this reading's to overwrite. **The field being absent entirely** likewise does nothing: a desktop-hosted session never has it (see #41 — it runs the CLI as `stream-json` with no terminal interface, and this field is written by the terminal interface), and neither do older CLI versions. Silence is not another way of saying idle.
 
-## 这不违反「状态永不猜测」
+## This does not violate "state is never guessed"
 
-`AGENTS.md` §6.2 禁止的是**用计时器推断业务状态**。这里没有计时器：一个安静了很久的轮次不是一个结束了的轮次，这条判断今天仍然成立，也正是本仓库始终没有为中断加超时的原因。改变的是出现了一份可以观察的证据——会话不再说自己在忙——而不是出现了一个新的猜法。
+`AGENTS.md` §6.2 forbids **inferring business state from a timer**. There is no timer here: a Turn that has been quiet for a long time is still not a Turn that ended, which is why this repository has never added a timeout for interrupts. What changed is that observable evidence appeared — the session no longer says it is working — not that a new way of guessing did.
 
-同样的原因，本决定**不**采用另一条路：去 transcript 里匹配 `[Request interrupted by user]` 这串固定文案。那要么让产品去读消息正文（与已经写下的承诺冲突），要么依赖一条结构规则去分辨中断记录与斜杠命令记录。会话状态更近、更快、更便宜，而且它就在本应用已经当作权威的那条命令的输出里。
+For the same reason this decision does **not** take the other route: matching the fixed string `[Request interrupted by user]` in the transcript. That would either make the product read message bodies (conflicting with a promise already written down) or rest on a structural rule for telling an interrupt record from a slash-command record. Session status is nearer, faster and cheaper, and it is already in the output of a command this app treats as authoritative.
 
-## 代价
+## Costs
 
-- **桌面端托管的会话得不到修复**（#41）。它们不报 `status`，按第 4 条什么也不会发生：那些行仍然会停住，和今天一样。这是一次刻意的部分修复。**2026-08-19 补上了，见下。**
-- **多了一个非公开依赖**：那条命令是公开的，`--json` 也是公开的，但这几个字段的词表与语义不是。它登记在 `non-public-codex-integration-features.md` 里，词表之外的任何取值一律当作「没有报告」而不是猜测它属于工作还是空闲——猜错的方向是把一个活着的轮次从用户眼前退休掉。
-- **它需要一条自己的边沿。** 那份记录是原地重写的，目录级 watcher 不会为此触发（实测：原地重写 0 次事件），所以这份读数原本要等下一次刷新才会被看见——最坏一个心跳（60 秒）。随后加上的 `ClaudeCodeSessionRecordWatcher` 直接监听那些轮次仍在跑的会话的记录文件（仍然只当信号、不解析内容），把它压回一次去抖的时间。本决定不依赖它：没有那条边沿，结论一样成立，只是慢。
+- **Desktop-hosted sessions are not fixed** (#41). They do not report `status`, so by boundary 4 nothing happens and those rows still freeze. A deliberately partial fix. **Filled in 2026-08-19, below.**
+- **One more non-public dependency**: the command is public and so is `--json`, but these fields' vocabulary and semantics are not. It is registered in `non-public-codex-integration-features.md`, and any value outside the vocabulary is treated as "did not report" rather than guessed into working or idle — the wrong guess retires a live Turn out from in front of the user.
+- **It needs an edge of its own.** That record is rewritten in place and a directory-level watcher does not fire for it (measured: an in-place rewrite produces 0 events), so this reading would otherwise wait for the next refresh — at worst one heartbeat (60 seconds). `ClaudeCodeSessionRecordWatcher`, added afterwards, watches the record files of sessions whose Turns are still running (still only as a signal, never parsing contents), compressing that to one debounce. This decision does not depend on it: without the edge the conclusion is the same, only slower.
 
-## 补充（2026-08-19）：第二份证据，它指名轮次
+## Addendum, 2026-08-19: a second piece of evidence, and it names the Turn
 
-上面那份「代价」里的第一条已经不成立了。桌面端托管的会话仍然永远不报 `status`——那是终端界面写的，而它们没有终端界面，本决定关于这一点的判断没有变——但它们并非什么都不留下：Claude Code 中止一轮时会往自己的 transcript 里写一条 `user` 记录，而那条记录带着被中止那一轮的 `promptId`。**因此允许第二份非事件证据结束一个已经开着的 Turn，同样只允许结束**：`HookEventRepository.endInterruptedTurns(_:)`。
+The first cost above no longer holds. Desktop-hosted sessions still never report `status` — that is written by the terminal interface and they have none, and this decision's judgement on that is unchanged — but they do not leave nothing behind: when Claude Code aborts a Turn it writes a `user` record into its own transcript, and that record carries the aborted Turn's `promptId`. **So a second non-event evidence may end an already-open Turn, again only end it**: `HookEventRepository.endInterruptedTurns(_:)`.
 
-**这推翻了上面那段拒绝，理由要写清楚。** 原文拒绝 transcript 这条路，说它「要么让产品去读消息正文，要么依赖一条结构规则去分辨中断记录与斜杠命令记录」。第一半仍然是对的、也仍然不做；第二半是错的：那条规则存在，只是要比当时想的多问一句。规则是——一条 `user` 记录，`message.content` **恰好是一个 `text` 块**，没有 `promptSource`，没有 `isMeta`。2026-08-19 在本机全部 transcript 上实测（205 个文件、7,438 条 `user` 记录）：命中 15 条中断记录中的 15 条，其余一条不中。少问 `content` 形状的那个版本会另外命中 202 条斜杠命令与 `<local-command-stdout>` 记录，其中 23 条后面还有模型在同一个 `promptId` 上继续工作——所以那不是一条「不够精确」的规则，而是一条会把还在跑的轮次退休掉的规则，这句话必须由测量来说，不能靠推理。
+**This overturns the rejection above, and the reason must be stated.** The original text rejected the transcript route as "either the product reads message bodies, or it rests on a structural rule for telling an interrupt record from a slash-command record". The first half is still true and still not done; the second half was wrong — the rule exists, it just has to ask one more question than was assumed. The rule is: a `user` record whose `message.content` is **exactly one `text` block**, with no `promptSource` and no `isMeta`. Measured 2026-08-19 across every transcript on this machine (205 files, 7,438 `user` records): it matched 15 of 15 interrupt records and nothing else. The version without the `content` shape check also matched 202 slash-command and `<local-command-stdout>` records, 23 of which had the model continuing to work on the same `promptId` afterwards — so that is not an imprecise rule but a rule that retires running Turns, and that sentence has to come from measurement rather than reasoning.
 
-第 1 条边界因此要改写，而不是照抄。原文写的是「它不能开启、命名或描述任何 Turn」，其中「命名」当时描述的是证据本身的形状——会话状态那份读数里没有轮次身份。这份有：`promptId` 就是 hook 的 `prompt_id`（2.1.237 实测，`UserPromptSubmit` 与中断记录带同一个 id）。**带着身份的证据被钉得更紧，不是更松**：它只能结束它指名的那个轮次，指到 reducer 没在持有的轮次就什么也不做；不带身份的那份只能对「此刻开着的那个」发话。所以边界的正确写法是**能力**而不是形状：两份证据都只能**结束**一个已经开着的 Turn，都不得开启或描述任何 Turn；能指名的那份还必须指对。
+Boundary 1 therefore needs rewriting rather than restating. It said "it may not open, name or describe any Turn", where "name" described the shape of the evidence itself: the session-status reading holds no Turn identity. This one does — `promptId` is the hook's `prompt_id` (measured on 2.1.237: `UserPromptSubmit` and the interrupt record carry the same id). **Evidence that carries identity is pinned tighter, not looser**: it can end only the Turn it names, and does nothing when it names a Turn the reducer does not hold, whereas the identity-free reading can only speak about "whichever one is open now". So the boundary is properly written as a constraint on **capability**, not on shape: both pieces of evidence may only **end** an already-open Turn and may never open or describe one, and the one that can name a Turn must also name the right one.
 
-其余三条边界原样成立。顺序护栏在这里更准——比较用的是记录被**写下**的时刻，而不是本应用读到它的时刻。「只有肯定的停止才作数」也一样：没有那条记录就什么都不做，一条读不出时间戳、或者结构对不上的记录同样什么都不做。
+The other three boundaries hold unchanged. The ordering guard is sharper here — it compares against the moment the record was **written**, not the moment this app read it. So is "only a positive stop counts": no record, nothing happens; a record with an unreadable timestamp or a structure that does not match, likewise nothing.
 
-代价：**多了一个非公开依赖的用途**。transcript 本来就是本表登记的私有只读 schema（标题与当日用量都读它），这里给它加的是一个新问题——「这一轮被中断了吗」——以及一条新的结构规则，两者都登记在 `non-public-codex-integration-features.md` 里。以及一条自己的边沿：中断不会改写 `~/.claude/sessions/<pid>.json`，所以 `ClaudeCodeSessionRecordWatcher` 看不到它，`transcriptWatcher` 按文件监听那些会话的 transcript；它不把会话列表标记为过期，因为答案不在那条命令里。
+Cost: **one more use of a non-public dependency.** The transcript is already a registered private read-only schema (titles and today's usage read it); what this adds is a new question — "was this Turn interrupted?" — and a new structural rule, both registered in `non-public-codex-integration-features.md`. Plus an edge of its own: an interrupt does not rewrite `~/.claude/sessions/<pid>.json`, so `ClaudeCodeSessionRecordWatcher` cannot see it and `transcriptWatcher` watches those sessions' transcripts by file. It does not mark the session list stale, because the answer is not in that command.
 
-## 补充（2026-08-23）：同一份读数还可以结束一个**等待**
+## Addendum, 2026-08-23: the same reading can also end a **wait**
 
-上面第 4 条边界写着「`busy` 与 `waiting` 是会话在工作」，然后就把这两个词一起放过了。**放过 `busy` 是对的，只看它能不能结束轮次却漏掉了它能回答的另一个问题：对话框还在不在。**
+Boundary 4 says "`busy` and `waiting` mean the session is working", and then waves both through. **Waving `busy` through is right; what was missed is that while it cannot end a Turn, it answers a different question: is the dialogue still there?**
 
-漏掉的代价是一个明确的错报。**Claude Code 在人批准一次审批时不发出任何 hook。** `PermissionRequest` 开启等待，之后到达的下一个事件是那次调用自己的 `PostToolUse`——而它落在**工具跑完**的时刻，不是对话框关闭的时刻。命令要跑 200 ms 时这两者看不出差别，命令要跑十几秒时行就在整段执行期间写着 *Approval needed*，请用户去回答一个他刚刚已经回答过的问题。子智能体是它显形的地方（一次不被等待的 `Agent` 调用加一条长命令，父轮次早已 `Stop`），但这个形状与子智能体无关：主线程上批准一条慢命令是同一回事。
+The cost of missing it is a definite misreport. **Claude Code emits no hook when a person approves an approval.** `PermissionRequest` opens the wait, and the next event to arrive is that call's own `PostToolUse` — which lands when **the tool finishes**, not when the dialogue closes. At 200 ms the two are indistinguishable; at ten-plus seconds the row reads *Approval needed* for the whole execution, asking the user to answer a question they just answered. Subagents are where it shows (an unawaited `Agent` call plus a long command, the parent Turn long since `Stop`ped), but the shape has nothing to do with subagents: approving a slow command on the main thread is the same thing.
 
-2026-08-23 对 CLI 2.1.241 实测，一个被要求 sleep 12 秒的子智能体，父轮次 `Stop` 在 +4.90 s：
+Measured 2026-08-23 on CLI 2.1.241, a subagent asked to sleep 12 seconds, parent Turn `Stop` at +4.90 s:
 
 ```text
 +6.18  PreToolUse         agent_id=a1f0…  tool=Bash  tool_use_id=toolu_01UX…
-+6.22  PermissionRequest  agent_id=a1f0…  tool=Bash  （没有 tool_use_id）
++6.22  PermissionRequest  agent_id=a1f0…  tool=Bash  (no tool_use_id)
        claude agents --json: status=waiting, waitingFor="permission prompt"   [+6.37 … +8.37]
-+9.35  人按下批准
-       claude agents --json: status=busy                                      [+9.07 起，整段]
++9.35  person approves
+       claude agents --json: status=busy                                      [from +9.07, throughout]
 +22.72 PostToolUse        agent_id=a1f0…  tool=Bash  tool_use_id=toolu_01UX…
 ```
 
-批准之后仍有 **13.4 秒**的 *Approval needed*。同一段时间里，会话自己一直在说 `busy`。
+**13.4 seconds** of *Approval needed* after the approval. Throughout, the session itself is saying `busy`.
 
-**因此允许这份读数再做一件事：结束一个已经开着的审批等待。** 写在 `HookEventRepository.endApprovalWaitsForWorkingSessions(_:)`，与上面两条同一个形状——服务层交出的仍是一件关于**会话**的事实，reducer 自己改状态。
+**So this reading is allowed one more job: ending an already-open approval wait.** The service layer still hands over a fact about a **session** and the reducer changes its own state.
 
-边界比照上面四条，逐条对齐：
+Aligned against the four boundaries:
 
-1. **能力仍然只有「结束」。** 这份读数没有轮次身份、也没有 `agent_id`，所以它开不了任何等待，只能对这条 thread 此刻持有的等待发话——轮次自己的那个，和每一个子智能体槽位里的那个。没有对话框的会话，这些等待没有一个在用户面前。
-2. **只有肯定的证据才作数：只认 `busy`，不认「不是 `waiting`」。** `idle` 证明不了对话框不在——CC-019 实测，对话框仍开着时按 `Esc`，160 ms 内就到 `idle`。从一个「缺席」里读出等待的结束，会关掉用户正在看的那一个。不报告状态的会话（桌面端托管）在这里同样什么也不做。
-3. **顺序护栏钉在每一个等待自己身上**，而不是钉在轮次的 `lastEventAt` 上：一次**开始**得比某个等待还早的读取，不可能看见那个对话框，因此不许关它。为此 `PendingApproval` 记下自己开启的时刻。代价是最多晚一次刷新，而那次刷新本来就在路上——`waiting → busy` 会重写会话记录，`ClaudeCodeSessionRecordWatcher` 正盯着每一个列出的会话。
-4. **它不移动 `lastEventAt`。** 这不是轮次在做事，而 `lastEventAt` 是 reducer 对账成员关系的唯一约束（`endOpenTurn` 移动它，是因为它**结束**轮次、必须挡住晚到事件把它重新打开；这里没有东西需要挡：后一个 `PermissionRequest` 是一个新的对话框，本来就该重新开启等待）。
+1. **The capability is still only "end".** This reading has no Turn identity and no `agent_id`, so it can open no wait and can only speak to the waits this thread holds right now — the Turn's own, and one in each subagent slot. In a session with no dialogue, none of those waits is in front of the user.
+2. **Only positive evidence counts: `busy` only, never "not `waiting`".** `idle` does not prove the dialogue is gone — measured in CC-019, pressing `Esc` while the dialogue is still open reaches `idle` within 160 ms. Reading the end of a wait out of an *absence* closes the one the user is looking at. A session that reports no status (desktop-hosted) again does nothing here.
+3. **The ordering guard is pinned to each wait's own opening**, not to the Turn's `lastEventAt`: a read that **started** before a wait opened cannot have seen that dialogue and may not close it. `PendingApproval` records when it opened for this. The cost is at most one refresh, and that refresh is already on its way — `waiting → busy` rewrites the session record, and `ClaudeCodeSessionRecordWatcher` is watching every listed session.
+4. **It does not move `lastEventAt`.** This is not the Turn doing anything, and `lastEventAt` is the reducer's only constraint when reconciling membership. (`endOpenTurn` moves it because it *ends* the Turn and must fend off a late event reopening it; nothing here needs fending off — a later `PermissionRequest` is a new dialogue and should reopen the wait.)
 
-拒绝的替代方案有两个。`Notification(permission_prompt)` 早已在 CC-011 里量过：它按 6 秒的键盘空闲计时器触发，且**没有任何一种通知类型表示「已解决」**，所以它连开启都比 `PermissionRequest` 晚，更谈不上关闭。「等 `PostToolUse`」就是今天的行为，它把审批区间和执行区间当成同一段，而这两段本来就不是一回事。
+Two alternatives rejected. `Notification(permission_prompt)` was already measured in CC-011: it fires on a 6-second keyboard-idle timer and **no notification type means "resolved"**, so it opens later than `PermissionRequest` and cannot close anything. "Wait for `PostToolUse`" is today's behaviour, which treats the approval interval and the execution interval as one span when they are not.
 
-代价：**上面那条非公开依赖多了一个用途。** `status` 的词表本来只用来回答「这个会话还在不在工作」，现在还回答「用户面前有没有对话框」。这不是一个新字段，但确实是一句更强的话，同样登记在 `non-public-codex-integration-features.md` 里；`busy` 之外的一切——包括词表之外的新词——仍然一律当作「没有报告」。
+Cost: **one more use of that non-public dependency.** `status`'s vocabulary previously answered only "is this session still working" and now also answers "is there a dialogue in front of the user". Not a new field, but a stronger claim, registered in `non-public-codex-integration-features.md` all the same; everything but `busy` — including new words outside the vocabulary — is still treated as "did not report".
 
-## 再补充（2026-08-23，同日）：上面那条只修好了一半的会话
+## Further addendum, 2026-08-23 (same day): the sessions the last one only half fixed
 
-上一节写完当天，用户在自己的环境里复现了同一个错报——批准之后行仍然停在 *Approval needed*，一直到 20 秒的 `sleep` 跑完。原因不在实现，在**证据的适用范围**：上一节整节只测了终端里的会话，而用户测的是 **Claude Code 桌面端托管的会话**，那种会话从头到尾不报告 `status`。这正是本 ADR 主体「代价」第一条早就写下、又在 2026-08-19 补充里为**中断**修好的那个洞——只是当时没有人把它跟**审批**连起来。
+The day that section was written, the user reproduced the same misreport in their own environment — the row stayed at *Approval needed* after approval until a 20-second `sleep` finished. The cause is not the implementation but the **evidence's range of applicability**: that whole section was measured on terminal sessions, and the user was testing a **Claude Code desktop-hosted session**, which never reports `status` at all. This is exactly the hole recorded in this ADR's first cost and fixed for **interrupts** in the 2026-08-19 addendum — nobody had connected it to **approvals**.
 
-先把一件更基本的事测掉，因为整节都压在它上面：**批准到底有没有 hook。** 2026-08-23 对 CLI 2.1.241，把 `strings -a` 从二进制里挖出的**全部 31 个** hook 事件（`ConfigChange`…`WorktreeRemove`）一次性注册到一份一次性 settings 上，跑一个被要求 sleep 25 秒的子智能体：
+First a more basic thing had to be measured, since the whole section rests on it: **is there any hook for an approval at all?** On 2026-08-23, CLI 2.1.241, registering **all 31** hook events dug out of the binary with `strings -a` (`ConfigChange`…`WorktreeRemove`) into a throwaway settings file, running a subagent asked to sleep 25 seconds:
 
 ```text
 +6.69  PreToolUse         agent_id=a0de…  tool=Bash  tool_use_id=toolu_012V…
 +6.72  PermissionRequest  agent_id=a0de…  tool=Bash
-+9.96  人按下批准
-+10.96 SubagentStop       agent_id=aeed…   ← 另一个无关 agent，TUI 自己的
++9.96  person approves
++10.96 SubagentStop       agent_id=aeed…   ← an unrelated agent, the TUI's own
 +36.23 PostToolUse        agent_id=a0de…  tool=Bash  tool_use_id=toolu_012V…
 ```
 
-**批准与 `PostToolUse` 之间 26 秒，一个相关事件都没有。** 所以这不是「漏注册了某个事件」，是这条路上根本没有事件——审批的结束只能由非事件证据回答，而两种宿主把这份证据放在不同地方。
+**26 seconds between the approval and `PostToolUse`, with not one relevant event.** So this is not a missing registration; there are no events on this path at all. The end of an approval can only be answered by non-event evidence, and the two hosts keep that evidence in different places.
 
-桌面端把它写在自己的日志里，两端都写，中间用 request id 串起来（`~/Library/Logs/Claude/main.log`，用户那次复现的原文）：
+Desktop writes it into its own log, both ends, joined by a request id (`~/Library/Logs/Claude/main.log`, verbatim from the user's reproduction):
 
 ```text
 18:10:40 Emitted tool permission request c930390d-… for Bash in session local_6c63f909-…
@@ -95,16 +95,16 @@ Claude Code 里用户按 `Esc` 中断一个轮次时，**不会有任何 hook �
 18:10:45 Received permission response for c930390d-…: once (tool: Bash)
 ```
 
-**因此允许第三份非事件证据结束一个已经开着的等待**：`ClaudeDesktopPermissionLogReader` 读这两种行形，`ClaudeCodeMonitorService` 用 Desktop 记录里的 `sessionId ↔ cliSessionId` 把它连回 thread，答案交给**与终端那条同一个入口** `HookEventRepository.endAnsweredApprovalWaits(_:)`。同一个入口是有意的：两份证据说的是同一句话——「此刻这条 thread 没有对话框在用户面前」——不同的只有它们怎么证明它。
+**So a third non-event evidence may end an already-open wait**: `ClaudeDesktopPermissionLogReader` reads both line shapes and `ClaudeCodeMonitorService` joins it back to a thread through the `sessionId ↔ cliSessionId` pairing in Desktop's records. The answer goes to **the same entry point as the terminal one**, `HookEventRepository.endAnsweredApprovalWaits(_:)` — deliberately, because both pieces of evidence say one sentence, "this thread has no dialogue in front of the user right now", and differ only in how they prove it.
 
-四条边界照样成立，逐条对齐：
+The four boundaries again, in order:
 
-1. **只能结束，不能开启。** 日志行里既没有轮次身份也没有 `agent_id`。**只有开启行带会话，只有应答行证明人答过**，所以配不上开启行的应答一律不归属给任何会话——失败方向是等待继续留着，那正是允许的方向。
-2. **只有肯定的证据才作数。** 没有应答行就什么也不做。**决定本身不读**：`once`、永久允许还是拒绝都同样是人答过了，而本应用没有任何理由关心用户选了什么——顺带把桌面端的**拒绝**也一起修好了，那一半此前只能等子智能体自己 `SubagentStop`。
-3. **顺序护栏**钉在每个等待自己的开启时刻上。日志时间戳是本地时区、秒级精度，截断方向安全：它只会让应答显得更旧而被拒绝，不会让它显得更新。
-4. **它不移动 `lastEventAt`**，与上一节同理。
+1. **End only, never open.** The log lines carry neither Turn identity nor `agent_id`. **Only the opening line names a session and only the response line proves a person answered**, so a response that cannot be matched to an opening line is attributed to no session — failing towards leaving the wait in place, which is the permitted direction.
+2. **Only positive evidence counts.** No response line, nothing happens. **The decision itself is not read**: `once`, always-allow and deny all equally mean a person answered, and this app has no reason to care which they chose — which incidentally also fixes Desktop **denials**, whose only previous exit was the subagent's own `SubagentStop`.
+3. **The ordering guard** is pinned to each wait's own opening. The log's timestamps are local-zone and second-precision, truncating in the safe direction: they can only make a response look older and be rejected, never newer.
+4. **It does not move `lastEventAt`**, for the reason above.
 
-新增的两样代价写清楚：
+Two new costs, stated plainly:
 
-- **多了一个非公开依赖的用途，而且这次读的是日志正文。** 这份日志本来就是本表登记的私有只读来源（焦点读数读它），但那条只匹配一种行形、只解出一个 id；这里多解一个会话、一个 request id 和一个时间戳。行形是 Claude Desktop 的实现细节，版本风险比 CLI 的字段更高，所以退化方向被写死成「一条也不命中就退回今天的样子」。**两个问题各持一个游标**：共用一个偏移量的话，先问的那个会把后问的那行吃掉。
-- **一条自己的边沿，而且是有条件的。** 焦点读数当初明确拒绝监听这个文件，理由是「一条 oauth 查询、一次 git 计时也要唤醒一次」。那条理由只在**没有东西等着它**时成立：一个桌面端会话正停在对话框上时，等着它的正是那行应答，而少了边沿就要等一整个心跳（60 秒）。所以 `permissionLogWatcher` 只在「reducer 手里有审批等待，且那个会话不报告任何状态」时指向该文件，其余时间指向空集——与 `recordWatcher`、`transcriptWatcher` 同一条「只监听值得监听的那几个」的规矩。同样地，日志与 Desktop 记录树都只在有审批开着时才读，所以 CR-Fable-003 那条「终态行才付账」的性质没有被这次改动摊薄。
+- **Another use of a non-public dependency, and this time it reads log bodies.** That log is already a registered private read-only source (the focus reading uses it), but that one matches a single line shape and extracts a single id; this extracts a session, a request id and a timestamp. Line shapes are a Claude Desktop implementation detail with higher version risk than a CLI field, so the degradation is hard-wired: match nothing and fall back to today's behaviour. **The two questions hold separate cursors** — sharing one offset would let whichever asks first swallow the other's line.
+- **An edge of its own, and a conditional one.** The focus reading explicitly refused to watch this file, on the grounds that "an oauth query or a git timing would wake it too". That reason holds only while **nothing is waiting on it**: when a desktop session is parked on a dialogue, the response line is exactly what is waited on, and without an edge it costs a whole heartbeat (60 seconds). So `permissionLogWatcher` points at the file only while "the reducer holds an approval wait whose session reports no status", and at an empty set otherwise — the same "watch only what is worth watching" rule as `recordWatcher` and `transcriptWatcher`. Likewise the log and Desktop's record tree are read only while an approval is open, so CR-Fable-003's "only terminal rows pay" property is not diluted by this change.

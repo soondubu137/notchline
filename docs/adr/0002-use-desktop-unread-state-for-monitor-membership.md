@@ -1,19 +1,23 @@
-# 以 Desktop 未读状态决定终态会话是否继续监视
+# Desktop unread state decides whether a terminal Thread stays monitored
 
-展开列表定位为当前处理轮次的实时汇总中心，而不是 Codex 历史会话入口。用户提交输入后，该轮次进入 Notch 的监视生命周期；尚未完成时始终显示，进入终态后只在 Codex Desktop 仍以蓝色小点标记为未读且会话未归档、未删除时继续显示，已读、归档或删除事件到达后立即移除。监视范围覆盖当前 Desktop 账户下所有 Project 与 Chats，不跟随当前侧边栏选择。该选择放弃固定时间窗和最近 N 条等替代规则；如果受支持的集成接口不能可靠观察活动状态、未读和成员变化，V1 不得以本地计时、窗口焦点或点击失败猜测，也不能发布这一实时汇总能力。
+The expanded list is a live summary of current Turns, not an entry point into Codex history. A Turn enters the monitoring lifecycle when the user submits input; while unfinished it always shows, and once terminal it stays only while Codex Desktop still marks the Thread unread with its blue dot and the Thread is neither archived nor deleted. A read, archive or delete event removes it immediately. The scope covers every Project and Chats under the current Desktop account and does not follow the sidebar selection.
 
-## 2026-08-26 补记：蓝点集合是投影，读它必须连它的时刻一起读
+Fixed time windows and "the last N" were both rejected. If the supported integration interfaces cannot reliably observe activity, unread state and membership changes, V1 must not guess from local timers, window focus or a failed click — and must not ship this live summary at all.
 
-上面那条规则说的是「Codex Desktop 仍以蓝色小点标记为未读时继续显示」，实现把它读成了「thread id 仍在 `unread-thread-ids-by-host-v1.local` 里」。两者不是一回事：那个集合是 Desktop 内存里的蓝点在磁盘上的**投影**，而投影可以任意落后。
+## Addendum, 2026-08-26: the blue-dot set is a projection, so read its timestamp with it
 
-Desktop 的 main 进程把**整张** `electron-persisted-atom-state` 用一个 500 ms 的 trailing debounce 落盘，没有 max-wait，并且所有 persisted atom **共用这一个 debounce**；composer 草稿 `composer-prompt-drafts-v2` 正是其中之一，由编辑器的 `dispatchTransaction` 每次按键写一次。实测（Desktop `26.820.60940`，2026-08-26）：在 composer 里连续键入 165 个字符，45.4 秒的窗口里该文件只被写了一次，就在停手约半秒之后，打字期间一次都没有。于是一条在**别的 thread** 里结束的轮次，蓝点毫秒级出现在侧边栏，id 却整段时间不在文件里——文件解析得好好的，所以它是权威快照；它没提这条 thread，所以 settling 窗口一到就把行撤了；而隐藏是终局的，几十秒后 id 落盘也换不回来。用户看着一条自己从没读过的 Completed 行离开通知栏，它的蓝点还亮着——这是用户报上来的，也是本条补记的由来。
+The rule above says "stays while Codex Desktop still marks it unread". The implementation read that as "the thread id is still in `unread-thread-ids-by-host-v1.local`". Those are not the same thing: that set is the on-disk **projection** of the blue dots in Desktop's memory, and a projection may lag arbitrarily.
 
-**决定：一份未读读数只能对它写入时刻之前结束的轮次作数。** 每份快照带上「完整覆盖到哪一刻」（`DesktopUnreadStateSnapshot.currentAsOf`，Codex 侧取主文件的 `modificationDate`）；成员关系门在它早于该 Turn 的终止时刻时拒绝作任何隐藏决定，该行照留，并按 1 秒 re-check 等下一次写入——它等的是文件而不是用户，所以锁屏也照等。
+Desktop's main process persists the **entire** `electron-persisted-atom-state` through a single 500 ms trailing debounce with no max-wait, and every persisted atom shares that one debounce. The composer draft `composer-prompt-drafts-v2` is one of them, written by the editor's `dispatchTransaction` on every keystroke. Measured (Desktop `26.820.60940`, 2026-08-26): typing 165 characters continuously into the composer produced exactly one write to that file in a 45.4-second window, about half a second after the typing stopped, and none during it.
 
-这不是新原则，是把 [ADR 0012](0012-read-state-is-answered-per-product-or-not-at-all.md) 第一条已经确立的东西补到 Codex 这一侧。那里写着：桌面端的记账延迟、节流甚至完全停写，都不能把一个轮次说成已读，**只有一次确实发生在它结束之后的证据可以**。当时那条规则只落在 Claude Desktop 的 focus 时刻上；Codex 这边读的是「不在集合里」，从来没问过这份读数本身有多新。
+So a Turn finishing in a **different** thread gets its blue dot in the sidebar within milliseconds while its id stays out of the file for that whole stretch. The file parses cleanly, so it counts as an authoritative snapshot; it does not mention the Thread, so the settling window retires the row; and hiding is final, so the id landing on disk seconds later cannot bring it back. The user watches a Completed row they never read leave the notch with its blue dot still lit — which is how this was reported, and why this addendum exists.
 
-**代价与边界。**
+**Decision: an unread reading may only speak for Turns that ended before it was written.** Every snapshot carries the moment it is complete as of (`DesktopUnreadStateSnapshot.currentAsOf`, taken from the main file's `modificationDate` on the Codex side). Where that is earlier than the Turn's end, the membership gate refuses to make any hiding decision, the row stays, and it waits for the next write on the 1-second re-check. It is waiting on a file rather than on the user, so it keeps waiting through a locked screen.
 
-- 被否决的替代方案是加宽 settling 窗口。延迟没有上界，而任何足以覆盖一次打字的窗口，也会把**已读**的行在通知栏上多留同样久——那是拿产品最常见的路径去换最少见的那条。
-- Desktop 从不为 CLI 里跑的 thread 写蓝点，这类行现在要等 Desktop 下一次写这个文件才会离开（开着 Desktop 时通常是几分钟内的事），此前是终止后 2 秒。它不会变成撤不掉的行：Codex 的行本来就要求 Desktop 在运行（拿不到 PID 就不进实时分支、一条行都不画），Desktop 一退出这些行随整条分支一起消失，用户也仍可以右键移除。
-- 用户**在打字窗口里就把那一轮读掉了**的情形仍然收敛：id 从未落盘，等文件真写下来时它照样不在集合里，而这次写入已经晚于该轮，行随即隐藏。这也是没有改用「必须先观察到未读才允许隐藏」的原因——那条规则会把这种行永远留在通知栏上。
+This is not a new principle but the Codex-side completion of the first clause of [ADR 0012](0012-read-state-is-answered-per-product-or-not-at-all.md), which already held that a desktop app's bookkeeping delay, throttling, or total silence cannot make a Turn read — **only evidence that genuinely happened after it ended can**. That rule had landed only on Claude Desktop's focus timestamps; the Codex side was reading "absent from the set" and had never asked how fresh the reading itself was.
+
+**Costs and boundaries.**
+
+- The rejected alternative was widening the settling window. The delay has no upper bound, and any window wide enough to cover a burst of typing keeps **read** rows on the notch just as long — trading the product's most common path for its rarest.
+- Desktop never writes a blue dot for a thread run from the CLI, so those rows now leave only at Desktop's next write to that file (usually within minutes while Desktop is open), where they previously left 2 seconds after terminating. They cannot become undismissable: a Codex row already requires Desktop to be running (with no PID the live branch is never entered and no row is drawn), so they disappear with the branch when Desktop quits, and right-click removal still works.
+- The case where the user **reads the Turn during the typing window** still converges: the id never reached disk, it is still absent when the file is finally written, and that write is now later than the Turn, so the row hides. This is also why the rule was not made "hiding requires having first observed the unread state" — that would strand such rows on the notch forever.

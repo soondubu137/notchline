@@ -1,21 +1,21 @@
-# 不写用户的 Claude Code 设置文件
+# Never write the user's Claude Code settings file
 
-> **已被 [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md) 取代。** 本应用现在直接写 `~/.claude/settings.json`，写之前把原文件复制到同目录的 `settings.json.notchline-backup`；Claude Code 那一行拿到和 Codex 一样的开关，粘贴卡片与 `configurationSnippet()` 已删除。下文保留为当时的论证记录——尤其是最后一段，它当时就写着「需要的是产品决策而不是新代码」，而 0016 做的正是这个决策。翻案的直接原因是这一条自己列在代价里的第一项和最后一项：安装摩擦是唯一一处 Claude Code 比 Codex 难上手的地方，而「粘贴不完整」与「形状过时」这两种失效**都不报错**，本应用看得见却修不动。
+> **Superseded by [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md).** The app now writes `~/.claude/settings.json` directly, copying the original to `settings.json.notchline-backup` in the same directory first; the Claude Code row gets the same toggle as Codex, and the paste card and `configurationSnippet()` are gone. Kept below as the reasoning as it stood — especially the last paragraph, which already said the missing piece was a product decision rather than new code. What overturned it is the first and last item in its own cost list: installation friction was the only place Claude Code was harder to adopt than Codex, and both "incomplete paste" and "stale shape" fail **without any error**, visible to this app but unfixable by it.
 
-Claude Code 的 hook 注册由**用户自己**加入 `~/.claude/settings.json`：本应用只读取该文件、显示需要粘贴的内容、并报告注册是否完整。它永远不写这个文件。
+Claude Code hook registration is added to `~/.claude/settings.json` by **the user**. The app only reads that file, shows what needs pasting, and reports whether registration is complete. It never writes it.
 
-Codex 侧维持现状——本应用继续直接编辑 `~/.codex/hooks.json`。**这个不对称是刻意的**，日后一定会被误读成疏漏，所以记在这里：理由不是技术上做不到（写入版本已经实现并通过测试），而是一次错误编辑的影响范围。`~/.codex/hooks.json` 除 hooks 外几乎不含别的东西；`~/.claude/settings.json` 装着用户整个 Claude Code 安装——主题、环境变量、权限、MCP 服务器、他们自己的 hooks。这两个文件不对等，对它们的授权也不该对等。
+The Codex side is unchanged — the app still edits `~/.codex/hooks.json` directly. **The asymmetry is deliberate** and will eventually be misread as an oversight, so: the reason is not that writing is technically hard (the writing version was implemented and passed its tests) but the blast radius of one bad edit. `~/.codex/hooks.json` holds almost nothing but hooks; `~/.claude/settings.json` holds the user's entire Claude Code installation — theme, environment variables, permissions, MCP servers, their own hooks. The files are not equivalent, so the authority over them should not be either.
 
-一个连带的好处，也是这个决定真正变得干净的地方：**权威方向反过来了。** 写入版本必须回答"选定的端口被占用怎么办"——只能改写用户的文件。现在不改写，于是规则简化为：用户文件里写的就是真的，应用读它、跟随它，不纠正它。
+A side benefit, and where the decision became clean: **the direction of authority reverses.** A writing version has to answer "what if the chosen port is taken", and its only answer is to rewrite the user's file. Not writing simplifies the rule to: whatever the user's file says is true; the app reads it, follows it, and does not correct it.
 
-**那个端口后来整个消失了**（[ADR 0013](0013-claude-code-hooks-run-a-helper-not-a-port.md)），于是这一段的论证只剩历史意义，而结论比原来更强：注册里现在唯一会变的就是 helper 的路径，而那个路径由本应用自己的 support 目录决定，同一台机器上每次渲染出来的块都一字不差。没有端口要跟随，也没有 token 要铸造和记住——`installMarker` 曾经就是为了记住那个建议值而写的，现在这条通道上不再有任何需要记住的东西。
+**That port later disappeared entirely** ([ADR 0013](0013-claude-code-hooks-run-a-helper-not-a-port.md)), so this argument is now only historical while its conclusion is stronger: the only thing that varies in a registration is the helper's path, decided by the app's own support directory, so the rendered block is byte-identical every time on one machine. There is no port to follow and no token to mint and remember — `installMarker` existed to remember that suggested value, and nothing on this channel needs remembering any more.
 
-代价照实记录：
+Costs, recorded as they stood:
 
-- 安装摩擦。用户要手工粘贴一段 JSON。这是开发者工具，其用户本来就在编辑这个文件，可以接受，但这是**唯一**一处 Claude Code 比 Codex 更难上手的地方。
-- ~~端口冲突无法自愈。建议端口被占用时，应用只能明确报出来，由用户改文件，不能悄悄换一个。~~ 这一条随端口一起作废（ADR 0013 / CC-014）：socket 在本应用自己的目录里，没有可冲突的对象。
-- 卸载同样由用户完成。应用能检测到注册已消失并如实显示，但不会替用户删。
-- 粘贴不完整会静默失灵——少注册一个事件不会报错，只是那个状态迁移永远不到达。因此 `status()` 必须把它单独报成 `repairRequired`，不能与"未安装"合并。
-- **"不完整"包括形状过时，不只是缺事件。** 用户的那份粘贴会随版本变旧，而本应用改不动它，只能看出来并说出来。一份仍是 `type: "http"` 的粘贴，事件齐全却送不到人手上——所以旧的 URL path 作为 legacy identity marker 留着，为的就是把它认成 `repairRequired` 而不是 `notInstalled`。所以 `isFullyInstalled` 判的是"恰好一个我们的 handler，且它就是本版本会装的那个"——与 `managedHandler` 整体取值相等，而不是核对某几个字段；identity marker 只用来找到 handler（包括本应用早先写过的形状）并删除它，它为了扛住那些形状而必须保持的宽松，正好使它无法回答这个问题。
+- Installation friction. The user pastes JSON by hand. This is a developer tool whose users already edit this file, so it is acceptable — but it is the **only** place Claude Code is harder to adopt than Codex.
+- ~~Port conflicts cannot self-heal.~~ Void along with the port (ADR 0013 / CC-014): the socket lives in the app's own directory and has nothing to collide with.
+- Uninstallation is likewise the user's. The app detects that registration has gone and says so, but does not delete it for them.
+- An incomplete paste fails silently — a missing event raises no error, that state transition simply never arrives. So `status()` must report it separately as `repairRequired` rather than merging it into "not installed".
+- **"Incomplete" includes a stale shape, not just a missing event.** A user's paste ages with the version and the app cannot touch it, only notice and say so. A paste still using `type: "http"` has every event and delivers none of them — which is why the old URL path is kept as a legacy identity marker, so it reads as `repairRequired` rather than `notInstalled`. Hence `isFullyInstalled` asks for "exactly one handler of ours, and it is the one this version installs" — equality against `managedHandler` as a whole, not a field-by-field check. The identity marker's looseness, needed to recognise older shapes, is exactly what stops it answering this question.
 
-如果以后要恢复写入能力，`ManagedHooksFileEditor` 与 `ManagedHooksConfiguration.command` 已经具备全部机制（只写自己的键、读改写前后字节比对、写后回读校验、无法理解的结构一律拒绝而非强转），需要的是产品决策而不是新代码。
+Should writing ever be restored, `ManagedHooksFileEditor` and `ManagedHooksConfiguration.command` already have the whole mechanism — write only our own keys, compare bytes before and after a read-modify-write, verify by reading back, and refuse rather than coerce a structure we do not understand. What is missing is a product decision, not code.

@@ -1,3 +1,3 @@
-# 只监控可在 Desktop 定位的根会话
+# Monitor only root Threads that Desktop can locate
 
-Codex in Notch V1 只把能够在 Codex Desktop 中以同一 `threadId` 直接定位的根会话纳入列表。CLI、IDE、子智能体或其他来源的会话只有在验证能够满足同一导航契约后才可纳入；这一范围牺牲了“展示所有本地活动”的广度，以保证每一行都兑现“点击后返回对应 Codex 会话”的核心承诺。
+V1 lists only root Threads that Codex Desktop can open directly under the same `threadId`. Threads from the CLI, an IDE, a subagent or any other origin qualify only once they are verified to satisfy that same navigation contract. The scope trades the breadth of "show all local activity" for the core promise that every row keeps: clicking it returns to the Codex Thread it describes.

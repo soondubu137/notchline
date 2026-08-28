@@ -1,65 +1,65 @@
-# Claude Code 的 hook 走 helper，不走端口
+# Claude Code hooks run a helper, not a port
 
-Claude Code 的生命周期事件此前由 `type: "http"` handler POST 到 `127.0.0.1:51741`，现在由 `type: "command"` handler 运行本应用写在自己 support 目录里的一个 helper，helper 把 payload 顺着 0600 的 Unix domain socket 交进来。
+Claude Code lifecycle events used to be POSTed by a `type: "http"` handler to `127.0.0.1:51741`. They now run a `type: "command"` handler that executes a helper the app writes into its own support directory, which hands the payload down a 0600 Unix domain socket.
 
-## 为什么换
+## Why it changed
 
-端口有两个毛病，**都不是注册能修的**——当时本应用还不写用户的 `settings.json`（[ADR 0010](0010-never-write-the-users-claude-code-settings.md)，后被 [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md) 取代）。写入能力收回来之后这两个毛病仍然不是注册能修的：它们是端口本身的性质，换成 helper 才消失。
+A port has two faults, **neither fixable by registration** — at the time the app did not write the user's `settings.json` ([ADR 0010](0010-never-write-the-users-claude-code-settings.md), later superseded by [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md)). Taking writing back does not fix them either: they are properties of the port itself and only disappear with the helper.
 
-**一、本应用没开的时候，端口不属于任何人，于是每个事件都在用户会话里打一行。** 实测 CLI 2.1.237，pty 驱动的交互式会话，同一句提示、两次工具调用：指向无人监听端口的 `http` 注册打出 **9 行** `<event> hook error / connect ECONNREFUSED`。渲染处只对 `Stop` 与 `SubagentStop` 返回 `null`，其余一律打印，且**没有任何设置或环境变量可以关掉**（查过 `suppressHook` / `hideHook` / `HOOK_SILENT` / `DISABLE_HOOK` / `quietHooks`，都不存在；`suppressOutput` 是 hook **回复**里的字段，连接被拒时根本够不着）。这条就是 §9 那条 NO-GO——「`http` hook 在应用未运行时对用户会话产生任何可见影响」——它对**所有**事件成立，不只是 `SessionEnd`。
+**One: while the app is not running the port belongs to nobody, so every event prints a line in the user's session.** Measured on CLI 2.1.237, a pty-driven interactive session, one prompt and two tool calls: an `http` registration pointing at an unlistened port printed **9 lines** of `<event> hook error / connect ECONNREFUSED`. The renderer returns `null` only for `Stop` and `SubagentStop` and prints everything else, and **no setting or environment variable turns it off** (`suppressHook`, `hideHook`, `HOOK_SILENT`, `DISABLE_HOOK`, `quietHooks` all checked, none exists; `suppressOutput` is a field in the hook's **reply**, unreachable when the connection is refused). This is §9's NO-GO — "an `http` hook has any visible effect on the user's session while the app is not running" — and it holds for **every** event, not only `SessionEnd`.
 
-**二、无人占用的端口可以被抢走，token 挡不住。** `51741` 落在 macOS ephemeral 区间（`net.inet.ip.portrange.first: 49152`），任何本地进程 bind 0 都可能拿到它。一个 40 行的冒充监听器收到了完整的 `prompt`、`cwd`、`transcript_path`、`session_id` 与 bearer token；回一段 `additionalContext` 之后，下一次会话按注入的内容作答；`PreToolUse` 上同样的形状可以回 `permissionDecision`。**bearer token 认证的是 CLI，不是监听器**，方向正好反了。
+**Two: an unoccupied port can be taken, and the token does not stop it.** `51741` sits inside the macOS ephemeral range (`net.inet.ip.portrange.first: 49152`), so any local process binding 0 may get it. A 40-line impersonating listener received the full `prompt`, `cwd`, `transcript_path`, `session_id` and bearer token; returning an `additionalContext` block made the next session answer from the injected content, and the same shape on `PreToolUse` can return a `permissionDecision`. **The bearer token authenticates the CLI, not the listener** — exactly the wrong direction.
 
-helper 两个毛病都没有：它无论本应用开没开都 `exit 0` 且两条流都不说话，所以任何注册的事件都不可能在任何地方留下一行；socket 在本应用自己的目录里，权限 0600，别的进程 bind 不了也读不了。
+The helper has neither fault: it exits 0 with both streams silent whether or not the app is running, so no registered event can leave a line anywhere, and the socket lives in the app's own directory at mode 0600, where another process can neither bind nor read it.
 
-## 考虑过并否决的方案
+## Considered and rejected
 
-**一个常驻进程占住端口，本应用启动时把端口交接过去。** 这是最先被提出的方案，端口部分成立得很好、交接部分不成立。实测：
+**A resident process holding the port, handed over when the app starts.** Proposed first; the port half works well and the handover half does not.
 
-- launchd 的 socket activation 确实**在没有任何进程运行时**占住端口（`state = not running`，别的进程 bind 报 `EADDRINUSE`），job 按需拉起、在 3 次/秒的连接率下复用同一个进程（1 次拉起服务 31 个连接），`SIGKILL` 之后端口仍被占住（t+0.0/0.2/0.4 s 三次 bind 全被拒），下一个 POST 照常 200。「永远有人占着」这一半是真的。
-- 但**交接本身没有安全的做法**。`SO_REUSEPORT` 让两个进程同时持有 `127.0.0.1:P`（实测 6/6 连接投给后 bind 的那个），可是它要求**所有**参与者都设这个选项——实测普通 bind 无法加入一个已被普通 bind 占住的端口，反之亦然。也就是说今天本应用在运行时没人能挤进来，而一旦为了交接打开 `SO_REUSEPORT`，任何本地进程只要也设上并后 bind 就能接管投递，**包括本应用正在运行的时候**：把「关着的时候有个窗口」换成了「一直开着」。剩下的只有 `SCM_RIGHTS` 传 fd，那要把 `AgentHookListener` 从 `NWListener` 改写成裸 fd 的 accept 循环。
-- 更要命的是**失败形态比它要修的病更重**。job 拉不起来的时候（应用被删、bundle 被移动、系统升级后二进制被隔离、launchd 限流），launchd 仍持有监听 socket：`connect()` **1 ms 就成功**，`recv()` 永远不返回（实测 10 s 无响应，`last exit code = 78: EX_CONFIG`）。于是每个事件都要等满自己的 `timeout`，而本应用**改不了用户文件里的 `timeout`**。今天连接被拒是立即返回的，`timeout: 5` 从来等不满——这个方案把「吵」换成了「卡死」。
-- 而且**端口被占时 bootstrap 是静默成功的**：`rc 0`、job 注册上、`launchctl print` 的输出与健康时**逐字节相同**（两边都报 `sockets = { 16 (no bytes to read) }`），抢占者照常收到 POST。今天 `bind()` 失败是一个干脆的信号，这个方案把它弄丢了。
+- launchd socket activation does hold the port **with no process running** (`state = not running`, another process binding gets `EADDRINUSE`), the job starts on demand and reuses one process at 3 connections/second (one launch served 31 connections), and after `SIGKILL` the port stays held (three binds at t+0.0/0.2/0.4 s all refused) with the next POST returning 200. That half is real.
+- But **there is no safe handover.** `SO_REUSEPORT` lets two processes hold `127.0.0.1:P` at once (measured: 6/6 connections went to the later binder), yet it requires **every** participant to set it — a plain bind cannot join a port held by a plain bind, or vice versa. So today nobody can push in while the app runs, whereas opening `SO_REUSEPORT` for handover lets any local process that also sets it and binds later take over delivery, **including while the app is running**: a window that exists when it is closed is traded for one that is always open. The remaining option, passing the fd by `SCM_RIGHTS`, means rewriting `AgentHookListener` from `NWListener` into a raw-fd accept loop.
+- Worse, **the failure shape is more severe than the illness**. When the job cannot start (the app deleted, the bundle moved, the binary quarantined after an OS upgrade, launchd throttling), launchd still holds the listening socket: `connect()` **succeeds in 1 ms** and `recv()` never returns (measured 10 s with no response, `last exit code = 78: EX_CONFIG`). Every event then waits out its own `timeout`, and the app **cannot change the `timeout` in the user's file**. Today a refused connection returns immediately and `timeout: 5` is never reached; this trades noisy for hung.
+- And **bootstrap succeeds silently when the port is taken**: `rc 0`, the job registers, and `launchctl print` is byte-identical to the healthy case (both report `sockets = { 16 (no bytes to read) }`) while the squatter keeps receiving POSTs. Today a failed `bind()` is a clean signal, and this loses it.
 
-**换一个 ephemeral 区间之外的端口**（例如 `31741`）。便宜地关掉了抢占窗口，对噪声毫无作用，而且要用户重贴。
+**A port outside the ephemeral range** (say `31741`). Cheaply closes the hijack window, does nothing about the noise, and makes every user re-paste.
 
-**每个 handler 加 `once: true`。** CLI 在第一次触发后把 hook 摘掉，于是每次会话最多十二行——安静的代价是监视本身结束。
+**`once: true` on each handler.** The CLI removes the hook after its first trigger, capping the noise at twelve lines per session — at the cost of ending the monitoring itself.
 
-**接受它并在设置卡片里说明。** 即注册这些 hook 就意味着应用关着时 CLI 会很吵。
+**Accept it and explain it on the settings card.** That is: registering these hooks means a noisy CLI whenever the app is closed.
 
-## 代价
+## Costs
 
-**每个事件一个进程。** 实测（2.1.237，pty 交互式会话，注册数放大 10× 与 60× 之后按事件数回归，基线是同一句提示不注册任何 hook）：
+**One process per event.** Measured (2.1.237, pty interactive session, registrations amplified 10× and 60× then regressed on event count, baseline the same prompt with no hooks registered):
 
-| 传输 | 每事件 CPU | 每轮次（17 个事件） |
+| Transport | CPU per event | Per Turn (17 events) |
 | --- | --- | --- |
-| `http` → 活着的监听器 | 1.2 ms | 21 ms |
-| `command` → 编译出来的 helper | 4.8 ms | 81 ms |
-| `command` → 本 ADR 的 `sh` + `nc` | 6.3 ms | 107 ms |
-| `command` → Python（Codex 那边一直如此） | 30 ms | 510 ms |
+| `http` → live listener | 1.2 ms | 21 ms |
+| `command` → compiled helper | 4.8 ms | 81 ms |
+| `command` → this ADR's `sh` + `nc` | 6.3 ms | 107 ms |
+| `command` → Python (as Codex has always been) | 30 ms | 510 ms |
 
-也就是说比它替换掉的通道贵，但只贵几十毫秒每轮次，而且**比本应用另一半早就在付的价钱便宜五倍**。没有为此单独做一个编译产物：省下的 2.2 ms 不值一个新 target、一份签名和一条升级路径。
+So it costs more than the channel it replaces, by tens of milliseconds per Turn, and five times less than what the app's other half has been paying all along. No separate compiled artefact was built for it: 2.2 ms saved is not worth a new target, a signature and an upgrade path.
 
-**注册是同步的。** `command` schema 有 `async` 键（`http` schema 没有），但实测 2.1.237 用它会让同一个 `tool_use_id` 的 `PreToolUse` 与 `PostToolUse` 互相超车，并且在 `-p` 下整个丢掉 `Stop`（进程在后台 hook 跑完之前就退出）。保序和终态比 6.3 ms 值钱。
+**Registration is synchronous.** The `command` schema has an `async` key (the `http` schema does not), but on 2.1.237 it measurably lets `PreToolUse` and `PostToolUse` for the same `tool_use_id` overtake each other, and drops `Stop` entirely under `-p` (the process exits before the background hook finishes). Ordering and terminal states are worth more than 6.3 ms.
 
-**依赖 `/usr/bin/nc` 带 `-U`。** macOS 自带，不是私有依赖，但它是这条通道唯一的外部件。helper 的三层超时由内向外是 `SO_RCVTIMEO` 250 ms（本应用读一条 payload）、`nc -w 1`（对端 accept 了却不读的情况）、注册里的 `timeout: 3`。
+**Depends on `/usr/bin/nc` with `-U`.** It ships with macOS, so it is not a private dependency, but it is this channel's only external part. The helper's three timeouts, innermost outwards, are `SO_RCVTIMEO` 250 ms (the app reading one payload), `nc -w 1` (a peer that accepted but does not read), and `timeout: 3` in the registration.
 
-**已经装过的用户要重贴。** 旧的 `http` handler 留在他们文件里，本应用删不掉（ADR 0010）。所以 `ManagedHooksConfiguration` 把旧的 URL path `/codex-in-notch/hook` 当作 legacy identity marker：认得出来，于是状态报 `repairRequired`（「这不是本版本要的注册，请重贴」）而不是 `notInstalled`（「你还没装」）——后者会让用户在旧的旁边再贴一份。
+**Users who already installed must re-paste.** Their old `http` handler stays in their file and the app cannot delete it (ADR 0010). So `ManagedHooksConfiguration` treats the old URL path `/codex-in-notch/hook` as a legacy identity marker: recognised, so status reports `repairRequired` ("this is not the registration this version wants, please re-paste") rather than `notInstalled` ("you have not installed it"), which would make users paste a second copy beside the first.
 
-> **这一段的结论已随 [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md) 变了，marker 本身没变。** 本应用现在删得掉那段死 handler：安装时 `installing(into:isNewFile:)` 用同一个 legacy marker 把它剥掉，再写当前形状。用户要做的从「回去重贴」变成「拨一下开关」，而 `repairRequired` 仍然要单独报——在他们去拨之前，notch 照样一直空着且任何地方都不报错。
+> **That conclusion changed with [ADR 0016](0016-write-the-users-claude-code-settings-and-keep-a-copy.md); the marker did not.** The app can now delete the dead handler: on install, `installing(into:isNewFile:)` strips it using that same legacy marker and writes the current shape. The user's job becomes flipping a switch rather than going back to re-paste — and `repairRequired` still needs reporting separately, because until they flip it the notch stays empty with no error anywhere.
 
-## 连带
+## Consequences
 
-**`SessionEnd` 排除的理由没有了，但它仍然不注册——换了一个理由。** 它当初被单独排除，是因为它是唯一一个失败会写进 CLI **自己的 stderr**、因而会跟着 `claude -p` 进入脚本、管道和 CI 的事件；helper 不会那样失败，所以那条理由确实作废了。于是重新按它自身的价值考察了一遍，结论是**没有价值**：
+**The reason for excluding `SessionEnd` is gone, and it still is not registered — for a different reason.** It was originally excluded as the one event whose failure writes to the CLI's **own stderr** and therefore follows `claude -p` into scripts, pipes and CI. The helper cannot fail that way, so that reason is void. Re-examined on its own merits, it earns nothing:
 
-- 支持它的理由是「能比 sessions 目录 watcher 更早退休一个死掉会话的行」。**实测反过来。** 2.1.237，pty 交互式会话，按 20 ms 采样 `~/.claude/sessions/<pid>.json`：文件在 **+15.09s / +15.08s**（两次）被删除，`SessionEnd` 两次都在 **+15.41s** 到达——**watcher 的信号早约 330 ms**。注册它只会给一个已经答完的问题补一个更晚的答案。
-- 看起来像例外的是 `/clear`：进程还活着，没有文件变化，watcher 不响。但它**在同一个 pid 下换掉了 session id**（实测 `bf10d6dc…` → `cd9d3d18…`，而 `SessionEnd(reason: clear)` 带的是旧的那个），于是旧 id 立刻离开 `claude agents --json`，行照常消失。`resume` 同形。
-- 顺带记下，如果以后重开这个问题：payload 带 `reason`，而 group 的 `matcher` 正是拿它匹配的，所以注册可以挑 reason。词表是 `clear`、`resume`、`logout`、`prompt_input_exit`、`other`——其中只有一部分意味着「会话没了」，这是它并不像名字那样是个简单信号的第二个原因。
+- The case for it was "retiring a dead session's row sooner than the sessions-directory watcher". **The measurement says the opposite.** On 2.1.237, pty interactive session, sampling `~/.claude/sessions/<pid>.json` every 20 ms: the file was deleted at **+15.09 s / +15.08 s** across two runs and `SessionEnd` arrived at **+15.41 s** both times — the watcher's signal is about **330 ms earlier**. Registering it only supplies a later answer to a question already answered.
+- `/clear` looks like the exception: the process lives, no file changes, the watcher stays quiet. But it **swaps the session id under the same pid** (measured `bf10d6dc…` → `cd9d3d18…`, while `SessionEnd(reason: clear)` carries the old one), so the old id leaves `claude agents --json` at once and the row disappears as usual. `resume` has the same shape.
+- Noted for whoever reopens this: the payload carries `reason` and a group's `matcher` matches on it, so a registration could select by reason. The vocabulary is `clear`, `resume`, `logout`, `prompt_input_exit`, `other` — only some of which mean "the session is gone", which is the second reason it is not the simple signal its name suggests.
 
-行消失靠的一直是「turn 的会话不在实时列表里就不画」这一条（`ClaudeCodeMonitorService`）。这条机制此前只由一行代码和一句注释扛着，现在由 `aRowGoesWhenItsSessionLeavesTheListIncludingAfterClear` 钉住，包括 `/clear` 那一形。
+Rows have always disappeared through "do not draw a Turn whose session is absent from the live list" (`ClaudeCodeMonitorService`). That mechanism was previously held up by one line of code and a comment; it is now pinned by `aRowGoesWhenItsSessionLeavesTheListIncludingAfterClear`, `/clear` shape included.
 
-**CC-014 一并消失。** 「固定端口冲突无法自愈」的前提是有个固定端口。
+**CC-014 disappears with it.** "A fixed port conflict cannot self-heal" presupposes a fixed port.
 
-## 状态
+## Status
 
-已实施。`ClaudeCodeHookSetup` 写 helper 并渲染要粘贴的块，`AgentHookListener` 绑 socket，`ClaudeCodeMonitorService.prepareTransport()` 每次刷新确认两者都在。测试：`theHelperDeliversWhenTheAppIsUpAndIsSilentWhenItIsNot`（拿真脚本按 CLI 的 exec form 跑，两种状态都要 `exit 0` 且两条流为空）、`theSocketIsPrivateToThisUserAndDropsWhatItCannotRead`、`theHandlerThisBuildReplacedStaysRecognisableSoAnUpgradeReplacesIt`、`anHTTPEraRegistrationAsksToBeRepairedRatherThanReadingAsAbsent`、`theHelperQuotesASocketPathThatCarriesAQuote`、`aRowGoesWhenItsSessionLeavesTheListIncludingAfterClear`。
+Implemented. `ClaudeCodeHookSetup` writes the helper and renders the block to paste, `AgentHookListener` binds the socket, and `ClaudeCodeMonitorService.prepareTransport()` confirms both on every refresh. Tests: `theHelperDeliversWhenTheAppIsUpAndIsSilentWhenItIsNot` (running the real script in the CLI's exec form, requiring `exit 0` and two empty streams in both states), `theSocketIsPrivateToThisUserAndDropsWhatItCannotRead`, `theHandlerThisBuildReplacedStaysRecognisableSoAnUpgradeReplacesIt`, `anHTTPEraRegistrationAsksToBeRepairedRatherThanReadingAsAbsent`, `theHelperQuotesASocketPathThatCarriesAQuote`, `aRowGoesWhenItsSessionLeavesTheListIncludingAfterClear`.

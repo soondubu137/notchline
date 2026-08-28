@@ -1,3 +1,3 @@
-# 使用 Codex Desktop 的 Project 身份
+# Use Codex Desktop's Project identity
 
-会话行中的 Project 必须对应 Codex Desktop 左侧边栏由用户创建的 Project 实体；一个 Project 可以包含一个或多个仓库，没有归属 Project 的会话显示 `Chats`。V1 不得从 `cwd`、Git 根目录或路径名称推断 Project，因为这些对象与用户管理的 Desktop Project 并非一一对应；如果受支持的集成接口不能取得 Desktop Project 身份和名称，该能力不允许以近似值降级发布。
+A Codex row's Project must correspond to a Project entity the user created in Codex Desktop's sidebar. One Project may span several repositories, and a Thread belonging to none shows `Chats`. V1 must not infer the Project from `cwd`, the Git root or a path name: those objects do not map one-to-one onto a user-managed Desktop Project. If the supported integration interfaces cannot yield Desktop Project identity and name, the capability ships not at all rather than degraded to an approximation.

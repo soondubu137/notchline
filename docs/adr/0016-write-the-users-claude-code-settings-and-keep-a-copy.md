@@ -1,67 +1,66 @@
-# 写用户的 Claude Code 设置，写之前先留一份
+# Write the user's Claude Code settings, keeping a copy first
 
-本应用直接把自己的 hook 注册写进 `~/.claude/settings.json`，并在需要时把它取出来。设置窗口与首次运行里 Claude Code 那一行因此拿到一个开关，和 Codex 那一行一模一样。
+The app writes its own hook registration into `~/.claude/settings.json` directly, and takes it back out on request. The Claude Code row in Settings and in first-run therefore gets a switch, identical to the Codex row's.
 
-**每一次写入之前**，先把该文件当前的样子原样复制到同目录的 `settings.json.notchline-backup`。
+**Before every write**, the file's current bytes are copied to `settings.json.notchline-backup` in the same directory.
 
-这条**取代 [ADR 0010](0010-never-write-the-users-claude-code-settings.md)**。那一条说本应用永不写这个文件，用户自己粘贴；实现里的粘贴卡片、`AgentManualSetup`、`configurationSnippet()` 与 `manualSetup()` 随本决定一起删除。
+This **supersedes [ADR 0010](0010-never-write-the-users-claude-code-settings.md)**, which said the app never writes this file and the user pastes it themselves. The paste card, `AgentManualSetup`, `configurationSnippet()` and `manualSetup()` are deleted with this decision.
 
-## 为什么翻过来
+## Why it reversed
 
-ADR 0010 的论证从来不是「做不到」——它自己就写着写入版本已经实现并通过测试，缺的是产品决策。它权衡的是一次错误编辑的影响范围：`~/.codex/hooks.json` 除 hooks 外几乎不含别的东西，`~/.claude/settings.json` 装着用户整个 Claude Code 安装。
+ADR 0010's argument was never "we cannot" — it says outright that the writing version was implemented and passed its tests, and that what was missing was a product decision. It weighed the blast radius of one bad edit: `~/.codex/hooks.json` holds almost nothing but hooks, `~/.claude/settings.json` holds a user's entire Claude Code installation.
 
-那个权衡里被低估的是它自己记下的代价：**这是唯一一处 Claude Code 比 Codex 更难上手的地方**。它当时被写成「开发者工具，其用户本来就在编辑这个文件，可以接受」。实际形态不是这样：
+What that weighing underrated was a cost it recorded itself: **this was the only place Claude Code was harder to adopt than Codex**. It was written off as "a developer tool whose users already edit this file". The actual shape was not that:
 
-- 用户要从一张卡片里复制一段十几个事件的 JSON，自己合并进一个已经有内容的文件。
-- **粘贴不完整会静默失灵。** ADR 0010 自己列了这一条，并要求 `status()` 单独报 `repairRequired`——但本应用只能看出来、说出来，改不动。
-- **形状过时同样是用户的活。** [ADR 0013](0013-claude-code-hooks-run-a-helper-not-a-port.md) 把 handler 从 `type: "http"` 换成 `command` 之后，所有已安装的用户必须回去重贴一次，而本应用连那段死掉的 `http` handler 都删不掉——只能认出来，然后请用户自己动手。
-- 每次词表新增一个事件（`MessageDisplay` 就是一次）都要用户重贴一遍。
+- The user copies a dozen-event JSON block from a card and merges it by hand into a file that already has contents.
+- **An incomplete paste fails silently.** ADR 0010 listed this and required `status()` to report `repairRequired` separately — but the app can only see it and say so, never fix it.
+- **A stale shape is the user's job too.** After [ADR 0013](0013-claude-code-hooks-run-a-helper-not-a-port.md) moved handlers from `type: "http"` to `command`, every installed user had to go back and re-paste, and the app could not even delete the dead `http` handler — only recognise it and ask them to do it.
+- Every new event in the vocabulary (`MessageDisplay` was one) means another re-paste.
 
-也就是说，ADR 0010 把「本应用有能力修好、且知道该怎么修」的一整类问题，全部转成了用户手工劳动，而这些问题**每一个都不报错**。用一次坏编辑的风险，换掉了一条持续存在的静默失效通道。
+So ADR 0010 converted an entire class of problems the app can fix, and knows how to fix, into manual labour — and **none of these problems raises an error**. It traded the risk of one bad edit for a permanent silent-failure channel.
 
-## 是什么让写入可以接受
+## What makes writing acceptable
 
-不是信心，是三件已经在代码里的事，加上一件新的。
+Not confidence: three things already in the code, plus one new one.
 
-1. **只碰自己的键。** `ManagedHooksConfiguration` 只增删本应用 identity marker 认得的 handler，用户在同一个事件下的 group 原样保留、位置不动（只在尾部追加）。
-2. **看不懂就拒绝，绝不强转。** root 不是对象、`hooks` 不是对象、某个事件不是 group 数组——一律在写之前抛错停下。ADR 0010 之前的实现正是因为把看不懂的东西强转成空字典，才会把一个 root 是数组的合法 JSON 整个覆盖掉。
-3. **写前比对字节、写后回读校验。** 读改写期间文件被别人动过就放弃本次写入并报 `changedWhileEditing`；写完重新读一遍确认注册确实完整，否则报错。
-4. **新增：每次写入前留一份副本。**
+1. **Touch only our own keys.** `ManagedHooksConfiguration` adds and removes only handlers this app's identity marker recognises; the user's groups under the same event are preserved in place (we append at the tail only).
+2. **Refuse what we cannot read; never coerce.** A root that is not an object, a `hooks` that is not an object, an event that is not an array of groups — all throw and stop before any write. The pre-ADR-0010 implementation overwrote an entire valid JSON file whose root was an array precisely because it coerced what it could not read into an empty dictionary.
+3. **Compare bytes before writing and verify by reading back.** If the file changed under us during the read-modify-write, abandon the write and report `changedWhileEditing`; after writing, re-read to confirm the registration is complete, and error if not.
+4. **New: keep a copy before every write.**
 
-## 副本为什么是「每次刷新」而不是「只留第一份」——**两个产品同一条规则**
+## Why the copy refreshes rather than being kept from the first write — **one rule for both products**
 
-`ManagedHooksFileEditor` 原本的语义是**只写一次、永不刷新**，理由是「它先于我们所有编辑，用后来的状态覆盖它就毁掉了唯一值得留的版本」。
+`ManagedHooksFileEditor` originally meant **write once, never refresh**, reasoning that the first copy predates all our edits and overwriting it with later state destroys the only version worth keeping.
 
-本条最初写成「这条对 `~/.codex/hooks.json` 成立，对 `~/.claude/settings.json` 正好反过来」，并据此把刷新说成是 Claude Code 这一侧的特例。**那句话是错的**，而且代码从来没有按它实现过——`preserveRecoveryCopy(of:)` 在共享的编辑器里，两个产品一直走的是同一条路径。回头把两边都算一遍，结论是刷新对两个文件都成立，而 Codex 那一侧的理由更硬：
+This ADR first said that rule held for `~/.codex/hooks.json` and inverted for `~/.claude/settings.json`, treating refresh as a Claude Code special case. **That was wrong**, and the code never implemented it that way — `preserveRecoveryCopy(of:)` lives in the shared editor and both products have always taken the same path. Worked through again for both sides, refresh is right for both files, and the Codex reason is the harder one:
 
-- **`~/.claude/settings.json`**：它装着用户整个 Claude Code 安装。一个半年前打开开关、此后一直在里面改主题、权限、环境变量和 MCP server 的用户，看到 `settings.json.notchline-backup` 会以为它是「出事之前的我的文件」；只留第一份的语义下它是半年前那一份，还原它就是一次由本应用造成的数据丢失。
-- **`~/.codex/hooks.json`**：Codex 按 `<path>:<event>:<group index>:<handler index>` 记信任（2026-08-20 实测，也正是 append-at-tail 规则的由来）。还原一份「本应用第一次编辑之前」的副本，**不只是丢掉用户此后新增的定义，还会把剩下那些的 group 序号整体挪位，于是他们自己定义上的信任静默失效**——Codex 不再跑它们，而任何地方都不报错。这正是 append-at-tail 拼命要避免的那个失效，只是换了个入口走进来。**一份过时的 `hooks.json` 副本比一份过时的 `settings.json` 副本更危险，不是更安全。**
-- 而且只留第一份的语义在**本应用自己创建的文件**上根本不自洽：创建那次没有副本可留，于是它冻结在本应用**第二次**编辑之前——一个谁也叫不出名字的版本。
+- **`~/.claude/settings.json`** holds the user's whole installation. Someone who enabled the switch six months ago and has since edited themes, permissions, environment variables and MCP servers will read `settings.json.notchline-backup` as "my file before this went wrong"; under write-once it is the file from six months ago, and restoring it is data loss caused by this app.
+- **`~/.codex/hooks.json`**: Codex records trust by `<path>:<event>:<group index>:<handler index>` (measured 2026-08-20, and the origin of the append-at-tail rule). Restoring a copy from before this app's first edit does not merely discard definitions the user added since — **it shifts the group indices of the remaining ones, so trust on their own definitions silently lapses**, Codex stops running them, and nothing anywhere reports it. That is exactly the failure append-at-tail exists to prevent, entering by another door. **A stale `hooks.json` copy is more dangerous than a stale `settings.json` copy, not safer.**
+- And write-once is incoherent for **a file this app created**: that write has no copy to keep, so it freezes at the state before this app's **second** edit — a version nobody can name.
 
-方向因此对两个文件都一样：**我们写进去的东西，关掉开关就能干净取出来；用户自己那些编辑，任何地方都找不回来。** 副本刷新，语义固定为一句话——
+The direction is therefore the same for both files: **what we wrote comes out cleanly when the switch goes off; the user's own edits are recoverable from nowhere else.** The copy refreshes, and its meaning is fixed as one sentence —
 
-> 本应用最近一次改动它之前，你的文件的样子。
+> your file as it was immediately before this app last changed it.
 
-实现上写的是 `write(_:replacing:)` 刚刚读出来并比对过的那份字节，不是再 `copyItem` 一次：少一次读，也没有「副本抓到的版本和被替换的版本不是同一个」的窗口。用 `.atomic` 写，中途崩溃留下的是上一份副本而不是没有副本。写副本失败会让整次写入失败——先有副本，才动用户的文件。
+It is implemented by writing the bytes `write(_:replacing:)` just read and compared, rather than a second `copyItem`: one less read, and no window in which the copied version differs from the replaced one. It is written `.atomic`, so a crash mid-write leaves the previous copy rather than none. A failed copy fails the whole write — the copy exists before the user's file is touched.
 
-**本应用创建的文件不留副本。** 之前不存在的东西没有更早的版本，留一份空的只会误导。
+**Files this app created get no copy.** Something that did not exist has no earlier version, and an empty copy would only mislead.
 
-**升级行为，照实记：** 老版本在 `~/.codex/hooks.json` 旁留下的那份「只写一次」的副本，会在下一次写入时被新语义替换掉。这是有意的——按上面第二条，那份更旧的副本正是最不该被还原的那一份。
+**Upgrade behaviour, recorded plainly:** the write-once copy an older version left beside `~/.codex/hooks.json` is replaced by the new semantics at the next write. That is intended — by the second point above, that older copy is exactly the one that should never be restored.
 
-**但改名留下了一份孤儿。** 副本名由应用名派生（`hooksConfiguration + ".notchline-backup"`），[改名之前](../../AGENTS.md)它叫 `hooks.json.codex-in-notch-backup`。本机 `~/.codex/` 里就有这么一份 2026-08-12 的文件，代码里现在没有任何地方引用那个名字：它不会被刷新，也不会被读。**本应用不删它**——那是用户文件里的一份恢复副本，删不删由用户决定。代价是这个目录里可能同时躺着两份语义不同的副本，只有新的那份是活的。
+**But the rename left an orphan.** The copy's name derives from the app's name (`hooksConfiguration + ".notchline-backup"`); before the rename it was `hooks.json.codex-in-notch-backup`. This machine has one such file from 2026-08-12 in `~/.codex/`, and nothing in the code references that name any more: it is never refreshed and never read. **The app does not delete it** — it is a recovery copy inside the user's file space, and removing it is the user's call. The cost is that the directory may hold two copies with different meanings, only the newer of which is live.
 
-## 代价，照实记
+## Costs, recorded plainly
 
-- **本应用现在会写用户 Claude Code 安装的中心文件。** 上面四条是全部的保障，没有别的。已知会被拒绝而不是被写坏的情况有测试覆盖（root 不是对象、`hooks` 不是对象、事件形状不认识），每一种都要求文件字节不变且不留副本。
-- **`~/.claude/` 与 `~/.codex/` 目录里各多一个文件。** 用户没要过它们。它们是这个决定的价格，设置窗口与首次运行的脚注写明了**两个**文件的名字——此前脚注只写了 Claude Code 那一个，而 Codex 那份副本一直在写，这是一处该说没说。两个开关的 tooltip 也各自写明自己那一份。安装完成的提示里只有 Claude Code 那条点名副本：Codex 那条要带一个必做的下一步（去 `/hooks` 信任），再加一句会和它抢。真正必须落在用户眼前的是**拨开关之前**那一次告知，而那是脚注。
-- **不写 `description` 键。** Codex 侧在自己新建的文件根上盖一个 `description` 作为给打开它的人的说明；这里不盖。Claude Code 会校验这个文件的键，而本应用给用户新建这个文件时的第一件事，不该是往里放一个它不认识的键。`descriptionForNewFiles` 因此改成可选，Claude Code 传 `nil`。
-- **`repairRequired` 这一态留着。** 本应用现在修得动它了，但一份来自旧版本、事件不全的注册在用户去拨那个开关之前仍然是「notch 一直空着而任何地方都不报错」。所以它继续单独报，不与「关着」合并。这一态下开关本来就显示为关（`isIntegrationEnabled` 对 `repairRequired` 为假），所以说明句写的是「把开关打开」；而「注册齐全却不触发」那条诊断（`restoreDefinitionAdvice`）下开关是开着的，写的是「拨一下」——`install()` 在注册已经正确时什么都不写。
-- **Codex 侧不需要新的安全机制，需要的是把它已有的说清楚并钉住。** 这一条最初把副本写成 Claude Code 的新增项，实际它落在共享的 `ManagedHooksFileEditor` 上，两个产品同时拿到了它——而 Codex 那条路径当时**一个测试都没有**。补上 `theUsersCodexHooksAreCopiedBesideThemselvesBeforeEveryChange` 与 `aRefusedCodexInstallLeavesNeitherAnEditNorACopy`。除此之外核对过：本应用写用户文件的路径只有这一个编辑器（其余写入全在自己的 support 目录内），Codex 卸载删掉 helper 与 socket 看着与 ADR 0016 给 Claude Code 的结论相反，但 `AgentHookListener.start` 用 inode 比对判断是否已绑定，socket 文件被删后下一轮 `prepareTransport()` 会重新绑定，所以那是无害的多余动作，不是安全缺口。
+- **The app now writes the central file of a user's Claude Code installation.** The four points above are the entire safeguard. The cases known to be refused rather than mangled are covered by tests (root not an object, `hooks` not an object, an unrecognised event shape), each requiring the file's bytes to be unchanged and no copy left behind.
+- **One extra file each in `~/.claude/` and `~/.codex/`.** The user did not ask for them. They are this decision's price, and the footnote in Settings and first-run names **both** files — it previously named only the Claude Code one while the Codex copy was already being written, which was something that should have been said and was not. Each switch's tooltip names its own copy. Only the Claude Code completion message mentions the copy: the Codex one has to carry a mandatory next step (go and trust it via `/hooks`), and a second sentence would compete with it. What must reach the user is the notice **before** they flip the switch, and that is the footnote.
+- **No `description` key.** The Codex side stamps a `description` on the root of a file it creates, as a note to whoever opens it; not here. Claude Code validates this file's keys, and the first thing this app does when creating that file for a user should not be to put a key it does not recognise in it. `descriptionForNewFiles` is therefore optional and Claude Code passes `nil`.
+- **`repairRequired` stays as a state.** The app can now fix it, but an incomplete registration from an older version still means "the notch stays empty and nothing reports it" until the user flips the switch. So it is still reported separately rather than merged into "off". In that state the switch already reads as off (`isIntegrationEnabled` is false for `repairRequired`), so the wording is "turn the switch on"; whereas the "registered but not firing" diagnostic (`restoreDefinitionAdvice`) has the switch on, so its wording is "flip it" — `install()` writes nothing when the registration is already correct.
+- **The Codex side needed no new safety mechanism, only the existing one stated and pinned.** This ADR first described the copy as a Claude Code addition; it actually lands in the shared `ManagedHooksFileEditor` and both products got it at once — and the Codex path had **no tests at all**. `theUsersCodexHooksAreCopiedBesideThemselvesBeforeEveryChange` and `aRefusedCodexInstallLeavesNeitherAnEditNorACopy` fill that in. Also checked: this editor is the only path by which the app writes a user's file (every other write is inside its own support directory), and Codex uninstall deleting the helper and socket looks like the opposite of ADR 0016's conclusion for Claude Code, but `AgentHookListener.start` compares inodes to decide whether it is already bound, so the next `prepareTransport()` rebinds after the socket file is deleted — a harmless redundancy, not a safety hole.
+- **Uninstall still only takes back the registration.** The helper and socket stay in this app's own support directory: with the registration gone nothing will run them, and the refresh loop's `prepareTransport()` writes both back within a second. Deleting them here claims a tidiness it cannot deliver.
 
-- **卸载仍然只取注册。** helper 与 socket 留在本应用自己的 support 目录里——注册没了就没有东西会去跑它，而刷新循环的 `prepareTransport()` 一秒内就会把两者写回来。在这里删它们是自称整洁而实际做不到。
+## Where it lands
 
-## 影响到的位置
+`ClaudeCodeHookSetup.install()` / `uninstall()`, `ManagedHooksFileEditor.preserveRecoveryCopy(of:)`, `ClaudeCodeMonitorService.installHooks()` / `removeHooks()`, `MonitorStore`'s per-product switches (`integrationSwitchIsOnByAgent`, `setupStatusByAgent`, `integrationBusyAgents`, one convergence task per product), and `ProductConnectionRows`' two rows with two switches.
 
-`ClaudeCodeHookSetup.install()` / `uninstall()`、`ManagedHooksFileEditor.preserveRecoveryCopy(of:)`、`ClaudeCodeMonitorService.installHooks()` / `removeHooks()`、`MonitorStore` 的按产品开关（`integrationSwitchIsOnByAgent`、`setupStatusByAgent`、`integrationBusyAgents`、每产品一个 convergence task）、`ProductConnectionRows` 两行两个开关。
-
-测试：`bothProductsInstallTheirOwnRegistration`、`theUsersSettingsAreCopiedBesideThemselvesBeforeEveryChange`、`theUsersCodexHooksAreCopiedBesideThemselvesBeforeEveryChange`、`aRefusedCodexInstallLeavesNeitherAnEditNorACopy`、`installingTouchesOnlyThisAppsOwnKeysInTheUsersSettings`、`aSettingsShapeThisAppCannotReadIsRefusedRatherThanOverwritten`、`aPartialRegistrationReportsThatItNeedsRepair`、`eachProductsIntegrationSwitchMovesOnlyItsOwnProduct`。
+Tests: `bothProductsInstallTheirOwnRegistration`, `theUsersSettingsAreCopiedBesideThemselvesBeforeEveryChange`, `theUsersCodexHooksAreCopiedBesideThemselvesBeforeEveryChange`, `aRefusedCodexInstallLeavesNeitherAnEditNorACopy`, `installingTouchesOnlyThisAppsOwnKeysInTheUsersSettings`, `aSettingsShapeThisAppCannotReadIsRefusedRatherThanOverwritten`, `aPartialRegistrationReportsThatItNeedsRepair`, `eachProductsIntegrationSwitchMovesOnlyItsOwnProduct`.
