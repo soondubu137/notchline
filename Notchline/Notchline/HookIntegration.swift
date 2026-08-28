@@ -358,15 +358,26 @@ protocol AgentHookVocabulary: Sendable {
     /// Unrelated activity arriving early would close a wait the human is still
     /// looking at.
     nonisolated var reportsApprovalDenials: Bool { get }
-    /// Whether a lifecycle payload carries the row's text itself.
+    /// Whether `UserPromptSubmit` carries the prompt the row falls back to.
     ///
-    /// Codex's `UserPromptSubmit` carries `prompt` and its `Stop` carries
-    /// `last_assistant_message`, which is exactly the row's two lines and
-    /// arrives with the event that changes the row anyway. Claude Code's
-    /// payloads carry a prompt too, and it is deliberately not read: PRD §7
-    /// gives that product one source for all four states, and it is the
-    /// assistant text being printed, not the question that started the turn.
-    nonisolated var carriesTurnText: Bool { get }
+    /// **Both products, and Claude Code only since this line existed.** A turn
+    /// that has not said anything yet has nothing else to show, and what the
+    /// row showed instead was whatever the *previous* turn finished saying --
+    /// or, on a session's first turn, nothing at all. Codex answers that with
+    /// the prompt (PRD §7, `Running`), and there is no reason for the other
+    /// product to answer it differently: the field is in the payload that
+    /// starts the turn, and reading it costs one normalisation per turn.
+    nonisolated var carriesPromptText: Bool { get }
+    /// Whether the terminal event carries the turn's closing words.
+    ///
+    /// Codex's `Stop` carries `last_assistant_message`, which is exactly what
+    /// its finished row draws and arrives with the event that finishes it.
+    /// Claude Code's carries one too and it is deliberately not read: that
+    /// product's assistant text all comes from `MessageDisplay` (PRD §7), and
+    /// the final message is the last thing that event delivered -- so reading
+    /// the terminal's copy as well would be a second source for one line,
+    /// differing from the first only in where it was cut.
+    nonisolated var carriesFinalAnswerText: Bool { get }
     /// The event that streams assistant text as it is displayed, if any.
     ///
     /// Folded into a per-session preview rather than reduced, and deliberately
@@ -413,7 +424,8 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
         "Run /hooks in Codex and trust the definition again."
     /// A refusal produces no event whatsoever, so it has to be inferred.
     nonisolated let reportsApprovalDenials = false
-    nonisolated let carriesTurnText = true
+    nonisolated let carriesPromptText = true
+    nonisolated let carriesFinalAnswerText = true
     nonisolated let messageDeltaEventName: String? = nil
     /// No delta event, so the row's live text is read from the App Server and a
     /// tool call opening is the only sign it has moved. See
@@ -537,8 +549,12 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// in different slots (``AgentWaitSlots``), so neither can reach the
     /// other's wait.
     nonisolated let reportsApprovalDenials = false
-    /// PRD §7: one source for all four states, and it is not the prompt.
-    nonisolated let carriesTurnText = false
+    /// The prompt is read here as it is on Codex: it is what a turn that has
+    /// not printed anything yet has to show.
+    nonisolated let carriesPromptText = true
+    /// PRD §7: every word of assistant text this product draws comes from
+    /// `MessageDisplay`, so its `Stop`'s copy of the last message is not read.
+    nonisolated let carriesFinalAnswerText = false
     nonisolated let messageDeltaEventName: String? = Self.messageDisplayEventName
     /// The fold carries its own edge, so a tool call would only wake the panel
     /// a second time for text it has already reported.
@@ -690,8 +706,8 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             // Never the turn's terminal, even though it reads like one and
             // carries the same `last_assistant_message` field `Stop` does. Its
             // text is the *subagent's* closing words, and the row reports its
-            // own turn -- which `carriesTurnText` already declines to read for
-            // this product, so nothing here has to say so twice.
+            // own turn -- which `carriesFinalAnswerText` already declines to
+            // read for this product, so nothing here has to say so twice.
             .subagentStopped
         case ("Notification", _):
             // No longer registered, and consumed rather than reported so that a
@@ -1362,6 +1378,22 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     let hookEventName: String?
     let sessionID: String?
     let turnID: String?
+    /// Claude Code's turn identity, read from the key it actually spells it
+    /// with rather than through ``turnID``'s two-spelling fallback.
+    ///
+    /// **`MessageDisplay` is why this is a field of its own.** It is the one
+    /// event that carries `turn_id` *and* `prompt_id`, and the two hold
+    /// **different values** -- so on that event ``turnID`` answers with a
+    /// message-level id the reducer has never held, and text keyed by it would
+    /// belong to no turn at all. Measured on CLI 2.1.234 and again on 2.1.251
+    /// (a `-p` run against a throwaway `--settings` listener): the turn's
+    /// `UserPromptSubmit`, its `MessageDisplay` and its `Stop` all carried the
+    /// same `prompt_id`, and only the middle one carried a `turn_id` as well.
+    /// Every other event of this product carries `prompt_id` only, which is
+    /// where ``turnID`` already takes it from; Codex sends none, so this is nil
+    /// there and the one rule that reads it treats nil as "belongs to whichever
+    /// turn is asking".
+    let promptID: String?
     /// The subagent that produced this event, when one did.
     ///
     /// Codex stamps a subagent's hooks with its **parent's** identity: the
@@ -1453,8 +1485,9 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hookEventName = try container.decodeIfPresent(String.self, forKey: .hookEventName)
         sessionID = try container.decodeIfPresent(String.self, forKey: .sessionID)
+        promptID = try container.decodeIfPresent(String.self, forKey: .promptID)
         turnID = try container.decodeIfPresent(String.self, forKey: .turnID)
-            ?? container.decodeIfPresent(String.self, forKey: .promptID)
+            ?? promptID
         agentID = try container.decodeIfPresent(String.self, forKey: .agentID)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolUseID = try container.decodeIfPresent(String.self, forKey: .toolUseID)
@@ -1880,6 +1913,12 @@ nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
     nonisolated static let maximumRetained = 64
 
     private struct SessionPreview {
+        /// The turn this message belongs to, as the payload spelled it.
+        ///
+        /// Nil where the product does not say, and read as "whichever turn is
+        /// asking" — the reading that keeps the row's text on a build that
+        /// stopped sending the field, rather than blanking it.
+        let turnID: String?
         /// Whichever assistant message is currently being printed. When this
         /// changes the text starts again — the newest message is the progress,
         /// and its head is what the row reports.
@@ -1892,26 +1931,42 @@ nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
     nonisolated(unsafe) private var order: [String] = []
     /// The sessions the last refresh listed.
     ///
-    /// Held only to qualify the edge in ``fold(delta:messageID:sessionID:)``.
+    /// Held only to qualify the edge in ``fold(delta:messageID:turnID:sessionID:)``.
     nonisolated(unsafe) private var listedSessionIDs: Set<String> = []
 
     nonisolated init() {}
 
-    /// The text this session is currently printing, if any was collected.
+    /// The text this turn is currently printing, if any was collected.
     ///
     /// Read, not consumed. A preview stands until the message it came from is
     /// replaced or the session leaves the live list, because a turn spends most
     /// of its life between events and a row that blanked itself after one
     /// refresh would flicker rather than report.
-    nonisolated func preview(forSession sessionID: String) -> String? {
+    ///
+    /// **Scoped to the turn asking, which is what makes the row's fallback to
+    /// the prompt work at all.** The store is keyed by session and a session
+    /// outlives its turns, so the text sitting in it when a turn opens is the
+    /// *previous* turn's closing words. Answering with those would describe
+    /// work that has finished as the work being done -- the same failure the
+    /// Codex side's `turnId` argument names (`tech-design.md` §11) -- and would
+    /// leave the prompt fallback reachable only on a session's first turn.
+    ///
+    /// - Parameter turnID: The turn the row is drawing. Text stamped with a
+    ///   different one is not this turn's and is not answered with.
+    nonisolated func preview(
+        forSession sessionID: String,
+        inTurn turnID: String
+    ) -> String? {
         lock.lock()
-        let text = previewsBySessionID[sessionID]?.text
+        let stored = previewsBySessionID[sessionID]
         lock.unlock()
+        guard let stored, stored.turnID == nil || stored.turnID == turnID else {
+            return nil
+        }
         // The stored form keeps its trailing space so the next delta can join
         // onto it; a row never shows one.
-        guard let trimmed = text?.trimmingCharacters(in: .whitespaces),
-              !trimmed.isEmpty else { return nil }
-        return trimmed
+        let trimmed = stored.text.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Drops previews for sessions that are no longer live.
@@ -1962,10 +2017,17 @@ nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
     /// session the list does not carry is pruned by the very refresh it asks
     /// for, which makes the next delta a change again — and the row it would
     /// draw is not on screen either way.
+    ///
+    /// - Parameter turnID: The turn that is speaking, so that
+    ///   ``preview(forSession:inTurn:)`` can tell this turn's words from the
+    ///   previous one's. A turn change is a change in its own right: the row
+    ///   was drawing the prompt and is now drawing text, which is a different
+    ///   line even in the one case where the two turns' text matches.
     @discardableResult
     nonisolated func fold(
         delta: String,
         messageID: String?,
+        turnID: String?,
         sessionID: String
     ) -> Bool {
         lock.lock()
@@ -1975,7 +2037,11 @@ nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
         guard !delta.isEmpty else { return false }
         // A new message replaces the old one rather than extending it: the row
         // shows the message being printed now, not the whole turn concatenated.
-        let carried = existing?.messageID == messageID ? (existing?.text ?? "") : ""
+        // A new turn replaces it for the same reason and more strongly: its
+        // words are not a continuation of anything the last turn said.
+        let continuesMessage = existing?.messageID == messageID
+            && existing?.turnID == turnID
+        let carried = continuesMessage ? (existing?.text ?? "") : ""
         let carriedLength = carried.count
         guard carriedLength < Self.maximumCharacters else { return false }
         let text = Self.normalized(
@@ -1993,15 +2059,24 @@ nonisolated final class HookSessionPreviewStore: @unchecked Sendable {
         if isFirstSinceEmpty {
             order.append(sessionID)
         }
-        previewsBySessionID[sessionID] = SessionPreview(messageID: messageID, text: text)
+        previewsBySessionID[sessionID] = SessionPreview(
+            turnID: turnID,
+            messageID: messageID,
+            text: text
+        )
         while order.count > Self.maximumRetained {
             previewsBySessionID.removeValue(forKey: order.removeFirst())
         }
         // `isFirstSinceEmpty` is checked as well as the comparison, because a
         // prune between the two locks leaves `existing` describing text this
         // store no longer holds: the row is blank again, and putting text back
-        // on it is a change whatever that text says.
-        let didChange = isFirstSinceEmpty || drawn != wasDrawn
+        // on it is a change whatever that text says. The turn is checked for a
+        // narrower reason: the row draws the prompt until its turn has said
+        // something, so the first delta of a turn moves the line it draws even
+        // when the characters happen to match what the last turn left here.
+        let didChange = isFirstSinceEmpty
+            || drawn != wasDrawn
+            || existing?.turnID != turnID
         let moved = didChange && listedSessionIDs.contains(sessionID)
         lock.unlock()
         return moved
@@ -2338,6 +2413,10 @@ actor HookEventRepository {
             if previews.fold(
                 delta: delta,
                 messageID: payload.messageID,
+                // `prompt_id`, never `turn_id`: this is the one event that
+                // carries both, and on it they are different values -- see
+                // ``HookPayload/promptID``.
+                turnID: payload.promptID,
                 sessionID: sessionID
             ) {
                 changes.signal()
@@ -2414,8 +2493,11 @@ actor HookEventRepository {
 
     // MARK: - Previews
 
-    nonisolated func preview(forSession sessionID: String) -> String? {
-        previews.preview(forSession: sessionID)
+    nonisolated func preview(
+        forSession sessionID: String,
+        inTurn turnID: String
+    ) -> String? {
+        previews.preview(forSession: sessionID, inTurn: turnID)
     }
 
     nonisolated func retainPreviews(forSessions sessionIDs: Set<String>) {
@@ -2786,7 +2868,8 @@ actor HookEventRepository {
         // Text arrives in the payload that changes the row, for a product that
         // sends it at all. There is no second socket and no `event_id` to
         // correlate: one connection carried the whole thing.
-        let carriesText = vocabulary.carriesTurnText
+        let carriesPrompt = vocabulary.carriesPromptText
+        let carriesFinalAnswer = vocabulary.carriesFinalAnswerText
 
         switch signal {
         case .turnStarted:
@@ -2831,7 +2914,7 @@ actor HookEventRepository {
                         holder.heldTurnStart = HookTurnState.HeldTurnStart(
                             turnID: turnID,
                             startedAt: receivedAt,
-                            promptPreview: carriesText
+                            promptPreview: carriesPrompt
                                 ? HookSessionPreviewStore.normalized(event.prompt)
                                 : nil
                         )
@@ -2852,7 +2935,7 @@ actor HookEventRepository {
                 startedAt: receivedAt,
                 lastEventAt: receivedAt,
                 retiredTurnIDs: retiredTurnIDs,
-                promptPreview: carriesText
+                promptPreview: carriesPrompt
                     ? HookSessionPreviewStore.normalized(event.prompt)
                     : nil,
                 assistantPreview: nil,
@@ -3013,7 +3096,7 @@ actor HookEventRepository {
                 }
             }
         case .turnEnded:
-            let assistantPreview = carriesText
+            let assistantPreview = carriesFinalAnswer
                 ? HookSessionPreviewStore.normalized(event.lastAssistantMessage)
                 : nil
             mutateExactTurn(

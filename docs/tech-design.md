@@ -549,7 +549,7 @@ AND (turn.isActive OR (turn.isTerminal AND thread.isUnread))
 
 - **同一条规则也管住 `MessageDisplay` 的折叠。** 那条路径在 `deliver` 里就转向，根本到不了 reducer 的闸门，而它写的是用户看得见的正文——子智能体说的话不是这一行的回答。据 schema 而非实测：两次 `-p` 实测（2026-08-23，CLI `2.1.241`）只见主线程发 `MessageDisplay`，但 `-p` 本来就不显示子智能体的正文，而 `agent_id` 在 base schema 上。
 - **`SubagentStart` / `SubagentStop` 是 Thread 级事实，既不开启也不结束任何 Turn。两个产品都注册这两条。** 两者都必带 `agent_id`，而它们携带的 `turn_id` 是**子智能体自己的**，是 reducer 从未持有过的值——所以它们不走 `mutateExactTurn`，而是直接落在该 Thread 当前已有的 Turn 上（没有 Turn 就丢弃：子智能体是某个 Turn 派生出来的，没有 Turn 就没有行可标）。配对靠 `agent_id`。它们也**不推进 `lastEventAt`**：那不是 Turn 自己的活动，让子智能体的动静去挡成员关系校正会把 reducer 唯一的边界弄丢。子智能体活得比派生它的 Turn 更久（实测 2026-08-22：Turn 22:20:10 结束，子智能体 22:21:41 收尾），所以 `runningSubagentIDs` 跨 Turn 边界继承——用户接着说话不会结束一个子智能体。`Stop` 永远只是主智能体的终态：官方 `stop.command.input` 不带 `agent_id`，`subagent-stop.command.input` 必带。
-  Claude Code 侧同样如此，而且那边的子智能体也活得比轮次长——实测 2026-08-23（CLI `2.1.241`，一次 `-p` 运行，提示词明说不要等待）：`Agent` 的 `PreToolUse`/`PostToolUse` 相继立刻到达，`SubagentStart` 排在其后，主智能体的 `Stop` 带着 `background_tasks: [{id: <agent_id>, type: "subagent", status: "running"}]`，随后才是子智能体自己的 `PreToolUse`/`PostToolUse` 与 `SubagentStop`。它的 `SubagentStop` 也带 `last_assistant_message`，那是**子智能体**的收尾话，不进预览（`carriesTurnText` 对该产品本就是 false）。
+  Claude Code 侧同样如此，而且那边的子智能体也活得比轮次长——实测 2026-08-23（CLI `2.1.241`，一次 `-p` 运行，提示词明说不要等待）：`Agent` 的 `PreToolUse`/`PostToolUse` 相继立刻到达，`SubagentStart` 排在其后，主智能体的 `Stop` 带着 `background_tasks: [{id: <agent_id>, type: "subagent", status: "running"}]`，随后才是子智能体自己的 `PreToolUse`/`PostToolUse` 与 `SubagentStop`。它的 `SubagentStop` 也带 `last_assistant_message`，那是**子智能体**的收尾话，不进预览（`carriesFinalAnswerText` 对该产品本就是 false）。
 - **到达时刻另记一处：`HookTurnState.lastSubagentBoundaryAt`，只有一个读者。** `lastEventAt` 不动的理由如上，而终态未读成员关系门需要一个「最后一个子智能体收尾于何时」的时刻：它给终态行一个 settling 窗口，窗口从行成为终态那一刻起算。主智能体的 `Stop` 在实测里比最后一个 `SubagentStop` 早 91 秒，用 `Stop` 起算等于窗口早就耗尽——那一行会在它刚停止说「还有活在跑」的同一瞬间消失。因此两个时刻分工明确：`lastEventAt` 是 Turn 的活动，任何子智能体都不许推进它；`lastSubagentBoundaryAt` 是子智能体集合的最后一次变化，除 `HookTurnState.terminalBoundaryAt`（取两者较晚的一个）之外没有别的读者，尤其不参与任何 Turn 身份判断。它与 `runningSubagentIDs` 一样是 Thread 级事实，跨 Turn 边界一起继承。
 
   **「集合的最后一次变化」是字面意思，而它此前不是。** 这一处此前对每一条 `SubagentStop` 都盖章，包括那些**从未宣告过自己**的 agent 的——也就是本节上文那条封顶（④「画出来的标志只认 `runningSubagentIDs` 里的 agent」）已经明写不算数的那一批。代价不是一个没人读的字段：`terminalBoundaryAt` 正是终态未读成员关系门用来判断「又结束了一次」的那个时刻，而那是唯一能把一行已经隐藏的终态行拉回来的东西（`CodexDesktopUnreadState.swift` 的 `endedAgain`）。实测 2026-08-26（Claude Code CLI `2.1.246`，pty 会话，全部事件注册在一份用完即弃的 `--settings` 上）：Claude Code 会在**一个已经结束的轮次上**跑自己的分叉查询，每一个都没有 `SubagentStart`，收尾时发一条 `agent_type: ""`、`agent_id` 谁也没见过、`prompt_id` 是那个**已结束**轮次的 `SubagentStop`——提示建议在 `Stop` + 3.79 秒（`last_assistant_message` 就是它建议用户接下来说的那句话），会话回顾（`/config` → `Session recap`）在 `Stop` + 183.74 秒，**后者全程没有任何用户输入**：它的触发条件是轮次结束后终端处于失焦状态满 `min(180 秒, 0.8 × 提示缓存 TTL)`。于是用户已经读过、门也已经终局隐藏（CC-024）的那一行，三分钟后带着「未读」自己回到刘海上，并一直待到用户再次回到那个终端。现在只有真的动了 `runningSubagentIDs` 的那一条边界才盖章；从未进过计数的 agent 本来也没让那一行画过任何东西，它收尾时那一行没有什么需要用户多看一眼。
@@ -681,6 +681,14 @@ Input needed
 这个产品**不**打开 `wakesOnToolCallOpened`：它的正文就在本进程里，`fold` 自己知道行什么时候变，再按工具调用唤醒一次是同一个边沿的第二次唤醒，而工具密集的轮次正是这件事最贵的地方。
 
 预览按 live 会话集合裁剪（与标题缓存同一个集合），所以会话结束后它的正文不会比那一行活得更久。
+
+**正文按轮次问，问不到就回退到 prompt。** store 以会话为键、会话比轮次活得久，所以行必须能问「**本轮**说了什么」：`HookSessionPreviewStore` 把每段文本连同它的轮次一起存下，`preview(forSession:inTurn:)` 只答得上号的那一段，`ClaudeCodeMonitorService` 在答不上时改用 `HookTurnState.promptPreview`。这与 Codex 那半边的 `turnId` 是同一条论证（本节开头那句「不带它，一个还没说过话的新轮次会答上一轮的收尾语」），只是那边靠请求 scope、这边靠存下来的戳。
+
+轮次戳取 `prompt_id` 而不是 `HookPayload.turnID`：`MessageDisplay` 是这个产品唯一同时带 `turn_id` 与 `prompt_id` 的事件，两者**不同值**，而 reducer 的轮次身份自始至终是 `prompt_id`。实测 CLI 2.1.234，2026-08-28 在 2.1.251 上复测一次（`-p` 单轮，hook 注册在临时 `--settings` 上，**未改动 `~/.claude/settings.json`**）：同一轮的 `UserPromptSubmit`、`MessageDisplay`、`Stop` 带着同一个 `prompt_id`，只有中间那个另外带一个 `turn_id`。所以 `HookPayload` 单独留了一个 `promptID` 字段，`turnID` 的「两种拼法取其一」在这一个事件上会取错。没有轮次戳的文本（假想中不再送这个字段的构建）按「谁问都答」处理——回到本条规则之前的行为，而不是整行变空。
+
+折叠的唤醒边沿也跟着多了一条：轮次变了就是变了，即使两段文本逐字相同。行在本轮开口之前画的是 prompt，所以本轮第一个 delta 换掉的是「prompt」而不是「上一段文本」。
+
+`UserPromptSubmit` 的 `prompt` 由 `AgentHookVocabulary.carriesPromptText` 打开——这个开关此前叫 `carriesTurnText`，一个开关同时管着 prompt 与 `Stop` 的 `last_assistant_message`，于是「这个产品的最终回答只认 `MessageDisplay`」这条正确的判断顺手也把 prompt 关掉了。现在拆成两个：`carriesPromptText` 两个产品都为真，`carriesFinalAnswerText` 只有 Codex 为真。
 
 ## 12. 处理时间
 

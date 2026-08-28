@@ -17803,6 +17803,97 @@ for line in sys.stdin:
         #expect(row.status == .running)
     }
 
+    /// A Claude Code row starts on the prompt, the way a Codex row does.
+    ///
+    /// **The row used to start on whatever the store happened to be holding**,
+    /// which is nothing on a session's first turn and the *previous* turn's
+    /// closing words on every one after it -- the row describing finished work
+    /// as the work in hand. Codex has always answered this with the prompt
+    /// (PRD §7, `Running`); the field was in this product's payload the whole
+    /// time and the vocabulary declined to read it.
+    ///
+    /// Both halves are pinned here, and the second is the one a fallback alone
+    /// would not fix: text is asked for by turn, so a new prompt replaces the
+    /// last turn's answer at the moment it arrives rather than when the new
+    /// turn first speaks.
+    @Test @MainActor
+    func aClaudeCodeRowShowsThePromptUntilItsOwnTurnHasSpoken() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+        try harness.queue(
+            event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100,
+            prompt: "Fix the flaky test."
+        )
+        harness.live = [harness.session(id: "s-1", cwd: "/Users/someone/Projects/thing")]
+
+        // Also what binds the socket; nothing can post before this.
+        let opened = try #require(await harness.service.fetchSnapshot().sessions.first)
+        #expect(opened.preview == "Fix the flaky test.")
+
+        // `prompt_id`, because that is the id this product's turn has -- and on
+        // `MessageDisplay` alone it is not the same value as `turn_id`.
+        try send(to: harness.hookSocket, body: [
+            "hook_event_name": "MessageDisplay", "session_id": "s-1",
+            "prompt_id": "p-1", "turn_id": "a-message-level-id",
+            "message_id": "m-1", "index": 0, "final": true,
+            "delta": "Reading the test before changing it."
+        ])
+        let speaking = try #require(await harness.service.fetchSnapshot().sessions.first)
+        #expect(speaking.preview == "Reading the test before changing it.")
+
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 110)
+        let finished = try #require(await harness.service.fetchSnapshot().sessions.first)
+        #expect(finished.status == .completed)
+        // A finished row still draws what it said, not what it was asked.
+        #expect(finished.preview == "Reading the test before changing it.")
+
+        try harness.queue(
+            event: "UserPromptSubmit", session: "s-1", turn: "p-2", at: 120,
+            prompt: "Now do the other one."
+        )
+        let next = try #require(await harness.service.fetchSnapshot().sessions.first)
+        #expect(next.turnID == "p-2")
+        #expect(
+            next.preview == "Now do the other one.",
+            "the last turn's answer must not describe the turn just started"
+        )
+    }
+
+    /// Text that names no turn is still the row's text.
+    ///
+    /// The scoping reads `prompt_id`, which every measured Claude Code event
+    /// carries. A build that stopped sending it on `MessageDisplay` would key
+    /// text to no turn at all, and the honest answer to that is the text --
+    /// blanking every row over a missing field would lose the line entirely to
+    /// protect it from being one turn stale.
+    @Test @MainActor
+    func textThatNamesNoTurnIsStillTheRowsText() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        repository.deliver(try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "MessageDisplay", "session_id": "s-1",
+            "message_id": "m-1", "delta": "Said by a build that names no turn."
+        ]), at: Date())
+
+        #expect(
+            repository.preview(forSession: "s-1", inTurn: "p-1")
+                == "Said by a build that names no turn."
+        )
+        #expect(
+            repository.preview(forSession: "s-1", inTurn: "p-2")
+                == "Said by a build that names no turn."
+        )
+    }
+
     /// A turn whose session has gone is gone with it.
     ///
     /// SessionEnd is deliberately not registered, so the session list is the
@@ -19512,9 +19603,11 @@ for line in sys.stdin:
         #expect(turn.threadID == "session-1")
         #expect(turn.turnID == "prompt-1")
         #expect(turn.lastEventAt == Date(timeIntervalSince1970: 1_700))
-        // PRD §7: this product's row text has one source, and the prompt is not
-        // it. The payload carries one and the vocabulary declines to read it.
-        #expect(turn.promptPreview == nil)
+        // PRD §7: what the row falls back to until this turn has printed
+        // something. It used to be dropped here -- the payload has always
+        // carried it -- which left a turn that had not spoken yet drawing
+        // either nothing or the previous turn's closing words.
+        #expect(turn.promptPreview == "what the user asked")
     }
 
     /// A tool result too big to forward does not take its event down with it.
@@ -20344,6 +20437,12 @@ for line in sys.stdin:
         repository.deliver(try JSONSerialization.data(withJSONObject: [
             "hook_event_name": "MessageDisplay",
             "session_id": "s-1", "message_id": "m-1", "index": 0,
+            // Both spellings, because this is the one event that carries both
+            // and measured on CLI 2.1.234 they hold different values. The
+            // reducer's turn is `prompt_id`, so text keyed by `turn_id` would
+            // belong to no turn the row could ask about -- which is what the
+            // read below is really pinning.
+            "prompt_id": "p-1", "turn_id": "not-the-reducers-turn",
             "delta": said, "final": false
         ]), at: Date())
         // Reduces, so its arrival proves the one before it was handled too:
@@ -20354,10 +20453,19 @@ for line in sys.stdin:
 
         let turns = await waitForReducedTurns(repository, count: 1)
         #expect(turns.count == 1, "MessageDisplay must not open a turn of its own")
-        #expect(repository.preview(forSession: "s-1") == said)
-        // The text belongs to the session, not to the turn: PRD §7 gives this
-        // product one source for all four states and it is not the prompt.
+        #expect(repository.preview(forSession: "s-1", inTurn: "p-1") == said)
+        #expect(
+            repository.preview(forSession: "s-1", inTurn: "not-the-reducers-turn") == nil,
+            "the row asks by `prompt_id`, which is the only id its turn has"
+        )
+        // The text reaches no turn: it is folded before the reducer, so nothing
+        // it says can become evidence about turn state. `promptPreview` is
+        // empty here because no `UserPromptSubmit` was delivered, not because
+        // this product declines to read one.
         #expect(turns.first?.promptPreview == nil)
+        // And the terminal's own copy of the last message is still not read:
+        // every word of assistant text this product draws comes from
+        // `MessageDisplay` (PRD §7).
         #expect(turns.first?.assistantPreview == nil)
     }
 
@@ -20386,34 +20494,32 @@ for line in sys.stdin:
         func display(_ delta: String, message: String, session: String = "s-1") throws {
             repository.deliver(try JSONSerialization.data(withJSONObject: [
                 "hook_event_name": "MessageDisplay", "session_id": session,
-                "message_id": message, "delta": delta
+                "prompt_id": "p-1", "message_id": message, "delta": delta
             ]), at: Date())
         }
+        func shown() -> String? { repository.preview(forSession: "s-1", inTurn: "p-1") }
 
         // The boundary case: delta one ends on the space that separates them.
         try display("Reading the ", message: "m-1")
         try display("listener", message: "m-1")
-        #expect(repository.preview(forSession: "s-1") == "Reading the listener")
+        #expect(shown() == "Reading the listener")
 
         // And the other boundary case. A delta is published as "the newly
         // completed lines", so two deltas are two lines and neither carries the
         // separator: concatenating them directly would produce `listenerthen`.
         try display("then", message: "m-1")
-        #expect(repository.preview(forSession: "s-1") == "Reading the listener then")
+        #expect(shown() == "Reading the listener then")
 
         // One line: newlines and runs of whitespace collapse to single spaces.
         // A multi-line delta is the measured shape under `-p` — the whole
         // message arrives at once with its newlines intact.
         try display("\n\nfirst,\tthen  writing.", message: "m-1")
-        #expect(
-            repository.preview(forSession: "s-1")
-                == "Reading the listener then first, then writing."
-        )
+        #expect(shown() == "Reading the listener then first, then writing.")
 
         // A new message replaces rather than extends: the row shows what is
         // being said now, not the whole turn concatenated.
         try display("A second thing.", message: "m-2")
-        #expect(repository.preview(forSession: "s-1") == "A second thing.")
+        #expect(shown() == "A second thing.")
 
         // The measured shape, which none of the cases above is: driving an
         // interactive session under a pty against a listener registered through
@@ -20426,20 +20532,19 @@ for line in sys.stdin:
         try display("2. Magma is the same rock underground.\n", message: "m-lines")
         try display("3. Ash travels furthest.", message: "m-lines")
         #expect(
-            repository.preview(forSession: "s-1")
-                == "1. Lava is molten rock. 2. Magma is the same rock underground."
+            shown() == "1. Lava is molten rock. 2. Magma is the same rock underground."
                 + " 3. Ash travels furthest."
         )
 
         // And a long answer is cut at the same 240 both products' rows are cut
         // at, which is now one constant rather than two.
         try display(String(repeating: "a", count: 400), message: "m-3")
-        let capped = try #require(repository.preview(forSession: "s-1"))
+        let capped = try #require(shown())
         #expect(capped.count == HookSessionPreviewStore.maximumCharacters)
         // Every later delta of the same message is dropped, not appended and
         // re-cut — otherwise the cap would bound the row and not the memory.
         try display("ignored", message: "m-3")
-        #expect(repository.preview(forSession: "s-1") == capped)
+        #expect(shown() == capped)
     }
 
     /// Text does not outlive the row that showed it.
@@ -20465,14 +20570,17 @@ for line in sys.stdin:
         for session in ["alive", "ghost"] {
             repository.deliver(try JSONSerialization.data(withJSONObject: [
                 "hook_event_name": "MessageDisplay", "session_id": session,
-                "message_id": "m-1", "delta": "Words from \(session)."
+                "prompt_id": "p-1", "message_id": "m-1",
+                "delta": "Words from \(session)."
             ]), at: Date())
         }
-        #expect(repository.preview(forSession: "ghost") != nil)
+        #expect(repository.preview(forSession: "ghost", inTurn: "p-1") != nil)
 
         repository.retainPreviews(forSessions: ["alive"])
-        #expect(repository.preview(forSession: "alive") == "Words from alive.")
-        #expect(repository.preview(forSession: "ghost") == nil)
+        #expect(
+            repository.preview(forSession: "alive", inTurn: "p-1") == "Words from alive."
+        )
+        #expect(repository.preview(forSession: "ghost", inTurn: "p-1") == nil)
     }
 
     /// The row is redrawn when the line it draws moves, and not otherwise.
@@ -20510,7 +20618,7 @@ for line in sys.stdin:
         let display: @Sendable (String, String) throws -> Void = { delta, message in
             repository.deliver(try JSONSerialization.data(withJSONObject: [
                 "hook_event_name": "MessageDisplay", "session_id": "s-1",
-                "message_id": message, "delta": delta
+                "prompt_id": "p-1", "message_id": message, "delta": delta
             ]), at: Date())
         }
 
@@ -20535,7 +20643,7 @@ for line in sys.stdin:
         // A prefix, not an equality: `receivesChange` repeats its mutation
         // until the change lands, so the same delta may have been folded twice.
         #expect(
-            repository.preview(forSession: "s-1")?
+            repository.preview(forSession: "s-1", inTurn: "p-1")?
                 .hasPrefix("Working on the fix.") == true
         )
 
@@ -23329,6 +23437,9 @@ private final class ClaudeCodeHarness {
     ///   and the parent's `prompt_id`, so this is the only thing separating
     ///   them — which is why it is a parameter here rather than a second
     ///   session.
+    /// - Parameter prompt: What the user typed, as `UserPromptSubmit` carries
+    ///   it. Absent by default, which is the shape every test written before
+    ///   the row fell back to it used.
     func queue(
         event: String,
         session: String,
@@ -23336,7 +23447,8 @@ private final class ClaudeCodeHarness {
         at received: Double,
         toolName: String? = nil,
         toolUseID: String? = nil,
-        agentID: String? = nil
+        agentID: String? = nil,
+        prompt: String? = nil
     ) throws {
         var payload: [String: Any] = [
             "event_id": UUID().uuidString,
@@ -23345,6 +23457,7 @@ private final class ClaudeCodeHarness {
             "session_id": session,
             "turn_id": turn
         ]
+        if let prompt { payload["prompt"] = prompt }
         if let toolName { payload["tool_name"] = toolName }
         if let toolUseID { payload["tool_use_id"] = toolUseID }
         if let agentID { payload["agent_id"] = agentID }
@@ -26353,11 +26466,13 @@ extension NotchlineTests {
         }
 
         try display("Reading note.txt for you.", agentID: nil)
-        #expect(repository.preview(forSession: "s") == "Reading note.txt for you.")
+        #expect(
+            repository.preview(forSession: "s", inTurn: "p") == "Reading note.txt for you."
+        )
 
         try display("Here is the full contents of note.txt", agentID: "a-1")
         #expect(
-            repository.preview(forSession: "s") == "Reading note.txt for you.",
+            repository.preview(forSession: "s", inTurn: "p") == "Reading note.txt for you.",
             "the row reports its own turn, not what a subagent is saying"
         )
     }

@@ -205,7 +205,7 @@ sequenceDiagram
 
 第一项现在有两条渲染投影之外的补充，两条都只为行上那一行「当前进度」而存在，而那一行的来源不在投影里：
 
-- **Claude Code**：`MessageDisplay` 的 delta 折进 preview store 时，如果行会画出来的那一行文字真的变了就发一次信号。频率不由一条规矩封住，而由 240 字符的头部上限封住——写满之后同一条消息的后续 delta 在存进任何结构之前就返回。实测（CLI 2.1.234，1561 字符 / 11 个 delta）一条长消息两次唤醒，一条短消息一次。
+- **Claude Code**：`MessageDisplay` 的 delta 折进 preview store 时，如果行会画出来的那一行文字真的变了就发一次信号——换了轮次也算变，因为本轮开口之前行画的是 prompt。频率不由一条规矩封住，而由 240 字符的头部上限封住——写满之后同一条消息的后续 delta 在存进任何结构之前就返回。实测（CLI 2.1.234，1561 字符 / 11 个 delta）一条长消息两次唤醒，一条短消息一次。
 - **Codex**：`PreToolUse` 发一次信号（`PostToolUse` 不发）。它不改投影里的任何字段，但 Codex 先打 commentary 再调工具，所以这是那句话变化的时刻，也是那次 `thread/items/list` 读取该被安排的时刻。
 
 两条都不是「内容变了就重画」的一般化：`MonitorStore.apply` 仍然只在 `sessions` 真的不等时才发布，所以没有变化的唤醒只花一次刷新运行，不花那 20 ms 的整屏重估（`AGENTS.md` §7）。

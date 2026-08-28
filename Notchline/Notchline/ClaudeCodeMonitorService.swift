@@ -759,9 +759,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             )
         }
 
-        /// What the session is currently saying, from `MessageDisplay`.
-        func preview(for session: ClaudeCodeSession) -> String? {
-            hookEvents.preview(forSession: session.sessionID)
+        /// What this turn has said, from `MessageDisplay`, and the prompt it
+        /// started from until it has said anything.
+        ///
+        /// Both halves are scoped to the turn. The text is asked for by turn
+        /// because the store outlives one, and the prompt is the turn's own --
+        /// so a row that has just been given a new prompt shows that prompt
+        /// rather than the answer to the last one.
+        func preview(for turn: HookTurnState, in session: ClaudeCodeSession) -> String? {
+            hookEvents.preview(forSession: session.sessionID, inTurn: turn.turnID)
+                ?? turn.promptPreview
         }
 
         var rows: [MonitoredSession] = []
@@ -779,7 +786,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 for: turn,
                 in: session,
                 title: await title(for: session),
-                preview: preview(for: session)
+                preview: preview(for: turn, in: session)
             )
             // The later of the turn's own last event and the last subagent
             // boundary. For every row without a subagent they are the same
@@ -1623,19 +1630,27 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // obtained, and the folder name is never allowed to stand in for
             // one.
             title: title ?? "Untitled",
-            // The same text whatever the status, unlike Codex, which swaps
-            // between the prompt and the answer. There is one source here and
-            // it reads the same in every state: the beginning of the newest
-            // message printed. When a turn stops, that is exactly the PRD's
-            // "beginning of the final answer"; while it runs it is the opening
-            // of whatever it last said, which is a weaker reading of "latest
-            // progress" than Codex's and is the deliberate trade — a rolling
-            // tail would track a long answer more closely but would stop being
-            // the beginning of it at the moment the turn ends. Messages between
-            // tool calls are mostly shorter than the cap, so the two readings
-            // usually coincide. A wait shows the words that led up to the
-            // question — never the question's own tool arguments, the command
-            // being approved, or a path.
+            // The beginning of the newest message *this turn* printed, and the
+            // prompt it started from until it has printed one. The first half
+            // reads the same in every state: when a turn stops it is exactly
+            // the PRD's "beginning of the final answer", and while it runs it
+            // is the opening of whatever it last said — a weaker reading of
+            // "latest progress" than Codex's and the deliberate trade, since a
+            // rolling tail would track a long answer more closely but would
+            // stop being the beginning of it at the moment the turn ends.
+            // Messages between tool calls are mostly shorter than the cap, so
+            // the two readings usually coincide. A wait shows the words that
+            // led up to the question — never the question's own tool arguments,
+            // the command being approved, or a path.
+            //
+            // The second half is the same fallback Codex's `Running` row has
+            // always had, and this product went without it: the store is keyed
+            // by session, so a turn that had not spoken yet drew either nothing
+            // at all (a session's first turn, or the first after this app
+            // started listening) or the previous turn's closing words — the row
+            // describing finished work as the work in hand. Both are answered
+            // by asking the store for *this* turn's text and falling back to
+            // what the user just typed.
             preview: preview,
             status: turn.status,
             startedAt: turn.startedAt,
