@@ -1,8 +1,9 @@
 <p align="center">
-  <img src="design/assets/02-horizontal/notchline-horizontal-white.png" width="300" alt="Notchline">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="design/assets/07-readme/notchline-readme-header-dark.png">
+    <img src="design/assets/07-readme/notchline-readme-header.png" width="360" alt="Notchline">
+  </picture>
 </p>
-
-
 
 
 Notchline is a macOS overlay that monitors Codex Desktop and Claude Code, whether hosted in Claude Desktop or a terminal. It sits in the notch, or in the menu bar on a notch-less display, and shows monitored Threads whose Turn is running, waiting for input or approval, or completed and unread.
