@@ -1248,6 +1248,226 @@ struct NotchlineTests {
         #expect(folded < unfolded)
     }
 
+    /// Only the panel body answers to the pointer, and its edges count as in.
+    ///
+    /// The window is a shoulder wider than the body on each side so
+    /// `PanelContour` has somewhere to draw the curve back up to the menu bar,
+    /// and those shoulders deliberately pass the pointer through to the menu
+    /// bar items underneath. Measuring hover against the window would hold the
+    /// panel open over two strips it does not draw on.
+    ///
+    /// The top edge is the case that has to be inclusive: the panel hangs from
+    /// the very top of the display, so a pointer on the first row of pixels
+    /// sits exactly on `maxY`, and an exclusive test reads it as gone.
+    @Test @MainActor
+    func onlyThePanelBodyAnswersToThePointerAndItsEdgesCountAsInside() {
+        let window = NSRect(x: 100, y: 900, width: 200, height: 100)
+        let shoulder: CGFloat = 20
+        func contains(_ x: CGFloat, _ y: CGFloat) -> Bool {
+            OverlayPanelLayout.bodyContainsPointer(
+                NSPoint(x: x, y: y),
+                windowFrame: window,
+                surfaceShoulder: shoulder
+            )
+        }
+
+        #expect(contains(200, 950))
+        // The shoulders belong to the menu bar behind them.
+        #expect(!contains(window.minX + shoulder - 1, 950))
+        #expect(!contains(window.maxX - shoulder + 1, 950))
+        // Every edge of what is left is inside, the top one included.
+        #expect(contains(window.minX + shoulder, 950))
+        #expect(contains(window.maxX - shoulder, 950))
+        #expect(contains(200, window.maxY))
+        #expect(contains(200, window.minY))
+        #expect(!contains(200, window.minY - 1))
+    }
+
+    /// Folding takes the panel's bottom edge up past the chevron that did it.
+    ///
+    /// This is why the fold is the one gesture that strands the panel open. The
+    /// chevron rides the footer's last line, which ends a control's height above
+    /// the panel's bottom edge; the rules folding removes are far taller than
+    /// that. So the click lands, the window shrinks, and the pointer that has
+    /// not moved an inch is now outside a panel that never heard it leave —
+    /// which is both halves of the failure, the exit that never comes and the
+    /// entry that will be swallowed next time.
+    @Test @MainActor
+    func foldingLiftsThePanelsBottomEdgePastTheChevronThatWasClicked() {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let store = MonitorStore(displays: [display], services: [])
+        func connect(_ agent: AgentKind, windows: [QuotaWindow]) {
+            store.applyForTesting(
+                AgentSnapshot(
+                    agent: agent,
+                    availability: .ready,
+                    sessions: [],
+                    quota: QuotaSnapshot(windows: windows, todayTokens: 16_100_000),
+                    diagnostic: nil
+                )
+            )
+        }
+        connect(.codex, windows: [
+            QuotaWindow(label: "", remainingPercent: 89, resetsAt: nil)
+        ])
+        connect(.claudeCode, windows: [
+            QuotaWindow(label: "5 h", remainingPercent: 85, resetsAt: nil),
+            QuotaWindow(label: "7 d", remainingPercent: 53, resetsAt: nil)
+        ])
+        store.isExpanded = true
+        #expect(store.footerRules.count == 2)
+
+        func window() -> NSRect {
+            OverlayPanelLayout.frame(
+                on: display.frame,
+                panelSize: store.currentPanelSize,
+                surfaceShoulder: store.surfaceShoulderRadius,
+                trailingAnchor: store.currentPanelTrailingAnchor
+            )
+        }
+
+        // The chevron's own square, sitting on the footer's last line: its top
+        // is one control height above the panel's bottom edge. Anywhere in it
+        // is a place the pointer can legitimately be when the click lands.
+        let unfolded = window()
+        let chevron = unfolded.minY + PanelMetrics.quotaFoldControlSize / 2
+        let pointer = NSPoint(x: unfolded.midX, y: chevron)
+        #expect(
+            OverlayPanelLayout.bodyContainsPointer(
+                pointer,
+                windowFrame: unfolded,
+                surfaceShoulder: store.surfaceShoulderRadius
+            )
+        )
+
+        store.toggleQuotaFold()
+        let folded = window()
+        #expect(
+            !OverlayPanelLayout.bodyContainsPointer(
+                pointer,
+                windowFrame: folded,
+                surfaceShoulder: store.surfaceShoulderRadius
+            )
+        )
+
+        // Which is exactly the shape that owes an entry: the pointer was in,
+        // the pointer is out, and the pointer never moved.
+        #expect(
+            OverlayPanelLayout.resizeStrandedPointer(
+                pointer,
+                from: unfolded,
+                to: folded,
+                surfaceShoulder: store.surfaceShoulderRadius
+            )
+        )
+        // Unfolding again is the same resize backwards and owes nothing: the
+        // panel grows back over a pointer the tracking area still has inside.
+        #expect(
+            !OverlayPanelLayout.resizeStrandedPointer(
+                pointer,
+                from: folded,
+                to: unfolded,
+                surfaceShoulder: store.surfaceShoulderRadius
+            )
+        )
+        // Nor does a resize the pointer was already clear of -- it walked out
+        // of the tracking area itself, so it will be let back in the same way.
+        let away = NSPoint(x: unfolded.midX, y: unfolded.minY - 200)
+        #expect(
+            !OverlayPanelLayout.resizeStrandedPointer(
+                away,
+                from: unfolded,
+                to: folded,
+                surfaceShoulder: store.surfaceShoulderRadius
+            )
+        )
+    }
+
+    /// A panel that shrinks away from a still pointer collapses on its own.
+    ///
+    /// Hover arrives from a tracking area, which only fires on pointer
+    /// movement, so nothing reports the exit — and nothing will, because the
+    /// pointer is outside the window by then and moving it further away is not
+    /// this window's event to receive. Without the re-check the panel stays
+    /// expanded until the pointer next enters and leaves.
+    @Test @MainActor
+    func aResizeThatLeavesThePointerOutsideCollapsesThePanel() async {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let clock = TestClock()
+        let store = MonitorStore(displays: [display], services: [], clock: clock)
+        store.isExpanded = true
+
+        let window = OverlayPanelLayout.frame(
+            on: display.frame,
+            panelSize: store.currentPanelSize,
+            surfaceShoulder: store.surfaceShoulderRadius,
+            trailingAnchor: store.currentPanelTrailingAnchor
+        )
+
+        // Still inside: the resize moved the panel, not the pointer out of it,
+        // and a panel under the pointer stays open.
+        store.panelResized(
+            to: window,
+            pointerAt: NSPoint(x: window.midX, y: window.midY)
+        )
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay * 2)
+        #expect(store.isExpanded)
+
+        // Below the bottom edge, which is where folding leaves it.
+        store.panelResized(
+            to: window,
+            pointerAt: NSPoint(x: window.midX, y: window.minY - 40)
+        )
+        // The ordinary dwell still applies -- a pointer that comes back during
+        // the resize animation cancels this the way it cancels a real exit.
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay / 2)
+        #expect(store.isExpanded)
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay)
+        #expect(!store.isExpanded)
+    }
+
+    /// Growing under a still pointer is not an invitation to reopen.
+    ///
+    /// The re-check corrects one direction only. Escape collapses the panel out
+    /// from under a pointer that is still resting on the notch, and reading
+    /// that pointer as a fresh hover would reopen what the key just closed.
+    @Test @MainActor
+    func aResizeUnderAStillPointerNeverReopensAClosedPanel() async {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let clock = TestClock()
+        let store = MonitorStore(displays: [display], services: [], clock: clock)
+        store.isExpanded = true
+        store.collapse()
+
+        let window = OverlayPanelLayout.frame(
+            on: display.frame,
+            panelSize: store.currentPanelSize,
+            surfaceShoulder: store.surfaceShoulderRadius,
+            trailingAnchor: store.currentPanelTrailingAnchor
+        )
+        store.panelResized(
+            to: window,
+            pointerAt: NSPoint(x: window.midX, y: window.midY)
+        )
+        await clock.advance(by: MonitorTiming.standard.hoverExpandDelay * 2)
+        #expect(!store.isExpanded)
+    }
+
     /// The fold is remembered, and starts showing the rules.
     @Test @MainActor
     func theFoldIsOneRememberedStateForTheWholeFooter() {

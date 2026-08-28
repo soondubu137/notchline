@@ -2191,6 +2191,42 @@ final class MonitorStore: ObservableObject {
         }
     }
 
+    /// Re-check the pointer against a panel that has just been resized.
+    ///
+    /// Hover reaches this store from an `NSTrackingArea`, and a tracking area
+    /// only speaks when the pointer *moves*. Shrink the window away from a
+    /// pointer that is standing still and no exit is ever delivered — and
+    /// because the pointer is outside the window by then, moving it away
+    /// afterwards delivers nothing either. The panel stays expanded until the
+    /// pointer next enters and leaves, which is the same failure
+    /// `OverlayPanelController.orderPanelToMatchConcealment` avoids by
+    /// collapsing on the way out.
+    ///
+    /// Folding the quota block does this every time rather than by accident:
+    /// it is a click, so the pointer is still by definition, and the rules it
+    /// takes away are taller than the gap between the chevron and the panel's
+    /// bottom edge — 56pt against 14 with both products connected, measured on
+    /// a 40pt menu bar.
+    ///
+    /// Only the leaving direction is corrected. A pointer that the panel has
+    /// *grown* under has not asked for anything, and re-expanding on it would
+    /// undo `collapse()`: Escape shrinks the panel out from under a pointer
+    /// that is still sitting on the notch, and that pointer must not
+    /// immediately reopen what it just closed.
+    func panelResized(to windowFrame: NSRect, pointerAt pointer: NSPoint) {
+        guard isExpanded else { return }
+        guard !OverlayPanelLayout.bodyContainsPointer(
+            pointer,
+            windowFrame: windowFrame,
+            surfaceShoulder: surfaceShoulderRadius
+        ) else { return }
+
+        // The ordinary dwell, not an immediate collapse: a pointer that moves
+        // back onto the panel while it is still animating cancels this the
+        // same way it cancels an exit the tracking area reported.
+        pointerExitedPanel()
+    }
+
     func collapse() {
         cancelPendingHoverAction()
         isExpanded = false

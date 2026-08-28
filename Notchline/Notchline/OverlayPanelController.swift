@@ -12,6 +12,8 @@ final class OverlayPanelController {
     private var pendingFrameUpdate: DispatchWorkItem?
     private var pendingFrameUpdateShouldAnimate: Bool?
     private var hasShownPanel = false
+    /// Non-nil while one `mouseEntered` is owed — see ``armPointerReentry()``.
+    private var pointerReentryMonitor: Any?
     private let concealmentWatcher: OverlayConcealmentWatcher
     /// Whether the panel is off screen because its display's menu bar is.
     ///
@@ -49,6 +51,9 @@ final class OverlayPanelController {
         pendingFrameUpdate?.cancel()
         if let localEventMonitor {
             NSEvent.removeMonitor(localEventMonitor)
+        }
+        if let pointerReentryMonitor {
+            NSEvent.removeMonitor(pointerReentryMonitor)
         }
         if let screenParametersObserver {
             NotificationCenter.default.removeObserver(screenParametersObserver)
@@ -199,6 +204,8 @@ final class OverlayPanelController {
             return
         }
 
+        let previousFrame = panel.frame
+
         guard animated, hasShownPanel else {
             panel.setFrame(targetFrame, display: true)
             panel.contentView?.layoutSubtreeIfNeeded()
@@ -209,6 +216,7 @@ final class OverlayPanelController {
             if hasShownPanel, !isConcealed {
                 panel.orderFrontRegardless()
             }
+            reconcilePointer(from: previousFrame, to: targetFrame)
             return
         }
 
@@ -224,6 +232,79 @@ final class OverlayPanelController {
         } completionHandler: { [weak panel] in
             panel?.contentView?.layoutSubtreeIfNeeded()
         }
+
+        // Asked of the frame the panel is heading for, not the one it is
+        // leaving, and asked now rather than from the completion handler: the
+        // destination is already known, and the collapse dwell should then run
+        // alongside the resize the way it would have had the pointer walked
+        // out. Waiting for the animation would also risk answering for a frame
+        // a later update had already superseded.
+        reconcilePointer(from: previousFrame, to: targetFrame)
+    }
+
+    /// Re-answer "is the pointer on the panel?" now that the panel has moved.
+    ///
+    /// Two things go wrong when the window resizes away from a pointer that is
+    /// standing still, and they are the same fact seen from either side.
+    /// `.onHover` is an `NSTrackingArea`, which speaks only when the pointer
+    /// *moves*: the exit is never delivered, so the store still thinks the
+    /// panel is hovered, and the tracking area still thinks the pointer is
+    /// inside it, so the next real entry is not reported either. The store is
+    /// told to collapse, and the swallowed entry is made good by
+    /// ``armPointerReentry()``.
+    private func reconcilePointer(from previousFrame: NSRect, to targetFrame: NSRect) {
+        let pointer = NSEvent.mouseLocation
+
+        if OverlayPanelLayout.resizeStrandedPointer(
+            pointer,
+            from: previousFrame,
+            to: targetFrame,
+            surfaceShoulder: store.surfaceShoulderRadius
+        ) {
+            armPointerReentry()
+        }
+
+        store.panelResized(to: targetFrame, pointerAt: pointer)
+    }
+
+    /// Deliver the one `mouseEntered` the tracking area is going to swallow.
+    ///
+    /// The area's own idea of where the pointer is says "inside" while the
+    /// pointer is in fact outside, so the next crossing back in changes nothing
+    /// it can see and it stays silent. It resyncs on the crossing *out* after
+    /// that, which is one hover too late: the first pass over the notch after a
+    /// fold does nothing at all, and the panel only opens on the second.
+    ///
+    /// A global monitor is what the situation leaves. The pointer is somewhere
+    /// this window is not, so no event of this window's can say when it comes
+    /// back, and a timer would be the polling `AGENTS.md` §7 exists to keep
+    /// out. Measured: the monitor does see moves over this panel, because a
+    /// non-activating panel that never becomes key is not where a mouse-moved
+    /// event is delivered. It runs one rectangle test and draws nothing, and it
+    /// is armed only between a resize that stranded the pointer and the pointer
+    /// arriving back — after which there is a live tracking area again.
+    private func armPointerReentry() {
+        guard pointerReentryMonitor == nil else { return }
+
+        pointerReentryMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: .mouseMoved
+        ) { [weak self] _ in
+            guard let self else { return }
+            guard OverlayPanelLayout.bodyContainsPointer(
+                NSEvent.mouseLocation,
+                windowFrame: self.panel.frame,
+                surfaceShoulder: self.store.surfaceShoulderRadius
+            ) else { return }
+
+            self.disarmPointerReentry()
+            self.store.pointerEnteredPanel()
+        }
+    }
+
+    private func disarmPointerReentry() {
+        guard let pointerReentryMonitor else { return }
+        NSEvent.removeMonitor(pointerReentryMonitor)
+        self.pointerReentryMonitor = nil
     }
 
     private func installEventMonitors() {
@@ -285,6 +366,53 @@ final class OverlayPanelController {
 }
 
 enum OverlayPanelLayout {
+    /// Whether `pointer` is over the part of `windowFrame` that answers to hover.
+    ///
+    /// Not the window: that is one `surfaceShoulder` wider than the panel body
+    /// on each side, and the shoulders pass the pointer through to the menu bar
+    /// items they overhang. `NotchOverlayView` insets its hover region by
+    /// exactly that much, and this has to describe the same rectangle.
+    ///
+    /// Every edge counts as inside. The panel hangs from the top of the
+    /// display, so its top edge *is* the screen's, and a pointer parked on the
+    /// first row of pixels reports a `y` sitting on that boundary — an
+    /// exclusive test would read it as gone and collapse a panel the user is
+    /// holding open.
+    static func bodyContainsPointer(
+        _ pointer: NSPoint,
+        windowFrame: NSRect,
+        surfaceShoulder: CGFloat
+    ) -> Bool {
+        let body = windowFrame.insetBy(dx: surfaceShoulder, dy: 0)
+        return pointer.x >= body.minX
+            && pointer.x <= body.maxX
+            && pointer.y >= body.minY
+            && pointer.y <= body.maxY
+    }
+
+    /// Whether a resize has moved the panel off a pointer that did not move.
+    ///
+    /// The condition for one swallowed `mouseEntered`, and the reason it has to
+    /// be both halves rather than "the pointer is outside now": a pointer that
+    /// was already outside left the tracking area by walking out of it, so the
+    /// area knows where it is and will report the way back in by itself.
+    static func resizeStrandedPointer(
+        _ pointer: NSPoint,
+        from previousFrame: NSRect,
+        to targetFrame: NSRect,
+        surfaceShoulder: CGFloat
+    ) -> Bool {
+        bodyContainsPointer(
+            pointer,
+            windowFrame: previousFrame,
+            surfaceShoulder: surfaceShoulder
+        ) && !bodyContainsPointer(
+            pointer,
+            windowFrame: targetFrame,
+            surfaceShoulder: surfaceShoulder
+        )
+    }
+
     /// The window frame that puts a panel body of `panelSize` where it belongs.
     ///
     /// Two things separate the window from the panel it carries.
