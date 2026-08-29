@@ -440,8 +440,8 @@ struct NotchlineTests {
         let glimmer = try cells(.inactive, awakeAgent: .codex)
         let glimmerTracks = try glimmer.map { try values($0) }
         for track in glimmerTracks {
-            // 120 frames plus the repeat of frame 0 that closes the loop.
-            #expect(track.count == 121)
+            // 60 frames plus the repeat of frame 0 that closes the loop.
+            #expect(track.count == 61)
             #expect(track.first == track.last)
             // Never below the level the still it replaces was holding at.
             #expect(track.min() ?? 0 >= resting - 1e-6)
@@ -480,7 +480,7 @@ struct NotchlineTests {
             for (top, bottom) in [(0, 3), (1, 2)] {
                 let above: [Double] = glimmerTracks[top * MatrixGrid.side + column]
                 let below: [Double] = glimmerTracks[bottom * MatrixGrid.side + column]
-                let halfALoopOn: [Double] = (0 ... 120).map { above[($0 + 60) % 120] }
+                let halfALoopOn: [Double] = (0 ... 60).map { above[($0 + 30) % 60] }
                 #expect(below == halfALoopOn)
             }
         }
@@ -488,7 +488,7 @@ struct NotchlineTests {
         // And the mark is never all at once at the floor: at every frame some
         // cell is most of the way up. A glimmering mark that momentarily went
         // flat would be indistinguishable from the still it replaces.
-        for frame in 0 ... 120 {
+        for frame in 0 ... 60 {
             let frameCells: [Double] = glimmerTracks.map { $0[frame] }
             let lit: Double = frameCells.max() ?? 0
             #expect(lit > 0.55)
@@ -547,10 +547,10 @@ struct NotchlineTests {
         #expect(claudeCode.begin.allSatisfy { $0 == claudeAnchor })
 
         // A third of the loop: Claude Code's highlight is where Codex's was
-        // 40 frames ago, cell for cell.
+        // 20 frames ago, cell for cell.
         for (mine, theirs) in zip(codex.tracks, claudeCode.tracks) {
-            let aThirdLater: [Double] = (0 ... 120).map {
-                mine[(($0 - 40) % 120 + 120) % 120]
+            let aThirdLater: [Double] = (0 ... 60).map {
+                mine[(($0 - 20) % 60 + 60) % 60]
             }
             #expect(theirs == aThirdLater)
         }
@@ -562,7 +562,7 @@ struct NotchlineTests {
         func brightness(_ tracks: [[Double]], at frame: Int) -> Double {
             tracks.reduce(0) { $0 + $1[frame] }
         }
-        for frame in 0 ..< 120 {
+        for frame in 0 ..< 60 {
             let mine: Double = brightness(codex.tracks, at: frame)
             let theirs: Double = brightness(claudeCode.tracks, at: frame)
             #expect(abs(mine - theirs) > 0.001)
@@ -572,9 +572,9 @@ struct NotchlineTests {
         // fails exactly that test: the mark's brightness has half the loop's
         // period, so two marks half a loop apart breathe as one.
         let halfALoop: [[Double]] = codex.tracks.map { track in
-            (0 ... 120).map { track[($0 + 60) % 120] }
+            (0 ... 60).map { track[($0 + 30) % 60] }
         }
-        for frame in 0 ..< 120 {
+        for frame in 0 ..< 60 {
             let mine: Double = brightness(codex.tracks, at: frame)
             let mirrored: Double = brightness(halfALoop, at: frame)
             #expect(abs(mine - mirrored) < 1e-9)

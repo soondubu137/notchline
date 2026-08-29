@@ -879,9 +879,10 @@ enum MatrixPattern: Equatable {
 
     /// Loop length, or `nil` for the still.
     ///
-    /// Four lengths for five patterns, and the pairing is the design's:
+    /// Three lengths for five patterns, and both pairings are the design's:
     /// the radar and the knock share `1.2`, so a bar showing one of each is
-    /// showing two things on one grid rather than two clocks.
+    /// showing two things on one grid rather than two clocks, and the lull and
+    /// the glimmer share `2`, the two slowest things the mark does.
     var period: TimeInterval? {
         switch self {
         case .radar, .doubleKnock: 1.2
@@ -894,7 +895,7 @@ enum MatrixPattern: Equatable {
 
     /// The glimmer's length, named because the surface has to know it before
     /// it has a pattern to ask — see ``NotchStatusMatrix/glimmerHasRun``.
-    static let glimmerPeriod: TimeInterval = 4.0
+    static let glimmerPeriod: TimeInterval = 2.0
 
     /// Whether the pattern runs until something else stops it.
     ///
@@ -1010,7 +1011,7 @@ private enum MatrixTrack {
         0.183, 0.183, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.183,
         0.183, 0.188, 0.192, 0.199, 0.210, 0.220, 0.242, 0.263, 0.291, 0.325
     ]
-    /// **Glimmer**, 120 frames over `4s`, and the only one of the five held as
+    /// **Glimmer**, 60 frames over `2s`, and the only one of the five held as
     /// its rule rather than as a curve.
     ///
     /// A soft highlight drifts over the mark: a Gaussian `1.25` cells wide
@@ -1020,6 +1021,17 @@ private enum MatrixTrack {
     /// it and falls back to `0.15` when the highlight is elsewhere. There is
     /// no beat anywhere in it and nothing ever arrives: it reads as idle
     /// rather than as waiting, which is the whole of what it has to say.
+    ///
+    /// **It takes the lull's two seconds, having started at four.** The mark
+    /// draws this once per opening of the panel, and four seconds is longer
+    /// than a panel opened to read something is often up for: the highlight
+    /// was still crossing when the pointer left, so what a user actually saw
+    /// was a fragment of a wander rather than a figure. At two the whole
+    /// figure fits inside a glance, and nothing about the drift's character is
+    /// spent — the highlight is soft and the travel unchanged, so it reads as
+    /// the same unhurried thing said in half the time. It also puts the two
+    /// slowest patterns on one length, which is the pairing `period` already
+    /// makes for the radar and the knock.
     ///
     /// **The other four are one curve plus an offset; this one cannot be.**
     /// Their highlights travel in one dimension — round a bearing, across a
@@ -1031,8 +1043,9 @@ private enum MatrixTrack {
     /// is written down and the curves are sampled off it — rounded to the
     /// same three decimals `notchline-connected-glimmer.svg` writes, so the
     /// file and this are the same numbers rather than merely close ones. The
-    /// file was regenerated when the ceiling came down to `0.8`; it is still
-    /// the same figure, read against a lower peak.
+    /// file is regenerated whenever the ceiling or the loop length moves; it
+    /// is still the same figure, read against a lower peak and half the
+    /// frames.
     static let glimmer: [[Double]] = (0 ..< MatrixGrid.cellCount).map { index in
         let row = Double(index / MatrixGrid.side)
         let column = Double(index % MatrixGrid.side)
@@ -1049,7 +1062,7 @@ private enum MatrixTrack {
         }
     }
     /// The glimmer at 30fps, like the other four.
-    static let glimmerFrames = 120
+    static let glimmerFrames = 60
     /// How far the highlight's centre travels from the mark's, in cells.
     ///
     /// Past the outer cells (`1.6` against the `1.5` that would reach them),
