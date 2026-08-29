@@ -1,6 +1,17 @@
-# Notchline
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="design/assets/07-readme/notchline-readme-header-dark.png">
+    <img src="design/assets/07-readme/notchline-readme-header.png" width="360" alt="Notchline">
+  </picture>
+</p>
 
-A macOS utility that uses the area around the display notch to keep the Codex Desktop and Claude Code Turns that still need attention in view.
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-macOS%2026.5%2B-lightgrey" alt="macOS 26.5 or later">
+  <img src="https://img.shields.io/badge/built%20with-SwiftUI%20%2B%20AppKit-orange" alt="SwiftUI and AppKit">
+  <img src="https://img.shields.io/badge/dependencies-none-blue" alt="No third-party dependencies">
+</p>
+
+**Notchline is a macOS overlay that keeps the Codex Desktop and Claude Code Turns which still need attention visible without taking up usable desktop space.**
 
 <!--
 HERO DEMO PLACEHOLDER
@@ -24,19 +35,17 @@ Notchline is a persistent surface attached to the top edge of the display, not a
 
 ## Overview
 
-Agent work often continues outside the window currently in front of you. A Turn may be running, waiting for an approval, asking a question, or finished but not yet read. Following several conversations across Codex Desktop, Claude Desktop and terminal sessions otherwise means repeatedly returning to each host to find out what changed.
+Daily work can already fill the screen with a code editor, internal documentation, product pages and communication tools. Codex Desktop, Claude Desktop and terminal sessions then end up buried under those windows, even while several Turns continue working in the background.
 
-Notchline keeps that state at the top of the screen. On a MacBook with a notch, its collapsed form extends from the physical cut-out into two small wings. One status matrix is shown for each connected product, while the trailing side can show the longest unfinished Turn's elapsed time and subagent activity. On a display without a notch, the same information is drawn in a compact black pill in the menu-bar band.
+Once the agent windows are out of sight, it becomes difficult to see which work is still running, which Turn needs an approval or answer, and which conversation has completed. Repeatedly bringing every window to the front just to check its state interrupts the work that already occupies the desktop.
 
-Hovering expands the same surface into a list of live monitored Threads. Each row carries the Project, Thread title, current-content preview, Turn status and timing information. Clicking a row returns to its originating product. Notchline observes this work; it does not approve commands, answer questions, send input, cancel work, archive Threads or mark them as read.
+Notchline moves that overview into the otherwise unused area around the display notch. Its collapsed surface quietly shows the current state of both products without covering any working window; hovering reveals the monitored Threads, and clicking a row returns to the originating conversation. It observes and navigates, but does not approve commands, answer questions, send input, cancel work, archive Threads or mark them as read.
 
 ## Features
 
-### A persistent status surface
+### Live status without another window
 
-The collapsed surface represents each connected product with a 4×4 matrix. Motion and shape distinguish `Running`, `Input needed`, `Approval needed` and `Completed`; a column beside each matrix indicates how many rows belong to that product. When several Threads are present, the summary follows the same priority as the expanded list: approval, input, running, then completed.
-
-The component is a borderless, non-activating panel at the system status-bar level. It follows the selected display's menu bar across Spaces and removes itself when that menu bar is hidden by a full-screen app or automatic menu-bar hiding.
+The collapsed surface sits around a physical notch, or appears as a compact pill on a display without one. A 4×4 matrix for each connected product distinguishes `Running`, `Input needed`, `Approval needed` and `Completed`, while the trailing side can show elapsed time and subagent activity; hovering expands the same surface into the Thread list.
 
 <!--
 SCREENSHOT PLACEHOLDER — Collapsed states
@@ -55,27 +64,21 @@ What it should communicate:
 The physical notch is part of the notched layout, while the notch-less form preserves the same interaction model without pretending a cut-out exists.
 -->
 
-### Live Threads rather than history
+### One list for both products
 
-Rows are created from lifecycle events observed after Notchline starts. Later Turns in the same Thread replace the row's current Turn rather than creating duplicates. Codex Desktop and Claude Code use one four-status vocabulary and one urgency-sorted list, with configurable product attribution when both are connected.
-
-A row can include the prompt or current agent output, wall-clock processing time, a terminal reason, and the number of subagents still running. A subagent waiting for approval raises the Thread's derived urgency without rewriting the parent Turn's own status.
-
-Completed rows remain visible until the originating product provides trustworthy evidence that they have been read or are no longer navigable. A completed row can also be removed with a secondary click; this dismisses only that Turn's row and changes nothing in Codex or Claude Code.
+Codex Desktop and Claude Code Threads share one urgency-sorted list and the same four statuses. Each row can show its Project, title, current-content preview, elapsed time and subagent count; completed rows remain until trustworthy read or navigation evidence removes them, or until the user dismisses the row with a secondary click.
 
 ### Navigation back to the originating work
 
-Before opening a Codex row, Notchline confirms that the Thread is still navigable and then uses the official `codex://threads/<thread-id>` deep link.
-
-For Claude Code, it resolves the host from the session's process ancestry. Claude Desktop is activated for desktop-hosted sessions. Terminal.app and iTerm2 can have the exact tab selected through their scripting dictionaries; terminals that do not expose a controlling terminal are activated at application level instead. If the relevant window is on another Space, activation follows it there.
+Clicking a Codex row confirms that the Thread is still navigable before using its official deep link. Claude Code rows return to Claude Desktop or the originating terminal; Terminal.app and iTerm2 can select the exact tab when its tty is available, while other terminals fall back to application activation.
 
 ### Quota and daily usage
 
-The expanded footer shows Codex's primary rate-limit window and Claude Code's 5-hour and 7-day windows, plus today's token count. Unavailable readings remain unavailable rather than being estimated. The quota rules can be folded down to the daily summary.
+The expanded footer shows Codex's primary rate-limit window, Claude Code's 5-hour and 7-day windows, and today's token count. Unavailable readings remain unavailable rather than being estimated, and the quota rows can be folded down to the daily summary.
 
 ### Display and product settings
 
-Each product has an independent integration switch and health row. Display settings choose which connected screen carries Notchline, optionally hide the collapsed wings where the hardware cut-out can be measured, and add a restrained outline for dark wallpapers. Session-list settings choose whether product attribution appears as a coloured name, plain name, badge or colour bar.
+Each product has an independent integration switch and health row. Settings also choose the display, optionally hide the collapsed wings, add an outline for dark wallpapers, and present product attribution as a coloured name, plain name, badge or colour bar.
 
 <!--
 SCREENSHOT PLACEHOLDER — Expanded panel
@@ -113,11 +116,11 @@ Configuration is conventional macOS UI even though the primary interface is not 
 
 ## Motivation
 
-The centre of a MacBook menu bar is unusual screen space: it is persistently visible, already associated with system state, and partly occupied by hardware. That makes it a useful place for information that should remain peripheral rather than demand another window or notification.
+In my daily work, the available screen area is often already occupied by a code editor, internal documentation, product pages, communication software and the other tools needed for the task in front of me. There is rarely space left to keep Codex Desktop, Claude Desktop or every Claude Code terminal visible as well.
 
-The interaction model follows from the problem being monitored. Agent conversations can run in parallel, but the important moment is often when one stops and needs a person. A transient notification can be missed, a menu-bar glyph cannot describe several Threads, and bringing every host to the foreground defeats the purpose. Notchline explores a surface that is persistent enough to answer “what still needs me?” while remaining small until detail is requested.
+The agent windows therefore spend much of their time underneath everything else. That makes it easy to miss a conversation waiting for permission, a question that needs an answer, or a Turn that has already completed. Bringing those windows to the front, checking them one by one and burying them again is a small but frequent interruption.
 
-That constraint also shapes what the app refuses to do. The overlay is an observer and navigation aid, not an approval surface. It begins with an empty list rather than reconstructing uncertain pre-launch state, and it withholds a row or field when its source cannot establish the answer reliably.
+I wanted one quiet place that consumed no usable desktop area but still made the live state of every task easy to check at any moment. The strip around the MacBook notch was already present, always visible and otherwise unable to hold a normal window. Notchline grew from using that space as a compact status surface: small enough to stay out of the way, but detailed enough to show when my attention is needed.
 
 ## Requirements and installation
 
@@ -158,6 +161,22 @@ It may request Automation permission when opening a Claude Code row hosted in Te
 ## First run and usage
 
 The first launch opens one onboarding window. It contains the two product connection switches, an explanation of the Hook configuration they manage, and a live legend for reading the notch. Selecting `Start` completes onboarding; later launches show only the overlay.
+
+<!--
+SCREENSHOT PLACEHOLDER — First-run onboarding
+
+Recommended visual:
+A real screenshot of the complete onboarding window on its first launch.
+
+Composition:
+- Keep the native macOS window chrome and the complete single-pane layout visible.
+- Show both product switches, the Hook configuration explanation, all four live status examples and the Start button.
+- Show both product switches enabled and ensure no account name, home-directory path or machine name is visible.
+- Capture at a scale where the explanatory text and status labels remain readable on GitHub.
+
+What it should communicate:
+The initial setup is one short, explicit step: choose the products to connect, understand what Notchline changes, learn the four states, and start the overlay.
+-->
 
 Enabling an integration adds Notchline's lifecycle definitions to the product's own configuration:
 
@@ -222,26 +241,6 @@ What it should communicate:
 Product-specific complexity stops at the boundary; state reduction and presentation have one shared path.
 -->
 
-## Design notes
-
-### AppKit owns placement; SwiftUI owns content
-
-`OverlayPanelController` creates a borderless, non-activating `NSPanel` at `.statusBar` level and positions it against the selected `NSScreen`. The panel can join all Spaces, does not become key or main, and deliberately bypasses the default visible-frame constraint so it can occupy the menu-bar/notch region. SwiftUI renders the contour, header, rows, footer and settings, but it does not decide window geometry or parse integration data.
-
-Display geometry is derived from safe-area insets and the auxiliary areas on either side of the notch. The notched compact form can anchor to the measured trailing edge of the physical cut-out; screens without a usable cut-out measurement use the centred pill form instead. Screen changes are observed and the user's preferred display is restored when it becomes available again.
-
-### Persistent motion stays out of SwiftUI's update loop
-
-The status matrices, sweeping text and once-per-second elapsed readings are layer-backed. Continuous animation and per-second drawing are delegated to Core Animation; the timer republishes into SwiftUI only when its reserved layout changes, such as when another digit is needed. Ordinary status and content changes still arrive through snapshots. This boundary comes from Release profiling of the whole overlay, not from treating individual animations as isolated drawing costs. The measurements and rejected approaches are recorded in [the system architecture](docs/system-architecture.md#6-the-rendering-boundary-for-persistent-motion).
-
-### Refreshes follow evidence
-
-Hook delivery, directory changes, completed background reads and the next meaningful deadline drive refreshes. A low-frequency heartbeat is the fallback. The one deliberate poll checks whether the selected display's menu bar is present, because macOS exposes no reliable event for another application entering full screen; unchanged samples never republish the UI, and the poll parks while the screen is unavailable.
-
-### Unknown state fails closed
-
-Recovery timers decide when to reconnect or retry, never whether a Turn is running, waiting or read. Unrecognised payloads and incompatible private schemas retain the last trustworthy value or withhold the affected field. User configuration is parsed and changed narrowly rather than replaced with a shape Notchline happens to understand.
-
 ## Known limitations
 
 - **No cold-start reconstruction.** Turns that were already running, waiting or completed before Notchline launched are not shown until a later lifecycle event establishes current state. Neither product offers a reliable common way to reconstruct the distinction between work and a wait.
@@ -255,46 +254,8 @@ Recovery timers decide when to reconnect or retry, never whether a Turn is runni
 
 ## Project status
 
-Notchline is an actively developed, pre-release side project. The core monitoring, display, navigation and settings paths are implemented and exercised by a large Swift Testing suite, while host-version compatibility and platform-specific edge cases continue to be refined. There are no published tags or GitHub releases.
-
-The current issue register and fix order live on the [Notchline project board](https://github.com/users/soondubu137/projects/2) and in [GitHub Issues](https://github.com/soondubu137/notchline/issues). Open technical explorations under [`docs/technical-explorations/`](docs/technical-explorations/) are research records, not promises or approved roadmap items.
-
-## Development
-
-Run the full unit suite with:
-
-```sh
-xcodebuild test \
-  -project Notchline/Notchline.xcodeproj \
-  -scheme Notchline \
-  -destination 'platform=macOS' \
-  -only-testing:NotchlineTests
-```
-
-The unit target uses Swift Testing. The UI-test target currently provides basic launch coverage rather than a full interaction suite. There is no CI or lint configuration, so the local unit suite is the repository's required gate. Performance work must be measured with a Release build; Debug timings are not representative of the overlay.
-
-The scheme is stored in ignored user state rather than `xcshareddata`. Opening the project in Xcode generates it locally. If a clean checkout cannot find the scheme, open the project once; if the scheme needs to work without user state, share it from Xcode instead of committing `xcuserdata`.
-
-### Repository structure
-
-```text
-Notchline/
-├── Notchline/             App entry point, domain model, providers and UI
-├── NotchlineTests/        Swift Testing unit and integration-boundary tests
-└── NotchlineUITests/      Basic application launch tests
-docs/
-├── adr/                   Decisions and their trade-offs
-├── technical-explorations/ Open research, measurements and NO-GO conditions
-├── PRD.md                 Current product contract
-├── system-architecture.md Implemented architecture and performance boundaries
-├── tech-design.md         Interfaces, data flow and recovery behaviour
-└── non-public-codex-integration-features.md
-                           Registry of undocumented or observed dependencies
-design/                    Product marks, app icons and design source assets
-```
-
-Start with [`CONTEXT.md`](CONTEXT.md) for the project's precise terminology, then [`docs/PRD.md`](docs/PRD.md) for product behaviour and [`docs/system-architecture.md`](docs/system-architecture.md) for the implementation as it currently exists.
+Notchline is an actively developed, pre-release solo side project. There are no published tags or GitHub releases; current work is tracked on the [project board](https://github.com/users/soondubu137/projects/2) and in [GitHub Issues](https://github.com/soondubu137/notchline/issues).
 
 ## Licence
 
-This repository does not currently declare an open-source licence.
+No open-source licence has been selected for this repository. All rights are reserved, and no permission is granted to use, copy, modify or distribute the source.
