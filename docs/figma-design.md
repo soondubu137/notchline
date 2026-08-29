@@ -233,7 +233,9 @@ Three derived rules:
 - **The dark ground is a `0.06` lift of the row's ground, not a fixed value.** A row brightens to `#2B2B2E` under the pointer and `#3A3A3D` when pressed, both above a hard-coded `#242424` — so hard-coded, the mark would turn into a hole at exactly the moment the pointer lands on it. Taking the brighter of the ink and the row ground and lifting that keeps the historical `#242424` at rest and rises with the row. This also fixed the subagent badge, which was hard-coded and had the same flaw. Pinned by `theDimGroundStaysAboveTheRowItIsDrawnOn`.
 - **A finished row gets a number back.** The slot has to draw something, and the only honest thing was already computed and thrown away: how long this Turn took — a fact nothing else on this surface reports, and what turns the mark from an absence into a record. It comes from the Turn's own last event (`MonitoredSession.finishedAt`), a stamp deliberately not moved forward by subagent activity, which is exactly the property this reading needs. Pinned by `aFinishedRowDrawsTheLengthOfTheTurnItRan`.
 
-**The collapsed state uses the same family, and the ground's `8` is always reserved.** See §6.4.
+**The collapsed state draws one member of that family — Running's — and the ground's `8` is always reserved.** See §6.4.
+
+**Why the family does not travel to the bar.** The three outlines answer *which of these rows wants me*, and that reading is comparative by construction: a row's ground is read against the rows beside it. The bar has one reading for every Turn at once, with nothing beside it to compare against, so a white slab there says only "something, somewhere" — which the status matrix and the pill's own word already say, in the same glance, on the other side of the cut-out. What the slab did add was being the brightest object in the menu bar, on a surface whose whole premise is that it sits there quietly. So the flip is gone from the collapsed reading; the expanded rows keep all three.
 
 ### 4.8 The searchlight: the body line's third channel
 
@@ -370,7 +372,7 @@ Widths are measured on this machine with `NSFont.systemFont(ofSize: 13)` and `mo
 
 Everything else falls inside it: `Completed 118.43`, `Connected 118.67`, `Input + 00:00:00 + ground 180.98`, `Running + 00:00:00 + ground 199.52`, `Approval + 00:00:00 + ground 203.27`. Two products is `225.89 → 226` (one matrix plus a `6` gap), and `Disconnected` is `135.58 → 136` — it never times anything, so it reserves neither the timer slot nor the ground. Adding each product mark's session-count dot column (`5.655`, [`dual-agent-design.md`](dual-agent-design.md) §11) gives the actual `209` / `238` / `136`.
 
-**The ground occupies its `8` whether drawn or not.** It fills white only while someone is waiting, but asking for `8` at that moment would shift every mark on the bar at exactly the instant attention is needed — the movement [`dual-agent-design.md`](dual-agent-design.md) §10 rejected for the badge's inversion, and §11's reason for the dot column reserving rather than flexing. Bought once, permanently, so inverting is only a colour change. Pinned by `theCompactReadingReservesItsGroundWhetherOrNotItIsFilled`.
+**The ground occupies its `8`, and on this surface it is never filled.** ~~It fills white only while someone is waiting~~ — **superseded**: the bar's reading now draws the Running treatment in every state (§4.7's note on the collapsed surface). The `8` stays because the reading keeps a clear ground for its padding, so none of the widths in this table move. Pinned by `theCompactReadingReservesItsGroundWhetherOrNotItIsFilled`.
 
 Before the side padding narrowed from `24` to `12`, those three widths were `220`, `242` and `160`; nothing else in the table changed, and the difference is two `12`s.
 

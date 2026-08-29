@@ -255,33 +255,30 @@ private struct OverlayHeader: View {
                     if !badges.isEmpty {
                         SubagentBadgeRow(badges: badges)
                     }
-                    // The reading takes the panel row's ground, on the same
-                    // terms and neutral rather than tinted — it is the longest
-                    // unfinished turn anywhere and belongs to no one product,
-                    // so a hue would claim an owner it has not got. The bar
-                    // needs it more than the panel does: on a notched display
-                    // the collapsed surface draws no status text at all
-                    // (``showsStatusText``), so this reading is the only still
-                    // thing on its side of the cut-out and until now it said
-                    // the same thing whatever the state was.
+                    // The reading is drawn the one way, whatever the aggregate
+                    // is: running's bare figure, neutral rather than tinted —
+                    // it is the longest unfinished turn anywhere and belongs to
+                    // no one product, so a hue would claim an owner it has not
+                    // got. The waiting flip that used to put it on white lived
+                    // here alone; the expanded rows keep their own three
+                    // silhouettes (``ReadingGround``), where a row's ground is
+                    // read against the rows beside it and says which of them
+                    // wants the person. Up here there is nothing to read it
+                    // against — one reading for every turn at once — and the
+                    // white slab was the brightest thing on the bar for a state
+                    // the matrix beside it already announces.
                     //
-                    // The ground is `.clear` rather than absent while nothing
-                    // is waiting, so the room it takes is the same either way
-                    // and a turn that starts waiting changes a colour without
-                    // moving a mark. `PanelMetrics.compactTrailingReadingWidth`
-                    // reserves that room to match.
+                    // The ground stays a `.clear` ``ReadingGround`` rather than
+                    // no ground at all: it carries the padding that
+                    // `PanelMetrics.compactTrailingReadingWidth` bills for, so
+                    // the composed bar width is unchanged.
                     if let startedAt = store.compactTimerStart {
-                        let wantsPerson = store.compactReadingWantsPerson
-                        ReadingGround(
-                            fill: wantsPerson ? NotchPalette.spotlight : .clear
-                        ) {
+                        ReadingGround(fill: .clear) {
                             ElapsedReadout(
                                 startedAt: startedAt,
                                 tick: store.elapsedTick.eraseToAnyPublisher(),
-                                tint: wantsPerson
-                                    ? NotchPalette.chipOnLightDrawingColor
-                                    : NotchPalette.labelDrawingColor,
-                                weight: wantsPerson ? .medium : .light
+                                tint: NotchPalette.labelDrawingColor,
+                                weight: .light
                             )
                         }
                     }

@@ -3004,14 +3004,13 @@ struct NotchlineTests {
         )
     }
 
-    /// The bar's reading carries its ground's room whether or not it is filled.
+    /// The bar's reading carries its ground's room, which is never filled.
     ///
-    /// `figma-design.md` page 14. The ground is what tells a waiting turn from
-    /// a running one on a notched display, where nothing else on that side of
-    /// the cut-out says so -- and it must cost the same either way, or every
-    /// mark on the bar moves at the exact moment attention is being asked for.
-    /// The same promise ``aWaitingBadgeIsTheSameWidthAsARunningOne`` keeps for
-    /// the badge beside it.
+    /// `figma-design.md` page 14. The collapsed reading is drawn the running
+    /// way for every state -- the waiting flip that used to put it on white was
+    /// taken out of the bar -- but it keeps a `.clear` `ReadingGround` around
+    /// it, and the width the bar composes has to include that ground's padding
+    /// or the digits are drawn into the trailing edge.
     @Test @MainActor
     func theCompactReadingReservesItsGroundWhetherOrNotItIsFilled() {
         let reading = CompactTrailingReading(timerText: "1:23")

@@ -605,6 +605,12 @@ struct SubagentBadgeView: View {
 /// could not say this: both are comparisons, and a row read on its own — or a
 /// list where every row happens to be in the same state — answered neither.
 ///
+/// **The three are the expanded rows'.** The collapsed bar's single reading
+/// draws the running silhouette always: it is one figure for every turn at
+/// once, with no second reading beside it to be read against, and the white
+/// slab there was the brightest thing on the bar for a state the matrix
+/// already announces. It keeps this ground at `.clear` for the room alone.
+///
 /// It is deliberately the ``SubagentBadgeView`` tile at reading width, down to
 /// the radius and the padding. That badge already draws a figure on a ground
 /// that flips when a person is wanted; this is the same mark answering for the
@@ -612,8 +618,8 @@ struct SubagentBadgeView: View {
 /// compose without a rule of their own on the row that draws both.
 struct ReadingGround<Content: View>: View {
     /// The ground itself. `.clear` is a drawn state and not an absence: the
-    /// collapsed bar reserves this room whether or not it fills it, so that a
-    /// turn which starts waiting changes a colour and moves nothing.
+    /// collapsed bar wraps its reading in one of these permanently, for the
+    /// padding, and the width it composes is billed for that padding.
     let fill: Color
     /// Fixed on the surfaces whose width is composed rather than hugged.
     var width: CGFloat?

@@ -529,14 +529,12 @@ enum PanelMetrics {
     /// Everything the trailing slot actually draws: the badges, the timer, and
     /// the gap between them when both are present.
     ///
-    /// **The reading carries its ground's room whether or not the ground is
-    /// drawn.** A bar whose reading gained `8` at the moment a turn started
-    /// waiting would move every mark on it at exactly the moment the surface
-    /// is asking for attention -- which is the movement `dual-agent-design.md`
-    /// §10 already refused for the badge flip beside it, and the reason the
-    /// session-dot column is reserved rather than packed (§11). So the room is
-    /// bought once, permanently, and the flip is a change of colour and
-    /// nothing else.
+    /// **The reading carries its ground's room, and its ground is never
+    /// filled.** The collapsed reading is drawn one way for every state -- the
+    /// waiting flip that used to put it on white was taken out of the bar, and
+    /// only the expanded rows read their grounds against each other now. What
+    /// stays is the `.clear` ``ReadingGround`` around it, whose padding is what
+    /// ``readingGroundWidthCost`` bills for here.
     static func compactTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
         let badgesWidth = subagentBadgesWidth(trailing.badges)
         guard let timerText = trailing.timerText else { return badgesWidth }
@@ -994,8 +992,9 @@ enum PanelMetrics {
     /// which is the one kind this surface already accepts.
     ///
     /// The reservation carries the reading's ground for the reason
-    /// ``compactTrailingReadingWidth`` does: the room is the same whether the
-    /// ground is filled or clear, so a turn that starts waiting moves nothing.
+    /// ``compactTrailingReadingWidth`` does: the collapsed reading is always
+    /// wrapped in a `.clear` ``ReadingGround``, and that ground's padding is
+    /// room the slot has to hold whatever the state is.
     static func compactTrailingSlotWidth(trailing: CompactTrailingReading) -> CGFloat {
         let reservation = textWidth(timerSlotTemplate, font: timerSlotFont)
             + readingGroundWidthCost
@@ -1903,15 +1902,6 @@ final class MonitorStore: ObservableObject {
     /// the state on its own rather than lean on this.
     func sweepsBody(for session: MonitoredSession) -> Bool {
         session.status.keepsTiming
-    }
-
-    /// Whether the collapsed reading draws its ground filled.
-    ///
-    /// The bar's own aggregate, not the subagent flip beside it: each badge on
-    /// that bar already answers for its product, and the reading is the one
-    /// thing there that speaks for the turns.
-    var compactReadingWantsPerson: Bool {
-        status.wantsPerson
     }
 
     /// The instant a readout is drawn at, never earlier than the turn it draws.
