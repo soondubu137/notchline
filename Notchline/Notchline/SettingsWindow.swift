@@ -982,10 +982,23 @@ enum SettingsWindowPresenter {
     /// Brings the app and the window forward. The placing is `place`'s job and
     /// has already happened by here; the call is repeated because `present`
     /// reaches this on a window that was open all along.
+    ///
+    /// `ignoringOtherApps:` rather than the cooperative `NSApp.activate()`,
+    /// because the cooperative call is a **request** and this app has already
+    /// measured it being refused while returning as if it had not: at launch
+    /// for an accessory application (see ``AppDelegate``) and with a
+    /// full-screen application in the foreground (`tech-design.md` §14.2). A
+    /// refusal here *is* the defect this presenter exists to prevent — the
+    /// window is ordered to the front of this app's own list, this app stays
+    /// behind, and what the user sees is a gear that opened Settings somewhere
+    /// under the window they were already looking at. Ignoring other apps is
+    /// what the gear is entitled to do: it answers a click the user has just
+    /// made on this app's surface, which is the one moment an accessory
+    /// application taking the foreground is the thing that was asked for.
     private static func reveal() {
         guard let window else { return }
         place(window)
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }
 }
