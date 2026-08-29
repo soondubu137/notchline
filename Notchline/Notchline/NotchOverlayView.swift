@@ -73,8 +73,13 @@ struct NotchOverlayView: View {
         // counts -- and together they are the only thing on the surface saying
         // work is still in flight once every turn has finished.
         let subagents = store.spokenRunningSubagentText.map { ", \($0)" } ?? ""
+        // The breathing column, which VoiceOver cannot see move. It is the one
+        // thing on this surface said by motion alone, so it has to be said here
+        // too -- §10's rule about colour, applied to the channel that replaced
+        // it.
+        let finished = store.spokenBuriedCompletionText.map { ", \($0)" } ?? ""
         return "Codex, \(store.sessions.count) related sessions, status "
-            + "\(store.statusDisplayName)\(elapsed)\(subagents), \(usage)"
+            + "\(store.statusDisplayName)\(elapsed)\(subagents)\(finished), \(usage)"
     }
 }
 
@@ -228,6 +233,7 @@ private struct OverlayHeader: View {
                 spacing: PanelMetrics.expandedReadoutSpacing,
                 matrixSize: PanelMetrics.statusMatrixSize,
                 markSpacing: PanelMetrics.compactMatrixSpacing,
+                breathesBuriedCompletions: !store.isExpanded,
                 reduceMotion: store.reduceMotion
             )
 
@@ -332,6 +338,14 @@ private struct StatusReadout: View {
     let spacing: CGFloat
     let matrixSize: CGFloat
     let markSpacing: CGFloat
+    /// Whether a column may breathe here at all.
+    ///
+    /// The breath exists to compensate for a summary, and only the collapsed
+    /// form summarises: expanded, the list naming every row is directly beneath
+    /// this readout, so a moving column would be saying what the rows are about
+    /// to spell out. The same reason the top bar takes the dot columns but not
+    /// the subagent badges ([`dual-agent-design.md`](dual-agent-design.md) §11).
+    let breathesBuriedCompletions: Bool
     let reduceMotion: Bool
 
     /// How far the label is drawn back over its own slot, animated on the
@@ -364,6 +378,8 @@ private struct StatusReadout: View {
                                     count: mark.sessionCount,
                                     agent: agent,
                                     matrixSize: matrixSize,
+                                    breathes: breathesBuriedCompletions
+                                        && mark.buriesAFinishedTurn,
                                     reduceMotion: reduceMotion
                                 )
                             }

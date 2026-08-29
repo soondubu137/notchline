@@ -858,6 +858,30 @@ nonisolated struct PresenceMark: Equatable, Sendable {
     /// per product rather than across both, because the badge that draws it is
     /// tinted and a mixed total could not honestly take either ink.
     let subagents: SubagentBadge
+    /// Whether this product's list holds a finished, unread Turn that its own
+    /// matrix is not drawing.
+    ///
+    /// **The one state the summary can lose.** The collapsed surface draws the
+    /// most urgent status and nothing else, and three of the four survive that:
+    /// approval outranks everything, input loses only to approval and the mark
+    /// still says a person is wanted, and a running turn that loses asks for
+    /// nobody and ends by itself. Only `.completed` both loses and waits — it
+    /// is in the list at all only while the product still believes it is unread
+    /// (`PRD.md` §7), so it clears when someone reads it and never on its own.
+    ///
+    /// So this is true exactly when the mark beside the column is telling part
+    /// of the truth: a row here has ended and gone unread, and the matrix is
+    /// drawing something other than lull. It is what ``SessionCountDots``
+    /// breathes on, and it is deliberately **not** a general answer to "the
+    /// summary hides things" — a buried `.inputNeeded` does not set it, because
+    /// approval and input are the same kind of thing at two ranks and the mark
+    /// says a person is wanted either way (`figma-design.md` §4.1).
+    ///
+    /// Both halves read ``MonitorAggregation/effectiveStatus(of:)``, like the
+    /// summary and the sort, so a finished turn whose subagents are still in
+    /// flight counts as running and is spoken for by its badge rather than
+    /// twice over.
+    let buriesAFinishedTurn: Bool
 
     /// Whether this mark has a session column to stand beside it.
     ///
@@ -873,12 +897,14 @@ nonisolated struct PresenceMark: Equatable, Sendable {
         agent: AgentKind?,
         status: MonitorStatus,
         sessionCount: Int = 0,
-        subagents: SubagentBadge = .empty
+        subagents: SubagentBadge = .empty,
+        buriesAFinishedTurn: Bool = false
     ) {
         self.agent = agent
         self.status = status
         self.sessionCount = sessionCount
         self.subagents = subagents
+        self.buriesAFinishedTurn = buriesAFinishedTurn
     }
 
     var isResting: Bool { agent == nil }
@@ -1114,14 +1140,22 @@ enum MonitorAggregation {
             // This product's own rows only. A Codex turn must not light Claude
             // Code's mark, and it must not be counted under one either.
             let own = sessions.filter { $0.agent == snapshot.agent }
+            let markStatus = status(agents: [snapshot], sessions: own)
             return PresenceMark(
                 agent: snapshot.agent,
-                status: status(agents: [snapshot], sessions: own),
+                status: markStatus,
                 sessionCount: own.count,
                 subagents: SubagentBadge(
                     count: own.reduce(0) { $0 + $1.runningSubagentCount },
                     wantsAttention: own.contains { $0.subagentsAwaitingApproval }
-                )
+                ),
+                // Both clauses, and both on the derived status. The second is
+                // what keeps the column quiet when it would only be repeating
+                // the mark: with every row finished the matrix is already on
+                // lull, and a signal that fires when nothing is wrong stops
+                // being read.
+                buriesAFinishedTurn: markStatus != .completed
+                    && own.contains { effectiveStatus(of: $0) == .completed }
             )
         }
     }

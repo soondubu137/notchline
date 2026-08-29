@@ -2,8 +2,8 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Visuals and data measures settled; domain and merge layers landed; the subagent numeral badge (§10) is implemented |
-| Version | 1.3 |
+| Status | Visuals and data measures settled; domain and merge layers landed; the subagent numeral badge (§10) is implemented. The session column now **breathes when the mark beside it is burying a finished, unread Turn** (§12), which supersedes "steady always" in §11 and costs no width anywhere |
+| Version | 1.4 |
 | Date | 2026-08-28 |
 | Figma | [`10 — Double Apps`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=540-2); settings in [`09 — Settings`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=609-2) |
 | Related ADRs | [0007](adr/0007-read-claude-code-quota-from-the-cli.md), [0008](adr/0008-count-today-tokens-cache-inclusive.md), [0009](adr/0009-resolve-project-per-product.md) |
@@ -316,7 +316,7 @@ The other half of the same page (`857:2`): **both the collapsed state and the ex
 - **One dot per row**, from the top edge at `5.84` pitch. No threads, no dots.
 - **Past three rows, the third dot stretches downwards into a bar** (`dot · dot · dash`), read as "more than three". The column's bottom therefore lands exactly on the matrix's lower edge.
 - **The column is exactly as tall as the matrix, so it needs no vertical space the matrix did not already have** — which is the entire reason it moved from below to the right: the `46` and `22` steps draw identically, and there is no longer an "omitted on short menu bars" cost.
-- **Colour**: the product's own lit colour at `85%`, and it **never animates**. Brightness is this surface's attention channel, and a count is not an attention signal.
+- **Colour**: the product's own lit colour at `85%`. It **never joins the matrix's animation** — brightness is this surface's attention channel and a count is not an attention signal, so a mark pulsing with the grid beside it would be claiming to be one. ~~Steady always~~ is superseded by §12: the column has one movement of its own, and only one.
 - **The resting grey matrix, which names no product, has no dot column** — there is no product behind it, so there are no rows.
 
 **Why dots rather than §02's "stack rail".** Same position, same pitch; the difference is the mark's shape and size. A `3.5 × 4.93` block — the same shape as a cell, the same height as a cell, separated only by a hairline — reads at real size as the matrix's fourth column; a `2.74` dot, just over half a cell and standing `2.92` off, does not. Both were rendered and compared, and that comparison is where this column's proportions come from.
@@ -344,3 +344,39 @@ The other half of the same page (`857:2`): **both the collapsed state and the ex
 **Implemented**: `PresenceMark.sessionCount` and `.subagents` (`MonitorDomain.swift`) are computed with the mark, and `MonitorAggregation.marks` counts only that product's own rows; `PresenceMark.drawsSessionColumn` says whether a mark draws the column. `SessionCountDots` (`NotchStatusMatrix.swift`) draws it and owns the open/close. `StatusReadout` (`NotchOverlayView.swift`) frames the mark group into the width `PanelMetrics.marksWidth` reserves, aligned to the leading edge, then offsets the status name back by `PanelMetrics.unpackedColumnRoom(_:matrixSize:)` — the reservation and the drawing use the same expression, the width read out is still the reserved one, and no panel width anywhere has to follow. That offset is written explicitly with `onChange` + `withAnimation`, choosing its curve by direction, and the curve is `PanelMotion.columnSlot(isOpening:reduceMotion:)`, shared with `SessionCountDots`' column width. `PanelMetrics.markWidth` / `marksWidth(_:areProductMarks:)` / `sessionDotColumnWidth` compose it into the width, and not one of them can be told how many threads there currently are; the geometry constants are `PanelMetrics.sessionDot*`, all given as ratios of the matrix's size. Assertions: `eachMarkCountsOnlyItsOwnProductsRows`, `theRestingMarkCountsNothing`, `theSessionDotColumnIsExactlyAsTallAsTheMatrix`, `theSessionDotColumnIsReservedInWidthAndPackedInDrawing`, `theStatusNameKeepsOneDistanceFromTheMarkItNames`, `theStatusNameMovesOnTheColumnsOwnCurve`, `theLeadingMatrixNeverMovesWhateverTheCountsDo`.
 
 **The expanded top bar takes the dot columns but not the badges.** The top bar has no timer to sit beside, and the list directly beneath it is about to name every subagent row by row, so a summary pair up top says the same thing twice. The Status Readout reservation therefore goes from `107.2` to `118.5`, the gear stays at `464`, and the notch-less panel stays `520 × 370` (on a notched display the panel has to yield those `11.3` itself, see [`figma-design.md`](figma-design.md) §3.2). **The status name's start follows the columns actually drawn**: `63.2` with neither product holding rows (`12 + 39.2 + 12`), `68.9` with one, `74.5` with both.
+
+## 12. The column breathes (decided, implemented)
+
+Design in [`15 — The column breathes`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Notchline-%E2%80%94-V1?node-id=973-2) (`973:2`).
+
+**One Turn running, one finished and unread, and the bar says `Running`.** The collapsed state draws the most urgent status and nothing else, so every state under the maximum has no representative on it. Three survive that: Approval outranks everything; Input loses only to Approval, and the mark still says a person is wanted (§4.1's accepted cost); and a Running Turn that loses asks for nobody and ends by itself. **`Completed` both loses and waits** — it is in the list at all only while that product still believes it unread ([`PRD.md`](PRD.md) §7), so it clears when somebody reads it and never on its own. It is the only state that can vanish from the bar with nothing wrong, and the only one that has to be seen.
+
+**The answer is a movement, not a mark.** A product's dot column breathes when **that product's list holds a Turn whose derived status is `Completed` and its own mark is drawing something other than lull** — the case the summary buries, and nothing else. Both clauses read `MonitorAggregation.effectiveStatus`, like the summary and the sort, so a finished Turn whose subagents are still in flight is `Running` and is spoken for by its badge rather than twice over. Once every row has finished, the mark is already on lull and the column rests: a signal that fires when nothing is wrong stops being read.
+
+| Item | Value |
+| --- | --- |
+| What moves | the whole column — every dot and the dash — in unison |
+| How | opacity only. Nothing translates, nothing resizes, no colour changes |
+| Range | the column's own `0.85` down to `0.50` |
+| Period | `2.8 s`, autoreversed at half of it, symmetric ease |
+| Phase | the layer clock, shared with the matrix's own `phaseAnchor` |
+| Start | the next whole beat, from the crest |
+| Width cost | **none**, at any count and in any state |
+
+**Why the column and not the mark.** The matrix has four movements and each one means a status; a fifth would have to mean "Running, and also something finished", which is a pair of statuses rather than one — and it would be drawn in a product's hue, so the same fact would look different depending on whose it was. The column had no movement at all, which is what makes giving it one unambiguous. It is also the only object on this surface that stands for the list rather than for a status or a sum.
+
+**Why the whole column.** One `2.74` dot is below the size at which movement registers away from the centre of vision, which is the only kind of looking a menu bar gets; every dot moving together makes the target the column, `5.66 × 16.6`. Nothing inside it changes relative to anything else, so it reads as the column being breathed on rather than as its members doing something.
+
+**Why `2.8 s` and a floor of `0.50`.** Lull is the slowest thing the mark runs, at `2 s`; sitting below that puts the breath in a different order of movement, so it cannot be taken for a fifth pattern on a mark `2.92` away. Below about half, a `2.74` dot stops being countable — at `0.50` the column is still brighter than the extinguished matrix beside it in every channel of both inks, so it gains a second job without ever putting down the first. **Both numbers are proposals until they are judged on a screen**; the ordering they respect (slower than lull, floor above countability) is not.
+
+**It begins on the next whole beat rather than immediately.** The cycle's first value is the resting `0.85`, exactly where the column already stood, so the movement starts from where the mark was instead of jumping to a phase. Waiting costs at most one period in a state that lasts until somebody reads something. Sharing `MatrixIndicatorView.phaseAnchor` is not economy: it is what puts two products' columns on one grid, so a pair breathing at once reads as one signal. Stopping eases back to rest rather than cutting from wherever the cycle had reached.
+
+**Reduce Motion does not remove it.** The searchlight can be switched off because the ground states the status on its own, and two channels only help when they fail under different conditions ([`figma-design.md`](figma-design.md) §4.8); this has no second channel, so switching it off takes the fact with it. The movement is opacity, which is what this surface substitutes *for* movement everywhere else (`MatrixDissolve`, `PanelMotion`), so it runs on the same terms either way. Recorded because it is a deliberate choice rather than an oversight, and because the Reduce Motion path is expected to be removed from this app entirely.
+
+**Not drawn expanded.** The top bar draws the same columns and stays still — the breath compensates for a summary, and there is no summary once the list is on screen. The same reason the top bar takes the columns but not the badges (§11).
+
+**What it costs.** The column cannot say which kind of waiting, or how many finished, or how long ago; the mark beside it draws the worst kind and the panel says the rest. And the movement runs for as long as the condition holds, which includes a `Completed` row whose read state cannot be answered ([`PRD.md`](PRD.md) §9.3) — right-click removal is the same human exit a stuck subagent count already has.
+
+**Superseded.** §11's "steady always" (above), in those two words only; the rest of that rule stands, and [`figma-design.md`](figma-design.md) §4.8's wording of it — "never joins the matrix's animation" — needs no change at all. §11's "neither form counts finished sessions" also stands and is now true in a stronger way: nothing counts them, nothing grows, and the bar reports one anyway.
+
+**Implemented**: `PresenceMark.buriesAFinishedTurn` (`MonitorDomain.swift`), set in `MonitorAggregation.marks` from rows it is already filtering. `SessionDotBreath` holds the period, the two opacities and the phased `CABasicAnimation`; `SessionDotColumnView` draws the marks on layers and owns the loop, and `SessionDotColumn` hosts it (`NotchStatusMatrix.swift`). `StatusReadout.breathesBuriedCompletions` gates it to the collapsed form (`NotchOverlayView.swift`), and `MonitorStore.spokenBuriedCompletionText` says it in words. `PanelMetrics` is not touched, which is the property worth pinning. Assertions: `theColumnBreathesOnlyWhereTheMarkBuriesAFinishedTurn`, `theBreathIsSlowerThanAnythingTheMatrixRuns`, `theBreathStartsOnTheNextWholeBeat`, `theBreathsFloorStaysAboveTheMarkItStandsBeside`, `theBreathReachesTheLayerAndLeavesWithTheCondition`, `theDashEndsOnTheMatrixsLowerEdge`.

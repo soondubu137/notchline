@@ -690,6 +690,10 @@ struct SessionCountDots: View {
     /// product and never draws this view at all.
     let agent: AgentKind
     let matrixSize: CGFloat
+    /// Whether a finished, unread turn is sitting under a mark drawing
+    /// something else — ``PresenceMark/buriesAFinishedTurn``, which is the only
+    /// thing that turns the breath on.
+    var breathes: Bool = false
     var reduceMotion: Bool = false
 
     private var hasRows: Bool { count > 0 }
@@ -698,8 +702,6 @@ struct SessionCountDots: View {
     }
     private var gap: CGFloat { PanelMetrics.sessionDotGap(matrixSize: matrixSize) }
     private var diameter: CGFloat { PanelMetrics.sessionDotDiameter(matrixSize: matrixSize) }
-    private var pitch: CGFloat { PanelMetrics.sessionDotPitch(matrixSize: matrixSize) }
-    private var dashLength: CGFloat { PanelMetrics.sessionDotDashLength(matrixSize: matrixSize) }
     private var isPastCap: Bool { count > PanelMetrics.sessionDotCap }
     private var drawnCount: Int { min(count, PanelMetrics.sessionDotCap) }
 
@@ -715,20 +717,25 @@ struct SessionCountDots: View {
             .accessibilityHidden(true)
     }
 
+    /// **The marks themselves are drawn by Core Animation, and the slot around
+    /// them is not.** The breath is a loop with no end, and `AGENTS.md` §7 and
+    /// `system-architecture.md` §6 allow exactly one home for that: a `CALayer`
+    /// evaluated by the render server, never a SwiftUI animation ticking the
+    /// whole overlay. What stays here is everything with a beginning and an end
+    /// — the slot opening, the dot fading in and out — which that rule does not
+    /// reach and which SwiftUI already drives correctly.
+    ///
+    /// The two opacities compose rather than compete: this fade is on the
+    /// hosted view, and the breath is on a layer inside it.
     private var dots: some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(0..<drawnCount, id: \.self) { index in
-                let isDash = isPastCap && index == PanelMetrics.sessionDotCap - 1
-                Capsule(style: .continuous)
-                    .fill(NotchPalette.ink(for: agent).on.opacity(Self.opacity))
-                    .frame(width: diameter, height: isDash ? dashLength : diameter)
-                    .offset(y: dotOffset(index))
-                    // The third dot becoming the dash is one capsule growing,
-                    // not a swap: the height and the offset that keeps its run
-                    // ending on the matrix's lower edge move together.
-                    .animation(dashAnimation, value: isDash)
-            }
-        }
+        SessionDotColumn(
+            drawnCount: drawnCount,
+            isPastCap: isPastCap,
+            agent: agent,
+            matrixSize: matrixSize,
+            breathes: breathes,
+            reduceMotion: reduceMotion
+        )
         .frame(width: diameter, height: matrixSize, alignment: .topLeading)
         .opacity(hasRows ? 1 : 0)
         .animation(fadeAnimation, value: hasRows)
@@ -757,28 +764,317 @@ struct SessionCountDots: View {
             : .easeOut(duration: Self.fadeOutDuration)
     }
 
-    private var dashAnimation: Animation? {
-        reduceMotion ? nil : PanelMotion.animation(reduceMotion: false)
-    }
-
     private static let fadeInDelay: TimeInterval = 0.06
     private static let fadeInDuration: TimeInterval = 0.12
     private static let fadeOutDuration: TimeInterval = 0.08
+}
 
-    /// The top edge of one mark, centred in its matrix row. The dash takes the
-    /// whole row instead of being centred in it, so the run ends on the
-    /// matrix's own lower edge rather than short of it.
-    private func dotOffset(_ index: Int) -> CGFloat {
-        let row = CGFloat(index) * pitch
-        guard !(isPastCap && index == PanelMetrics.sessionDotCap - 1) else { return row }
-        return row + (dashLength - diameter) / 2
+/// The column's one movement, and the only one it will ever have.
+///
+/// **What it says.** The collapsed surface draws the most urgent status and
+/// nothing else, so every state under the maximum has no representative on the
+/// bar. Three survive that: approval outranks everything, input loses only to
+/// approval and the mark still says a person is wanted, and a running turn that
+/// loses asks for nobody. `.completed` both loses and waits, and it is the only
+/// one that does. So the column moves exactly when the mark beside it is
+/// telling part of the truth — ``PresenceMark/buriesAFinishedTurn`` — and rests
+/// the rest of the time, which is nearly all of it.
+///
+/// **Why the column and not the mark.** The matrix already has four movements
+/// and each one means a status; a fifth would have to mean "running, and also
+/// something finished", which is a pair of statuses rather than one, and it
+/// would be drawn in a product's hue, so the same fact would look different
+/// depending on whose it was. The column had no movement at all, which is what
+/// makes giving it one unambiguous. This supersedes the "steady always" half of
+/// the dot ink's rule ([`dual-agent-design.md`](dual-agent-design.md) §11) and
+/// no other part of it: the column still takes no part in the matrix's own
+/// patterns, which is what `figma-design.md` §4.8 actually says.
+///
+/// **Why the whole column, and opacity only.** One `2.74` dot is below the size
+/// at which movement registers away from the centre of vision, which is the
+/// only kind of looking a menu bar gets; every dot moving together makes the
+/// target the column, `5.66` by `16.6`. Nothing translates and nothing resizes,
+/// because the column's geometry is load-bearing — it is exactly as tall as the
+/// matrix and ends flush with it.
+///
+/// **The numbers.** `2.8 s` sits below lull's `2 s`, the slowest thing the mark
+/// runs, so the breath reads as a different order of movement rather than a
+/// fifth pattern on a mark `2.92` away. The floor is `0.50` rather than lower
+/// because under about half a `2.74` dot stops being countable: the column
+/// gains a second job without ever putting down the first.
+///
+/// **Reduce Motion does not remove it.** The searchlight can be switched off
+/// because the ground states the status on its own, and two channels only help
+/// when they fail under different conditions (`figma-design.md` §4.8). This has
+/// no second channel, so switching it off takes the fact with it — and the
+/// movement is opacity, which is what this surface substitutes *for* movement
+/// everywhere else (``MatrixDissolve``, ``PanelMotion``). It therefore runs on
+/// the same terms either way.
+enum SessionDotBreath {
+    /// Slower than every track in ``MatrixTrack``; pinned by
+    /// `theBreathIsSlowerThanAnythingTheMatrixRuns`.
+    static let period: TimeInterval = 2.8
+    /// **Steady, and a little under full.** Unchanged: this is the value the
+    /// column has always rested at, and the breath only ever leaves it.
+    static let restingOpacity: Double = 0.85
+    /// Far enough for the movement to be caught peripherally, and no further
+    /// than a `2.74` mark can go and still be counted.
+    static let floorOpacity: Double = 0.50
+
+    /// The loop, phased off the layer clock.
+    ///
+    /// **It begins on the next whole beat rather than immediately**, which is
+    /// what keeps the movement from starting with a jump: the cycle's first
+    /// value is ``restingOpacity``, exactly where the column was already
+    /// resting, so the column simply starts moving from where it stood. Waiting
+    /// costs at most one period, in a state that is going to last minutes.
+    ///
+    /// Sharing ``MatrixIndicatorView/phaseAnchor(for:now:)`` is not economy: it
+    /// is what puts two products' columns on one grid, so a pair breathing at
+    /// once reads as one signal rather than two. Same reason as the searchlight
+    /// (``NotchTextRaster/installSweep(on:across:height:period:)``).
+    static func animation(now: CFTimeInterval = CACurrentMediaTime()) -> CABasicAnimation {
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = restingOpacity
+        animation.toValue = floorOpacity
+        // Autoreversed, so one period is crest to trough and back, and the ease
+        // is symmetric by construction rather than by a curve chosen to look it.
+        animation.duration = period / 2
+        animation.autoreverses = true
+        animation.repeatCount = .infinity
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        animation.beginTime = beginTime(now: now)
+        animation.isRemovedOnCompletion = false
+        return animation
     }
 
-    /// **Steady, and a little under full.** The dots take no part in the
-    /// matrix's breathe or flash: brightness is this surface's attention
-    /// channel and a count is not an attention signal, so a mark that pulsed
-    /// with the grid beside it would be claiming to be one.
-    private static let opacity: Double = 0.85
+    /// The next whole-period boundary on the layer clock.
+    static func beginTime(now: CFTimeInterval = CACurrentMediaTime()) -> CFTimeInterval {
+        MatrixIndicatorView.phaseAnchor(for: period, now: now) + period
+    }
+}
+
+private struct SessionDotColumn: NSViewRepresentable {
+    let drawnCount: Int
+    let isPastCap: Bool
+    let agent: AgentKind
+    let matrixSize: CGFloat
+    let breathes: Bool
+    let reduceMotion: Bool
+
+    func makeNSView(context: Context) -> SessionDotColumnView {
+        let view = SessionDotColumnView()
+        apply(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: SessionDotColumnView, context: Context) {
+        apply(to: nsView)
+    }
+
+    private func apply(to view: SessionDotColumnView) {
+        view.apply(
+            drawnCount: drawnCount,
+            isPastCap: isPastCap,
+            agent: agent,
+            matrixSize: matrixSize,
+            breathes: breathes,
+            reduceMotion: reduceMotion
+        )
+    }
+}
+
+/// The dots themselves, on layers, so the breath is evaluated by the render
+/// server and the overlay is not re-rendered for it.
+///
+/// Two opacities, on two layers, because they answer different questions and
+/// must be able to hold different values at the same instant: the hosted view's
+/// own opacity is the dot arriving and leaving (SwiftUI, in
+/// ``SessionCountDots``), and ``ink``'s is the breath. They compose.
+final class SessionDotColumnView: NSView {
+    /// Carries the breath. The capsules are its sublayers and are opaque.
+    private let ink = CALayer()
+    private var dots: [CALayer] = []
+
+    private var drawnCount = 0
+    private var isPastCap = false
+    private var agent: AgentKind = .codex
+    private var matrixSize: CGFloat = 0
+    private var breathes = false
+    private var reduceMotion = false
+    private var isBreathing = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+        ink.opacity = Float(SessionDotBreath.restingOpacity)
+        layer?.addSublayer(ink)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func apply(
+        drawnCount: Int,
+        isPastCap: Bool,
+        agent: AgentKind,
+        matrixSize: CGFloat,
+        breathes: Bool,
+        reduceMotion: Bool
+    ) {
+        // The dash is the only geometry change worth animating, and only when
+        // it is genuinely a change: everything else here is a fresh layout.
+        let dashChanged = self.isPastCap != isPastCap && self.drawnCount == drawnCount
+        let inkChanged = self.agent != agent
+        self.drawnCount = drawnCount
+        self.isPastCap = isPastCap
+        self.agent = agent
+        self.matrixSize = matrixSize
+        self.breathes = breathes
+        self.reduceMotion = reduceMotion
+
+        rebuildDots(recolouring: inkChanged)
+        layoutDots(animatingDash: dashChanged)
+        updateBreath()
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ink.frame = bounds
+        CATransaction.commit()
+        layoutDots(animatingDash: false)
+    }
+
+    private func rebuildDots(recolouring: Bool) {
+        guard dots.count != drawnCount || recolouring else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        while dots.count > drawnCount {
+            dots.removeLast().removeFromSuperlayer()
+        }
+        while dots.count < drawnCount {
+            let dot = CALayer()
+            ink.addSublayer(dot)
+            dots.append(dot)
+        }
+        let colour = NotchPalette.ink(for: agent).onLayerColor
+        for dot in dots { dot.backgroundColor = colour }
+        CATransaction.commit()
+    }
+
+    /// Where the marks sit, in the layer's own bottom-up space.
+    ///
+    /// **Written as the arithmetic rather than as a flipped coordinate system.**
+    /// The design states this column downwards — "one dot per row from the top
+    /// edge at `5.84` pitch" — and a layer's space runs the other way, so the
+    /// conversion has to happen somewhere. Doing it here, in one subtraction
+    /// with the column's own height, is a thing that can be read and pinned;
+    /// `isGeometryFlipped` is a thing that has to be trusted, and it would put
+    /// the run at the wrong end of the mark if it were ever misread.
+    ///
+    /// The height is ``PanelMetrics/statusMatrixSize``'s column rather than the
+    /// view's `bounds`, so the frames do not depend on when layout happens to
+    /// run — and because that identity is the column's whole placement argument
+    /// (`dual-agent-design.md` §11): it is exactly as tall as the matrix.
+    ///
+    /// Pinned by `theDashEndsOnTheMatrixsLowerEdge`.
+    static func markFrames(
+        drawnCount: Int,
+        isPastCap: Bool,
+        matrixSize: CGFloat
+    ) -> [CGRect] {
+        let diameter = PanelMetrics.sessionDotDiameter(matrixSize: matrixSize)
+        let pitch = PanelMetrics.sessionDotPitch(matrixSize: matrixSize)
+        let dashLength = PanelMetrics.sessionDotDashLength(matrixSize: matrixSize)
+        return (0 ..< max(0, drawnCount)).map { index in
+            let isDash = isPastCap && index == PanelMetrics.sessionDotCap - 1
+            let height = isDash ? dashLength : diameter
+            // The top edge of one mark, centred in its matrix row. The dash
+            // takes the whole row instead of being centred in it, so the run
+            // ends on the matrix's own lower edge rather than short of it.
+            let row = CGFloat(index) * pitch
+            let top = isDash ? row : row + (dashLength - diameter) / 2
+            return CGRect(
+                x: 0,
+                y: matrixSize - top - height,
+                width: diameter,
+                height: height
+            )
+        }
+    }
+
+    private func layoutDots(animatingDash: Bool) {
+        guard !dots.isEmpty else { return }
+        let diameter = PanelMetrics.sessionDotDiameter(matrixSize: matrixSize)
+        let frames = Self.markFrames(
+            drawnCount: dots.count,
+            isPastCap: isPastCap,
+            matrixSize: matrixSize
+        )
+
+        CATransaction.begin()
+        if animatingDash {
+            // The third dot becoming the dash is one capsule growing, not a
+            // swap: the height and the offset that keeps its run ending on the
+            // matrix's lower edge move together, on the panel's own curve.
+            CATransaction.setAnimationDuration(PanelMotion.duration(reduceMotion: reduceMotion))
+            CATransaction.setAnimationTimingFunction(
+                PanelMotion.timingFunction(reduceMotion: reduceMotion)
+            )
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+        for (dot, frame) in zip(dots, frames) {
+            dot.frame = frame
+            dot.cornerRadius = diameter / 2
+        }
+        CATransaction.commit()
+    }
+
+    private func updateBreath() {
+        guard breathes else {
+            guard isBreathing else { return }
+            isBreathing = false
+            settleBreath()
+            return
+        }
+        guard !isBreathing else { return }
+        isBreathing = true
+        ink.removeAnimation(forKey: Self.settleKey)
+        ink.add(SessionDotBreath.animation(), forKey: Self.breathKey)
+    }
+
+    /// Coming to rest rather than stopping where it happened to be.
+    ///
+    /// The loop is removed the instant the condition clears, so without this
+    /// the column would cut from wherever the cycle had reached back to full —
+    /// a step of up to `0.35` on a mark that has just been read, which is the
+    /// one moment nothing should be drawing attention.
+    private func settleBreath() {
+        let resting = Float(SessionDotBreath.restingOpacity)
+        let current = ink.presentation()?.opacity ?? resting
+        ink.removeAnimation(forKey: Self.breathKey)
+        guard abs(current - resting) > 0.001 else { return }
+        let settle = CABasicAnimation(keyPath: "opacity")
+        settle.fromValue = current
+        settle.toValue = resting
+        settle.duration = PanelMotion.duration(reduceMotion: reduceMotion)
+        settle.timingFunction = PanelMotion.timingFunction(reduceMotion: reduceMotion)
+        ink.add(settle, forKey: Self.settleKey)
+    }
+
+    /// The loop actually attached to the layer.
+    ///
+    /// Exposed for `theBreathReachesTheLayerAndLeavesWithTheCondition`, because
+    /// the failure this change is most exposed to is silent: every value right,
+    /// every rule right, and nothing ever handed to Core Animation.
+    var installedBreath: CAAnimation? { ink.animation(forKey: Self.breathKey) }
+
+    private static let breathKey = "sessionDotBreath"
+    private static let settleKey = "sessionDotBreathSettle"
 }
 
 /// The mark's own grid, in the units its design files are drawn in.

@@ -2379,6 +2379,275 @@ struct NotchlineTests {
         )
     }
 
+    /// The column moves on exactly one condition, and that condition is the
+    /// defect itself.
+    ///
+    /// The collapsed surface reports a maximum, so every state under the
+    /// maximum has no representative on the bar. Three survive that: approval
+    /// outranks everything, input loses only to approval and the mark still
+    /// says a person is wanted, and a running turn that loses asks for nobody
+    /// and ends by itself. `.completed` both loses and waits -- it is in the
+    /// list at all only while it is unread -- and it is the only one that does.
+    ///
+    /// So the four lists that look as though they should qualify must not: an
+    /// all-finished one (the mark is already on lull, and a moving column would
+    /// only repeat it), a buried `.inputNeeded` (the same kind of thing at a
+    /// lower rank, a cost `figma-design.md` §4.1 took deliberately), a list with
+    /// nothing finished at all, and a finished turn whose subagents are still in
+    /// flight -- which is `.running` by derived status and spoken for by its
+    /// badge rather than twice over.
+    @Test @MainActor
+    func theColumnBreathesOnlyWhereTheMarkBuriesAFinishedTurn() {
+        func session(
+            _ agent: AgentKind,
+            _ status: SessionStatus,
+            _ id: String,
+            subagents: Int = 0
+        ) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "p", title: "t",
+                preview: nil, status: status, startedAt: nil,
+                runningSubagentCount: subagents
+            )
+        }
+        func breathes(_ sessions: [MonitoredSession]) -> Bool {
+            AgentSnapshotMerge.merge([
+                makeAgentSnapshot(.codex, availability: .ready, sessions: sessions)
+            ])
+            .presenceMarks
+            .first?
+            .buriesAFinishedTurn ?? false
+        }
+
+        // The case the summary buries, and the case this exists for.
+        #expect(breathes([
+            session(.codex, .running, "a"),
+            session(.codex, .completed, "b")
+        ]))
+        // Approval wins the mark, as it must; the finished rows are still
+        // buried underneath it.
+        #expect(breathes([
+            session(.codex, .approvalNeeded, "a"),
+            session(.codex, .completed, "b"),
+            session(.codex, .completed, "c")
+        ]))
+
+        // Nothing is buried: the mark is telling the whole list.
+        #expect(!breathes([
+            session(.codex, .running, "a"),
+            session(.codex, .running, "b")
+        ]))
+        // The mark is already drawing lull, which is the thing itself.
+        #expect(!breathes([
+            session(.codex, .completed, "a"),
+            session(.codex, .completed, "b")
+        ]))
+        // Input is buried and stays buried. Not a general answer to burial.
+        #expect(!breathes([
+            session(.codex, .approvalNeeded, "a"),
+            session(.codex, .inputNeeded, "b")
+        ]))
+        // Derived status: this turn has not finished, so there is no finished
+        // turn to bury, and the badge in the wing already says two are working.
+        #expect(!breathes([session(.codex, .completed, "a", subagents: 2)]))
+        // A connected product with nothing open has no column and nothing to
+        // say with it.
+        #expect(!breathes([]))
+
+        // Per product, like the count beside it: one product's buried row is
+        // not the other's, and only the column that owns it moves.
+        let split = AgentSnapshotMerge.merge([
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: [
+                    session(.codex, .running, "a"),
+                    session(.codex, .completed, "b")
+                ]
+            ),
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                sessions: [session(.claudeCode, .running, "c")]
+            )
+        ])
+        #expect(split.presenceMarks.map(\.buriesAFinishedTurn) == [true, false])
+    }
+
+    /// The breath is the column's own movement, and is not one of the mark's.
+    ///
+    /// Slower than every track ``MatrixTrack`` runs, so at `2.92` away it reads
+    /// as a different order of movement rather than a fifth pattern; and it
+    /// leaves and returns to the value the column has always rested at, so
+    /// nothing here is a new resting appearance.
+    @Test @MainActor
+    func theBreathIsSlowerThanAnythingTheMatrixRuns() {
+        for status in MonitorStatus.allCases {
+            guard let period = NotchMatrixState(status).period else { continue }
+            #expect(
+                period < SessionDotBreath.period,
+                "\(status) runs at \(period), which the breath must stay under"
+            )
+        }
+        #expect(abs(SessionDotBreath.period - 2.8) < 0.001)
+        #expect(abs(SessionDotBreath.restingOpacity - 0.85) < 0.001)
+        #expect(SessionDotBreath.floorOpacity < SessionDotBreath.restingOpacity)
+
+        let animation = SessionDotBreath.animation(now: 10)
+        #expect(animation.keyPath == "opacity")
+        // Autoreversed at half the period, so one cycle is crest to trough and
+        // back and the ease is symmetric by construction.
+        #expect(animation.autoreverses)
+        #expect(abs(animation.duration - SessionDotBreath.period / 2) < 0.001)
+        #expect(animation.repeatCount == .infinity)
+        #expect(
+            abs((animation.fromValue as? Double ?? 0) - SessionDotBreath.restingOpacity)
+                < 0.001
+        )
+        #expect(
+            abs((animation.toValue as? Double ?? 0) - SessionDotBreath.floorOpacity) < 0.001
+        )
+    }
+
+    /// It begins on the next whole beat, so it never starts with a jump — and
+    /// on a grid, so two products breathing at once are one signal.
+    ///
+    /// The loop's first value is the resting opacity, which is exactly what the
+    /// column is already showing, so waiting for the beat means the movement
+    /// starts from where the mark stood rather than from wherever the phase
+    /// happens to be. It costs at most one period, in a state that lasts until
+    /// somebody reads something.
+    @Test @MainActor
+    func theBreathStartsOnTheNextWholeBeat() {
+        let period = SessionDotBreath.period
+        for now in [0.0, 1.0, 2.79, 2.8, 5.0, 12_345.678] as [CFTimeInterval] {
+            let begin = SessionDotBreath.beginTime(now: now)
+            #expect(begin > now)
+            #expect(begin - now <= period + 0.001)
+            let offGrid = begin.truncatingRemainder(dividingBy: period)
+            #expect(min(offGrid, period - offGrid) < 0.001)
+        }
+    }
+
+    /// The floor dims the column without ever losing it.
+    ///
+    /// At its darkest the run of dots is still brighter than the extinguished
+    /// matrix it stands beside, so a breathing column never reads as a mark
+    /// going out — and it is still about half of resting, which is where a
+    /// `2.74` mark stops being countable. The column takes a second job without
+    /// putting down the first.
+    @Test @MainActor
+    func theBreathsFloorStaysAboveTheMarkItStandsBeside() {
+        for ink in [NotchPalette.codexInk, NotchPalette.claudeCodeInk] {
+            let channels = [
+                (ink.onRed, ink.offRed),
+                (ink.onGreen, ink.offGreen),
+                (ink.onBlue, ink.offBlue)
+            ]
+            for (on, off) in channels {
+                #expect(SessionDotBreath.floorOpacity * on > off)
+            }
+        }
+        #expect(SessionDotBreath.floorOpacity >= SessionDotBreath.restingOpacity / 2)
+    }
+
+    /// The run of marks starts at the column's top edge and ends on the
+    /// matrix's lower one.
+    ///
+    /// **The direction is the part worth pinning.** The design states this
+    /// column downwards and a layer's space runs upwards, so one subtraction
+    /// stands between the two — and if it were ever read the wrong way round
+    /// the whole column would be mirrored, which on three identical dots is
+    /// invisible until the day the third becomes a dash and the run ends at the
+    /// wrong end of the mark.
+    @Test @MainActor
+    func theDashEndsOnTheMatrixsLowerEdge() throws {
+        let size = PanelMetrics.statusMatrixSize
+        let diameter = PanelMetrics.sessionDotDiameter(matrixSize: size)
+        let dash = PanelMetrics.sessionDotDashLength(matrixSize: size)
+        let inset = (dash - diameter) / 2
+
+        let past = SessionDotColumnView.markFrames(
+            drawnCount: PanelMetrics.sessionDotCap,
+            isPastCap: true,
+            matrixSize: size
+        )
+        #expect(past.count == PanelMetrics.sessionDotCap)
+        // The first mark sits one half-cell in from the top, and the dash runs
+        // out flush with the bottom -- which is the column being exactly as
+        // tall as the matrix, drawn rather than merely asserted.
+        #expect(abs(try #require(past.first).maxY - (size - inset)) < 0.001)
+        #expect(abs(try #require(past.last).minY) < 0.001)
+        // Downwards, in the order the rows are packed.
+        for (upper, lower) in zip(past, past.dropFirst()) {
+            #expect(lower.minY < upper.minY)
+        }
+
+        // Under the cap every mark is a dot, and the run stops one half-cell
+        // short of the bottom instead of reaching it.
+        let under = SessionDotColumnView.markFrames(
+            drawnCount: PanelMetrics.sessionDotCap,
+            isPastCap: false,
+            matrixSize: size
+        )
+        #expect(abs(try #require(under.last).minY - inset) < 0.001)
+        #expect(under.allSatisfy { abs($0.height - diameter) < 0.001 })
+        // And a mark never leaves the column it stands in.
+        for frame in past + under {
+            #expect(frame.minY >= -0.001)
+            #expect(frame.maxY <= size + 0.001)
+        }
+    }
+
+    /// The breath reaches Core Animation, and leaves when the condition does.
+    ///
+    /// The failure this is most exposed to is a silent one — every number
+    /// right, every rule right, and nothing ever handed to the render server,
+    /// which draws exactly like the design that came before it.
+    @Test @MainActor
+    func theBreathReachesTheLayerAndLeavesWithTheCondition() throws {
+        let size = PanelMetrics.statusMatrixSize
+        let view = SessionDotColumnView(
+            frame: NSRect(
+                x: 0,
+                y: 0,
+                width: PanelMetrics.sessionDotDiameter(matrixSize: size),
+                height: size
+            )
+        )
+        func apply(breathes: Bool) {
+            view.apply(
+                drawnCount: 2,
+                isPastCap: false,
+                agent: .codex,
+                matrixSize: size,
+                breathes: breathes,
+                reduceMotion: false
+            )
+        }
+
+        apply(breathes: false)
+        #expect(view.installedBreath == nil, "a column with nothing buried is still")
+
+        apply(breathes: true)
+        let breath = try #require(view.installedBreath as? CABasicAnimation)
+        #expect(breath.keyPath == "opacity")
+        #expect(breath.repeatCount == .infinity)
+        #expect(breath.autoreverses)
+        #expect(!breath.isRemovedOnCompletion)
+
+        // Idempotent: the view is re-applied on every state change upstream,
+        // and re-adding the loop each time would restart it -- and with it the
+        // phase that keeps two products together.
+        let first = try #require(view.installedBreath)
+        apply(breathes: true)
+        #expect(view.installedBreath === first)
+
+        apply(breathes: false)
+        #expect(view.installedBreath == nil)
+    }
+
     /// The column is reserved in the width and packed in the drawing.
     ///
     /// The panel holds room for every mark's column at every session count, so

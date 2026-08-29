@@ -1833,6 +1833,33 @@ final class MonitorStore: ObservableObject {
         return spoken.joined(separator: ", ")
     }
 
+    /// What a breathing column is saying, in words.
+    ///
+    /// A movement cannot be spoken, and `figma-design.md` §10 forbids saying
+    /// anything on this surface through one channel alone. It speaks on exactly
+    /// the terms the column moves on (``PresenceMark/buriesAFinishedTurn``), so
+    /// it stays quiet when every turn has finished — the status name already
+    /// reads `Completed` there, and saying it again would be reading one fact
+    /// twice.
+    ///
+    /// It does say **how many**, which the breath never does. That difference
+    /// is kept rather than levelled: the number is already known, a reader who
+    /// cannot see the column has no cheap way to ask for it, and nothing about
+    /// the drawing has to change to hand it over.
+    var spokenBuriedCompletionText: String? {
+        guard !hidesCompactSurface else { return nil }
+        let buried = presenceMarks.filter(\.buriesAFinishedTurn).compactMap(\.agent)
+        guard !buried.isEmpty else { return nil }
+        let count = sessions.filter { session in
+            buried.contains(session.agent)
+                && MonitorAggregation.effectiveStatus(of: session) == .completed
+        }.count
+        guard count > 0 else { return nil }
+        return count == 1
+            ? "1 turn finished and unread"
+            : "\(count) turns finished and unread"
+    }
+
     /// The instant the compact readout counts from, or nil when there is nothing
     /// to draw. The readout advances itself from ``elapsedTick``, so it needs the
     /// start rather than a string that would go stale between re-renders.
