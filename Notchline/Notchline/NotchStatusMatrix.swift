@@ -1372,6 +1372,12 @@ final class MatrixIndicatorView: NSView {
     private var appliedInk = NotchPalette.codexInk
     private var appliedAwakeAgent: AgentKind?
     private var appliedSplit: NotchPalette.MatrixSplit?
+    /// What the mark is currently drawing, which the next `apply` compares
+    /// against to decide whether the change is one to fade across.
+    private var appliedPattern: MatrixPattern?
+    /// The lit copies of the current pattern, kept because a dissolve needs
+    /// them to go on drawing while the next pattern comes up under the pointer.
+    private var litPasses: [CALayer] = []
 
     // Row 0 is the top row, as in the SVG.
     override var isFlipped: Bool { true }
@@ -1402,13 +1408,23 @@ final class MatrixIndicatorView: NSView {
             || split != appliedSplit else {
             return
         }
+        // A dissolve crosses one pattern over another on the same mark. If the
+        // mark itself is a different drawing — resized, a different product's
+        // ink, the legend's split — there is nothing to cross: the two are not
+        // two readings of one thing, and fading between them would say they
+        // were.
+        let sameMark = size == appliedSize
+            && ink == appliedInk
+            && split == appliedSplit
+        let wasDrawing = appliedPattern
+
         appliedState = state
         appliedSize = size
         appliedIsAnimated = isAnimated
         appliedInk = ink
         appliedAwakeAgent = awakeAgent
         appliedSplit = split
-        rebuild()
+        rebuild(dissolvingFrom: sameMark ? wasDrawing : nil)
     }
 
     override func viewDidMoveToWindow() {
@@ -1422,12 +1438,16 @@ final class MatrixIndicatorView: NSView {
         rebuild()
     }
 
-    private func rebuild() {
+    /// Rebuild the layers, optionally fading out of what was there before.
+    ///
+    /// `previous` is what the mark was drawing, and is `nil` whenever the
+    /// rebuild is for a reason the eye should not see — a window change, a
+    /// backing-scale change — or for a mark whose drawing changed underneath
+    /// the pattern.
+    private func rebuild(dissolvingFrom previous: MatrixPattern? = nil) {
         guard let state = appliedState, appliedSize > 0, let root = layer else {
             return
         }
-
-        root.sublayers?.forEach { $0.removeFromSuperlayer() }
 
         // **A mark that cannot move cannot glimmer.** With motion off the
         // pattern would come out as one arbitrary frame of a wandering
@@ -1439,6 +1459,15 @@ final class MatrixIndicatorView: NSView {
         let pattern = state.pattern(
             awakeAgent: appliedIsAnimated ? appliedAwakeAgent : nil
         )
+        // The copies that stay behind to be faded out, before anything else is
+        // torn down.
+        let outgoing = Self.dissolves(from: previous, to: pattern) ? litPasses : []
+        appliedPattern = pattern
+
+        for sublayer in root.sublayers ?? []
+        where !outgoing.contains(where: { $0 === sublayer }) {
+            sublayer.removeFromSuperlayer()
+        }
 
         // Proportions come straight from the design file's viewBox, by way of
         // ``MatrixGrid``: 27-unit cells on a 32-unit pitch, 2-unit corner
@@ -1546,13 +1575,16 @@ final class MatrixIndicatorView: NSView {
             .split(above: $0.above.onLayerColor, below: $0.below.onLayerColor)
         } ?? .single(appliedInk.onLayerColor)
 
-        // The unlit bed never animates; only the lit copies above it do.
-        root.addSublayer(
+        // The unlit bed never animates; only the lit copies above it do. It
+        // goes in underneath whatever is on its way out, which is drawing the
+        // same bed's worth of cells and must stay on top of it.
+        root.insertSublayer(
             pass(
                 GlowPass(blur: nil, opacity: 1),
                 ink: unlit,
                 animated: false
-            )
+            ),
+            at: 0
         )
 
         // Three blurred copies reproduce the SVG's feGaussianBlur + feMerge
@@ -1563,16 +1595,92 @@ final class MatrixIndicatorView: NSView {
             GlowPass(blur: cell * 2.1 / 27, opacity: 0.56),
             GlowPass(blur: nil, opacity: 1)
         ]
-        for glowPass in glowPasses {
-            root.addSublayer(
-                pass(
-                    glowPass,
-                    ink: lit,
-                    animated: appliedIsAnimated
-                )
-            )
+        litPasses = glowPasses.map { glowPass in
+            let copy = pass(glowPass, ink: lit, animated: appliedIsAnimated)
+            root.addSublayer(copy)
+            return copy
+        }
+
+        guard !outgoing.isEmpty else { return }
+        crossFade(from: outgoing, to: litPasses)
+    }
+
+    /// Whether a change of pattern is crossed over rather than swapped.
+    ///
+    /// **Only the changes with the still on one side of them.** Those are the
+    /// ones where the mark starts or stops having something to say, and cut
+    /// they read as a light being thrown: a mark that was a dark square is
+    /// suddenly a radar, or a lull the user has just read is suddenly gone.
+    /// Neither is a lie about the product, but both are louder than the news
+    /// they carry — a turn beginning and a turn being read are quiet events,
+    /// and the mark arrives out of the dark and sinks back into it.
+    ///
+    /// **A change between two live patterns is not faded.** Running to
+    /// Completed, Input to Approval: those are the product saying a different
+    /// thing, and the cut is the point — there is no moment where the mark is
+    /// half of each, because it is never half in one state and half in
+    /// another. Fading them would also be the fade the eye reads *least*, both
+    /// sides being lit and moving.
+    static func dissolves(from previous: MatrixPattern?, to next: MatrixPattern) -> Bool {
+        guard let previous, previous != next else { return false }
+        return (previous == .still) != (next == .still)
+    }
+
+    /// Cross one lit stack over another, and drop the old one when it is spent.
+    ///
+    /// Both stacks go on drawing for the length of the fade, so a pattern
+    /// leaving is still running while it dissolves — a completed mark's crest
+    /// keeps crossing as it goes out, rather than freezing on a frame and then
+    /// vanishing. The unlit bed under both never moves, because it is the same
+    /// bed either way; what fades is only the product's colour over it.
+    ///
+    /// The two stacks are composited rather than mixed, so a cell midway
+    /// through reads a shade above the straight average of the two. At these
+    /// opacities that is a fraction of a percent, and it errs towards keeping
+    /// the mark lit through the middle of the fade, which is the direction a
+    /// dissolve should err in.
+    ///
+    /// **Reduce Motion shortens this rather than removing it**, the same
+    /// answer ``PanelMotion`` gives for the panel's own hand-over: a dissolve
+    /// is the thing you replace movement *with*, and a mark that cuts between
+    /// two states is not the calmer option.
+    private func crossFade(from outgoing: [CALayer], to incoming: [CALayer]) {
+        let reduceMotion = !appliedIsAnimated
+        let duration = PanelMotion.duration(reduceMotion: reduceMotion)
+        let timing = PanelMotion.timingFunction(reduceMotion: reduceMotion)
+
+        func fade(_ layer: CALayer, from: Float, to: Float) {
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = from
+            animation.toValue = to
+            animation.duration = duration
+            animation.timingFunction = timing
+            layer.opacity = to
+            layer.add(animation, forKey: Self.dissolveAnimationKey)
+        }
+
+        for copy in incoming {
+            fade(copy, from: 0, to: copy.opacity)
+        }
+        for copy in outgoing {
+            // Where a fade is already running, take over from where it has
+            // actually got to rather than from the value it was heading for.
+            // Two changes inside one dissolve would otherwise jump back up to
+            // full before starting down again.
+            fade(copy, from: copy.presentation()?.opacity ?? copy.opacity, to: 0)
+        }
+
+        // Nothing else is waiting on these, so they are dropped a beat after
+        // they stop being visible rather than on a completion the render
+        // server has to call back for.
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            for copy in outgoing {
+                copy.removeFromSuperlayer()
+            }
         }
     }
+
+    static let dissolveAnimationKey = "notch.matrix.dissolve"
 
     /// The part of one cell that lies past the seam, corners and all.
     ///

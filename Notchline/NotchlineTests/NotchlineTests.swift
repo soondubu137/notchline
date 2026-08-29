@@ -680,6 +680,114 @@ struct NotchlineTests {
         }
     }
 
+    /// A mark arrives out of the dark and sinks back into it.
+    ///
+    /// Going dim to lit and lit to dim is the mark starting or stopping having
+    /// something to say — a turn beginning, a finished one being read, the
+    /// pointer arriving on an idle mark. Cut, those read as a light being
+    /// thrown: louder than the quiet events they carry. Crossed over, the
+    /// pattern comes up out of the still and goes back down into it.
+    ///
+    /// A change between two live patterns keeps its cut. The product is saying
+    /// a different thing and there is no moment where it is half of each.
+    @Test @MainActor
+    func aMarkFadesBetweenTheStillAndAPatternButNotBetweenTwoPatterns() throws {
+        let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
+        func show(
+            _ state: NotchMatrixState,
+            awakeAgent: AgentKind? = nil,
+            isAnimated: Bool = true
+        ) {
+            view.apply(
+                state: state,
+                size: 16,
+                isAnimated: isAnimated,
+                ink: NotchPalette.codexInk,
+                awakeAgent: awakeAgent
+            )
+        }
+        func passes() throws -> [CALayer] { try #require(view.layer?.sublayers) }
+        func dissolve(_ layer: CALayer) -> CABasicAnimation? {
+            layer.animation(forKey: MatrixIndicatorView.dissolveAnimationKey)
+                as? CABasicAnimation
+        }
+        /// The lit copies on their way in and on their way out.
+        func crossing() throws -> (arriving: [CALayer], leaving: [CALayer]) {
+            var arriving: [CALayer] = []
+            var leaving: [CALayer] = []
+            for layer in try passes() {
+                guard let animation = dissolve(layer) else { continue }
+                if (animation.toValue as? NSNumber)?.floatValue == 0 {
+                    leaving.append(layer)
+                } else {
+                    arriving.append(layer)
+                }
+            }
+            return (arriving, leaving)
+        }
+
+        // A mark drawn for the first time has nothing to come out of: the bed
+        // and its four lit copies, and not a fade anywhere.
+        show(.inactive)
+        #expect(try passes().count == 5)
+        #expect(try passes().allSatisfy { dissolve($0) == nil })
+
+        // A turn beginning under an idle mark: two lit stacks over the one bed
+        // they share, one coming up and one going down.
+        show(.running)
+        #expect(try passes().count == 9)
+        let (arriving, leaving) = try crossing()
+        #expect(arriving.count == 4)
+        #expect(leaving.count == 4)
+        for layer in arriving {
+            let animation = try #require(dissolve(layer))
+            #expect((animation.fromValue as? NSNumber)?.floatValue == 0)
+            #expect((animation.toValue as? NSNumber)?.floatValue == layer.opacity)
+            #expect(animation.duration == PanelMotion.duration(reduceMotion: false))
+        }
+        for layer in leaving {
+            let animation = try #require(dissolve(layer))
+            #expect(try #require(animation.fromValue as? NSNumber).floatValue > 0)
+        }
+        // The bed is no part of it. It draws the same cells whatever the
+        // pattern is, so fading it would fade the mark itself away rather than
+        // the pattern on it.
+        #expect(dissolve(try #require(passes().first)) == nil)
+        // And the still on its way out is still the still — what leaves is a
+        // pattern that goes on drawing while it goes, not a frozen frame.
+        for layer in leaving {
+            let cell = try #require(layer.sublayers?.first)
+            #expect(cell.opacity == Float(MatrixPattern.still.track(forCell: 0)[0]))
+        }
+
+        // Running to Completed is the product saying a different thing, and it
+        // is cut: one stack, no fades, the last one dropped outright.
+        show(.completed)
+        #expect(try passes().count == 5)
+        #expect(try passes().allSatisfy { dissolve($0) == nil })
+
+        // A read turn going quiet fades the other way.
+        show(.inactive)
+        #expect(try crossing().arriving.count == 4)
+        #expect(try crossing().leaving.count == 4)
+
+        // The pointer waking an idle mark is the same kind of change, so it
+        // gets the same treatment.
+        show(.inactive, awakeAgent: .codex)
+        #expect(try crossing().arriving.count == 4)
+        #expect(try crossing().leaving.count == 4)
+
+        // Motion off shortens the hand-over rather than removing it — a
+        // dissolve is what movement is replaced *with*.
+        show(.inactive, awakeAgent: .codex, isAnimated: false)
+        for layer in try crossing().arriving {
+            #expect(
+                try #require(dissolve(layer)).duration
+                    == PanelMotion.duration(reduceMotion: true)
+            )
+        }
+    }
+
     /// Two marks showing the same pattern show it in sync.
     ///
     /// The two products start their turns whenever they start them, so a Codex
