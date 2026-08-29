@@ -7950,6 +7950,192 @@ struct NotchlineTests {
         #expect(await read(pastTheWindow) == nil)
     }
 
+    /// The abort record, which is all a stopped Codex Turn ever reports.
+    ///
+    /// Pressing stop in Codex Desktop sends no hook of any kind, so this record
+    /// is the only thing that can end the Turn — and it names it, which is what
+    /// lets it be held to that one Turn rather than to whichever is open.
+    @Test @MainActor
+    func rolloutAbortReaderEndsOnlyTheTurnTheRecordNames() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let stampFormatter = ISO8601DateFormatter()
+        stampFormatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds
+        ]
+        // Whole seconds, so a stamp survives the round trip through the
+        // rollout's millisecond format and the dates below can be compared
+        // rather than bracketed.
+        let lastEventAt = Date(
+            timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down)
+        )
+        func line(_ object: [String: Any]) throws -> String {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            return String(decoding: data, as: UTF8.self)
+        }
+        /// The record Codex writes, verbatim in shape — including `reason`,
+        /// which this reader deliberately never looks at.
+        func abort(
+            turn: String,
+            offsetFromLastEvent: TimeInterval,
+            reason: String = "interrupted"
+        ) throws -> String {
+            try line([
+                "timestamp": stampFormatter.string(
+                    from: lastEventAt.addingTimeInterval(offsetFromLastEvent)
+                ),
+                "type": "event_msg",
+                "payload": [
+                    "type": "turn_aborted",
+                    "turn_id": turn,
+                    "reason": reason,
+                    "duration_ms": 4_466
+                ]
+            ])
+        }
+        /// The developer message Codex writes one line *before* the abort. It
+        /// carries the word in its text and is not the record.
+        let abortNarration = try line([
+            "timestamp": stampFormatter.string(from: lastEventAt),
+            "type": "response_item",
+            "payload": [
+                "type": "message",
+                "role": "developer",
+                "text": "<turn_aborted>The previous turn was interrupted.</turn_aborted>"
+            ]
+        ])
+        func writeRollout(_ lines: [String]) throws -> String {
+            let file = root.appendingPathComponent("\(UUID().uuidString).jsonl")
+            try Data(lines.joined(separator: "\n").appending("\n").utf8)
+                .write(to: file, options: .atomic)
+            return file.path
+        }
+
+        let reader = CodexRolloutTurnAbortReader()
+        func read(_ path: String, turn: String = "turn-1") async -> Date? {
+            await reader.abortedAt(
+                turnID: turn,
+                inRolloutAt: path,
+                after: lastEventAt
+            )
+        }
+
+        let stopped = try writeRollout([
+            abortNarration,
+            try abort(turn: "turn-1", offsetFromLastEvent: 4)
+        ])
+        #expect(
+            await read(stopped) == lastEventAt.addingTimeInterval(4)
+        )
+
+        // A reason a later Codex invents still ends the Turn. Requiring the
+        // word `interrupted` would leave the row Running for ever, which is the
+        // failure this reader exists to end.
+        let unknownReason = try writeRollout([
+            try abort(turn: "turn-1", offsetFromLastEvent: 4, reason: "replaced")
+        ])
+        #expect(
+            await read(unknownReason) == lastEventAt.addingTimeInterval(4)
+        )
+
+        // **The reading that must not be made.** The record names the Turn
+        // before this one, and ending the open Turn on it retires a Turn that
+        // is still running.
+        let previousTurn = try writeRollout([
+            try abort(turn: "turn-0", offsetFromLastEvent: 4)
+        ])
+        #expect(await read(previousTurn) == nil)
+
+        // Nor may a record older than the Turn's last event end it: this Turn
+        // has moved since, so the record cannot be describing it.
+        let stale = try writeRollout([
+            try abort(turn: "turn-1", offsetFromLastEvent: -30)
+        ])
+        #expect(await read(stale) == nil)
+
+        // The narration alone is not the record.
+        let narrationOnly = try writeRollout([abortNarration])
+        #expect(await read(narrationOnly) == nil)
+
+        let unnamed = try writeRollout([try line([
+            "timestamp": stampFormatter.string(
+                from: lastEventAt.addingTimeInterval(4)
+            ),
+            "type": "event_msg",
+            "payload": ["type": "turn_aborted", "reason": "interrupted"]
+        ])])
+        #expect(await read(unnamed) == nil)
+
+        let running = try writeRollout([try line([
+            "timestamp": stampFormatter.string(from: lastEventAt),
+            "type": "event_msg",
+            "payload": ["type": "token_count"]
+        ])])
+        #expect(await read(running) == nil)
+
+        #expect(await read(root.appendingPathComponent("absent.jsonl").path) == nil)
+
+        // The newest abort is the whole reading: one naming another Turn after
+        // this Turn's own says this rollout has moved on, and an answer read
+        // out of the older record would be about a Turn that cannot still be
+        // open.
+        let superseded = try writeRollout([
+            try abort(turn: "turn-1", offsetFromLastEvent: 4),
+            try abort(turn: "turn-2", offsetFromLastEvent: 9)
+        ])
+        #expect(await read(superseded) == nil)
+
+        // A long turn's rollout is read from its tail, and the seek that gets
+        // there lands mid-record.
+        let padding = try line([
+            "timestamp": stampFormatter.string(from: lastEventAt),
+            "type": "response_item",
+            "payload": [
+                "type": "message",
+                "text": String(repeating: "p", count: 8_192)
+            ]
+        ])
+        let paddedLines = Array(repeating: padding, count: 64)
+        let deepInAFile = try writeRollout(
+            paddedLines + [try abort(turn: "turn-1", offsetFromLastEvent: 4)]
+        )
+        #expect(
+            await read(deepInAFile) == lastEventAt.addingTimeInterval(4)
+        )
+
+        // And a record already pushed past the tail window is one this reader
+        // declines to claim anything about. Measured on this machine, an abort
+        // whose thread was left alone sits 249-940 bytes from the end, so the
+        // window is sized for a refresh that is late rather than for one that
+        // has been away for a whole turn.
+        let pastTheWindow = try writeRollout(
+            [try abort(turn: "turn-1", offsetFromLastEvent: 4)] + paddedLines
+        )
+        #expect(await read(pastTheWindow) == nil)
+
+        // The answer is cached on the file's revision, so the ordinary refresh
+        // costs one `lstat`. A rollout that grows is a new revision: the abort
+        // the next record brings is found, not answered from the cache.
+        let grew = try writeRollout([padding])
+        #expect(await read(grew) == nil)
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: grew))
+        try handle.seekToEnd()
+        try handle.write(
+            contentsOf: Data(
+                (try abort(turn: "turn-1", offsetFromLastEvent: 4) + "\n").utf8
+            )
+        )
+        try handle.close()
+        #expect(await read(grew) == lastEventAt.addingTimeInterval(4))
+    }
+
     /// A map written outside the Turn's opening moments may not silence it,
     /// at either end.
     ///
@@ -8350,6 +8536,234 @@ struct NotchlineTests {
         let snapshot = await snapshotWithSessions(from: service)
         await service.disconnect()
         #expect(snapshot.sessions.first?.status == .running)
+    }
+
+    /// A Turn the user stopped in Codex Desktop, end to end.
+    ///
+    /// **Codex sends nothing when a Turn is stopped** — no `Stop`, and not even
+    /// the `PostToolUse` for the call that was still open. So the row said
+    /// *Running* with its timer counting until the user resumed that exact
+    /// thread or right-clicked the row away, and on a thread they simply left
+    /// alone, for ever: no event would name that `turn_id` again, membership
+    /// reconciliation kept the row because the thread is still listed, and this
+    /// product has no activity reading like `claude agents --json` to fall back
+    /// on. The abort Codex writes into the thread's own rollout is the only
+    /// report there is (ADR 0011).
+    @Test @MainActor
+    func aStoppedCodexTurnCompletesOnTheAbortInItsRollout() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        // Whole seconds, so the abort's stamp survives the round trip through
+        // the rollout's millisecond format and `finishedAt` can be compared.
+        let timestamp = Date().timeIntervalSince1970.rounded(.down)
+        let rollout = root.appendingPathComponent("rollout-thread-1.jsonl")
+        let stampFormatter = ISO8601DateFormatter()
+        stampFormatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds
+        ]
+        func writeRollout(_ objects: [[String: Any]]) throws {
+            let lines = try objects.map { object in
+                String(
+                    decoding: try JSONSerialization.data(withJSONObject: object),
+                    as: UTF8.self
+                )
+            }
+            try Data(lines.joined(separator: "\n").appending("\n").utf8)
+                .write(to: rollout, options: .atomic)
+        }
+        // The Turn is running: its own record at the head, and nothing else the
+        // reader could mistake for an end.
+        try writeRollout([[
+            "timestamp": stampFormatter.string(
+                from: Date(timeIntervalSince1970: timestamp - 0.065)
+            ),
+            "type": "turn_context",
+            "payload": ["turn_id": "turn-1", "approvals_reviewer": "user"]
+        ]])
+
+        func deliver(_ event: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: event)
+                .deliver(to: repository)
+        }
+        try deliver([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "prompt": "Rewrite the panel contour."
+        ])
+        // The call the user stops in the middle of. Its `PostToolUse` never
+        // arrives, which is the whole shape of the failure.
+        try deliver([
+            "received_at": timestamp + 1,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ])
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                codexRootThread(
+                    id: "thread-1",
+                    name: "Panel contour",
+                    path: rollout.path
+                )
+            ],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        let running = await snapshotWithSessions(from: service)
+        #expect(running.sessions.first?.status == .running)
+
+        // The user presses stop. This is everything Codex reports.
+        try writeRollout([
+            [
+                "timestamp": stampFormatter.string(
+                    from: Date(timeIntervalSince1970: timestamp - 0.065)
+                ),
+                "type": "turn_context",
+                "payload": ["turn_id": "turn-1", "approvals_reviewer": "user"]
+            ],
+            [
+                "timestamp": stampFormatter.string(
+                    from: Date(timeIntervalSince1970: timestamp + 8)
+                ),
+                "type": "event_msg",
+                "payload": [
+                    "type": "turn_aborted",
+                    "turn_id": "turn-1",
+                    "reason": "interrupted",
+                    "duration_ms": 7_000
+                ]
+            ]
+        ])
+
+        var stopped = await service.fetchSnapshot()
+        let ended = await holds {
+            stopped = await service.fetchSnapshot()
+            return stopped.sessions.first?.status == .completed
+        }
+        let methods = await client.requestedMethods()
+        await service.disconnect()
+
+        #expect(ended, "a stopped Codex Turn went on reporting Running")
+        // The Turn ends where the abort says it did, not where this app noticed.
+        #expect(
+            stopped.sessions.first?.finishedAt
+                == Date(timeIntervalSince1970: timestamp + 8)
+        )
+        // And it keeps saying something. A stopped Turn has no last word,
+        // because the event that carries one is the event Codex never sends.
+        #expect(stopped.sessions.first?.preview == "Rewrite the panel contour.")
+        // Nothing about this reading asks the App Server for Turn detail.
+        #expect(!methods.contains("thread/turns/list"))
+        for params in await client.recordedThreadReadParams() {
+            #expect(params["includeTurns"]?.boolValue == false)
+        }
+    }
+
+    /// The rollouts this service watches, and for exactly how long.
+    ///
+    /// The edge under the reading above. A quiet monitor watches nothing: only
+    /// a Turn that is still going has an abort to wait for, and the moment one
+    /// ends its rollout is dropped — otherwise every thread this app had ever
+    /// seen would go on waking a refresh for each record appended to it.
+    @Test @MainActor
+    func onlyTheRolloutsOfRunningTurnsAreWatched() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        let rollout = root.appendingPathComponent("rollout-thread-1.jsonl")
+        try Data("\n".utf8).write(to: rollout, options: .atomic)
+
+        let timestamp = Date().timeIntervalSince1970
+        func deliver(_ event: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: event)
+                .deliver(to: repository)
+        }
+        try deliver([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ])
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                codexRootThread(id: "thread-1", name: "Watched", path: rollout.path)
+            ],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        let running = await snapshotWithSessions(from: service)
+        #expect(running.sessions.first?.status == .running)
+        #expect(await service.rolloutWatcher.watchedPaths == [rollout])
+
+        try deliver([
+            "received_at": timestamp + 5,
+            "hook_event_name": "Stop",
+            "session_id": "thread-1",
+            "turn_id": "turn-1",
+            "last_assistant_message": "Done."
+        ])
+        var finished = await service.fetchSnapshot()
+        let ended = await holds {
+            finished = await service.fetchSnapshot()
+            return finished.sessions.first?.status == .completed
+        }
+        let watchedAfterStop = await service.rolloutWatcher.watchedPaths
+        await service.disconnect()
+        let watchedAfterDisconnect = await service.rolloutWatcher.watchedPaths
+
+        #expect(ended)
+        #expect(watchedAfterStop.isEmpty)
+        #expect(watchedAfterDisconnect.isEmpty)
     }
 
     @Test @MainActor
@@ -23268,7 +23682,8 @@ private actor NavigationTargetCheckerStub: CodexNavigationTargetChecking {
 private func codexRootThread(
     id: String,
     name: String? = nil,
-    preview: String? = nil
+    preview: String? = nil,
+    path: String? = nil
 ) -> JSONValue {
     var fields: [String: JSONValue] = [
         "id": .string(id),
@@ -23277,6 +23692,7 @@ private func codexRootThread(
     ]
     if let name { fields["name"] = .string(name) }
     if let preview { fields["preview"] = .string(preview) }
+    if let path { fields["path"] = .string(path) }
     return .object(fields)
 }
 

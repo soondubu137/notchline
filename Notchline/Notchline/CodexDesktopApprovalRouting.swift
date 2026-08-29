@@ -324,10 +324,6 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
     /// reviewer anyway, because nobody switched a mode in between.
     nonisolated private static let recordTolerance: TimeInterval = 2
 
-    private enum RolloutReadError: Error {
-        case unsafeFile
-    }
-
     private struct TurnContextRecord: Decodable {
         let timestamp: Date
         let approvalsReviewer: String?
@@ -369,10 +365,14 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
         }
     }
 
-    private let fileManager: FileManager
+    /// The end of the file, validated once for both rollout readers.
+    private let tail: CodexRolloutTail
 
     init(fileManager: FileManager = .default) {
-        self.fileManager = fileManager
+        tail = CodexRolloutTail(
+            maximumByteCount: Self.maximumTailByteCount,
+            fileManager: fileManager
+        )
     }
 
     func approvalsReachTheUser(
@@ -396,7 +396,7 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
     private func newestTurnContext(
         inRolloutAt rolloutPath: String
     ) -> TurnContextRecord? {
-        guard let tail = try? readValidatedTail(ofFileAt: rolloutPath) else {
+        guard let tail = try? tail.read(ofFileAt: rolloutPath) else {
             return nil
         }
         let decoder = JSONDecoder()
@@ -419,45 +419,6 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
 
     /// The substring every `turn_context` line carries, whatever the spacing.
     nonisolated private static let turnContextMarker = Data("turn_context".utf8)
-
-    /// The last ``maximumTailByteCount`` bytes of the file, minus a partial
-    /// first line.
-    ///
-    /// Validated the way the sibling adapter validates its state file, and for
-    /// the same reason: the path is handed over by the App Server, so it is
-    /// only ever read when it is a regular file this user owns.
-    private func readValidatedTail(ofFileAt path: String) throws -> Data {
-        let url = URL(fileURLWithPath: path)
-        let resourceValues = try url.resourceValues(forKeys: [
-            .fileSizeKey,
-            .isRegularFileKey,
-            .isSymbolicLinkKey
-        ])
-        guard resourceValues.isRegularFile == true,
-              resourceValues.isSymbolicLink != true else {
-            throw RolloutReadError.unsafeFile
-        }
-        let attributes = try fileManager.attributesOfItem(atPath: path)
-        if let owner = attributes[.ownerAccountID] as? NSNumber,
-           owner.uint32Value != getuid() {
-            throw RolloutReadError.unsafeFile
-        }
-
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        let size = resourceValues.fileSize ?? 0
-        let startsAtHead = size <= Self.maximumTailByteCount
-        if !startsAtHead {
-            try handle.seek(toOffset: UInt64(size - Self.maximumTailByteCount))
-        }
-        let tail = try handle.readToEnd() ?? Data()
-        guard !startsAtHead else { return tail }
-        // A seek lands mid-record, and half a JSON object decodes as nothing.
-        guard let firstBreak = tail.firstIndex(of: UInt8(ascii: "\n")) else {
-            return Data()
-        }
-        return Data(tail[tail.index(after: firstBreak)...])
-    }
 }
 
 /// The one timestamp format every rollout record is stamped with.

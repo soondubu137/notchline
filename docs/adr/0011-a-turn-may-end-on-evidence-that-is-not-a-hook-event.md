@@ -108,3 +108,33 @@ Two new costs, stated plainly:
 
 - **Another use of a non-public dependency, and this time it reads log bodies.** That log is already a registered private read-only source (the focus reading uses it), but that one matches a single line shape and extracts a single id; this extracts a session, a request id and a timestamp. Line shapes are a Claude Desktop implementation detail with higher version risk than a CLI field, so the degradation is hard-wired: match nothing and fall back to today's behaviour. **The two questions hold separate cursors** — sharing one offset would let whichever asks first swallow the other's line.
 - **An edge of its own, and a conditional one.** The focus reading explicitly refused to watch this file, on the grounds that "an oauth query or a git timing would wake it too". That reason holds only while **nothing is waiting on it**: when a desktop session is parked on a dialogue, the response line is exactly what is waited on, and without an edge it costs a whole heartbeat (60 seconds). So `permissionLogWatcher` points at the file only while "the reducer holds an approval wait whose session reports no status", and at an empty set otherwise — the same "watch only what is worth watching" rule as `recordWatcher` and `transcriptWatcher`. Likewise the log and Desktop's record tree are read only while an approval is open, so CR-Fable-003's "only terminal rows pay" property is not diluted by this change.
+
+## Addendum, 2026-08-29: Codex needs this decision too, and it has the best evidence of the three
+
+Everything above is about Claude Code, because that is where the symptom was first met. **Codex has the identical hole and it is worse**: pressing stop in Codex Desktop sends no `Stop`, and not even the `PostToolUse` for the call that was still open — measured 2026-08-24, and reproduced end to end on 2026-08-29 against CLI `0.151.0-alpha.7.1` by driving a real `codex app-server` in an isolated `CODEX_HOME` with all eight registrable hooks trusted: `turn/interrupt` arrived 5.2 s into the turn and the whole turn produced exactly one hook, its own `UserPromptSubmit`.
+
+Where a Claude Code row froze until that session's next prompt or its exit, a Codex row froze **for ever**. Nothing could reach it: no event would ever name that `turn_id` again, membership reconciliation kept the row because the thread is still listed and unarchived, and this product has no activity reading like `claude agents --json` to fall back on — a gap this ADR's own text already named twice as the reason the Codex side had no exit. The only ways out were resuming that exact thread or right-clicking the row away. Archiving a working thread is the same interrupt with a second step after it, so that row said *Running* too, until membership retired it (measured on this machine, Desktop issues `thread/archive` 11–33 s after the `turn/interrupt` that precedes it).
+
+**So a fourth non-event evidence may end an already-open Turn**: `event_msg/turn_aborted`, in the thread's own rollout.
+
+```text
+{"timestamp":"2026-08-29T18:48:31.220Z","type":"event_msg",
+ "payload":{"type":"turn_aborted","turn_id":"01a04eda-04c3-…",
+            "reason":"interrupted","started_at":…,"completed_at":…,"duration_ms":5166}}
+```
+
+`CodexRolloutTurnAbortReader` reads it and hands it to the same entry point the Claude Code desktop record uses, `HookEventRepository.endInterruptedTurns(_:)` — deliberately, for the reason the two approval readings share one: both say one sentence, *this Turn is over*, and differ only in how they prove it.
+
+The four boundaries, in order:
+
+1. **End only, never open — and this one names the Turn, so it is pinned tighter.** `turn_id` is the reducer's own Turn identity: in the run above the hook's `turn_id`, the id `turn/start` returned, the `turn_context` at the head of the turn and the `turn_aborted` at its end were all `01a04eda-04c3-7b13-abb5-57f253394aa8`. It ends only the Turn it names and does nothing when it names one the reducer does not hold.
+2. **Only positive evidence counts.** No record, nothing happens; an unreadable timestamp, a missing `turn_id` or a shape that does not match, likewise nothing. **`reason` is deliberately not read** — every one of the 18 aborts on this machine says `interrupted`, and requiring that word would mean a reason a later Codex invents leaves the row Running for ever, which is the failure being fixed. Only the newest abort in the tail is considered: an older one naming this Turn would describe a Turn that ended before one this rollout has since recorded ending.
+3. **The ordering guard** compares against the moment Codex stamped the record, and the record must be strictly later than the Turn's last event.
+4. **It ends the Turn where the abort says it did**, not where this app noticed, so the row's elapsed readout is the turn's real length.
+
+Two costs:
+
+- **One more use of a non-public dependency.** The rollout is already a registered private read-only schema — `turn_context.approvals_reviewer` is read from the same tail — and what this adds is a second question of the same file. Registered in `non-public-codex-integration-features.md`. It degrades in the safe direction: a changed record shape matches nothing and those rows revert to today's behaviour. The one dangerous direction is a version that wrote `turn_aborted` for something that is not the end of a turn, which would retire a running row.
+- **An edge of its own.** An abort appends a record to a file inside a directory, and a directory-level watcher does not fire for that, so `LiveCodexMonitorService.rolloutWatcher` watches the rollouts of Turns that are still going — the same "watch only what is worth watching" rule as `transcriptWatcher` and `recordWatcher`, and it watches nothing at all while no Turn is open. Without it the abort would wait for whatever wakes the service next: at best the 10 s metadata interval, and on a thread that had gone quiet, the heartbeat.
+
+**One case this does not fix, stated plainly.** Archiving moves the rollout out of `$CODEX_HOME/sessions` into `archived_sessions`, so an archive that followed its interrupt closely enough would take the file away before the read. The row then behaves exactly as it does today — *Running* until membership reconciliation retires it — which is a wait, not a wrong state, and the gesture has already told the app what it needs: the thread is leaving the list.

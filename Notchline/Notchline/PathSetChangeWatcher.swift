@@ -53,6 +53,18 @@ final class PathSetChangeWatcher: @unchecked Sendable {
         }
     }
 
+    /// The paths currently watched.
+    ///
+    /// Reporting only, and for tests: what is watched, and for how long, is an
+    /// invariant its owners state rather than an implementation detail -- see
+    /// ``ClaudeCodeMonitorService/transcriptWatcher`` and
+    /// ``LiveCodexMonitorService/rolloutWatcher``.
+    nonisolated var watchedPaths: Set<URL> {
+        lock.lock()
+        defer { lock.unlock() }
+        return Set(watches.keys)
+    }
+
     /// Watches exactly these paths, and no others.
     nonisolated func watch(paths: Set<URL>) {
         lock.lock()
