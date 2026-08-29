@@ -1465,8 +1465,8 @@ struct NotchlineTests {
 
     /// Folded, the panel is one height whatever is connected.
     ///
-    /// That is the whole point of §5.4: unfolded the expanded panel is `326`,
-    /// `340` or `370` depending on which products happen to be running, and
+    /// That is the whole point of §5.4: unfolded the expanded panel is `316`,
+    /// `339` or `370` depending on which products happen to be running, and
     /// folded it stops depending on that at all.
     @Test @MainActor
     func aFoldedFooterIsTheSameHeightForEveryShape() {
@@ -1495,14 +1495,14 @@ struct NotchlineTests {
         }
 
         // Unfolded: three shapes, three heights. 46 + 240 + footer.
-        #expect(panelHeight(codexAlone, folded: false) == 326)
-        #expect(panelHeight(claudeAlone, folded: false) == 340)
+        #expect(panelHeight(codexAlone, folded: false) == 316)
+        #expect(panelHeight(claudeAlone, folded: false) == 339)
         #expect(panelHeight(both, folded: false) == 370)
 
         // Folded: one footer height, and the same panel every time.
-        #expect(panelHeight(codexAlone, folded: true) == 314)
-        #expect(panelHeight(claudeAlone, folded: true) == 314)
-        #expect(panelHeight(both, folded: true) == 314)
+        #expect(panelHeight(codexAlone, folded: true) == 308)
+        #expect(panelHeight(claudeAlone, folded: true) == 308)
+        #expect(panelHeight(both, folded: true) == 308)
         #expect(
             PanelMetrics.footerHeight(rules: both, isFolded: true)
                 == PanelMetrics.foldedFooterHeight
@@ -1513,6 +1513,63 @@ struct NotchlineTests {
             PanelMetrics.footerHeight(rules: [], isFolded: true)
                 == PanelMetrics.footerHeight(rules: [], isFolded: false)
         )
+    }
+
+    /// The footer's last line stands the same height above the edge, always.
+    ///
+    /// It did not. Each of the four footers was a constant, and the black
+    /// under the last line was whatever that constant had left once the
+    /// content was laid out — `6` with both products, `7` with Claude Code
+    /// alone, `16` with Codex alone, `12` folded. So the panel's bottom edge
+    /// sat at a different distance from the same reading depending on what
+    /// happened to be connected, and folding the rules away, which does not
+    /// touch that reading, moved the edge under it.
+    ///
+    /// The contents are written longhand here, as the view lays each shape
+    /// out, so that this is a claim about what is drawn rather than the
+    /// composition in `PanelMetrics` restated.
+    @Test @MainActor
+    func theFootersLastLineStandsTheSameHeightAboveTheEdgeInEveryShape() {
+        func rules(_ shape: [(AgentKind, Int)]) -> [FooterRule] {
+            shape.map { agent, windowCount in
+                FooterRule(
+                    agent: agent,
+                    windows: (0..<windowCount).map { _ in
+                        FooterWindow(fill: 0.5, caption: "c")
+                    }
+                )
+            }
+        }
+        let codexAlone = rules([(.codex, 1)])
+        let claudeAlone = rules([(.claudeCode, 2)])
+        let both = rules([(.codex, 1), (.claudeCode, 2)])
+
+        // A rule, the gap under it, and the line it labels — which is the
+        // disclosure's own line where the two share it (the Codex-only form).
+        let line = PanelMetrics.quotaFoldControlSize
+        let block = PanelMetrics.footerRuleHeight
+            + PanelMetrics.footerCaptionSpacing
+            + PanelMetrics.footerCaptionHeight
+        let inlineBlock = PanelMetrics.footerRuleHeight
+            + PanelMetrics.footerCaptionSpacing
+            + line
+        let gap = PanelMetrics.footerRuleSpacing
+
+        let shapes: [(rules: [FooterRule], isFolded: Bool, drawn: CGFloat)] = [
+            (codexAlone, false, inlineBlock),
+            (claudeAlone, false, block + gap + line),
+            (both, false, block + gap + block + gap + line),
+            (codexAlone, true, line),
+            (claudeAlone, true, line),
+            (both, true, line)
+        ]
+        for shape in shapes {
+            let footer = PanelMetrics.footerHeight(
+                rules: shape.rules,
+                isFolded: shape.isFolded
+            )
+            #expect(footer - shape.drawn == PanelMetrics.footerBottomMargin)
+        }
     }
 
     /// Today's line is the one thing folding never takes away.
@@ -1871,8 +1928,8 @@ struct NotchlineTests {
             forSessionCount: 3,
             footerHeight: PanelMetrics.dualFooterHeight
         )
-        // 46 + 240 + 40 and 46 + 240 + 84, from dual-agent-design 5.1.
-        #expect(PanelMetrics.referenceCompactHeight + single == 326)
+        // 46 + 240 + 30 and 46 + 240 + 84, from dual-agent-design 5.1.
+        #expect(PanelMetrics.referenceCompactHeight + single == 316)
         #expect(PanelMetrics.referenceCompactHeight + dual == 370)
         // Claude Code alone sits between them: two windows fill its caption
         // line, so today's usage still needs a line of its own.

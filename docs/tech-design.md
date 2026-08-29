@@ -251,11 +251,11 @@ Unit tests come in two layers: `aTerminalsAccessTimeRecordsBeingReadFromRatherTh
 
 ### 2.3 UI constraints
 
-- The shared expanded baseline width is `520`; with a `46` menu bar and three session rows the reference total height is `326`.
+- The shared expanded baseline width is `520`; with a `46` menu bar and three session rows the reference total height is `316`.
 - The top summary region's reference height is `46` and always equals the target menu-bar height; expanding grows only horizontally.
-- The content region below it is the list viewport plus the footer: the viewport is at most `508 × 240` with three rows visible and vertical scrolling, and the footer is a fixed `496 × 40`. The viewport is two `6`s wider than the footer: the row block is inset only `6`, the row adds `6` back, and in-row text lands at `12` with the footer.
-- A healthy empty list and global availability states use a `520 × 134` thin layer, with a `48` body and a `40` footer.
-- The footer must be `40` tall with and without sessions, with no padding appended beneath it. It is separated at the top by the same hairline as the header and list; the left holds today's token total and the reset copy, and the right a `32 × 32` Settings hit target with a `16 × 16` gear.
+- The content region below it is the list viewport plus the footer: the viewport is at most `508 × 240` with three rows visible and vertical scrolling, and the footer is `496` wide by its own content plus a `6` bottom margin — `30` in this single-product form. The viewport is two `6`s wider than the footer: the row block is inset only `6`, the row adds `6` back, and in-row text lands at `12` with the footer.
+- A healthy empty list and global availability states use a `520 × 124` thin layer, with a `48` body and a `30` footer.
+- The footer must be the same height with and without sessions, with no padding appended beneath it beyond the `6` its own height already includes. It is separated at the top by the same hairline as the header and list; the left holds today's token total and the reset copy, and the right a `32 × 32` Settings hit target with a `16 × 16` gear.
 - Figma and the product UI both use SF Pro.
 
 ## 3. Key release gates
@@ -965,7 +965,7 @@ The test became **a visible product no longer listing it**: that product is `isC
 
 **Whether the panel is on screen also goes through the AppKit side rather than the view model.** `OverlayConcealmentWatcher` samples the on-screen window list every 250 ms and hands it to the pure function `OverlayConcealment.menuBarPresence(onDisplay:windows:otherDisplays:)` to decide who owns the target display right now: the target display's menu-bar window absent from the on-screen list means concealed (an app or video is full-screen there, or the menu bar is set to auto-hide), and present means it stays on screen. That is the only test, so the answer is a `Bool` rather than a reason enum; Mission Control does not hide the menu bar and therefore falls on the "stays" side (`PRD.md` §9.2.1). The callback fires only on a change and does exactly three things — collapse (`MonitorStore.collapse()`, since a window pulled away receives no pointer exit), `orderOut`, or recompute the frame and `orderFrontRegardless`. While concealed the panel still follows frame changes and merely does not re-enter the screen. When the display cannot be determined (`DisplayOption.displayID` is `nil`, meaning `identifier(for:)` took the fallback) it never hides, per `PRD.md` §9.2.1; **and with no screen it likewise does not hide** — the stopping side puts the overlay back and forgets the previous answer, `system-architecture.md` §7. The sample's ticket is carried all the way to `apply(_:ticket:)`, because a main-queue hop separates the test from going on screen while `sampleNow()` goes on screen immediately on the main actor and would cut ahead of an already-queued hop. The signal itself and the polling cost are in `system-architecture.md` §6.
 
-Geometry remains the existing AppKit overlay's: it uses the full `NSScreen.frame`, every intermediate frame keeps the same `maxY`, and the top height comes from the target menu bar. Horizontally the expanded form locks `midX` while the notched collapsed form anchors to the cut-out's right edge, with the window leaving one corner radius of shoulder on each side of the body (`figma-design.md` §3.4). Three visible session rows give a total expanded height of `menuBarHeight + 280` (`240` viewport + `40` footer), and empty/global states `menuBarHeight + 88` (`48` body + `40` footer) — so at the `46 pt` reference those are `326` and `134`, and a notch-less `24 pt` menu bar with three rows is `304`.
+Geometry remains the existing AppKit overlay's: it uses the full `NSScreen.frame`, every intermediate frame keeps the same `maxY`, and the top height comes from the target menu bar. Horizontally the expanded form locks `midX` while the notched collapsed form anchors to the cut-out's right edge, with the window leaving one corner radius of shoulder on each side of the body (`figma-design.md` §3.4). Three visible session rows give a total expanded height of `menuBarHeight + 270` (`240` viewport + `30` footer), and empty/global states `menuBarHeight + 78` (`48` body + `30` footer) — so at the `46 pt` reference those are `316` and `124`, and a notch-less `24 pt` menu bar with three rows is `294`.
 
 ## 18. Phase 0 verification plan
 
@@ -1044,9 +1044,9 @@ The deliverables are a capability matrix, redacted event traces, a version compa
 
 | Page / node | Technical contract |
 | --- | --- |
-| `06 — Notch Core` / `118:120` | `520 × 326` shared expanded, `46` top, `40` footer |
+| `06 — Notch Core` / `118:120` | `520 × 316` shared expanded, `46` top, `30` footer |
 | `05 — Panel` / `327:305` | `496 × 40` expanded footer, today's tokens, reset copy and the Settings gear |
-| `07 — Integration States` / `227:3` | Quota partial degradation, the membership lifecycle and the `520 × 134` thin states |
+| `07 — Integration States` / `227:3` | Quota partial degradation, the membership lifecycle and the `520 × 124` thin states |
 | `08 — Onboarding` / `232:95` | The explicitly authorised first-install flow |
 | `09 — Settings` / `609:2` | The macOS 26 single-panel settings window: the Products / Display / Session list groups and two-mode colour; `233:3` is the v1 reference |
 

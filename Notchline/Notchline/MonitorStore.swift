@@ -266,15 +266,6 @@ enum PanelMetrics {
     }
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
-    /// Single-Codex footer: one rule and one inline caption, as today.
-    static let expandedFooterHeight: CGFloat = 40
-    /// Claude Code alone: two windows fill the caption line, so today's usage
-    /// needs a line of its own. This asymmetry between the two single-product
-    /// forms is known and accepted — it follows from one product having two
-    /// windows and the other having one.
-    static let claudeCodeOnlyFooterHeight: CGFloat = 54
-    /// Both products: two rule blocks and a shared usage line.
-    static let dualFooterHeight: CGFloat = 84
     static let footerRuleHeight: CGFloat = 3
     /// A rule to its own caption.
     static let footerCaptionSpacing: CGFloat = 5
@@ -282,6 +273,60 @@ enum PanelMetrics {
     static let footerRuleSpacing: CGFloat = 9
     /// Between two half-width rules of the same product.
     static let footerWindowSpacing: CGFloat = 8
+    /// One line of the footer's `11pt` caption.
+    ///
+    /// Measured rather than derived, for the same reason
+    /// ``sessionRowCaptionHeight`` is: every footer height below is composed
+    /// from it, so a caption that changed size in the view and not here would
+    /// leave the wrong black under it.
+    static let footerCaptionHeight: CGFloat = 14
+
+    /// The black between the footer's last line and the panel's bottom edge.
+    ///
+    /// **One number for every shape, which it was not.** The four footers were
+    /// four constants, and this margin was whatever each had left once its
+    /// content was laid out: `6` with both products, `7` with Claude Code
+    /// alone, `16` with Codex alone, `12` folded. So the panel's bottom edge
+    /// stood at a different distance from the same line depending on what
+    /// happened to be connected — and folding the rules away, which does not
+    /// touch that line, moved the edge under it from `6` to `12`. Composing
+    /// each height from its content plus this puts the edge in one place, and
+    /// the value is the thinnest of the four rather than an average of them:
+    /// at `6` the black reads as the panel's own edge, and at `12` or `16` as
+    /// a gap left by something that was taken away.
+    static let footerBottomMargin: CGFloat = 6
+
+    /// One product's rule and the captions beneath it.
+    static let footerRuleBlockHeight: CGFloat = footerRuleHeight
+        + footerCaptionSpacing
+        + footerCaptionHeight
+    /// The same block where the disclosure rides the caption line rather than a
+    /// line of its own — the Codex-only form, §5.4. The control is a couple of
+    /// points taller than the caption it shares the line with, and the block
+    /// grows by exactly that.
+    static let footerInlineRuleBlockHeight: CGFloat = footerRuleHeight
+        + footerCaptionSpacing
+        + quotaFoldControlSize
+
+    /// Single-Codex footer: one rule, with today's tokens and the disclosure
+    /// on its caption line.
+    static let expandedFooterHeight: CGFloat = footerInlineRuleBlockHeight
+        + footerBottomMargin
+    /// Claude Code alone: two windows fill the caption line, so today's usage
+    /// needs a line of its own. This asymmetry between the two single-product
+    /// forms is known and accepted — it follows from one product having two
+    /// windows and the other having one.
+    static let claudeCodeOnlyFooterHeight: CGFloat = footerRuleBlockHeight
+        + footerRuleSpacing
+        + quotaFoldControlSize
+        + footerBottomMargin
+    /// Both products: two rule blocks and a shared usage line.
+    static let dualFooterHeight: CGFloat = footerRuleBlockHeight
+        + footerRuleSpacing
+        + footerRuleBlockHeight
+        + footerRuleSpacing
+        + quotaFoldControlSize
+        + footerBottomMargin
 
     /// The gear scales with the menu bar: `32` under a `46pt` bar, `20` under a
     /// `24pt` one. It is trailing-aligned inside the footer's content box, which
@@ -330,9 +375,10 @@ enum PanelMetrics {
     /// Folded, the footer keeps today's line and nothing else.
     ///
     /// One height for every shape, which is the point: folded, the expanded
-    /// panel is `314` whether one product is connected or both, and its height
-    /// stops depending on what happens to be running. See §5.4.
-    static let foldedFooterHeight: CGFloat = 28
+    /// panel is the same whether one product is connected or both, and its
+    /// height stops depending on what happens to be running. See §5.4.
+    static let foldedFooterHeight: CGFloat = quotaFoldControlSize
+        + footerBottomMargin
     /// The disclosure at the trailing end of the footer's last line.
     static let quotaFoldControlSize: CGFloat = 16
 
