@@ -357,19 +357,23 @@ Design in [`15 — The column breathes`](https://www.figma.com/design/B9qIi46zhd
 | --- | --- |
 | What moves | the whole column — every dot and the dash — in unison |
 | How | opacity only. Nothing translates, nothing resizes, no colour changes |
-| Range | the column's own `0.85` down to `0.50` |
-| Period | `2.8 s`, autoreversed at half of it, symmetric ease |
+| Range | `1.0` down to `0.50`. The column still **rests** at `0.85`, so the swing goes above rest as well as below it |
+| Period | `2.8 s`, autoreversed at half of it, on a symmetric curve that never parks at either turn |
 | Phase | the layer clock, shared with the matrix's own `phaseAnchor` |
-| Start | the next whole beat, from the crest |
+| Start | the next whole beat, which is what puts two products on one grid |
 | Width cost | **none**, at any count and in any state |
 
 **Why the column and not the mark.** The matrix has four movements and each one means a status; a fifth would have to mean "Running, and also something finished", which is a pair of statuses rather than one — and it would be drawn in a product's hue, so the same fact would look different depending on whose it was. The column had no movement at all, which is what makes giving it one unambiguous. It is also the only object on this surface that stands for the list rather than for a status or a sum.
 
 **Why the whole column.** One `2.74` dot is below the size at which movement registers away from the centre of vision, which is the only kind of looking a menu bar gets; every dot moving together makes the target the column, `5.66 × 16.6`. Nothing inside it changes relative to anything else, so it reads as the column being breathed on rather than as its members doing something.
 
-**Why `2.8 s` and a floor of `0.50`.** Lull is the slowest thing the mark runs, at `2 s`; sitting below that puts the breath in a different order of movement, so it cannot be taken for a fifth pattern on a mark `2.92` away. Below about half, a `2.74` dot stops being countable — at `0.50` the column is still brighter than the extinguished matrix beside it in every channel of both inks, so it gains a second job without ever putting down the first. **Both numbers are proposals until they are judged on a screen**; the ordering they respect (slower than lull, floor above countability) is not.
+**Why `2.8 s`, and why `1.0` down to `0.50`.** Lull is the slowest thing the mark runs, at `2 s`; sitting below that puts the breath in a different order of movement, so it cannot be taken for a fifth pattern on a mark `2.92` away. Below about half, a `2.74` dot stops being countable — at `0.50` the column is still brighter than the extinguished matrix beside it in every channel of both inks, so it gains a second job without ever putting down the first.
 
-**It begins on the next whole beat rather than immediately.** The cycle's first value is the resting `0.85`, exactly where the column already stood, so the movement starts from where the mark was instead of jumping to a phase. Waiting costs at most one period in a state that lasts until somebody reads something. Sharing `MatrixIndicatorView.phaseAnchor` is not economy: it is what puts two products' columns on one grid, so a pair breathing at once reads as one signal. Stopping eases back to rest rather than cutting from wherever the cycle had reached.
+**The crest was `0.85` first, and that version was too quiet to see.** It topped out where the column already rested, on the reasoning that the movement was the signal and the mark should not also get brighter; judged on a screen, a `0.35` swing on a `2.74` mark spending most of its length near one end or the other simply is not caught out of the corner of an eye. Full widens the swing by half again and buys a reading the first version had thrown away — a breathing column is brighter at its crest than a resting one, so the two differ even in a still glance. The cost is a `0.15` step up when the loop starts, which lands exactly when something has begun waiting to be read and is better had than hidden.
+
+**And the curve had the other half of the problem.** `easeInEaseOut` has a rate of zero at both ends, so an autoreversed cycle parks at the crest, parks again at the trough, and spends most of its length barely moving — and rate of change, not value, is what peripheral vision answers to. The curve is now `(0.3, 0.1, 0.7, 0.9)`: the same symmetric shape, still slowest at the turns, but never slower there than a third of its average rate, so the column is moving at every moment of the cycle.
+
+**It begins on the next whole beat rather than immediately.** That is what puts two products' columns on one grid, so a pair breathing at once reads as one signal rather than two — which is why `MatrixIndicatorView.phaseAnchor` is shared rather than copied. Waiting costs at most one period in a state that lasts until somebody reads something. Stopping eases back to rest rather than cutting from wherever the cycle had reached.
 
 **Reduce Motion does not remove it.** The searchlight can be switched off because the ground states the status on its own, and two channels only help when they fail under different conditions ([`figma-design.md`](figma-design.md) §4.8); this has no second channel, so switching it off takes the fact with it. The movement is opacity, which is what this surface substitutes *for* movement everywhere else (`MatrixDissolve`, `PanelMotion`), so it runs on the same terms either way. Recorded because it is a deliberate choice rather than an oversight, and because the Reduce Motion path is expected to be removed from this app entirely.
 

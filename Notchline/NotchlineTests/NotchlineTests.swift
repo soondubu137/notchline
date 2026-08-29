@@ -2491,23 +2491,63 @@ struct NotchlineTests {
             )
         }
         #expect(abs(SessionDotBreath.period - 2.8) < 0.001)
+        // The column still rests where it always has; the swing goes above it
+        // rather than down from it, so a breathing column reads as different
+        // from a resting one even in a still glance.
         #expect(abs(SessionDotBreath.restingOpacity - 0.85) < 0.001)
+        #expect(SessionDotBreath.crestOpacity > SessionDotBreath.restingOpacity)
         #expect(SessionDotBreath.floorOpacity < SessionDotBreath.restingOpacity)
 
         let animation = SessionDotBreath.animation(now: 10)
         #expect(animation.keyPath == "opacity")
         // Autoreversed at half the period, so one cycle is crest to trough and
-        // back and the ease is symmetric by construction.
+        // back, and the fall and the rise are one curve rather than two.
         #expect(animation.autoreverses)
         #expect(abs(animation.duration - SessionDotBreath.period / 2) < 0.001)
         #expect(animation.repeatCount == .infinity)
         #expect(
-            abs((animation.fromValue as? Double ?? 0) - SessionDotBreath.restingOpacity)
-                < 0.001
+            abs((animation.fromValue as? Double ?? 0) - SessionDotBreath.crestOpacity) < 0.001
         )
         #expect(
             abs((animation.toValue as? Double ?? 0) - SessionDotBreath.floorOpacity) < 0.001
         )
+    }
+
+    /// The cycle never stops moving, at either turn.
+    ///
+    /// **This is the half of it a still page cannot show.** `easeInEaseOut` has
+    /// a rate of zero at both ends, so an autoreversed loop parks at the crest,
+    /// parks again at the trough, and spends most of its length barely moving —
+    /// which is invisible away from the centre of vision, where rate of change
+    /// is the whole of what is answered to. The curve is still symmetric and
+    /// still slowest at the turns; it just never reaches nothing there.
+    @Test @MainActor
+    func theBreathNeverParksAtEitherTurn() {
+        var points = [Float](repeating: 0, count: 2)
+        var control: [(x: Double, y: Double)] = []
+        for index in 0 ... 3 {
+            SessionDotBreath.timingFunction.getControlPoint(at: index, values: &points)
+            control.append((Double(points[0]), Double(points[1])))
+        }
+        #expect(control.count == 4)
+        // A Bezier timing curve begins at (0, 0) and ends at (1, 1); the two in
+        // between are what shape it.
+        #expect(abs(control[0].x) < 0.001 && abs(control[0].y) < 0.001)
+        #expect(abs(control[3].x - 1) < 0.001 && abs(control[3].y - 1) < 0.001)
+
+        let opening = control[1], closing = control[2]
+        #expect(opening.x > 0 && closing.x < 1)
+        let startRate = opening.y / opening.x
+        let endRate = (1 - closing.y) / (1 - closing.x)
+        // Never still: at its slowest the cycle is still moving at a third of
+        // its average rate.
+        #expect(startRate > 0.3)
+        #expect(endRate > 0.3)
+        // And the fall and the rise are the same shape, so the breath has no
+        // preferred direction.
+        #expect(abs(startRate - endRate) < 0.001)
+        // Slowest at the turns, not fastest: this is still a breath.
+        #expect(startRate < 1)
     }
 
     /// It begins on the next whole beat, so it never starts with a jump — and

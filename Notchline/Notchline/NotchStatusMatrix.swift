@@ -799,9 +799,13 @@ struct SessionCountDots: View {
 ///
 /// **The numbers.** `2.8 s` sits below lull's `2 s`, the slowest thing the mark
 /// runs, so the breath reads as a different order of movement rather than a
-/// fifth pattern on a mark `2.92` away. The floor is `0.50` rather than lower
-/// because under about half a `2.74` dot stops being countable: the column
-/// gains a second job without ever putting down the first.
+/// fifth pattern on a mark `2.92` away. The swing is `1.0` to `0.50`: the floor
+/// is not lower because under about half a `2.74` dot stops being countable, so
+/// the column gains a second job without ever putting down the first, and the
+/// crest is full rather than the column's resting `0.85` because seen on a
+/// screen the narrower swing was simply too quiet to catch. That also buys a
+/// second reading for free — a breathing column is brighter at its crest than a
+/// resting one, so the two differ even in a still glance.
 ///
 /// **Reduce Motion does not remove it.** The searchlight can be switched off
 /// because the ground states the status on its own, and two channels only help
@@ -814,6 +818,22 @@ enum SessionDotBreath {
     /// Slower than every track in ``MatrixTrack``; pinned by
     /// `theBreathIsSlowerThanAnythingTheMatrixRuns`.
     static let period: TimeInterval = 2.8
+
+    /// The top of the swing, and **above** where the column rests.
+    ///
+    /// The first version topped out at ``restingOpacity``, on the reasoning
+    /// that the movement was the signal and the column should not also get
+    /// brighter. Seen on a screen that was simply too quiet: a `0.35` swing on
+    /// a `2.74` mark, most of it spent parked at one end or the other, is not
+    /// caught out of the corner of an eye. Going to full widens the swing by
+    /// half again, and adds a second reading the first version had thrown away
+    /// — a breathing column is now brighter at its crest than a resting one, so
+    /// it differs from its neighbour even in a still glance.
+    ///
+    /// It costs a `0.15` step up at the instant the loop starts, which is worth
+    /// having rather than worth hiding: it lands exactly when something has
+    /// begun waiting to be read.
+    static let crestOpacity: Double = 1.0
     /// **Steady, and a little under full.** Unchanged: this is the value the
     /// column has always rested at, and the breath only ever leaves it.
     static let restingOpacity: Double = 0.85
@@ -821,28 +841,42 @@ enum SessionDotBreath {
     /// than a `2.74` mark can go and still be counted.
     static let floorOpacity: Double = 0.50
 
+    /// **The turns slow down; they do not stop.**
+    ///
+    /// `easeInEaseOut` was the obvious curve and the wrong one. Its rate is
+    /// zero at both ends, so an autoreversed cycle parks at the crest and again
+    /// at the trough and spends most of its length barely moving — and what
+    /// peripheral vision answers to is rate of change, not value. This is the
+    /// same shape with the ends unparked: symmetric, still slowest at the
+    /// turns, but never slower there than **a third** of its average rate, so
+    /// the column is moving at every moment of the cycle.
+    ///
+    /// `y1 / x1` and `(1 - y2) / (1 - x2)` are that third, and their being
+    /// equal is what keeps the fall and the rise the same shape. Pinned by
+    /// `theBreathNeverParksAtEitherTurn`.
+    static let timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0.1, 0.7, 0.9)
+
     /// The loop, phased off the layer clock.
     ///
-    /// **It begins on the next whole beat rather than immediately**, which is
-    /// what keeps the movement from starting with a jump: the cycle's first
-    /// value is ``restingOpacity``, exactly where the column was already
-    /// resting, so the column simply starts moving from where it stood. Waiting
-    /// costs at most one period, in a state that is going to last minutes.
-    ///
-    /// Sharing ``MatrixIndicatorView/phaseAnchor(for:now:)`` is not economy: it
-    /// is what puts two products' columns on one grid, so a pair breathing at
-    /// once reads as one signal rather than two. Same reason as the searchlight
-    /// (``NotchTextRaster/installSweep(on:across:height:period:)``).
+    /// **It begins on the next whole beat rather than immediately.** That is
+    /// what puts two products' columns on one grid, so a pair breathing at once
+    /// reads as one signal rather than two — the reason
+    /// ``MatrixIndicatorView/phaseAnchor(for:now:)`` is shared rather than
+    /// copied, and the same rule the searchlight follows
+    /// (``NotchTextRaster/installSweep(on:across:height:period:)``). Waiting
+    /// costs at most one period, in a state that lasts until somebody reads
+    /// something.
     static func animation(now: CFTimeInterval = CACurrentMediaTime()) -> CABasicAnimation {
         let animation = CABasicAnimation(keyPath: "opacity")
-        animation.fromValue = restingOpacity
+        animation.fromValue = crestOpacity
         animation.toValue = floorOpacity
-        // Autoreversed, so one period is crest to trough and back, and the ease
-        // is symmetric by construction rather than by a curve chosen to look it.
+        // Autoreversed, so one period is crest to trough and back, and the fall
+        // and the rise are one curve rather than two that have to be kept
+        // matching.
         animation.duration = period / 2
         animation.autoreverses = true
         animation.repeatCount = .infinity
-        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        animation.timingFunction = timingFunction
         animation.beginTime = beginTime(now: now)
         animation.isRemovedOnCompletion = false
         return animation
