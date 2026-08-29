@@ -329,14 +329,14 @@ struct NotchlineTests {
     @Test @MainActor
     func eachStateDrawsThePatternItsDesignFileDraws() throws {
         /// The lit cells of one mark, in row-major order.
-        func cells(_ state: NotchMatrixState, awakeAgent: AgentKind? = nil) throws -> [CALayer] {
+        func cells(_ state: NotchMatrixState, isAwake: Bool = false) throws -> [CALayer] {
             let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
             view.apply(
                 state: state,
                 size: 16,
                 isAnimated: true,
                 ink: NotchPalette.codexInk,
-                awakeAgent: awakeAgent
+                isAwake: isAwake
             )
             // The unlit bed is first and never animates; any lit pass will do.
             let passes = try #require(view.layer?.sublayers)
@@ -437,7 +437,7 @@ struct NotchlineTests {
         // highlight wanders over a field held at exactly the level the still
         // was at, so opening the panel lifts the mark without changing what it
         // says the product is doing.
-        let glimmer = try cells(.inactive, awakeAgent: .codex)
+        let glimmer = try cells(.inactive, isAwake: true)
         let glimmerTracks = try glimmer.map { try values($0) }
         for track in glimmerTracks {
             // 60 frames plus the repeat of frame 0 that closes the loop.
@@ -495,22 +495,22 @@ struct NotchlineTests {
         }
     }
 
-    /// Two idle marks glimmer, but never together.
+    /// Two idle marks glimmer as one.
     ///
     /// Every other pattern is deliberately in sync across marks, which is what
-    /// `marksShowingTheSamePatternShowItInSync` pins. The glimmer is the one
-    /// exception, because it is the one pattern that says nothing is
-    /// happening: two idle marks rising and falling as one would be a rhythm,
-    /// and a rhythm is what the pattern is careful not to have.
+    /// `marksShowingTheSamePatternShowItInSync` pins: two products running one
+    /// curve out of step read as noise rather than as one thing said twice.
+    /// The glimmer used to be the exception, staggered a third of a loop,
+    /// because a *repeating* pair rising and falling together is a rhythm and
+    /// a rhythm is what the figure is careful not to have.
     ///
-    /// The stagger is a third of the loop and not a half, and this is where
-    /// that matters. Half a loop is the obvious answer for two products and
-    /// the one value that fails on this figure — the columns are crossed twice
-    /// per loop, so half a loop moves the highlight only in the rows, and
-    /// because the mark is symmetric top to bottom the two marks' brightness
-    /// would then match frame for frame.
+    /// Drawn once per opening of the panel it is an event and not a beat, so
+    /// the reason for the stagger went with the loop — and what the stagger
+    /// costs shows up instead: two single blooms a third of a second apart
+    /// read as two unrelated flickers, where the pair together reads as the
+    /// surface answering the pointer.
     @Test @MainActor
-    func twoIdleMarksGlimmerOutOfPhaseWithEachOther() throws {
+    func twoIdleMarksGlimmerAsOne() throws {
         func glimmer(_ agent: AgentKind) throws -> (tracks: [[Double]], begin: [CFTimeInterval]) {
             let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
             view.apply(
@@ -518,7 +518,7 @@ struct NotchlineTests {
                 size: 16,
                 isAnimated: true,
                 ink: NotchPalette.ink(for: agent),
-                awakeAgent: agent
+                isAwake: true
             )
             let passes = try #require(view.layer?.sublayers)
             let cells = try #require(passes.last?.sublayers)
@@ -535,49 +535,35 @@ struct NotchlineTests {
         let codex = try glimmer(.codex)
         let claudeCode = try glimmer(.claudeCode)
 
-        // One clock per mark, as for every other pattern: the sixteen cells
-        // are anchored together and what differs between two marks is the
-        // curve each draws, not the time each keeps. The anchor itself is the
-        // reading taken when the mark was built rather than a point on the
-        // period grid — the glimmer runs once and a one-shot put on the grid
-        // would begin in the past and show whatever was left of itself.
+        // The curve is the substance of it: cell for cell, the two marks draw
+        // the same thing, so whatever one is showing the other is showing too.
+        #expect(codex.tracks == claudeCode.tracks)
+
+        // One clock per mark, as for every other pattern — the sixteen cells
+        // of a mark are anchored together. Between two marks the anchors are
+        // two readings of the same instant rather than one shared number,
+        // because a one-shot starts when it is woken; both are woken by the
+        // same opening of the panel, in the same pass, so they land inside a
+        // frame of each other.
         let codexAnchor = try #require(codex.begin.first)
         let claudeAnchor = try #require(claudeCode.begin.first)
         #expect(codex.begin.allSatisfy { $0 == codexAnchor })
         #expect(claudeCode.begin.allSatisfy { $0 == claudeAnchor })
+        #expect(abs(claudeAnchor - codexAnchor) < 1.0 / 30)
 
-        // A third of the loop: Claude Code's highlight is where Codex's was
-        // 20 frames ago, cell for cell.
-        for (mine, theirs) in zip(codex.tracks, claudeCode.tracks) {
-            let aThirdLater: [Double] = (0 ... 60).map {
-                mine[(($0 - 20) % 60 + 60) % 60]
-            }
-            #expect(theirs == aThirdLater)
-        }
-
-        // What that buys, which the stagger alone does not say: the two marks
-        // are never as bright as each other. Total brightness is what the eye
-        // reads at this size — the cells are 3.64pt — so this is the claim
-        // that the pair does not pulse as one.
+        // Which is to say the pair is exactly as bright as itself throughout,
+        // where the stagger existed to keep the two apart at every frame.
+        // Total brightness is what the eye reads at this size — the cells are
+        // 3.64pt — so this is the claim that the two bloom as one.
         func brightness(_ tracks: [[Double]], at frame: Int) -> Double {
             tracks.reduce(0) { $0 + $1[frame] }
         }
-        for frame in 0 ..< 60 {
-            let mine: Double = brightness(codex.tracks, at: frame)
-            let theirs: Double = brightness(claudeCode.tracks, at: frame)
-            #expect(abs(mine - theirs) > 0.001)
-        }
-
-        // And the half-loop stagger that would have been the obvious choice
-        // fails exactly that test: the mark's brightness has half the loop's
-        // period, so two marks half a loop apart breathe as one.
-        let halfALoop: [[Double]] = codex.tracks.map { track in
-            (0 ... 60).map { track[($0 + 30) % 60] }
-        }
-        for frame in 0 ..< 60 {
-            let mine: Double = brightness(codex.tracks, at: frame)
-            let mirrored: Double = brightness(halfALoop, at: frame)
-            #expect(abs(mine - mirrored) < 1e-9)
+        let frames = try #require(codex.tracks.first).count
+        for frame in 0 ..< frames {
+            #expect(
+                brightness(codex.tracks, at: frame)
+                    == brightness(claudeCode.tracks, at: frame)
+            )
         }
     }
 
@@ -596,7 +582,7 @@ struct NotchlineTests {
                 size: 16,
                 isAnimated: isAnimated,
                 ink: NotchPalette.codexInk,
-                awakeAgent: isPanelOpen ? .codex : nil
+                isAwake: isPanelOpen
             )
             let passes = try #require(view.layer?.sublayers)
             return try #require(passes.last?.sublayers)
@@ -629,7 +615,7 @@ struct NotchlineTests {
     func anIdleMarkGlimmersOnceForAnOpeningRatherThanOnALoop() throws {
         func litCells(
             _ state: NotchMatrixState,
-            awakeAgent: AgentKind? = nil
+            isAwake: Bool = false
         ) throws -> [CALayer] {
             let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
             view.apply(
@@ -637,7 +623,7 @@ struct NotchlineTests {
                 size: 16,
                 isAnimated: true,
                 ink: NotchPalette.codexInk,
-                awakeAgent: awakeAgent
+                isAwake: isAwake
             )
             let passes = try #require(view.layer?.sublayers)
             return try #require(passes.last?.sublayers)
@@ -661,7 +647,7 @@ struct NotchlineTests {
         }
 
         let builtAt = CACurrentMediaTime()
-        for cell in try litCells(.inactive, awakeAgent: .codex) {
+        for cell in try litCells(.inactive, isAwake: true) {
             let animation = try #require(
                 cell.animation(forKey: "notch.matrix.opacity") as? CAKeyframeAnimation
             )
@@ -695,7 +681,7 @@ struct NotchlineTests {
         let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
         func show(
             _ state: NotchMatrixState,
-            awakeAgent: AgentKind? = nil,
+            isAwake: Bool = false,
             isAnimated: Bool = true
         ) {
             view.apply(
@@ -703,7 +689,7 @@ struct NotchlineTests {
                 size: 16,
                 isAnimated: isAnimated,
                 ink: NotchPalette.codexInk,
-                awakeAgent: awakeAgent
+                isAwake: isAwake
             )
         }
         func passes() throws -> [CALayer] { try #require(view.layer?.sublayers) }
@@ -773,13 +759,13 @@ struct NotchlineTests {
 
         // The pointer waking an idle mark is the same kind of change, so it
         // gets the same treatment.
-        show(.inactive, awakeAgent: .codex)
+        show(.inactive, isAwake: true)
         #expect(try crossing().arriving.count == 4)
         #expect(try crossing().leaving.count == 4)
 
         // Motion off shortens the hand-over rather than removing it — a
         // dissolve is what movement is replaced *with*.
-        show(.inactive, awakeAgent: .codex, isAnimated: false)
+        show(.inactive, isAwake: true, isAnimated: false)
         for layer in try crossing().arriving {
             #expect(
                 try #require(dissolve(layer)).duration
