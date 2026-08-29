@@ -694,7 +694,6 @@ struct SessionCountDots: View {
     /// something else — ``PresenceMark/buriesAFinishedTurn``, which is the only
     /// thing that turns the breath on.
     var breathes: Bool = false
-    var reduceMotion: Bool = false
 
     private var hasRows: Bool { count > 0 }
     private var columnWidth: CGFloat {
@@ -733,8 +732,7 @@ struct SessionCountDots: View {
             isPastCap: isPastCap,
             agent: agent,
             matrixSize: matrixSize,
-            breathes: breathes,
-            reduceMotion: reduceMotion
+            breathes: breathes
         )
         .frame(width: diameter, height: matrixSize, alignment: .topLeading)
         .opacity(hasRows ? 1 : 0)
@@ -742,9 +740,9 @@ struct SessionCountDots: View {
     }
 
     /// The slot opening and closing, shared with the status name that stands
-    /// after it — see ``PanelMotion/columnSlot(isOpening:reduceMotion:)``.
+    /// after it — see ``PanelMotion/columnSlot(isOpening:)``.
     private var slotAnimation: Animation {
-        PanelMotion.columnSlot(isOpening: hasRows, reduceMotion: reduceMotion)
+        PanelMotion.columnSlot(isOpening: hasRows)
     }
 
     /// The dot arriving and leaving. Fading only — see the type's note.
@@ -756,10 +754,7 @@ struct SessionCountDots: View {
     /// every other reading on this surface fades out quicker than it fades in —
     /// something starting is worth catching and something ending is not.
     private var fadeAnimation: Animation {
-        guard !reduceMotion else {
-            return .easeOut(duration: PanelMotion.reducedDuration)
-        }
-        return hasRows
+        hasRows
             ? .easeOut(duration: Self.fadeInDuration).delay(Self.fadeInDelay)
             : .easeOut(duration: Self.fadeOutDuration)
     }
@@ -806,14 +801,6 @@ struct SessionCountDots: View {
 /// that deep because the dip is momentary: what has to hold at every instant is
 /// only that the run stays clearly brighter than the extinguished matrix, which
 /// at `0.30` it does by about a factor of two.
-///
-/// **Reduce Motion does not remove it.** The searchlight can be switched off
-/// because the ground states the status on its own, and two channels only help
-/// when they fail under different conditions (`figma-design.md` §4.8). This has
-/// no second channel, so switching it off takes the fact with it — and the
-/// movement is opacity, which is what this surface substitutes *for* movement
-/// everywhere else (``MatrixDissolve``, ``PanelMotion``). It therefore runs on
-/// the same terms either way.
 enum SessionDotBreath {
     /// Slower than every track in ``MatrixTrack``; pinned by
     /// `theBreathIsSlowerThanAnythingTheMatrixRuns`.
@@ -905,7 +892,6 @@ private struct SessionDotColumn: NSViewRepresentable {
     let agent: AgentKind
     let matrixSize: CGFloat
     let breathes: Bool
-    let reduceMotion: Bool
 
     func makeNSView(context: Context) -> SessionDotColumnView {
         let view = SessionDotColumnView()
@@ -923,8 +909,7 @@ private struct SessionDotColumn: NSViewRepresentable {
             isPastCap: isPastCap,
             agent: agent,
             matrixSize: matrixSize,
-            breathes: breathes,
-            reduceMotion: reduceMotion
+            breathes: breathes
         )
     }
 }
@@ -946,7 +931,6 @@ final class SessionDotColumnView: NSView {
     private var agent: AgentKind = .codex
     private var matrixSize: CGFloat = 0
     private var breathes = false
-    private var reduceMotion = false
     private var isBreathing = false
 
     override init(frame frameRect: NSRect) {
@@ -965,8 +949,7 @@ final class SessionDotColumnView: NSView {
         isPastCap: Bool,
         agent: AgentKind,
         matrixSize: CGFloat,
-        breathes: Bool,
-        reduceMotion: Bool
+        breathes: Bool
     ) {
         // The dash is the only geometry change worth animating, and only when
         // it is genuinely a change: everything else here is a fresh layout.
@@ -977,7 +960,6 @@ final class SessionDotColumnView: NSView {
         self.agent = agent
         self.matrixSize = matrixSize
         self.breathes = breathes
-        self.reduceMotion = reduceMotion
 
         rebuildDots(recolouring: inkChanged)
         layoutDots(animatingDash: dashChanged)
@@ -1065,10 +1047,8 @@ final class SessionDotColumnView: NSView {
             // The third dot becoming the dash is one capsule growing, not a
             // swap: the height and the offset that keeps its run ending on the
             // matrix's lower edge move together, on the panel's own curve.
-            CATransaction.setAnimationDuration(PanelMotion.duration(reduceMotion: reduceMotion))
-            CATransaction.setAnimationTimingFunction(
-                PanelMotion.timingFunction(reduceMotion: reduceMotion)
-            )
+            CATransaction.setAnimationDuration(PanelMotion.duration)
+            CATransaction.setAnimationTimingFunction(PanelMotion.timingFunction)
         } else {
             CATransaction.setDisableActions(true)
         }
@@ -1106,8 +1086,8 @@ final class SessionDotColumnView: NSView {
         let settle = CABasicAnimation(keyPath: "opacity")
         settle.fromValue = current
         settle.toValue = resting
-        settle.duration = PanelMotion.duration(reduceMotion: reduceMotion)
-        settle.timingFunction = PanelMotion.timingFunction(reduceMotion: reduceMotion)
+        settle.duration = PanelMotion.duration
+        settle.timingFunction = PanelMotion.timingFunction
         ink.add(settle, forKey: Self.settleKey)
     }
 
@@ -1735,7 +1715,7 @@ final class MatrixIndicatorView: NSView {
     /// for the reason written there: the panel's curve is an arrival, and read
     /// as a fade it is a cut with a tail.
     private func crossFade(from outgoing: [CALayer], to incoming: [CALayer]) {
-        let duration = MatrixDissolve.duration(reduceMotion: !appliedIsAnimated)
+        let duration = MatrixDissolve.duration
         let timing = MatrixDissolve.timingFunction
 
         func fade(_ layer: CALayer, from: Float, to: Float) {
@@ -1977,20 +1957,8 @@ enum NotchTextRaster {
 /// arrival, and the part worth seeing is the middle, where the mark is
 /// genuinely half of each. So it is symmetric — as long coming out of the
 /// still as going into it — and long enough to have a middle at all.
-///
-/// **Reduce Motion shortens it rather than removing it**, the same answer
-/// ``PanelMotion`` gives: what that setting asks to be spared is movement, and
-/// a dissolve is the thing movement is replaced *with*. It keeps a shape a
-/// third of the length, still symmetric, rather than falling back on the
-/// snappier curve — a hurried fade is still a fade, where an ease-out that
-/// short is the cut again.
 enum MatrixDissolve {
     static let duration: TimeInterval = 0.32
-    static let reducedDuration: TimeInterval = 0.12
-
-    static func duration(reduceMotion: Bool) -> TimeInterval {
-        reduceMotion ? reducedDuration : duration
-    }
 
     static let timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 }
@@ -2006,32 +1974,15 @@ enum MatrixDissolve {
 /// Core Animation drives the window and the layer-backed labels.
 enum PanelMotion {
     static let duration: TimeInterval = 0.20
-    /// Reduce Motion shortens the hand-over rather than removing it. What that
-    /// setting asks to be spared is movement, and a dissolve is the thing you
-    /// replace movement *with* — a label that swaps instantly under a panel
-    /// that is still closing is not the calmer option.
-    static let reducedDuration: TimeInterval = 0.08
 
-    static func duration(reduceMotion: Bool) -> TimeInterval {
-        reduceMotion ? reducedDuration : duration
-    }
+    static let animation = Animation.timingCurve(0.22, 1, 0.36, 1, duration: duration)
 
-    static func animation(reduceMotion: Bool) -> Animation {
-        reduceMotion
-            ? .easeOut(duration: reducedDuration)
-            : .timingCurve(0.22, 1, 0.36, 1, duration: duration)
-    }
-
-    static func timingFunction(reduceMotion: Bool) -> CAMediaTimingFunction {
-        reduceMotion
-            ? CAMediaTimingFunction(name: .easeOut)
-            : CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
-    }
+    static let timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
 
     /// How long a closing session column waits before it starts shutting.
     ///
     /// Long enough for the dot inside it to be most of the way out — see
-    /// ``columnSlot(isOpening:reduceMotion:)``.
+    /// ``columnSlot(isOpening:)``.
     static let columnClosingDelay: TimeInterval = 0.05
 
     /// A session column's room opening and closing — and therefore how anything
@@ -2049,14 +2000,8 @@ enum PanelMotion {
     /// one declaration is what makes the room and the name one movement instead
     /// of two — including on the way out, where a name that left on time would
     /// set off while the dot was still lit and the room had not begun to close.
-    ///
-    /// Reduce Motion takes the delay away with the rest of it. The delay buys an
-    /// order between two animations, and at `0.08` there is not enough of either
-    /// left to order.
-    static func columnSlot(isOpening: Bool, reduceMotion: Bool) -> Animation {
-        let base = animation(reduceMotion: reduceMotion)
-        guard !reduceMotion else { return base }
-        return isOpening ? base : base.delay(columnClosingDelay)
+    static func columnSlot(isOpening: Bool) -> Animation {
+        isOpening ? animation : animation.delay(columnClosingDelay)
     }
 }
 
@@ -2079,16 +2024,12 @@ struct SearchlightLabel: View {
     let text: String
     var font: NSFont = .systemFont(ofSize: 13, weight: .light)
     var isSweeping: Bool
-    /// Only the length of the hand-over between two readings. Whether the label
-    /// sweeps at all is the caller's decision and rides in `isSweeping`.
-    var reduceMotion = false
 
     var body: some View {
         SweepingLabel(
             text: text,
             font: font,
-            isSweeping: isSweeping,
-            reduceMotion: reduceMotion
+            isSweeping: isSweeping
         )
         .accessibilityHidden(true)
     }
@@ -2098,19 +2039,13 @@ private struct SweepingLabel: NSViewRepresentable {
     let text: String
     let font: NSFont
     let isSweeping: Bool
-    let reduceMotion: Bool
 
     func makeNSView(context: Context) -> SweepingLabelView {
         SweepingLabelView()
     }
 
     func updateNSView(_ view: SweepingLabelView, context: Context) {
-        view.apply(
-            text: text,
-            font: font,
-            isSweeping: isSweeping,
-            reduceMotion: reduceMotion
-        )
+        view.apply(text: text, font: font, isSweeping: isSweeping)
     }
 
     func sizeThatFits(
@@ -2140,7 +2075,6 @@ final class SweepingLabelView: NSView {
     private var appliedText = ""
     private var appliedFont = NSFont.systemFont(ofSize: 13, weight: .light)
     private var appliedIsSweeping = false
-    private var appliedReduceMotion = false
     private var renderedScale: CGFloat = 0
     /// The size the current glyphs were rasterised at, which is what every
     /// glyph layer is framed to. Never `bounds`: the layout animates `bounds`
@@ -2183,12 +2117,9 @@ final class SweepingLabelView: NSView {
         NotchTextRaster.textSize(appliedText, font: appliedFont)
     }
 
-    func apply(text: String, font: NSFont, isSweeping: Bool, reduceMotion: Bool) {
+    func apply(text: String, font: NSFont, isSweeping: Bool) {
         let textChanged = text != appliedText || font != appliedFont
-        guard textChanged
-            || isSweeping != appliedIsSweeping
-            || reduceMotion != appliedReduceMotion
-        else { return }
+        guard textChanged || isSweeping != appliedIsSweeping else { return }
 
         let previousText = appliedText
         let previousGlyphs = baseLayer.contents
@@ -2198,7 +2129,6 @@ final class SweepingLabelView: NSView {
         appliedText = text
         appliedFont = font
         appliedIsSweeping = isSweeping
-        appliedReduceMotion = reduceMotion
 
         if textChanged {
             invalidateIntrinsicContentSize()
@@ -2266,8 +2196,8 @@ final class SweepingLabelView: NSView {
             return
         }
 
-        let duration = PanelMotion.duration(reduceMotion: appliedReduceMotion)
-        let timing = PanelMotion.timingFunction(reduceMotion: appliedReduceMotion)
+        let duration = PanelMotion.duration
+        let timing = PanelMotion.timingFunction
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)

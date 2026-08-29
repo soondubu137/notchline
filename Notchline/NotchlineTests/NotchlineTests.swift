@@ -433,11 +433,11 @@ struct NotchlineTests {
     @Test @MainActor
     func aMarkFadesBetweenTheStillAndAPatternButNotBetweenTwoPatterns() throws {
         let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-        func show(_ state: NotchMatrixState, isAnimated: Bool = true) {
+        func show(_ state: NotchMatrixState) {
             view.apply(
                 state: state,
                 size: 16,
-                isAnimated: isAnimated,
+                isAnimated: true,
                 ink: NotchPalette.codexInk
             )
         }
@@ -505,16 +505,6 @@ struct NotchlineTests {
         show(.inactive)
         #expect(try crossing().arriving.count == 4)
         #expect(try crossing().leaving.count == 4)
-
-        // Motion off shortens the hand-over rather than removing it — a
-        // dissolve is what movement is replaced *with*.
-        show(.running, isAnimated: false)
-        for layer in try crossing().arriving {
-            #expect(
-                try #require(dissolve(layer)).duration
-                    == MatrixDissolve.duration(reduceMotion: true)
-            )
-        }
 
         // **Half way through, the mark is half way across.** This is the claim
         // the fade was failing on while it borrowed the panel's curve: that
@@ -2674,8 +2664,7 @@ struct NotchlineTests {
                 isPastCap: false,
                 agent: .codex,
                 matrixSize: size,
-                breathes: breathes,
-                reduceMotion: false
+                breathes: breathes
             )
         }
 
@@ -2849,26 +2838,19 @@ struct NotchlineTests {
     /// waits for the dot on the way out, and the name has to do both.
     @Test @MainActor
     func theStatusNameMovesOnTheColumnsOwnCurve() {
-        let base = PanelMotion.animation(reduceMotion: false)
+        let base = PanelMotion.animation
         // Opening, the room is made first and the dot arrives into it.
-        #expect(PanelMotion.columnSlot(isOpening: true, reduceMotion: false) == base)
+        #expect(PanelMotion.columnSlot(isOpening: true) == base)
         // Closing, it waits: a name that left on time would set off while the
         // dot was still lit and the room had not begun to shut.
         #expect(
-            PanelMotion.columnSlot(isOpening: false, reduceMotion: false)
+            PanelMotion.columnSlot(isOpening: false)
                 == base.delay(PanelMotion.columnClosingDelay)
         )
         #expect(
-            PanelMotion.columnSlot(isOpening: true, reduceMotion: false)
-                != PanelMotion.columnSlot(isOpening: false, reduceMotion: false)
+            PanelMotion.columnSlot(isOpening: true)
+                != PanelMotion.columnSlot(isOpening: false)
         )
-
-        // Reduce Motion takes the delay away with the rest of it. The delay
-        // buys an order between two animations, and at `0.08` there is not
-        // enough of either left to order.
-        let reduced = PanelMotion.animation(reduceMotion: true)
-        #expect(PanelMotion.columnSlot(isOpening: true, reduceMotion: true) == reduced)
-        #expect(PanelMotion.columnSlot(isOpening: false, reduceMotion: true) == reduced)
     }
 
     /// The leading matrix stands in one place, whatever the counts do.
@@ -9835,7 +9817,7 @@ struct NotchlineTests {
         let font = NSFont.systemFont(ofSize: 13, weight: .light)
         let text = "Approval needed"
         let view = SweepingLabelView()
-        view.apply(text: text, font: font, isSweeping: true, reduceMotion: false)
+        view.apply(text: text, font: font, isSweeping: true)
 
         // The same metrics PanelMetrics reserves compact width with, so the
         // label cannot be wider than the panel drawn for it.
@@ -9885,7 +9867,7 @@ struct NotchlineTests {
         let mask = try #require(highlight.mask)
         #expect(mask.animation(forKey: "notch.searchlight") != nil)
 
-        view.apply(text: text, font: font, isSweeping: false, reduceMotion: false)
+        view.apply(text: text, font: font, isSweeping: false)
         #expect(highlight.isHidden)
         #expect(mask.animation(forKey: "notch.searchlight") == nil)
     }
@@ -9912,7 +9894,7 @@ struct NotchlineTests {
         let expanded = "Approval needed"
         let compact = "Approval"
         let view = SweepingLabelView()
-        view.apply(text: expanded, font: font, isSweeping: true, reduceMotion: false)
+        view.apply(text: expanded, font: font, isSweeping: true)
         view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
         view.layout()
 
@@ -9924,7 +9906,7 @@ struct NotchlineTests {
 
         // The reading changes first and the layout follows it, so this is the
         // view exactly as it is drawn mid-collapse: new text, old frame.
-        view.apply(text: compact, font: font, isSweeping: true, reduceMotion: false)
+        view.apply(text: compact, font: font, isSweeping: true)
         view.layout()
 
         let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)
@@ -9967,11 +9949,11 @@ struct NotchlineTests {
         // copy still dissolving underneath it.
         let font = NSFont.systemFont(ofSize: 13, weight: .light)
         let view = SweepingLabelView()
-        view.apply(text: "Running", font: font, isSweeping: true, reduceMotion: false)
+        view.apply(text: "Running", font: font, isSweeping: true)
         view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
         view.layout()
 
-        view.apply(text: "Approval", font: font, isSweeping: true, reduceMotion: false)
+        view.apply(text: "Approval", font: font, isSweeping: true)
         view.layout()
 
         let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)
@@ -9982,54 +9964,6 @@ struct NotchlineTests {
         #expect(fadeIn.fromValue as? Float == 0)
         #expect(fadeIn.toValue as? Float == 1)
         #expect(fadeIn.duration == PanelMotion.duration)
-
-        // Reduce Motion shortens the hand-over rather than removing it: a
-        // dissolve is what that setting asks for in place of movement.
-        view.apply(text: "Running", font: font, isSweeping: true, reduceMotion: true)
-        let outgoing = try Self.labelLayer(
-            named: SweepingLabelView.outgoingLayerName,
-            in: view
-        )
-        let reduced = try #require(
-            outgoing.animation(forKey: SweepingLabelView.dissolveAnimationKey)
-                as? CABasicAnimation
-        )
-        #expect(reduced.duration == PanelMotion.reducedDuration)
-    }
-
-    /// The store is the only writer any of that motion has.
-    ///
-    /// Every reduced path above -- the dissolve, the matrix keyframes, the
-    /// panel's spring -- reads `MonitorStore.reduceMotion` and nothing else,
-    /// and it was declared `false` and never assigned, so all of them were
-    /// dead in production while tests that hand the flag straight to a view
-    /// went on passing. This one fails if the property loses its writer.
-    @Test @MainActor
-    func reduceMotionIsReadFromTheSystemAndFollowsItsChanges() async {
-        let accessibility = NotificationCenter()
-        let systemSetting = MutableFlag(true)
-        let store = MonitorStore(
-            services: [],
-            systemReduceMotion: { systemSetting.value },
-            accessibilityNotifications: accessibility
-        )
-
-        // Read at construction, because this is a state rather than an event:
-        // a user who already had Reduce Motion on never posts a change for it.
-        #expect(store.reduceMotion)
-
-        systemSetting.value = false
-        accessibility.post(
-            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-            object: nil
-        )
-        // The workspace posts one notification for the whole accessibility
-        // group and the store re-reads; the hop to the main actor is what
-        // these yields are waiting on.
-        for _ in 0 ..< 24 where store.reduceMotion {
-            await Task.yield()
-        }
-        #expect(store.reduceMotion == false)
     }
 
     private static func alphaExtremes(
@@ -13552,8 +13486,7 @@ for line in sys.stdin:
     /// A finished turn's body is the answer it produced. It does not sweep even
     /// while subagents it started are still working: the text the band would
     /// cross is that turn's own final output, and the badge in the slot is what
-    /// speaks for what is still in flight. Reduce Motion takes the channel away
-    /// entirely, which is why the reading's ground has to say the state alone.
+    /// speaks for what is still in flight.
     @Test @MainActor
     func onlyAnUnfinishedTurnSweepsItsBody() {
         let store = makeIdleStore(clock: TestClock(now: Date()))
@@ -13572,11 +13505,6 @@ for line in sys.stdin:
         )
         #expect(!store.sweepsBody(for: finishedWithSubagents))
         #expect(finishedWithSubagents.showsSubagentBadge)
-
-        store.reduceMotion = true
-        for status in SessionStatus.allCases {
-            #expect(!store.sweepsBody(for: makeSession(status: status, startedAt: started)))
-        }
     }
 
     private func makeSession(
@@ -25811,21 +25739,6 @@ extension NotchlineTests {
         _ = await harness.service.fetchSnapshot()
         let askingAgain = await harness.service.nextRefreshDeadline()
         #expect((askingAgain?.timeIntervalSinceNow ?? .infinity) <= 1.1)
-    }
-}
-
-/// Holds a value a `@Sendable` closure has to be able to read after a test has
-/// changed it. A captured `var` cannot cross that boundary.
-/// A boolean a test can flip while something else is reading it.
-private final class MutableFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored: Bool
-
-    init(_ value: Bool) { stored = value }
-
-    var value: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return stored }
-        set { lock.lock(); stored = newValue; lock.unlock() }
     }
 }
 

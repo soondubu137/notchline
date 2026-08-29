@@ -50,7 +50,6 @@ private struct OnboardingView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
-                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(.horizontal, 24)
@@ -164,7 +163,6 @@ private struct MatrixLegend: View {
                         NotchStatusMatrix(
                             state: entry.0,
                             size: OnboardingMetrics.matrixSize,
-                            isAnimated: !store.reduceMotion,
                             split: .products
                         )
                     }

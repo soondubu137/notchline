@@ -1290,15 +1290,6 @@ final class MonitorStore: ObservableObject {
     /// The products whose hooks are being written or removed right now.
     @Published private(set) var integrationBusyAgents: Set<AgentKind> = []
     @Published var isExpanded = false
-    /// Whether the user has asked the system to reduce motion.
-    ///
-    /// Seeded from the accessibility setting at construction and updated when
-    /// it changes, because everything downstream -- the matrix keyframes, the
-    /// searchlight sweep, the panel's spring -- reads this and nothing else.
-    /// It was declared with a `false` literal and never written, which left
-    /// every one of those paths dead in production while the tests that pass
-    /// the flag straight into a view kept passing (figma-design §9.1, §10).
-    @Published var reduceMotion: Bool
     /// How a row says which product it came from. Only drawn while both
     /// products are connected; see ``showsProductAttribution``.
     @Published var productAttribution: ProductAttributionStyle {
@@ -1446,8 +1437,6 @@ final class MonitorStore: ObservableObject {
     /// letting it into the shared `min` would drag every other provider down to
     /// the refresh floor with it.
     private var stuckDeadlines: [AgentKind: Date] = [:]
-    private let accessibilityNotifications: NotificationCenter
-    private var reduceMotionObserver: NSObjectProtocol?
 
     init(
         displays: [DisplayOption]? = nil,
@@ -1457,11 +1446,7 @@ final class MonitorStore: ObservableObject {
         preferences: UserDefaults? = nil,
         refreshEvents: AsyncStream<Void>? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
-        timing: MonitorTiming = .standard,
-        systemReduceMotion: @escaping @Sendable () -> Bool =
-            { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion },
-        accessibilityNotifications: NotificationCenter =
-            NSWorkspace.shared.notificationCenter
+        timing: MonitorTiming = .standard
     ) {
         let resolvedDisplays = displays ?? DisplayOption.currentDisplays()
         let snapshot = initialSnapshot ?? Self.previewSnapshot
@@ -1478,11 +1463,6 @@ final class MonitorStore: ObservableObject {
         self.elapsedTick = CurrentValueSubject(clock.now())
         self.timing = timing
         self.stuckDeadlines = [:]
-        self.accessibilityNotifications = accessibilityNotifications
-        // Read once here for the same reason `DesktopReadingWatcher` reads the
-        // front once: this is a state, not an event, and a user who already had
-        // Reduce Motion on before launch never generates a change for it.
-        self.reduceMotion = systemReduceMotion()
         self.preferredDisplayID = persistedDisplayID
             ?? (initialDisplayID.isEmpty ? nil : initialDisplayID)
         self.services = services
@@ -1520,21 +1500,6 @@ final class MonitorStore: ObservableObject {
         ) ?? false
         self.lastIntegrationMessage = snapshot.diagnostic ?? "Waiting for Codex data"
 
-        // The workspace posts one notification for the whole accessibility
-        // group, so the setting is re-read rather than carried in the payload.
-        // Hopped to the main actor rather than trusting the delivery queue:
-        // this store is main-actor state, and the publish it triggers is what
-        // the panel controller and the matrix are subscribed to.
-        reduceMotionObserver = accessibilityNotifications.addObserver(
-            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-            object: nil,
-            queue: nil
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.reduceMotion = systemReduceMotion()
-            }
-        }
-
         if !services.isEmpty {
             startMonitoring()
         }
@@ -1542,9 +1507,6 @@ final class MonitorStore: ObservableObject {
     }
 
     deinit {
-        if let reduceMotionObserver {
-            accessibilityNotifications.removeObserver(reduceMotionObserver)
-        }
         wakeTask?.cancel()
         refreshEventTask?.cancel()
         pendingHoverTask?.cancel()
@@ -1937,11 +1899,10 @@ final class MonitorStore: ObservableObject {
     /// still in flight.
     ///
     /// Motion answers *live or finished*, which is the one thing here that can
-    /// be read without looking straight at the panel. It is also the channel
-    /// Reduce Motion takes away, which is why the reading's ground has to say
+    /// be read without looking straight at the panel. The reading's ground says
     /// the state on its own rather than lean on this.
     func sweepsBody(for session: MonitoredSession) -> Bool {
-        session.status.keepsTiming && !reduceMotion
+        session.status.keepsTiming
     }
 
     /// Whether the collapsed reading draws its ground filled.

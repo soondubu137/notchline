@@ -101,7 +101,6 @@ final class OverlayPanelController {
             // footer redraws itself, but only the panel can give back the
             // height the rules were occupying.
             store.$isQuotaFolded.map { _ in () }.eraseToAnyPublisher(),
-            store.$reduceMotion.map { _ in () }.eraseToAnyPublisher(),
             // Giving up the wings collapses the compact body to the cut-out and
             // takes them back again. Nothing else republishes when it is
             // toggled -- no status, no session, no quota moves -- so without
@@ -216,12 +215,8 @@ final class OverlayPanelController {
         }
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = PanelMotion.duration(
-                reduceMotion: store.reduceMotion
-            )
-            context.timingFunction = PanelMotion.timingFunction(
-                reduceMotion: store.reduceMotion
-            )
+            context.duration = PanelMotion.duration
+            context.timingFunction = PanelMotion.timingFunction
             context.allowsImplicitAnimation = true
             panel.animator().setFrame(targetFrame, display: true)
         } completionHandler: { [weak panel] in

@@ -57,7 +57,7 @@ struct NotchOverlayView: View {
     }
 
     private var contentAnimation: Animation {
-        PanelMotion.animation(reduceMotion: store.reduceMotion)
+        PanelMotion.animation
     }
 
     private var panelAccessibilityLabel: String {
@@ -233,8 +233,7 @@ private struct OverlayHeader: View {
                 spacing: PanelMetrics.expandedReadoutSpacing,
                 matrixSize: PanelMetrics.statusMatrixSize,
                 markSpacing: PanelMetrics.compactMatrixSpacing,
-                breathesBuriedCompletions: !store.isExpanded,
-                reduceMotion: store.reduceMotion
+                breathesBuriedCompletions: !store.isExpanded
             )
 
             Spacer(minLength: 0)
@@ -326,7 +325,7 @@ private struct OverlayHeader: View {
     private var headerAnimation: Animation {
         // The same curve the window resizes on and the same one the status
         // label hands its reading over on: the three are one movement.
-        PanelMotion.animation(reduceMotion: store.reduceMotion)
+        PanelMotion.animation
     }
 }
 
@@ -346,7 +345,6 @@ private struct StatusReadout: View {
     /// to spell out. The same reason the top bar takes the dot columns but not
     /// the subagent badges ([`dual-agent-design.md`](dual-agent-design.md) §11).
     let breathesBuriedCompletions: Bool
-    let reduceMotion: Bool
 
     /// How far the label is drawn back over its own slot, animated on the
     /// column's curve. Held rather than computed so the write that moves it can
@@ -370,7 +368,6 @@ private struct StatusReadout: View {
                             NotchStatusMatrix(
                                 state: NotchMatrixState(mark.status),
                                 size: matrixSize,
-                                isAnimated: !reduceMotion,
                                 agent: mark.agent
                             )
                             if let agent = mark.agent {
@@ -379,8 +376,7 @@ private struct StatusReadout: View {
                                     agent: agent,
                                     matrixSize: matrixSize,
                                     breathes: breathesBuriedCompletions
-                                        && mark.buriesAFinishedTurn,
-                                    reduceMotion: reduceMotion
+                                        && mark.buriesAFinishedTurn
                                 )
                             }
                         }
@@ -411,11 +407,7 @@ private struct StatusReadout: View {
                 // rather than to its bounds, and its sweep is installed against
                 // that raster too, so a translation costs it nothing: no
                 // re-rasterising, no sweep rebuilt, no hand-over disturbed.
-                SearchlightLabel(
-                    text: text,
-                    isSweeping: isActive && !reduceMotion,
-                    reduceMotion: reduceMotion
-                )
+                SearchlightLabel(text: text, isSweeping: isActive)
                 .offset(x: slide)
             }
         }
@@ -440,12 +432,7 @@ private struct StatusReadout: View {
             }
             // Less room going unused means a column opened ahead of the label
             // and is pushing it along.
-            withAnimation(
-                PanelMotion.columnSlot(
-                    isOpening: room < previous,
-                    reduceMotion: reduceMotion
-                )
-            ) {
+            withAnimation(PanelMotion.columnSlot(isOpening: room < previous)) {
                 slide = -room
             }
         }
@@ -505,10 +492,7 @@ private struct SettingsButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(isHovered ? NotchPalette.sessionTitle : NotchPalette.label)
         .onHover { isHovered = $0 }
-        .animation(
-            store.reduceMotion ? nil : .easeOut(duration: 0.12),
-            value: isHovered
-        )
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .accessibilityLabel("Open Settings")
         .help("Open Settings")
     }
@@ -666,14 +650,8 @@ private struct QuotaFoldChevron: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .animation(
-            store.reduceMotion ? nil : .easeOut(duration: 0.16),
-            value: isFolded
-        )
-        .animation(
-            store.reduceMotion ? nil : .easeOut(duration: 0.12),
-            value: isHovered
-        )
+        .animation(.easeOut(duration: 0.16), value: isFolded)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .accessibilityLabel(isFolded ? "Show quota rules" : "Hide quota rules")
     }
 }
