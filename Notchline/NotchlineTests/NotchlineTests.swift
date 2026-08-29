@@ -729,7 +729,7 @@ struct NotchlineTests {
             let animation = try #require(dissolve(layer))
             #expect((animation.fromValue as? NSNumber)?.floatValue == 0)
             #expect((animation.toValue as? NSNumber)?.floatValue == layer.opacity)
-            #expect(animation.duration == PanelMotion.duration(reduceMotion: false))
+            #expect(animation.duration == MatrixDissolve.duration)
         }
         for layer in leaving {
             let animation = try #require(dissolve(layer))
@@ -769,9 +769,58 @@ struct NotchlineTests {
         for layer in try crossing().arriving {
             #expect(
                 try #require(dissolve(layer)).duration
-                    == PanelMotion.duration(reduceMotion: true)
+                    == MatrixDissolve.duration(reduceMotion: true)
             )
         }
+
+        // **Half way through, the mark is half way across.** This is the claim
+        // the fade was failing on while it borrowed the panel's curve: that
+        // one is `(0.22, 1, 0.36, 1)`, an arrival, and it is `96%` across at
+        // its own midpoint — so a `0.20 s` dissolve was done inside `60 ms`
+        // and landed as the hard swap it was there to replace. Nothing about a
+        // cross-fade is an arrival, and the part worth seeing is the middle.
+        let midpoint = Self.progress(
+            of: MatrixDissolve.timingFunction,
+            atFractionOfDuration: 0.5
+        )
+        #expect(midpoint > 0.4)
+        #expect(midpoint < 0.6)
+    }
+
+    /// How far through its travel a timing function is, a given fraction of
+    /// the way through its duration.
+    ///
+    /// `CAMediaTimingFunction` is a cubic bezier from `(0,0)` to `(1,1)` whose
+    /// two middle control points it will hand back, so the curve can be read
+    /// rather than taken on trust.
+    @MainActor
+    static func progress(
+        of timing: CAMediaTimingFunction,
+        atFractionOfDuration fraction: Double
+    ) -> Double {
+        func controlPoint(_ index: Int) -> (x: Double, y: Double) {
+            var values = [Float](repeating: 0, count: 2)
+            timing.getControlPoint(at: index, values: &values)
+            return (Double(values[0]), Double(values[1]))
+        }
+        let first = controlPoint(1)
+        let second = controlPoint(2)
+        func axis(_ a: Double, _ b: Double, _ t: Double) -> Double {
+            3 * pow(1 - t, 2) * t * a + 3 * (1 - t) * t * t * b + pow(t, 3)
+        }
+        // The curve is parametric, so the time axis is solved before the
+        // travel axis can be read off it.
+        var low = 0.0
+        var high = 1.0
+        for _ in 0 ..< 60 {
+            let middle = (low + high) / 2
+            if axis(first.x, second.x, middle) < fraction {
+                low = middle
+            } else {
+                high = middle
+            }
+        }
+        return axis(first.y, second.y, (low + high) / 2)
     }
 
     /// Two marks showing the same pattern show it in sync.

@@ -1275,15 +1275,25 @@ struct NotchStatusMatrix: View {
         )
         .frame(width: size, height: size)
         .accessibilityHidden(true)
-        // One turn of the figure, timed against the same length the animation
-        // is given. A cancelled sleep is the panel closing under it, and it
-        // must not be read as the turn having finished — hence the `catch`
-        // rather than a `try?`, which would spend the glimmer on the way out.
+        // One turn of the figure, and the fade out of it started a dissolve
+        // early so that the two finish together. The copies on their way out
+        // keep running while they fade, so the mark sinks back into the still
+        // with the highlight still travelling — waiting for the turn to end
+        // first would dissolve a frozen frame, and spend a dissolve's worth of
+        // the opening after the figure had stopped saying anything.
+        //
+        // A cancelled sleep is the panel closing under it, and must not be
+        // read as the turn having finished — hence the `catch` rather than a
+        // `try?`, which would spend the glimmer on the way out.
         .task(id: isPanelOpen) {
             glimmerHasRun = false
             guard isPanelOpen, isAnimated, agent != nil else { return }
             do {
-                try await Task.sleep(for: .seconds(MatrixPattern.glimmerPeriod))
+                try await Task.sleep(
+                    for: .seconds(
+                        MatrixPattern.glimmerPeriod - MatrixDissolve.duration
+                    )
+                )
             } catch {
                 return
             }
@@ -1621,14 +1631,12 @@ final class MatrixIndicatorView: NSView {
     /// the mark lit through the middle of the fade, which is the direction a
     /// dissolve should err in.
     ///
-    /// **Reduce Motion shortens this rather than removing it**, the same
-    /// answer ``PanelMotion`` gives for the panel's own hand-over: a dissolve
-    /// is the thing you replace movement *with*, and a mark that cuts between
-    /// two states is not the calmer option.
+    /// The length and the curve are ``MatrixDissolve``'s and not the panel's,
+    /// for the reason written there: the panel's curve is an arrival, and read
+    /// as a fade it is a cut with a tail.
     private func crossFade(from outgoing: [CALayer], to incoming: [CALayer]) {
-        let reduceMotion = !appliedIsAnimated
-        let duration = PanelMotion.duration(reduceMotion: reduceMotion)
-        let timing = PanelMotion.timingFunction(reduceMotion: reduceMotion)
+        let duration = MatrixDissolve.duration(reduceMotion: !appliedIsAnimated)
+        let timing = MatrixDissolve.timingFunction
 
         func fade(_ layer: CALayer, from: Float, to: Float) {
             let animation = CABasicAnimation(keyPath: "opacity")
@@ -1867,6 +1875,38 @@ enum NotchTextRaster {
         NSGraphicsContext.restoreGraphicsState()
         return context.makeImage()
     }
+}
+
+/// How a mark crosses between the still and a pattern.
+///
+/// **Not ``PanelMotion``'s curve, which is what this was and why it could not
+/// be seen.** That curve is `(0.22, 1, 0.36, 1)` over `0.20 s`, and it is
+/// right for what it was written for: a panel arriving at a size wants to get
+/// there and settle, so it spends `83%` of its travel in the first `60 ms` and
+/// eases out for the rest. Read as a fade that is a cut with a tail — the mark
+/// was fully across before the eye had a chance to catch it mid-way, and the
+/// dissolve landed as the hard swap it had replaced.
+///
+/// A cross-fade is the opposite shape of event: nothing about it is an
+/// arrival, and the part worth seeing is the middle, where the mark is
+/// genuinely half of each. So it is symmetric — as long coming out of the
+/// still as going into it — and long enough to have a middle at all.
+///
+/// **Reduce Motion shortens it rather than removing it**, the same answer
+/// ``PanelMotion`` gives: what that setting asks to be spared is movement, and
+/// a dissolve is the thing movement is replaced *with*. It keeps a shape a
+/// third of the length, still symmetric, rather than falling back on the
+/// snappier curve — a hurried fade is still a fade, where an ease-out that
+/// short is the cut again.
+enum MatrixDissolve {
+    static let duration: TimeInterval = 0.32
+    static let reducedDuration: TimeInterval = 0.12
+
+    static func duration(reduceMotion: Bool) -> TimeInterval {
+        reduceMotion ? reducedDuration : duration
+    }
+
+    static let timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 }
 
 /// The one curve this overlay opens, closes and hands text over on.
