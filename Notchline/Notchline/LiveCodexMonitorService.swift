@@ -1233,10 +1233,16 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             // is terminal again, and the window has to start from that instant
             // instead of from a `Stop` that may be minutes old, or the row
             // disappears the moment it stops saying anything is working.
+            //
+            // The Turn's own terminal goes in beside it and the two must not be
+            // collapsed back into one. The window is about how long this thread
+            // has been quiet; the blue dot is about a Turn's answer, and that
+            // answer was there to be read from the moment the Turn ended.
             if terminalUnreadMembershipGate.shouldDisplay(
                 sessionID: session.id,
                 threadID: session.threadID,
                 status: MonitorAggregation.effectiveStatus(of: session),
+                turnEndedAt: state.turnEndedAt,
                 terminalBoundaryAt: state.terminalBoundaryAt,
                 unreadState: unreadState,
                 now: clock.now()

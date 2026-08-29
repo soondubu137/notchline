@@ -1309,12 +1309,42 @@ struct HookTurnState: Sendable {
         subagentsAwaitingApprovalCount > 0
     }
 
+    /// The instant this turn's own terminal arrived.
+    ///
+    /// **What every piece of read evidence is dated against**, on both
+    /// products, and the reason it is published under a name of its own rather
+    /// than read off `lastEventAt` at four call sites. Reading is something a
+    /// person does to a turn's *answer*, and the answer landed here: Claude
+    /// Desktop's `lastFocusedAt`, its return to the foreground, a controlling
+    /// terminal's access time and Codex Desktop's blue dot are all evidence
+    /// only if they came after this.
+    ///
+    /// Deliberately not ``terminalBoundaryAt``, which a subagent pushes past
+    /// the answer nobody has read yet -- see there for what that cost.
+    ///
+    /// Meaningful only once the turn is terminal, exactly like the stamp below
+    /// it; on a running turn it is simply the last thing that happened.
+    nonisolated var turnEndedAt: Date { lastEventAt }
+
     /// The instant a finished row's settling window is measured from.
     ///
     /// The later of the turn's own last event and the last subagent boundary,
     /// which for every row without a subagent is simply `lastEventAt`. The two
     /// stamps stay separate because only this one is allowed to slip forward
     /// on a subagent's account; see ``lastSubagentBoundaryAt``.
+    ///
+    /// **It says when this *thread* stopped working and nothing else, and it
+    /// may not be used to date read evidence.** A subagent's `SubagentStop`
+    /// was measured 91 seconds after its parent's `Stop` (2026-08-22), and
+    /// from `dff7d66` until this was split out both products compared the
+    /// user's read against this instant: Codex against the unread file's
+    /// `modificationDate`, Claude Code against `lastFocusedAt`, the return to
+    /// the foreground and the terminal's access time. A user who read the
+    /// answer while the subagent was still working -- which is the ordinary
+    /// case, since that is when the row is on the notch -- had their read
+    /// dated before the bar and thrown away, and the row then waited on
+    /// evidence from a moment nobody was going to act at. See
+    /// ``turnEndedAt``.
     nonisolated var terminalBoundaryAt: Date {
         max(lastEventAt, lastSubagentBoundaryAt ?? lastEventAt)
     }

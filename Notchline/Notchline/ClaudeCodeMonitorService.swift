@@ -778,6 +778,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // working. That is the left-hand side of "has this been read": a focus
         // recorded before it cannot have shown the user this answer.
         var boundaryByRowID: [String: Date] = [:]
+        /// Each row's Turn ending on its own, with no subagent folded in.
+        ///
+        /// **This is the left-hand side of every "has this been read" test**,
+        /// and the map beside it is only the settling window's origin. Reading
+        /// is something a person does to a Turn's answer, and the answer landed
+        /// here -- so a focus stamp, a return to the foreground or a terminal
+        /// gesture is evidence if it came after *this*, whatever a subagent
+        /// went on doing afterwards. The two are the same instant for every row
+        /// without a subagent, which is nearly all of them.
+        var turnEndByRowID: [String: Date] = [:]
         for turn in hookState.turns {
             // A turn whose session is gone is gone. This is the whole reason
             // the session list is load-bearing rather than a convenience.
@@ -795,6 +805,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // and a settling window measured from it would be long spent -- the
             // row would go the moment it stopped saying anything was running.
             boundaryByRowID[built.id] = turn.terminalBoundaryAt
+            turnEndByRowID[built.id] = turn.turnEndedAt
             rows.append(built)
         }
 
@@ -817,6 +828,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         let read = await rowsStillWorthShowing(
             rows,
             boundaryByRowID: boundaryByRowID,
+            turnEndByRowID: turnEndByRowID,
             // Which process each row belongs to, from the same list that
             // proved the session exists. It is the only way to reach a
             // terminal session's read state: the answer is a property of the
@@ -1003,6 +1015,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     private func rowsStillWorthShowing(
         _ rows: [MonitoredSession],
         boundaryByRowID: [String: Date],
+        turnEndByRowID: [String: Date],
         processIdentifierByThreadID: [String: Int32],
         dismissedRowIDs: Set<String>
     ) async -> (rows: [MonitoredSession], diagnostic: String?) {
@@ -1294,9 +1307,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // boundary is read as "ended just now", so nothing can be judged
             // already read on a boundary nobody supplied.
             let boundary = boundaryByRowID[row.id] ?? clock.now()
+            // What every read test below is dated against. The same fail-closed
+            // default as `boundary`, and the same instant as it on every row
+            // with no subagent that outlived its Turn.
+            let turnEndedAt = turnEndByRowID[row.id] ?? boundary
             let state = readState.readState(
                 forSession: row.threadID,
-                terminalBoundaryAt: boundary
+                terminalBoundaryAt: turnEndedAt
             )
             // Kept up to date here rather than anywhere else, because this is
             // the one place that knows both halves at once: which session
@@ -1331,7 +1348,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // could ever say yes".
             let terminalCanSpeak = terminalReadingByThreadID[row.threadID]?
                 .hostCanEverBeInFrontOfTheUser == true
-            let terminalSaysRead = wereAtItsTerminal(row.threadID, since: boundary)
+            let terminalSaysRead = wereAtItsTerminal(
+                row.threadID,
+                since: turnEndedAt
+            )
             switch state {
             case .unknown:
                 // Claude Desktop cannot speak for this session, so only its
@@ -1354,7 +1374,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
                 }
                 judged.append((row, boundary, true))
             case .unread:
-                if comingBackShowedIt(row.threadID, since: boundary)
+                if comingBackShowedIt(row.threadID, since: turnEndedAt)
                     || isInFrontOfThem(row.threadID)
                     || movedOnFrom(row.threadID)
                     || terminalSaysRead {
@@ -1424,6 +1444,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // anything is still running cannot be erased a settling interval
             // after a `Stop` the user has already read.
             status: MonitorAggregation.effectiveStatus(of: row),
+            turnEndedAt: turnEndByRowID[row.id] ?? boundary,
             terminalBoundaryAt: boundary,
             unreadState: restsOnTerminal ? terminalUnreadState : desktopUnreadState,
             now: now

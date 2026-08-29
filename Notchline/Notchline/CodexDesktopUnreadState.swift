@@ -31,7 +31,7 @@ struct DesktopUnreadStateSnapshot: Equatable, Sendable {
     /// "read" only if whatever produced the set had already heard about the
     /// Turn. Every reading therefore has to say how far forward it reaches,
     /// and the gate compares that against the Turn it is judging -- see
-    /// ``TerminalUnreadMembershipGate/shouldDisplay(sessionID:threadID:status:terminalBoundaryAt:unreadState:now:)``.
+    /// ``TerminalUnreadMembershipGate/shouldDisplay(sessionID:threadID:status:turnEndedAt:terminalBoundaryAt:unreadState:now:)``.
     ///
     /// For the file behind ``CodexDesktopUnreadStateRepository`` this is not a
     /// formality. Codex Desktop keeps the blue dots in memory and projects
@@ -99,6 +99,19 @@ struct DesktopUnreadStateSnapshot: Equatable, Sendable {
 
 struct TerminalUnreadMembershipGate: Sendable {
     private struct Entry: Sendable {
+        /// When this Turn's own terminal arrived, and nothing else.
+        ///
+        /// **The instant read evidence is dated against.** Reading is done to
+        /// a Turn's answer, and the answer landed here; a reading of Desktop's
+        /// unread set can only speak for this Turn if it was written after it.
+        /// Deliberately not ``terminalObservedAt``, which a subagent pushes
+        /// forward long after the answer was there to be read.
+        var turnEndedAt: Date
+        /// When this thread stopped working, subagents included.
+        ///
+        /// Only the settling window is measured from here: a row that has just
+        /// stopped saying anything is in flight is not snatched off the notch
+        /// in the same instant. It says nothing about what Desktop knew.
         var terminalObservedAt: Date
         var hasObservedUnread: Bool
         var isHidden: Bool
@@ -142,10 +155,26 @@ struct TerminalUnreadMembershipGate: Sendable {
         self.unreadRecheckInterval = unreadRecheckInterval
     }
 
+    /// - Parameters:
+    ///   - turnEndedAt: When this Turn's own terminal arrived. The unread
+    ///     reading is dated against this, because that is the moment the
+    ///     answer was there to be read.
+    ///   - terminalBoundaryAt: When this *thread* stopped working, a subagent
+    ///     outliving the Turn included. Only the settling window uses it.
+    ///
+    ///     **The two were one argument, and that is this defect.** A
+    ///     `SubagentStop` was measured 91 seconds after its parent's `Stop`
+    ///     (2026-08-22); dating the reading against that demanded a Desktop
+    ///     write later than an instant Desktop had no reason to write after,
+    ///     so the write recording the user opening the thread -- which
+    ///     happened while the subagent was still going, because that is when
+    ///     the row is on the notch -- fell short of the bar and was thrown
+    ///     away. The row then waited on a write that might never come.
     nonisolated mutating func shouldDisplay(
         sessionID: String,
         threadID: String,
         status: SessionStatus,
+        turnEndedAt: Date,
         terminalBoundaryAt: Date,
         unreadState: DesktopUnreadStateSnapshot,
         now: Date
@@ -156,6 +185,7 @@ struct TerminalUnreadMembershipGate: Sendable {
         }
 
         var entry = entries[sessionID] ?? Entry(
+            turnEndedAt: turnEndedAt,
             terminalObservedAt: terminalBoundaryAt,
             hasObservedUnread: false,
             isHidden: false,
@@ -164,14 +194,22 @@ struct TerminalUnreadMembershipGate: Sendable {
         )
         // Whether a *newer* Turn has ended than the one this entry describes,
         // which is the only thing allowed to bring a hidden row back -- see
-        // below. Read before the boundary is folded in, because folding it in
-        // is what makes the two equal.
+        // below. Read before the stamp is folded in, because folding it in is
+        // what makes the two equal.
         //
         // A new Turn normally passes through a running status, and the guard
         // above drops the entry outright when it does. This covers the case
         // where no refresh saw it: a Turn that started and ended between two
         // looks is still a Turn the user has not read.
-        let endedAgain = terminalBoundaryAt > entry.terminalObservedAt
+        //
+        // Asked of the Turn's own terminal rather than of `terminalBoundaryAt`:
+        // a subagent stopping is not a Turn ending, and reading it as one
+        // un-hides a row the user has already read -- the same shape as the
+        // internal-fork fix in
+        // ``HookEventRepository/reduceSubagentBoundary(_:agentID:threadID:at:)``,
+        // reaching the gate through the other half of the same stamp.
+        let endedAgain = turnEndedAt > entry.turnEndedAt
+        entry.turnEndedAt = max(entry.turnEndedAt, turnEndedAt)
         entry.terminalObservedAt = max(
             entry.terminalObservedAt,
             terminalBoundaryAt
@@ -186,7 +224,7 @@ struct TerminalUnreadMembershipGate: Sendable {
         // the real thing rather than a backup or a retained copy.
         // ``DesktopUnreadStateSnapshot/currentAsOf`` says how far forward the
         // reading reaches, and a reading that stops short of this Turn's own
-        // boundary describes a moment in which the Turn had not ended yet: it
+        // end describes a moment in which the Turn had not ended yet: it
         // cannot have recorded it either way, so its silence about this thread
         // is not evidence of anything.
         //
@@ -210,7 +248,7 @@ struct TerminalUnreadMembershipGate: Sendable {
         // happened *after* the Turn ended counts. That rule was applied to
         // Claude Desktop's focus stamps and never to this file.
         let canAnswer = unreadState.source.isAuthoritative
-            && unreadState.currentAsOf >= entry.terminalObservedAt
+            && unreadState.currentAsOf >= entry.turnEndedAt
         entry.canHideByWaiting = canAnswer && !isCurrentlyUnread
         entry.waitsOnTheUser = canAnswer && isCurrentlyUnread
 

@@ -21,3 +21,25 @@ This is not a new principle but the Codex-side completion of the first clause of
 - The rejected alternative was widening the settling window. The delay has no upper bound, and any window wide enough to cover a burst of typing keeps **read** rows on the notch just as long — trading the product's most common path for its rarest.
 - Desktop never writes a blue dot for a thread run from the CLI, so those rows now leave only at Desktop's next write to that file (usually within minutes while Desktop is open), where they previously left 2 seconds after terminating. They cannot become undismissable: a Codex row already requires Desktop to be running (with no PID the live branch is never entered and no row is drawn), so they disappear with the branch when Desktop quits, and right-click removal still works.
 - The case where the user **reads the Turn during the typing window** still converges: the id never reached disk, it is still absent when the file is finally written, and that write is now later than the Turn, so the row hides. This is also why the rule was not made "hiding requires having first observed the unread state" — that would strand such rows on the notch forever.
+
+## Addendum, 2026-08-29: the timestamp answers two questions, and one instant cannot serve both
+
+The addendum above is right and was applied to one instant too many — and the same mistake had already been made on the other product, so this corrects both.
+
+`HookTurnState.terminalBoundaryAt` is not the Turn's end. It is the later of the Turn's own terminal and the last boundary of a subagent that Turn spawned, and it exists for one job: the settling window, so a row is not snatched off the notch in the instant its subagent badge clears. A subagent's `SubagentStop` was measured **91 seconds** past its parent's `Stop` (2026-08-22), and `dff7d66` introduced that stamp for exactly this reason.
+
+From `dff7d66` (2026-08-23) both products also used it as the instant *read evidence* had to be later than. That is a different question, and it has a different answer. Reading is something a person does to a Turn's **answer**, and the answer landed when the Turn ended. So:
+
+- **Codex** demanded an unread file written after the subagent's stop — an instant Codex Desktop has no reason to write after, since the dot for that Turn was set or withheld a minute and a half earlier. The write that recorded the user opening the thread happened *while the subagent was still working*, because that is exactly when the row is on the notch, and it fell short of the bar.
+- **Claude Code** demanded the same of `lastFocusedAt`, of Claude Desktop returning to the foreground, and of the controlling terminal's access time. `ClaudeCodeDesktopReadStateRepository`'s own documentation said the left half is "the instant the Turn actually ended, from the event that ended it"; only the call site disagreed.
+
+Either way the user read the answer, the subagent finished afterwards, and the row came back reported unread — staying until that product happened to put the session on screen a second time. Reported on both products on 2026-08-29.
+
+**Decision: read evidence is dated against `HookTurnState.turnEndedAt`, the Turn's own terminal. `terminalBoundaryAt` keeps the settling window and nothing else.** Two questions, two stamps. `TerminalUnreadMembershipGate`'s `endedAgain` asks the Turn's terminal too, so a late `SubagentStop` no longer un-hides a row already retired.
+
+**Costs and boundaries.**
+
+- The case `dff7d66` was fixing does not come back: the window still starts when the thread stopped working, so a row is not erased in the instant its badge clears.
+- A row whose Turn was read *before* it finished is unaffected — a focus earlier than the `Stop` never showed anybody this answer, and still reads as unread.
+- The narrower consequence is deliberate: once the thread stops working, a Turn already read stays read. A user who read the answer and then wanted to be told about the subagent's own outcome is not served by this row, and never was — the row reports its Turn.
+

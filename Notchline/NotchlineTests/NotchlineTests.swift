@@ -6214,6 +6214,7 @@ struct NotchlineTests {
             sessionID: "thread-1:turn-1",
             threadID: "thread-1",
             status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary,
             unreadState: unread,
             now: boundary
@@ -6223,6 +6224,7 @@ struct NotchlineTests {
             sessionID: "thread-1:turn-1",
             threadID: "thread-1",
             status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary,
             unreadState: read,
             now: boundary.addingTimeInterval(0.1)
@@ -6232,6 +6234,7 @@ struct NotchlineTests {
             sessionID: "thread-1:turn-1",
             threadID: "thread-1",
             status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary,
             unreadState: unavailable,
             now: boundary.addingTimeInterval(0.2)
@@ -6242,6 +6245,7 @@ struct NotchlineTests {
             sessionID: "thread-2:turn-2",
             threadID: "thread-2",
             status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary,
             unreadState: read,
             now: boundary.addingTimeInterval(1.9)
@@ -6251,6 +6255,7 @@ struct NotchlineTests {
             sessionID: "thread-2:turn-2",
             threadID: "thread-2",
             status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary,
             unreadState: read,
             now: boundary.addingTimeInterval(2)
@@ -6261,6 +6266,7 @@ struct NotchlineTests {
             sessionID: "thread-active:turn-active",
             threadID: "thread-active",
             status: .running,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary,
             unreadState: read,
             now: boundary.addingTimeInterval(20)
@@ -24867,6 +24873,7 @@ extension NotchlineTests {
 
         let displayedAtOnce = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: unread, now: start
         )
         #expect(displayedAtOnce)
@@ -24874,6 +24881,7 @@ extension NotchlineTests {
         let later = start.addingTimeInterval(600)
         let stillDisplayed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: unread, now: later
         )
         #expect(stillDisplayed, "an unread terminal row stays listed")
@@ -24906,6 +24914,7 @@ extension NotchlineTests {
 
         _ = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: unread, now: start
         )
         let first = gate.nextDeadline(now: start)
@@ -24913,6 +24922,7 @@ extension NotchlineTests {
         let woken = start.addingTimeInterval(1)
         _ = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: unread, now: woken
         )
         let second = gate.nextDeadline(now: woken)
@@ -24941,6 +24951,7 @@ extension NotchlineTests {
 
         _ = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: unread, now: start
         )
 
@@ -24949,6 +24960,7 @@ extension NotchlineTests {
         let readAt = start.addingTimeInterval(600)
         let displayed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: read, now: readAt
         )
         #expect(!displayed, "a row observed unread hides the moment it reads as read")
@@ -24969,6 +24981,7 @@ extension NotchlineTests {
 
         let displayed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: read, now: start
         )
         #expect(displayed, "a just-finished turn is not hidden instantly")
@@ -24977,6 +24990,7 @@ extension NotchlineTests {
         // Once the window passes, the row hides and stops asking to be woken.
         let hidden = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: read,
             now: start.addingTimeInterval(2.1)
         )
@@ -25019,6 +25033,7 @@ extension NotchlineTests {
 
         let listed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary, unreadState: stale, now: boundary
         )
         #expect(listed)
@@ -25027,6 +25042,7 @@ extension NotchlineTests {
         // retire the row here was time, against a reading that never spoke.
         let hidden = !gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary, unreadState: stale,
             now: boundary.addingTimeInterval(600)
         )
@@ -25043,6 +25059,7 @@ extension NotchlineTests {
         )
         let hiddenNow = !gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary, unreadState: written,
             now: boundary.addingTimeInterval(600)
         )
@@ -25074,6 +25091,7 @@ extension NotchlineTests {
         let now = boundary.addingTimeInterval(600)
         let displayed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary, unreadState: stale, now: now
         )
         #expect(displayed)
@@ -25109,12 +25127,14 @@ extension NotchlineTests {
 
         let listed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary, unreadState: unread, now: boundary
         )
         #expect(listed)
 
         let hidden = !gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary, unreadState: read,
             now: boundary.addingTimeInterval(0.1)
         )
@@ -25124,6 +25144,7 @@ extension NotchlineTests {
         // again. That is the flash, and it must not happen.
         let flashed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: boundary,
             terminalBoundaryAt: boundary, unreadState: unread,
             now: boundary.addingTimeInterval(0.2)
         )
@@ -25139,6 +25160,7 @@ extension NotchlineTests {
         let again = boundary.addingTimeInterval(10)
         let relisted = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: again,
             terminalBoundaryAt: again, unreadState: unread, now: again
         )
         #expect(relisted, "a Turn nobody has read is a Turn to show")
@@ -25162,6 +25184,7 @@ extension NotchlineTests {
         let now = start.addingTimeInterval(600)
         let displayed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: unreadable, now: now
         )
         #expect(displayed, "an unreadable state must never hide a row")
@@ -25407,6 +25430,7 @@ extension NotchlineTests {
         let now = start.addingTimeInterval(600)
         let displayed = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: unread, now: now
         )
         #expect(displayed, "a locked screen must not retire anything")
@@ -25442,6 +25466,7 @@ extension NotchlineTests {
         let now = start.addingTimeInterval(600)
         _ = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: unreadable, now: now
         )
         #expect(
@@ -25464,6 +25489,7 @@ extension NotchlineTests {
 
         _ = gate.shouldDisplay(
             sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: start,
             terminalBoundaryAt: start, unreadState: read, now: start
         )
         #expect(
@@ -27028,13 +27054,30 @@ extension NotchlineTests {
     }
 
     /// A session Claude Desktop reports as read keeps its row while a subagent
-    /// is still working.
+    /// is still working — and leaves once that subagent stops.
     ///
     /// The read gate is where this costs the most if it is missed: the moment
     /// the user opens the session, `lastFocusedAt` moves past the turn's `Stop`
     /// and the row is retired — and the person most likely to be looking at a
     /// session is the one who just watched it launch something. Through the
     /// real service, because the rule is the orchestrator's and not the gate's.
+    ///
+    /// **The tail of this test used to assert the opposite, and that assertion
+    /// was the defect.** It read: "the row is terminal from this instant, so
+    /// the focus recorded before it can no longer speak for the answer" — which
+    /// dates the user's reading against ``HookTurnState/terminalBoundaryAt``.
+    /// Reading is done to a Turn's *answer*, and the answer landed at the
+    /// Turn's own `Stop`; a focus after that is a genuine read of it, and a
+    /// subagent stopping later cannot make it unread again. Under the old rule
+    /// the user read the row, the subagent finished, and the row came back
+    /// reported unread and stayed until Claude Desktop happened to display that
+    /// session a second time. Reported on both products; the Codex half is the
+    /// same comparison against the unread file's `modificationDate`.
+    ///
+    /// What the subagent's boundary still buys is the settling window — the row
+    /// is not snatched away in the instant its badge clears — and that is
+    /// unobservable here, because this harness stamps its events in 1970 and
+    /// the service reads a real clock.
     @Test @MainActor
     func aReadClaudeCodeSessionWithASubagentStillRunningKeepsItsRow() async throws {
         let harness = try ClaudeCodeHarness()
@@ -27078,25 +27121,60 @@ extension NotchlineTests {
         #expect(kept.runningSubagentCount == 1)
         #expect(MonitorAggregation.effectiveStatus(of: kept) == .running)
 
-        // The subagent finishes. The row is terminal from *this* instant, so
-        // the focus recorded before it can no longer speak for the answer and
-        // the row has to survive.
+        // The subagent finishes. The thread has stopped working, and the focus
+        // at 103 -- after the turn's own `Stop` at 102 -- already said the user
+        // read the answer. That reading stands: nothing a subagent did
+        // afterwards can turn a read Turn back into an unread one.
         try harness.queue(
             event: "SubagentStop", session: "s-1", turn: "p-1", at: 104,
             agentID: "a-1"
         )
-        let settling = await harness.service.fetchSnapshot()
         #expect(
-            settling.sessions.map(\.threadID) == ["s-1"],
+            await harness.service.fetchSnapshot().sessions.isEmpty,
             """
-            the window starts when the last subagent stopped: measured from \
-            the turn's own `Stop`, this row would already be gone
+            a Turn read after its own `Stop` stays read when its subagent \
+            stops later
             """
         )
-        #expect(settling.sessions.first?.runningSubagentCount == 0)
+    }
 
-        // And once the user reads what is now genuinely finished, it leaves the
-        // way any read row does.
+    /// And an *unread* Turn is still kept when its subagent stops.
+    ///
+    /// The other half of the rule above, and the one that must not be lost in
+    /// fixing it: the focus here lands before the turn's `Stop`, so it never
+    /// showed the user this answer, and the row stays for somebody to read.
+    @Test @MainActor
+    func anUnreadClaudeCodeSessionSurvivesItsSubagentStopping() async throws {
+        let harness = try ClaudeCodeHarness()
+        defer { harness.tearDown() }
+        try harness.registerHooks()
+
+        try harness.queue(event: "UserPromptSubmit", session: "s-1", turn: "p-1", at: 100)
+        try harness.queue(
+            event: "SubagentStart", session: "s-1", turn: "p-1", at: 101,
+            agentID: "a-1"
+        )
+        try harness.queue(event: "Stop", session: "s-1", turn: "p-1", at: 102)
+        harness.live = [
+            harness.session(id: "s-1", cwd: "/Users/someone/Projects/thing")
+        ]
+        // On screen before the turn finished, and not since.
+        try harness.writeDesktopRecord(
+            session: "s-1", lastFocusedAt: 101, desktopID: "d-1"
+        )
+        #expect(await harness.service.fetchSnapshot().sessions.count == 1)
+
+        try harness.queue(
+            event: "SubagentStop", session: "s-1", turn: "p-1", at: 104,
+            agentID: "a-1"
+        )
+        #expect(
+            await harness.service.fetchSnapshot().sessions.map(\.threadID)
+                == ["s-1"],
+            "nobody has read this answer, so the row waits for somebody to"
+        )
+
+        // And it leaves on the reading that does speak for the turn.
         try harness.writeDesktopRecord(
             session: "s-1", lastFocusedAt: 105, desktopID: "d-1"
         )
@@ -28449,5 +28527,166 @@ private enum AnyHookVocabularyCase {
         case .codex: "Codex"
         case .claudeCode: "Claude Code"
         }
+    }
+}
+
+extension NotchlineTests {
+    /// A read Turn stays read when its subagent stops after the reading.
+    ///
+    /// **The reported defect, on the Codex side.** A subagent outlives its
+    /// parent Turn -- measured 2026-08-22 at 91 seconds past the `Stop` -- and
+    /// ``HookTurnState/terminalBoundaryAt`` moves with it. Until this was
+    /// split in two, that instant was also what the unread reading had to be
+    /// newer than, and Desktop has no reason to write anything after it: the
+    /// dot for that Turn was set or withheld a minute and a half earlier. The
+    /// write that recorded the user opening the thread -- which happens while
+    /// the subagent is still going, because that is when the row is on the
+    /// notch -- fell short of the bar and was discarded, and the row waited for
+    /// a write nobody was going to cause.
+    ///
+    /// The settling window still starts at the subagent's boundary, so the row
+    /// is not snatched away in the instant it stops saying anything is working.
+    @Test
+    func terminalGateKeepsAReadVerdictWhenASubagentOutlivesTheTurn() {
+        var gate = TerminalUnreadMembershipGate(
+            settlingInterval: 2,
+            unreadRecheckInterval: 1
+        )
+        let turnEnded = Date(timeIntervalSince1970: 1_000)
+        let subagentStopped = turnEnded.addingTimeInterval(91)
+        let unread = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: ["thread"],
+            source: .current,
+            currentAsOf: turnEnded.addingTimeInterval(0.6)
+        )
+        // The user opened the thread in Desktop 20 seconds after the answer
+        // landed, and Desktop wrote the cleared dot out half a second later --
+        // all of it while the subagent was still working.
+        let read = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: [],
+            source: .current,
+            currentAsOf: turnEnded.addingTimeInterval(20.5)
+        )
+
+        let listed = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: turnEnded, terminalBoundaryAt: turnEnded,
+            unreadState: unread, now: turnEnded
+        )
+        #expect(listed)
+
+        // While the subagent works the row is shown outright and holds no
+        // entry -- the running path -- and the gate is asked again only once
+        // the thread is finally quiet.
+        let running = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .running,
+            turnEndedAt: turnEnded, terminalBoundaryAt: turnEnded,
+            unreadState: read, now: turnEnded.addingTimeInterval(20.6)
+        )
+        #expect(running)
+
+        let graced = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: turnEnded, terminalBoundaryAt: subagentStopped,
+            unreadState: read, now: subagentStopped
+        )
+        #expect(
+            graced,
+            "a row does not vanish in the same instant its last subagent does"
+        )
+        #expect(
+            gate.nextDeadline(now: subagentStopped)
+                == subagentStopped.addingTimeInterval(2),
+            "and the window that clears it is measured from that instant"
+        )
+
+        let hidden = !gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: turnEnded, terminalBoundaryAt: subagentStopped,
+            unreadState: read, now: subagentStopped.addingTimeInterval(2)
+        )
+        #expect(
+            hidden,
+            "the read the user actually performed still retires the row"
+        )
+        #expect(
+            gate.nextDeadline(now: subagentStopped.addingTimeInterval(2)) == nil
+        )
+    }
+
+    /// And a subagent stopping does not un-hide a row already retired.
+    ///
+    /// `endedAgain` asks the Turn's own terminal for the same reason: a
+    /// subagent is not a Turn, so its boundary moving is not a new answer for
+    /// anybody to read.
+    @Test
+    func terminalGateDoesNotRelistARowBecauseASubagentStopped() {
+        var gate = TerminalUnreadMembershipGate(settlingInterval: 2)
+        let turnEnded = Date(timeIntervalSince1970: 1_000)
+        let unread = desktopReading(unread: ["thread"], after: turnEnded)
+        let read = desktopReading(unread: [], after: turnEnded)
+
+        _ = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: turnEnded, terminalBoundaryAt: turnEnded,
+            unreadState: unread, now: turnEnded
+        )
+        let hidden = !gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: turnEnded, terminalBoundaryAt: turnEnded,
+            unreadState: read, now: turnEnded.addingTimeInterval(0.1)
+        )
+        #expect(hidden)
+
+        let late = turnEnded.addingTimeInterval(120)
+        let relisted = gate.shouldDisplay(
+            sessionID: "thread:turn", threadID: "thread", status: .completed,
+            turnEndedAt: turnEnded, terminalBoundaryAt: late,
+            unreadState: read, now: late
+        )
+        #expect(
+            !relisted,
+            "a subagent stopping is not a Turn the user has not read"
+        )
+    }
+
+    /// The same defect on Claude Code, where the evidence is a focus stamp.
+    ///
+    /// `ClaudeCodeDesktopReadStateRepository`'s own documentation says the left
+    /// half of the comparison is "the instant the Turn actually ended, from the
+    /// event that ended it" -- and from `dff7d66` until this change the caller
+    /// handed it `terminalBoundaryAt` instead, which a subagent pushes past the
+    /// answer. A user who read the row in Claude Desktop while the subagent was
+    /// still working was reported `unread`, and the row stayed until Desktop
+    /// displayed that session again.
+    @Test
+    func readStateAnswersForTheTurnRatherThanItsSubagents() throws {
+        let turnEnded = Date(timeIntervalSince1970: 1_000)
+        let readAt = turnEnded.addingTimeInterval(20)
+        let subagentStopped = turnEnded.addingTimeInterval(91)
+        let snapshot = ClaudeCodeReadStateSnapshot(
+            entries: [
+                "session": ClaudeCodeReadStateSnapshot.Entry(
+                    lastFocusedAt: readAt,
+                    isArchived: false
+                )
+            ],
+            source: .current
+        )
+
+        #expect(
+            snapshot.readState(
+                forSession: "session",
+                terminalBoundaryAt: turnEnded
+            ) == .read,
+            "a focus after the answer landed is the user having read it"
+        )
+        #expect(
+            snapshot.readState(
+                forSession: "session",
+                terminalBoundaryAt: subagentStopped
+            ) == .unread,
+            "and dating it against the subagent's boundary is what threw it away"
+        )
     }
 }
