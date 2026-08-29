@@ -228,7 +228,6 @@ private struct OverlayHeader: View {
                 spacing: PanelMetrics.expandedReadoutSpacing,
                 matrixSize: PanelMetrics.statusMatrixSize,
                 markSpacing: PanelMetrics.compactMatrixSpacing,
-                isPanelOpen: store.isExpanded,
                 reduceMotion: store.reduceMotion
             )
 
@@ -333,9 +332,6 @@ private struct StatusReadout: View {
     let spacing: CGFloat
     let matrixSize: CGFloat
     let markSpacing: CGFloat
-    /// Whether the pointer has opened the panel, which is the one thing on
-    /// this surface an idle mark answers to — see ``NotchStatusMatrix``.
-    let isPanelOpen: Bool
     let reduceMotion: Bool
 
     /// How far the label is drawn back over its own slot, animated on the
@@ -357,18 +353,11 @@ private struct StatusReadout: View {
                         // owns the gap it stands off by, so the two collapse
                         // together at no rows -- see ``SessionCountDots``.
                         HStack(spacing: 0) {
-                            // An idle mark glimmers while the panel is open
-                            // and holds still while it is shut: the one place
-                            // the surface says something about the pointer
-                            // rather than about a product. A mark with a turn
-                            // in flight is unaffected — it already has
-                            // something of its own to say.
                             NotchStatusMatrix(
                                 state: NotchMatrixState(mark.status),
                                 size: matrixSize,
                                 isAnimated: !reduceMotion,
-                                agent: mark.agent,
-                                isPanelOpen: isPanelOpen
+                                agent: mark.agent
                             )
                             if let agent = mark.agent {
                                 SessionCountDots(

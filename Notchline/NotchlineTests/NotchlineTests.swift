@@ -308,36 +308,22 @@ struct NotchlineTests {
 
     /// Each state draws the pattern its design file draws.
     ///
-    /// The files in `design/assets/matrix-states/` are the contract, and what
-    /// makes four of the five checkable is that each writes one waveform
-    /// sixteen times at sixteen offsets. The code holds the waveform once and
-    /// computes the offsets, so the offsets are the half that can drift
-    /// silently — a sign flipped on the radar's bearing sweeps it
-    /// anticlockwise and still looks like a radar. They are transcribed here
-    /// from the files.
+    /// The four files in `design/assets/matrix-states/` are the contract, and
+    /// what makes them checkable is that each writes one waveform sixteen
+    /// times at sixteen offsets. The code holds the waveform once and computes
+    /// the offsets, so the offsets are the half that can drift silently — a
+    /// sign flipped on the radar's bearing sweeps it anticlockwise and still
+    /// looks like a radar. They are transcribed here from the files.
     ///
-    /// The glimmer is the fifth and has no single waveform to transcribe: its
-    /// highlight travels in two dimensions, so the code holds the figure and
-    /// samples the sixteen curves off it. What can drift there is the figure's
-    /// own shape, so what is asserted is the shape's consequences — the range
-    /// it spans, the floor it shares with the still it replaces, and the
-    /// symmetry a 1:2 figure has and no other would.
-    ///
-    /// Read off the layers rather than off ``MatrixPattern/track(forCell:)``
+    /// Read off the layers rather than off ``NotchMatrixState/track(forCell:)``
     /// so that what is asserted is what the render server is actually given,
     /// closing keyframe and all.
     @Test @MainActor
     func eachStateDrawsThePatternItsDesignFileDraws() throws {
         /// The lit cells of one mark, in row-major order.
-        func cells(_ state: NotchMatrixState, isAwake: Bool = false) throws -> [CALayer] {
+        func cells(_ state: NotchMatrixState) throws -> [CALayer] {
             let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-            view.apply(
-                state: state,
-                size: 16,
-                isAnimated: true,
-                ink: NotchPalette.codexInk,
-                isAwake: isAwake
-            )
+            view.apply(state: state, size: 16, isAnimated: true, ink: NotchPalette.codexInk)
             // The unlit bed is first and never animates; any lit pass will do.
             let passes = try #require(view.layer?.sublayers)
             return try #require(passes.last?.sublayers)
@@ -432,264 +418,27 @@ struct NotchlineTests {
         #expect(knockFloor < resting)
         #expect(radarFloor < resting)
         #expect(resting < lullFloor)
-
-        // Glimmer: the same idle mark, awake because the panel is open. A
-        // highlight wanders over a field held at exactly the level the still
-        // was at, so opening the panel lifts the mark without changing what it
-        // says the product is doing.
-        let glimmer = try cells(.inactive, isAwake: true)
-        let glimmerTracks = try glimmer.map { try values($0) }
-        for track in glimmerTracks {
-            // 60 frames plus the repeat of frame 0 that closes the loop.
-            #expect(track.count == 61)
-            #expect(track.first == track.last)
-            // Never below the level the still it replaces was holding at.
-            #expect(track.min() ?? 0 >= resting - 1e-6)
-        }
-        // And the field the highlight moves over *is* that level: a cell the
-        // highlight has left far enough behind rests exactly where it rested
-        // before the panel opened, so opening the panel lifts the mark without
-        // moving its floor. Only the cells the figure swings clear of ever get
-        // that far — the ones it passes through keep a little of its tail all
-        // loop — so this is a claim about the pattern's floor, not every
-        // cell's.
-        let floors: [Double] = glimmerTracks.compactMap { $0.min() }
-        let glimmerFloor = try #require(floors.min())
-        #expect(abs(glimmerFloor - resting) < 1e-6)
-        // Normalised: the floor is the resting level and the highlight's peak
-        // is `0.8`, short of the full the other four reach. A mark with no
-        // news must not be the brightest thing on the bar. A hair under `0.8`
-        // and not exactly it, because the highlight crosses a cell's centre
-        // between two frames rather than on one — the ceiling is the figure's,
-        // and 30fps is where it is read.
-        let peaks: [Double] = glimmerTracks.compactMap { $0.max() }
-        let brightest = try #require(peaks.max())
-        #expect(abs(brightest - 0.8) < 0.005)
-        // And it stays under the `1` all four live patterns reach above, which
-        // is the ordering the ceiling exists to keep: whatever is brightest on
-        // the bar is something with news.
-        #expect(brightest < 1)
-
-        // The figure crosses the columns twice for every once it crosses the
-        // rows, so half a loop later the highlight is at the mirrored row and
-        // the same column: the bottom two rows draw the top two, half a loop
-        // on. Nothing else about the pattern would produce that, which is what
-        // makes it worth asserting — a 1:1 figure or a different skew would
-        // still look like a wandering highlight and fail here.
-        for column in 0 ..< MatrixGrid.side {
-            for (top, bottom) in [(0, 3), (1, 2)] {
-                let above: [Double] = glimmerTracks[top * MatrixGrid.side + column]
-                let below: [Double] = glimmerTracks[bottom * MatrixGrid.side + column]
-                let halfALoopOn: [Double] = (0 ... 60).map { above[($0 + 30) % 60] }
-                #expect(below == halfALoopOn)
-            }
-        }
-
-        // And the mark is never all at once at the floor: at every frame some
-        // cell is most of the way up. A glimmering mark that momentarily went
-        // flat would be indistinguishable from the still it replaces.
-        for frame in 0 ... 60 {
-            let frameCells: [Double] = glimmerTracks.map { $0[frame] }
-            let lit: Double = frameCells.max() ?? 0
-            #expect(lit > 0.55)
-        }
-    }
-
-    /// Two idle marks glimmer as one.
-    ///
-    /// Every other pattern is deliberately in sync across marks, which is what
-    /// `marksShowingTheSamePatternShowItInSync` pins: two products running one
-    /// curve out of step read as noise rather than as one thing said twice.
-    /// The glimmer used to be the exception, staggered a third of a loop,
-    /// because a *repeating* pair rising and falling together is a rhythm and
-    /// a rhythm is what the figure is careful not to have.
-    ///
-    /// Drawn once per opening of the panel it is an event and not a beat, so
-    /// the reason for the stagger went with the loop — and what the stagger
-    /// costs shows up instead: two single blooms a third of a second apart
-    /// read as two unrelated flickers, where the pair together reads as the
-    /// surface answering the pointer.
-    @Test @MainActor
-    func twoIdleMarksGlimmerAsOne() throws {
-        func glimmer(_ agent: AgentKind) throws -> (tracks: [[Double]], begin: [CFTimeInterval]) {
-            let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-            view.apply(
-                state: .inactive,
-                size: 16,
-                isAnimated: true,
-                ink: NotchPalette.ink(for: agent),
-                isAwake: true
-            )
-            let passes = try #require(view.layer?.sublayers)
-            let cells = try #require(passes.last?.sublayers)
-            let animations = try cells.map {
-                try #require($0.animation(forKey: "notch.matrix.opacity") as? CAKeyframeAnimation)
-            }
-            let tracks: [[Double]] = try animations.map {
-                let numbers = try #require($0.values as? [NSNumber])
-                return numbers.map(\.doubleValue)
-            }
-            return (tracks, animations.map(\.beginTime))
-        }
-
-        let codex = try glimmer(.codex)
-        let claudeCode = try glimmer(.claudeCode)
-
-        // The curve is the substance of it: cell for cell, the two marks draw
-        // the same thing, so whatever one is showing the other is showing too.
-        #expect(codex.tracks == claudeCode.tracks)
-
-        // One clock per mark, as for every other pattern — the sixteen cells
-        // of a mark are anchored together. Between two marks the anchors are
-        // two readings of the same instant rather than one shared number,
-        // because a one-shot starts when it is woken; both are woken by the
-        // same opening of the panel, in the same pass, so they land inside a
-        // frame of each other.
-        let codexAnchor = try #require(codex.begin.first)
-        let claudeAnchor = try #require(claudeCode.begin.first)
-        #expect(codex.begin.allSatisfy { $0 == codexAnchor })
-        #expect(claudeCode.begin.allSatisfy { $0 == claudeAnchor })
-        #expect(abs(claudeAnchor - codexAnchor) < 1.0 / 30)
-
-        // Which is to say the pair is exactly as bright as itself throughout,
-        // where the stagger existed to keep the two apart at every frame.
-        // Total brightness is what the eye reads at this size — the cells are
-        // 3.64pt — so this is the claim that the two bloom as one.
-        func brightness(_ tracks: [[Double]], at frame: Int) -> Double {
-            tracks.reduce(0) { $0 + $1[frame] }
-        }
-        let frames = try #require(codex.tracks.first).count
-        for frame in 0 ..< frames {
-            #expect(
-                brightness(codex.tracks, at: frame)
-                    == brightness(claudeCode.tracks, at: frame)
-            )
-        }
-    }
-
-    /// A mark asked to hold still holds still, panel open or not.
-    ///
-    /// The glimmer is the mark acknowledging the pointer, and with motion off
-    /// there is no way to acknowledge it: a single frame of a wandering
-    /// highlight is a scatter of brightnesses saying nothing, where the still
-    /// it would replace is the honest reading of an idle product.
-    @Test @MainActor
-    func anIdleMarkDoesNotGlimmerUnderReduceMotion() throws {
-        func opacities(isAnimated: Bool, isPanelOpen: Bool) throws -> [CALayer] {
-            let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-            view.apply(
-                state: .inactive,
-                size: 16,
-                isAnimated: isAnimated,
-                ink: NotchPalette.codexInk,
-                isAwake: isPanelOpen
-            )
-            let passes = try #require(view.layer?.sublayers)
-            return try #require(passes.last?.sublayers)
-        }
-
-        let stillLevel = Float(MatrixPattern.still.track(forCell: 0)[0])
-        for cell in try opacities(isAnimated: false, isPanelOpen: true) {
-            #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
-            #expect(cell.opacity == stillLevel)
-        }
-        // The panel being shut stops it for everyone, motion or not.
-        for cell in try opacities(isAnimated: true, isPanelOpen: false) {
-            #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
-        }
-        // And with both, it moves.
-        for cell in try opacities(isAnimated: true, isPanelOpen: true) {
-            #expect(cell.animation(forKey: "notch.matrix.opacity") != nil)
-        }
-    }
-
-    /// The glimmer is given one turn of the figure, not a loop.
-    ///
-    /// It is the mark answering the pointer rather than a reading of a
-    /// product, and an answer is given once: repeated it becomes a beat on a
-    /// bar where nothing is happening, which is the one thing this figure is
-    /// shaped not to say, and it goes on costing the render server for as long
-    /// as a hover-held panel stays up. The four state patterns keep their
-    /// loops, because each is true for as long as the state is.
-    @Test @MainActor
-    func anIdleMarkGlimmersOnceForAnOpeningRatherThanOnALoop() throws {
-        func litCells(
-            _ state: NotchMatrixState,
-            isAwake: Bool = false
-        ) throws -> [CALayer] {
-            let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-            view.apply(
-                state: state,
-                size: 16,
-                isAnimated: true,
-                ink: NotchPalette.codexInk,
-                isAwake: isAwake
-            )
-            let passes = try #require(view.layer?.sublayers)
-            return try #require(passes.last?.sublayers)
-        }
-
-        // Every state that is a reading of a product runs until the reading
-        // changes.
-        for state in [
-            NotchMatrixState.running,
-            .inputNeeded,
-            .approvalNeeded,
-            .completed
-        ] {
-            for cell in try litCells(state) {
-                guard let animation = cell.animation(forKey: "notch.matrix.opacity") else {
-                    // The advance's baseline row, which never moves.
-                    continue
-                }
-                #expect(animation.repeatCount == .infinity)
-            }
-        }
-
-        let builtAt = CACurrentMediaTime()
-        for cell in try litCells(.inactive, isAwake: true) {
-            let animation = try #require(
-                cell.animation(forKey: "notch.matrix.opacity") as? CAKeyframeAnimation
-            )
-            #expect(animation.repeatCount == 1)
-            #expect(animation.duration == MatrixPattern.glimmerPeriod)
-            // Started when the pointer arrived, not on the period grid the
-            // looping patterns share. A one-shot anchored to the grid would
-            // begin in the past and draw whatever fraction was left of it.
-            #expect(animation.beginTime <= CACurrentMediaTime())
-            #expect(builtAt - animation.beginTime < 1)
-            // And it ends where the layer itself rests, so the mark holds the
-            // frame it finished on instead of snapping somewhere when the turn
-            // is over.
-            let values = try #require(animation.values as? [NSNumber])
-            #expect(Float(try #require(values.last).doubleValue) == cell.opacity)
-        }
     }
 
     /// A mark arrives out of the dark and sinks back into it.
     ///
     /// Going dim to lit and lit to dim is the mark starting or stopping having
-    /// something to say — a turn beginning, a finished one being read, the
-    /// pointer arriving on an idle mark. Cut, those read as a light being
-    /// thrown: louder than the quiet events they carry. Crossed over, the
-    /// pattern comes up out of the still and goes back down into it.
+    /// something to say — a turn beginning, a finished one being read. Cut,
+    /// those read as a light being thrown: louder than the quiet events they
+    /// carry. Crossed over, the pattern comes up out of the still and goes
+    /// back down into it.
     ///
     /// A change between two live patterns keeps its cut. The product is saying
     /// a different thing and there is no moment where it is half of each.
     @Test @MainActor
     func aMarkFadesBetweenTheStillAndAPatternButNotBetweenTwoPatterns() throws {
         let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-        func show(
-            _ state: NotchMatrixState,
-            isAwake: Bool = false,
-            isAnimated: Bool = true
-        ) {
+        func show(_ state: NotchMatrixState, isAnimated: Bool = true) {
             view.apply(
                 state: state,
                 size: 16,
                 isAnimated: isAnimated,
-                ink: NotchPalette.codexInk,
-                isAwake: isAwake
+                ink: NotchPalette.codexInk
             )
         }
         func passes() throws -> [CALayer] { try #require(view.layer?.sublayers) }
@@ -743,7 +492,7 @@ struct NotchlineTests {
         // pattern that goes on drawing while it goes, not a frozen frame.
         for layer in leaving {
             let cell = try #require(layer.sublayers?.first)
-            #expect(cell.opacity == Float(MatrixPattern.still.track(forCell: 0)[0]))
+            #expect(cell.opacity == Float(NotchMatrixState.inactive.track(forCell: 0)[0]))
         }
 
         // Running to Completed is the product saying a different thing, and it
@@ -757,15 +506,9 @@ struct NotchlineTests {
         #expect(try crossing().arriving.count == 4)
         #expect(try crossing().leaving.count == 4)
 
-        // The pointer waking an idle mark is the same kind of change, so it
-        // gets the same treatment.
-        show(.inactive, isAwake: true)
-        #expect(try crossing().arriving.count == 4)
-        #expect(try crossing().leaving.count == 4)
-
         // Motion off shortens the hand-over rather than removing it — a
         // dissolve is what movement is replaced *with*.
-        show(.inactive, isAwake: true, isAnimated: false)
+        show(.running, isAnimated: false)
         for layer in try crossing().arriving {
             #expect(
                 try #require(dissolve(layer)).duration
@@ -883,7 +626,7 @@ struct NotchlineTests {
         // every grid, but it is however long the process has been up behind
         // the clock, which is exactly the "phase records when it was built"
         // the fix removes.
-        let period = try #require(MatrixPattern.radar.period)
+        let period = try #require(NotchMatrixState.running.period)
         for (phase, builtAt) in [(codexPhase, builtCodexAt), (claudePhase, builtClaudeAt)] {
             #expect(offGrid(phase, period) < 1e-9)
             #expect(phase <= builtAt)
