@@ -404,25 +404,59 @@ enum OverlayPanelLayout {
     /// the cut-out is centred and rounds the panel against the display's
     /// midpoint rather than against the edge it has to meet. Everything else
     /// passes `nil` and is centred.
+    ///
+    /// **The rect is whole points, and that is not cosmetic.** `NSWindow` keeps
+    /// its frame on the point grid: hand it `x = 713.784` and it stores `713`.
+    /// A fractional frame therefore describes a window that can never exist,
+    /// so `updatePanelFrame`'s "nothing moved, do nothing" guard
+    /// (`panel.frame != targetFrame`) is true forever and *every* publish —
+    /// each status, session list, quota and elapsed-width change — starts
+    /// another 200 ms animated `setFrame` towards a target the window is
+    /// already as close to as it can get. Mid-animation the panel is drawn at
+    /// the fractional offset, which lands its trailing edge a point further
+    /// out, and it snaps back when the animation ends: the collapsed bar's
+    /// right edge visibly jitters by one point for as long as anything is
+    /// happening. Measured on a Release build 2026-08-29 as `357 → 358 → 357`
+    /// once or twice a second while a Turn ran. Rounding here is what makes an
+    /// unchanged layout compare equal and stand still.
+    ///
+    /// Two terms are fractional on real hardware, so neither edge can be
+    /// assumed whole: the shoulder is `menuBarHeight / 8` (`4.75` under a `38`
+    /// pt bar) and the trailing anchor carries the measured width of the
+    /// elapsed reading (`55.78` for `0:00`).
+    ///
+    /// **Where the slack lands.** The trailing edge takes `ceil`, never
+    /// `round`: it is the edge that meets the cut-out, and rounding to nearest
+    /// would half the time pull it *back inside* the notch — the one direction
+    /// `winglessTrailingOvershoot(menuBarHeight:)` exists to avoid. Stepping
+    /// out by up to a point is black drawn over black. Everything else is
+    /// derived from that edge and a ceiled width, so the remainder falls in the
+    /// leading wing, which is padding and can take it — the same rule
+    /// `PanelMetrics.size(...)` already ceils its body width under.
     static func frame(
         on screenFrame: NSRect,
         panelSize: CGSize,
         surfaceShoulder: CGFloat = 0,
         trailingAnchor: CGFloat? = nil
     ) -> NSRect {
-        let width = panelSize.width + surfaceShoulder * 2
-        // Anchored, the trailing edge is arithmetic the panel must land on
-        // exactly; centred, it is the midpoint that must survive intact. Each
-        // case is written from the thing it has to preserve, because deriving
-        // one from the other loses an ulp and a half-open window seam is
-        // visible against a black cut-out.
-        let x = trailingAnchor.map { $0 + surfaceShoulder - width }
-            ?? (screenFrame.midX - width / 2)
+        let width = (panelSize.width + surfaceShoulder * 2).rounded(.up)
+        let height = panelSize.height.rounded(.up)
+        // Anchored, the trailing edge is the thing that must land where it was
+        // asked to; centred, it is the midpoint that must survive. Each case is
+        // written from what it has to preserve, because deriving one from the
+        // other loses the half point it was rounded by.
+        let x = trailingAnchor.map { ($0 + surfaceShoulder).rounded(.up) - width }
+            ?? (screenFrame.midX - width / 2).rounded()
         return NSRect(
             x: x,
-            y: screenFrame.maxY - panelSize.height,
+            // Up, for the same reason the trailing edge goes up: the panel
+            // hangs from the very top of the display, so erring outwards
+            // clips a sliver against the screen edge while erring inwards
+            // would open a line of wallpaper above it. A no-op on every real
+            // screen, whose frames are whole points already.
+            y: (screenFrame.maxY - height).rounded(.up),
             width: width,
-            height: panelSize.height
+            height: height
         )
     }
 }

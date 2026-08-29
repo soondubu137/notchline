@@ -2164,12 +2164,23 @@ struct NotchlineTests {
             trailingAnchor: occlusionMaxX
         )
 
-        // The window is the panel plus one shoulder on each side. `PanelContour`
-        // draws its straight sides a radius inside the rect it is given, so a
-        // window sized to the panel puts the black that far inside the cut-out.
-        #expect(frame.width == store.currentPanelSize.width + shoulder * 2)
-        #expect(frame.maxX - shoulder == occlusionMaxX)
-        #expect(frame.minX + shoulder == occlusionMaxX - store.currentPanelSize.width)
+        // The window is the panel plus one shoulder on each side, rounded out
+        // to whole points (`aPanelFrameIsWholePoints`). `PanelContour` draws
+        // its straight sides a radius inside the rect it is given, so a window
+        // sized to the panel puts the black that far inside the cut-out.
+        #expect(frame.width == (store.currentPanelSize.width + shoulder * 2).rounded(.up))
+        // The body's trailing edge lands on the cut-out's, and on the outside
+        // of it: a `38` pt bar makes the shoulder `4.75`, so the whole point
+        // the window edge is rounded to is up to one point out. Never inwards
+        // — that is the direction `winglessTrailingOvershoot` exists to avoid.
+        #expect(frame.maxX - shoulder >= occlusionMaxX)
+        #expect(frame.maxX - shoulder < occlusionMaxX + 1)
+        // And the leading edge is one body in from it: the rounding lands in
+        // the leading wing, which is padding, rather than on the edge that has
+        // to meet the hardware.
+        #expect(
+            abs((frame.minX + shoulder) - (occlusionMaxX - store.currentPanelSize.width)) < 1
+        )
 
         // Nothing to pin to when there is no notch, and nothing pinned stays
         // centred on the display.
@@ -2186,7 +2197,290 @@ struct NotchlineTests {
             surfaceShoulder: shoulder,
             trailingAnchor: nil
         )
-        #expect(centred.midX == external.frame.midX)
+        #expect(abs(centred.midX - external.frame.midX) <= 0.5)
+    }
+
+    /// Every frame the panel is ever asked to take is whole points, because a
+    /// fractional one is a window that cannot exist.
+    ///
+    /// `NSWindow` keeps its frame on the point grid and silently drops the
+    /// remainder, so a fractional target is one the window is never able to
+    /// reach. `OverlayPanelController.updatePanelFrame` then finds
+    /// `panel.frame != targetFrame` on every single publish and starts another
+    /// animated `setFrame` towards it — and the panel, drawn at the fractional
+    /// offset while that runs and snapped back when it ends, jitters its
+    /// trailing edge by a point for as long as anything is happening. It is the
+    /// collapsed bar's right edge that shows it, because that is the edge a
+    /// person reads against the notch.
+    ///
+    /// Two terms make it fractional on real hardware and both are covered
+    /// here: the shoulder is `menuBarHeight / 8`, whole only at multiples of
+    /// eight, and the trailing anchor carries the measured width of an elapsed
+    /// reading.
+    @Test @MainActor
+    func aPanelFrameIsWholePoints() {
+        let screen = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
+
+        func isWhole(_ frame: NSRect) -> Bool {
+            frame.minX == frame.minX.rounded()
+                && frame.minY == frame.minY.rounded()
+                && frame.width == frame.width.rounded()
+                && frame.height == frame.height.rounded()
+        }
+
+        for bar in [46.0, 38.0, 37.0, 32.0, 24.0, 22.0] as [CGFloat] {
+            let shoulder = PanelMetrics.surfaceShoulderRadius(menuBarHeight: bar)
+            // A measured elapsed reading, which is where the fraction in the
+            // anchor comes from: `0:00` is `27.78` before its ground and the
+            // wing's own padding are added.
+            let wing = PanelMetrics.compactTrailingWingWidth(
+                trailing: CompactTrailingReading(timerText: "0:00"),
+                menuBarHeight: bar,
+                drawsCompactMarks: true
+            )
+            let size = PanelMetrics.size(
+                geometry: .notched,
+                isExpanded: false,
+                statusReadoutText: "Running",
+                trailing: CompactTrailingReading(timerText: "0:00"),
+                centerOcclusionWidth: 220,
+                compactHeight: bar
+            )
+            // The wing is whole points by construction now; what is still
+            // fractional -- and what this has to prove is being rounded -- is
+            // the shoulder, on every bar that is not a multiple of eight.
+            let bodyEdge = 1_060 + wing + shoulder
+            if bar.truncatingRemainder(dividingBy: 8) != 0 {
+                #expect(bodyEdge != bodyEdge.rounded(), "\(bar) pt bar rounds nothing")
+            }
+            #expect(
+                isWhole(
+                    OverlayPanelLayout.frame(
+                        on: screen,
+                        panelSize: size,
+                        surfaceShoulder: shoulder,
+                        trailingAnchor: 1_060 + wing
+                    )
+                ),
+                "notched compact frame under a \(bar) pt bar"
+            )
+            // Centred, and expanded, where the height is composed too.
+            #expect(
+                isWhole(
+                    OverlayPanelLayout.frame(
+                        on: screen,
+                        panelSize: PanelMetrics.size(
+                            geometry: .notched,
+                            isExpanded: true,
+                            statusReadoutText: "Running",
+                            trailing: CompactTrailingReading(timerText: "0:00"),
+                            centerOcclusionWidth: 220,
+                            compactHeight: bar
+                        ),
+                        surfaceShoulder: shoulder,
+                        trailingAnchor: nil
+                    )
+                ),
+                "expanded frame under a \(bar) pt bar"
+            )
+        }
+    }
+
+    /// The two edges of a notched collapsed bar, stated as the rule they obey.
+    ///
+    /// **The leading edge never moves.** Nothing on the trailing side may reach
+    /// it: not a timer arriving, not its digits growing, not a badge. The panel
+    /// is pinned by its trailing edge, so the leading one is
+    /// `trailingAnchor − bodyWidth`, and the wing appears in both — it cancels
+    /// only because `compactTrailingWingWidth` is a whole number of points, so
+    /// `ceil(leading + occlusion + wing)` is `ceil(leading + occlusion) + wing`.
+    /// Left fractional, the two sums rounded apart and the leading matrix
+    /// drifted under every trailing reading.
+    ///
+    /// **The trailing edge moves only on composition.** A timer or a badge
+    /// arriving or leaving may move it. A reading counting on may not — which
+    /// is why the timer is billed for `PanelMetrics.timerReservationWidth`
+    /// rather than for the digits it happens to be showing.
+    @Test @MainActor
+    func theCollapsedWingsMoveOnlyWhenTheirContentsArriveOrLeave() {
+        let bar: CGFloat = 38
+        let occlusionMaxX: CGFloat = 1_060
+        let occlusion: CGFloat = 220
+        let shoulder = PanelMetrics.surfaceShoulderRadius(menuBarHeight: bar)
+        let screen = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
+
+        func frame(_ trailing: CompactTrailingReading) -> NSRect {
+            OverlayPanelLayout.frame(
+                on: screen,
+                panelSize: PanelMetrics.size(
+                    geometry: .notched,
+                    isExpanded: false,
+                    statusReadoutText: "Running",
+                    trailing: trailing,
+                    centerOcclusionWidth: occlusion,
+                    compactHeight: bar,
+                    matrixCount: 2
+                ),
+                surfaceShoulder: shoulder,
+                trailingAnchor: occlusionMaxX + PanelMetrics.compactTrailingWingWidth(
+                    trailing: trailing,
+                    menuBarHeight: bar,
+                    drawsCompactMarks: true
+                )
+            )
+        }
+
+        let badge = [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))]
+        let bothBadges = [
+            AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2)),
+            AgentSubagentBadge(agent: .claudeCode, badge: SubagentBadge(count: 1))
+        ]
+        let states: [(String, CompactTrailingReading)] = [
+            ("idle", .empty),
+            ("0:00", CompactTrailingReading(timerText: "0:00")),
+            ("9:59", CompactTrailingReading(timerText: "9:59")),
+            ("10:00", CompactTrailingReading(timerText: "10:00")),
+            ("59:59", CompactTrailingReading(timerText: "59:59")),
+            ("1:00:00", CompactTrailingReading(timerText: "1:00:00")),
+            ("10:00:00", CompactTrailingReading(timerText: "10:00:00")),
+            ("badge", CompactTrailingReading(badges: badge, timerText: nil)),
+            ("badge+0:00", CompactTrailingReading(badges: badge, timerText: "0:00")),
+            ("badge+10:00:00", CompactTrailingReading(badges: badge, timerText: "10:00:00")),
+            ("badges+1:23", CompactTrailingReading(badges: bothBadges, timerText: "1:23"))
+        ]
+
+        // One leading edge for every one of them.
+        let leading = frame(.empty).minX
+        for (name, trailing) in states {
+            #expect(frame(trailing).minX == leading, "leading edge moved for \(name)")
+        }
+
+        // And one trailing edge per *composition*, whatever the reading counts
+        // up to. This is the assertion the digits used to break: `9:59` and
+        // `10:00` sat 8 pt apart, and `59:59` and `1:00:00` another 12.
+        func trailingEdge(_ trailing: CompactTrailingReading) -> CGFloat {
+            frame(trailing).maxX
+        }
+        let timed = trailingEdge(CompactTrailingReading(timerText: "0:00"))
+        for text in ["9:59", "10:00", "59:59", "1:00:00", "10:00:00"] {
+            #expect(
+                trailingEdge(CompactTrailingReading(timerText: text)) == timed,
+                "trailing edge moved for \(text)"
+            )
+        }
+        let besideABadge = trailingEdge(CompactTrailingReading(badges: badge, timerText: "0:00"))
+        for text in ["9:59", "1:00:00", "10:00:00"] {
+            #expect(
+                trailingEdge(CompactTrailingReading(badges: badge, timerText: text))
+                    == besideABadge,
+                "trailing edge moved for a badge beside \(text)"
+            )
+        }
+
+        // The moves that are allowed, and are the only ones: something arrived.
+        #expect(timed > trailingEdge(.empty))
+        #expect(besideABadge > timed)
+        #expect(
+            trailingEdge(CompactTrailingReading(badges: bothBadges, timerText: "0:00"))
+                > besideABadge
+        )
+    }
+
+    /// The trailing wing is a whole number of points, which is what makes it
+    /// cancel out of the leading edge.
+    ///
+    /// `ceil(leading + occlusion + wing) == ceil(leading + occlusion) + wing`
+    /// holds for an integral wing and for no other kind, and that identity is
+    /// the whole argument that a trailing reading cannot move the leading
+    /// matrix. Asserted on the arithmetic rather than only through a frame, so
+    /// a wing that went back to fractions fails here first and says why.
+    @Test @MainActor
+    func theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove() {
+        let badge = [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))]
+        let readings: [CompactTrailingReading] = [
+            .empty,
+            CompactTrailingReading(timerText: "0:00"),
+            CompactTrailingReading(timerText: "10:00:00"),
+            CompactTrailingReading(badges: badge, timerText: nil),
+            CompactTrailingReading(badges: badge, timerText: "1:23")
+        ]
+
+        for bar in [46.0, 38.0, 37.0, 32.0, 24.0, 22.0] as [CGFloat] {
+            for reading in readings {
+                for draws in [true, false] {
+                    let wing = PanelMetrics.compactTrailingWingWidth(
+                        trailing: reading,
+                        menuBarHeight: bar,
+                        drawsCompactMarks: draws
+                    )
+                    #expect(wing == wing.rounded(), "\(bar) pt bar, draws \(draws)")
+                    // The identity itself, on the leading wing this app draws.
+                    let leadingAndCutOut = PanelMetrics.compactLeadingWidth(
+                        statusReadoutText: "Running",
+                        showsStatusText: false
+                    ) + PanelMetrics.expandedNotchClearance + 220
+                    #expect(
+                        ceil(leadingAndCutOut + wing) == ceil(leadingAndCutOut) + wing
+                    )
+                }
+            }
+        }
+    }
+
+    /// The same layout asked for twice is the same frame, which is what lets
+    /// the controller's "nothing moved" guard stop the second one.
+    @Test @MainActor
+    func anUnchangedLayoutProducesAnIdenticalFrame() {
+        let screen = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        let shoulder = PanelMetrics.surfaceShoulderRadius(menuBarHeight: 38)
+        let size = PanelMetrics.size(
+            geometry: .notched,
+            isExpanded: false,
+            statusReadoutText: "Running",
+            trailing: CompactTrailingReading(timerText: "9:59"),
+            centerOcclusionWidth: 220,
+            compactHeight: 38
+        )
+        let anchor = 1_060 + PanelMetrics.compactTrailingWingWidth(
+            trailing: CompactTrailingReading(timerText: "9:59"),
+            menuBarHeight: 38,
+            drawsCompactMarks: true
+        )
+        let first = OverlayPanelLayout.frame(
+            on: screen,
+            panelSize: size,
+            surfaceShoulder: shoulder,
+            trailingAnchor: anchor
+        )
+        let second = OverlayPanelLayout.frame(
+            on: screen,
+            panelSize: size,
+            surfaceShoulder: shoulder,
+            trailingAnchor: anchor
+        )
+        #expect(first == second)
+        // And a second that has only advanced the digits does not move it
+        // either: the reading is tabular, so `0:01` is `0:09`'s width.
+        let laterAnchor = 1_060 + PanelMetrics.compactTrailingWingWidth(
+            trailing: CompactTrailingReading(timerText: "9:58"),
+            menuBarHeight: 38,
+            drawsCompactMarks: true
+        )
+        #expect(
+            OverlayPanelLayout.frame(
+                on: screen,
+                panelSize: PanelMetrics.size(
+                    geometry: .notched,
+                    isExpanded: false,
+                    statusReadoutText: "Running",
+                    trailing: CompactTrailingReading(timerText: "9:58"),
+                    centerOcclusionWidth: 220,
+                    compactHeight: 38
+                ),
+                surfaceShoulder: shoulder,
+                trailingAnchor: laterAnchor
+            ) == first
+        )
     }
 
     /// A wingless trailing edge steps just past the cut-out's *reported* edge,
@@ -2206,12 +2500,16 @@ struct NotchlineTests {
 
         // Drawing marks with an empty trailing slot -- the one shape that takes
         // the step.
+        // Taken to the next whole point, like every other wing width: the
+        // wing has to enter the body sum as an integer or the leading edge
+        // drifts with it (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
+        // `2.375` becomes `3`, which the assertions below still hold.
         #expect(
             PanelMetrics.compactTrailingWingWidth(
                 trailing: .empty,
                 menuBarHeight: bar,
                 drawsCompactMarks: true
-            ) == overshoot
+            ) == ceil(overshoot)
         )
 
         // Drawing nothing at all: the body *is* the cut-out, and stepping past
@@ -2232,8 +2530,10 @@ struct NotchlineTests {
                 trailing: timed,
                 menuBarHeight: bar,
                 drawsCompactMarks: true
-            ) == PanelMetrics.compactTrailingWidth(trailing: timed)
-                + PanelMetrics.expandedNotchClearance
+            ) == ceil(
+                PanelMetrics.compactTrailingWidth(trailing: timed)
+                    + PanelMetrics.expandedNotchClearance
+            )
         )
 
         // A share of the menu bar height like the two radii, because what it
@@ -2259,7 +2559,10 @@ struct NotchlineTests {
             statusReadoutText: "Running",
             showsStatusText: false
         ) + PanelMetrics.expandedNotchClearance
-        #expect(body == ceil(leading + 200 + overshoot))
+        // The step enters the sum as the whole point the wing is rounded to,
+        // not as its raw ratio -- that is what makes it cancel out of the
+        // leading edge like every other trailing width.
+        #expect(body == ceil(leading + 200 + ceil(overshoot)))
     }
 
     /// The compact panel measures itself from rendered text, so only the widths
@@ -2297,7 +2600,7 @@ struct NotchlineTests {
             notchedIdle == ceil(
                 12 + PanelMetrics.marksWidth(1) + PanelMetrics.expandedNotchClearance
                     + 200
-                    + PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 46)
+                    + ceil(PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 46))
             )
         )
 
@@ -2927,9 +3230,11 @@ struct NotchlineTests {
         #expect(leadingEdge() == anchored)
 
         // A timed turn opens the trailing wing, which the anchor and the width
-        // answer to identically -- so the edge would be exact here too but for
-        // `size` rounding the panel up while the anchor keeps its fraction.
-        // Under a point, and the columns contribute none of it.
+        // answer to identically -- and now cancel in, so this is exact too.
+        // It was not always: `size` ceils the body while the anchor keeps its
+        // fraction, and the two rounded apart until the wing itself was made
+        // whole points (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
+        // Nothing the trailing side does reaches this edge.
         let timed = MonitoredSession(
             agent: .codex,
             threadID: "timed", turnID: "u", projectName: "p", title: "t",
@@ -2939,7 +3244,7 @@ struct NotchlineTests {
             makeAgentSnapshot(.codex, availability: .ready, sessions: [timed])
         )
         #expect(store.compactTimerText != nil)
-        #expect(abs(leadingEdge() - anchored) < 1)
+        #expect(leadingEdge() == anchored)
     }
 
     /// The collapsed badge pair is spaced like the matrix pair, because it is
@@ -3019,9 +3324,28 @@ struct NotchlineTests {
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .light)
             ]
         ).width
+        // The reading is billed for its *slot*, not its digits, so a short one
+        // costs more than it draws. That is the point: tabular figures hold a
+        // reading still only inside one digit count, and the slot holds it
+        // still across them.
         #expect(
             PanelMetrics.compactTrailingReadingWidth(reading)
-                == bare + PanelMetrics.readingGroundWidthCost
+                == PanelMetrics.timerReservationWidth
+        )
+        #expect(
+            PanelMetrics.compactTrailingReadingWidth(reading)
+                > bare + PanelMetrics.readingGroundWidthCost
+        )
+        // The ground is inside the slot rather than beside it: the widest
+        // reading plus its ground *is* the reservation, so nothing sized from
+        // it has to grow to draw the ground.
+        #expect(
+            PanelMetrics.timerReservationWidth
+                == ("00:00:00" as NSString).size(
+                    withAttributes: [
+                        .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+                    ]
+                ).width + PanelMetrics.readingGroundWidthCost
         )
         // The reservation holds the widest reading *with* its ground, so a
         // pill sized from it can draw the ground without growing.
@@ -4524,7 +4848,12 @@ struct NotchlineTests {
                 panelSize: size
             )
 
-            #expect(frame.midX == screenFrame.midX)
+            // Centred to within the half point the frame is rounded by
+            // (`aPanelFrameIsWholePoints`); the screen here is deliberately
+            // laid out on halves, so an exact midpoint is not a frame any
+            // window could hold. Top-attachment stays exact: the height is
+            // ceiled and the origin derived from the screen's own top edge.
+            #expect(abs(frame.midX - screenFrame.midX) <= 0.5)
             #expect(frame.maxY == screenFrame.maxY)
         }
     }
@@ -27278,26 +27607,20 @@ extension NotchlineTests {
         // can produce -- that is what the reservation is for.
         #expect(pill(CompactTrailingReading(timerText: "1:23")) == pill(.empty))
         #expect(pill(CompactTrailingReading(timerText: "10:00:00")) == pill(.empty))
-        // A badge beside a short reading still fits inside it.
-        #expect(
-            pill(
-                CompactTrailingReading(
-                    badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))],
-                    timerText: "1:23"
-                )
-            )
-                == pill(.empty)
-        )
-        // A badge beside a long reading does not, and the pill takes it.
-        #expect(
-            pill(
-                CompactTrailingReading(
-                    badges: [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))],
-                    timerText: "1:23:45"
-                )
-            )
-                > pill(.empty)
-        )
+        // A badge takes room beside the reading rather than out of it, so it
+        // widens the pill -- and widens it by the same amount whatever the
+        // reading beside it says.
+        //
+        // **That second half is the fix.** While the timer was billed for its
+        // digits, a badge fitted inside the reservation's slack next to `1:23`
+        // and did not next to `1:23:45`, so the pill moved when a Turn with a
+        // subagent in flight crossed an hour. Composition may move this
+        // surface; counting may not.
+        let badge = [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))]
+        let beside = pill(CompactTrailingReading(badges: badge, timerText: "1:23"))
+        #expect(beside > pill(.empty))
+        #expect(beside == pill(CompactTrailingReading(badges: badge, timerText: "1:23:45")))
+        #expect(beside == pill(CompactTrailingReading(badges: badge, timerText: "10:00:00")))
 
         // The notched panel hangs it off the cut-out instead, so every badge
         // widens the wing.

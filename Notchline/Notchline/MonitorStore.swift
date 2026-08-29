@@ -535,10 +535,28 @@ enum PanelMetrics {
     /// only the expanded rows read their grounds against each other now. What
     /// stays is the `.clear` ``ReadingGround`` around it, whose padding is what
     /// ``readingGroundWidthCost`` bills for here.
+    ///
+    /// **The timer is billed for its slot, not for its digits.** Tabular
+    /// figures hold a reading still between `0:01` and `0:59`, and no further:
+    /// `9:59 → 10:00` is `8` pt wider and `59:59 → 1:00:00` another `12`, and
+    /// on a notched screen the panel is pinned to the cut-out, so every one of
+    /// those points comes off the *trailing* edge — the edge a person reads
+    /// against the notch. A reading that grows a digit mid-Turn moved it. So
+    /// the slot is ``timerReservationWidth`` whatever the reading is, and the
+    /// trailing edge moves only when the timer or a badge *arrives or leaves*.
+    /// The cost is paid only while a Turn is timed: an idle surface reserves
+    /// nothing here, unlike the notch-less pill, which holds this width at
+    /// every state so a menu-bar item never shifts under the pointer.
     static func compactTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
         let badgesWidth = subagentBadgesWidth(trailing.badges)
         guard let timerText = trailing.timerText else { return badgesWidth }
-        let timerWidth = textWidth(timerText, font: timerFont) + readingGroundWidthCost
+        // `max`, not the reservation alone: past a hundred hours the formatter
+        // outruns its own template, and a clipped reading is worse than a
+        // moved edge.
+        let timerWidth = max(
+            timerReservationWidth,
+            textWidth(timerText, font: timerFont) + readingGroundWidthCost
+        )
         guard badgesWidth > 0 else { return timerWidth }
         return badgesWidth + subagentBadgeTimerSpacing + timerWidth
     }
@@ -689,6 +707,17 @@ enum PanelMetrics {
     /// the surface drawing nothing at all -- it *is* the cut-out, and pushing
     /// it out would hang a sliver of black off the side of the notch.
     ///
+    /// **A whole number of points, and that is what holds the leading edge
+    /// still.** The panel is pinned by its trailing edge, so its leading one is
+    /// `trailingAnchor − bodyWidth` — and the body width is ceiled while the
+    /// anchor was not, so the two rounded apart and the leading edge drifted by
+    /// a fraction of a point every time this wing changed. Ceiled here, the
+    /// wing enters both sums as the same integer: `ceil(leading + occlusion +
+    /// wing)` is `ceil(leading + occlusion) + wing`, the wing cancels, and the
+    /// leading edge is a constant that no trailing reading can reach. It is
+    /// what lets `theLeadingMatrixNeverMovesWhateverTheCountsDo` assert an
+    /// exact edge across a timer arriving, rather than "within a point".
+    ///
     /// - Parameter drawsCompactMarks: Whether the collapsed surface is drawing
     ///   anything at all. Passed rather than inferred here so the body's two
     ///   edges are decided by one reading: the leading wing already answers to
@@ -700,9 +729,13 @@ enum PanelMetrics {
         drawsCompactMarks: Bool
     ) -> CGFloat {
         let content = compactTrailingWidth(trailing: trailing)
-        guard content <= 0 else { return content + expandedNotchClearance }
+        guard content <= 0 else { return ceil(content + expandedNotchClearance) }
         guard drawsCompactMarks else { return 0 }
-        return winglessTrailingOvershoot(menuBarHeight: menuBarHeight)
+        // The step is a nudge rather than a measurement (see below), so taking
+        // it to the next whole point costs it nothing and buys the same
+        // cancellation: `2.375` becomes `3` under a `38` pt bar, still well
+        // inside the shoulder it exists to clear.
+        return ceil(winglessTrailingOvershoot(menuBarHeight: menuBarHeight))
     }
 
     /// Leading wing on a notched display: padding, the marks, and the clearance.
@@ -870,6 +903,17 @@ enum PanelMetrics {
         ofSize: 13,
         weight: .medium
     )
+    /// That slot with the reading's ground around it — what one elapsed
+    /// readout costs wherever a surface reserves for it rather than hugging it.
+    ///
+    /// One declaration for both form factors on purpose. The notch-less pill
+    /// holds it at every state so a menu-bar item never shifts sideways; the
+    /// notched wing claims it only while a Turn is timed, because there the
+    /// idle surface has no wing at all. Two templates would let the two ends of
+    /// the same app disagree about how wide a timer is.
+    static var timerReservationWidth: CGFloat {
+        textWidth(timerSlotTemplate, font: timerSlotFont) + readingGroundWidthCost
+    }
     /// Between the status name and the right-aligned timer slot.
     ///
     /// Wider than the gap after the matrix, and not the same kind of thing: it
@@ -996,10 +1040,8 @@ enum PanelMetrics {
     /// wrapped in a `.clear` ``ReadingGround``, and that ground's padding is
     /// room the slot has to hold whatever the state is.
     static func compactTrailingSlotWidth(trailing: CompactTrailingReading) -> CGFloat {
-        let reservation = textWidth(timerSlotTemplate, font: timerSlotFont)
-            + readingGroundWidthCost
-        guard !trailing.isEmpty else { return reservation }
-        return max(reservation, compactTrailingReadingWidth(trailing))
+        guard !trailing.isEmpty else { return timerReservationWidth }
+        return max(timerReservationWidth, compactTrailingReadingWidth(trailing))
     }
 
     /// What either surface can say while an agent is connected.
