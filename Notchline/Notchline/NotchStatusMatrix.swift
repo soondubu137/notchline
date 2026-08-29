@@ -799,13 +799,13 @@ struct SessionCountDots: View {
 ///
 /// **The numbers.** `2.8 s` sits below lull's `2 s`, the slowest thing the mark
 /// runs, so the breath reads as a different order of movement rather than a
-/// fifth pattern on a mark `2.92` away. The swing is `1.0` to `0.50`: the floor
-/// is not lower because under about half a `2.74` dot stops being countable, so
-/// the column gains a second job without ever putting down the first, and the
-/// crest is full rather than the column's resting `0.85` because seen on a
-/// screen the narrower swing was simply too quiet to catch. That also buys a
-/// second reading for free — a breathing column is brighter at its crest than a
-/// resting one, so the two differ even in a still glance.
+/// fifth pattern on a mark `2.92` away. The swing is the column's own `0.85`
+/// down to `0.30` and back — `0.55` of amplitude, all of it below rest, so the
+/// column never draws brighter than a resting one. It went that deep because
+/// `0.35` was measured on a screen and was too quiet to catch, and it may go
+/// that deep because the dip is momentary: what has to hold at every instant is
+/// only that the run stays clearly brighter than the extinguished matrix, which
+/// at `0.30` it does by about a factor of two.
 ///
 /// **Reduce Motion does not remove it.** The searchlight can be switched off
 /// because the ground states the status on its own, and two channels only help
@@ -819,27 +819,36 @@ enum SessionDotBreath {
     /// `theBreathIsSlowerThanAnythingTheMatrixRuns`.
     static let period: TimeInterval = 2.8
 
-    /// The top of the swing, and **above** where the column rests.
+    /// **Steady, and a little under full.** Unchanged, and it is also the top
+    /// of the swing: the breath only ever leaves this value and comes back to
+    /// it, so the column never draws brighter than a resting one and §11's
+    /// reason for holding the dots under full still stands untouched.
     ///
-    /// The first version topped out at ``restingOpacity``, on the reasoning
-    /// that the movement was the signal and the column should not also get
-    /// brighter. Seen on a screen that was simply too quiet: a `0.35` swing on
-    /// a `2.74` mark, most of it spent parked at one end or the other, is not
-    /// caught out of the corner of an eye. Going to full widens the swing by
-    /// half again, and adds a second reading the first version had thrown away
-    /// — a breathing column is now brighter at its crest than a resting one, so
-    /// it differs from its neighbour even in a still glance.
-    ///
-    /// It costs a `0.15` step up at the instant the loop starts, which is worth
-    /// having rather than worth hiding: it lands exactly when something has
-    /// begun waiting to be read.
-    static let crestOpacity: Double = 1.0
-    /// **Steady, and a little under full.** Unchanged: this is the value the
-    /// column has always rested at, and the breath only ever leaves it.
+    /// A version that went to `1.0` was tried and dropped. It read, but it made
+    /// the column the brightest thing in the leading wing for part of every
+    /// cycle, and it bought that by breaking the one value this mark has always
+    /// had. Taking the same amplitude out of the floor instead costs nothing
+    /// that was already there.
     static let restingOpacity: Double = 0.85
-    /// Far enough for the movement to be caught peripherally, and no further
-    /// than a `2.74` mark can go and still be counted.
-    static let floorOpacity: Double = 0.50
+
+    /// The bottom of the swing.
+    ///
+    /// **`0.55` of amplitude, all of it below rest.** The first version swung
+    /// `0.35` and was too quiet to catch on a screen; this is wider than that
+    /// and wider than the `1.0`-crested version it replaces, without the column
+    /// ever exceeding where it rests.
+    ///
+    /// It goes this low because the dip is **momentary**. A column held at
+    /// `0.30` would stop being countable, which is exactly why "dim the marks
+    /// that are not yours" was rejected when this page was drawn — but a column
+    /// that returns to full rest every `2.8 s` is legible for most of its cycle
+    /// and never stops being a count. What must hold at every instant is the
+    /// weaker, checkable thing: the run of dots stays clearly brighter than the
+    /// extinguished matrix beside it, so a breathing column never reads as a
+    /// mark going out. At `0.30` it keeps about twice that value in every
+    /// channel of both inks — pinned by
+    /// `theBreathsFloorStaysAboveTheMarkItStandsBeside`.
+    static let floorOpacity: Double = 0.30
 
     /// **The turns slow down; they do not stop.**
     ///
@@ -858,17 +867,19 @@ enum SessionDotBreath {
 
     /// The loop, phased off the layer clock.
     ///
-    /// **It begins on the next whole beat rather than immediately.** That is
-    /// what puts two products' columns on one grid, so a pair breathing at once
-    /// reads as one signal rather than two — the reason
+    /// **It begins on the next whole beat rather than immediately**, which buys
+    /// two things at once. It puts two products' columns on one grid, so a pair
+    /// breathing together reads as one signal rather than two — the reason
     /// ``MatrixIndicatorView/phaseAnchor(for:now:)`` is shared rather than
     /// copied, and the same rule the searchlight follows
-    /// (``NotchTextRaster/installSweep(on:across:height:period:)``). Waiting
-    /// costs at most one period, in a state that lasts until somebody reads
-    /// something.
+    /// (``NotchTextRaster/installSweep(on:across:height:period:)``). And since
+    /// the cycle's first value is ``restingOpacity``, exactly where the column
+    /// already stood, the movement starts from where the mark was instead of
+    /// stepping to a phase. Waiting costs at most one period, in a state that
+    /// lasts until somebody reads something.
     static func animation(now: CFTimeInterval = CACurrentMediaTime()) -> CABasicAnimation {
         let animation = CABasicAnimation(keyPath: "opacity")
-        animation.fromValue = crestOpacity
+        animation.fromValue = restingOpacity
         animation.toValue = floorOpacity
         // Autoreversed, so one period is crest to trough and back, and the fall
         // and the rise are one curve rather than two that have to be kept

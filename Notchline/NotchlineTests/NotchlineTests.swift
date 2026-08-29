@@ -2491,11 +2491,10 @@ struct NotchlineTests {
             )
         }
         #expect(abs(SessionDotBreath.period - 2.8) < 0.001)
-        // The column still rests where it always has; the swing goes above it
-        // rather than down from it, so a breathing column reads as different
-        // from a resting one even in a still glance.
+        // The column rests where it always has, and that is also the top of the
+        // swing: a breathing column never draws brighter than a resting one, so
+        // §11's reason for holding the dots under full is untouched.
         #expect(abs(SessionDotBreath.restingOpacity - 0.85) < 0.001)
-        #expect(SessionDotBreath.crestOpacity > SessionDotBreath.restingOpacity)
         #expect(SessionDotBreath.floorOpacity < SessionDotBreath.restingOpacity)
 
         let animation = SessionDotBreath.animation(now: 10)
@@ -2505,8 +2504,11 @@ struct NotchlineTests {
         #expect(animation.autoreverses)
         #expect(abs(animation.duration - SessionDotBreath.period / 2) < 0.001)
         #expect(animation.repeatCount == .infinity)
+        // The cycle opens on the value the column already stood at, so starting
+        // is a movement rather than a step.
         #expect(
-            abs((animation.fromValue as? Double ?? 0) - SessionDotBreath.crestOpacity) < 0.001
+            abs((animation.fromValue as? Double ?? 0) - SessionDotBreath.restingOpacity)
+                < 0.001
         )
         #expect(
             abs((animation.toValue as? Double ?? 0) - SessionDotBreath.floorOpacity) < 0.001
@@ -2570,13 +2572,16 @@ struct NotchlineTests {
         }
     }
 
-    /// The floor dims the column without ever losing it.
+    /// The floor dims the column deeply without ever losing it.
     ///
-    /// At its darkest the run of dots is still brighter than the extinguished
-    /// matrix it stands beside, so a breathing column never reads as a mark
-    /// going out — and it is still about half of resting, which is where a
-    /// `2.74` mark stops being countable. The column takes a second job without
-    /// putting down the first.
+    /// **The dip is allowed to be this deep because it is momentary.** A column
+    /// *held* at `0.30` would stop being countable, which is exactly why "dim
+    /// the marks that are not yours" was rejected when this was drawn — but one
+    /// that returns to full rest every `2.8 s` is legible for most of its cycle
+    /// and never stops being a count. So the thing that has to hold at every
+    /// instant is the weaker and checkable one: at its darkest the run of dots
+    /// is still clearly brighter than the extinguished matrix it stands beside,
+    /// and a breathing column never reads as a mark going out.
     @Test @MainActor
     func theBreathsFloorStaysAboveTheMarkItStandsBeside() {
         for ink in [NotchPalette.codexInk, NotchPalette.claudeCodeInk] {
@@ -2586,10 +2591,17 @@ struct NotchlineTests {
                 (ink.onBlue, ink.offBlue)
             ]
             for (on, off) in channels {
-                #expect(SessionDotBreath.floorOpacity * on > off)
+                // Clearly brighter, not merely brighter: a margin the floor can
+                // be lowered into again without the mark being lost. Measured
+                // at about twice on every channel of both inks.
+                #expect(SessionDotBreath.floorOpacity * on > off * 1.5)
             }
         }
-        #expect(SessionDotBreath.floorOpacity >= SessionDotBreath.restingOpacity / 2)
+        // And the swing is worth having: more than half of everything the mark
+        // has to give, taken entirely out of the floor so the crest stays where
+        // the column rests.
+        let swing = SessionDotBreath.restingOpacity - SessionDotBreath.floorOpacity
+        #expect(swing > SessionDotBreath.restingOpacity / 2)
     }
 
     /// The run of marks starts at the column's top edge and ends on the
