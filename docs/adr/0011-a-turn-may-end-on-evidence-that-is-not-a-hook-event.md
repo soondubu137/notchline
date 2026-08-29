@@ -138,3 +138,33 @@ Two costs:
 - **An edge of its own.** An abort appends a record to a file inside a directory, and a directory-level watcher does not fire for that, so `LiveCodexMonitorService.rolloutWatcher` watches the rollouts of Turns that are still going — the same "watch only what is worth watching" rule as `transcriptWatcher` and `recordWatcher`, and it watches nothing at all while no Turn is open. Without it the abort would wait for whatever wakes the service next: at best the 10 s metadata interval, and on a thread that had gone quiet, the heartbeat.
 
 **One case this does not fix, stated plainly.** Archiving moves the rollout out of `$CODEX_HOME/sessions` into `archived_sessions`, so an archive that followed its interrupt closely enough would take the file away before the read. The row then behaves exactly as it does today — *Running* until membership reconciliation retires it — which is a wait, not a wrong state, and the gesture has already told the app what it needs: the thread is leaving the list.
+
+## Addendum, 2026-08-29 (same day): ending the Turn was not enough — its subagents kept it Running
+
+The addendum above ends the Turn. On a thread with a subagent in flight the row went on saying *Running* anyway, and the reason is in this repository rather than in Codex: `runningSubagentIDs` is a **thread**-level fact carried across turn boundaries, and `MonitorAggregation.effectiveStatus` reads a Completed row with one as Running. That is deliberate and right for a Turn that ended on its own `Stop` — the subagent finishes, the parent collects the result, and a row reading `.completed` alone would say nothing is happening while the thread works. A stop is where it stops being right.
+
+Measured on the same run, CLI `0.151.0-alpha.7.1`, a turn told to spawn one subagent and wait for it, interrupted 5 s in:
+
+```text
+PreToolUse   collaborationspawn_agent          -- closes
+PostToolUse  collaborationspawn_agent
+PreToolUse   collaborationwait_agent           -- never closes
+SubagentStart  agent=01a04f6f-8570
+   … turn/interrupt, turn_aborted at +8.4 s
+PreToolUse   Bash  agent=01a04f6f-8570         -- the subagent works on
+PostToolUse  Bash  agent=01a04f6f-8570
+SubagentStop       agent=01a04f6f-8570         -- 27 s after the abort
+```
+
+Two facts, and both matter. **The subagent is not killed**: it runs to completion and does report, so this is not a case of a lost `SubagentStop`. **And the stop killed the `wait_agent` the Turn was going to collect it with** — that `PreToolUse` never closes. Whatever the orphan produces is written into the rollout as a `SubAgentActivity` item against a Turn that is over, and nothing re-enters the parent. So the row announced work the stopped Turn could no longer receive, for as long as the orphan ran — unbounded, on a Turn the user had ended by hand.
+
+**So the same evidence that ends the Turn also empties that Turn's subagent bookkeeping**: `TurnInterruption.orphansSubagents`, honoured by `endOpenTurn`, clearing `runningSubagentIDs`, `subagentSlots` and stamping `lastSubagentBoundaryAt` at the stop.
+
+Against the boundaries: it is still **end only** — it retires what the Turn held and opens nothing — it is still held to the Turn the record names, and it still takes effect inside the reducer. What is new is the range of what one piece of evidence retires, and that is why it is a field on the evidence rather than a rule inside `endOpenTurn`: the identity-free session reading may not do this (it says nobody is working on the turn, which is a different sentence), and neither may a `Stop`.
+
+**It defaults to changing nothing, and Claude Code takes the default.** Its query loop runs a subagent's own `SubagentStop` on an interrupt — the log line this ADR opens by quoting — so the count clears itself there, and nothing has been measured that would justify more.
+
+Two costs:
+
+- **It contradicts `PRD.md` §173's stated preference**, which weighs a stuck subagent count against a premature Completed and takes the stuck count, on the grounds that "the collapsed state saying `Completed` while work continues is wrong every single time". That reasoning holds where it was written — a **lost** `SubagentStop`, an accident, on a Turn that ended normally and whose answer the user is still waiting for. It does not survive a stop: the user has said they are not waiting. §173 now carries the carve-out.
+- **A subagent orphaned this way can no longer raise a wait on this row.** `subagentsAwaitingApprovalCount` is capped by `runningSubagentIDs`, so a `PermissionRequest` arriving from the orphan afterwards is not drawn. That is the same judgement in the same direction — a dialogue belonging to a Turn the user stopped is not a question anyone is going to answer here — and it is the reason the open ones are cleared in the same breath rather than left to linger.

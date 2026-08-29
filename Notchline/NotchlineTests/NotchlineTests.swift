@@ -9016,6 +9016,220 @@ struct NotchlineTests {
         }
     }
 
+    /// A stopped Turn's subagents stop counting for it, and only then.
+    ///
+    /// **The row was still stuck at Running with a subagent in flight**, even
+    /// once the abort had ended the Turn: `runningSubagentCount` outlives a
+    /// Turn by design, and `MonitorAggregation.effectiveStatus` reads a
+    /// Completed row with one as Running. Measured 2026-08-29 on CLI
+    /// `0.151.0-alpha.7.1`, that is not a state the user can wait out: the stop
+    /// kills the `collaborationwait_agent` the Turn was going to collect the
+    /// subagent with -- its `PostToolUse` never arrives -- while the subagent
+    /// itself runs on, so the row went on announcing work the stopped Turn
+    /// could no longer receive, for as long as the orphan took.
+    @Test @MainActor
+    func aStoppedTurnsSubagentsStopCountingForIt() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        let timestamp = Date().timeIntervalSince1970.rounded(.down)
+        let rollout = root.appendingPathComponent("rollout-thread-1.jsonl")
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let turnContext: [String: Any] = [
+            "timestamp": stamp.string(
+                from: Date(timeIntervalSince1970: timestamp - 0.065)
+            ),
+            "type": "turn_context",
+            "payload": ["turn_id": "turn-1", "approvals_reviewer": "user"]
+        ]
+        func writeRollout(_ objects: [[String: Any]]) throws {
+            let lines = try objects.map {
+                String(
+                    decoding: try JSONSerialization.data(withJSONObject: $0),
+                    as: UTF8.self
+                )
+            }
+            try Data(lines.joined(separator: "\n").appending("\n").utf8)
+                .write(to: rollout, options: .atomic)
+        }
+        try writeRollout([turnContext])
+
+        func deliver(_ event: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: event)
+                .deliver(to: repository)
+        }
+        // The measured shape, verbatim: the spawn closes, the wait does not,
+        // and the subagent announces itself and starts working.
+        try deliver([
+            "received_at": timestamp, "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1", "turn_id": "turn-1",
+            "prompt": "Spawn one subagent and wait for it."
+        ])
+        try deliver([
+            "received_at": timestamp + 1, "hook_event_name": "PreToolUse",
+            "session_id": "thread-1", "turn_id": "turn-1",
+            "tool_name": "collaborationspawn_agent", "tool_use_id": "spawn-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 2, "hook_event_name": "PostToolUse",
+            "session_id": "thread-1", "turn_id": "turn-1",
+            "tool_name": "collaborationspawn_agent", "tool_use_id": "spawn-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 3, "hook_event_name": "PreToolUse",
+            "session_id": "thread-1", "turn_id": "turn-1",
+            "tool_name": "collaborationwait_agent", "tool_use_id": "wait-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 4, "hook_event_name": "SubagentStart",
+            "session_id": "thread-1", "turn_id": "sub-turn", "agent_id": "agent-1"
+        ])
+        // And it is stopped at a dialogue of its own, which is the state that
+        // outranks every other and must not survive the stop either.
+        try deliver([
+            "received_at": timestamp + 5, "hook_event_name": "PreToolUse",
+            "session_id": "thread-1", "turn_id": "sub-turn", "agent_id": "agent-1",
+            "tool_name": "Bash", "tool_use_id": "sub-call-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 6, "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1", "turn_id": "sub-turn", "agent_id": "agent-1",
+            "tool_name": "Bash"
+        ])
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                codexRootThread(
+                    id: "thread-1",
+                    name: "Spawner",
+                    path: rollout.path
+                )
+            ],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        let running = await snapshotWithSessions(from: service)
+        #expect(running.sessions.first?.runningSubagentCount == 1)
+        #expect(running.sessions.first?.subagentsAwaitingApprovalCount == 1)
+
+        // The user presses stop.
+        try writeRollout([turnContext, [
+            "timestamp": stamp.string(
+                from: Date(timeIntervalSince1970: timestamp + 8)
+            ),
+            "type": "event_msg",
+            "payload": [
+                "type": "turn_aborted", "turn_id": "turn-1",
+                "reason": "interrupted"
+            ]
+        ]])
+
+        var stopped = await service.fetchSnapshot()
+        let ended = await holds {
+            stopped = await service.fetchSnapshot()
+            return stopped.sessions.first?.status == .completed
+        }
+        #expect(ended)
+        let row = try #require(stopped.sessions.first)
+        // The row the user was left with before this rule: Completed underneath
+        // and Running to everything that reads "is this thread working".
+        #expect(row.runningSubagentCount == 0)
+        #expect(row.subagentsAwaitingApprovalCount == 0)
+        #expect(MonitorAggregation.effectiveStatus(of: row) == .completed)
+
+        // And the subagent's own stop, whenever it comes, names an agent this
+        // thread no longer counts and changes nothing -- the rule the reducer
+        // already applies to every agent it never counted.
+        try deliver([
+            "received_at": timestamp + 40, "hook_event_name": "SubagentStop",
+            "session_id": "thread-1", "turn_id": "sub-turn", "agent_id": "agent-1"
+        ])
+        let after = await service.fetchSnapshot()
+        await service.disconnect()
+        #expect(after.sessions.first?.status == .completed)
+        #expect(after.sessions.first?.runningSubagentCount == 0)
+    }
+
+    /// A Turn that ends on its own `Stop` keeps its subagents, which is the
+    /// whole reason the count outlives a Turn.
+    ///
+    /// The counterpart to the test above, and the boundary it must not cross:
+    /// only a **stop** orphans them. A `Stop` means the Turn finished and the
+    /// thread will collect what its subagents produce, so a row that dropped
+    /// the count there would read as finished while the thread works on.
+    @Test @MainActor
+    func aTurnThatEndsOnItsOwnStopKeepsItsSubagents() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+        let timestamp = Date().timeIntervalSince1970
+        func deliver(_ event: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: event)
+                .deliver(to: repository)
+        }
+        try deliver([
+            "received_at": timestamp, "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1", "turn_id": "turn-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 1, "hook_event_name": "SubagentStart",
+            "session_id": "thread-1", "turn_id": "sub-turn", "agent_id": "agent-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 2, "hook_event_name": "Stop",
+            "session_id": "thread-1", "turn_id": "turn-1",
+            "last_assistant_message": "Started one and left it running."
+        ])
+        let afterStop = await repository.drainDeliveredEvents()
+        #expect(afterStop.turns.first?.sessionStatus == .completed)
+        #expect(afterStop.turns.first?.runningSubagentIDs == ["agent-1"])
+
+        // The identity-free reading may not orphan them either: it says nobody
+        // is working on the turn, which is not the same sentence.
+        let afterSessionStop = await repository.endTurnsForStoppedSessions(
+            ["thread-1": Date(timeIntervalSince1970: timestamp + 3)]
+        )
+        #expect(afterSessionStop.turns.first?.runningSubagentIDs == ["agent-1"])
+
+        // And an interrupt that does not claim to have orphaned them -- Claude
+        // Code's, whose subagents run their own `SubagentStop` on an interrupt
+        // -- leaves the count exactly where it was.
+        let afterPlainInterrupt = await repository.endInterruptedTurns([
+            TurnInterruption(
+                threadID: "thread-1",
+                turnID: "turn-1",
+                endedAt: Date(timeIntervalSince1970: timestamp + 4)
+            )
+        ])
+        #expect(afterPlainInterrupt.turns.first?.runningSubagentIDs == ["agent-1"])
+    }
+
     /// The rollouts this service watches, and for exactly how long.
     ///
     /// The edge under the reading above. A quiet monitor watches nothing: only

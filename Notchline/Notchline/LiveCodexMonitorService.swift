@@ -1951,7 +1951,14 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 TurnInterruption(
                     threadID: turn.threadID,
                     turnID: turn.turnID,
-                    endedAt: endedAt
+                    endedAt: endedAt,
+                    // The stop killed the `wait_agent` this Turn was going to
+                    // collect its subagents with, so their results can never
+                    // reach it. See ``TurnInterruption/orphansSubagents`` for
+                    // the measurement, and why a row that went on counting
+                    // them said the thread was working for as long as an
+                    // orphan ran -- on a Turn the user ended by hand.
+                    orphansSubagents: true
                 )
             )
         }

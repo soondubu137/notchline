@@ -1362,6 +1362,59 @@ struct TurnInterruption: Sendable, Equatable {
     let turnID: String
     /// When the interrupt was written, as the product stamped it.
     let endedAt: Date
+    /// Whether the stop also cut this Turn's subagents off from it.
+    ///
+    /// **A Turn's subagent set normally outlives the Turn, and that is the
+    /// point of it**: a subagent finishes after its parent's `Stop`, the parent
+    /// collects the result, and a row reading the count alone is what stops
+    /// `Completed` meaning "nothing is happening here" while it does. A stop is
+    /// where that stops being true.
+    ///
+    /// Measured 2026-08-29, CLI `0.151.0-alpha.7.1`, a Codex turn told to spawn
+    /// one subagent and wait for it, interrupted 5 s in:
+    ///
+    /// ```text
+    /// PreToolUse   collaborationspawn_agent          -- closes
+    /// PostToolUse  collaborationspawn_agent
+    /// PreToolUse   collaborationwait_agent           -- never closes
+    /// SubagentStart  agent=01a04f6f-8570
+    /// ...  turn/interrupt, turn_aborted
+    /// PreToolUse   Bash  agent=01a04f6f-8570         -- the subagent works on
+    /// PostToolUse  Bash  agent=01a04f6f-8570
+    /// SubagentStop       agent=01a04f6f-8570         -- 27 s after the abort
+    /// ```
+    ///
+    /// The subagent is not killed and does eventually report. What the stop
+    /// killed is the `wait_agent` the Turn was going to collect it with, so
+    /// whatever that subagent produces can never reach this Turn -- it is
+    /// written into the rollout as `SubAgentActivity` against a Turn that is
+    /// over, and nothing re-enters. Counting it goes on saying *the thread is
+    /// working* for as long as the orphan runs, on a Turn the user ended by
+    /// hand, and with no bound on how long that is.
+    ///
+    /// So this is not "guessing the subagent stopped": it is declining to
+    /// report work the stopped Turn can no longer receive as that Turn's. A
+    /// `SubagentStop` that does arrive afterwards names an agent the thread no
+    /// longer counts, which the reducer already treats as changing nothing.
+    ///
+    /// **Codex only, and only because only Codex was measured this way.**
+    /// Claude Code runs a subagent's own `SubagentStop` on an interrupt (its
+    /// query loop logs `SubagentStop on interrupted query failed`), so the
+    /// count clears itself there and the evidence says nothing more. It
+    /// defaults to the answer that changes nothing.
+    let orphansSubagents: Bool
+
+    nonisolated init(
+        threadID: String,
+        turnID: String,
+        endedAt: Date,
+        orphansSubagents: Bool = false
+    ) {
+        self.threadID = threadID
+        self.turnID = turnID
+        self.endedAt = endedAt
+        self.orphansSubagents = orphansSubagents
+    }
 }
 
 struct HookStateSnapshot: Sendable {
@@ -2593,7 +2646,8 @@ actor HookEventRepository {
             endOpenTurn(
                 ofThread: interruption.threadID,
                 named: interruption.turnID,
-                at: interruption.endedAt
+                at: interruption.endedAt,
+                orphansSubagents: interruption.orphansSubagents
             )
         }
         signalIfProjectionChanged()
@@ -2605,7 +2659,15 @@ actor HookEventRepository {
     /// - Parameter named: The turn the evidence names, when it names one. Nil is
     ///   evidence that names none -- it applies to whichever turn the thread has
     ///   open, which is all a reading of a *session* can ever justify.
-    private func endOpenTurn(ofThread threadID: String, named turnID: String?, at moment: Date) {
+    /// - Parameter orphansSubagents: Whether the same evidence says this turn's
+    ///   subagents were cut off from it. See ``TurnInterruption/orphansSubagents``
+    ///   for the measurement; the default is the answer that changes nothing.
+    private func endOpenTurn(
+        ofThread threadID: String,
+        named turnID: String?,
+        at moment: Date,
+        orphansSubagents: Bool = false
+    ) {
         guard var turn = turnsByThreadID[threadID],
               turnID == nil || turn.turnID == turnID,
               turn.sessionStatus != .completed,
@@ -2616,6 +2678,20 @@ actor HookEventRepository {
         turn.pendingInputToolUseID = nil
         turn.pendingApproval = nil
         turn.openToolUse = nil
+        if orphansSubagents, !turn.runningSubagentIDs.isEmpty {
+            turn.runningSubagentIDs.removeAll()
+            // The waits go with them. A dialogue raised by a subagent of a turn
+            // the user stopped is not a question anyone is going to answer on
+            // this row, and it is the same rule as the turn's own
+            // `pendingApproval` two lines up.
+            turn.subagentSlots.removeAll()
+            // The set moved, so the stamp that dates the set moves with it --
+            // the invariant on ``HookTurnState/lastSubagentBoundaryAt``. It
+            // lands on the same instant `lastEventAt` is about to, which is
+            // what the settling window should measure from: this is the moment
+            // the row stopped saying anything was in flight.
+            turn.lastSubagentBoundaryAt = moment
+        }
         // Counted as the turn's last moment, so an event that really is older
         // than this evidence cannot reopen what it ended -- the same monotonic
         // rule ``mutateExactTurn(threadID:turnID:at:createWith:adoptContinuationWith:turns:mutation:)``
