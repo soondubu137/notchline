@@ -35,7 +35,7 @@ Notchline is a persistent surface attached to the top edge of the display, not a
 
 ## Overview
 
-Daily work can already fill the screen with a code editor, internal documentation, product pages and communication tools. Codex Desktop, Claude Desktop and terminal sessions then end up buried under those windows, even while several Turns continue working in the background.
+Daily work can already fill the screen with a code editor, a browser, documents, and communication tools. Codex Desktop, Claude Desktop and terminal sessions then end up buried under those windows, even while several Turns continue working in the background.
 
 Once the agent windows are out of sight, it becomes difficult to see which work is still running, which Turn needs an approval or answer, and which conversation has completed. Repeatedly bringing every window to the front just to check its state interrupts the work that already occupies the desktop.
 
@@ -162,22 +162,6 @@ It may request Automation permission when opening a Claude Code row hosted in Te
 
 The first launch opens one onboarding window. It contains the two product connection switches, an explanation of the Hook configuration they manage, and a live legend for reading the notch. Selecting `Start` completes onboarding; later launches show only the overlay.
 
-<!--
-SCREENSHOT PLACEHOLDER — First-run onboarding
-
-Recommended visual:
-A real screenshot of the complete onboarding window on its first launch.
-
-Composition:
-- Keep the native macOS window chrome and the complete single-pane layout visible.
-- Show both product switches, the Hook configuration explanation, all four live status examples and the Start button.
-- Show both product switches enabled and ensure no account name, home-directory path or machine name is visible.
-- Capture at a scale where the explanatory text and status labels remain readable on GitHub.
-
-What it should communicate:
-The initial setup is one short, explicit step: choose the products to connect, understand what Notchline changes, learn the four states, and start the overlay.
--->
-
 Enabling an integration adds Notchline's lifecycle definitions to the product's own configuration:
 
 - Codex: `~/.codex/hooks.json`
@@ -197,49 +181,34 @@ There is no keyboard shortcut for opening or closing the overlay. Because Notchl
 
 ## How it works
 
-The runtime converges product-specific evidence into one path to the overlay:
+Notchline is one `LSUIElement` process that observes two products it does not control. Each product is understood through its own boundary — hooks, a subprocess, a few read-only file adapters — and everything past that boundary follows a single path: one reducer per product, one merged snapshot, one main-actor store, one overlay.
 
-```text
-Codex boundary signals               Claude Code boundary signals
-        ↓                                      ↓
-HookEventRepository                  HookEventRepository
-LiveCodexMonitorService              ClaudeCodeMonitorService
-        └──────────── AgentSnapshot ────────────┘
-                           ↓
-             AgentSnapshotMerge / MonitorSnapshot
-                           ↓
-             MonitorStore (@MainActor)
-                           ↓
-       NSPanel geometry + SwiftUI content + CALayer motion
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design/assets/07-readme/notchline-architecture-dark.svg">
+  <img src="design/assets/07-readme/notchline-architecture.svg" alt="Notchline architecture: the Codex and Claude Code boundaries converge on one merged snapshot and one overlay" width="1120">
+</picture>
 
-Both products run a small `sh` helper for lifecycle events. The helper forwards one payload to a per-product, permission-restricted Unix domain socket and always exits successfully, so Notchline being closed does not add errors to the originating session. Events are reduced in memory; there is no on-disk event queue or persisted Thread list.
+### Live Turn state comes only from Hooks
 
-Codex metadata, quota, membership and navigation checks come from a local `codex app-server` subprocess. A small number of features that public interfaces do not expose—such as Desktop Project identity and unread state—are handled by read-only boundary adapters and documented in the [non-public integration registry](docs/non-public-codex-integration-features.md).
+Both products run a small `sh` helper for lifecycle events. The helper forwards one payload to a per-product, permission-restricted Unix domain socket and always exits successfully, so Notchline being closed does not add errors to the originating session. Payloads go straight into an in-memory reducer that holds each Turn's exact state; there is no on-disk event queue and no persisted Thread list. The socket transport and the reducer are one implementation shared by both products, instantiated once each.
 
-Claude Code combines official Hooks and `claude agents --json` with narrowly scoped local readers for titles, read evidence, usage and host discovery. Product-specific evidence is translated into the same `AgentSnapshot` shape before the UI sees it.
+### Codex is read through a second App Server
 
-The app itself has no network client. Its sockets are local, its App Server and CLI interactions are local subprocesses, and the UI receives only the merged snapshot rather than reading product files or protocols directly.
+Codex Desktop drives its own App Server in-process. Notchline never attaches to it. It launches a **separate** `codex app-server` subprocess of its own and speaks JSON-RPC over stdio to that one, using six public read-only methods plus one registered experimental method.
 
-<!--
-ARCHITECTURE DIAGRAM PLACEHOLDER
+The two servers never exchange live state, and that is a measured capability boundary rather than a design preference: on a standalone App Server, `thread/loaded/list` comes back empty, threads read as `notLoaded`, and `thread/read` never reports `inProgress`. What they do share is the records on disk — the same thread rollout files under `~/.codex`. So the split falls out naturally: the App Server answers what is already persisted (Thread identity, titles, Projects, quota, and the pre-flight that a row is still navigable), while whether a Turn is running, waiting or finished arrives only through the hook socket. This is also why there is no cold-start reconstruction.
 
-Recommended diagram:
-A restrained engineering diagram of the implemented runtime, suitable for an SVG exported from a simple vector or Mermaid source.
+A small number of features that public interfaces do not expose — Desktop Project identity, unread state and approval routing — are handled by read-only adapters over Desktop's own state file, and documented in the [non-public integration registry](docs/non-public-codex-integration-features.md).
 
-Structure:
-- Left column: Codex Hooks, codex app-server, and Desktop read-only metadata.
-- Second left column: Claude Code Hooks, claude agents/usage commands, transcripts and host/read-state adapters.
-- Centre: two Unix sockets feeding AgentHookListener and the shared HookEventRepository implementation, with one reducer instance per product.
-- Next: LiveCodexMonitorService and ClaudeCodeMonitorService producing AgentSnapshots that merge into one MonitorSnapshot.
-- Right: MonitorStore on the main actor feeding OverlayPanelController, NotchOverlayView and the settings/onboarding window.
-- Mark public interfaces, observed/private read-only boundaries and app-owned files with simple line styles rather than decorative colour.
+### Claude Code divides the same way
 
-Keep the diagram monochrome, flat and compact. Avoid cloud symbols, service logos, gradients and infrastructure-style decoration.
+Notchline runs its own `claude` subprocesses too — `claude agents --json` for the session list and `claude -p "/usage"` for quota — and they are separate invocations, not attachments to the user's sessions. Narrowly scoped local readers supply titles, read evidence and host discovery from transcripts, Claude Desktop's session records and each session's controlling tty. As on the Codex side, files can say what a session is, but only a hook can say what its Turn is doing right now.
 
-What it should communicate:
-Product-specific complexity stops at the boundary; state reduction and presentation have one shared path.
--->
+### One contract, one store, one surface
+
+Each service reduces its own product's evidence into an `AgentSnapshot`. The two merge into a single `MonitorSnapshot` — availability, sessions, quota and diagnostics — which `MonitorStore` publishes on the main actor. The views render that store and nothing else: they parse no protocol and read no product file. Clicking a row runs the same loop in reverse, back to the originating Thread through the official deep link, or to the terminal or Claude Desktop host that owns the session.
+
+The app has no network client. Every socket, subprocess and file read in the diagram above is local.
 
 ## Known limitations
 
