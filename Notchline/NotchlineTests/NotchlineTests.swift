@@ -457,12 +457,18 @@ struct NotchlineTests {
         let glimmerFloor = try #require(floors.min())
         #expect(abs(glimmerFloor - resting) < 1e-6)
         // Normalised: the floor is the resting level and the highlight's peak
-        // is full. `0.998` and not `1` because the highlight crosses a cell's
-        // centre between two frames rather than on one — the ceiling is the
-        // figure's, and 30fps is where it is read.
+        // is `0.8`, short of the full the other four reach. A mark with no
+        // news must not be the brightest thing on the bar. A hair under `0.8`
+        // and not exactly it, because the highlight crosses a cell's centre
+        // between two frames rather than on one — the ceiling is the figure's,
+        // and 30fps is where it is read.
         let peaks: [Double] = glimmerTracks.compactMap { $0.max() }
         let brightest = try #require(peaks.max())
-        #expect(abs(brightest - 1) < 0.005)
+        #expect(abs(brightest - 0.8) < 0.005)
+        // And it stays under the `1` all four live patterns reach above, which
+        // is the ordering the ceiling exists to keep: whatever is brightest on
+        // the bar is something with news.
+        #expect(brightest < 1)
 
         // The figure crosses the columns twice for every once it crosses the
         // rows, so half a loop later the highlight is at the mirrored row and
@@ -485,7 +491,7 @@ struct NotchlineTests {
         for frame in 0 ... 120 {
             let frameCells: [Double] = glimmerTracks.map { $0[frame] }
             let lit: Double = frameCells.max() ?? 0
-            #expect(lit > 0.7)
+            #expect(lit > 0.55)
         }
     }
 
@@ -529,13 +535,16 @@ struct NotchlineTests {
         let codex = try glimmer(.codex)
         let claudeCode = try glimmer(.claudeCode)
 
-        // The clock is still shared: one anchor per mark, on the same grid, as
-        // it is for every other pattern. What differs is the curve each mark
-        // draws, not the time each keeps — the same division of labour a
-        // cell's own phase already uses.
-        let anchor = try #require(codex.begin.first)
-        #expect(codex.begin.allSatisfy { $0 == anchor })
-        #expect(claudeCode.begin.allSatisfy { $0 == anchor })
+        // One clock per mark, as for every other pattern: the sixteen cells
+        // are anchored together and what differs between two marks is the
+        // curve each draws, not the time each keeps. The anchor itself is the
+        // reading taken when the mark was built rather than a point on the
+        // period grid — the glimmer runs once and a one-shot put on the grid
+        // would begin in the past and show whatever was left of itself.
+        let codexAnchor = try #require(codex.begin.first)
+        let claudeAnchor = try #require(claudeCode.begin.first)
+        #expect(codex.begin.allSatisfy { $0 == codexAnchor })
+        #expect(claudeCode.begin.allSatisfy { $0 == claudeAnchor })
 
         // A third of the loop: Claude Code's highlight is where Codex's was
         // 40 frames ago, cell for cell.
@@ -605,6 +614,69 @@ struct NotchlineTests {
         // And with both, it moves.
         for cell in try opacities(isAnimated: true, isPanelOpen: true) {
             #expect(cell.animation(forKey: "notch.matrix.opacity") != nil)
+        }
+    }
+
+    /// The glimmer is given one turn of the figure, not a loop.
+    ///
+    /// It is the mark answering the pointer rather than a reading of a
+    /// product, and an answer is given once: repeated it becomes a beat on a
+    /// bar where nothing is happening, which is the one thing this figure is
+    /// shaped not to say, and it goes on costing the render server for as long
+    /// as a hover-held panel stays up. The four state patterns keep their
+    /// loops, because each is true for as long as the state is.
+    @Test @MainActor
+    func anIdleMarkGlimmersOnceForAnOpeningRatherThanOnALoop() throws {
+        func litCells(
+            _ state: NotchMatrixState,
+            awakeAgent: AgentKind? = nil
+        ) throws -> [CALayer] {
+            let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
+            view.apply(
+                state: state,
+                size: 16,
+                isAnimated: true,
+                ink: NotchPalette.codexInk,
+                awakeAgent: awakeAgent
+            )
+            let passes = try #require(view.layer?.sublayers)
+            return try #require(passes.last?.sublayers)
+        }
+
+        // Every state that is a reading of a product runs until the reading
+        // changes.
+        for state in [
+            NotchMatrixState.running,
+            .inputNeeded,
+            .approvalNeeded,
+            .completed
+        ] {
+            for cell in try litCells(state) {
+                guard let animation = cell.animation(forKey: "notch.matrix.opacity") else {
+                    // The advance's baseline row, which never moves.
+                    continue
+                }
+                #expect(animation.repeatCount == .infinity)
+            }
+        }
+
+        let builtAt = CACurrentMediaTime()
+        for cell in try litCells(.inactive, awakeAgent: .codex) {
+            let animation = try #require(
+                cell.animation(forKey: "notch.matrix.opacity") as? CAKeyframeAnimation
+            )
+            #expect(animation.repeatCount == 1)
+            #expect(animation.duration == MatrixPattern.glimmerPeriod)
+            // Started when the pointer arrived, not on the period grid the
+            // looping patterns share. A one-shot anchored to the grid would
+            // begin in the past and draw whatever fraction was left of it.
+            #expect(animation.beginTime <= CACurrentMediaTime())
+            #expect(builtAt - animation.beginTime < 1)
+            // And it ends where the layer itself rests, so the mark holds the
+            // frame it finished on instead of snapping somewhere when the turn
+            // is over.
+            let values = try #require(animation.values as? [NSNumber])
+            #expect(Float(try #require(values.last).doubleValue) == cell.opacity)
         }
     }
 

@@ -887,9 +887,32 @@ enum MatrixPattern: Equatable {
         case .radar, .doubleKnock: 1.2
         case .advance: 0.8
         case .lull: 2.0
-        case .glimmer: 4.0
+        case .glimmer: Self.glimmerPeriod
         case .still: nil
         }
+    }
+
+    /// The glimmer's length, named because the surface has to know it before
+    /// it has a pattern to ask — see ``NotchStatusMatrix/glimmerHasRun``.
+    static let glimmerPeriod: TimeInterval = 4.0
+
+    /// Whether the pattern runs until something else stops it.
+    ///
+    /// The four state patterns do: each is a reading of a product that is
+    /// still doing the thing, so it goes on being drawn for as long as that is
+    /// true, and the loop ends when the state does.
+    ///
+    /// **The glimmer runs once.** It is not a reading of anything — it is the
+    /// mark answering the pointer — and an answer is given once. Repeated, it
+    /// became a beat on a bar where nothing was happening, which is the one
+    /// thing the figure is shaped to avoid saying; it also went on costing the
+    /// render server for as long as the panel stayed open, which for a panel
+    /// held by hover can be minutes. One turn round the figure says the mark
+    /// is live, and after that an idle product is best drawn the way an idle
+    /// product looks.
+    var repeatsIndefinitely: Bool {
+        if case .glimmer = self { return false }
+        return true
     }
 }
 
@@ -993,10 +1016,10 @@ private enum MatrixTrack {
     /// A soft highlight drifts over the mark: a Gaussian `1.25` cells wide
     /// whose centre travels a 1:2 Lissajous figure, once down and up the rows
     /// while it goes twice across the columns. A cell is as bright as the
-    /// highlight is close, so it rises to full as the highlight passes over it
-    /// and falls back to `0.15` when the highlight is elsewhere. There is no
-    /// beat anywhere in it and nothing ever arrives: it reads as idle rather
-    /// than as waiting, which is the whole of what it has to say.
+    /// highlight is close, so it rises to `0.8` as the highlight passes over
+    /// it and falls back to `0.15` when the highlight is elsewhere. There is
+    /// no beat anywhere in it and nothing ever arrives: it reads as idle
+    /// rather than as waiting, which is the whole of what it has to say.
     ///
     /// **The other four are one curve plus an offset; this one cannot be.**
     /// Their highlights travel in one dimension — round a bearing, across a
@@ -1007,7 +1030,9 @@ private enum MatrixTrack {
     /// shape. What survives being read is the figure, so the figure is what
     /// is written down and the curves are sampled off it — rounded to the
     /// same three decimals `notchline-connected-glimmer.svg` writes, so the
-    /// file and this are the same numbers rather than merely close ones.
+    /// file and this are the same numbers rather than merely close ones. The
+    /// file was regenerated when the ceiling came down to `0.8`; it is still
+    /// the same figure, read against a lower peak.
     static let glimmer: [[Double]] = (0 ..< MatrixGrid.cellCount).map { index in
         let row = Double(index / MatrixGrid.side)
         let column = Double(index % MatrixGrid.side)
@@ -1055,13 +1080,24 @@ private enum MatrixTrack {
     /// sinks back to it, and a cell the highlight is not near is drawing
     /// exactly what it drew before the pointer arrived.
     private static let glimmerFloor = inactiveLevel
+    /// The brightest a cell gets, at the moment the highlight is over it.
+    ///
+    /// Short of the `1` the other four patterns reach, and short on purpose.
+    /// Those four are readings of a product doing something; this one is the
+    /// mark answering the pointer while the product does nothing at all. Given
+    /// the same ceiling it was the brightest thing on a bar where nothing was
+    /// happening — a mark with no news outshining one that had some. `0.8` is
+    /// still plainly lit and plainly below every state that has something to
+    /// report, so the loudest mark on the surface is always the one with a
+    /// reason to be.
+    private static let glimmerPeak = 0.8
     /// How far the highlight lifts a cell above that field.
     ///
-    /// Floor plus swing is exactly `1`, so the highlight's peak is full and
-    /// the pattern spans the whole range the other four span. The brightest
-    /// frame the design file actually draws is `0.998`, because the highlight
-    /// crosses a cell's centre between two frames rather than on one.
-    private static let glimmerSwing = 1 - glimmerFloor
+    /// Floor plus swing is the peak, so the pattern spans `0.15` to `0.8` --
+    /// the bottom of the other four's range and four fifths of the way up it.
+    /// The brightest frame actually drawn is a hair under, because the
+    /// highlight crosses a cell's centre between two frames rather than on one.
+    private static let glimmerSwing = glimmerPeak - glimmerFloor
 
     /// Connected and disconnected hold still at a level no live pattern
     /// rests at.
@@ -1226,6 +1262,16 @@ struct NotchStatusMatrix: View {
     /// belongs to one product. When set it replaces `agent`'s ink entirely.
     var split: NotchPalette.MatrixSplit?
 
+    /// Whether this opening's one turn round the figure is already spent.
+    ///
+    /// The glimmer runs once per hover rather than for as long as the panel is
+    /// up — see ``MatrixPattern/repeatsIndefinitely``. Something has to notice
+    /// when the turn is over, and this is the smallest thing that can: it is
+    /// local to one mark, it moves once, and the redraw it causes is this view
+    /// and not the surface. Closing the panel clears it, so the next opening
+    /// is answered as freshly as the first.
+    @State private var glimmerHasRun = false
+
     /// The product whose idle mark should wake, if any.
     ///
     /// **Only a product's mark glimmers.** The resting grey is drawn when
@@ -1233,7 +1279,9 @@ struct NotchStatusMatrix: View {
     /// so a curve run through it would move nothing but the glow around it —
     /// half an effect, saying that something might happen behind a mark that
     /// exists to say nothing can.
-    private var awakeAgent: AgentKind? { isPanelOpen ? agent : nil }
+    private var awakeAgent: AgentKind? {
+        isPanelOpen && !glimmerHasRun ? agent : nil
+    }
 
     var body: some View {
         MatrixIndicator(
@@ -1246,6 +1294,20 @@ struct NotchStatusMatrix: View {
         )
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+        // One turn of the figure, timed against the same length the animation
+        // is given. A cancelled sleep is the panel closing under it, and it
+        // must not be read as the turn having finished — hence the `catch`
+        // rather than a `try?`, which would spend the glimmer on the way out.
+        .task(id: isPanelOpen) {
+            glimmerHasRun = false
+            guard isPanelOpen, isAnimated, agent != nil else { return }
+            do {
+                try await Task.sleep(for: .seconds(MatrixPattern.glimmerPeriod))
+            } catch {
+                return
+            }
+            glimmerHasRun = true
+        }
     }
 }
 
@@ -1390,6 +1452,9 @@ final class MatrixIndicatorView: NSView {
         // would clip its own halo.
         let bleed = cell * 10.5 / 27 * 3
         let scale = window?.backingScaleFactor ?? 2
+        // One reading for every cell of this mark, so the sixteen are on one
+        // clock however long the layers take to build.
+        let now = CACurrentMediaTime()
 
         /// One cell, in one colour or cut into two on the mark's diagonal.
         ///
@@ -1460,7 +1525,12 @@ final class MatrixIndicatorView: NSView {
                 cellLayer.opacity = Float(track.first ?? 1)
                 if animated, let period = pattern.period, track.count > 1 {
                     cellLayer.add(
-                        Self.trackAnimation(track: track, period: period),
+                        Self.trackAnimation(
+                            track: track,
+                            period: period,
+                            repeats: pattern.repeatsIndefinitely,
+                            now: now
+                        ),
                         forKey: "notch.matrix.opacity"
                     )
                 }
@@ -1560,17 +1630,32 @@ final class MatrixIndicatorView: NSView {
     /// frames are drawn at, and a wrap that interpolates like every other
     /// step. It matters most to the radar and the knock, whose tracks end far
     /// from where they begin.
+    ///
+    /// **A pattern that runs once starts now rather than on the grid.** The
+    /// anchor exists so that two marks saying the same thing say it together,
+    /// and a one-shot has nothing to be together with: put on the grid it
+    /// would begin somewhere in the past and show whatever fraction of itself
+    /// was left. The glimmer is the only one, and it starts when the pointer
+    /// arrives because that is the thing it is answering. Its stagger between
+    /// products survives regardless, being baked into the curve rather than
+    /// into the clock — see ``MatrixTrack/glimmerStagger``.
+    ///
+    /// It ends where it began: the closing keyframe is frame 0 again, which is
+    /// also the layer's own opacity, so the mark holds that frame rather than
+    /// snapping anywhere when the animation is over.
     private static func trackAnimation(
         track: [Double],
-        period: TimeInterval
+        period: TimeInterval,
+        repeats: Bool,
+        now: CFTimeInterval
     ) -> CAKeyframeAnimation {
         let animation = CAKeyframeAnimation(keyPath: "opacity")
         animation.values = (track + [track[0]]).map { NSNumber(value: $0) }
         animation.duration = period
         animation.calculationMode = .linear
-        animation.repeatCount = .infinity
+        animation.repeatCount = repeats ? .infinity : 1
         animation.isRemovedOnCompletion = false
-        animation.beginTime = phaseAnchor(for: period)
+        animation.beginTime = repeats ? phaseAnchor(for: period, now: now) : now
         return animation
     }
 
