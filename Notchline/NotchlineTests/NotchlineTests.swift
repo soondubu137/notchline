@@ -2262,16 +2262,14 @@ struct NotchlineTests {
             )
         }
 
-        // Idle: leading wing + the cut-out, and nothing to its right but the
-        // step that keeps the shoulder off the cut-out's flare — an empty
-        // trailing *wing* would render as a second, fake notch.
+        // Idle: leading wing + the cut-out, and nothing at all to its right —
+        // an empty trailing *wing* would render as a second, fake notch.
         let idle = size(trailingText: nil)
         let leading = PanelMetrics.compactLeadingWidth(
             statusReadoutText: "Running",
             showsStatusText: false
         ) + PanelMetrics.expandedNotchClearance
-        let overshoot = PanelMetrics.winglessTrailingOvershoot(panelHeight: 46)
-        #expect(abs(idle.width - (leading + occlusion + overshoot)) <= 1)
+        #expect(abs(idle.width - (leading + occlusion)) <= 1)
 
         #expect(size(trailingText: "1:23").width > idle.width)
     }
@@ -2295,34 +2293,18 @@ struct NotchlineTests {
         let occlusionMaxX = try #require(display.centerOcclusionMaxX)
 
         // The cut-out's own edge, held out by whatever trailing wing is drawn —
-        // and nothing is drawn there until a turn is being timed. A surface
-        // drawing nothing at all keeps that edge exactly; one that draws marks
-        // steps a fraction past it (`aWinglessTrailingEdgeStepsClearOfTheCutOut`).
+        // and nothing is drawn there until a turn is being timed, on any form
+        // (`aWinglessTrailingEdgeIsTheCutOutsEdge`).
+        #expect(PanelMetrics.compactTrailingWingWidth(trailing: .empty) == 0)
         #expect(
             PanelMetrics.compactTrailingWingWidth(
-                trailing: .empty,
-                panelHeight: store.compactHeight,
-                drawsCompactMarks: false
-            ) == 0
-        )
-        #expect(
-            PanelMetrics.compactTrailingWingWidth(
-                trailing: CompactTrailingReading(timerText: "1:23"),
-                panelHeight: store.compactHeight,
-                drawsCompactMarks: true
-            )
-                > PanelMetrics.compactTrailingWingWidth(
-                    trailing: .empty,
-                    panelHeight: store.compactHeight,
-                    drawsCompactMarks: true
-                )
+                trailing: CompactTrailingReading(timerText: "1:23")
+            ) > 0
         )
         #expect(
             store.currentPanelTrailingAnchor
                 == occlusionMaxX + PanelMetrics.compactTrailingWingWidth(
-                    trailing: store.compactTrailingReading,
-                    panelHeight: store.compactHeight,
-                    drawsCompactMarks: store.drawsCompactMarks
+                    trailing: store.compactTrailingReading
                 )
         )
 
@@ -2341,9 +2323,10 @@ struct NotchlineTests {
         // sized to the panel puts the black that far inside the cut-out.
         #expect(frame.width == (store.currentPanelSize.width + shoulder * 2).rounded(.up))
         // The body's trailing edge lands on the cut-out's, and on the outside
-        // of it: a `38` pt bar makes the shoulder `4.75`, so the whole point
-        // the window edge is rounded to is up to one point out. Never inwards
-        // — that is the direction `winglessTrailingOvershoot` exists to avoid.
+        // of it: a `38` pt cut-out makes the shoulder `4.75`, so the whole
+        // point the window edge is rounded to is up to one point out. Never
+        // inwards — out is black over the hardware's own black, in is a point
+        // of the cut-out's edge with no panel on it.
         #expect(frame.maxX - shoulder >= occlusionMaxX)
         #expect(frame.maxX - shoulder < occlusionMaxX + 1)
         // And the leading edge is one body in from it: the rounding lands in
@@ -2405,9 +2388,7 @@ struct NotchlineTests {
             // anchor comes from: `0:00` is `27.78` before its ground and the
             // wing's own padding are added.
             let wing = PanelMetrics.compactTrailingWingWidth(
-                trailing: CompactTrailingReading(timerText: "0:00"),
-                panelHeight: bar,
-                drawsCompactMarks: true
+                trailing: CompactTrailingReading(timerText: "0:00")
             )
             let size = PanelMetrics.size(
                 geometry: .notched,
@@ -2494,9 +2475,7 @@ struct NotchlineTests {
                 ),
                 surfaceShoulder: shoulder,
                 trailingAnchor: occlusionMaxX + PanelMetrics.compactTrailingWingWidth(
-                    trailing: trailing,
-                    panelHeight: bar,
-                    drawsCompactMarks: true
+                    trailing: trailing
                 )
             )
         }
@@ -2580,9 +2559,7 @@ struct NotchlineTests {
             for reading in readings {
                 for draws in [true, false] {
                     let wing = PanelMetrics.compactTrailingWingWidth(
-                        trailing: reading,
-                        panelHeight: bar,
-                        drawsCompactMarks: draws
+                        trailing: reading
                     )
                     #expect(wing == wing.rounded(), "\(bar) pt bar, draws \(draws)")
                     // The identity itself, on the leading wing this app draws.
@@ -2613,9 +2590,7 @@ struct NotchlineTests {
             compactHeight: 38
         )
         let anchor = 1_060 + PanelMetrics.compactTrailingWingWidth(
-            trailing: CompactTrailingReading(timerText: "9:59"),
-            panelHeight: 38,
-            drawsCompactMarks: true
+            trailing: CompactTrailingReading(timerText: "9:59")
         )
         let first = OverlayPanelLayout.frame(
             on: screen,
@@ -2633,9 +2608,7 @@ struct NotchlineTests {
         // And a second that has only advanced the digits does not move it
         // either: the reading is tabular, so `0:01` is `0:09`'s width.
         let laterAnchor = 1_060 + PanelMetrics.compactTrailingWingWidth(
-            trailing: CompactTrailingReading(timerText: "9:58"),
-            panelHeight: 38,
-            drawsCompactMarks: true
+            trailing: CompactTrailingReading(timerText: "9:58")
         )
         #expect(
             OverlayPanelLayout.frame(
@@ -2654,67 +2627,46 @@ struct NotchlineTests {
         )
     }
 
-    /// A wingless trailing edge steps just past the cut-out's *reported* edge,
-    /// so the shoulder curving back up to the menu bar is not drawn behind the
-    /// flare at the top of the notch. See
-    /// `PanelMetrics.winglessTrailingOvershoot(menuBarHeight:)` for why the
-    /// reported rectangle is not the shape the panel has to clear.
+    /// **A wingless trailing edge is the cut-out's edge**, on every form.
+    ///
+    /// This test previously asserted the opposite, and the reversal is the
+    /// point of it. The body used to step `panelHeight / 16` past the reported
+    /// edge whenever it was drawing marks: `auxiliaryTopRightArea` describes
+    /// the cut-out as a rectangle, the glass actually flares outwards where it
+    /// meets the top of the display, and an edge on the reported value has the
+    /// top of its shoulder fillet drawn behind that flare — which under
+    /// `Outline the panel` reads as the hairline stopping short of the notch.
+    ///
+    /// **But that argument is about the top of the shoulder, and the step moved
+    /// the whole edge.** The flare is a few points tall at the very top of the
+    /// screen; the rest of the stepped-out edge — most of the height, the lower
+    /// corner included — is nowhere near it, and stands as a `3` pt sliver of
+    /// black beside the notch on a lit wallpaper. Reported from the hardware.
+    /// A hairline clipped at the top under an optional setting is the cheaper
+    /// cost, so the step is gone.
     @Test @MainActor
-    func aWinglessTrailingEdgeStepsClearOfTheCutOut() {
+    func aWinglessTrailingEdgeIsTheCutOutsEdge() {
         let bar: CGFloat = 38
-        let overshoot = PanelMetrics.winglessTrailingOvershoot(panelHeight: bar)
 
-        // Small enough to read as the panel continuing out of the notch rather
-        // than as a ledge beside it: half the shoulder it is clearing.
-        #expect(overshoot > 0)
-        #expect(overshoot < PanelMetrics.surfaceShoulderRadius(panelHeight: bar))
+        // Nothing in the trailing reading is nothing in the trailing wing, and
+        // that no longer depends on what the rest of the surface is drawing:
+        // the resting cut-out and a notch with a leading wing of marks put
+        // their right edge in the same place.
+        #expect(PanelMetrics.compactTrailingWingWidth(trailing: .empty) == 0)
 
-        // Drawing marks with an empty trailing slot -- the one shape that takes
-        // the step.
-        // Taken to the next whole point, like every other wing width: the
-        // wing has to enter the body sum as an integer or the leading edge
-        // drifts with it (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
-        // `2.375` becomes `3`, which the assertions below still hold.
-        #expect(
-            PanelMetrics.compactTrailingWingWidth(
-                trailing: .empty,
-                panelHeight: bar,
-                drawsCompactMarks: true
-            ) == ceil(overshoot)
-        )
-
-        // Drawing nothing at all: the body *is* the cut-out, and stepping past
-        // its edge would hang a sliver of black off the side of the notch.
-        #expect(
-            PanelMetrics.compactTrailingWingWidth(
-                trailing: .empty,
-                panelHeight: bar,
-                drawsCompactMarks: false
-            ) == 0
-        )
-
-        // A wing with something in it is already far clear of the flare, so it
-        // is unchanged: its content plus the clearance.
+        // A wing with something in it is unchanged: its content plus the
+        // clearance, taken to the next whole point like every other wing width
+        // (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
         let timed = CompactTrailingReading(timerText: "1:23")
         #expect(
-            PanelMetrics.compactTrailingWingWidth(
-                trailing: timed,
-                panelHeight: bar,
-                drawsCompactMarks: true
-            ) == ceil(
+            PanelMetrics.compactTrailingWingWidth(trailing: timed) == ceil(
                 PanelMetrics.compactTrailingWidth(trailing: timed)
                     + PanelMetrics.expandedNotchClearance
             )
         )
 
-        // A share of the menu bar height like the two radii, because what it
-        // clears is hardware: it shrinks in points as the scaling coarsens.
-        #expect(PanelMetrics.winglessTrailingOvershoot(panelHeight: 22) < overshoot)
-        #expect(PanelMetrics.winglessTrailingOvershoot(panelHeight: 0) == 0)
-
-        // The body takes the step into its own width, which is what keeps it on
-        // the trailing side: the window and the anchor grow by the same amount,
-        // so the leading edge -- and the marks measured from it -- stay put.
+        // So a marks-drawing body is exactly its leading wing plus the cut-out,
+        // with nothing added on the trailing side.
         let body = PanelMetrics.size(
             geometry: .notched,
             isExpanded: false,
@@ -2730,10 +2682,7 @@ struct NotchlineTests {
             statusReadoutText: "Running",
             showsStatusText: false
         ) + PanelMetrics.expandedNotchClearance
-        // The step enters the sum as the whole point the wing is rounded to,
-        // not as its raw ratio -- that is what makes it cancel out of the
-        // leading edge like every other trailing width.
-        #expect(body == ceil(leading + 200 + ceil(overshoot)))
+        #expect(body == ceil(leading + 200))
     }
 
     /// The compact panel measures itself from rendered text, so only the widths
@@ -2757,38 +2706,32 @@ struct NotchlineTests {
             ).width
         }
 
-        // Leading wing plus the cut-out, plus the step that keeps the trailing
-        // shoulder off the cut-out's flare. No text is measured on a notched
+        // Leading wing plus the cut-out, and nothing else: the trailing side
+        // adds nothing until a turn is timed. No text is measured on a notched
         // compact panel, so this width is exact -- and it is the one number a
         // Figma variant can be checked against directly. `12` padding + `16.6`
         // matrix + `5.655` dot column + `8` clearance + the `200` cut-out is
-        // `242.255`; the step is `46 / 16`, and the sum ceils to `246`. It was
-        // `240` before each product mark reserved a column for its session
-        // dots, and `237` before the step existed at all.
+        // `242.255`, which ceils to `243`. It was `246` while a wingless
+        // trailing edge stepped `46 / 16` past the cut-out
+        // (`aWinglessTrailingEdgeIsTheCutOutsEdge`), and `237` before each
+        // product mark reserved a column for its session dots.
         let notchedIdle = width(geometry: .notched, trailingText: nil, compactHeight: 46)
-        #expect(notchedIdle == 246)
+        #expect(notchedIdle == 243)
         #expect(
             notchedIdle == ceil(
                 12 + PanelMetrics.marksWidth(1) + PanelMetrics.expandedNotchClearance
                     + 200
-                    + ceil(PanelMetrics.winglessTrailingOvershoot(panelHeight: 46))
             )
         )
 
-        // Timing a turn replaces the step with the trailing wing, and adds
-        // nothing but the trailing wing.
+        // Timing a turn adds the trailing wing, and nothing but the trailing
+        // wing.
         let notchedTimed = width(geometry: .notched, trailingText: "1:23", compactHeight: 46)
         let trailingWing = PanelMetrics.compactTrailingWidth(
             trailing: CompactTrailingReading(timerText: "1:23")
         )
             + PanelMetrics.expandedNotchClearance
-        #expect(
-            abs(
-                (notchedTimed - notchedIdle)
-                    - (trailingWing
-                        - PanelMetrics.winglessTrailingOvershoot(panelHeight: 46))
-            ) <= 1
-        )
+        #expect(abs((notchedTimed - notchedIdle) - trailingWing) <= 1)
 
         // Only the notched panel composes its width from content. A no-notch
         // one is fixed, so the same two cases must not move it at all.

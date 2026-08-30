@@ -426,10 +426,11 @@ enum OverlayPanelLayout {
     /// elapsed reading (`55.78` for `0:00`).
     ///
     /// **Where the slack lands.** The trailing edge takes `ceil`, never
-    /// `round`: it is the edge that meets the cut-out, and rounding to nearest
-    /// would half the time pull it *back inside* the notch — the one direction
-    /// `winglessTrailingOvershoot(menuBarHeight:)` exists to avoid. Stepping
-    /// out by up to a point is black drawn over black. Everything else is
+    /// `round`: it is the edge that meets the cut-out, and the two directions
+    /// are not equally cheap. Out by up to a point is black laid over the
+    /// hardware's own black; back inside is a point of the cut-out's right
+    /// edge with no panel on it, which on a lit wallpaper is a seam beside the
+    /// notch. Everything else is
     /// derived from that edge and a ceiled width, so the remainder falls in the
     /// leading wing, which is padding and can take it — the same rule
     /// `PanelMetrics.size(...)` already ceils its body width under.
