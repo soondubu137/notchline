@@ -284,7 +284,11 @@ struct AppSettingsView: View {
         let geometry = display.geometry == .notched
             ? "Notch display"
             : "Display without a notch"
-        return "\(geometry) · \(Int(display.menuBarHeight.rounded())) pt menu bar"
+        // The band the component is drawn at, named for what it is here: on a
+        // notched display that is the cut-out, which is a couple of points
+        // shorter than the menu bar around it.
+        let band = display.geometry == .notched ? "pt notch" : "pt menu bar"
+        return "\(geometry) · \(Int(display.panelBandHeight.rounded())) \(band)"
     }
 
     private var displaySelection: Binding<String> {

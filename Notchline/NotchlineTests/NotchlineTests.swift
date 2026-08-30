@@ -2270,7 +2270,7 @@ struct NotchlineTests {
             statusReadoutText: "Running",
             showsStatusText: false
         ) + PanelMetrics.expandedNotchClearance
-        let overshoot = PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 46)
+        let overshoot = PanelMetrics.winglessTrailingOvershoot(panelHeight: 46)
         #expect(abs(idle.width - (leading + occlusion + overshoot)) <= 1)
 
         #expect(size(trailingText: "1:23").width > idle.width)
@@ -2301,19 +2301,19 @@ struct NotchlineTests {
         #expect(
             PanelMetrics.compactTrailingWingWidth(
                 trailing: .empty,
-                menuBarHeight: store.compactHeight,
+                panelHeight: store.compactHeight,
                 drawsCompactMarks: false
             ) == 0
         )
         #expect(
             PanelMetrics.compactTrailingWingWidth(
                 trailing: CompactTrailingReading(timerText: "1:23"),
-                menuBarHeight: store.compactHeight,
+                panelHeight: store.compactHeight,
                 drawsCompactMarks: true
             )
                 > PanelMetrics.compactTrailingWingWidth(
                     trailing: .empty,
-                    menuBarHeight: store.compactHeight,
+                    panelHeight: store.compactHeight,
                     drawsCompactMarks: true
                 )
         )
@@ -2321,7 +2321,7 @@ struct NotchlineTests {
             store.currentPanelTrailingAnchor
                 == occlusionMaxX + PanelMetrics.compactTrailingWingWidth(
                     trailing: store.compactTrailingReading,
-                    menuBarHeight: store.compactHeight,
+                    panelHeight: store.compactHeight,
                     drawsCompactMarks: store.drawsCompactMarks
                 )
         )
@@ -2400,13 +2400,13 @@ struct NotchlineTests {
         }
 
         for bar in [46.0, 38.0, 37.0, 32.0, 24.0, 22.0] as [CGFloat] {
-            let shoulder = PanelMetrics.surfaceShoulderRadius(menuBarHeight: bar)
+            let shoulder = PanelMetrics.surfaceShoulderRadius(panelHeight: bar)
             // A measured elapsed reading, which is where the fraction in the
             // anchor comes from: `0:00` is `27.78` before its ground and the
             // wing's own padding are added.
             let wing = PanelMetrics.compactTrailingWingWidth(
                 trailing: CompactTrailingReading(timerText: "0:00"),
-                menuBarHeight: bar,
+                panelHeight: bar,
                 drawsCompactMarks: true
             )
             let size = PanelMetrics.size(
@@ -2477,7 +2477,7 @@ struct NotchlineTests {
         let bar: CGFloat = 38
         let occlusionMaxX: CGFloat = 1_060
         let occlusion: CGFloat = 220
-        let shoulder = PanelMetrics.surfaceShoulderRadius(menuBarHeight: bar)
+        let shoulder = PanelMetrics.surfaceShoulderRadius(panelHeight: bar)
         let screen = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
 
         func frame(_ trailing: CompactTrailingReading) -> NSRect {
@@ -2495,7 +2495,7 @@ struct NotchlineTests {
                 surfaceShoulder: shoulder,
                 trailingAnchor: occlusionMaxX + PanelMetrics.compactTrailingWingWidth(
                     trailing: trailing,
-                    menuBarHeight: bar,
+                    panelHeight: bar,
                     drawsCompactMarks: true
                 )
             )
@@ -2581,7 +2581,7 @@ struct NotchlineTests {
                 for draws in [true, false] {
                     let wing = PanelMetrics.compactTrailingWingWidth(
                         trailing: reading,
-                        menuBarHeight: bar,
+                        panelHeight: bar,
                         drawsCompactMarks: draws
                     )
                     #expect(wing == wing.rounded(), "\(bar) pt bar, draws \(draws)")
@@ -2603,7 +2603,7 @@ struct NotchlineTests {
     @Test @MainActor
     func anUnchangedLayoutProducesAnIdenticalFrame() {
         let screen = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
-        let shoulder = PanelMetrics.surfaceShoulderRadius(menuBarHeight: 38)
+        let shoulder = PanelMetrics.surfaceShoulderRadius(panelHeight: 38)
         let size = PanelMetrics.size(
             geometry: .notched,
             isExpanded: false,
@@ -2614,7 +2614,7 @@ struct NotchlineTests {
         )
         let anchor = 1_060 + PanelMetrics.compactTrailingWingWidth(
             trailing: CompactTrailingReading(timerText: "9:59"),
-            menuBarHeight: 38,
+            panelHeight: 38,
             drawsCompactMarks: true
         )
         let first = OverlayPanelLayout.frame(
@@ -2634,7 +2634,7 @@ struct NotchlineTests {
         // either: the reading is tabular, so `0:01` is `0:09`'s width.
         let laterAnchor = 1_060 + PanelMetrics.compactTrailingWingWidth(
             trailing: CompactTrailingReading(timerText: "9:58"),
-            menuBarHeight: 38,
+            panelHeight: 38,
             drawsCompactMarks: true
         )
         #expect(
@@ -2662,12 +2662,12 @@ struct NotchlineTests {
     @Test @MainActor
     func aWinglessTrailingEdgeStepsClearOfTheCutOut() {
         let bar: CGFloat = 38
-        let overshoot = PanelMetrics.winglessTrailingOvershoot(menuBarHeight: bar)
+        let overshoot = PanelMetrics.winglessTrailingOvershoot(panelHeight: bar)
 
         // Small enough to read as the panel continuing out of the notch rather
         // than as a ledge beside it: half the shoulder it is clearing.
         #expect(overshoot > 0)
-        #expect(overshoot < PanelMetrics.surfaceShoulderRadius(menuBarHeight: bar))
+        #expect(overshoot < PanelMetrics.surfaceShoulderRadius(panelHeight: bar))
 
         // Drawing marks with an empty trailing slot -- the one shape that takes
         // the step.
@@ -2678,7 +2678,7 @@ struct NotchlineTests {
         #expect(
             PanelMetrics.compactTrailingWingWidth(
                 trailing: .empty,
-                menuBarHeight: bar,
+                panelHeight: bar,
                 drawsCompactMarks: true
             ) == ceil(overshoot)
         )
@@ -2688,7 +2688,7 @@ struct NotchlineTests {
         #expect(
             PanelMetrics.compactTrailingWingWidth(
                 trailing: .empty,
-                menuBarHeight: bar,
+                panelHeight: bar,
                 drawsCompactMarks: false
             ) == 0
         )
@@ -2699,7 +2699,7 @@ struct NotchlineTests {
         #expect(
             PanelMetrics.compactTrailingWingWidth(
                 trailing: timed,
-                menuBarHeight: bar,
+                panelHeight: bar,
                 drawsCompactMarks: true
             ) == ceil(
                 PanelMetrics.compactTrailingWidth(trailing: timed)
@@ -2709,8 +2709,8 @@ struct NotchlineTests {
 
         // A share of the menu bar height like the two radii, because what it
         // clears is hardware: it shrinks in points as the scaling coarsens.
-        #expect(PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 22) < overshoot)
-        #expect(PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 0) == 0)
+        #expect(PanelMetrics.winglessTrailingOvershoot(panelHeight: 22) < overshoot)
+        #expect(PanelMetrics.winglessTrailingOvershoot(panelHeight: 0) == 0)
 
         // The body takes the step into its own width, which is what keeps it on
         // the trailing side: the window and the anchor grow by the same amount,
@@ -2771,7 +2771,7 @@ struct NotchlineTests {
             notchedIdle == ceil(
                 12 + PanelMetrics.marksWidth(1) + PanelMetrics.expandedNotchClearance
                     + 200
-                    + ceil(PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 46))
+                    + ceil(PanelMetrics.winglessTrailingOvershoot(panelHeight: 46))
             )
         )
 
@@ -2786,7 +2786,7 @@ struct NotchlineTests {
             abs(
                 (notchedTimed - notchedIdle)
                     - (trailingWing
-                        - PanelMetrics.winglessTrailingOvershoot(menuBarHeight: 46))
+                        - PanelMetrics.winglessTrailingOvershoot(panelHeight: 46))
             ) <= 1
         )
 
@@ -3592,14 +3592,14 @@ struct NotchlineTests {
         for menuBarHeight in [38.0, 32, 28, 22] as [CGFloat] {
             #expect(
                 abs(
-                    PanelMetrics.surfaceShoulderRadius(menuBarHeight: menuBarHeight)
+                    PanelMetrics.surfaceShoulderRadius(panelHeight: menuBarHeight)
                         - menuBarHeight / 8
                 ) < 0.001
             )
             #expect(
                 abs(
                     PanelMetrics.surfaceBottomCornerRadius(
-                        menuBarHeight: menuBarHeight
+                        panelHeight: menuBarHeight
                     ) - menuBarHeight / 4
                 ) < 0.001
             )
@@ -3607,8 +3607,8 @@ struct NotchlineTests {
 
         // The default 185 × 32 cut-out, which is where the two radii were
         // measured: 4 up top and 8 below.
-        #expect(PanelMetrics.surfaceShoulderRadius(menuBarHeight: 32) == 4)
-        #expect(PanelMetrics.surfaceBottomCornerRadius(menuBarHeight: 32) == 8)
+        #expect(PanelMetrics.surfaceShoulderRadius(panelHeight: 32) == 4)
+        #expect(PanelMetrics.surfaceBottomCornerRadius(panelHeight: 32) == 8)
     }
 
     /// The lower corners are twice the upper ones. Drawing them equal — as one
@@ -3620,9 +3620,9 @@ struct NotchlineTests {
             #expect(
                 abs(
                     PanelMetrics.surfaceBottomCornerRadius(
-                        menuBarHeight: menuBarHeight
+                        panelHeight: menuBarHeight
                     ) - PanelMetrics.surfaceShoulderRadius(
-                        menuBarHeight: menuBarHeight
+                        panelHeight: menuBarHeight
                     ) * 2
                 ) < 0.001
             )
@@ -3631,8 +3631,148 @@ struct NotchlineTests {
 
     @Test
     func surfaceRadiiNeverGoNegative() {
-        #expect(PanelMetrics.surfaceShoulderRadius(menuBarHeight: -10) == 0)
-        #expect(PanelMetrics.surfaceBottomCornerRadius(menuBarHeight: -10) == 0)
+        #expect(PanelMetrics.surfaceShoulderRadius(panelHeight: -10) == 0)
+        #expect(PanelMetrics.surfaceBottomCornerRadius(panelHeight: -10) == 0)
+    }
+
+    /// **The lower corners leave the straight edges with no curvature at all**,
+    /// which is what stops the join reading as a crease.
+    ///
+    /// A circular corner is *tangent* to the edge it leaves but not curved
+    /// like it: curvature jumps from nothing to `1/r` in one step, and against
+    /// a long straight run of black on a lit wallpaper the eye finds the step
+    /// and reads the edge as stopping being straight at a nameable point. The
+    /// continuous corner spends `(1 + smoothing)` radii instead of one easing
+    /// that step out.
+    ///
+    /// The invariant that says it happened is a property of the control
+    /// points, not of the picture: a cubic's curvature at its start is
+    /// proportional to how far its *second* control point lies off the line
+    /// through the first two, so a segment whose two control points both sit
+    /// on the straight edge has exactly zero curvature where it meets it. That
+    /// is asserted here on all four joins -- both edges of both corners.
+    @Test
+    func theLowerCornersLeaveTheStraightEdgesWithoutCurvature() {
+        let shoulder = PanelMetrics.surfaceShoulderRadius(panelHeight: 38)
+        let bottom = PanelMetrics.surfaceBottomCornerRadius(panelHeight: 38)
+        let reach = PanelMetrics.smoothCornerReach(radius: bottom)
+        let rect = CGRect(x: 0, y: 0, width: 265, height: 38)
+        let elements = PanelContour(
+            shoulderRadius: shoulder,
+            bottomRadius: bottom
+        ).path(in: rect).elements
+
+        // The corner reaches further back along both edges than its radius,
+        // and that is what the straight runs are cut to.
+        #expect(reach == bottom * 1.6)
+        guard case let .line(to: trailingRun) = elements[3],
+              case let .line(to: bottomRun) = elements[7] else {
+            Issue.record("the straight runs into the lower corners are missing")
+            return
+        }
+        #expect(
+            trailingRun.isNear(
+                CGPoint(x: rect.maxX - shoulder, y: rect.maxY - reach)
+            )
+        )
+        #expect(
+            bottomRun.isNear(
+                CGPoint(x: rect.minX + shoulder + reach, y: rect.maxY)
+            )
+        )
+
+        // Trailing side into the bottom-right corner, then that corner into
+        // the bottom edge; then the same pair on the leading side. Each entry
+        // is the curve that eases away from a straight edge and the coordinate
+        // that edge holds constant.
+        let joins: [(Int, KeyPath<CGPoint, CGFloat>, CGFloat, String)] = [
+            (4, \.x, rect.maxX - shoulder, "trailing side into the lower-right corner"),
+            (6, \.y, rect.maxY, "lower-right corner into the bottom edge"),
+            (8, \.y, rect.maxY, "bottom edge into the lower-left corner"),
+            (10, \.x, rect.minX + shoulder, "lower-left corner into the leading side"),
+        ]
+        for (index, axis, edge, what) in joins {
+            guard case let .curve(to: _, control1: control1, control2: control2)
+                = elements[index] else {
+                Issue.record("\(what) is not a curve")
+                continue
+            }
+            #expect(abs(control1[keyPath: axis] - edge) < 0.000_1, "\(what)")
+            #expect(abs(control2[keyPath: axis] - edge) < 0.000_1, "\(what)")
+        }
+    }
+
+    /// Smoothing is the only thing separating these corners from the circular
+    /// arcs they replaced: at `0` the path is the one that used to be written
+    /// by hand, quarter-circle handle and all.
+    ///
+    /// Worth pinning because the reduction is what makes the construction
+    /// trustworthy -- the easing segments collapse to zero length, the arc
+    /// grows back to the full right angle, and `4/3 · tan(θ/4)` becomes the
+    /// familiar `0.5523`.
+    @Test
+    func theLowerCornersReduceToCircularArcsWithoutSmoothing() {
+        let shoulder = PanelMetrics.surfaceShoulderRadius(panelHeight: 38)
+        let bottom = PanelMetrics.surfaceBottomCornerRadius(panelHeight: 38)
+        let rect = CGRect(x: 0, y: 0, width: 265, height: 38)
+        let elements = PanelContour(
+            shoulderRadius: shoulder,
+            bottomRadius: bottom,
+            bottomSmoothing: 0
+        ).path(in: rect).elements
+        let handle = bottom * 0.552_284_749_8
+
+        // The straight run now ends one radius above the bottom, and the two
+        // easing segments are points rather than curves.
+        guard case let .line(to: trailingRun) = elements[3],
+              case let .curve(to: end, control1: control1, control2: control2)
+                = elements[5] else {
+            Issue.record("the lower-right corner is not a line into a curve")
+            return
+        }
+        #expect(
+            trailingRun.isNear(
+                CGPoint(x: rect.maxX - shoulder, y: rect.maxY - bottom)
+            )
+        )
+        #expect(
+            end.isNear(CGPoint(x: rect.maxX - shoulder - bottom, y: rect.maxY))
+        )
+        #expect(
+            control1.isNear(
+                CGPoint(x: rect.maxX - shoulder, y: rect.maxY - bottom + handle)
+            )
+        )
+        #expect(
+            control2.isNear(
+                CGPoint(x: rect.maxX - shoulder - bottom + handle, y: rect.maxY)
+            )
+        )
+    }
+
+    /// A corner that cannot fit takes the whole pair down with it, keeping
+    /// their ratio -- and it is the corner's *reach* that has to fit, not its
+    /// radius, or a smoothed corner overruns the edge it was clamped onto.
+    @Test
+    func theContourClampsOnTheCornersReachRatherThanItsRadius() {
+        // Half the width is `10`, and a `4` shoulder plus a `8` lower corner
+        // asks for `4 + 12.8 = 16.8` of it.
+        let rect = CGRect(x: 0, y: 0, width: 20, height: 38)
+        let elements = PanelContour(shoulderRadius: 4, bottomRadius: 8)
+            .path(in: rect).elements
+        let fit = 10.0 / 16.8
+        let shoulder = 4 * fit
+        let reach = PanelMetrics.smoothCornerReach(radius: 8 * fit)
+
+        // The two corners meet in the middle of the bottom edge and nowhere
+        // past it: the shoulder plus the reach is exactly half the width.
+        #expect(abs(shoulder + reach - rect.width / 2) < 0.000_1)
+        guard case let .line(to: bottomEdge) = elements[7] else {
+            Issue.record("the bottom edge is not a line")
+            return
+        }
+        #expect(abs(bottomEdge.x - rect.midX) < 0.000_1)
+        #expect(bottomEdge.x >= rect.minX + shoulder)
     }
 
     @Test @MainActor
@@ -4948,16 +5088,30 @@ struct NotchlineTests {
         #expect(store.compactHeight == 22)
     }
 
-    /// The panel is as tall as the band the menu bar occupies, on a notched
-    /// display too -- `safeAreaInsets.top` is the cut-out and stops a point
-    /// short of it.
+    /// **A notched panel is as tall as the cut-out, not as the menu bar around
+    /// it** -- and a display without a cut-out still fills its menu bar.
+    ///
+    /// The two measurements differ, and the difference is what a person sees:
+    /// `safeAreaInsets.top` is the camera housing, `frame.maxY -
+    /// visibleFrame.maxY` is the band the menu **bar** occupies, and the
+    /// second is the larger because `visibleFrame` also leaves a gap under the
+    /// bar for window content. Drawn at the bar's height the black runs a
+    /// couple of points past the hardware, putting the panel's lower corners
+    /// below the notch's own and making the collapsed surface read as taller
+    /// than the thing it claims to be part of.
+    ///
+    /// This test previously asserted the opposite, under the reasoning that
+    /// one rule -- "fill the band you sit in" -- should hold on every display.
+    /// It should not: on a notched screen the shape has hardware to agree
+    /// with, and agreeing with it is the whole point of the contour.
     ///
     /// The numbers are a 14-inch M3 Pro at *More Space*, read from `NSScreen`:
-    /// `safeAreaInsets.top` `38`, `frame.maxY - visibleFrame.maxY` `39`.
-    /// `makeDisplay` builds the two flush with each other, so this display is
-    /// written out by hand.
+    /// `safeAreaInsets.top` `38`, auxiliary areas `38` tall, `frame.maxY -
+    /// visibleFrame.maxY` `40`. `makeDisplay` builds the safe area and the
+    /// occupied band flush with each other, so this display is written out by
+    /// hand.
     @Test @MainActor
-    func aNotchedPanelIsAsTallAsTheBandTheMenuBarOccupies() {
+    func aNotchedPanelIsAsTallAsTheCutOutAndNotAsTheMenuBar() {
         let frame = NSRect(x: 0, y: 0, width: 1_800, height: 1_169)
         let notched = DisplayOption(
             id: "built-in",
@@ -4965,9 +5119,9 @@ struct NotchlineTests {
             ordinal: 1,
             name: "Built-in Retina Display",
             frame: frame,
-            // A point lower than the safe area: `visibleFrame` leaves a gap
+            // Two points lower than the safe area: `visibleFrame` leaves a gap
             // under the menu bar for window content.
-            visibleFrame: NSRect(x: 0, y: 0, width: 1_800, height: 1_130),
+            visibleFrame: NSRect(x: 0, y: 0, width: 1_800, height: 1_129),
             safeAreaInsets: NSEdgeInsets(top: 38, left: 0, bottom: 0, right: 0),
             auxiliaryTopLeftArea: NSRect(x: 0, y: 1_131, width: 790, height: 38),
             auxiliaryTopRightArea: NSRect(x: 1_010, y: 1_131, width: 790, height: 38),
@@ -4975,12 +5129,21 @@ struct NotchlineTests {
         )
 
         #expect(notched.geometry == .notched)
+        #expect(notched.menuBarHeight == 40)
+        // The cut-out, which both the safe area and the auxiliary areas report.
         #expect(notched.safeAreaInsets.top == 38)
-        #expect(notched.menuBarHeight == 39)
-        #expect(MonitorStore(displays: [notched]).compactHeight == 39)
+        #expect(notched.auxiliaryTopLeftArea?.height == 38)
+        #expect(notched.panelBandHeight == 38)
+        #expect(MonitorStore(displays: [notched]).compactHeight == 38)
 
-        // A display without a cut-out answers the same way: the menu bar band
-        // is the whole measurement.
+        // Both radii and the wingless step follow it down, so the shape stays
+        // a share of the hardware it traces rather than of the bar beside it.
+        let store = MonitorStore(displays: [notched])
+        #expect(store.surfaceShoulderRadius == 38.0 / 8)
+        #expect(store.surfaceBottomCornerRadius == 38.0 / 4)
+
+        // A display without a cut-out keeps the menu bar band: there is no
+        // hardware to agree with, and the pill should fill the bar it sits in.
         let external = DisplayOption(
             id: "external",
             displayID: nil,
@@ -4995,6 +5158,59 @@ struct NotchlineTests {
         )
         #expect(external.geometry == .noNotch)
         #expect(external.menuBarHeight == 24)
+        #expect(external.panelBandHeight == 24)
+        #expect(MonitorStore(displays: [external]).compactHeight == 24)
+    }
+
+    /// **The height is read per display, never pinned to a pixel count.**
+    ///
+    /// The cut-out is a fixed shape in millimetres, so its height in points
+    /// falls as the display scaling coarsens. A hard-coded `74` device pixels
+    /// -- `37` pt at 2x, the figure quoted for this hardware -- is right at no
+    /// step this machine actually offers, and at *Larger Text* it is taller
+    /// than the whole menu bar. Whatever the display says the cut-out is, the
+    /// panel is that.
+    @Test @MainActor
+    func theNotchedPanelHeightFollowsTheScalingStep() {
+        for cutOut in [38.0, 32.0, 24.0, 22.0] as [CGFloat] {
+            let frame = NSRect(x: 0, y: 0, width: 1_800, height: 1_169)
+            let display = DisplayOption(
+                id: "built-in",
+                displayID: nil,
+                ordinal: 1,
+                name: "Built-in Retina Display",
+                frame: frame,
+                // The menu bar stays taller than the cut-out at every step.
+                visibleFrame: NSRect(
+                    x: 0,
+                    y: 0,
+                    width: 1_800,
+                    height: frame.height - cutOut - 2
+                ),
+                safeAreaInsets: NSEdgeInsets(
+                    top: cutOut,
+                    left: 0,
+                    bottom: 0,
+                    right: 0
+                ),
+                auxiliaryTopLeftArea: NSRect(
+                    x: 0,
+                    y: frame.maxY - cutOut,
+                    width: 790,
+                    height: cutOut
+                ),
+                auxiliaryTopRightArea: NSRect(
+                    x: 1_010,
+                    y: frame.maxY - cutOut,
+                    width: 790,
+                    height: cutOut
+                ),
+                fallbackMenuBarHeight: 24
+            )
+            #expect(display.geometry == .notched)
+            #expect(display.panelBandHeight == cutOut, "\(cutOut) pt cut-out")
+            #expect(display.menuBarHeight == cutOut + 2)
+        }
     }
 
     @Test
@@ -29870,5 +30086,21 @@ extension NotchlineTests {
             #expect(!marketing.localizedCaseInsensitiveContains(stage))
             #expect(!stage.isEmpty)
         }
+    }
+}
+
+/// `Path` hands its segments out one at a time; the contour tests want them by
+/// position, because the order they are drawn in is part of what is asserted.
+private extension Path {
+    var elements: [Path.Element] {
+        var collected: [Path.Element] = []
+        forEach { collected.append($0) }
+        return collected
+    }
+}
+
+private extension CGPoint {
+    func isNear(_ other: CGPoint, within tolerance: CGFloat = 0.000_1) -> Bool {
+        hypot(x - other.x, y - other.y) < tolerance
     }
 }

@@ -49,24 +49,58 @@ struct DisplayOption: Identifiable {
         return hasTopInset && hasAuxiliaryArea ? .notched : .noNotch
     }
 
-    /// The band the collapsed panel fills: the height the menu bar occupies,
-    /// on every display.
+    /// The height the menu bar occupies on this display.
     ///
-    /// `NSScreen` offers two measurements of that band and they disagree by a
-    /// point. `safeAreaInsets.top` is the camera housing — on a 14-inch M3 Pro
-    /// at *More Space*, `38`. `frame.maxY - visibleFrame.maxY` is what the menu
-    /// bar occupies, `39`, because `visibleFrame` also leaves a gap under the
-    /// bar for window content. The panel takes the larger of the two, so it is
-    /// as tall as the menu bar rather than as tall as the cut-out. That is a
-    /// point of overhang past the hardware on a notched display, and it is the
-    /// answer we want: one height for every display, and the collapsed panel
-    /// filling the bar it sits in.
+    /// `NSScreen` offers two measurements of the band at the top of a notched
+    /// screen and they disagree. `safeAreaInsets.top` is the camera housing —
+    /// on a 14-inch M3 Pro at *More Space*, `38`. `frame.maxY -
+    /// visibleFrame.maxY` is what the menu **bar** occupies, `40`, because
+    /// `visibleFrame` also leaves a gap under the bar for window content. This
+    /// takes the larger of the two, so it answers for the bar and not for the
+    /// hardware; ``panelBandHeight`` is the one the panel is drawn at.
     var menuBarHeight: CGFloat {
         let occupiedTopHeight = max(0, frame.maxY - visibleFrame.maxY)
         let measuredHeight = max(occupiedTopHeight, safeAreaInsets.top)
         return measuredHeight >= 1
             ? measuredHeight
             : max(1, fallbackMenuBarHeight)
+    }
+
+    /// The band the collapsed panel fills — **the cut-out on a notched
+    /// display, the menu bar on every other one.**
+    ///
+    /// The two are not the same height and the difference is visible. A
+    /// notched screen's menu bar is a couple of points taller than the notch
+    /// it surrounds (`40` against `38` on a 14-inch M3 Pro at *More Space*),
+    /// so a panel drawn at the bar's height hangs below the hardware: the
+    /// black continues past the cut-out's lower corners, and the collapsed
+    /// surface reads as *taller than the notch* rather than as the notch
+    /// carrying on sideways. The whole shape's claim is that it is the same
+    /// object as the cut-out, and a couple of points of overhang is enough to
+    /// break it — the lower corners are drawn where a person can lay them
+    /// against the hardware's own.
+    ///
+    /// `safeAreaInsets.top` is the cut-out, and it is the measurement to take:
+    /// the auxiliary areas beside the notch report the same height (`38` here)
+    /// and this one survives the menu bar being auto-hidden, which takes the
+    /// occupied band to zero while leaving the hardware where it is.
+    ///
+    /// **Not a fixed pixel count.** The cut-out is a shape of fixed
+    /// millimetres and its height in points falls as the display scaling
+    /// coarsens — `38` under *More Space*, about `32` by default, `22` at
+    /// *Larger Text* — so a hard-coded `74` device pixels (`37` pt at 2x) is
+    /// right at one step, short at the next, and taller than the entire menu
+    /// bar at *Larger Text*. Reading it per display is what keeps it exact at
+    /// every step.
+    ///
+    /// A display without a notch keeps the menu bar band: there is no hardware
+    /// to agree with, the pill is an imitation of a cut-out, and it should
+    /// fill the bar it sits in.
+    var panelBandHeight: CGFloat {
+        guard geometry == .notched, safeAreaInsets.top >= 1 else {
+            return menuBarHeight
+        }
+        return safeAreaInsets.top
     }
 
     var centerOcclusionWidth: CGFloat {
@@ -97,7 +131,11 @@ struct DisplayOption: Identifiable {
     }
 
     var configurationSummary: String {
-        "\(geometry.title) · menu bar \(Int(menuBarHeight.rounded())) pt"
+        // The band the panel is actually drawn at, named for what it is on
+        // this display: reporting the menu bar on a notched screen would print
+        // a number two points off the panel standing under it.
+        let band = geometry == .notched ? "notch" : "menu bar"
+        return "\(geometry.title) · \(band) \(Int(panelBandHeight.rounded())) pt"
     }
 
     static func currentDisplays() -> [DisplayOption] {
@@ -165,6 +203,45 @@ enum PanelMetrics {
     static let notchUpperRadiusRatio: CGFloat = 1.0 / 8
     /// The cut-out's lower corners, as a share of its height.
     static let notchLowerRadiusRatio: CGFloat = 1.0 / 4
+    /// How far the lower corners' curvature is spread past a circular arc.
+    ///
+    /// A circular corner is tangent to the straight edge it leaves but not
+    /// *curved* like it: curvature jumps from nothing to `1/r` at the join, in
+    /// one step. The eye reads that step as a crease — the edge appears to
+    /// stop being straight at a nameable point rather than to bend away — and
+    /// it is at its most visible exactly where this shape puts it: a long
+    /// straight run of pure black meeting a small radius against a lit
+    /// wallpaper. It was the complaint about these two corners.
+    ///
+    /// So the corner is built the way Apple's own are, and the way Figma's
+    /// *corner smoothing* control works: the curve starts `(1 + smoothing)`
+    /// radii back along each straight edge instead of one, spends the extra
+    /// length easing curvature up from zero, holds a circular arc of
+    /// `90° × (1 - smoothing)` through the turn, and eases back down to zero
+    /// into the other edge. Both control points of each easing segment lie
+    /// **on** the straight edge, which is what makes the curvature there
+    /// exactly zero and the join unfindable.
+    ///
+    /// `0.6` is the value Figma calls 60% and the closest single number to
+    /// iOS's own continuous corners. `0` reproduces the plain circular corner
+    /// exactly, arc and control handles alike, which is the reduction
+    /// `theLowerCornersReduceToCircularArcsWithoutSmoothing` pins.
+    ///
+    /// **The two upper fillets keep their circular arc.** They are the trace
+    /// of where the glass curves back out to the top of the screen (§3.3 of
+    /// `docs/figma-design.md`), they are half the size, and they meet the
+    /// screen's own top edge rather than a lit background — there is no crease
+    /// to see, and widening them would widen the window they are drawn in.
+    static let notchLowerCornerSmoothing: CGFloat = 0.6
+
+    /// How far back along each straight edge a lower corner reaches.
+    ///
+    /// One radius for a circular corner; `1.6` radii at the smoothing above.
+    /// This, not the radius, is what has to fit inside the panel's height and
+    /// half its width.
+    static func smoothCornerReach(radius: CGFloat) -> CGFloat {
+        max(0, radius) * (1 + max(0, notchLowerCornerSmoothing))
+    }
     /// How thick the optional surface outline is drawn.
     ///
     /// Drawn inside the contour rather than centred on it, so this is the full
@@ -702,7 +779,7 @@ enum PanelMetrics {
     ///
     /// With nothing to draw out there the edge does not land exactly on the
     /// reported one either: it steps past it by
-    /// ``winglessTrailingOvershoot(menuBarHeight:)``, which is where that
+    /// ``winglessTrailingOvershoot(panelHeight:)``, which is where that
     /// figure's reasoning lives. The one form that keeps the reported edge is
     /// the surface drawing nothing at all -- it *is* the cut-out, and pushing
     /// it out would hang a sliver of black off the side of the notch.
@@ -725,7 +802,7 @@ enum PanelMetrics {
     ///   on a form that draws no black.
     static func compactTrailingWingWidth(
         trailing: CompactTrailingReading,
-        menuBarHeight: CGFloat,
+        panelHeight: CGFloat,
         drawsCompactMarks: Bool
     ) -> CGFloat {
         let content = compactTrailingWidth(trailing: trailing)
@@ -735,7 +812,7 @@ enum PanelMetrics {
         // it to the next whole point costs it nothing and buys the same
         // cancellation: `2.375` becomes `3` under a `38` pt bar, still well
         // inside the shoulder it exists to clear.
-        return ceil(winglessTrailingOvershoot(menuBarHeight: menuBarHeight))
+        return ceil(winglessTrailingOvershoot(panelHeight: panelHeight))
     }
 
     /// Leading wing on a notched display: padding, the marks, and the clearance.
@@ -765,22 +842,25 @@ enum PanelMetrics {
     /// shoulder inside the cut-out, and its bottom-right corner curve took
     /// another radius off that, which read as a bite out of the notch.
     ///
-    /// Both radii are shares of the menu bar height rather than constants,
+    /// Both radii are shares of the panel's own height rather than constants,
     /// because that is how the hardware behaves. The cut-out is a fixed shape
-    /// in millimetres; the menu bar on a notched display is exactly as tall as
-    /// it, and both shrink together in points as the display scaling coarsens —
-    /// `220 × 38` at *More Space* down to `127 × 22` at *Larger Text*. A pinned
-    /// radius is therefore right at one scaling and too round at every other
-    /// one, which is what a fixed `10` was doing on notched displays.
-    static func surfaceShoulderRadius(menuBarHeight: CGFloat) -> CGFloat {
-        max(0, menuBarHeight) * notchUpperRadiusRatio
+    /// in millimetres and it shrinks in points as the display scaling coarsens
+    /// — `220 × 38` at *More Space* down to `127 × 22` at *Larger Text*. A
+    /// pinned radius is therefore right at one scaling and too round at every
+    /// other one, which is what a fixed `10` was doing on notched displays.
+    ///
+    /// `panelHeight` is ``DisplayOption/panelBandHeight``, which **is** the
+    /// cut-out's height on a notched display, so on the screens these radii
+    /// have to agree with they are shares of the very shape they trace.
+    static func surfaceShoulderRadius(panelHeight: CGFloat) -> CGFloat {
+        max(0, panelHeight) * notchUpperRadiusRatio
     }
 
     /// The contour's lower corners, which are the ones the eye compares with
     /// the cut-out: the notch's own bottom corners sit under the panel, so this
     /// curve is the only place the shape is checkable against the hardware.
-    static func surfaceBottomCornerRadius(menuBarHeight: CGFloat) -> CGFloat {
-        max(0, menuBarHeight) * notchLowerRadiusRatio
+    static func surfaceBottomCornerRadius(panelHeight: CGFloat) -> CGFloat {
+        max(0, panelHeight) * notchLowerRadiusRatio
     }
 
     /// How far past the cut-out's *reported* trailing edge a body with nothing
@@ -811,13 +891,13 @@ enum PanelMetrics {
     /// the flare, and the leading side is either such a wing or the resting
     /// form that is meant to be invisible.
     ///
-    /// A share of the menu bar height for the reason the two radii are: what
+    /// A share of the panel's height for the reason the two radii are: what
     /// the cut-out hides is a fixed shape in millimetres, and it shrinks in
     /// points as the display scaling coarsens. Half the upper fillet --
-    /// `2.375pt` under a `38pt` bar, `1.375pt` under a `22pt` one.
+    /// `2.375pt` under a `38pt` cut-out, `1.375pt` under a `22pt` one.
     static let notchTrailingOvershootRatio: CGFloat = 1.0 / 16
-    static func winglessTrailingOvershoot(menuBarHeight: CGFloat) -> CGFloat {
-        max(0, menuBarHeight) * notchTrailingOvershootRatio
+    static func winglessTrailingOvershoot(panelHeight: CGFloat) -> CGFloat {
+        max(0, panelHeight) * notchTrailingOvershootRatio
     }
 
     static func size(
@@ -875,7 +955,7 @@ enum PanelMetrics {
                 + centerOcclusionWidth
                 + compactTrailingWingWidth(
                     trailing: trailing,
-                    menuBarHeight: compactHeight,
+                    panelHeight: compactHeight,
                     drawsCompactMarks: drawsCompactMarks
                 )
             return CGSize(width: ceil(width), height: compactHeight)
@@ -1688,8 +1768,13 @@ final class MonitorStore: ObservableObject {
         selectedDisplay?.geometry ?? .noNotch
     }
 
+    /// The collapsed panel's height on the selected display, and the figure
+    /// both corner radii and the wingless step are shares of.
+    ///
+    /// ``DisplayOption/panelBandHeight``: the cut-out on a notched display,
+    /// the menu bar band on every other one.
     var compactHeight: CGFloat {
-        selectedDisplay?.menuBarHeight ?? PanelMetrics.referenceCompactHeight
+        selectedDisplay?.panelBandHeight ?? PanelMetrics.referenceCompactHeight
     }
 
     var tokenRemainingPercent: Int? {
@@ -2203,7 +2288,7 @@ final class MonitorStore: ObservableObject {
         return occlusionMaxX
             + PanelMetrics.compactTrailingWingWidth(
                 trailing: compactTrailingReading,
-                menuBarHeight: compactHeight,
+                panelHeight: compactHeight,
                 drawsCompactMarks: drawsCompactMarks
             )
     }
@@ -2211,12 +2296,12 @@ final class MonitorStore: ObservableObject {
     /// The contour's upper fillet on the selected display, which is also the
     /// shoulder the window has to leave outside the body on each side.
     var surfaceShoulderRadius: CGFloat {
-        PanelMetrics.surfaceShoulderRadius(menuBarHeight: compactHeight)
+        PanelMetrics.surfaceShoulderRadius(panelHeight: compactHeight)
     }
 
     /// The contour's lower corners on the selected display.
     var surfaceBottomCornerRadius: CGFloat {
-        PanelMetrics.surfaceBottomCornerRadius(menuBarHeight: compactHeight)
+        PanelMetrics.surfaceBottomCornerRadius(panelHeight: compactHeight)
     }
 
     var integrationSummary: String {

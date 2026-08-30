@@ -131,12 +131,21 @@ private struct PanelSurface: View {
 /// The cut-out's outline, stretched to whatever rect the panel occupies.
 ///
 /// Two radii, not one, because the notch has two: a small concave fillet where
-/// its sides meet the top of the display, and lower corners twice as round. The
-/// arcs are circular — a quarter circle each, hence the `0.5523` handle — which
-/// is what the hardware edge is and what makes the panel read as the same
-/// object as the cut-out it grows out of rather than as a rounded rectangle
-/// pinned beneath it.
-private struct PanelContour: Shape {
+/// its sides meet the top of the display, and lower corners twice as round.
+///
+/// The upper fillets are true circular arcs — a quarter circle each, hence the
+/// `0.5523` handle — which is what the hardware edge is up there and what makes
+/// the panel read as the same object as the cut-out it grows out of rather than
+/// as a rounded rectangle pinned beneath it.
+///
+/// **The lower corners are not.** They are continuous corners: the curve begins
+/// ``PanelMetrics/smoothCornerReach(radius:)`` back along each straight edge
+/// and eases curvature up from zero before it reaches the arc, so the vertical
+/// side does not stop being straight at a findable point. That constant carries
+/// the reasoning; the shape of it is three segments per corner — ease in,
+/// circular arc, ease out — and at a smoothing of `0` it collapses back into
+/// the single quarter-circle cubic that used to be written here.
+struct PanelContour: Shape {
     let shoulderRadius: CGFloat
     let bottomRadius: CGFloat
     /// Whether the path spans the top of its rect, which is the one edge the
@@ -149,21 +158,29 @@ private struct PanelContour: Shape {
     /// the screen's own edge, and a line drawn along it is not this panel's
     /// boundary but a rule across the top of the display.
     var spansTopEdge = true
+    /// Exposed so the reduction to a circular corner can be asserted rather
+    /// than argued; nothing in the product passes anything but the default.
+    var bottomSmoothing = PanelMetrics.notchLowerCornerSmoothing
 
     func path(in rect: CGRect) -> Path {
         // Each side of the shape spends one shoulder plus one lower corner, so
         // that sum is what has to fit — down the side, and twice across the
-        // width. Clamping the pair together keeps their ratio, which is the
-        // part of the shape that carries the resemblance.
-        let requested = max(0, shoulderRadius) + max(0, bottomRadius)
+        // width. It is the corner's *reach* that is spent, not its radius: a
+        // smoothed corner starts further back along both edges than a circular
+        // one of the same radius. Clamping the pair together keeps their
+        // ratio, which is the part of the shape that carries the resemblance.
+        let smoothing = min(max(0, bottomSmoothing), 1)
+        let requestedShoulder = max(0, shoulderRadius)
+        let requestedBottom = max(0, bottomRadius)
+        let requested = requestedShoulder
+            + requestedBottom * (1 + smoothing)
         let available = min(rect.height, rect.width / 2)
         let fit = requested > available && requested > 0
             ? available / requested
             : 1
-        let shoulder = max(0, shoulderRadius) * fit
-        let bottom = max(0, bottomRadius) * fit
+        let shoulder = requestedShoulder * fit
+        let bottom = requestedBottom * fit
         let shoulderControl = shoulder * 0.552_284_749_8
-        let bottomControl = bottom * 0.552_284_749_8
 
         var path = Path()
         if spansTopEdge {
@@ -180,29 +197,23 @@ private struct PanelContour: Shape {
                 y: rect.minY + shoulder - shoulderControl
             )
         )
-        path.addLine(to: CGPoint(x: rect.maxX - shoulder, y: rect.maxY - bottom))
-        path.addCurve(
-            to: CGPoint(x: rect.maxX - shoulder - bottom, y: rect.maxY),
-            control1: CGPoint(
-                x: rect.maxX - shoulder,
-                y: rect.maxY - bottom + bottomControl
-            ),
-            control2: CGPoint(
-                x: rect.maxX - shoulder - bottom + bottomControl,
-                y: rect.maxY
-            )
+        // Down the trailing side and round the bottom-right corner, then
+        // along the bottom and round the bottom-left one. Each call draws its
+        // own straight run in, so the corner decides where the straight edge
+        // ends rather than the two having to agree separately.
+        path.addSmoothCorner(
+            vertex: CGPoint(x: rect.maxX - shoulder, y: rect.maxY),
+            entering: CGVector(dx: 0, dy: 1),
+            leaving: CGVector(dx: -1, dy: 0),
+            radius: bottom,
+            smoothing: smoothing
         )
-        path.addLine(to: CGPoint(x: rect.minX + shoulder + bottom, y: rect.maxY))
-        path.addCurve(
-            to: CGPoint(x: rect.minX + shoulder, y: rect.maxY - bottom),
-            control1: CGPoint(
-                x: rect.minX + shoulder + bottom - bottomControl,
-                y: rect.maxY
-            ),
-            control2: CGPoint(
-                x: rect.minX + shoulder,
-                y: rect.maxY - bottom + bottomControl
-            )
+        path.addSmoothCorner(
+            vertex: CGPoint(x: rect.minX + shoulder, y: rect.maxY),
+            entering: CGVector(dx: -1, dy: 0),
+            leaving: CGVector(dx: 0, dy: -1),
+            radius: bottom,
+            smoothing: smoothing
         )
         path.addLine(to: CGPoint(x: rect.minX + shoulder, y: rect.minY + shoulder))
         path.addCurve(
@@ -217,6 +228,121 @@ private struct PanelContour: Shape {
             path.closeSubpath()
         }
         return path
+    }
+}
+
+private extension Path {
+    /// Runs the straight edge into `vertex` and turns the corner there with a
+    /// continuous curve, leaving the current point on the outgoing edge.
+    ///
+    /// `entering` and `leaving` are unit vectors: the direction the path is
+    /// already travelling, and the direction it travels after the turn. They
+    /// are perpendicular here — every corner this shape has is a right angle —
+    /// and the whole corner is written in the frame they make, which is what
+    /// lets one construction serve corners facing four different ways.
+    ///
+    /// Three segments, in the order they are drawn:
+    ///
+    /// 1. **Ease in.** A cubic whose two control points both lie *on* the
+    ///    incoming edge. Collinear control points mean zero curvature at the
+    ///    start, so the curve leaves the straight run the way the straight run
+    ///    arrives — no step, and nothing for the eye to find.
+    /// 2. **The arc.** A true circular arc of `radius`, but spanning only
+    ///    `90° × (1 - smoothing)` instead of the whole quarter turn, drawn as
+    ///    the single cubic that fits an arc of that angle (`4/3 · tan(θ/4)`).
+    /// 3. **Ease out.** The mirror of the first, landing on the outgoing edge
+    ///    with its curvature back at zero.
+    ///
+    /// The three together consume exactly `(1 + smoothing) · radius` along each
+    /// edge, which is why the caller sizes the straight runs from
+    /// ``PanelMetrics/smoothCornerReach(radius:)`` and not from the radius.
+    /// At `smoothing == 0` the first and third segments have zero length and
+    /// the second is the plain quarter-circle cubic.
+    mutating func addSmoothCorner(
+        vertex: CGPoint,
+        entering: CGVector,
+        leaving: CGVector,
+        radius: CGFloat,
+        smoothing: CGFloat
+    ) {
+        // Everything below is written as a step of `along` (the incoming
+        // direction) and a step of `across` (the outgoing one) from a point,
+        // so the arithmetic reads the same whichever way the corner faces.
+        func step(
+            from origin: CGPoint,
+            along: CGFloat,
+            across: CGFloat
+        ) -> CGPoint {
+            CGPoint(
+                x: origin.x + entering.dx * along + leaving.dx * across,
+                y: origin.y + entering.dy * along + leaving.dy * across
+            )
+        }
+
+        let r = max(0, radius)
+        let s = min(max(0, smoothing), 1)
+        guard r > 0 else {
+            addLine(to: vertex)
+            return
+        }
+
+        let reach = r * (1 + s)
+        // The circular arc keeps only what smoothing has not taken from it,
+        // and the easing segments turn the rest: `psi` each, so the three
+        // sweeps still add up to the right angle.
+        let arc = (.pi / 2) * (1 - s)
+        let psi = (.pi / 4) * s
+        // The arc's endpoints, as a step along and a step across from where it
+        // starts: it is a chord at 45° to both edges, so the two are equal.
+        let chord = sin(arc / 2) * r * (2 as CGFloat).squareRoot()
+        // Where the easing segment hands over to the arc, measured from the
+        // point it started at on the straight edge.
+        let approach = r * tan(psi / 2) * cos(psi)
+        let drop = approach * tan(psi)
+        // What is left of the reach after the arc and the handover, spread
+        // over the easing segment's two control points. `2:1` is the ratio
+        // that keeps the segment's own curvature rising evenly.
+        let spread = (reach - chord - approach - drop) / 3
+        let lead = 2 * spread
+        // A cubic fits an arc of `theta` with handles of `4/3 · tan(theta/4)`
+        // radii; at a right angle that is the familiar `0.5523`.
+        let handle = (4.0 / 3.0) * tan(arc / 4) * r
+
+        let start = step(from: vertex, along: -reach, across: 0)
+        let arcStart = step(
+            from: start,
+            along: lead + spread + approach,
+            across: drop
+        )
+        let arcEnd = step(from: arcStart, along: chord, across: chord)
+
+        addLine(to: start)
+        addCurve(
+            to: arcStart,
+            control1: step(from: start, along: lead, across: 0),
+            control2: step(from: start, along: lead + spread, across: 0)
+        )
+        // The arc's tangents run at `psi` to each edge — the angle the easing
+        // segments turned through — so its handles are laid on those, not on
+        // the edges themselves.
+        addCurve(
+            to: arcEnd,
+            control1: step(
+                from: arcStart,
+                along: handle * cos(psi),
+                across: handle * sin(psi)
+            ),
+            control2: step(
+                from: arcEnd,
+                along: -handle * sin(psi),
+                across: -handle * cos(psi)
+            )
+        )
+        addCurve(
+            to: step(from: arcEnd, along: drop, across: lead + spread + approach),
+            control1: step(from: arcEnd, along: drop, across: approach),
+            control2: step(from: arcEnd, along: drop, across: spread + approach)
+        )
     }
 }
 
