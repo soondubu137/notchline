@@ -23502,18 +23502,39 @@ for line in sys.stdin:
     /// The store allows one navigation at a time, so a script that never
     /// returns would not merely lose this click -- it would disable the row
     /// click for the rest of the run.
+    ///
+    /// **The deadline is fired by hand rather than waited for.** Timing the
+    /// click instead asserts a proxy no loaded machine has to respect: the
+    /// wall-clock form of this test -- a 0.05 s deadline, a real 5 s sleep and
+    /// a 2 s budget -- failed twice in ten suite runs on 2026-08-30 at 2.7 s
+    /// and 2.9 s, with builds running alongside and the deadline itself
+    /// working correctly every time. What the invariant actually is, is an
+    /// ordering: the click answers **while the script is still inside
+    /// `execute`**, which is released only after the answer is in hand. So a
+    /// 60-second deadline is scheduled and then dropped on the spot, and this
+    /// test consults no clock at all.
     @Test @MainActor
     func aWedgedTerminalGivesTheClickBack() async {
+        let wedged = DispatchSemaphore(value: 0)
+        let scheduled = IntervalBox()
         let focuser = AppleEventsTerminalTabFocuser(
-            timeout: 0.05,
+            timeout: 60,
             permission: { _ in .granted },
             requestConsent: { _ in },
             execute: { _ in
-                Thread.sleep(forTimeInterval: 5)
+                // Wedged until the assertions below have run. The bound is a
+                // valve rather than a budget: it is there so a focuser that
+                // stopped racing its deadline fails this test instead of
+                // hanging the suite, and a passing run never approaches it.
+                _ = wedged.wait(timeout: .now() + 30)
                 return true
+            },
+            scheduleDeadline: { interval, fire in
+                scheduled.record(interval)
+                fire()
             }
         )
-        let started = Date()
+
         let answer = await focuser.focusTab(
             withTerminalDevice: "/dev/ttys001",
             in: HostApplication(
@@ -23522,8 +23543,12 @@ for line in sys.stdin:
                 processIdentifier: 877
             )
         )
+
         #expect(answer == .unavailable)
-        #expect(Date().timeIntervalSince(started) < 2)
+        // Against the deadline the focuser was built with, not a shorter one
+        // the test could have got away with by waiting for it.
+        #expect(scheduled.value == 60)
+        wedged.signal()
     }
 
     // MARK: - Raising a host that is on another desktop
@@ -26116,6 +26141,24 @@ private final class TerminalTabFocuserSpy: TerminalTabFocusing {
     ) async -> TerminalTabFocus {
         requested.append((device, application.bundleIdentifier))
         return answer
+    }
+}
+
+/// The interval a scheduling closure was handed, read back from the test.
+private final class IntervalBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var interval: TimeInterval?
+
+    func record(_ value: TimeInterval) {
+        lock.lock()
+        interval = value
+        lock.unlock()
+    }
+
+    var value: TimeInterval? {
+        lock.lock()
+        defer { lock.unlock() }
+        return interval
     }
 }
 

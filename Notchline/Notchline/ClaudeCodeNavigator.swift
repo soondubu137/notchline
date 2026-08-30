@@ -279,6 +279,15 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
     private let permission: @Sendable (String) -> AutomationPermission
     private let requestConsent: @Sendable (String) -> Void
     private let execute: @Sendable (String) -> Bool
+    /// Schedules the deadline half of the race in ``run``.
+    ///
+    /// Injected only so a test can decide when the deadline falls. Asserting
+    /// that the click comes back early by timing it needs a wall-clock budget,
+    /// and a budget wide enough for a loaded machine is no longer evidence of
+    /// anything -- measured failing twice in ten suite runs on 2026-08-30
+    /// while builds ran alongside, at 2.7 s and 2.9 s against a 2 s budget,
+    /// with the deadline itself working correctly every time.
+    private let scheduleDeadline: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
     /// Hosts with a consent request already out, so a second click while the
     /// prompt is on screen does not stack another one behind it.
     private var asking: Set<String> = []
@@ -289,7 +298,10 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
             AppleEventsTerminalTabFocuser.systemPermission(forHost: $0, askUserIfNeeded: false)
         },
         requestConsent: (@Sendable (String) -> Void)? = nil,
-        execute: (@Sendable (String) -> Bool)? = nil
+        execute: (@Sendable (String) -> Bool)? = nil,
+        scheduleDeadline: (
+            @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
+        )? = nil
     ) {
         self.timeout = timeout
         self.permission = permission
@@ -299,6 +311,9 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
             }
         }
         self.execute = execute ?? { Self.runAppleScript($0) }
+        self.scheduleDeadline = scheduleDeadline ?? { interval, fire in
+            Self.queue.asyncAfter(deadline: .now() + interval, execute: fire)
+        }
     }
 
     func focusTab(
@@ -345,6 +360,7 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
     /// the one in-flight navigation open for good.
     private func run(_ source: String) async -> Bool {
         let execute = execute
+        let scheduleDeadline = scheduleDeadline
         let timeout = timeout
         let answer = FirstAnswer()
         return await withCheckedContinuation { continuation in
@@ -352,7 +368,7 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
                 let focused = execute(source)
                 if answer.take() { continuation.resume(returning: focused) }
             }
-            Self.queue.asyncAfter(deadline: .now() + timeout) {
+            scheduleDeadline(timeout) {
                 if answer.take() {
                     Self.log.error("terminal tab focus outlived its deadline")
                     continuation.resume(returning: false)
