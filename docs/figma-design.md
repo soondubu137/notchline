@@ -28,7 +28,7 @@
 | `05 — Panel` | Collapsed and expanded Panel variants; `808:527` is the no-notch collapsed count+timer composite reading (§4.6) | `115:82`, `300:253`, `300:263`, `808:527` |
 | `06 — Notch Core` | Core product states and menu-bar height references | `118:73`, `185:292`, `304:630`, `304:641` |
 | `07 — Integration States` | Partial degradation; hidden previews and the thin-layer states are retired or merged into the two system states (§6.6) | `227:3`, `307:30` |
-| `08 — Onboarding` | The first-run flow. **Current** is `1016:2`, the one window with the bar and the panel pinned and named (§7); `750:2` (legend only) and `232:95` (three windows) are references | `1016:2` (current); `750:2`, `232:95` (references) |
+| `08 — Onboarding` | The first-run flow. **Current** is `1016:2`, the two pages with the bar and the panel pinned and named (§7); `750:2` (one window, legend only) and `232:95` (three windows) are references | `1016:2` (current); `750:2`, `232:95` (references) |
 | `09 — Settings` | The macOS 26 settings window (light and dark), integration management and the `Session list` group | `609:2` (current); `233:3`, `591:2` (v1 reference) |
 | `10 — Double Apps` | Two-product (Codex + Claude Code) design; `08 — Presence` defines the collapsed presence rules | `540:2`, `624:1560` |
 | `11 — Subagent UI Concepts` | Subagent marker candidate review. The chosen `C — Numeral Chip` is superseded by page `12` (the split treatment is void entirely); kept as a review record | `812:2`, `815:116` |
@@ -451,7 +451,7 @@ Three remain:
 
 ## 7. First-run onboarding
 
-The current design is `First run — one window, with the notch explained` (`1016:2`) on `08 — Onboarding`, **one `580`-wide window**, with light and dark as one set of nodes. `750:2`'s legend-only window and `232:95`'s three-window flow are kept as references and are no longer acceptance targets.
+The current design is `First run — two pages, with the notch explained` (`1016:2`) on `08 — Onboarding`: **one `580`-wide window in two pages**, with light and dark as one set of nodes. `750:2`'s legend-only window and `232:95`'s three-window flow are kept as references and are no longer acceptance targets.
 
 Each of the original three windows carried one decision: value, consent, confirmation. But consent *is* the switch and confirmation *is* that row turning green — the other two windows were words around two controls. Collapsing them freed the room this window now spends on the thing no window explained: **what the notch is actually drawing**.
 
