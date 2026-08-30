@@ -6,6 +6,14 @@
 // Collapsing them leaves room for the thing the flow never explained: what the
 // notch actually draws.
 //
+// It teaches that the way the README figures do, and for the same reason those
+// figures exist: the parts have names, and a still of the real surface with
+// its parts numbered says more than any amount of prose. What does not carry
+// over is their layout — those figures are four thousand pixels wide with a
+// column of callouts either side, and a `532` pt content area would draw that
+// text at four points. So the callouts become pins and a key, and the drawings
+// stay at the size the user will meet them (`OnboardingAnatomy.swift`).
+//
 // It is the Settings window's shapes throughout, because it becomes the
 // Settings window: the same scene shows this view until onboarding completes
 // and `AppSettingsView` afterwards, so the second time it opens nothing has
@@ -27,29 +35,45 @@ struct ProductRootView: View {
     }
 }
 
+/// Two pages: the connections, then the notch.
+///
+/// **The teaching outgrew the page it was on.** One window carrying the hero,
+/// both switches, the bar, the five states and the whole panel came to `1026`
+/// pt — past what a 14-inch built-in display leaves under its menu bar, which
+/// put `Start` behind the Dock on the smallest Mac this ships to. Cutting the
+/// drawings back to fit was the wrong economy: what would have gone is the
+/// panel's quota footer and its second row, which are two of the four things
+/// the panel exists to show.
+///
+/// So the flow is two pages of about `380` and `850`, and they divide on the
+/// seam the content already had: **page one asks for something, page two
+/// explains something.** Nothing on the first page needs the second to make
+/// sense — a user who presses `Continue` without reading has connected both
+/// products correctly — and nothing on the second asks for anything, which is
+/// why it can carry a `Back` and be re-read.
+///
+/// The second page is also where every specimen lives, and they are built on
+/// first use (``NotchSpecimen``), so a launch that stops at page one never
+/// composes a panel, a store or a mark.
 private struct OnboardingView: View {
     @EnvironmentObject private var store: MonitorStore
+    @State private var page: Page = .connect
+
+    private enum Page {
+        case connect
+        case read
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            hero
-            connectGroup
-            notchGroup
-
-            // Same shape as the Settings window's closing line: the standing
-            // statement about what this app does, and the action it is about.
-            HStack(alignment: .center, spacing: 16) {
-                Text(
-                    "Notchline only reads. Nothing here changes state in "
-                        + "Codex or Claude Code."
-                )
-                .settingsFootnote(MacOSWindowColor.tertiaryText)
-
-                Button("Start") {
-                    store.completeOnboarding()
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
+            switch page {
+            case .connect:
+                hero
+                connectGroup
+                connectClosing
+            case .read:
+                notchGroup
+                readClosing
             }
         }
         .padding(.horizontal, 24)
@@ -60,11 +84,53 @@ private struct OnboardingView: View {
         .background(SettingsWindowChrome(title: "Welcome to Notchline"))
     }
 
+    /// Page one's closing line: the standing statement, and the way on.
+    ///
+    /// Same shape as the Settings window's closing row — an explanation with
+    /// the action it is about on the end. The read-only promise belongs here
+    /// rather than on page two, because this is the page with the switches on
+    /// it and it is the switches the promise is about.
+    private var connectClosing: some View {
+        HStack(alignment: .center, spacing: 16) {
+            Text("Notchline only reads. Nothing here changes Codex or Claude Code.")
+                .settingsFootnote(MacOSWindowColor.tertiaryText)
+
+            Button("Continue") {
+                page = .read
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+        }
+    }
+
+    /// Page two's closing line: where all of this lives afterwards, `Back`, and
+    /// the one action that ends onboarding.
+    private var readClosing: some View {
+        HStack(alignment: .center, spacing: 16) {
+            Text("All of this is in Settings afterwards, behind the gear.")
+                .settingsFootnote(MacOSWindowColor.tertiaryText)
+
+            Button("Back") {
+                page = .connect
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+
+            Button("Start") {
+                store.completeOnboarding()
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+        }
+    }
+
     /// The icon, and the one sentence about what the app is for.
     ///
     /// No second title: the window's own title bar already says the name, and
     /// repeating it in the content area is the mistake the Settings redesign
-    /// removed.
+    /// removed. No second promise either — the closing line carries the
+    /// read-only statement, and saying it twice on one page made the page read
+    /// as though it were arguing with somebody.
     private var hero: some View {
         HStack(alignment: .center, spacing: 14) {
             Image(nsImage: NSApp.applicationIconImage)
@@ -72,9 +138,8 @@ private struct OnboardingView: View {
                 .frame(width: 52, height: 52)
 
             Text(
-                "Notchline keeps every Codex and Claude Code session that is "
-                    + "running, waiting on you, or finished but unseen at the "
-                    + "top of your screen. It only ever reads."
+                "Every Codex and Claude Code session at the top of your screen "
+                    + "— running, waiting on you, or finished but unseen."
             )
             .font(.system(size: 13))
             .foregroundStyle(MacOSWindowColor.secondaryText)
@@ -97,11 +162,9 @@ private struct OnboardingView: View {
             ProductConnectionRows()
         } footnote: {
             SettingsFootnote(
-                "The switches install the lifecycle definitions Notchline needs "
-                    + "in ~/.codex/hooks.json and ~/.claude/settings.json and take "
-                    + "them out again when they are off; your own settings and hooks "
-                    + "are left alone. Each file is copied beside itself as a "
-                    + ".notchline-backup file first."
+                "Each switch writes Notchline’s hooks into ~/.codex/hooks.json "
+                    + "or ~/.claude/settings.json and takes them out again when "
+                    + "off. Both files are backed up first."
             ) {
                 Button("Recheck") {
                     store.refreshNow()
@@ -112,26 +175,45 @@ private struct OnboardingView: View {
         }
     }
 
-    /// The whole of what the notch draws, in four specimens and two words.
+    /// The whole of what the notch draws: shut, the five states, hovered.
     ///
-    /// A state called `Running` does not need a sentence saying that a turn is
-    /// running. The specimens carry the pattern, the labels carry the names,
-    /// and the only thing left to say is which colour belongs to which product.
+    /// Three blocks rather than one row of swatches. The swatches said what the
+    /// marks mean and nothing about where they sit, which left the first thing
+    /// a user actually sees — a bar in the menu bar with six parts in it —
+    /// unexplained. The bar and the panel are the product's own views at their
+    /// own size (`OnboardingAnatomy.swift`), so this group cannot fall out of
+    /// step with the surface it describes.
     private var notchGroup: some View {
         SettingsGroup(header: "Reading the notch") {
-            MatrixLegend()
+            CollapsedBarAnatomy()
+                .padding(14)
+
             SettingsSeparator()
-            ProductColourKey()
+
+            MatrixLegend()
+
+            SettingsSeparator()
+
+            ExpandedPanelAnatomy()
+                .padding(.vertical, 14)
         } footnote: {
             SettingsFootnote(
-                "With nothing connected the matrix is grey — or on a notched "
-                    + "display, absent."
+                "Hovering opens one list — both products, most urgent first. "
+                    + "With nothing connected the mark is grey, or absent on a "
+                    + "notched display."
             )
         }
+        // Both specimens read from one clock, and it is a real one: the
+        // readings are the product's own, counting on from the moment this
+        // window opened. Restarted every ten minutes so a window left open all
+        // afternoon is still teaching from a turn-shaped figure rather than
+        // from `4:17:33`. Cancelled with the view, which is the whole of its
+        // lifetime.
+        .task { await NotchSpecimen.cycle() }
     }
 }
 
-/// The five appearances, live.
+/// The five appearances, live, in both products' ink.
 ///
 /// They animate here for the same reason they animate in the notch: the
 /// pattern *is* the motion, and a still grid says far less than a moving one.
@@ -139,14 +221,14 @@ private struct OnboardingView: View {
 /// server, and `Connected` holds by itself because its state has no period at
 /// all.
 ///
-/// **Five, not four.** This row used to read `Input · Approval` under a single
-/// specimen because the two states drew the same flash. They draw the advance
-/// and the knock now, so one chip could only teach one of them; the names go
-/// short — `Input`, `Approval`, matching what the notch itself says when it is
-/// short of room — rather than the row going to two lines.
+/// **Two marks per specimen, stacked, rather than one cut on the diagonal.**
+/// The split matrix taught the pattern by drawing something the product never
+/// draws: on the notch a mark belongs to one product, since hue is exactly what
+/// tells two marks apart. A stacked pair — Codex above Claude Code, in the
+/// order the bar puts them — teaches the same five patterns and both hues at
+/// once, which is what let the colour-key row go: `Reading the notch` names the
+/// two products on the bar above, where the user meets them first.
 private struct MatrixLegend: View {
-    @EnvironmentObject private var store: MonitorStore
-
     private static let states: [(NotchMatrixState, String)] = [
         (.running, "Running"),
         (.approvalNeeded, "Approval"),
@@ -160,11 +242,19 @@ private struct MatrixLegend: View {
             ForEach(Array(Self.states.enumerated()), id: \.offset) { _, entry in
                 VStack(alignment: .leading, spacing: 8) {
                     NotchChip {
-                        NotchStatusMatrix(
-                            state: entry.0,
-                            size: OnboardingMetrics.matrixSize,
-                            split: .products
-                        )
+                        VStack(spacing: PanelMetrics.compactMatrixSpacing) {
+                            NotchStatusMatrix(
+                                state: entry.0,
+                                size: OnboardingMetrics.matrixSize,
+                                agent: .codex
+                            )
+
+                            NotchStatusMatrix(
+                                state: entry.0,
+                                size: OnboardingMetrics.matrixSize,
+                                agent: .claudeCode
+                            )
+                        }
                     }
 
                     Text(entry.1)
@@ -176,47 +266,11 @@ private struct MatrixLegend: View {
             }
         }
         .padding(14)
-    }
-}
-
-/// Which hue belongs to which product, in the fewest words that can say it.
-///
-/// The specimens above carry both colours at once, which shows that there are
-/// two but not which is which. This row answers only that, and it sits on the
-/// same five columns as the legend so the two chips line up under specimens
-/// rather than floating between them.
-private struct ProductColourKey: View {
-    private static let products: [AgentKind?] = [.codex, nil, .claudeCode, nil, nil]
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(Self.products.enumerated()), id: \.offset) { _, entry in
-                HStack(spacing: 8) {
-                    if let agent = entry {
-                        NotchChip {
-                            NotchStatusMatrix(
-                                state: .running,
-                                size: OnboardingMetrics.matrixSize,
-                                isAnimated: false,
-                                agent: agent
-                            )
-                        }
-
-                        Text(agent.displayName)
-                            .font(.system(size: 12))
-                            .foregroundStyle(MacOSWindowColor.primaryText)
-                    }
-                }
-                .padding(.trailing, 12)
-                .frame(
-                    maxWidth: .infinity,
-                    minHeight: OnboardingMetrics.chipSize,
-                    alignment: .leading
-                )
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "The five marks, each drawn in both products' colours: running, "
+                + "approval, input, completed, and connected with nothing running."
+        )
     }
 }
 

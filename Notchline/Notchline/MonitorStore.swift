@@ -911,6 +911,18 @@ enum PanelMetrics {
     /// notched wing claims it only while a Turn is timed, because there the
     /// idle surface has no wing at all. Two templates would let the two ends of
     /// the same app disagree about how wide a timer is.
+    /// What the collapsed reading actually draws at, as against the slot it is
+    /// billed for.
+    ///
+    /// The two differ on purpose: the slot is ``timerReservationWidth`` so the
+    /// bar's trailing edge cannot move while a turn merely counts on, and the
+    /// ink inside it is right-aligned and narrower. Only the first-run drawing
+    /// asks for this — it has to put a pin under the reading, and the slot's
+    /// centre is a good `19` pt to the left of the digits.
+    static func drawnCompactReadingWidth(_ text: String) -> CGFloat {
+        textWidth(text, font: timerFont) + readingGroundWidthCost
+    }
+
     static var timerReservationWidth: CGFloat {
         textWidth(timerSlotTemplate, font: timerSlotFont) + readingGroundWidthCost
     }
@@ -1484,13 +1496,21 @@ final class MonitorStore: ObservableObject {
         services: [any AgentMonitoring] = [],
         navigator: (any AgentNavigating)? = nil,
         initialSnapshot: AgentSnapshot? = nil,
+        /// Every product's opening answer, where more than one is wanted.
+        ///
+        /// ``initialSnapshot`` seeds one product, which is all a live store
+        /// ever needs -- the services publish the rest. A drawing that has to
+        /// show both products at once has no services to wait for, so it hands
+        /// the whole set in here and the merge runs over it exactly as it does
+        /// on every refresh. See ``NotchSpecimen``.
+        initialSnapshots: [AgentSnapshot]? = nil,
         preferences: UserDefaults? = nil,
         refreshEvents: AsyncStream<Void>? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
     ) {
         let resolvedDisplays = displays ?? DisplayOption.currentDisplays()
-        let snapshot = initialSnapshot ?? Self.previewSnapshot
+        let snapshots = initialSnapshots ?? [initialSnapshot ?? Self.previewSnapshot]
         let persistedDisplayID = preferences?.string(
             forKey: Self.selectedDisplayDefaultsKey
         )
@@ -1509,8 +1529,11 @@ final class MonitorStore: ObservableObject {
         self.services = services
         self.navigator = navigator
         self.refreshEvents = refreshEvents
-        self.latestByAgent = [snapshot.agent: snapshot]
-        let merged = AgentSnapshotMerge.merge([snapshot])
+        self.latestByAgent = Dictionary(
+            snapshots.map { ($0.agent, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let merged = AgentSnapshotMerge.merge(snapshots)
         self.availability = merged.availability
         self.quota = merged.quota
         self.sessions = merged.sessions
@@ -1539,7 +1562,8 @@ final class MonitorStore: ObservableObject {
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
         ) ?? false
-        self.lastIntegrationMessage = snapshot.diagnostic ?? "Waiting for Codex data"
+        self.lastIntegrationMessage = snapshots.first?.diagnostic
+            ?? "Waiting for Codex data"
 
         if !services.isEmpty {
             startMonitoring()
@@ -2750,6 +2774,27 @@ final class MonitorStore: ObservableObject {
             guard !Task.isCancelled else { return }
             self.requestRefresh()
         }
+    }
+
+    /// Re-stage a drawing's fixed answers, on a store that draws rather than
+    /// watches.
+    ///
+    /// The first-run specimens are stores with no services (``NotchSpecimen``),
+    /// so after `init` nothing will ever publish to them again -- and their
+    /// reading is a clock, counting on from the moment the window opened. Handing
+    /// the same rows back with a fresh start is what wraps it, and it goes
+    /// through the ordinary merge, so a re-staged drawing is still only what a
+    /// refresh could have produced.
+    ///
+    /// Refused on a watching store. Nothing outside a provider may put rows in
+    /// front of the user; a caller that got this wrong would be publishing
+    /// fiction to the notch.
+    func restageSpecimen(_ snapshots: [AgentSnapshot]) {
+        guard services.isEmpty else { return }
+        for snapshot in snapshots {
+            latestByAgent[snapshot.agent] = snapshot
+        }
+        apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
     }
 
     private func apply(_ snapshot: MonitorSnapshot) {

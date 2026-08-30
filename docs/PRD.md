@@ -106,15 +106,18 @@ A missing, corrupt, permission-denied or schema-incompatible main state must con
 
 ## 5. First-run onboarding
 
-First installation uses a standalone macOS window for three steps:
+First installation opens **one standalone macOS window, in two pages**. It is the same window Settings becomes afterwards, in the same shape, so nothing has moved by the second opening.
 
-1. **Welcome**: what the product monitors, how it surfaces requests for a person, and how it returns to the same thread.
-2. **Connect to Codex**: exactly which local metadata will be read, with the user's confirmation taken before any user-level integration is installed or registered.
-3. **Ready**: confirming that live status, Project, unread membership, exact navigation and the primary quota window are available.
+1. **`Connect your agents`** — the app's one sentence, a switch per product with its live connection status, and a footnote naming the files those switches write and the backups they take first. `Continue` moves on.
+2. **`Reading the notch`** — what the component draws, taught from the product's own drawings rather than pictures of them: the collapsed bar and the expanded panel at their own size with every part numbered and named, and the five state patterns between them. `Back` returns to the first page; `Start` completes onboarding.
+
+**The two pages divide on the seam the content already had: page one asks for something, page two explains something.** Nothing on page one needs page two to make sense — a user who presses `Continue` without reading has connected both products correctly — and nothing on page two asks for anything, which is what makes going back to it cheap. The split is also what keeps the window inside the height a 14-inch built-in display leaves under its menu bar; the alternative was cutting the drawings back until one page fitted, which would have spent exactly the parts worth showing ([`figma-design.md`](figma-design.md) §7.3).
+
+**Neither page gates the other, and neither gates the product**: onboarding can be finished with no product connected at all, and the notch will honestly say `Disconnected`.
 
 Setup must be explicit, reversible and user-confirmed. The app must not silently modify Codex configuration, bypass Codex's trust mechanism, or launch Codex Desktop by itself.
 
-`Set Up Integration` in onboarding and the `Codex integration` master switch in Settings both manage the required lifecycle event definitions as one indivisible product capability. Switching on installs or repairs the complete set; switching off removes only the definitions Notchline manages and stays in Settings rather than returning to onboarding. Codex still shows the definitions individually by event type, and a first install or a changed definition must still be reviewed and trusted by the user under `/hooks`.
+The product switches in onboarding and the master switches in Settings are the same control drawn twice — the same view, not a copy — and manage the required lifecycle event definitions as one indivisible product capability. Switching on installs or repairs the complete set; switching off removes only the definitions Notchline manages and stays in Settings rather than returning to onboarding. Codex still shows the definitions individually by event type, and a first install or a changed definition must still be reviewed and trusted by the user under `/hooks`.
 
 > The count of definitions has been wrong in this document more than once — it has read six, five, eleven and twelve — so it is deliberately not restated here. Count them in `HookIntegration.swift`'s `managedDefinitions`; `SessionEnd` is deliberately never registered ([`tech-design.md`](tech-design.md) §9.3). Any change to the set drops already-installed users into `Repair required` and requires re-trusting under `/hooks` — the only cost of adding a definition, and the designed path for it.
 
@@ -400,7 +403,7 @@ If Project, unread membership or exact navigation cannot be met, V1 must not fak
 - Figma file: [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1)
 - `06 — Notch Core`: collapsed and shared expanded core geometry.
 - `07 — Integration States`: quota degradation, empty and integration states.
-- `08 — Onboarding`: the three-step first-run flow.
+- `08 — Onboarding`: the two-page first-run flow (`1016:2`); `750:2` and `232:95` are superseded references.
 - `09 — Settings`: integration management.
 
 ## 16. Terminology and architectural decisions

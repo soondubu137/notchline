@@ -306,6 +306,177 @@ struct NotchlineTests {
         #expect(!half.contains(CGPoint(x: edge * 0.1, y: edge * 0.5)))
     }
 
+    /// The first-run specimens are the product, and they watch nothing.
+    ///
+    /// `OnboardingAnatomy` draws the bar and the panel by handing
+    /// ``NotchOverlayView`` a store of its own, so what is asserted here is
+    /// everything that store has to be for that drawing to be honest and safe:
+    /// **inert** -- no services, so no socket is bound, no file of the user's
+    /// is read and nothing on the notch answers to it; **two products**, since
+    /// a specimen with one mark would teach the wrong bar; and **shut and open
+    /// respectively**, which is the difference between the two figures.
+    ///
+    /// The width is the load-bearing one. The window pins the bar's trailing
+    /// parts by measuring inwards from its right edge, which is only where the
+    /// badges and the reading are if the specimen is the no-notch pill the
+    /// product composes for this reading. `PanelMetrics.size` is asked the same
+    /// question directly: if the pill's geometry ever stops matching, the pins
+    /// are pointing at nothing and this fails rather than the drawing going
+    /// quietly wrong.
+    @Test @MainActor
+    func theFirstRunSpecimensAreTheProductAndWatchNothing() {
+        let shut = NotchSpecimen.shut
+        let hovered = NotchSpecimen.hovered
+
+        #expect(!shut.isWatching)
+        #expect(!hovered.isWatching)
+        #expect(!shut.isExpanded)
+        #expect(hovered.isExpanded)
+
+        // Both products, in the bar's own order, each with its own rows.
+        #expect(shut.presenceMarks.count == 2)
+        #expect(shut.connectedAgents == [.codex, .claudeCode])
+        #expect(shut.geometry == .noNotch)
+        #expect(shut.compactHeight == PanelMetrics.referenceCompactHeight)
+
+        // A subagent stopped on a question is what the whole drawing is of.
+        #expect(shut.status == .approvalNeeded)
+        #expect(shut.compactSubagentBadges.count == 2)
+        #expect(shut.compactTimerText != nil)
+
+        // The pill the pins are measured against.
+        let composed = PanelMetrics.size(
+            geometry: .noNotch,
+            isExpanded: false,
+            statusReadoutText: shut.compactStatusReadoutText,
+            trailing: shut.compactTrailingReading,
+            centerOcclusionWidth: 0,
+            compactHeight: shut.compactHeight,
+            status: shut.status,
+            matrixCount: shut.presenceMarks.count,
+            drawsCompactMarks: shut.drawsCompactMarks
+        )
+        #expect(shut.currentPanelSize == composed)
+
+        // The reading is drawn narrower than the slot it is billed for, which
+        // is why the trailing pins measure the ink rather than the reservation.
+        let drawn = PanelMetrics.drawnCompactReadingWidth(shut.compactTimerText ?? "")
+        #expect(drawn < PanelMetrics.timerReservationWidth)
+
+        // Four Codex rows: one past the dot cap, which is what turns the third
+        // dot into the dash the key names -- and three of them finished under a
+        // mark that is drawing something else, which is what sets that column
+        // breathing. Both are drawn facts with no text beside them, so the key
+        // is the only place they are explained and this is the only place they
+        // are pinned.
+        let codex = shut.presenceMarks.first { $0.agent == .codex }
+        #expect((codex?.sessionCount ?? 0) > PanelMetrics.sessionDotCap)
+        #expect(codex?.buriesAFinishedTurn == true)
+
+        // Claude Code has finished with a subagent still working. That is one
+        // row drawing a badge where a reading would be -- the seventh pin on
+        // the open panel -- and it is also why this product's mark is on radar
+        // rather than lull.
+        let claude = shut.presenceMarks.first { $0.agent == .claudeCode }
+        #expect(claude?.status == .running)
+        let claudeRow = hovered.sessions.first { $0.agent == .claudeCode }
+        #expect(claudeRow?.showsSubagentBadge == true)
+        // Second, so it is inside the three rows the panel lists. The pin is
+        // placed on that row's centre and would otherwise name empty black.
+        #expect(hovered.sessions.dropFirst().first?.agent == .claudeCode)
+
+        // The panel's own footer, which the second page has the room to draw:
+        // one rule per product -- Codex publishes one window, Claude Code two
+        // -- and the day's tokens under them. Pins 7 and 8 name rows that only
+        // exist if this fixture carries real quota.
+        #expect(hovered.footerRules.count == 2)
+        #expect(hovered.footerRules.first { $0.agent == .claudeCode }?.windows.count == 2)
+        #expect(hovered.footerTodayText != nil)
+    }
+
+    /// The first-run clock starts again rather than running all afternoon.
+    ///
+    /// The specimens draw the product's own live reading over the product's own
+    /// tick, so a window left open keeps counting: by teatime the pin marked
+    /// `Longest turn` would be naming `4:17:33`, a shape the collapsed bar
+    /// cannot even draw. ``NotchSpecimen/cycle()`` hands the same rows back with
+    /// a fresh start every ``NotchSpecimen/clockPeriod``, and what has to be
+    /// true for that to work is here: re-staging really republishes, and the
+    /// reading really is back at zero afterwards.
+    ///
+    /// `max(now, start)` in ``MonitorStore`` is what makes the wrap clean --
+    /// the staged start is newer than the last tick, and without that clamp the
+    /// reading would be a negative duration, which the formatter reports as not
+    /// timed and the bar draws as nothing.
+    @Test @MainActor
+    func theFirstRunClockStartsAgainRatherThanRunningAllAfternoon() {
+        // Under ten minutes, which is the whole of what the period has to be:
+        // at `600` the formatter grows an hours field and the reading changes
+        // shape under the pin naming it.
+        #expect(NotchSpecimen.clockPeriod < .seconds(600))
+
+        func staged(startedAt: Date) -> [AgentSnapshot] {
+            [
+                AgentSnapshot(
+                    agent: .codex,
+                    availability: .ready,
+                    sessions: [
+                        MonitoredSession(
+                            agent: .codex,
+                            threadID: "clock",
+                            turnID: "clock-turn",
+                            projectName: "notchline",
+                            title: "Wire the quota footer to the fold control",
+                            preview: nil,
+                            status: .running,
+                            startedAt: startedAt
+                        )
+                    ],
+                    quota: .unavailable,
+                    diagnostic: nil,
+                    setupStatus: .active,
+                    presence: .open
+                )
+            ]
+        }
+
+        let store = MonitorStore(
+            displays: [NotchSpecimen.display],
+            services: [],
+            initialSnapshots: staged(startedAt: Date().addingTimeInterval(-595)),
+            preferences: nil
+        )
+        let before = store.compactTimerText
+        #expect(before != nil)
+        #expect(before != "0:00")
+
+        store.restageSpecimen(staged(startedAt: Date()))
+        #expect(store.compactTimerText == "0:00")
+
+        // The wait is the *remainder*, never a fresh period. A fixed
+        // `sleep(period)` loop is what let the reading run past 9:59: going
+        // Back to page one cancels the loop and coming forward re-slept a whole
+        // period against a store that had been counting all along, and a Mac
+        // that sleeps holds the task while the wall clock -- which is what the
+        // reading is measured against -- runs on.
+        let stagedAt = Date()
+        #expect(
+            NotchSpecimen.remainingBeforeWrap(stagedAt: stagedAt, now: stagedAt)
+                == NotchSpecimen.clockPeriod
+        )
+        let halfway = stagedAt.addingTimeInterval(300)
+        #expect(
+            NotchSpecimen.remainingBeforeWrap(stagedAt: stagedAt, now: halfway)
+                < NotchSpecimen.clockPeriod
+        )
+        // Past the period -- a lid closed over lunch -- wraps at once.
+        let afterLunch = stagedAt.addingTimeInterval(3_600)
+        #expect(
+            NotchSpecimen.remainingBeforeWrap(stagedAt: stagedAt, now: afterLunch)
+                == .zero
+        )
+    }
+
     /// Each state draws the pattern its design file draws.
     ///
     /// The four files in `design/assets/matrix-states/` are the contract, and

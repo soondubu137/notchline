@@ -108,7 +108,7 @@ It may request Automation permission when opening a Claude Code row hosted in Te
 
 ## First run and usage
 
-The first launch opens one onboarding window. It contains the two product connection switches, an explanation of the Hook configuration they manage, and a live legend for reading the notch. Selecting `Start` completes onboarding; later launches show only the overlay.
+The first launch opens one onboarding window, in two pages. The first has the two product connection switches and an explanation of the Hook configuration they manage; the second is a live guide to reading the notch — the collapsed bar and the expanded panel as the app itself draws them, each part numbered and named, with the five state patterns between them. Selecting `Start` completes onboarding; later launches show only the overlay.
 
 Enabling an integration adds Notchline's lifecycle definitions to the product's own configuration:
 
