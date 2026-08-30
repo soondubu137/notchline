@@ -2367,10 +2367,19 @@ struct NotchlineTests {
     /// collapsed bar's right edge that shows it, because that is the edge a
     /// person reads against the notch.
     ///
-    /// Two terms make it fractional on real hardware and both are covered
-    /// here: the shoulder is `menuBarHeight / 8`, whole only at multiples of
-    /// eight, and the trailing anchor carries the measured width of an elapsed
-    /// reading.
+    /// **Three terms are fractional on real hardware, and all three are
+    /// covered here.** The shoulder is `panelHeight / 8`, whole only at
+    /// multiples of eight. The trailing anchor is the cut-out's reported edge
+    /// plus the wing, and neither term is promised to be an integer — the wing
+    /// is one by construction, but `auxiliaryTopRightArea.minX` is whatever
+    /// the hardware says. And the panel's height is now read off the cut-out
+    /// (§3.5) rather than off the menu bar band, so it too is only whatever
+    /// `NSScreen` reports.
+    ///
+    /// Both trailing readings are exercised, because they take different
+    /// paths: a timed one puts a measured wing in the anchor, and an empty one
+    /// puts the reported edge in it untouched, which is the case the wingless
+    /// step used to round away.
     @Test @MainActor
     func aPanelFrameIsWholePoints() {
         let screen = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
@@ -2382,28 +2391,42 @@ struct NotchlineTests {
                 && frame.height == frame.height.rounded()
         }
 
-        for bar in [46.0, 38.0, 37.0, 32.0, 24.0, 22.0] as [CGFloat] {
+        // Whole cut-out heights, and fractional ones: nothing promises
+        // `safeAreaInsets.top` lands on a point.
+        let heights = [46.0, 38.0, 37.0, 32.0, 24.0, 22.0, 38.5, 31.5] as [CGFloat]
+        let readings: [CompactTrailingReading] = [
+            .empty,
+            CompactTrailingReading(timerText: "0:00")
+        ]
+        // A cut-out edge on the point grid, and one off it.
+        let reportedEdges = [1_060.0, 1_060.5] as [CGFloat]
+
+        for bar in heights {
+        for reading in readings {
+        for reportedEdge in reportedEdges {
             let shoulder = PanelMetrics.surfaceShoulderRadius(panelHeight: bar)
             // A measured elapsed reading, which is where the fraction in the
             // anchor comes from: `0:00` is `27.78` before its ground and the
             // wing's own padding are added.
-            let wing = PanelMetrics.compactTrailingWingWidth(
-                trailing: CompactTrailingReading(timerText: "0:00")
-            )
+            let wing = PanelMetrics.compactTrailingWingWidth(trailing: reading)
             let size = PanelMetrics.size(
                 geometry: .notched,
                 isExpanded: false,
                 statusReadoutText: "Running",
-                trailing: CompactTrailingReading(timerText: "0:00"),
+                trailing: reading,
                 centerOcclusionWidth: 220,
                 compactHeight: bar
             )
-            // The wing is whole points by construction now; what is still
+            let where_ = "\(bar) pt cut-out, edge \(reportedEdge)"
+            // The wing is whole points by construction; what is still
             // fractional -- and what this has to prove is being rounded -- is
-            // the shoulder, on every bar that is not a multiple of eight.
-            let bodyEdge = 1_060 + wing + shoulder
-            if bar.truncatingRemainder(dividingBy: 8) != 0 {
-                #expect(bodyEdge != bodyEdge.rounded(), "\(bar) pt bar rounds nothing")
+            // the shoulder on every height that is not a multiple of eight,
+            // the reported edge, and the height itself.
+            #expect(wing == wing.rounded(), "\(where_)")
+            let bodyEdge = reportedEdge + wing + shoulder
+            if bar.truncatingRemainder(dividingBy: 8) != 0
+                || reportedEdge != reportedEdge.rounded() {
+                #expect(bodyEdge != bodyEdge.rounded(), "\(where_) rounds nothing")
             }
             #expect(
                 isWhole(
@@ -2411,10 +2434,10 @@ struct NotchlineTests {
                         on: screen,
                         panelSize: size,
                         surfaceShoulder: shoulder,
-                        trailingAnchor: 1_060 + wing
+                        trailingAnchor: reportedEdge + wing
                     )
                 ),
-                "notched compact frame under a \(bar) pt bar"
+                "notched compact frame under a \(where_)"
             )
             // Centred, and expanded, where the height is composed too.
             #expect(
@@ -2433,8 +2456,10 @@ struct NotchlineTests {
                         trailingAnchor: nil
                     )
                 ),
-                "expanded frame under a \(bar) pt bar"
+                "expanded frame under a \(where_)"
             )
+        }
+        }
         }
     }
 
@@ -2544,6 +2569,14 @@ struct NotchlineTests {
     /// the whole argument that a trailing reading cannot move the leading
     /// matrix. Asserted on the arithmetic rather than only through a frame, so
     /// a wing that went back to fractions fails here first and says why.
+    ///
+    /// It is one loop rather than three now: the wing answers to the trailing
+    /// reading and to nothing else. It used to be measured across every menu
+    /// bar height and both `drawsCompactMarks` values as well, because the
+    /// wingless branch derived a step from the panel's height (§3.6) -- the
+    /// one place a fraction could ever have entered this from outside the
+    /// reading. That branch is gone, so the panel's height cannot reach any
+    /// horizontal measurement at all.
     @Test @MainActor
     func theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove() {
         let badge = [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 2))]
@@ -2555,23 +2588,15 @@ struct NotchlineTests {
             CompactTrailingReading(badges: badge, timerText: "1:23")
         ]
 
-        for bar in [46.0, 38.0, 37.0, 32.0, 24.0, 22.0] as [CGFloat] {
-            for reading in readings {
-                for draws in [true, false] {
-                    let wing = PanelMetrics.compactTrailingWingWidth(
-                        trailing: reading
-                    )
-                    #expect(wing == wing.rounded(), "\(bar) pt bar, draws \(draws)")
-                    // The identity itself, on the leading wing this app draws.
-                    let leadingAndCutOut = PanelMetrics.compactLeadingWidth(
-                        statusReadoutText: "Running",
-                        showsStatusText: false
-                    ) + PanelMetrics.expandedNotchClearance + 220
-                    #expect(
-                        ceil(leadingAndCutOut + wing) == ceil(leadingAndCutOut) + wing
-                    )
-                }
-            }
+        for reading in readings {
+            let wing = PanelMetrics.compactTrailingWingWidth(trailing: reading)
+            #expect(wing == wing.rounded(), "\(reading)")
+            // The identity itself, on the leading wing this app draws.
+            let leadingAndCutOut = PanelMetrics.compactLeadingWidth(
+                statusReadoutText: "Running",
+                showsStatusText: false
+            ) + PanelMetrics.expandedNotchClearance + 220
+            #expect(ceil(leadingAndCutOut + wing) == ceil(leadingAndCutOut) + wing)
         }
     }
 
