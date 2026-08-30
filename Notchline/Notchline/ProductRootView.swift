@@ -84,16 +84,27 @@ private struct OnboardingView: View {
         .background(SettingsWindowChrome(title: "Welcome to Notchline"))
     }
 
-    /// Page one's closing line: the standing statement, and the way on.
+    /// Page one's closing line: the standing statement, the version, and the
+    /// way on.
     ///
     /// Same shape as the Settings window's closing row — an explanation with
     /// the action it is about on the end. The read-only promise belongs here
     /// rather than on page two, because this is the page with the switches on
     /// it and it is the switches the promise is about.
+    ///
+    /// The version rides under that statement, in the same place and the same
+    /// view Settings uses (`AppVersionLine`), so the window says it in one form
+    /// before and after onboarding. Page one and not page two: this is the page
+    /// the window opens on, and a build number is a fact about the app rather
+    /// than part of the teaching.
     private var connectClosing: some View {
         HStack(alignment: .center, spacing: 16) {
-            Text("Notchline only reads. Nothing here changes Codex or Claude Code.")
-                .settingsFootnote(MacOSWindowColor.tertiaryText)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Notchline only reads. Nothing here changes Codex or Claude Code.")
+                    .settingsFootnote(MacOSWindowColor.tertiaryText)
+
+                AppVersionLine()
+            }
 
             Button("Continue") {
                 page = .read

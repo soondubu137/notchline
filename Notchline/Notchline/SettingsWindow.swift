@@ -20,19 +20,30 @@ struct AppSettingsView: View {
             displayGroup
             sessionListGroup
 
-            // The closing note, and the one action that ends the app.
+            // The closing note, the version, and the one action that ends the
+            // app.
             //
             // Quit belongs to the window, not to a group: it is not a setting,
             // and the component it removes has no window of its own to close.
             // Same shape as `Recheck` — a footnote line with a control on its
             // trailing side — because it is the same kind of thing: the action
             // that the text beside it is about.
+            //
+            // The version goes under that statement for the same reason: it is
+            // about the build rather than about any setting, so no group can
+            // hold it, and this app has no menu bar and therefore no `About
+            // Notchline` to put it in. First run closes on the same pair
+            // (`ProductRootView.swift`), so the two windows say it identically.
             HStack(alignment: .top, spacing: 16) {
-                Text(
-                    "Notchline only reads. Nothing here changes state in "
-                        + "Codex or Claude Code."
-                )
-                .settingsFootnote(MacOSWindowColor.tertiaryText)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(
+                        "Notchline only reads. Nothing here changes state in "
+                            + "Codex or Claude Code."
+                    )
+                    .settingsFootnote(MacOSWindowColor.tertiaryText)
+
+                    AppVersionLine()
+                }
 
                 Button("Quit") {
                     NSApp.terminate(nil)

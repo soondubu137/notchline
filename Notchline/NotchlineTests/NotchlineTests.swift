@@ -29813,3 +29813,62 @@ extension NotchlineTests {
         )
     }
 }
+
+// MARK: - What this build says it is
+
+extension NotchlineTests {
+    /// The version both windows draw is the one the build stamped.
+    ///
+    /// `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` are the release's only
+    /// declaration of itself, and this asserts the interface reads them rather
+    /// than carrying a second copy that a release would have to remember to
+    /// change. The figures are deliberately not written down here: pinning
+    /// `0.1.0` would make every release a test edit and would assert the
+    /// project file's value against itself.
+    @Test
+    func theVersionOnTheWindowIsTheOneTheBuildStamped() throws {
+        let marketing = try #require(
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        )
+        let build = try #require(
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        )
+
+        #expect(AppVersion.marketing == marketing)
+        #expect(AppVersion.build == build)
+
+        let stage = try #require(AppVersion.stage, "this build is still qualified")
+        #expect(AppVersion.name == "\(marketing) \(stage)")
+        #expect(AppVersion.summary == "Version \(marketing) \(stage) (\(build))")
+        // The build number is the half a bug report needs and the half
+        // VoiceOver would otherwise read as punctuation.
+        #expect(AppVersion.spokenSummary == "Version \(marketing) \(stage), build \(build)")
+    }
+
+    /// The stage word stays out of the marketing version.
+    ///
+    /// This is the invariant behind splitting them at all, and the one a
+    /// simplification would break: `CFBundleShortVersionString` is numeric
+    /// components separated by dots or it is invalid, so a `MARKETING_VERSION`
+    /// of `0.1.0 Alpha` fails notarisation and stops ordering against the
+    /// version it follows. The word is a word, and it is only ever joined to
+    /// the numbers where they are drawn.
+    @Test
+    func theStageWordIsNeverStampedIntoTheMarketingVersion() throws {
+        let marketing = try #require(AppVersion.marketing)
+        let components = marketing.split(separator: ".", omittingEmptySubsequences: false)
+
+        #expect(!components.isEmpty)
+        for component in components {
+            #expect(
+                !component.isEmpty && component.allSatisfy(\.isNumber),
+                "\(marketing) is not a version macOS can compare"
+            )
+        }
+
+        if let stage = AppVersion.stage {
+            #expect(!marketing.localizedCaseInsensitiveContains(stage))
+            #expect(!stage.isEmpty)
+        }
+    }
+}

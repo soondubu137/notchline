@@ -45,6 +45,7 @@ Each document owns a scope. A change landing in one of these scopes updates that
 | [`docs/tech-design.md`](docs/tech-design.md) | Interfaces, protocols, data flow, failure recovery |
 | [`docs/integration-settings-behaviour.md`](docs/integration-settings-behaviour.md) | What the settings toggles actually do to the user's hook configuration |
 | [`docs/artifacts.md`](docs/artifacts.md) | Every file this app creates or edits, inside its container and outside it |
+| [`CHANGELOG.md`](CHANGELOG.md) | What each released version contains, and the known limitations it ships with |
 | [`docs/adr/`](docs/adr/) | High-impact decisions and their trade-offs |
 | [`docs/non-public-codex-integration-features.md`](docs/non-public-codex-integration-features.md) | Every feature depending on non-public Codex implementation details (§7) |
 | [`docs/technical-explorations/`](docs/technical-explorations/) | **Open research, not decisions.** Nothing here is implemented or approved |
