@@ -1,124 +1,72 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="design/assets/07-readme/notchline-readme-header-dark.png">
-    <img src="design/assets/07-readme/notchline-readme-header.png" width="360" alt="Notchline">
+    <img src="design/assets/07-readme/notchline-readme-header.png" width="340" alt="Notchline">
   </picture>
 </p>
-
 <p align="center">
   <img src="https://img.shields.io/badge/platform-macOS%2026.5%2B-lightgrey" alt="macOS 26.5 or later">
   <img src="https://img.shields.io/badge/built%20with-SwiftUI%20%2B%20AppKit-orange" alt="SwiftUI and AppKit">
   <img src="https://img.shields.io/badge/dependencies-none-blue" alt="No third-party dependencies">
 </p>
 
-**Notchline is a macOS overlay that keeps the Codex Desktop and Claude Code Turns which still need attention visible without taking up usable desktop space.**
+**Notchline is a macOS overlay that keeps the Codex Desktop and Claude Code sessions which still need attention visible without taking up usable desktop space.**
 
-<!--
-HERO DEMO PLACEHOLDER
 
-Recommended visual:
-A 6–10 second screen recording or GIF of the top portion of a real MacBook display.
-
-Composition:
-- Crop to a wide horizontal strip covering roughly the top 20–30% of the display.
-- Keep the physical notch centred and leave enough desktop and menu-bar context to make the placement unambiguous.
-- Begin with Notchline collapsed around the notch with both product matrices visible.
-- Let a live Turn change state, then move the pointer onto the surface so the session list and quota footer expand below it.
-- Move the pointer away and show the panel returning to its collapsed form.
-- Use neutral Project and Thread names, hide notifications and personal menu-bar items, and remove unrelated desktop files.
-- Prefer a direct screen recording over a device mock-up; avoid perspective, gradients and promotional framing.
-- Suggested final width for GitHub: 1600–2000 px.
-
-What it should communicate:
-Notchline is a persistent surface attached to the top edge of the display, not a conventional app window or another menu-bar icon.
--->
+<p align="center">
+  <img src="docs/assets/hero.webp" width="1200" alt="Notchline collapsed around the notch, expanding on hover to show three sessions and the quota footer, then a click on the row needing approval opening that Codex Desktop thread at its approval prompt">
+</p>
 
 ## Overview
 
-Daily work can already fill the screen with a code editor, a browser, documents, and communication tools. Codex Desktop, Claude Desktop and terminal sessions then end up buried under those windows, even while several Turns continue working in the background.
+Daily work can already fill the screen with a code editor, a browser, documents, and communication tools. Codex Desktop, Claude Desktop and terminal sessions then end up buried under those windows, even while several sessions continue working in the background.
 
-Once the agent windows are out of sight, it becomes difficult to see which work is still running, which Turn needs an approval or answer, and which conversation has completed. Repeatedly bringing every window to the front just to check its state interrupts the work that already occupies the desktop.
+Once the agent windows are out of sight, it becomes difficult to see which work is still running, which session needs an approval or answer, and which conversation has completed. Repeatedly bringing every window to the front just to check its state interrupts the work that already occupies the desktop.
 
 Notchline moves that overview into the otherwise unused area around the display notch. Its collapsed surface quietly shows the current state of both products without covering any working window; hovering reveals the monitored Threads, and clicking a row returns to the originating conversation. It observes and navigates, but does not approve commands, answer questions, send input, cancel work, archive Threads or mark them as read.
 
 ## Features
 
-### Live status without another window
+- **Live status without another window**
 
-The collapsed surface sits around a physical notch, or appears as a compact pill on a display without one. A 4×4 matrix for each connected product distinguishes `Running`, `Input needed`, `Approval needed` and `Completed`, while the trailing side can show elapsed time and subagent activity; hovering expands the same surface into the Thread list.
+  The collapsed surface wraps a physical notch, or becomes a compact pill on a display without one. A 4×4 matrix per product separates `Running`, `Input needed`, `Approval needed` and `Completed`; the trailing wing can add elapsed time and subagent activity.
 
-<!--
-SCREENSHOT PLACEHOLDER — Collapsed states
+  <img src="docs/assets/notch-anatomy-readme.png" width="1200" alt="Anatomy of the collapsed bar: a Codex and a Claude Code status matrix with a column of session dots beside each, the most urgent state name, one subagent badge per product, and the elapsed time, every element labelled with what it is and what it means">
 
-Recommended visual:
-Two real screenshots at the same scale: one from a notched MacBook display and one from a display without a notch.
+- **One list for both products**
 
-Composition:
-- Keep the full top edge of each display visible, with restrained desktop context below it.
-- On the notched display, show two connected products and an active elapsed-time reading in the wings.
-- On the notch-less display, show the compact pill in the menu-bar band without obscuring unrelated menu items.
-- Use the same state and demo data in both captures so the layout difference is the subject.
-- Hide notifications, account names and private menu-bar items.
+  Codex Desktop and Claude Code Threads share one urgency-sorted list and the same four statuses. A row can show its Project, title, current-content preview, elapsed time and subagent count; completed rows stay until read or navigation evidence clears them, or a secondary click dismisses them.
 
-What it should communicate:
-The physical notch is part of the notched layout, while the notch-less form preserves the same interaction model without pretending a cut-out exists.
--->
+  <img src="docs/assets/list-anatomy-readme.png" width="1200" alt="Anatomy of the expanded panel: the collapsed bar as a header, then three session rows each carrying a product colour bar, its Project, its title and its live progress with a trailing reading — a waiting turn on white, a finished turn whose subagent is still running, and a running turn — over a footer of rate-limit rules and today's token count">
 
-### One list for both products
+- **Navigation back to the originating work**
 
-Codex Desktop and Claude Code Threads share one urgency-sorted list and the same four statuses. Each row can show its Project, title, current-content preview, elapsed time and subagent count; completed rows remain until trustworthy read or navigation evidence removes them, or until the user dismisses the row with a secondary click.
+  A Codex row is confirmed still navigable before its official deep link is used. Claude Code rows return to Claude Desktop or the originating terminal; Terminal.app and iTerm2 select the exact tab when its tty is available, other terminals only activate the application.
 
-### Navigation back to the originating work
+- **Quota and daily usage**
 
-Clicking a Codex row confirms that the Thread is still navigable before using its official deep link. Claude Code rows return to Claude Desktop or the originating terminal; Terminal.app and iTerm2 can select the exact tab when its tty is available, while other terminals fall back to application activation.
+  The expanded footer shows Codex's primary rate-limit window, Claude Code's 5-hour and 7-day windows, and today's token count. Unavailable readings stay unavailable rather than estimated, and the quota rows fold down to the daily summary.
 
-### Quota and daily usage
+- **Display and product settings**
 
-The expanded footer shows Codex's primary rate-limit window, Claude Code's 5-hour and 7-day windows, and today's token count. Unavailable readings remain unavailable rather than being estimated, and the quota rows can be folded down to the daily summary.
+  Each product has an independent integration switch and health row. Settings also choose the display, optionally hide the collapsed wings, add an outline for dark wallpapers, and present product attribution as a coloured name, plain name, badge or colour bar.
 
-### Display and product settings
+  <img src="docs/assets/settings-anatomy-readme.png" width="1200" alt="Anatomy of the Notchline Settings window: a Products group with one switchable row per product, each carrying a health line and a reveal-in-Finder button, above the quota transcript footprint and a Recheck button; a Display group choosing the screen and the two collapsed options; a Session list group choosing product attribution; and a Quit button">
 
-Each product has an independent integration switch and health row. Settings also choose the display, optionally hide the collapsed wings, add an outline for dark wallpapers, and present product attribution as a coloured name, plain name, badge or colour bar.
+### Status matrix patterns
 
-<!--
-SCREENSHOT PLACEHOLDER — Expanded panel
+Each product carries its own 4×4 mark on the collapsed surface — Codex above, Claude Code below — and every state animates differently, so the surface reads at a glance without depending on colour or on the panel being open. The cell curves below are the ones the app ships.
 
-Recommended visual:
-A real screenshot of the expanded panel attached to the top edge of a notched display.
-
-Composition:
-- Include the notch and enough of the menu-bar band to preserve the spatial relationship.
-- Show three non-sensitive rows: one needing approval or input, one running with a current-content preview and elapsed time, and one completed.
-- Include both products, at least one subagent count, the quota rules and the daily token line.
-- Crop tightly enough for the row text to remain readable on GitHub, but not so tightly that the panel looks like a detached window.
-- Use neutral Project names and text written specifically for the demo.
-
-What it should communicate:
-The expanded panel is the collapsed notch surface revealing more detail, not a separate dashboard.
--->
-
-<!--
-SCREENSHOT PLACEHOLDER — Settings
-
-Recommended visual:
-A real screenshot of the single-pane Notchline Settings window.
-
-Composition:
-- Show the Products, Display and Session list groups in one capture if the text remains readable; otherwise show the Products and Display groups.
-- Keep native macOS window chrome visible.
-- Show both product switches enabled with healthy, non-sensitive status text.
-- Ensure no home-directory path, account detail or machine name is visible.
-- Use the same appearance and scale as the other README captures.
-
-What it should communicate:
-Configuration is conventional macOS UI even though the primary interface is not a conventional window.
--->
+| Running | Input needed | Approval needed | Completed | Connected |
+|:---:|:---:|:---:|:---:|:---:|
+| <img src="docs/assets/matrix-running.svg" width="120" alt="Running: a beam sweeps the matrix and each cell fades behind it"> | <img src="docs/assets/matrix-input.svg" width="120" alt="Input needed: one column steps across a held baseline"> | <img src="docs/assets/matrix-approval.svg" width="120" alt="Approval needed: the whole matrix flashes twice, then goes dark"> | <img src="docs/assets/matrix-completed.svg" width="120" alt="Completed: a crest travels down the diagonal, then rests in a trough"> | <img src="docs/assets/matrix-idle.svg" width="120" alt="Connected: every cell dim and still"> |
+| **Radar** — a beam sweeps, each cell holds its afterglow | **Advance** — a column steps across a held baseline | **Double knock** — two beats, then a silence | **Lull** — one crest down the diagonal, then a trough | **Dim and still** — the product is open, nothing is running |
 
 ## Motivation
 
 In my daily work, the available screen area is often already occupied by a code editor, internal documentation, product pages, communication software and the other tools needed for the task in front of me. There is rarely space left to keep Codex Desktop, Claude Desktop or every Claude Code terminal visible as well.
 
-The agent windows therefore spend much of their time underneath everything else. That makes it easy to miss a conversation waiting for permission, a question that needs an answer, or a Turn that has already completed. Bringing those windows to the front, checking them one by one and burying them again is a small but frequent interruption.
+The agent windows therefore spend much of their time underneath everything else. That makes it easy to miss a conversation waiting for permission, a question that needs an answer, or a session that has already completed. Bringing those windows to the front, checking them one by one and burying them again is a small but frequent interruption.
 
 I wanted one quiet place that consumed no usable desktop area but still made the live state of every task easy to check at any moment. The strip around the MacBook notch was already present, always visible and otherwise unable to hold a normal window. Notchline grew from using that space as a compact status surface: small enough to stay out of the way, but detailed enough to show when my attention is needed.
 
@@ -173,7 +121,7 @@ Once running:
 
 - Hover over the collapsed surface to expand it; move the pointer away to collapse it.
 - Left-click a row to return to its originating Thread or host.
-- Right-click a completed row to dismiss that Turn's row without deleting or marking anything read.
+- Right-click a completed row to dismiss that session's row without deleting or marking anything read.
 - Use the gear in the expanded header to open Settings.
 - Use `Quit` in Settings to stop the app.
 
@@ -185,41 +133,40 @@ Notchline is one `LSUIElement` process that observes two products it does not co
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="design/assets/07-readme/notchline-architecture-dark.svg">
-  <img src="design/assets/07-readme/notchline-architecture.svg" alt="Notchline architecture: the Codex and Claude Code boundaries converge on one merged snapshot and one overlay" width="1120">
+  <img src="design/assets/07-readme/notchline-architecture.svg" alt="Notchline architecture: the Codex and Claude Code boundaries converge on one merged snapshot and one overlay" width="1240">
 </picture>
 
-### Live Turn state comes only from Hooks
+**Live state comes only from Hooks.** Both products run a small `sh` helper on lifecycle events that forwards one payload to a per-product, permission-restricted Unix domain socket and always exits successfully, so a closed Notchline never adds errors to the originating session. Payloads feed an in-memory reducer holding each session's exact state — no on-disk event queue, no persisted Thread list, and therefore no cold-start reconstruction.
 
-Both products run a small `sh` helper for lifecycle events. The helper forwards one payload to a per-product, permission-restricted Unix domain socket and always exits successfully, so Notchline being closed does not add errors to the originating session. Payloads go straight into an in-memory reducer that holds each Turn's exact state; there is no on-disk event queue and no persisted Thread list. The socket transport and the reducer are one implementation shared by both products, instantiated once each.
+**Files say what a session is; only a hook says what it is doing.** Notchline runs its own subprocesses — a **separate** `codex app-server` spoken to over JSON-RPC, plus `claude agents --json` and `claude -p "/usage"` — never attaching to the user's own. They supply Thread identity, titles, Projects, quota and the pre-flight that a row is still navigable, alongside narrowly scoped readers for transcripts, Claude Desktop records and each session's controlling tty. The split is a measured boundary, not a preference: on a standalone Codex App Server, `thread/loaded/list` comes back empty and `thread/read` never reports `inProgress`. Features no public interface exposes — Desktop Project identity, unread state, approval routing — come from read-only adapters recorded in the [non-public integration registry](docs/non-public-codex-integration-features.md).
 
-### Codex is read through a second App Server
-
-Codex Desktop drives its own App Server in-process. Notchline never attaches to it. It launches a **separate** `codex app-server` subprocess of its own and speaks JSON-RPC over stdio to that one, using six public read-only methods plus one registered experimental method.
-
-The two servers never exchange live state, and that is a measured capability boundary rather than a design preference: on a standalone App Server, `thread/loaded/list` comes back empty, threads read as `notLoaded`, and `thread/read` never reports `inProgress`. What they do share is the records on disk — the same thread rollout files under `~/.codex`. So the split falls out naturally: the App Server answers what is already persisted (Thread identity, titles, Projects, quota, and the pre-flight that a row is still navigable), while whether a Turn is running, waiting or finished arrives only through the hook socket. This is also why there is no cold-start reconstruction.
-
-A small number of features that public interfaces do not expose — Desktop Project identity, unread state and approval routing — are handled by read-only adapters over Desktop's own state file, and documented in the [non-public integration registry](docs/non-public-codex-integration-features.md).
-
-### Claude Code divides the same way
-
-Notchline runs its own `claude` subprocesses too — `claude agents --json` for the session list and `claude -p "/usage"` for quota — and they are separate invocations, not attachments to the user's sessions. Narrowly scoped local readers supply titles, read evidence and host discovery from transcripts, Claude Desktop's session records and each session's controlling tty. As on the Codex side, files can say what a session is, but only a hook can say what its Turn is doing right now.
-
-### One contract, one store, one surface
-
-Each service reduces its own product's evidence into an `AgentSnapshot`. The two merge into a single `MonitorSnapshot` — availability, sessions, quota and diagnostics — which `MonitorStore` publishes on the main actor. The views render that store and nothing else: they parse no protocol and read no product file. Clicking a row runs the same loop in reverse, back to the originating Thread through the official deep link, or to the terminal or Claude Desktop host that owns the session.
-
-The app has no network client. Every socket, subprocess and file read in the diagram above is local.
+**One contract, one store, one surface.** Each service reduces its own product's evidence into an `AgentSnapshot`; `MonitorStore` merges the two on the main actor into a single `MonitorSnapshot` and publishes that. The views render that store and nothing else — they parse no protocol and read no product file. Clicking a row runs the loop in reverse, back to the originating Thread's official deep link or to the terminal or Claude Desktop host that owns it. There is no network client: every socket, subprocess and file read in the diagram is local.
 
 ## Known limitations
 
-- **No cold-start reconstruction.** Turns that were already running, waiting or completed before Notchline launched are not shown until a later lifecycle event establishes current state. Neither product offers a reliable common way to reconstruct the distinction between work and a wait.
-- **Only navigable root Threads become rows.** Codex side chats cannot be vouched for or reopened through the available interfaces. Claude Code side chats do not reach the observation boundary.
-- **Claude Code navigation can degrade.** Claude Desktop can only be activated, not focused to a specific existing session. A terminal tab is selected only when the terminal exposes its tty through a scripting dictionary; otherwise only the host application is activated.
-- **Some completed Claude Code rows have no automatic read signal.** A session with neither a Claude Desktop record nor a controlling terminal cannot prove it has been read. Its row remains until the next submission, the session disappears, or the user dismisses it.
-- **Several integrations depend on observed or undocumented local behaviour.** Host updates can affect Project names, unread membership, Claude Code titles, quota parsing, approval correction, subagent attribution or navigation. These dependencies and their conservative degradation paths are maintained in the [integration registry](docs/non-public-codex-integration-features.md).
-- **Claude Code quota reads leave transcripts.** The `claude -p "/usage"` command creates a Claude Code project transcript. Notchline reports the accumulated footprint in Settings but does not delete files from a directory that can also contain the user's own sessions.
-- **A lost subagent stop can leave a stale running count.** There is no safe timeout from which to infer that a subagent ended. The row can be dismissed once its Turn is completed or will leave when the Thread leaves the monitored list; the trade-off is tracked in [issue #102](https://github.com/soondubu137/notchline/issues/102).
-- **The scope is local and current.** There is no history browser, search, cross-device sync or remote service.
+- **No cold-start reconstruction**
+
+  Sessions already running, waiting or completed before Notchline launched stay hidden until a later lifecycle event establishes their state.
+
+- **Side chats won't become rows**
+
+  Side chats in both products are not treated as full sessions, so they won't show up in Notchline.
+
+- **Claude Code navigation can degrade**
+
+  Claude Desktop can only be activated, not focused to a specific session. A terminal tab is selected only when the terminal exposes its tty through a scripting dictionary.
+
+- **Several integrations rely on undocumented local behaviour**
+
+  Host updates can affect Project names, unread membership, Claude Code titles, quota parsing, approval correction, subagent attribution or navigation. The dependencies and their degradation paths live in the [integration registry](docs/non-public-codex-integration-features.md).
+
+- **Claude Code quota reads leave transcripts**
+
+  `claude -p "/usage"` creates a Claude Code project transcript. Notchline reports the accumulated footprint in Settings but deletes nothing (for safety concerns).
+
+- **The scope is local and current**
+
+  There is no history browser, search, cross-device sync or remote service.
 
 ## Project status
 

@@ -1,7 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 330 209" width="330" height="209" role="img" aria-label="Running: Codex and Claude Code status matrix">
-  <rect x="0" y="0" width="330" height="209" rx="14" ry="14" fill="#0B0B0D" stroke="#232326" stroke-width="1"/>
-  <text x="165.0" y="20" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="600" fill="#E7E7EA">Running</text>
-  <g transform="translate(22,30)">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 155 318" width="155" height="318" role="img" aria-label="Running: Codex and Claude Code status matrix">
+  <rect x="0" y="0" width="155" height="318" rx="14" ry="14" fill="#0B0B0D" stroke="#232326" stroke-width="1"/>
+  <g transform="translate(16,14)">
     <rect x="0" y="0" width="27" height="27" rx="2" ry="2" fill="#101B26"/>
     <rect x="0" y="0" width="27" height="27" rx="2" ry="2" fill="#6CB4FF" opacity="0.363"><animate attributeName="opacity" values="0.363;0.340;0.318;0.299;0.281;0.265;0.251;0.238;0.226;0.215;0.205;0.196;0.188;0.181;0.174;0.168;0.163;0.158;0.153;0.149;0.146;0.142;0.139;1.000;0.930;0.853;0.784;0.721;0.664;0.613;0.566;0.523;0.485;0.450;0.418;0.389;0.363" dur="1.2s" repeatCount="indefinite" calcMode="linear"/></rect>
     <rect x="32" y="0" width="27" height="27" rx="2" ry="2" fill="#101B26"/>
@@ -35,7 +34,8 @@
     <rect x="96" y="96" width="27" height="27" rx="2" ry="2" fill="#101B26"/>
     <rect x="96" y="96" width="27" height="27" rx="2" ry="2" fill="#6CB4FF" opacity="0.153"><animate attributeName="opacity" values="0.153;0.149;0.146;0.142;0.139;1.000;0.930;0.853;0.784;0.721;0.664;0.613;0.566;0.523;0.485;0.450;0.418;0.389;0.363;0.340;0.318;0.299;0.281;0.265;0.251;0.238;0.226;0.215;0.205;0.196;0.188;0.181;0.174;0.168;0.163;0.158;0.153" dur="1.2s" repeatCount="indefinite" calcMode="linear"/></rect>
     </g>
-  <g transform="translate(185,30)">
+  <text x="77.5" y="152" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#4D81B7">Codex</text>
+  <g transform="translate(16,169)">
     <rect x="0" y="0" width="27" height="27" rx="2" ry="2" fill="#21120D"/>
     <rect x="0" y="0" width="27" height="27" rx="2" ry="2" fill="#D97757" opacity="0.363"><animate attributeName="opacity" values="0.363;0.340;0.318;0.299;0.281;0.265;0.251;0.238;0.226;0.215;0.205;0.196;0.188;0.181;0.174;0.168;0.163;0.158;0.153;0.149;0.146;0.142;0.139;1.000;0.930;0.853;0.784;0.721;0.664;0.613;0.566;0.523;0.485;0.450;0.418;0.389;0.363" dur="1.2s" repeatCount="indefinite" calcMode="linear"/></rect>
     <rect x="32" y="0" width="27" height="27" rx="2" ry="2" fill="#21120D"/>
@@ -69,7 +69,5 @@
     <rect x="96" y="96" width="27" height="27" rx="2" ry="2" fill="#21120D"/>
     <rect x="96" y="96" width="27" height="27" rx="2" ry="2" fill="#D97757" opacity="0.153"><animate attributeName="opacity" values="0.153;0.149;0.146;0.142;0.139;1.000;0.930;0.853;0.784;0.721;0.664;0.613;0.566;0.523;0.485;0.450;0.418;0.389;0.363;0.340;0.318;0.299;0.281;0.265;0.251;0.238;0.226;0.215;0.205;0.196;0.188;0.181;0.174;0.168;0.163;0.158;0.153" dur="1.2s" repeatCount="indefinite" calcMode="linear"/></rect>
     </g>
-  <text x="83.5" y="173" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#4D81B7">Codex</text>
-  <text x="246.5" y="173" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#9C553E">Claude Code</text>
-  <text x="165.0" y="197" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="10.5" fill="#6C6C72">Radar — a beam sweeps, each cell holds its afterglow</text>
+  <text x="77.5" y="307" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#9C553E">Claude Code</text>
 </svg>
