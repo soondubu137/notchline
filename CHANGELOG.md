@@ -4,6 +4,24 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.1.1 Alpha — 2026-08-31
+
+**The collapsed surface, corrected against the hardware it sits on** — plus one navigation click that reported success without doing anything.
+
+### Changed
+
+- **The collapsed surface is now exactly as wide as what it draws.** Both forms gave up the room they were holding empty: a session-dot column per product mark whether or not that product had rows, and a `00:00:00` timer slot open in every state. A resting two-product notched bar is 290 pt where it was 301; the notch-less pill is 154 where it was 238, and 126 for a single product. Nothing was protecting a neighbour — no menu-bar icon is laid out from an overlay panel's frame — so what replaces the reservation is a displacement rule: a dot pushes the leading edge, a digit the trailing one, and each edge opens and closes on the same curve the mark inside it arrives and leaves on.
+- **Every surface says the whole status name.** The pill drew `Approval`, `Input` and `Set up`; it now says `Approval needed`, `Input needed` and `Set up integration`, like the panel and the bar. It is the surface with the least context around it and the last one that should economise on the verb. It is sized for the word it is saying, except while a reading follows it.
+- **The panel agrees with the notch instead of with the menu bar.** On a notched display its height is the cut-out's, not the taller band the menu bar occupies, so it no longer hangs two points below the hardware. Its lower corners are continuous curves rather than circular arcs, so the edge no longer stops being straight at a findable point. Its right edge sits on the cut-out's own, removing the 3 pt sliver of black that protruded past the notch when the trailing wing was empty.
+
+### Fixed
+
+- **Clicking a Claude Code row whose host is on another desktop.** The click did nothing at all: the host was not raised, the desktop did not change, and the panel collapsed as though it had worked. `NSRunningApplication.activate(options:)` answers `true` whether or not the window server honoured it, and it declines the request an accessory application makes for a host it has just hidden — so the failure was believed and the fallback below it never ran. The raise now asks for the foreground first, on the same entitlement the gear already uses for a click the user has just made, and reads each step's result from the state it should have produced rather than from the call's own answer.
+
+### Known limitations
+
+Those shipped with `0.1.0` still stand, with one addition measured while fixing the above: **a host whose window is full-screen cannot be reached.** A full-screen window is a desktop of its own and nothing public crosses into it. That click now fails out loud instead of claiming a raise. Codex rows escape this, because a deep link opens through Launch Services.
+
 ## 0.1.0 Alpha — 2026-08-29
 
 **The first numbered build.** The product below is not new — this entry says what `0.1.0` is, not what changed inside it, because everything here predates the decision to start counting.
