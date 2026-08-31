@@ -126,14 +126,33 @@ struct TurnApprovalRoutingPin: Sendable {
     /// What is known about one Turn's routing.
     ///
     /// The two fields answer different questions and neither implies the other:
-    /// `value` is the answer the row uses, `hasReadRollout` is whether the
-    /// authority has already been asked. A Turn whose rollout answered has
-    /// both; a Turn whose rollout could not be read has only the second, and
-    /// falls back to the map for the rest of its life rather than re-reading a
-    /// file that will not gain the record it is missing.
+    /// `value` is the answer the row uses, `rolloutReading` is what the
+    /// authority has already been asked and of which file.
     private struct Answer: Sendable {
         var value: Bool?
-        var hasReadRollout = false
+        var rolloutReading: RolloutReading = .notAsked
+    }
+
+    /// How far the Turn's own `turn_context` has been looked for.
+    ///
+    /// **The third case is the whole of why this is not a `Bool`.** A reading
+    /// that comes up empty used to close the question for the Turn's whole
+    /// life, on the measurement that the record is written before the hook
+    /// that makes this app aware of the Turn -- true, and still true, but it
+    /// answers *when* the record is written and not *which file it is written
+    /// in*. The rollout a thread is written to is not fixed: resuming an
+    /// interrupted Turn rotates it, and the path this app holds is the App
+    /// Server's, read up to a metadata refresh interval ago. So an empty
+    /// reading now records the file it was made against, and closes the
+    /// question only when that file was the Turn's own.
+    private enum RolloutReading: Sendable {
+        /// The authority has not been asked.
+        case notAsked
+        /// It was asked and it answered. Nothing more to ask.
+        case answered
+        /// It was asked of the rollout the App Server named at this instant,
+        /// and that file did not carry this Turn's record.
+        case silent(pathReportedAt: Date)
     }
 
     /// How far into a Turn Desktop's map may have been written and still be
@@ -152,30 +171,69 @@ struct TurnApprovalRoutingPin: Sendable {
 
     nonisolated init() {}
 
-    /// Whether the Turn's own `turn_context` has yet to be looked for.
+    /// Whether the Turn's own `turn_context` is still worth looking for in the
+    /// rollout the App Server named at `pathReportedAt`.
     ///
-    /// Asked once per Turn and not once per refresh: the record is written
-    /// *before* the hook that makes this app aware of the Turn — measured
-    /// 2026-08-25 against CLI `0.149.0-alpha.4.3`, `turn_context` at
-    /// `…491.593` and `UserPromptSubmit` at `…491.660`, and again 65 ms apart
-    /// on an `--approve-for-me` run — so a look that finds nothing is looking
-    /// at a rollout that will never carry it, not at one that has not caught
-    /// up.
-    nonisolated func awaitsRolloutReading(forTurn turn: TurnIdentity) -> Bool {
-        !(answersByTurn[turn]?.hasReadRollout ?? false)
+    /// **Once per rollout the Turn could be in, not once per refresh and not
+    /// once per Turn.** The record is written *before* the hook that makes
+    /// this app aware of the Turn — measured 2026-08-25 against CLI
+    /// `0.149.0-alpha.4.3`, `turn_context` at `…491.593` and
+    /// `UserPromptSubmit` at `…491.660`, again 65 ms apart on an
+    /// `--approve-for-me` run, and again 34 ms apart on the resumed Turn
+    /// measured 2026-08-31 — so a look inside the Turn's own rollout that
+    /// finds nothing is looking at a file that will never carry the record.
+    ///
+    /// **But the path may predate the Turn.** It comes from `thread/read`,
+    /// cached for a metadata refresh interval, and Codex writes a Turn resumed
+    /// after an interrupt into a *new* rollout for the same thread. Measured
+    /// 2026-08-31 on thread `01a058c7` (CLI `0.151.0-alpha.7.2`, Desktop): the
+    /// Turn was interrupted at `…38.039`, the user edited the prompt, and the
+    /// resumed Turn opened a rollout of its own at `…44.592` — the App Server
+    /// reported the new path from that instant, while this app's last
+    /// `thread/read` had gone out at `…36.206`, eight seconds before. Read
+    /// against that path, the newest `turn_context` in it belonged to the
+    /// interrupted Turn and no answer was given; recorded as final, the Turn
+    /// spent its whole life on the map, which had nothing admissible to say
+    /// either, and every call the automatic reviewer decided was announced as
+    /// *Approval needed*.
+    ///
+    /// So an empty reading is final only when it was made against a path the
+    /// App Server reported at or after the Turn began — which is after the
+    /// rotation, because the rollout exists before the record that is written
+    /// into it and the record precedes the hook. Otherwise the question stays
+    /// open until a newer path arrives, and one reading is made per path.
+    nonisolated func awaitsRolloutReading(
+        forTurn turn: TurnIdentity,
+        startedAt turnStartedAt: Date,
+        inRolloutReportedAt pathReportedAt: Date
+    ) -> Bool {
+        switch answersByTurn[turn]?.rolloutReading ?? .notAsked {
+        case .notAsked:
+            return true
+        case .answered:
+            return false
+        case .silent(let readPathReportedAt):
+            guard readPathReportedAt < turnStartedAt else { return false }
+            return pathReportedAt > readPathReportedAt
+        }
     }
 
-    /// Records what the Turn's own `turn_context` said, or that it said nothing.
+    /// Records what the Turn's own `turn_context` said, or that the rollout
+    /// named at `pathReportedAt` did not carry it.
     ///
     /// `nil` is the second case, and it is deliberately not the same as an
-    /// answer: it closes the reading without claiming anything, leaving the map
-    /// to supply the value exactly as it did before this reading existed.
+    /// answer: it claims nothing, leaving the map to supply the value exactly
+    /// as it did before this reading existed, and it names the file it looked
+    /// in so ``awaitsRolloutReading(forTurn:startedAt:inRolloutReportedAt:)``
+    /// can tell "not there" from "not there *yet*, in the wrong file".
     nonisolated mutating func recordRolloutReading(
         _ approvalsReachTheUser: Bool?,
-        forTurn turn: TurnIdentity
+        forTurn turn: TurnIdentity,
+        inRolloutReportedAt pathReportedAt: Date
     ) {
         guard let approvalsReachTheUser else {
-            answersByTurn[turn, default: Answer()].hasReadRollout = true
+            answersByTurn[turn, default: Answer()].rolloutReading =
+                .silent(pathReportedAt: pathReportedAt)
             return
         }
         // Overwrites a map answer this Turn may already have been given. That
@@ -183,7 +241,7 @@ struct TurnApprovalRoutingPin: Sendable {
         // is the reviewer the running Turn was handed.
         answersByTurn[turn] = Answer(
             value: approvalsReachTheUser,
-            hasReadRollout: true
+            rolloutReading: .answered
         )
     }
 
@@ -268,10 +326,11 @@ nonisolated protocol TurnReviewerReading: Sendable {
     /// Whether an approval on this Turn can still reach the user.
     ///
     /// `nil` means the rollout did not say — no such file, no `turn_context`
-    /// near its end, or none recent enough to be this Turn's. It is not an
-    /// answer and must not be treated as one.
+    /// near its end, or one belonging to a different Turn. It is not an answer
+    /// and must not be treated as one.
     func approvalsReachTheUser(
-        forTurnStartedAt turnStartedAt: Date,
+        forTurn turnID: String,
+        startedAt turnStartedAt: Date,
         inRolloutAt rolloutPath: String
     ) async -> Bool?
 }
@@ -315,7 +374,8 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
     nonisolated private static let maximumTailByteCount = 512 * 1_024
     /// How much older than the Turn its own `turn_context` may be.
     ///
-    /// The record precedes the Turn's first hook by ~65 ms measured, and the
+    /// **The fallback test, for a record that does not name its Turn.** The
+    /// record precedes the Turn's first hook by ~65 ms measured, and the
     /// Turn's `startedAt` is that hook's arrival, so this Turn's record is
     /// always a little *older* than `startedAt` and the previous Turn's is
     /// older by however long the user took to type. Two seconds separates them
@@ -326,6 +386,16 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
 
     private struct TurnContextRecord: Decodable {
         let timestamp: Date
+        /// The Turn this record was written for, where the record says.
+        ///
+        /// The same identity the hooks carry and the same one the abort record
+        /// carries: measured on the 2026-08-29 end-to-end run behind ADR 0011,
+        /// the hook's `turn_id`, the id `turn/start` returned, the
+        /// `turn_context` at the head of the Turn and the `turn_aborted` at
+        /// its end were one string. Optional because a build that stops
+        /// writing it must fall back to the window rather than answer nothing
+        /// for every Turn there is.
+        let turnID: String?
         let approvalsReviewer: String?
 
         private enum CodingKeys: String, CodingKey {
@@ -335,9 +405,11 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
         }
 
         private struct Payload: Decodable {
+            let turnID: String?
             let approvalsReviewer: String?
 
             private enum CodingKeys: String, CodingKey {
+                case turnID = "turn_id"
                 case approvalsReviewer = "approvals_reviewer"
             }
         }
@@ -358,10 +430,12 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
                 throw DecodingFailure.unreadableTimestamp
             }
             self.timestamp = timestamp
-            approvalsReviewer = try container.decodeIfPresent(
+            let payload = try container.decodeIfPresent(
                 Payload.self,
                 forKey: .payload
-            )?.approvalsReviewer
+            )
+            turnID = payload?.turnID
+            approvalsReviewer = payload?.approvalsReviewer
         }
     }
 
@@ -376,17 +450,27 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
     }
 
     func approvalsReachTheUser(
-        forTurnStartedAt turnStartedAt: Date,
+        forTurn turnID: String,
+        startedAt turnStartedAt: Date,
         inRolloutAt rolloutPath: String
     ) async -> Bool? {
         guard let record = newestTurnContext(inRolloutAt: rolloutPath) else {
             return nil
         }
         // A record from the Turn before this one describes a reviewer that has
-        // already been superseded, which is the whole failure being fixed here.
-        // Better to say nothing and let the map answer than to pin it.
-        guard record.timestamp
-            >= turnStartedAt.addingTimeInterval(-Self.recordTolerance) else {
+        // already been superseded, which is the whole failure this reader was
+        // built for. Better to say nothing and let the map answer than to pin
+        // it.
+        //
+        // **The record names its own Turn, so where it does, that settles it.**
+        // The window below is a proxy for this question and a good one, but a
+        // proxy: it reads "written at about the time this Turn started" as
+        // "written for this Turn", which the rollout a resumed Turn leaves
+        // behind can satisfy while naming the Turn the user interrupted.
+        if let recordedTurnID = record.turnID {
+            guard recordedTurnID == turnID else { return nil }
+        } else if record.timestamp
+            < turnStartedAt.addingTimeInterval(-Self.recordTolerance) {
             return nil
         }
         guard let reviewer = record.approvalsReviewer else { return nil }

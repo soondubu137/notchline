@@ -225,6 +225,17 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// and the re-queue never happens. It is the slow list -- the case
     /// pagination exists to be -- that leaves the window open.
     private var inFlightMetadataThreadIDs: Set<String> = []
+
+    /// The Turn each thread's path was last asked about, and nothing else.
+    ///
+    /// A thread's rollout path is not a fixed property of the thread: Codex
+    /// writes a Turn resumed after an interrupt into a new file, and the
+    /// reviewer this app reads out of that file is read once, at the moment
+    /// the Turn opens. So a Turn new to this thread asks for the path again
+    /// instead of waiting out the refresh interval -- once, which is what this
+    /// records. See
+    /// ``scheduleThreadMetadataRefreshIfNeeded(for:)``.
+    private var metadataReadTurnIDsByThreadID: [String: String] = [:]
     private var supportsThreadMetadataRead = true
     /// The newest thing each unfinished turn has said, by thread.
     ///
@@ -523,7 +534,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 // enough to follow Hook activity; the paginated full list is
                 // needed only to reconcile membership, so it keeps the low
                 // frequency the design calls for.
-                scheduleThreadMetadataRefreshIfNeeded(for: hookThreadIDs)
+                scheduleThreadMetadataRefreshIfNeeded(for: hookState.turns)
                 let fullListMustSupplyMetadata = !supportsThreadMetadataRead
                     && hookState.didConsumeEvents
                 if containsUnlistedHookThread
@@ -1213,23 +1224,36 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 threadID: state.threadID,
                 turnID: state.turnID
             )
-            guard approvalRoutingPin.awaitsRolloutReading(forTurn: turn) else {
-                continue
-            }
             // The rollout's own path, as the App Server reports it. A thread
             // this app has not been handed yet is one it draws no row for
             // either, so there is nothing to be early for -- and the reading is
             // simply made on the refresh that does have the path.
-            guard let rolloutPath = threadRecords[state.threadID]?
-                .thread?["path"]?.stringValue else {
+            //
+            // **When the path was reported goes in with it.** The path is not
+            // a fixed property of the thread: resuming an interrupted Turn
+            // rotates the rollout, so a record read a metadata interval ago
+            // can name the file the *previous* Turn was written to. The pin
+            // uses the stamp to tell a Turn whose record is genuinely absent
+            // from a Turn that was looked for in the wrong file.
+            guard let record = threadRecords[state.threadID],
+                  let rolloutPath = record.thread?["path"]?.stringValue else {
+                continue
+            }
+            guard approvalRoutingPin.awaitsRolloutReading(
+                forTurn: turn,
+                startedAt: state.startedAt,
+                inRolloutReportedAt: record.observedAt
+            ) else {
                 continue
             }
             approvalRoutingPin.recordRolloutReading(
                 await turnReviewer.approvalsReachTheUser(
-                    forTurnStartedAt: state.startedAt,
+                    forTurn: state.turnID,
+                    startedAt: state.startedAt,
                     inRolloutAt: rolloutPath
                 ),
-                forTurn: turn
+                forTurn: turn,
+                inRolloutReportedAt: record.observedAt
             )
         }
 
@@ -1373,19 +1397,61 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// same `Thread` payload as `thread/list` for a single thread, so it covers
     /// title, preview, root-thread eligibility and `status.activeFlags` at a
     /// fraction of the cost of paginating every unarchived thread.
-    private func scheduleThreadMetadataRefreshIfNeeded(for threadIDs: Set<String>) {
+    private func scheduleThreadMetadataRefreshIfNeeded(for states: [HookTurnState]) {
         guard supportsThreadMetadataRead else { return }
 
         let now = clock.now()
-        let staleThreadIDs = threadIDs.filter { threadID in
+        var staleThreadIDs: Set<String> = []
+        var observedThreadIDs: Set<String> = []
+        for state in states {
+            let threadID = state.threadID
+            observedThreadIDs.insert(threadID)
             // A read already out for this thread is going to write the record
-            // the check below is looking for, stamped when it was issued.
-            guard !inFlightMetadataThreadIDs.contains(threadID) else {
-                return false
+            // the checks below are looking for, stamped when it was issued.
+            guard !inFlightMetadataThreadIDs.contains(threadID) else { continue }
+            guard let record = threadRecords[threadID] else {
+                staleThreadIDs.insert(threadID)
+                metadataReadTurnIDsByThreadID[threadID] = state.turnID
+                continue
             }
-            guard let record = threadRecords[threadID] else { return true }
-            return now.timeIntervalSince(record.observedAt)
+            // **A record older than the Turn is a reason to ask again,
+            // whatever the interval says.** The record carries the thread's
+            // rollout path, and that path moves: Codex writes a Turn resumed
+            // after an interrupt into a rollout of its own (measured
+            // 2026-08-31 on thread `01a058c7`, CLI `0.151.0-alpha.7.2` --
+            // interrupted at `…38.039`, new rollout at `…44.592`, the resumed
+            // Turn's own hook at `…46.263`). Held to the interval alone the
+            // path stayed up to ten seconds behind the Turn -- 6.7 s in that
+            // measurement -- and the reviewer reading
+            // ``TurnApprovalRoutingPin`` makes went to the file the
+            // interrupted Turn was written to, which is what put *Approval
+            // needed* on a row nobody was being asked about.
+            //
+            // **Once per Turn, not once per refresh.** The read is asked for
+            // when the Turn is new to this thread and its path predates it;
+            // whether the answer arrives is then the retry machinery's
+            // business rather than this condition's, which must not go on
+            // re-asking on a clock that has not caught up with the Turn's own
+            // stamp. One extra `thread/read` per Turn buys the row its own
+            // rollout, and it is the same read the title and preview already
+            // come from.
+            let isFirstLookAtThisTurn =
+                metadataReadTurnIDsByThreadID[threadID] != state.turnID
+            let isBehindTheTurn = isFirstLookAtThisTurn
+                && record.observedAt < state.startedAt
+            let isBehindTheInterval = now.timeIntervalSince(record.observedAt)
                 >= timing.threadMetadataRefreshInterval
+            if isBehindTheTurn {
+                metadataReadTurnIDsByThreadID[threadID] = state.turnID
+            }
+            if isBehindTheTurn || isBehindTheInterval {
+                staleThreadIDs.insert(threadID)
+            }
+        }
+        // Held to the threads the reducer still tracks, like every other table
+        // keyed on one.
+        metadataReadTurnIDsByThreadID = metadataReadTurnIDsByThreadID.filter {
+            observedThreadIDs.contains($0.key)
         }
         guard !staleThreadIDs.isEmpty else { return }
 

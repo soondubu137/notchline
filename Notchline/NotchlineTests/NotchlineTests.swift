@@ -9134,11 +9134,15 @@ struct NotchlineTests {
         }
         func turnContext(
             reviewer: String?,
-            offsetFromTurnStart: TimeInterval
+            offsetFromTurnStart: TimeInterval,
+            turnID: String? = nil
         ) throws -> String {
             var payload: [String: Any] = ["approval_policy": "on-request"]
             if let reviewer {
                 payload["approvals_reviewer"] = reviewer
+            }
+            if let turnID {
+                payload["turn_id"] = turnID
             }
             return try line([
                 "timestamp": stampFormatter.string(
@@ -9163,9 +9167,10 @@ struct NotchlineTests {
         ])
 
         let reader = CodexRolloutTurnReviewerReader()
-        func read(_ path: String) async -> Bool? {
+        func read(_ path: String, asTurn turnID: String = "turn-1") async -> Bool? {
             await reader.approvalsReachTheUser(
-                forTurnStartedAt: turnStartedAt,
+                forTurn: turnID,
+                startedAt: turnStartedAt,
                 inRolloutAt: path
             )
         }
@@ -9207,6 +9212,32 @@ struct NotchlineTests {
             noise
         ])
         #expect(await read(staleOnly) == nil)
+
+        // **Where the record names its Turn, that is the test.** The window
+        // above is a proxy for this question, and the rollout a resumed Turn
+        // leaves behind is where the proxy breaks: interrupt, edit, send, and
+        // the previous file's last record can be seconds rather than minutes
+        // old while naming the Turn the user interrupted.
+        let interruptedTurnsRecord = try writeRollout([
+            try turnContext(
+                reviewer: "user",
+                offsetFromTurnStart: -1,
+                turnID: "turn-0"
+            )
+        ])
+        #expect(await read(interruptedTurnsRecord) == nil)
+
+        // And it settles the answer the other way too: this Turn's own record
+        // answers however late the reading is, where the window would have
+        // refused it.
+        let ownRecordReadLate = try writeRollout([
+            try turnContext(
+                reviewer: "auto_review",
+                offsetFromTurnStart: -600,
+                turnID: "turn-1"
+            )
+        ])
+        #expect(await read(ownRecordReadLate) == false)
 
         let silent = try writeRollout([noise, noise])
         #expect(await read(silent) == nil)
@@ -9508,7 +9539,11 @@ struct NotchlineTests {
         )
 
         // The authority still outranks both refusals.
-        late.recordRolloutReading(false, forTurn: turn)
+        late.recordRolloutReading(
+            false,
+            forTurn: turn,
+            inRolloutReportedAt: turnStart
+        )
         let onTheAuthority = late.approvalsReachTheUser(
             forTurn: turn, startedAt: turnStart, in: afterASwitch
         )
@@ -9528,9 +9563,21 @@ struct NotchlineTests {
             automatic: [], forTurnStartedAt: turnStart
         )
 
+        // The path this app holds was reported while the Turn was starting,
+        // which is the ordinary case: `thread/read` is on a ten-second
+        // interval and a rollout that has not rotated is named correctly by
+        // every one of those readings.
+        let pathReportedAt = turnStart.addingTimeInterval(-3)
+
         // A refresh before the rollout path is known still has to answer, and
         // the map is what it answers with.
-        #expect(pin.awaitsRolloutReading(forTurn: turn))
+        #expect(
+            pin.awaitsRolloutReading(
+                forTurn: turn,
+                startedAt: turnStart,
+                inRolloutReportedAt: pathReportedAt
+            )
+        )
         let beforeTheReading = pin.approvalsReachTheUser(
             forTurn: turn,
             startedAt: turnStart,
@@ -9541,21 +9588,44 @@ struct NotchlineTests {
         // The rollout then says what the Turn was actually handed, and that
         // replaces the map's answer rather than being ignored as "already
         // pinned".
-        pin.recordRolloutReading(false, forTurn: turn)
+        pin.recordRolloutReading(
+            false,
+            forTurn: turn,
+            inRolloutReportedAt: pathReportedAt
+        )
         let afterTheReading = pin.approvalsReachTheUser(
             forTurn: turn,
             startedAt: turnStart,
             in: mapSaysPerson
         )
-        #expect(!pin.awaitsRolloutReading(forTurn: turn))
+        #expect(
+            !pin.awaitsRolloutReading(
+                forTurn: turn,
+                startedAt: turnStart,
+                inRolloutReportedAt: turnStart.addingTimeInterval(60)
+            ),
+            "an answered Turn is not asked again, however the path moves"
+        )
         #expect(!afterTheReading)
 
-        // A rollout that cannot answer closes the reading without claiming
-        // anything: the map goes on answering, pinned for the Turn exactly as
-        // it was before this reading existed.
+        // A rollout that is the Turn's own and does not carry the record
+        // closes the reading without claiming anything: the map goes on
+        // answering, pinned for the Turn exactly as it was before this reading
+        // existed.
         var unreadable = TurnApprovalRoutingPin()
-        unreadable.recordRolloutReading(nil, forTurn: turn)
-        #expect(!unreadable.awaitsRolloutReading(forTurn: turn))
+        unreadable.recordRolloutReading(
+            nil,
+            forTurn: turn,
+            inRolloutReportedAt: turnStart.addingTimeInterval(0.5)
+        )
+        #expect(
+            !unreadable.awaitsRolloutReading(
+                forTurn: turn,
+                startedAt: turnStart,
+                inRolloutReportedAt: turnStart.addingTimeInterval(10)
+            ),
+            "a file named after this Turn began will not gain what it lacks"
+        )
         let codexReviews = desktopRouting(
             automatic: ["thread-1"], forTurnStartedAt: turnStart
         )
@@ -9574,7 +9644,94 @@ struct NotchlineTests {
 
         // And a forgotten Turn is a fresh question, reading included.
         unreadable.retain(turns: [])
-        #expect(unreadable.awaitsRolloutReading(forTurn: turn))
+        #expect(
+            unreadable.awaitsRolloutReading(
+                forTurn: turn,
+                startedAt: turnStart,
+                inRolloutReportedAt: pathReportedAt
+            )
+        )
+    }
+
+    /// A reading made in the wrong file is not an answer about this Turn.
+    ///
+    /// **The rollout a thread is written to moves.** Codex writes a Turn
+    /// resumed after an interrupt into a new rollout for the same thread, and
+    /// the path this app holds comes from a `thread/read` up to a metadata
+    /// interval old. Measured 2026-08-31 on thread `01a058c7` (CLI
+    /// `0.151.0-alpha.7.2`): interrupted at `…38.039`, new rollout at
+    /// `…44.592`, the resumed Turn's `UserPromptSubmit` at `…46.263`, and this
+    /// app's last `thread/read` at `…36.206` — eight seconds before the file
+    /// it named stopped being the Turn's.
+    ///
+    /// Read once and recorded as final, that emptiness cost the Turn its whole
+    /// life on the map, which had nothing admissible to say either.
+    @Test @MainActor
+    func aReadingOfTheRolloutTheTurnIsNoLongerInIsNotFinal() {
+        var pin = TurnApprovalRoutingPin()
+        let turnStart = Date(timeIntervalSince1970: 1_000)
+        let turn = TurnApprovalRoutingPin.TurnIdentity(
+            threadID: "thread-1",
+            turnID: "turn-2"
+        )
+
+        // The path in hand was reported ten seconds before this Turn began,
+        // which is before Codex rotated the rollout. The record is not in that
+        // file and the reading comes back empty.
+        let pathFromBeforeTheTurn = turnStart.addingTimeInterval(-10)
+        #expect(
+            pin.awaitsRolloutReading(
+                forTurn: turn,
+                startedAt: turnStart,
+                inRolloutReportedAt: pathFromBeforeTheTurn
+            )
+        )
+        pin.recordRolloutReading(
+            nil,
+            forTurn: turn,
+            inRolloutReportedAt: pathFromBeforeTheTurn
+        )
+
+        // Nothing has changed yet, so nothing is re-read: one reading per
+        // rollout the Turn could be in, not one per refresh.
+        #expect(
+            !pin.awaitsRolloutReading(
+                forTurn: turn,
+                startedAt: turnStart,
+                inRolloutReportedAt: pathFromBeforeTheTurn
+            ),
+            "the same path must not be read again on every refresh"
+        )
+
+        // The next `thread/read` names the rollout this Turn is actually in,
+        // and the question reopens.
+        let pathFromInsideTheTurn = turnStart.addingTimeInterval(6.7)
+        #expect(
+            pin.awaitsRolloutReading(
+                forTurn: turn,
+                startedAt: turnStart,
+                inRolloutReportedAt: pathFromInsideTheTurn
+            ),
+            "a newer path is a new file to look in"
+        )
+        pin.recordRolloutReading(
+            false,
+            forTurn: turn,
+            inRolloutReportedAt: pathFromInsideTheTurn
+        )
+        let answered = pin.approvalsReachTheUser(
+            forTurn: turn,
+            startedAt: turnStart,
+            in: desktopRouting(
+                automatic: [],
+                forTurnStartedAt: turnStart,
+                writtenAfter: -30
+            )
+        )
+        #expect(
+            !answered,
+            "the Turn's own record outranks a map that cannot be shown current"
+        )
     }
 
     /// The reported bug, end to end.
@@ -9833,6 +9990,221 @@ struct NotchlineTests {
         let snapshot = await snapshotWithSessions(from: service)
         await service.disconnect()
         #expect(snapshot.sessions.first?.status == .running)
+    }
+
+    /// The third report, end to end: the Turn that was resumed.
+    ///
+    /// Reported 2026-08-31 — *Approval needed* several times over on a thread
+    /// that had been "Approve for me" from its first moment, on a Turn the
+    /// user had started, stopped with a double Esc, edited and sent again.
+    ///
+    /// **Codex writes a resumed Turn into a rollout of its own.** Reconstructed
+    /// from the user's own records (thread `01a058c7`, CLI
+    /// `0.151.0-alpha.7.2`, Desktop `26.820.60940`): the Turn was interrupted
+    /// at `17:08:38.039`, a *new* rollout for the same thread was opened at
+    /// `…44.592`, its `turn_context` — `auto_review`, like every other one on
+    /// that thread — landed at `…46.229`, and the resumed Turn's
+    /// `UserPromptSubmit` 34 ms later at `…46.263`. This app's last
+    /// `thread/read` had gone out at `…36.206`, so the path it held still named
+    /// the file the interrupted Turn was written to, and the reviewer reading
+    /// — made once, and once only — found that file's newest record belonged
+    /// to the interrupted Turn. No answer was given, the map had been written
+    /// too long before the Turn to be admissible either, and the fallback in
+    /// the absence of evidence is that approvals reach the user. The three
+    /// calls Codex's own guardian reviewed at `17:09:03`, `17:09:12` and
+    /// `17:09:30` were each announced as a person being asked.
+    @Test @MainActor
+    func aTurnResumedAfterAnInterruptIsNotAnnouncedAsApprovalNeeded() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        let timestamp = Date().timeIntervalSince1970.rounded(.down)
+        let stampFormatter = ISO8601DateFormatter()
+        stampFormatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds
+        ]
+        func line(_ object: [String: Any]) throws -> String {
+            String(
+                decoding: try JSONSerialization.data(withJSONObject: object),
+                as: UTF8.self
+            )
+        }
+        func write(_ lines: [String], to file: URL) throws {
+            try Data(lines.joined(separator: "\n").appending("\n").utf8)
+                .write(to: file, options: .atomic)
+        }
+        func turnContext(turnID: String, at offset: TimeInterval) throws -> String {
+            try line([
+                "timestamp": stampFormatter.string(
+                    from: Date(timeIntervalSince1970: timestamp + offset)
+                ),
+                "type": "turn_context",
+                "payload": [
+                    "turn_id": turnID,
+                    "approvals_reviewer": "auto_review"
+                ]
+            ])
+        }
+
+        // The thread has been reviewed by Codex from its first moment, so
+        // every `turn_context` on it says so.
+        let interruptedRollout = root.appendingPathComponent("rollout-1.jsonl")
+        try write(
+            [try turnContext(turnID: "turn-1", at: -0.065)],
+            to: interruptedRollout
+        )
+
+        // Desktop's map agrees, and cannot say so: it was last written before
+        // this Turn and is refused as a reading that may name a reviewer the
+        // user has since moved away from. That is what the reported Turn had —
+        // the fix has to come from the Turn's own record.
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        try JSONSerialization.data(withJSONObject: [
+            "electron-persisted-atom-state": [
+                "heartbeat-thread-permissions-by-id": [
+                    "thread-1": ["approvalsReviewer": "auto_review"]
+                ]
+            ]
+        ]).write(to: stateFile, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: timestamp)],
+            ofItemAtPath: stateFile.path
+        )
+
+        func deliver(_ event: [String: Any]) throws {
+            try JSONSerialization.data(withJSONObject: event)
+                .deliver(to: repository)
+        }
+        try deliver([
+            "received_at": timestamp,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ])
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                .object([
+                    "id": .string("thread-1"),
+                    "ephemeral": .bool(false),
+                    "threadSource": .string("user"),
+                    "path": .string(interruptedRollout.path)
+                ])
+            ],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            approvalRouting: CodexDesktopApprovalRoutingRepository(
+                stateFileURL: stateFile
+            ),
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+        #expect(await snapshotWithSessions(from: service).sessions.first?.status == .running)
+
+        // The double Esc. Codex sends no hook for it at all; the abort in the
+        // rollout is the whole of the report (ADR 0011).
+        try write(
+            [
+                try turnContext(turnID: "turn-1", at: -0.065),
+                try line([
+                    "timestamp": stampFormatter.string(
+                        from: Date(timeIntervalSince1970: timestamp + 3)
+                    ),
+                    "type": "event_msg",
+                    "payload": [
+                        "type": "turn_aborted",
+                        "turn_id": "turn-1",
+                        "reason": "interrupted"
+                    ]
+                ])
+            ],
+            to: interruptedRollout
+        )
+        let ended = await holds {
+            await service.fetchSnapshot().sessions.first?.status == .completed
+        }
+        #expect(ended, "the interrupted Turn never ended")
+
+        // The user edits the prompt and sends it. Codex opens a new rollout
+        // for the same thread, writes this Turn's record into it, and the App
+        // Server reports the new path from that instant — while this app is
+        // still holding the one it read before the rotation.
+        let resumedRollout = root.appendingPathComponent("rollout-2.jsonl")
+        try write([try turnContext(turnID: "turn-2", at: 8.9)], to: resumedRollout)
+        await client.setThreadPath(resumedRollout.path, forThread: "thread-1")
+        // **The new path does not arrive in time for the first projection, and
+        // must not have to.** Asking for it is a background read over a
+        // transport this app does not control, while the row is composed from
+        // whatever is in hand — so the reviewer is looked for in the old file
+        // first, and what the fix turns on is that coming up empty there is
+        // not an answer about this Turn.
+        await client.setThreadReadDelayNanoseconds(300_000_000)
+        let readsBeforeTheResumedTurn = await client.completedThreadReadRequestCount()
+        try deliver([
+            "received_at": timestamp + 9,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "turn_id": "turn-2"
+        ])
+        let onTheResumedTurn = await holds {
+            await service.fetchSnapshot().sessions.first?.turnID == "turn-2"
+        }
+        #expect(onTheResumedTurn, "the resumed Turn never reached the row")
+
+        // The Turn opening is what asks for the path again, and the reviewer
+        // is settled from it long before anything is reviewed: the first call
+        // Codex's guardian decided on the reported Turn came 17 seconds after
+        // the prompt.
+        let pathCaughtUp = await holds {
+            _ = await service.fetchSnapshot()
+            return await client.completedThreadReadRequestCount()
+                > readsBeforeTheResumedTurn
+        }
+        #expect(pathCaughtUp, "the resumed Turn never had its own path read")
+        _ = await service.fetchSnapshot()
+
+        try deliver([
+            "received_at": timestamp + 10,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-1",
+            "turn_id": "turn-2",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-1"
+        ])
+        try deliver([
+            "received_at": timestamp + 11,
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "turn_id": "turn-2",
+            "tool_name": "Bash"
+        ])
+
+        // Nobody is being asked anything: Codex's own reviewer is deciding this
+        // call, exactly as it decided every call of the Turn before it. Read
+        // once and without polling for the answer wanted -- the row has to be
+        // right on the refresh that draws the request, not eventually.
+        let settled = await service.fetchSnapshot().sessions.first
+        #expect(settled?.turnID == "turn-2")
+        #expect(settled?.status == .running)
     }
 
     /// A Turn the user stopped in Codex Desktop, end to end.
@@ -25298,7 +25670,7 @@ private func processDies(_ pid: pid_t, within seconds: TimeInterval) async -> Bo
 }
 
 private actor CodexAppServerStub: CodexAppServerCommunicating {
-    private let listedThreads: [JSONValue]
+    private var listedThreads: [JSONValue]
     /// Threads `thread/read` answers for that `thread/list` does not carry.
     ///
     /// The real server has both: a thread is written to disk before its first
@@ -25516,6 +25888,25 @@ private actor CodexAppServerStub: CodexAppServerCommunicating {
     /// transport failing, which is not an answer about anything.
     func setThreadReadError(_ error: CodexAppServerError?) {
         threadReadError = error
+    }
+
+    /// Moves a thread's rollout, the way Codex does when a Turn is resumed
+    /// after an interrupt.
+    ///
+    /// The path is a field of the Thread payload rather than a fixed property
+    /// of the thread, and both reads answer with whatever it says *now* — so
+    /// the only way to model the rotation is to change it under a running
+    /// test, exactly as the real App Server does at the instant the new
+    /// rollout is created.
+    func setThreadPath(_ path: String, forThread threadID: String) {
+        listedThreads = listedThreads.map { thread in
+            guard thread["id"]?.stringValue == threadID,
+                  var fields = thread.objectValue else {
+                return thread
+            }
+            fields["path"] = .string(path)
+            return .object(fields)
+        }
     }
 
     func requestedMethods() -> [String] {
