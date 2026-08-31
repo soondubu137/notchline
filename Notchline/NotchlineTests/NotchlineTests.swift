@@ -1247,10 +1247,11 @@ struct NotchlineTests {
         #expect(store.showsSurfaceOutline)
     }
 
-    /// A second mark widens the notched wing by exactly one matrix and its gap.
+    /// A second mark widens the notched wing by exactly one matrix and its gap
+    /// — and a session column arrives separately, when there is one to draw.
     @Test @MainActor
     func aSecondMarkWidensTheNotchedWingByOneMatrix() {
-        func width(markCount: Int) -> CGFloat {
+        func width(markCount: Int, columnCount: Int = 0) -> CGFloat {
             PanelMetrics.size(
                 geometry: .notched,
                 isExpanded: false,
@@ -1260,16 +1261,28 @@ struct NotchlineTests {
                 compactHeight: 46,
                 status: .running,
                 matrixCount: markCount,
+                sessionColumnCount: columnCount,
                 drawsCompactMarks: true
             ).width
         }
-        // One more mark is one more matrix, its own dot column, and the pair
-        // gap between them.
+        // One more mark is one more matrix and the pair gap between them, and
+        // that is all: the column it would draw with rows open is no longer
+        // held for it.
         let step = width(markCount: 2) - width(markCount: 1)
         #expect(
-            abs(step - (PanelMetrics.markWidth() + PanelMetrics.compactMatrixSpacing))
+            abs(step - (PanelMetrics.statusMatrixSize + PanelMetrics.compactMatrixSpacing))
                 <= 1
         )
+        // The column is its own step, taken only when a product has rows.
+        for markCount in 1...2 {
+            for columnCount in 0..<markCount {
+                let opened = width(markCount: markCount, columnCount: columnCount + 1)
+                    - width(markCount: markCount, columnCount: columnCount)
+                #expect(abs(opened - PanelMetrics.sessionDotColumnWidth()) <= 1)
+            }
+        }
+        // And no mark can be billed for more than one.
+        #expect(width(markCount: 2, columnCount: 5) == width(markCount: 2, columnCount: 2))
         // The pair spacing lands on the matrix's own cell pitch so the gap reads
         // as a missing column rather than an arbitrary space.
         #expect(PanelMetrics.compactMatrixSpacing == 6)
@@ -2465,19 +2478,30 @@ struct NotchlineTests {
 
     /// The two edges of a notched collapsed bar, stated as the rule they obey.
     ///
-    /// **The leading edge never moves.** Nothing on the trailing side may reach
-    /// it: not a timer arriving, not its digits growing, not a badge. The panel
-    /// is pinned by its trailing edge, so the leading one is
-    /// `trailingAnchor − bodyWidth`, and the wing appears in both — it cancels
-    /// only because `compactTrailingWingWidth` is a whole number of points, so
-    /// `ceil(leading + occlusion + wing)` is `ceil(leading + occlusion) + wing`.
-    /// Left fractional, the two sums rounded apart and the leading matrix
-    /// drifted under every trailing reading.
+    /// **The leading edge never moves for anything on the trailing side.** Not
+    /// a timer arriving, not its digits growing, not a badge. The panel is
+    /// pinned by its trailing edge, so the leading one is `trailingAnchor −
+    /// bodyWidth`, and the wing is a term in *both* — it cancels only because
+    /// `compactTrailingWingWidth` is a whole number of points, so `ceil(leading
+    /// + occlusion + wing)` is `ceil(leading + occlusion) + wing`. Left
+    /// fractional, the two sums rounded apart and the leading matrix drifted
+    /// under every trailing reading.
     ///
-    /// **The trailing edge moves only on composition.** A timer or a badge
-    /// arriving or leaving may move it. A reading counting on may not — which
-    /// is why the timer is billed for `PanelMetrics.timerReservationWidth`
-    /// rather than for the digits it happens to be showing.
+    /// **The trailing edge follows the reading, digit by digit.** This reverses
+    /// the assertion this test used to make. The reading was billed for
+    /// `PanelMetrics.timerReservationWidth` — the widest thing it could ever
+    /// say — so that `9:59 → 10:00` moved nothing; the cost was `30` pt of
+    /// permanent black beside the cut-out for a reading almost no bar ever
+    /// shows. The notched form reserves nothing now: the wing is the reading
+    /// and its two clearances, and it steps out when a digit, a badge or a
+    /// badge's digit arrives, and back in when each leaves.
+    ///
+    /// **Which leaves the reading's own leading edge as the fixed thing**, one
+    /// `expandedNotchClearance` past the cut-out at every length it can draw.
+    /// That is what makes a growing reading read as the panel opening for it
+    /// rather than as the figure sliding sideways, and it is exact rather than
+    /// approximate because every term in the trailing reading is a whole number
+    /// of points.
     @Test @MainActor
     func theCollapsedWingsMoveOnlyWhenTheirContentsArriveOrLeave() {
         let bar: CGFloat = 38
@@ -2530,35 +2554,49 @@ struct NotchlineTests {
             #expect(frame(trailing).minX == leading, "leading edge moved for \(name)")
         }
 
-        // And one trailing edge per *composition*, whatever the reading counts
-        // up to. This is the assertion the digits used to break: `9:59` and
-        // `10:00` sat 8 pt apart, and `59:59` and `1:00:00` another 12.
+        // The reading starts one clearance past the cut-out in every one of
+        // them, the empty wing excepted -- there is no reading to place. The
+        // window's own edge is ceiled outwards over the hardware's black
+        // (`aPanelFrameIsWholePoints`), so this stands that fraction proud of
+        // the clearance -- by the same fraction in every state, which is the
+        // whole of what has to hold.
+        func readingLeadingEdge(_ trailing: CompactTrailingReading) -> CGFloat {
+            frame(trailing).maxX
+                - shoulder
+                - PanelMetrics.expandedHorizontalPadding
+                - PanelMetrics.drawnTrailingReadingWidth(trailing)
+        }
+        let readingStart = readingLeadingEdge(CompactTrailingReading(timerText: "0:00"))
+        for (name, trailing) in states where !trailing.isEmpty {
+            #expect(readingLeadingEdge(trailing) == readingStart, "the reading moved for \(name)")
+        }
+        let clearance = readingStart - occlusionMaxX
+        #expect(clearance >= PanelMetrics.expandedNotchClearance)
+        #expect(clearance < PanelMetrics.expandedNotchClearance + 1)
+
+        // And the trailing edge follows what the reading draws. Tabular figures
+        // still hold it still inside one digit count -- `0:00` and `9:59` are
+        // one width -- and every count above that steps it out.
         func trailingEdge(_ trailing: CompactTrailingReading) -> CGFloat {
             frame(trailing).maxX
         }
         let timed = trailingEdge(CompactTrailingReading(timerText: "0:00"))
-        for text in ["9:59", "10:00", "59:59", "1:00:00", "10:00:00"] {
-            #expect(
-                trailingEdge(CompactTrailingReading(timerText: text)) == timed,
-                "trailing edge moved for \(text)"
-            )
-        }
-        let besideABadge = trailingEdge(CompactTrailingReading(badges: badge, timerText: "0:00"))
-        for text in ["9:59", "1:00:00", "10:00:00"] {
-            #expect(
-                trailingEdge(CompactTrailingReading(badges: badge, timerText: text))
-                    == besideABadge,
-                "trailing edge moved for a badge beside \(text)"
-            )
+        #expect(trailingEdge(CompactTrailingReading(timerText: "9:59")) == timed)
+        var previous = timed
+        for text in ["10:00", "1:00:00", "10:00:00"] {
+            let edge = trailingEdge(CompactTrailingReading(timerText: text))
+            #expect(edge > previous, "trailing edge did not follow \(text)")
+            previous = edge
         }
 
-        // The moves that are allowed, and are the only ones: something arrived.
-        #expect(timed > trailingEdge(.empty))
+        // A badge is the same story, and it moves nothing but that edge.
+        let besideABadge = trailingEdge(CompactTrailingReading(badges: badge, timerText: "0:00"))
         #expect(besideABadge > timed)
         #expect(
             trailingEdge(CompactTrailingReading(badges: bothBadges, timerText: "0:00"))
                 > besideABadge
         )
+        #expect(timed > trailingEdge(.empty))
     }
 
     /// The trailing wing is a whole number of points, which is what makes it
@@ -2735,16 +2773,18 @@ struct NotchlineTests {
         // adds nothing until a turn is timed. No text is measured on a notched
         // compact panel, so this width is exact -- and it is the one number a
         // Figma variant can be checked against directly. `12` padding + `16.6`
-        // matrix + `5.655` dot column + `8` clearance + the `200` cut-out is
-        // `242.255`, which ceils to `243`. It was `246` while a wingless
-        // trailing edge stepped `46 / 16` past the cut-out
-        // (`aWinglessTrailingEdgeIsTheCutOutsEdge`), and `237` before each
-        // product mark reserved a column for its session dots.
+        // matrix + `8` clearance + the `200` cut-out is `236.6`, which ceils to
+        // `237`. It was `246` while a wingless trailing edge stepped `46 / 16`
+        // past the cut-out (`aWinglessTrailingEdgeIsTheCutOutsEdge`) and `243`
+        // while each product mark held a dot column open whether or not it had
+        // rows; this form reserves nothing now, so an idle mark is a matrix.
         let notchedIdle = width(geometry: .notched, trailingText: nil, compactHeight: 46)
-        #expect(notchedIdle == 243)
+        #expect(notchedIdle == 237)
         #expect(
             notchedIdle == ceil(
-                12 + PanelMetrics.marksWidth(1) + PanelMetrics.expandedNotchClearance
+                12
+                    + PanelMetrics.drawnMarksWidth(markCount: 1, sessionColumnCount: 0)
+                    + PanelMetrics.expandedNotchClearance
                     + 200
             )
         )
@@ -3199,6 +3239,140 @@ struct NotchlineTests {
         // to save a gap that reads there as spacing before a label.
     }
 
+    /// The notched bar reserves nothing, on either side.
+    ///
+    /// The two rules stated as arithmetic, and against the two forms that still
+    /// reserve so the difference cannot quietly disappear. Every widening and
+    /// narrowing this surface now does is one of these four moves.
+    @Test @MainActor
+    func theNotchedBarIsExactlyAsWideAsWhatItDraws() {
+        let column = PanelMetrics.sessionDotColumnWidth()
+        let matrix = PanelMetrics.statusMatrixSize
+        let gap = PanelMetrics.compactMatrixSpacing
+
+        // **The leading wing is the marks it draws.** No mark is billed for a
+        // column it has not got, and none for more than one.
+        #expect(PanelMetrics.drawnMarksWidth(markCount: 0, sessionColumnCount: 0) == 0)
+        #expect(PanelMetrics.drawnMarksWidth(markCount: 1, sessionColumnCount: 0) == matrix)
+        #expect(
+            PanelMetrics.drawnMarksWidth(markCount: 1, sessionColumnCount: 1)
+                == matrix + column
+        )
+        #expect(
+            PanelMetrics.drawnMarksWidth(markCount: 2, sessionColumnCount: 0)
+                == 2 * matrix + gap
+        )
+        #expect(
+            PanelMetrics.drawnMarksWidth(markCount: 2, sessionColumnCount: 2)
+                == PanelMetrics.marksWidth(2)
+        )
+        // At every column open it is the reservation, and never more than it.
+        for markCount in 0...2 {
+            for columnCount in 0...markCount {
+                #expect(
+                    PanelMetrics.drawnMarksWidth(
+                        markCount: markCount,
+                        sessionColumnCount: columnCount
+                    ) <= PanelMetrics.marksWidth(markCount)
+                )
+            }
+        }
+
+        // **The trailing wing is the reading it draws.** The pill holds the
+        // widest reading open at every length; the notch pays for the digits.
+        for text in ["0:00", "10:00", "1:00:00", "10:00:00"] {
+            let reading = CompactTrailingReading(timerText: text)
+            let drawn = PanelMetrics.drawnTrailingReadingWidth(reading)
+            #expect(drawn == PanelMetrics.drawnCompactReadingWidth(text))
+            #expect(drawn <= PanelMetrics.compactTrailingReadingWidth(reading))
+        }
+        // Short readings are where the two part company, and by the whole of
+        // the reservation the notch stopped paying.
+        #expect(
+            PanelMetrics.drawnTrailingReadingWidth(CompactTrailingReading(timerText: "0:00"))
+                < PanelMetrics.timerReservationWidth
+        )
+        // Past the template both bill the same thing: a reading that outruns
+        // its own slot is drawn, not clipped.
+        #expect(
+            PanelMetrics.drawnTrailingReadingWidth(
+                CompactTrailingReading(timerText: "000:00:00")
+            )
+                == PanelMetrics.compactTrailingReadingWidth(
+                    CompactTrailingReading(timerText: "000:00:00")
+                )
+        )
+
+        // **And the wing is whole points without being rounded to them**,
+        // which is what holds the reading's own leading edge still
+        // (`theCollapsedWingsMoveOnlyWhenTheirContentsArriveOrLeave`). Every
+        // term is an integer: the ceiled glyph box, the ground's `8`, the
+        // badges' ceiled digits, and the two spacings.
+        let badge = [AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 12))]
+        for reading in [
+            CompactTrailingReading(timerText: "0:00"),
+            CompactTrailingReading(timerText: "10:00:00"),
+            CompactTrailingReading(badges: badge, timerText: nil),
+            CompactTrailingReading(badges: badge, timerText: "1:23")
+        ] {
+            let drawn = PanelMetrics.drawnTrailingReadingWidth(reading)
+            #expect(drawn == drawn.rounded(), "\(reading)")
+            #expect(
+                PanelMetrics.compactTrailingWingWidth(trailing: reading)
+                    == drawn
+                        + PanelMetrics.expandedHorizontalPadding
+                        + PanelMetrics.expandedNotchClearance,
+                "the wing rounded something for \(reading)"
+            )
+        }
+
+        // The reading is billed for the box the raster actually draws into.
+        // Taking the bare metric left it a fraction short, which a reservation
+        // used to cover and a hugging wing does not.
+        for text in ["0:00", "9:59", "10:00", "1:00:00"] {
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .light)
+            #expect(
+                PanelMetrics.drawnCompactReadingWidth(text)
+                    == NotchTextRaster.textSize(text, font: font).width
+                        + PanelMetrics.readingGroundWidthCost
+            )
+        }
+    }
+
+    /// The window edge keeps the slot's own timing, because it *is* the slot.
+    ///
+    /// A notched wing is exactly as wide as its contents, so the black edge and
+    /// the room inside it are two halves of one movement. Opening, the edge
+    /// leads and the mark fades in behind it; closing, the edge waits for the
+    /// mark to go first, on the same `50 ms` the column has always waited.
+    @Test @MainActor
+    func theWindowEdgeWaitsForAClosingWingTheWayTheColumnDoes() {
+        func frame(width: CGFloat, height: CGFloat = 38) -> NSRect {
+            NSRect(x: 0, y: 0, width: width, height: height)
+        }
+
+        // Growing: the room is made first, so there is nothing to wait for.
+        #expect(OverlayPanelLayout.closingDelay(from: frame(width: 240), to: frame(width: 260)) == 0)
+        #expect(OverlayPanelLayout.closingDelay(from: frame(width: 240), to: frame(width: 240)) == 0)
+        // Narrowing: the same delay the column and the status name take, read
+        // from the one declaration rather than restated as a number.
+        #expect(
+            OverlayPanelLayout.closingDelay(from: frame(width: 260), to: frame(width: 240))
+                == PanelMotion.slotDelay(isOpening: false)
+        )
+        #expect(PanelMotion.slotDelay(isOpening: false) == PanelMotion.closingDelay)
+        #expect(PanelMotion.slotDelay(isOpening: true) == 0)
+
+        // A collapse is a height change as well, and is not a wing closing:
+        // hovering out is an answer to the pointer and must not be held back.
+        #expect(
+            OverlayPanelLayout.closingDelay(
+                from: frame(width: 520, height: 370),
+                to: frame(width: 260, height: 38)
+            ) == 0
+        )
+    }
+
     /// The status name keeps one distance from the mark it names.
     ///
     /// The reservation has to be spent somewhere, and where it is spent is the
@@ -3282,32 +3456,48 @@ struct NotchlineTests {
     func theStatusNameMovesOnTheColumnsOwnCurve() {
         let base = PanelMotion.animation
         // Opening, the room is made first and the dot arrives into it.
-        #expect(PanelMotion.columnSlot(isOpening: true) == base)
+        #expect(PanelMotion.slot(isOpening: true) == base)
         // Closing, it waits: a name that left on time would set off while the
         // dot was still lit and the room had not begun to shut.
         #expect(
-            PanelMotion.columnSlot(isOpening: false)
-                == base.delay(PanelMotion.columnClosingDelay)
+            PanelMotion.slot(isOpening: false)
+                == base.delay(PanelMotion.closingDelay)
         )
         #expect(
-            PanelMotion.columnSlot(isOpening: true)
-                != PanelMotion.columnSlot(isOpening: false)
+            PanelMotion.slot(isOpening: true)
+                != PanelMotion.slot(isOpening: false)
         )
     }
 
-    /// The leading matrix stands in one place, whatever the counts do.
+    /// The dots push the leading edge, and everything standing behind them.
     ///
-    /// This is the whole reason the column is reserved rather than packed out
-    /// of the panel. The panel's leading edge is `trailingAnchor + shoulder -
-    /// width`, and both of those answer to the trailing wing identically, so
-    /// the edge is fixed exactly as long as the *leading* wing is -- which it
-    /// now is, at every session count. A column opening therefore pushes only
-    /// the marks after it, and the leading matrix sits `12` from an edge that
-    /// does not move.
+    /// **This reverses `theLeadingMatrixNeverMovesWhateverTheCountsDo`, which
+    /// asserted the opposite.** That test was the argument for reserving every
+    /// mark's column: hold the room at every session count and the leading wing
+    /// is one width, so the leading edge — `trailingAnchor + shoulder − width`
+    /// — is a constant and the first matrix has an anchor. The cost was
+    /// permanent width for a column that is empty most of the time, on the one
+    /// form that has nothing beside it to protect: a notched bar hangs off a
+    /// cut-out, and there are no menu bar icons to its left and no centreline
+    /// to keep. So the reservation is gone and the rule is the plain one — the
+    /// bar is exactly as wide as what it draws.
+    ///
+    /// What replaces the anchor is a **displacement rule**, which is what the
+    /// panel's pinning makes of it: a column can only open leftwards, so it
+    /// pushes the leading edge and every matrix ahead of it by exactly its own
+    /// width, and the marks between it and the cut-out do not move — they stand
+    /// at fixed spacings from an edge that is fixed to the hardware. The dot
+    /// therefore displaces precisely what is behind it.
+    ///
+    /// The trailing side is still ruled out of this entirely: a timer arriving
+    /// or growing may not reach the leading edge, which is what
+    /// `theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove` composes and
+    /// what the last section here checks end to end.
     @Test @MainActor
-    func theLeadingMatrixNeverMovesWhateverTheCountsDo() {
+    func theDotsPushTheLeadingEdgeAndTheMarksBeforeThem() {
         let notched = makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 38, hasNotch: true)
         let store = MonitorStore(displays: [notched], services: [])
+        let column = PanelMetrics.sessionDotColumnWidth()
 
         func leadingEdge() -> CGFloat {
             OverlayPanelLayout.frame(
@@ -3317,12 +3507,25 @@ struct NotchlineTests {
                 trailingAnchor: store.currentPanelTrailingAnchor
             ).minX
         }
+        /// Where mark `index` starts, in screen coordinates: the panel's
+        /// leading edge, its inset, and every mark drawn before this one.
+        func markOrigin(_ index: Int) -> CGFloat {
+            let before = store.presenceMarks.prefix(index)
+            return leadingEdge()
+                + store.surfaceShoulderRadius
+                + PanelMetrics.expandedHorizontalPadding
+                + PanelMetrics.drawnMarksWidth(
+                    markCount: before.count,
+                    sessionColumnCount: before.filter(\.drawsSessionColumn).count
+                )
+                + (before.isEmpty ? 0 : PanelMetrics.compactMatrixSpacing)
+        }
         // Untimed on purpose. A timed turn also opens the *trailing* wing, and
         // `size` ceils the whole panel while the anchor does not, so the timer
         // arriving can shift the leading edge by up to that rounding -- an
         // existing quantisation with nothing to do with the columns. This test
-        // is about the columns, so it holds the trailing wing still and asserts
-        // the edge exactly; the timer's own rounding is checked at the end.
+        // is about the columns, so it holds the trailing wing still; the
+        // timer's own rounding is checked at the end.
         func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
             MonitoredSession(
                 agent: agent,
@@ -3335,24 +3538,40 @@ struct NotchlineTests {
         store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
         #expect(store.presenceMarks.count == 2)
         #expect(store.presenceMarks.allSatisfy { !$0.drawsSessionColumn })
-        let anchored = leadingEdge()
+        let restingEdge = leadingEdge()
+        let restingCodex = markOrigin(0)
+        let restingClaude = markOrigin(1)
 
-        // Claude Code opens one: the trailing mark's own column, which pushes
-        // nothing. Then Codex opens one, which pushes Claude Code's mark along
-        // but not its own. Then both, then back to nothing.
+        // Claude Code opens one. Its column is the last thing in the wing, so
+        // it pushes everything: both matrices and the edge step left together.
         store.applyForTesting(
-            makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [session(.claudeCode, "a")])
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                sessions: [session(.claudeCode, "a")]
+            )
         )
         #expect(store.presenceMarks.map(\.drawsSessionColumn) == [false, true])
-        #expect(leadingEdge() == anchored)
+        #expect(abs(leadingEdge() - (restingEdge - column)) <= 1)
+        #expect(abs(markOrigin(0) - (restingCodex - column)) <= 1)
+        #expect(abs(markOrigin(1) - (restingClaude - column)) <= 1)
 
+        // Now Codex opens one too. That column stands *before* Claude Code's
+        // mark, so Claude Code's matrix does not move at all -- it is a fixed
+        // distance from a cut-out that did not move -- while Codex's matrix and
+        // the edge take another column.
+        let oneColumn = (edge: leadingEdge(), codex: markOrigin(0), claude: markOrigin(1))
         store.applyForTesting(
             makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex, "b")])
         )
         #expect(store.presenceMarks.map(\.drawsSessionColumn) == [true, true])
-        #expect(leadingEdge() == anchored)
+        #expect(abs(leadingEdge() - (oneColumn.edge - column)) <= 1)
+        #expect(abs(markOrigin(0) - (oneColumn.codex - column)) <= 1)
+        #expect(abs(markOrigin(1) - oneColumn.claude) <= 1)
 
-        // Four sessions apiece -- past the cap, where the third dot is a dash.
+        // A column is one width at every count above zero, so more rows move
+        // nothing: four apiece is past the cap, where the third dot is a dash.
+        let bothOpen = leadingEdge()
         store.applyForTesting(
             makeAgentSnapshot(
                 .codex,
@@ -3360,20 +3579,20 @@ struct NotchlineTests {
                 sessions: (0..<4).map { session(.codex, "c\($0)") }
             )
         )
-        #expect(leadingEdge() == anchored)
+        #expect(leadingEdge() == bothOpen)
 
-        // And all the way back down.
+        // And all the way back down to where it started, exactly.
         store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
         store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
         #expect(store.presenceMarks.allSatisfy { !$0.drawsSessionColumn })
-        #expect(leadingEdge() == anchored)
+        #expect(leadingEdge() == restingEdge)
+        #expect(markOrigin(0) == restingCodex)
+        #expect(markOrigin(1) == restingClaude)
 
-        // A timed turn opens the trailing wing, which the anchor and the width
-        // answer to identically -- and now cancel in, so this is exact too.
-        // It was not always: `size` ceils the body while the anchor keeps its
-        // fraction, and the two rounded apart until the wing itself was made
-        // whole points (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
-        // Nothing the trailing side does reaches this edge.
+        // The trailing side still cannot reach any of it. A timed turn opens
+        // the trailing wing, which the anchor and the width answer to
+        // identically -- and cancel in, because the wing is a whole number of
+        // points (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
         let timed = MonitoredSession(
             agent: .codex,
             threadID: "timed", turnID: "u", projectName: "p", title: "t",
@@ -3383,7 +3602,9 @@ struct NotchlineTests {
             makeAgentSnapshot(.codex, availability: .ready, sessions: [timed])
         )
         #expect(store.compactTimerText != nil)
-        #expect(leadingEdge() == anchored)
+        // One column opened with that turn, and nothing else moved the edge.
+        #expect(store.presenceMarks.map(\.drawsSessionColumn) == [true, false])
+        #expect(abs(leadingEdge() - (restingEdge - column)) <= 1)
     }
 
     /// The collapsed badge pair is spaced like the matrix pair, because it is

@@ -489,17 +489,26 @@ enum PanelMetrics {
         weight: .light
     )
 
-    /// Compact content leading the notch: padding, the matrix, and — where there
+    /// Compact content leading the notch: padding, the marks, and — where there
     /// is no physical notch to work around — the status label as well.
     ///
     /// Menu bar height no longer appears here. Neither the indicator nor the
     /// label scales with it, so it governs panel height and corner radius only.
+    ///
+    /// The marks enter at ``drawnMarksWidth(markCount:sessionColumnCount:)`` —
+    /// what they are drawing — rather than at the reservation. Only the two
+    /// forms that hold a position of their own still reserve; see that method.
     static func compactLeadingWidth(
         statusReadoutText: String,
         showsStatusText: Bool,
-        markCount: Int = 1
+        markCount: Int = 1,
+        sessionColumnCount: Int = 0
     ) -> CGFloat {
-        var width = expandedHorizontalPadding + marksWidth(markCount)
+        var width = expandedHorizontalPadding
+            + drawnMarksWidth(
+                markCount: markCount,
+                sessionColumnCount: sessionColumnCount
+            )
         if showsStatusText {
             width += expandedReadoutSpacing
                 + textWidth(statusReadoutText, font: statusLabelFont)
@@ -507,18 +516,21 @@ enum PanelMetrics {
         return width
     }
 
-    /// One drawn mark's width, at the widest that mark ever draws.
+    /// One mark's width at the widest it ever draws — the reservation, not the
+    /// drawing.
     ///
     /// A product's mark is its matrix plus the column of session dots beside it
-    /// (``sessionDotColumnWidth``), reserved whether or not that product has
-    /// rows right now. The resting grey has no product behind it and therefore
-    /// no rows it could ever count, so it is the matrix alone.
+    /// (``sessionDotColumnWidth``), held whether or not that product has rows
+    /// right now. The resting grey has no product behind it and therefore no
+    /// rows it could ever count, so it is the matrix alone.
     ///
-    /// **Reserved here and packed in the view**, which is the whole of the
-    /// arrangement: the panel is one width in every session state, and the room
-    /// a missing column is not using shows up as slack at the trailing end of
-    /// the marks rather than as width the panel gives back. See
-    /// ``sessionDotColumnWidth(matrixSize:)``.
+    /// **Only the forms that hold a position of their own reserve**: the
+    /// notch-less pill, which sits in the menu bar with icons to its left, and
+    /// the expanded header, which is centred on the display and would move both
+    /// its edges to buy one dot. The notched collapsed bar hangs off a cut-out
+    /// that nothing else is measured from, so it is composed from
+    /// ``drawnMarksWidth(markCount:sessionColumnCount:)`` and gives the room
+    /// back when a column closes.
     static func markWidth(isProductMark: Bool = true) -> CGFloat {
         statusMatrixSize + (isProductMark ? sessionDotColumnWidth() : 0)
     }
@@ -538,6 +550,37 @@ enum PanelMetrics {
         guard markCount > 0 else { return 0 }
         return CGFloat(markCount) * markWidth(isProductMark: areProductMarks)
             + CGFloat(markCount - 1) * compactMatrixSpacing
+    }
+
+    /// The marks at the width they are **drawing**: the matrices, the pair
+    /// spacing, and one session column for each mark that currently has one.
+    ///
+    /// This is what the notched collapsed bar is measured from, and the whole
+    /// of the difference between the two form factors' leading wings. There is
+    /// no slack in it and nothing is held open: a product opening its first
+    /// thread widens the wing by exactly ``sessionDotColumnWidth()``, and
+    /// closing its last one gives that width back.
+    ///
+    /// **Which moves the panel's leading edge, deliberately.** A notched panel
+    /// is pinned by its trailing edge to the cut-out, so a wing that grows can
+    /// only grow leftwards: the edge and every matrix ahead of the new column
+    /// step left together, and the marks between that column and the cut-out
+    /// stand still — they are at fixed spacings from an edge that has not
+    /// moved. The dot therefore pushes exactly what is behind it and nothing
+    /// else, which is the arrangement a reservation was buying with permanent
+    /// width. See ``PanelMotion/slot(isOpening:)`` for the curve the edge and
+    /// the room travel on together.
+    ///
+    /// Takes counts rather than the marks themselves so that the composition
+    /// stays a pure arithmetic statement about the two things that can change
+    /// it. Which marks have a column is ``PresenceMark/drawsSessionColumn``'s
+    /// answer, and the resting grey never has one.
+    static func drawnMarksWidth(markCount: Int, sessionColumnCount: Int) -> CGFloat {
+        guard markCount > 0 else { return 0 }
+        return CGFloat(markCount) * statusMatrixSize
+            + CGFloat(markCount - 1) * compactMatrixSpacing
+            + CGFloat(min(max(0, sessionColumnCount), markCount))
+                * sessionDotColumnWidth()
     }
 
     /// The subagent badge: font, minimum size, and the padding that lets a
@@ -613,29 +656,60 @@ enum PanelMetrics {
     /// stays is the `.clear` ``ReadingGround`` around it, whose padding is what
     /// ``readingGroundWidthCost`` bills for here.
     ///
-    /// **The timer is billed for its slot, not for its digits.** Tabular
-    /// figures hold a reading still between `0:01` and `0:59`, and no further:
-    /// `9:59 → 10:00` is `8` pt wider and `59:59 → 1:00:00` another `12`, and
-    /// on a notched screen the panel is pinned to the cut-out, so every one of
-    /// those points comes off the *trailing* edge — the edge a person reads
-    /// against the notch. A reading that grows a digit mid-Turn moved it. So
-    /// the slot is ``timerReservationWidth`` whatever the reading is, and the
-    /// trailing edge moves only when the timer or a badge *arrives or leaves*.
-    /// The cost is paid only while a Turn is timed: an idle surface reserves
-    /// nothing here, unlike the notch-less pill, which holds this width at
-    /// every state so a menu-bar item never shifts under the pointer.
+    /// **The timer is billed for its slot here, and this is the notch-less
+    /// pill's expression.** That pill sits in the menu bar with icons to its
+    /// left, so it must not move at all: the slot is ``timerReservationWidth``
+    /// whatever the reading says, and a turn crossing an hour grows leftwards
+    /// into room that was already empty.
+    ///
+    /// The notched bar bills the digits instead — see
+    /// ``drawnTrailingReadingWidth(_:)``. It hangs off a cut-out and has
+    /// nothing to its right to disturb, so holding `00:00:00` open would be
+    /// paying permanent width for a reading almost no bar ever shows.
     static func compactTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
-        let badgesWidth = subagentBadgesWidth(trailing.badges)
-        guard let timerText = trailing.timerText else { return badgesWidth }
         // `max`, not the reservation alone: past a hundred hours the formatter
         // outruns its own template, and a clipped reading is worse than a
         // moved edge.
-        let timerWidth = max(
-            timerReservationWidth,
-            textWidth(timerText, font: timerFont) + readingGroundWidthCost
-        )
-        guard badgesWidth > 0 else { return timerWidth }
-        return badgesWidth + subagentBadgeTimerSpacing + timerWidth
+        composeTrailingReading(trailing) {
+            max(timerReservationWidth, drawnCompactReadingWidth($0))
+        }
+    }
+
+    /// The same slot at the width it is actually drawing, which is what the
+    /// notched collapsed bar is measured from.
+    ///
+    /// **Nothing here is held open.** The wing is the reading and its
+    /// clearances, so the panel's trailing edge steps outwards when the timer
+    /// gains a digit, when a badge arrives, or when a badge's count gains one —
+    /// and steps back in when each of those leaves. The edge that moves is the
+    /// one beside the cut-out; the leading edge cannot feel any of it, because
+    /// ``compactTrailingWingWidth(trailing:)`` is a whole number of points and
+    /// cancels out of the sum that places it.
+    ///
+    /// **And it leaves the reading's own leading edge standing still.** Every
+    /// term here is a whole number — the badges ceil their measured digits, the
+    /// two spacings are integers, and ``drawnCompactReadingWidth(_:)`` ceils
+    /// the glyph box the way the raster does — so the wing is exactly
+    /// `reading + 12 + 8` with no rounding of its own, and the reading starts
+    /// ``expandedNotchClearance`` past the cut-out at every length it can draw.
+    /// A digit therefore appears at the trailing end of the reading and pushes
+    /// the panel edge out in front of it, rather than sliding the whole figure
+    /// sideways.
+    static func drawnTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
+        composeTrailingReading(trailing, timer: drawnCompactReadingWidth)
+    }
+
+    /// The badges, the timer, and the gap between them when both are drawn.
+    /// The two callers differ only in what a timer costs.
+    private static func composeTrailingReading(
+        _ trailing: CompactTrailingReading,
+        timer timerWidth: (String) -> CGFloat
+    ) -> CGFloat {
+        let badgesWidth = subagentBadgesWidth(trailing.badges)
+        guard let timerText = trailing.timerText else { return badgesWidth }
+        let timer = timerWidth(timerText)
+        guard badgesWidth > 0 else { return timer }
+        return badgesWidth + subagentBadgeTimerSpacing + timer
     }
 
     /// The session-count dots, in a `91`-unit viewBox of their own.
@@ -766,7 +840,7 @@ enum PanelMetrics {
     /// rendered a blank wing that read as a second, fake notch.
     static func compactTrailingWidth(trailing: CompactTrailingReading) -> CGFloat {
         guard !trailing.isEmpty else { return 0 }
-        return compactTrailingReadingWidth(trailing) + expandedHorizontalPadding
+        return drawnTrailingReadingWidth(trailing) + expandedHorizontalPadding
     }
 
     /// How far the compact body reaches past the cut-out's trailing edge.
@@ -826,10 +900,20 @@ enum PanelMetrics {
     /// carries no information. A no-notch display keeps its mark instead,
     /// because a control that vanishes from the menu bar takes its position
     /// with it and everything to its left slides over.
-    private static func notchedLeadingWidth(markCount: Int) -> CGFloat {
+    ///
+    /// The marks enter at what they draw, so this wing is as wide as its
+    /// contents and no wider — see
+    /// ``drawnMarksWidth(markCount:sessionColumnCount:)``.
+    private static func notchedLeadingWidth(
+        markCount: Int,
+        sessionColumnCount: Int
+    ) -> CGFloat {
         guard markCount > 0 else { return 0 }
         return expandedHorizontalPadding
-            + marksWidth(markCount)
+            + drawnMarksWidth(
+                markCount: markCount,
+                sessionColumnCount: sessionColumnCount
+            )
             + expandedNotchClearance
     }
 
@@ -875,6 +959,11 @@ enum PanelMetrics {
         compactHeight: CGFloat,
         status: MonitorStatus = .connected,
         matrixCount: Int = 1,
+        // How many of those marks are drawing a session column right now. Only
+        // the notched collapsed bar reads it -- the two forms that hold a
+        // position of their own reserve every mark's column instead
+        // (`markWidth(isProductMark:)`).
+        sessionColumnCount: Int = 0,
         drawsCompactMarks: Bool = true,
         expandsToPillOnly: Bool = false,
         expandedContentHeight: CGFloat = expandedContentHeight
@@ -913,10 +1002,14 @@ enum PanelMetrics {
                     height: compactHeight
                 )
             }
-            // A notched panel still wraps the cut-out, so its width is set by
-            // the wings around a fixed obstacle rather than by its content.
+            // A notched panel wraps the cut-out, so its width is one fixed
+            // obstacle with a wing on each side -- and each wing is exactly as
+            // wide as what it is drawing. Nothing on this form is reserved:
+            // both edges answer to their own wing's contents and to nothing
+            // else.
             let width = notchedLeadingWidth(
-                markCount: drawsCompactMarks ? matrixCount : 0
+                markCount: drawsCompactMarks ? matrixCount : 0,
+                sessionColumnCount: drawsCompactMarks ? sessionColumnCount : 0
             )
                 + centerOcclusionWidth
                 + compactTrailingWingWidth(trailing: trailing)
@@ -953,16 +1046,24 @@ enum PanelMetrics {
     /// notched wing claims it only while a Turn is timed, because there the
     /// idle surface has no wing at all. Two templates would let the two ends of
     /// the same app disagree about how wide a timer is.
-    /// What the collapsed reading actually draws at, as against the slot it is
-    /// billed for.
+    /// What the collapsed reading actually draws at, as against the slot the
+    /// notch-less pill bills it for.
     ///
-    /// The two differ on purpose: the slot is ``timerReservationWidth`` so the
-    /// bar's trailing edge cannot move while a turn merely counts on, and the
-    /// ink inside it is right-aligned and narrower. Only the first-run drawing
-    /// asks for this — it has to put a pin under the reading, and the slot's
-    /// centre is a good `19` pt to the left of the digits.
+    /// The two differ on purpose: that pill's slot is ``timerReservationWidth``
+    /// so a menu-bar neighbour cannot be moved while a turn merely counts on,
+    /// and the ink inside it is right-aligned and narrower. The notched bar has
+    /// no such neighbour and is composed from this instead
+    /// (``drawnTrailingReadingWidth(_:)``), and the first-run drawing asks for
+    /// it to put a pin under the reading rather than under the slot's centre, a
+    /// good `19` pt to the left of the digits.
+    ///
+    /// **Ceiled, because the raster is.** `NotchTextRaster.textSize` rounds the
+    /// glyph box up before drawing into it, so a composed width taking the bare
+    /// metric is a fraction short of the ink — invisible while a reservation
+    /// covered it, and the last digit against the panel edge once the wing
+    /// hugs. The ground's own cost is already whole.
     static func drawnCompactReadingWidth(_ text: String) -> CGFloat {
-        textWidth(text, font: timerFont) + readingGroundWidthCost
+        ceil(textWidth(text, font: timerFont)) + readingGroundWidthCost
     }
 
     static var timerReservationWidth: CGFloat {
@@ -1892,6 +1993,54 @@ final class MonitorStore: ObservableObject {
         CompactTrailingReading(badges: compactSubagentBadges, timerText: compactTimerText)
     }
 
+    /// How many marks are drawing a session column right now.
+    ///
+    /// The notched collapsed bar is measured from this rather than from the
+    /// mark count: its leading wing is as wide as what it draws, so a column
+    /// opening widens the panel leftwards and closing gives that width back
+    /// (``PanelMetrics/drawnMarksWidth(markCount:sessionColumnCount:)``). The
+    /// notch-less pill and the expanded header still reserve every mark's
+    /// column and never read this.
+    var compactSessionColumnCount: Int {
+        presenceMarks.filter(\.drawsSessionColumn).count
+    }
+
+    /// The leading wing's marks at the width they are drawing, for the view
+    /// that has to draw them into exactly the room the panel was sized for.
+    var compactDrawnMarksWidth: CGFloat {
+        PanelMetrics.drawnMarksWidth(
+            markCount: presenceMarks.count,
+            sessionColumnCount: compactSessionColumnCount
+        )
+    }
+
+    /// The trailing wing's reading at the width the notched bar bills it for.
+    ///
+    /// The view frames the reading to this and lets its glyphs sit at the
+    /// leading edge of it, so the box and the panel edge open together and the
+    /// figure's own leading edge stands still while a digit arrives at the far
+    /// end. Zero on an empty reading, which is a wing that is not drawn at all.
+    var compactDrawnTrailingReadingWidth: CGFloat {
+        PanelMetrics.drawnTrailingReadingWidth(compactTrailingReading)
+    }
+
+    /// Whether the collapsed surface holds room for a column no mark is
+    /// standing in, and for a timer longer than the one being drawn.
+    ///
+    /// True for the two forms that hold a position of their own: the notch-less
+    /// pill, which lives in the menu bar with icons to its left, and the
+    /// expanded header, which is centred on the display so every point one side
+    /// wants is taken from the other as well. False for the notched collapsed
+    /// bar, which hangs off a cut-out with nothing beside it to disturb and is
+    /// therefore only ever as wide as what it draws.
+    ///
+    /// One declaration for the width and the drawing alike: it is the same
+    /// question `showsStatusText` answers, and two spellings of it would let
+    /// the panel reserve room the readout had stopped drawing into.
+    var reservesCompactRoom: Bool {
+        isExpanded || geometry == .noNotch
+    }
+
     /// The spoken form of ``compactSubagentBadges``, since VoiceOver can read
     /// neither a flipped ground nor which product a hue belongs to.
     ///
@@ -2229,6 +2378,7 @@ final class MonitorStore: ObservableObject {
             // Exactly what the header draws. The resting mark counts as one,
             // because it takes the single slot rather than adding one beside it.
             matrixCount: presenceMarks.count,
+            sessionColumnCount: compactSessionColumnCount,
             drawsCompactMarks: drawsCompactMarks,
             expandsToPillOnly: expandsToPillOnly,
             expandedContentHeight: expandedContentHeight

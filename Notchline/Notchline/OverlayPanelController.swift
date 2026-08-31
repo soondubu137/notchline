@@ -10,6 +10,9 @@ final class OverlayPanelController {
     private var screenParametersObserver: NSObjectProtocol?
     private var pendingFrameUpdate: DispatchWorkItem?
     private var pendingFrameUpdateShouldAnimate: Bool?
+    /// A frame animation waiting out a closing wing's lead-out — see
+    /// ``animateFrame(to:delay:)``.
+    private var pendingFrameAnimation: DispatchWorkItem?
     private var hasShownPanel = false
     /// Non-nil while one `mouseEntered` is owed — see ``armPointerReentry()``.
     private var pointerReentryMonitor: Any?
@@ -47,6 +50,7 @@ final class OverlayPanelController {
 
     deinit {
         pendingFrameUpdate?.cancel()
+        pendingFrameAnimation?.cancel()
         if let pointerReentryMonitor {
             NSEvent.removeMonitor(pointerReentryMonitor)
         }
@@ -201,6 +205,11 @@ final class OverlayPanelController {
         let previousFrame = panel.frame
 
         guard animated, hasShownPanel else {
+            // An immediate move overtakes a wing that was still waiting to
+            // close: that animation would otherwise fire afterwards and drag
+            // the panel back towards a target this frame has superseded.
+            pendingFrameAnimation?.cancel()
+            pendingFrameAnimation = nil
             panel.setFrame(targetFrame, display: true)
             panel.contentView?.layoutSubtreeIfNeeded()
             // A concealed panel still tracks its frame — it has to be in the
@@ -214,22 +223,55 @@ final class OverlayPanelController {
             return
         }
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = PanelMotion.duration
-            context.timingFunction = PanelMotion.timingFunction
-            context.allowsImplicitAnimation = true
-            panel.animator().setFrame(targetFrame, display: true)
-        } completionHandler: { [weak panel] in
-            panel?.contentView?.layoutSubtreeIfNeeded()
-        }
+        animateFrame(
+            to: targetFrame,
+            delay: OverlayPanelLayout.closingDelay(from: previousFrame, to: targetFrame)
+        )
 
         // Asked of the frame the panel is heading for, not the one it is
         // leaving, and asked now rather than from the completion handler: the
         // destination is already known, and the collapse dwell should then run
         // alongside the resize the way it would have had the pointer walked
         // out. Waiting for the animation would also risk answering for a frame
-        // a later update had already superseded.
+        // a later update had already superseded. It is asked before any closing
+        // delay for the same reason — the pointer's question is about where the
+        // panel is going, not about when it sets off.
         reconcilePointer(from: previousFrame, to: targetFrame)
+    }
+
+    /// The window's half of ``PanelMotion/slot(isOpening:)``.
+    ///
+    /// AppKit's animation context has a duration and a curve but no delay, so a
+    /// closing wing is scheduled rather than declared. The work item is held so
+    /// a change arriving inside the delay supersedes it instead of firing a
+    /// second animation towards a target that has already moved.
+    private func animateFrame(to targetFrame: NSRect, delay: TimeInterval) {
+        pendingFrameAnimation?.cancel()
+        pendingFrameAnimation = nil
+
+        let run = { [weak self] in
+            guard let panel = self?.panel else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = PanelMotion.duration
+                context.timingFunction = PanelMotion.timingFunction
+                context.allowsImplicitAnimation = true
+                panel.animator().setFrame(targetFrame, display: true)
+            } completionHandler: { [weak panel] in
+                panel?.contentView?.layoutSubtreeIfNeeded()
+            }
+        }
+
+        guard delay > 0 else {
+            run()
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.pendingFrameAnimation = nil
+            run()
+        }
+        pendingFrameAnimation = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     /// Re-answer "is the pointer on the panel?" now that the panel has moved.
@@ -386,6 +428,34 @@ enum OverlayPanelLayout {
             windowFrame: targetFrame,
             surfaceShoulder: surfaceShoulder
         )
+    }
+
+    /// How long the window waits before it starts closing over a wing whose
+    /// contents are still leaving.
+    ///
+    /// **A collapsed notched wing is exactly as wide as what it draws**, so the
+    /// panel's own edge *is* the slot that opens and closes around a session
+    /// dot, a subagent badge or the elapsed reading — and it has to keep that
+    /// slot's timing, or it stops being one movement. Opening it leads, and the
+    /// mark fades in behind it (``PanelMotion/fade(isArriving:)``); closing it
+    /// waits ``PanelMotion/closingDelay`` for the mark to go first, because an
+    /// edge seen shutting over something still lit reads as that thing being
+    /// crushed rather than dismissed.
+    ///
+    /// **Narrower is the whole test, and only while the height holds.** Two
+    /// edges move independently and one `setFrame` carries both, so the panel's
+    /// own width is the honest question to ask of the pair: a wing giving room
+    /// back is what the delay is for, and a bar that nets wider has made room
+    /// first whatever else left. An expand or a collapse changes the height as
+    /// well and is excluded by that clause — hovering out is an answer to the
+    /// pointer, and holding it back `50 ms` would read as the panel being slow
+    /// rather than as its contents leaving first.
+    static func closingDelay(from previousFrame: NSRect, to targetFrame: NSRect) -> TimeInterval {
+        guard targetFrame.height == previousFrame.height,
+              targetFrame.width < previousFrame.width else {
+            return 0
+        }
+        return PanelMotion.slotDelay(isOpening: false)
     }
 
     /// The window frame that puts a panel body of `panelSize` where it belongs.

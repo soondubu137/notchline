@@ -674,10 +674,15 @@ struct SubagentBadgeRow: View {
 /// open and close as one value rather than as a spacing plus a view — half a
 /// column is a dot standing at the wrong distance from its own mark.
 ///
-/// The panel does not narrow when this closes; `StatusReadout` has already been
-/// given the room and the slack falls at the trailing end of the marks. So what
-/// an opening column moves is only what comes *after* it, and the last mark's
-/// column moves nothing at all.
+/// **What an opening column moves depends on which form is drawing it.** On
+/// the notch-less pill and the expanded header the room was reserved, so the
+/// panel does not resize and the column pushes only the marks and the status
+/// name after it. On the notched bar nothing is reserved: the leading wing is
+/// as wide as its contents and the panel is pinned to the cut-out, so the
+/// column pushes the panel's leading edge and every matrix *before* it
+/// leftwards instead, while the marks between it and the cut-out stand still.
+/// Both readings are the same rule — a column displaces whatever the anchored
+/// edge does not hold in place — and both run on this view's own curve.
 ///
 /// **Dots only fade; matrices only move.** The dot is drawn at a fixed `2.92`
 /// from the matrix that owns it — offset rather than laid out, so the column's
@@ -745,29 +750,22 @@ struct SessionCountDots: View {
         .animation(fadeAnimation, value: hasRows)
     }
 
-    /// The slot opening and closing, shared with the status name that stands
-    /// after it — see ``PanelMotion/columnSlot(isOpening:)``.
+    /// The slot opening and closing, shared with everything that stands after
+    /// it and with the panel edge itself — see
+    /// ``PanelMotion/slot(isOpening:)``.
     private var slotAnimation: Animation {
-        PanelMotion.columnSlot(isOpening: hasRows)
+        PanelMotion.slot(isOpening: hasRows)
     }
 
     /// The dot arriving and leaving. Fading only — see the type's note.
     ///
-    /// It trails the opening rather than matching it, because the slot's curve
-    /// is a hard ease-out that is most of the way open early: run the two
-    /// together and the dot is at full ink inside a slot that has not finished
-    /// making room for it. Leaving is quicker than arriving, for the reason
-    /// every other reading on this surface fades out quicker than it fades in —
-    /// something starting is worth catching and something ending is not.
+    /// ``PanelMotion/fade(isArriving:)``, shared with every other mark that
+    /// arrives into a slot on this surface: the reasoning that set these
+    /// durations is the dot's, and the collapsed reading and the subagent
+    /// badges inherit it rather than restating it.
     private var fadeAnimation: Animation {
-        hasRows
-            ? .easeOut(duration: Self.fadeInDuration).delay(Self.fadeInDelay)
-            : .easeOut(duration: Self.fadeOutDuration)
+        PanelMotion.fade(isArriving: hasRows)
     }
-
-    private static let fadeInDelay: TimeInterval = 0.06
-    private static let fadeInDuration: TimeInterval = 0.12
-    private static let fadeOutDuration: TimeInterval = 0.08
 }
 
 /// The column's one movement, and the only one it will ever have.
@@ -1985,30 +1983,67 @@ enum PanelMotion {
 
     static let timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
 
-    /// How long a closing session column waits before it starts shutting.
+    /// How long a closing slot waits before it starts shutting.
     ///
-    /// Long enough for the dot inside it to be most of the way out — see
-    /// ``columnSlot(isOpening:)``.
-    static let columnClosingDelay: TimeInterval = 0.05
+    /// Long enough for the mark inside it to be most of the way out — see
+    /// ``slot(isOpening:)``.
+    static let closingDelay: TimeInterval = 0.05
 
-    /// A session column's room opening and closing — and therefore how anything
-    /// standing after that room moves when it does.
+    /// **Every horizontal movement the collapsed surface makes.** A session
+    /// column's room opening and closing, the trailing reading's box growing a
+    /// digit or taking a badge, whatever stands after either of those — and,
+    /// since the notched bar stopped reserving, the panel's own two edges.
     ///
-    /// Opening, it leads: the room is made and the dot arrives into it. Closing,
-    /// it waits for the dot to go first — a slot seen shutting on a mark that is
-    /// still lit reads as the mark being crushed rather than dismissed, which is
-    /// the wrong thing to say about a session that ended.
+    /// Opening, it leads: the room is made and the mark arrives into it.
+    /// Closing, it waits for the mark to go first — a slot seen shutting on
+    /// something still lit reads as that thing being crushed rather than
+    /// dismissed, which is the wrong thing to say about a session that ended or
+    /// a turn that finished.
     ///
-    /// **Read by the column and by the status name that follows it**
-    /// (``SessionCountDots``, `StatusReadout`). The name is not moving on its
-    /// own account: it is downstream of the column, so it is being *pushed*, and
-    /// a pushed thing that keeps its own timing stops reading as pushed. Sharing
-    /// one declaration is what makes the room and the name one movement instead
-    /// of two — including on the way out, where a name that left on time would
-    /// set off while the dot was still lit and the room had not begun to close.
-    static func columnSlot(isOpening: Bool) -> Animation {
-        isOpening ? animation : animation.delay(columnClosingDelay)
+    /// **One declaration, read by the room, by everything the room pushes, and
+    /// by the window.** `SessionCountDots` opens and closes the column,
+    /// `StatusReadout` and `OverlayHeader` carry what stands after it, and
+    /// `OverlayPanelController` moves the panel edge that has to arrive at the
+    /// same instant — a notched wing is now exactly as wide as its contents, so
+    /// the black edge and the content inside it are two halves of one movement
+    /// and cannot be allowed to keep separate time. A pushed thing that keeps
+    /// its own timing stops reading as pushed; an edge that keeps its own
+    /// timing clips what it is supposed to be revealing.
+    ///
+    /// AppKit cannot take an `Animation`, so the window reads ``closingDelay``
+    /// and ``timingFunction`` directly and this method's asymmetry is spelled
+    /// out there rather than duplicated as a second rule.
+    static func slot(isOpening: Bool) -> Animation {
+        isOpening ? animation : animation.delay(closingDelay)
     }
+
+    /// The same asymmetry as a plain number of seconds, for the window frame.
+    static func slotDelay(isOpening: Bool) -> TimeInterval {
+        isOpening ? 0 : closingDelay
+    }
+
+    /// A mark arriving into a slot, or leaving one: the session dot, a subagent
+    /// badge, the collapsed elapsed reading.
+    ///
+    /// **It trails the room rather than matching it.** ``slot(isOpening:)`` is
+    /// a hard ease-out that is most of the way open early; run the two together
+    /// and the mark is at full ink inside a slot that has not finished making
+    /// space for it — and on the notched bar, where the slot is now the panel's
+    /// own edge, at full ink over the cut-out. Leaving is quicker than
+    /// arriving, for the reason every reading on this surface fades out quicker
+    /// than it fades in: something starting is worth catching and something
+    /// ending is not. It is also what lets ``closingDelay`` be as short as it
+    /// is — by the time the room begins to shut, the mark is most of the way
+    /// gone.
+    static func fade(isArriving: Bool) -> Animation {
+        isArriving
+            ? .easeOut(duration: fadeInDuration).delay(fadeInDelay)
+            : .easeOut(duration: fadeOutDuration)
+    }
+
+    static let fadeInDelay: TimeInterval = 0.06
+    static let fadeInDuration: TimeInterval = 0.12
+    static let fadeOutDuration: TimeInterval = 0.08
 }
 
 /// A single-line notch label: thin and dim, sweeping while work is in flight.

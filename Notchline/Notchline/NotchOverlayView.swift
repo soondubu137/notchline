@@ -356,6 +356,7 @@ private struct OverlayHeader: View {
                 drawsMarks: store.drawsCompactMarks,
                 text: statusText,
                 showsText: showsStatusText,
+                reservesColumnRoom: reservesRoom,
                 spacing: PanelMetrics.expandedReadoutSpacing,
                 matrixSize: PanelMetrics.statusMatrixSize,
                 markSpacing: PanelMetrics.compactMatrixSpacing,
@@ -364,51 +365,8 @@ private struct OverlayHeader: View {
 
             Spacer(minLength: 0)
 
-            // Trailing wing, compact only: present while a turn is timed or a
-            // subagent is still working, absent otherwise so a notched display
-            // shows no empty second cut-out. The expanded view times each row
-            // individually instead.
-            //
-            // The badges and the timer are two views sharing one slot, not
-            // one raster the way the count used to be baked into the timer's
-            // own prefix: a badge is a static reading that only changes when a
-            // subagent starts, stops or is stopped on a question, and drawing
-            // it apart from the timer's once-a-second layer keeps that layer
-            // from re-rastering on every badge change and vice versa.
             if !store.isExpanded {
-                HStack(spacing: PanelMetrics.subagentBadgeTimerSpacing) {
-                    let badges = store.compactSubagentBadges
-                    if !badges.isEmpty {
-                        SubagentBadgeRow(badges: badges)
-                    }
-                    // The reading is drawn the one way, whatever the aggregate
-                    // is: running's bare figure, neutral rather than tinted —
-                    // it is the longest unfinished turn anywhere and belongs to
-                    // no one product, so a hue would claim an owner it has not
-                    // got. The waiting flip that used to put it on white lived
-                    // here alone; the expanded rows keep their own three
-                    // silhouettes (``ReadingGround``), where a row's ground is
-                    // read against the rows beside it and says which of them
-                    // wants the person. Up here there is nothing to read it
-                    // against — one reading for every turn at once — and the
-                    // white slab was the brightest thing on the bar for a state
-                    // the matrix beside it already announces.
-                    //
-                    // The ground stays a `.clear` ``ReadingGround`` rather than
-                    // no ground at all: it carries the padding that
-                    // `PanelMetrics.compactTrailingReadingWidth` bills for, so
-                    // the composed bar width is unchanged.
-                    if let startedAt = store.compactTimerStart {
-                        ReadingGround(fill: .clear) {
-                            ElapsedReadout(
-                                startedAt: startedAt,
-                                tick: store.elapsedTick.eraseToAnyPublisher(),
-                                tint: NotchPalette.labelDrawingColor,
-                                weight: .light
-                            )
-                        }
-                    }
-                }
+                CompactTrailingSlot(hugsItsReading: !reservesRoom)
             }
 
             // The gear lives up here now rather than in the footer, for one and
@@ -438,7 +396,18 @@ private struct OverlayHeader: View {
     }
 
     private var showsStatusText: Bool {
-        store.isExpanded || store.geometry == .noNotch
+        reservesRoom
+    }
+
+    /// Whether this form holds room it is not drawing into — the reserved
+    /// session columns and the widest elapsed slot.
+    ///
+    /// ``MonitorStore/reservesCompactRoom``, which is also what the panel's own
+    /// width is composed under, so the room reserved and the room drawn into
+    /// cannot come apart. It is the same question `showsStatusText` asks: the
+    /// two forms with a word to draw are the two with a position to hold.
+    private var reservesRoom: Bool {
+        store.reservesCompactRoom
     }
 
     private var horizontalPadding: CGFloat {
@@ -452,11 +421,136 @@ private struct OverlayHeader: View {
     }
 }
 
+/// The collapsed surface's trailing wing: the subagent badges, the elapsed
+/// reading, or both sharing the slot.
+///
+/// Present while a turn is timed or a subagent is still working, absent
+/// otherwise so a notched display shows no empty second cut-out. The expanded
+/// view times each row individually instead.
+///
+/// The badges and the reading are two views sharing one slot, not one raster
+/// the way the count used to be baked into the timer's own prefix: a badge is a
+/// static reading that only changes when a subagent starts, stops or is stopped
+/// on a question, and drawing it apart from the reading's once-a-second layer
+/// keeps that layer from re-rastering on every badge change and vice versa.
+private struct CompactTrailingSlot: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    /// Whether this wing is exactly as wide as what it draws.
+    ///
+    /// True on the notched bar, which hangs off a cut-out and gives its width
+    /// back; false on the notch-less pill, which reserves the widest reading so
+    /// a menu-bar neighbour is never moved and simply hugs inside it.
+    let hugsItsReading: Bool
+
+    /// The box the panel edge opens, held rather than computed so the write
+    /// that changes it can say which way the wing is going.
+    ///
+    /// **It is the panel's own trailing wing, drawn.** That wing is composed
+    /// from exactly this number (`PanelMetrics.drawnTrailingReadingWidth`), so
+    /// framing the reading to it and drawing the glyphs from its leading edge
+    /// makes the box and the panel's trailing edge two halves of one movement:
+    /// both leave on the same curve, and the figure's own leading edge stands
+    /// still ``PanelMetrics/expandedNotchClearance`` past the cut-out at every
+    /// length the reading can draw. A digit therefore arrives at the far end
+    /// with the black edge opening ahead of it, rather than the whole figure
+    /// sliding sideways to stay flush with an edge that moved first.
+    ///
+    /// `nil` while the pill reserves, where the box would have to be the
+    /// reservation and the slack already falls where it belongs — between the
+    /// status name and a reading drawn flush right.
+    @State private var boxWidth: CGFloat?
+
+    var body: some View {
+        HStack(spacing: PanelMetrics.subagentBadgeTimerSpacing) {
+            let badges = store.compactSubagentBadges
+            if !badges.isEmpty {
+                SubagentBadgeRow(badges: badges)
+                    .transition(Self.markFade)
+            }
+            // The reading is drawn the one way, whatever the aggregate is:
+            // running's bare figure, neutral rather than tinted — it is the
+            // longest unfinished turn anywhere and belongs to no one product,
+            // so a hue would claim an owner it has not got. The waiting flip
+            // that used to put it on white lived here alone; the expanded rows
+            // keep their own three silhouettes (``ReadingGround``), where a
+            // row's ground is read against the rows beside it and says which of
+            // them wants the person. Up here there is nothing to read it
+            // against — one reading for every turn at once — and the white slab
+            // was the brightest thing on the bar for a state the matrix beside
+            // it already announces.
+            //
+            // The ground stays a `.clear` ``ReadingGround`` rather than no
+            // ground at all: it carries the padding both trailing widths bill
+            // for, so the composed bar width is unchanged.
+            if let startedAt = store.compactTimerStart {
+                ReadingGround(fill: .clear) {
+                    ElapsedReadout(
+                        startedAt: startedAt,
+                        tick: store.elapsedTick.eraseToAnyPublisher(),
+                        tint: NotchPalette.labelDrawingColor,
+                        weight: .light
+                    )
+                }
+                .transition(Self.markFade)
+            }
+        }
+        .frame(width: boxWidth, alignment: .leading)
+        // The transaction the two transitions above run in. They each carry
+        // their own curve, so what this supplies is only the fact that the
+        // change is animated at all -- and it is keyed on *what is present*
+        // rather than on the width, because a reading merely gaining a digit
+        // inserts and removes nothing and must not be faded.
+        .animation(PanelMotion.animation, value: presence)
+        .onChange(of: targetWidth, initial: true) { previous, width in
+            // Nil either side is the pill's reserved form or a display change
+            // into or out of it: take the value rather than animating a box
+            // that was not there a moment ago.
+            guard let previous, let width, boxWidth != nil, previous != width else {
+                boxWidth = width
+                return
+            }
+            withAnimation(PanelMotion.slot(isOpening: width > previous)) {
+                boxWidth = width
+            }
+        }
+    }
+
+    /// The width this wing has to be, or `nil` while the pill reserves and the
+    /// reading simply hugs inside the room already held for it.
+    private var targetWidth: CGFloat? {
+        hugsItsReading ? store.compactDrawnTrailingReadingWidth : nil
+    }
+
+    /// What the slot is currently drawing, as against how wide it is.
+    private var presence: [Bool] {
+        [store.compactSubagentBadges.isEmpty, store.compactTimerStart == nil]
+    }
+
+    /// Fading rather than appearing, because the wing they stand in is a width
+    /// that opens for them: a reading arriving at full ink would be drawn over
+    /// the cut-out for as long as the panel edge took to clear it.
+    private static let markFade = AnyTransition.asymmetric(
+        insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),
+        removal: .opacity.animation(PanelMotion.fade(isArriving: false))
+    )
+}
+
 private struct StatusReadout: View {
     let marks: [PresenceMark]
     let drawsMarks: Bool
     let text: String
     let showsText: Bool
+    /// Whether the panel this readout is drawn in has held room for every
+    /// mark's session column, drawn or not.
+    ///
+    /// ``MonitorStore/reservesCompactRoom``: true on the notch-less pill and in
+    /// the expanded header, where the marks are packed into a fixed reservation
+    /// and the status name is drawn back over what no column is using; false on
+    /// the notched bar, where the wing is exactly as wide as the marks and the
+    /// panel's own leading edge is what moves instead. That form draws no
+    /// status name at all, so there is nothing left for the slide to carry.
+    let reservesColumnRoom: Bool
     let spacing: CGFloat
     let matrixSize: CGFloat
     let markSpacing: CGFloat
@@ -505,15 +599,26 @@ private struct StatusReadout: View {
                         }
                     }
                 }
-                // **The anchor.** The marks are given the room every column
-                // would take and packed into it from the leading edge, so the
-                // first matrix stands in one place whatever the counts do: a
-                // column opening pushes only the marks after it, and the last
-                // mark's column pushes nothing.
+                // **The anchor, on the two forms that hold a position.** The
+                // marks are given the room every column would take and packed
+                // into it from the leading edge, so the first matrix stands in
+                // one place whatever the counts do: a column opening pushes
+                // only the marks after it, and the last mark's column pushes
+                // nothing.
                 //
-                // This is `PanelMetrics.marksWidth`, the same expression the
-                // panel is measured from (``MonitorStore/currentPanelSize``),
+                // This is `PanelMetrics.marksWidth`, the same expression those
+                // panels are measured from (``MonitorStore/currentPanelSize``),
                 // so the room reserved and the room drawn into cannot drift.
+                //
+                // **The notched bar takes `nil` and hugs.** Its wing is
+                // `PanelMetrics.drawnMarksWidth` — the marks and nothing else —
+                // so a frame here would be holding open room the panel has
+                // already given back, and the last mark would stand a column
+                // short of the cut-out it is supposed to meet. The column
+                // widths inside still animate on their own
+                // (``SessionCountDots``), which is what carries this stack's
+                // width, and the panel's leading edge travels the same curve to
+                // meet it.
                 .frame(width: reservedMarksWidth, alignment: .leading)
             }
 
@@ -555,7 +660,7 @@ private struct StatusReadout: View {
             }
             // Less room going unused means a column opened ahead of the label
             // and is pushing it along.
-            withAnimation(PanelMotion.columnSlot(isOpening: room < previous)) {
+            withAnimation(PanelMotion.slot(isOpening: room < previous)) {
                 slide = -room
             }
         }
@@ -564,13 +669,19 @@ private struct StatusReadout: View {
     /// The reserved column room no mark is standing in, which is how far back
     /// over its own slot the label is drawn -- see
     /// ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``.
+    ///
+    /// Zero where nothing is reserved: there is no unused room to draw back
+    /// over, and the notched bar draws no label to do it with.
     private var unpackedColumnRoom: CGFloat {
-        PanelMetrics.unpackedColumnRoom(marks, matrixSize: matrixSize)
+        guard reservesColumnRoom else { return 0 }
+        return PanelMetrics.unpackedColumnRoom(marks, matrixSize: matrixSize)
     }
 
-    /// The room the panel has already reserved for the marks.
-    private var reservedMarksWidth: CGFloat {
-        PanelMetrics.marksWidth(
+    /// The room the panel has already reserved for the marks, or `nil` where it
+    /// has reserved none and this stack simply hugs what it draws.
+    private var reservedMarksWidth: CGFloat? {
+        guard reservesColumnRoom else { return nil }
+        return PanelMetrics.marksWidth(
             marks.count,
             areProductMarks: marks.contains { $0.agent != nil }
         )
