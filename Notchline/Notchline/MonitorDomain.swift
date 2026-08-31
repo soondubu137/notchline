@@ -97,6 +97,23 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     /// it. Dropping the names costs the user nothing they cannot see one click
     /// away, and it buys back the width the longest of them reserved on every
     /// panel, connected or not.
+    ///
+    /// **`running` is drawn as `Working...`, and the case keeps its name.** The
+    /// state is `Running` everywhere in this code, in `CONTEXT.md`'s vocabulary
+    /// and in every document that reasons about the state machine; only the
+    /// word on the surface changed. `Running` is what the *machine* is doing —
+    /// a process, a turn, a thread — where the other three names say what is
+    /// happening to the person reading them, and the one state that is nobody's
+    /// business but the agent's is the one the notch spends most of its life
+    /// in. `Working...` says the same fact in the user's terms, and the
+    /// trailing ellipsis is the only mark in the vocabulary that carries "and
+    /// it has not finished" in the word itself, which is exactly what
+    /// distinguishes this state from `Completed`.
+    ///
+    /// It costs `12` of drawn width (`48.99` → `60.22`) and **nothing at all**
+    /// where the pill is reserved: `Approval needed` at `101.56` is still the
+    /// widest thing the working set can say, so ``PanelMetrics``'s reservations
+    /// are untouched. See `docs/figma-design.md` §6.4.
     var displayName: String {
         switch self {
         case .connected:
@@ -106,7 +123,7 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         case .connecting:
             "Connecting"
         case .running:
-            "Running"
+            "Working..."
         case .inputNeeded:
             "Input needed"
         case .approvalNeeded:
@@ -174,10 +191,15 @@ enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var id: Self { self }
 
+    /// The same vocabulary the aggregate says, for one row.
+    ///
+    /// Four of ``MonitorStatus/displayName``'s ten, spelled identically — a row
+    /// and the bar above it naming one state two ways is the drift this
+    /// duplicate exists to avoid, `running` drawn as `Working...` included.
     var displayName: String {
         switch self {
         case .running:
-            "Running"
+            "Working..."
         case .inputNeeded:
             "Input needed"
         case .approvalNeeded:

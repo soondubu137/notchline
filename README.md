@@ -29,7 +29,7 @@ Notchline moves that overview into the otherwise unused area around the display 
 
 - **Live status without another window**
 
-  The collapsed surface wraps a physical notch, or becomes a compact pill on a display without one. A 4×4 matrix per product separates `Running`, `Input needed`, `Approval needed` and `Completed`; the trailing wing can add elapsed time and subagent activity.
+  The collapsed surface wraps a physical notch, or becomes a compact pill on a display without one. A 4×4 matrix per product separates `Working...`, `Input needed`, `Approval needed` and `Completed`; the trailing wing can add elapsed time and subagent activity.
 
   <img src="docs/assets/notch-anatomy-readme.png" width="1200" alt="Anatomy of the collapsed bar: a Codex and a Claude Code status matrix with a column of session dots beside each, the most urgent state name, one subagent badge per product, and the elapsed time, every element labelled with what it is and what it means">
 
@@ -57,9 +57,9 @@ Notchline moves that overview into the otherwise unused area around the display 
 
 Each product carries its own 4×4 mark on the collapsed surface — Codex above, Claude Code below — and every state animates differently, so the surface reads at a glance without depending on colour or on the panel being open. The cell curves below are the ones the app ships.
 
-| Running | Input needed | Approval needed | Completed | Connected |
+| Working... | Input needed | Approval needed | Completed | Connected |
 |:---:|:---:|:---:|:---:|:---:|
-| <img src="docs/assets/matrix-running.svg" width="120" alt="Running: a beam sweeps the matrix and each cell fades behind it"> | <img src="docs/assets/matrix-input.svg" width="120" alt="Input needed: one column steps across a held baseline"> | <img src="docs/assets/matrix-approval.svg" width="120" alt="Approval needed: the whole matrix flashes twice, then goes dark"> | <img src="docs/assets/matrix-completed.svg" width="120" alt="Completed: a crest travels down the diagonal, then rests in a trough"> | <img src="docs/assets/matrix-idle.svg" width="120" alt="Connected: every cell dim and still"> |
+| <img src="docs/assets/matrix-running.svg" width="120" alt="Working...: a beam sweeps the matrix and each cell fades behind it"> | <img src="docs/assets/matrix-input.svg" width="120" alt="Input needed: one column steps across a held baseline"> | <img src="docs/assets/matrix-approval.svg" width="120" alt="Approval needed: the whole matrix flashes twice, then goes dark"> | <img src="docs/assets/matrix-completed.svg" width="120" alt="Completed: a crest travels down the diagonal, then rests in a trough"> | <img src="docs/assets/matrix-idle.svg" width="120" alt="Connected: every cell dim and still"> |
 | **Radar** — a beam sweeps, each cell holds its afterglow | **Advance** — a column steps across a held baseline | **Double knock** — two beats, then a silence | **Lull** — one crest down the diagonal, then a trough | **Dim and still** — the product is open, nothing is running |
 
 ## Motivation

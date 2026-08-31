@@ -25,7 +25,7 @@ V1 must:
 1. Live-present the Turns worth monitoring across every Project and `Chats` under the current account. **The scope is strictly Turns that began after this launch**: anything already running, finished-unread or awaiting approval when the app starts is excluded until it produces its next lifecycle event (§3).
 2. Use only four thread statuses: Running, Input needed, Approval needed, Completed.
 3. Let a click on any row reach exactly the same thread in its product.
-4. Show `Running` through the same status-name mechanism as other statuses, show processing time per unfinished Turn, and show the longest running time at the collapsed right end (§8.2).
+4. Show Running through the same status-name mechanism as other statuses — the word every surface draws for it is `Working...` (§6.2) — show processing time per unfinished Turn, and show the longest running time at the collapsed right end (§8.2).
 5. Show the current account's primary quota window's remaining share, and say so explicitly when it cannot be read reliably.
 6. Show no cached threads after an app restart, a product restart, an account switch or missed events; the list starts empty and re-accumulates.
 7. Provide a useful current-content preview by default.
@@ -129,10 +129,12 @@ The product switches in onboarding and the master switches in Settings are the s
 | --- | --- | --- |
 | `Input needed` | Waiting for the user to answer | Amber status; name pill on hover |
 | `Approval needed` | Waiting for a permission decision | Amber status; name pill on hover |
-| `Running` | The current Turn is processing automatically | Blue `Running` name pill, always shown |
+| `Running` | The current Turn is processing automatically | Blue `Working...` name pill, always shown |
 | `Completed` | The current Turn has ended but is still unread | Green status |
 
 There is no row-level `Idle` and no row-level `Disconnected`.
+
+**`Running` is the state; `Working...` is the word.** Every surface — the collapsed bar, the pill, the panel header, a row's name pill, the first-run legend and the spoken copy — draws `Working...` for it, and this document, the code and the state machine go on calling the state Running. The other three names say what is happening to the person reading them; this one said what the machine was doing, and it is the state the surface spends most of its life in. The trailing ellipsis is the only mark in the drawn vocabulary carrying "and it has not finished", which is the whole of what separates this state from `Completed` at a glance. It changes no width the surface reserves ([`figma-design.md`](figma-design.md) §6.4).
 
 `Approval needed` holds only while the exact current Turn has an approval interval still open, and that interval must be closable by an end event with the same `tool_use_id`: a dedicated approval tool forms the interval itself, while an ordinary tool (a Bash command, say) is named by `PermissionRequest` and borrows that tool's still-open call id. A lone `PermissionRequest` is still not proof that a user is needed, because an automatic reviewer may pass it immediately.
 
@@ -282,7 +284,7 @@ Processing time is in scope. This section answers the five questions previously 
 - On a notched screen it matches the real menu bar / notch height, showing only an `8 × 8` summary dot on the left and an `18 × 18` quota ring on the right.
 - A notched screen has a second collapsed form: with `Hide the wings` (§11) on, neither wing is drawn and the collapsed state is the notch itself. It is the same form as "nothing is drawn when no product is connected", differing only in being user-chosen and holding for every status. Screens where the notch's exact position and width cannot be measured do not have this form (§11).
 - A notch-less screen uses content-driven width: dot, conditional text, quota ring and fixed margins, never reserving blank space for a notch that does not exist.
-- Notch-less Running shows the full status name `Running`, like every other status.
+- Notch-less Running shows the full status name `Working...`, like every other status.
 - The position right of the notch is shared by the timer and subagent counts, per §8.2.
 
 ### 9.2 Expanded
@@ -307,7 +309,7 @@ The overlay hangs at the `.statusBar` level, one above the menu bar, so the syst
 ### 9.3 Session rows
 
 - The left carries Project, title and current content preview in order.
-- Running always shows a status dot and a `Running` name pill on the right.
+- Running always shows a status dot and a `Working...` name pill on the right.
 - Other statuses show a status dot by default, expanding to a name pill on hover.
 - **The row end has one position and the timer gets it first**: while the Turn is timing that is the processing time; once the timer stops, if the Thread still has subagents running or awaiting approval, **one** numeral badge is drawn there — the number is that row's every subagent, and the ground says whether anything is waiting on you (dark ground with bright text = all running, bright ground with dark text = one stopped at approval or input). In-row it is always neutral and never takes a product colour ([`dual-agent-design.md`](dual-agent-design.md) §10). The two never coexist: a running row already says this Thread is working, so a badge would say it twice, whereas **the timer stopping while the position stays occupied** is the one shape of "the Turn ended but this Thread has not". With no subagents, or with subagent boundaries unreadable, the position is empty and exactly as before subagents existed.
 - **That cell has two brightnesses, saying quite different things.** Dark (Running's) means work is in flight with nobody being asked anything. Bright (the needs-attention one, Medium weight) means one of this Thread's subagents is **stopped at an approval dialogue**: the product is not busy, it is waiting for a person. The timer cell has the same two, under the same rule — a row that is timing may also have a subagent stuck at a dialogue. Brightness is this interface's only attention channel, so no new mark and no new colour are added here; the spoken copy adds `a subagent is waiting for approval`, because brightness cannot be read aloud.
@@ -398,7 +400,7 @@ If Project, unread membership or exact navigation cannot be met, V1 must not fak
 14. Every product font in Figma and in the implementation is SF Pro.
 15. Right-clicking a terminal row removes it immediately and it does not return on any later refresh — including the refresh after that product quits, drops, or holds every row back and returns; the thread's next Turn still gets a row. An active Turn's row ignores right-click, and left-click navigation is unaffected on both.
 16. While one of a Thread's subagents is stopped at an approval dialogue (both products reach this, whether or not the Thread's own Turn is terminal): the collapsed state and the sort treat that row as Approval needed, the row-end cell (timer or count) takes the needs-attention brightness, and the spoken copy says so. The band is revoked immediately when that subagent's call is approved, when that subagent moves to another call (neither product emits anything on a human refusal), or when that subagent ends. The row's own status, preview, timer and removability are unchanged throughout. On a Codex thread Desktop records as `auto_review` this band must never be entered — there, a subagent and its parent thread are answered by the same reviewer.
-17. While a Thread's own Turn has ended and subagents it spawned are still running (both products): the collapsed state says `Running` and writes the total still-running subagent count at the right end (before the timer when a Turn is timing), the row sorts in the Running band, and Desktop reporting it read does not remove it. Once the last subagent wraps up, the removal window counts from **that** moment rather than from the main agent finishing. Throughout, the row itself is still Completed: the timer is stopped, the preview is the main agent's final answer, and a right-click still removes it.
+17. While a Thread's own Turn has ended and subagents it spawned are still running (both products): the collapsed state says `Working...` and writes the total still-running subagent count at the right end (before the timer when a Turn is timing), the row sorts in the Running band, and Desktop reporting it read does not remove it. Once the last subagent wraps up, the removal window counts from **that** moment rather than from the main agent finishing. Throughout, the row itself is still Completed: the timer is stopped, the preview is the main agent's final answer, and a right-click still removes it.
 
 ## 15. Design sources
 

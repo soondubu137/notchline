@@ -1588,7 +1588,7 @@ struct NotchlineTests {
             PanelMetrics.size(
                 geometry: .notched,
                 isExpanded: false,
-                statusReadoutText: "Running",
+                statusReadoutText: "Working...",
                 trailing: .empty,
                 centerOcclusionWidth: 200,
                 compactHeight: 46,
@@ -2621,7 +2621,7 @@ struct NotchlineTests {
             PanelMetrics.size(
                 geometry: .notched,
                 isExpanded: false,
-                statusReadoutText: "Running",
+                statusReadoutText: "Working...",
                 trailing: CompactTrailingReading(timerText: trailingText),
                 centerOcclusionWidth: occlusion,
                 compactHeight: 46
@@ -2632,7 +2632,7 @@ struct NotchlineTests {
         // an empty trailing *wing* would render as a second, fake notch.
         let idle = size(trailingText: nil)
         let leading = PanelMetrics.compactLeadingWidth(
-            statusReadoutText: "Running",
+            statusReadoutText: "Working...",
             showsStatusText: false
         ) + PanelMetrics.expandedNotchClearance
         #expect(abs(idle.width - (leading + occlusion)) <= 1)
@@ -2778,7 +2778,7 @@ struct NotchlineTests {
             let size = PanelMetrics.size(
                 geometry: .notched,
                 isExpanded: false,
-                statusReadoutText: "Running",
+                statusReadoutText: "Working...",
                 trailing: reading,
                 centerOcclusionWidth: 220,
                 compactHeight: bar
@@ -2813,7 +2813,7 @@ struct NotchlineTests {
                         panelSize: PanelMetrics.size(
                             geometry: .notched,
                             isExpanded: true,
-                            statusReadoutText: "Running",
+                            statusReadoutText: "Working...",
                             trailing: CompactTrailingReading(timerText: "0:00"),
                             centerOcclusionWidth: 220,
                             compactHeight: bar
@@ -2869,7 +2869,7 @@ struct NotchlineTests {
                 panelSize: PanelMetrics.size(
                     geometry: .notched,
                     isExpanded: false,
-                    statusReadoutText: "Running",
+                    statusReadoutText: "Working...",
                     trailing: trailing,
                     centerOcclusionWidth: occlusion,
                     compactHeight: bar,
@@ -2984,7 +2984,7 @@ struct NotchlineTests {
             #expect(wing == wing.rounded(), "\(reading)")
             // The identity itself, on the leading wing this app draws.
             let leadingAndCutOut = PanelMetrics.compactLeadingWidth(
-                statusReadoutText: "Running",
+                statusReadoutText: "Working...",
                 showsStatusText: false
             ) + PanelMetrics.expandedNotchClearance + 220
             #expect(ceil(leadingAndCutOut + wing) == ceil(leadingAndCutOut) + wing)
@@ -3000,7 +3000,7 @@ struct NotchlineTests {
         let size = PanelMetrics.size(
             geometry: .notched,
             isExpanded: false,
-            statusReadoutText: "Running",
+            statusReadoutText: "Working...",
             trailing: CompactTrailingReading(timerText: "9:59"),
             centerOcclusionWidth: 220,
             compactHeight: 38
@@ -3032,7 +3032,7 @@ struct NotchlineTests {
                 panelSize: PanelMetrics.size(
                     geometry: .notched,
                     isExpanded: false,
-                    statusReadoutText: "Running",
+                    statusReadoutText: "Working...",
                     trailing: CompactTrailingReading(timerText: "9:58"),
                     centerOcclusionWidth: 220,
                     compactHeight: 38
@@ -3086,7 +3086,7 @@ struct NotchlineTests {
         let body = PanelMetrics.size(
             geometry: .notched,
             isExpanded: false,
-            statusReadoutText: "Running",
+            statusReadoutText: "Working...",
             trailing: .empty,
             centerOcclusionWidth: 200,
             compactHeight: bar,
@@ -3095,7 +3095,7 @@ struct NotchlineTests {
             drawsCompactMarks: true
         ).width
         let leading = PanelMetrics.compactLeadingWidth(
-            statusReadoutText: "Running",
+            statusReadoutText: "Working...",
             showsStatusText: false
         ) + PanelMetrics.expandedNotchClearance
         #expect(body == ceil(leading + 200))
@@ -3115,7 +3115,7 @@ struct NotchlineTests {
             PanelMetrics.size(
                 geometry: geometry,
                 isExpanded: false,
-                statusReadoutText: "Running",
+                statusReadoutText: "Working...",
                 trailing: CompactTrailingReading(timerText: trailingText),
                 centerOcclusionWidth: geometry == .notched ? 200 : 0,
                 compactHeight: compactHeight
@@ -4362,7 +4362,7 @@ struct NotchlineTests {
         let noNotchSize = PanelMetrics.size(
             geometry: .noNotch,
             isExpanded: true,
-            statusReadoutText: "Running",
+            statusReadoutText: "Working...",
             trailing: .empty,
             centerOcclusionWidth: 0,
             compactHeight: 24
@@ -4373,7 +4373,7 @@ struct NotchlineTests {
         let notchedSize = PanelMetrics.size(
             geometry: .notched,
             isExpanded: true,
-            statusReadoutText: "Running",
+            statusReadoutText: "Working...",
             trailing: .empty,
             centerOcclusionWidth: 200,
             compactHeight: 38,
@@ -4382,7 +4382,7 @@ struct NotchlineTests {
         let notchedSingle = PanelMetrics.size(
             geometry: .notched,
             isExpanded: true,
-            statusReadoutText: "Running",
+            statusReadoutText: "Working...",
             trailing: .empty,
             centerOcclusionWidth: 200,
             compactHeight: 38
@@ -4806,7 +4806,7 @@ struct NotchlineTests {
         )
 
         #expect(store.sessions.count == 1)
-        #expect(store.statusDisplayName == "Running")
+        #expect(store.statusDisplayName == "Working...")
         #expect(store.tokenRemainingPercent == 72)
 
         store.applyForTesting(
@@ -11873,17 +11873,17 @@ struct NotchlineTests {
 
     @Test @MainActor
     func notchLabelCrossFadesTwoUnrelatedReadings() throws {
-        // `Running` and `Approval` share nothing, so the new reading has to
-        // arrive as well as the old one leaving. Shown at full strength, as the
-        // shared-prefix case deliberately does, it would stamp itself over the
-        // copy still dissolving underneath it.
+        // `Working...` and `Approval needed` share nothing, so the new reading
+        // has to arrive as well as the old one leaving. Shown at full strength,
+        // as the shared-prefix case deliberately does, it would stamp itself
+        // over the copy still dissolving underneath it.
         let font = NSFont.systemFont(ofSize: 13, weight: .light)
         let view = SweepingLabelView()
-        view.apply(text: "Running", font: font, isSweeping: true)
+        view.apply(text: "Working...", font: font, isSweeping: true)
         view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
         view.layout()
 
-        view.apply(text: "Approval", font: font, isSweeping: true)
+        view.apply(text: "Approval needed", font: font, isSweeping: true)
         view.layout()
 
         let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)

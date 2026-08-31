@@ -241,7 +241,7 @@ private struct OnboardingView: View {
 /// two products on the bar above, where the user meets them first.
 private struct MatrixLegend: View {
     private static let states: [(NotchMatrixState, String)] = [
-        (.running, "Running"),
+        (.running, "Working..."),
         (.approvalNeeded, "Approval"),
         (.inputNeeded, "Input"),
         (.completed, "Completed"),
