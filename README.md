@@ -154,7 +154,7 @@ Notchline is one `LSUIElement` process that observes two products it does not co
 
 - **Claude Code navigation can degrade**
 
-  Claude Desktop can only be activated, not focused to a specific session. A terminal tab is selected only when the terminal exposes its tty through a scripting dictionary.
+  Claude Desktop can only be activated, not focused to a specific session. A terminal tab is selected only when the terminal exposes its tty through a scripting dictionary. A host whose window is **full-screen** cannot be reached at all: a full-screen window is a desktop of its own, and no public interface available to Notchline crosses into one. Such a click reports that it failed rather than claiming a raise the user cannot see. Codex rows are unaffected, because their deep link goes through Launch Services.
 
 - **Several integrations rely on undocumented local behaviour**
 

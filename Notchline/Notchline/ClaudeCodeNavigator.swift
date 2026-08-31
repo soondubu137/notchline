@@ -587,7 +587,6 @@ struct WindowServerOccupancyReporter: ActiveSpaceOccupancyReporting {
 @MainActor
 protocol RaisableApplication: AnyObject {
     var processIdentifier: Int32 { get }
-    var bundleURL: URL? { get }
     /// Whether the application is hidden — the state ``hide()`` produces and
     /// coming forward clears.
     var isHidden: Bool { get }
@@ -597,6 +596,58 @@ protocol RaisableApplication: AnyObject {
 }
 
 extension NSRunningApplication: RaisableApplication {}
+
+/// This app's own place in the activation order.
+///
+/// A raise needs it. `NSRunningApplication.activate(options:)` is a *request*,
+/// and the window server declines the one an accessory application makes for a
+/// host it has just hidden — while answering `true` either way. Measured
+/// 2026-08-30 inside the running app, host Ghostty windowed on a desktop that
+/// was not showing: `activate` answered `true`, the host came back from
+/// hidden, and 400 ms later it still had no window on any desktop in view.
+/// `NSWorkspace.openApplication` with `activates = true`, tried straight
+/// afterwards, left it there too. The identical two calls made by a throwaway
+/// process — from a shell and from `launchctl` alike — were honoured every
+/// time, which is what makes this about *who is asking* rather than about the
+/// calls.
+///
+/// It is a protocol so the sequence can be tested without a foreground to take.
+@MainActor
+protocol ForegroundClaiming: AnyObject {
+    /// Whether this app holds the foreground right now.
+    ///
+    /// Taking it is not instant, and the raise has to wait for it: an
+    /// activation sent while this app is still on its way to the foreground is
+    /// declined exactly like one sent from the background.
+    var isClaimed: Bool { get }
+    /// Takes the foreground, so the raise that follows is honoured.
+    func claim()
+    /// Gives it back up, for a raise that never arrived.
+    func relinquish()
+}
+
+@MainActor
+final class AppKitForeground: ForegroundClaiming {
+    var isClaimed: Bool { NSRunningApplication.current.isActive }
+
+    func claim() {
+        // `ignoringOtherApps:` rather than the cooperative `NSApp.activate()`,
+        // for the reason `SettingsWindowPresenter.reveal` gives: the
+        // cooperative call is itself a request this app has measured being
+        // refused. Taking the foreground is what an accessory application is
+        // entitled to do here — it answers a click the user has just made on
+        // this app's own surface, and it holds it only for as long as it takes
+        // the host to take it away.
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func relinquish() {
+        // Only reached by a click that failed. Without it the user is left
+        // looking at their own desktop with an application in the foreground
+        // that has no window to show them.
+        NSApp.deactivate()
+    }
+}
 
 /// Raises a host, and changes desktop when the host is on another one.
 ///
@@ -621,29 +672,49 @@ extension NSRunningApplication: RaisableApplication {}
 /// its own windows front and the window server follows the front window to its
 /// Space. Measured the same day across three hosts built on very different
 /// stacks — Xcode (AppKit), Ghostty (its own AppKit layer) and Claude Desktop
-/// (Electron) — all three landed the user on the window's desktop, both from a
-/// background caller and with the host already frontmost.
+/// (Electron) — all three landed the user on the window's desktop.
+///
+/// **What that measurement missed is who was asking.** It was taken from a
+/// throwaway process, and this app is not one: it is an accessory application
+/// whose panel is a `nonactivatingPanel`, so it is never in the foreground, and
+/// the window server declines the activation it sends for a host it has just
+/// hidden. The decline is invisible — `activate` answers `true` regardless, the
+/// host merely comes back from hidden, and the desktop stays where it was. That
+/// is why the raise now takes the foreground first (``ForegroundClaiming``) and
+/// then **checks**, rather than believing the answer it is given.
 @MainActor
 final class AppKitHostApplicationActivator: HostApplicationActivating {
+    /// How many times each of the three steps is asked whether it took.
+    ///
+    /// At ``settle``'s default 50 ms that is a second and a half apiece. The
+    /// foreground and the hide answer in a few tens of milliseconds and a raise
+    /// that lands is measured answering inside 300–500 ms, all of them
+    /// returning on the first yes; the ceiling is only there to bound the ones
+    /// that never will.
+    static let questionsPerStep = 30
+
     private let occupancy: any ActiveSpaceOccupancyReporting
     private let applications: @MainActor (HostApplication) -> [any RaisableApplication]
+    private let foreground: any ForegroundClaiming
     private let settle: @Sendable () async -> Void
 
     /// - Parameters:
     ///   - occupancy: Whether the host is already where the user is looking.
     ///   - applications: The running applications a host may be raised through,
     ///     nearest answer first.
-    ///   - settle: How long to leave an activation before deciding it never
-    ///     arrived. Only a hidden application waits on this, and only to be put
-    ///     back; nothing about the click is delayed by it.
+    ///   - foreground: This app's own place in the activation order.
+    ///   - settle: One pause between two questions, so a test can ask them
+    ///     without a clock.
     init(
         occupancy: any ActiveSpaceOccupancyReporting = WindowServerOccupancyReporter(),
         applications: (@MainActor (HostApplication) -> [any RaisableApplication])? = nil,
+        foreground: (any ForegroundClaiming)? = nil,
         settle: (@Sendable () async -> Void)? = nil
     ) {
         self.occupancy = occupancy
         self.applications = applications ?? { AppKitHostApplicationActivator.systemApplications(for: $0) }
-        self.settle = settle ?? { try? await Task.sleep(for: .seconds(2)) }
+        self.foreground = foreground ?? AppKitForeground()
+        self.settle = settle ?? { try? await Task.sleep(for: .milliseconds(50)) }
     }
 
     func activate(_ application: HostApplication) async -> Bool {
@@ -673,70 +744,73 @@ final class AppKitHostApplicationActivator: HostApplicationActivating {
         return ([named].compactMap { $0 } + others)
     }
 
-    /// Hide first when the desktop has to change, then cooperative activation,
-    /// then Launch Services.
+    /// The foreground, then hide, then activate — and then the window server is
+    /// asked whether any of it worked.
     ///
-    /// `activate` is the cheap one and it can be declined — an app that is not
-    /// the current front app has a say in whether it yields. Opening the bundle
-    /// is the same route ``AppKitCodexWorkspace`` uses and does not launch a
-    /// second copy of an application that is already running.
+    /// **Nothing here reads `activate`'s answer.** It reports that the request
+    /// went out, never that it was honoured, and this app's requests are
+    /// routinely not: measured 2026-08-30 inside the running app, a host
+    /// windowed on a desktop that was not showing answered `true` and stayed
+    /// exactly where it was. Taking that word for it is what made a click that
+    /// did nothing report itself as a raise.
+    ///
+    /// **The one question the window server does answer honestly** is the same
+    /// one that decided whether to hide: does this pid have a visible window on
+    /// a desktop showing right now. Asking it again afterwards is what
+    /// separates a click that moved the user from one that only moved the menu
+    /// bar.
     private func raise(_ running: any RaisableApplication) async -> Bool {
-        // Hidden only when the click has a desktop to change. A host with a
-        // window in front of the user is raised by activation alone, and hiding
-        // it first would make its windows blink for no reason at all.
-        let mustFollow = !occupancy.hasWindowOnActiveSpace(
+        // A host with a window in front of the user has no desktop to change:
+        // activation alone brings it forward, and hiding it first would make
+        // its windows blink for no reason at all. That path is measured
+        // working from this app as it stands, and is left exactly as it was.
+        guard !occupancy.hasWindowOnActiveSpace(
             processIdentifier: running.processIdentifier
-        )
+        ) else {
+            return running.activate(options: [])
+        }
+
+        // Everything below is declined without this, and declined just the
+        // same if it is sent before the foreground has actually arrived — so
+        // each step here waits for its own effect to be observable before the
+        // next one is asked for. None of the three reports its own result.
+        foreground.claim()
+        _ = await holds { [foreground] in foreground.isClaimed }
+
         // An application the user hid themselves is left hidden: activation
         // unhides it, and unhiding it is the same thing that carries the Space.
-        let hidden = mustFollow && !running.isHidden
+        let hidden = !running.isHidden
         if hidden {
             // The result is deliberately ignored. `hide()` reports whether the
             // request was sent, and it answered false on every host measured
             // while `isHidden` went true immediately afterwards.
             running.hide()
+            _ = await holds { running.isHidden }
         }
+        running.activate(options: [])
 
-        if running.activate(options: []) {
-            if hidden { restoreIfActivationNeverArrives(running) }
-            return true
-        }
+        if await holds({ [occupancy] in
+            occupancy.hasWindowOnActiveSpace(processIdentifier: running.processIdentifier)
+        }) { return true }
 
-        guard let bundleURL = running.bundleURL else {
-            if hidden { running.unhide() }
-            return false
-        }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        do {
-            _ = try await NSWorkspace.shared.openApplication(
-                at: bundleURL,
-                configuration: configuration
-            )
-            if hidden { restoreIfActivationNeverArrives(running) }
-            return true
-        } catch {
-            if hidden { running.unhide() }
-            return false
-        }
+        // A click that did not land must not also cost the user their window,
+        // or leave an application with nothing to show holding the foreground.
+        if hidden { running.unhide() }
+        foreground.relinquish()
+        return false
     }
 
-    /// Puts back an application that was hidden for a raise that never landed.
+    /// Waits for something none of these calls reports: the foreground
+    /// arriving, the host going hidden, the desktop changing.
     ///
-    /// `activate` answers whether the request went out, not whether the system
-    /// honoured it, and a refusal is invisible from here — measured once
-    /// against an app holding a full-screen Space, where activation was
-    /// declined and answered `true` all the same. Without this, that click
-    /// would not merely fail: it would take the user's window away.
-    ///
-    /// Coming forward clears `isHidden` itself, so still being hidden after the
-    /// wait is the refusal. Nothing about the click waits on this.
-    private func restoreIfActivationNeverArrives(_ running: any RaisableApplication) {
-        Task { [settle] in
+    /// Stops at the first yes, so a step that lands is not held up by the
+    /// ceiling; only a click that had already failed pays it in full.
+    private func holds(_ condition: @MainActor () -> Bool) async -> Bool {
+        for _ in 0..<Self.questionsPerStep {
+            if condition() { return true }
             await settle()
-            guard running.isHidden else { return }
-            running.unhide()
         }
+        return condition()
     }
 }
 

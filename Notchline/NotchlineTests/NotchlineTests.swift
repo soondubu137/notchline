@@ -24184,7 +24184,7 @@ for line in sys.stdin:
     // MARK: - Raising a host that is on another desktop
 
     /// A host whose windows are all on another desktop is hidden before it is
-    /// activated, and that order is the whole fix.
+    /// activated, and that order is half the fix.
     ///
     /// Activation on its own hands the application the menu bar and leaves
     /// every window where it was (measured 2026-08-22 for `activate()`,
@@ -24192,13 +24192,18 @@ for line in sys.stdin:
     /// `NSWorkspace.openApplication`, with the Mission Control preference both
     /// unset and on). Coming back from hidden is what makes the application
     /// order its own windows front, and the window server follows the front
-    /// window to its Space.
+    /// window to its Space. The other half is ``ForegroundClaiming``: without
+    /// the foreground the same two calls are simply declined.
     @Test @MainActor
     func aHostOnAnotherDesktopIsHiddenSoTheClickChangesDesktop() async {
         let application = FakeRaisableApplication()
+        let foreground = ForegroundSpy()
+        // Not here, not here, and then the desktop has changed.
+        let occupancy = OccupancyStub(answering: [false, false, true])
         let activator = AppKitHostApplicationActivator(
-            occupancy: OccupancyStub(false),
+            occupancy: occupancy,
             applications: { _ in [application] },
+            foreground: foreground,
             settle: {}
         )
 
@@ -24206,18 +24211,50 @@ for line in sys.stdin:
 
         #expect(raised)
         #expect(application.calls == [.hide, .activate])
+        #expect(foreground.calls == [.claim])
     }
 
-    /// A host that already has a window in front of the user is never hidden.
+    /// The foreground is taken before the host is touched, and given back only
+    /// when the raise failed.
+    ///
+    /// The order is the point: an activation sent while this app is still on
+    /// its way to the foreground is declined exactly like one sent from the
+    /// background, so `claim` has to be answered before `hide` goes out.
+    @Test @MainActor
+    func theForegroundIsTakenBeforeTheHostIsTouched() async {
+        let foreground = ForegroundSpy(claimsImmediately: false)
+        let application = FakeRaisableApplication()
+        let activator = AppKitHostApplicationActivator(
+            occupancy: OccupancyStub(answering: [false, false, true]),
+            applications: { _ in [application] },
+            foreground: foreground,
+            // The foreground arrives on the first pause and not before, so
+            // what the host has been asked by then is the whole assertion.
+            settle: { await MainActor.run { foreground.arrive(hostCalls: application.calls) } }
+        )
+
+        let raised = await activator.activate(Self.ghosttyHost())
+
+        #expect(raised)
+        #expect(foreground.hostCallsAtArrival == [])
+        #expect(application.calls == [.hide, .activate])
+    }
+
+    /// A host that already has a window in front of the user is never hidden,
+    /// and the foreground is never taken for it.
     ///
     /// There is no desktop to change, so hiding it would buy nothing and cost
-    /// the user a blink of every window that application has open.
+    /// the user a blink of every window that application has open — and this
+    /// app taking the foreground first would cost a step that this path is
+    /// measured not to need.
     @Test @MainActor
     func aHostAlreadyInFrontOfTheUserIsNeverHidden() async {
         let application = FakeRaisableApplication()
+        let foreground = ForegroundSpy()
         let activator = AppKitHostApplicationActivator(
             occupancy: OccupancyStub(true),
             applications: { _ in [application] },
+            foreground: foreground,
             settle: {}
         )
 
@@ -24225,48 +24262,61 @@ for line in sys.stdin:
 
         #expect(raised)
         #expect(application.calls == [.activate])
+        #expect(foreground.calls.isEmpty)
     }
 
-    /// An activation that never arrives gives the host back.
+    /// A raise the window server never honours is reported as the failure it
+    /// is, rather than as the raise `activate` claimed.
     ///
-    /// `activate` answers whether the request went out, not whether the system
-    /// honoured it, and a refusal cannot be seen from here — measured once
-    /// against an application holding a full-screen Space, which answered
-    /// `true` and never came forward. Without this, such a click would not
-    /// merely fail: it would take the user's window away.
+    /// This is the defect the whole sequence exists for. Measured 2026-08-30
+    /// inside the running app against Ghostty windowed on a desktop that was
+    /// not showing: `activate` answered `true`, the host came back from hidden
+    /// and the desktop never changed — and because the answer was believed, the
+    /// user was told the host had been raised. The window server's own yes/no
+    /// is the only thing here that knows better, so it is asked afterwards and
+    /// the click stands or falls on it.
     @Test @MainActor
-    func aHostHiddenForAnActivationThatNeverArrivesIsPutBack() async {
+    func aRaiseTheWindowServerRefusesIsNotReportedAsSuccess() async {
         let application = FakeRaisableApplication(activationArrives: false)
+        let foreground = ForegroundSpy()
         let activator = AppKitHostApplicationActivator(
             occupancy: OccupancyStub(false),
             applications: { _ in [application] },
+            foreground: foreground,
             settle: {}
         )
 
-        _ = await activator.activate(Self.ghosttyHost())
+        let raised = await activator.activate(Self.ghosttyHost())
 
-        let restored = await holds { application.calls.contains(.unhide) }
-        #expect(restored)
+        #expect(!raised)
+        // The host is put back, and this app does not sit in the foreground
+        // with nothing to show for it.
+        #expect(application.calls == [.hide, .activate, .unhide])
         #expect(!application.isHidden)
+        #expect(foreground.calls == [.claim, .relinquish])
     }
 
-    /// A host that does come forward is left alone.
+    /// The window server is asked once per pause, and stops being asked the
+    /// moment it says yes.
     ///
-    /// Coming forward clears `isHidden` itself, so the safety net has nothing
-    /// to do — and doing it anyway would order the windows a second time.
+    /// A raise that lands must not pay the ceiling that exists for the ones
+    /// that never will.
     @Test @MainActor
-    func aHostThatComesForwardIsNotUnhiddenAgain() async {
-        let application = FakeRaisableApplication()
+    func theWindowServerStopsBeingAskedAtTheFirstYes() async {
+        let occupancy = OccupancyStub(answering: [false, false, false, true])
         let activator = AppKitHostApplicationActivator(
-            occupancy: OccupancyStub(false),
-            applications: { _ in [application] },
+            occupancy: occupancy,
+            applications: { _ in [FakeRaisableApplication()] },
+            foreground: ForegroundSpy(),
             settle: {}
         )
 
-        _ = await activator.activate(Self.ghosttyHost())
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        let raised = await activator.activate(Self.ghosttyHost())
 
-        #expect(application.calls == [.hide, .activate])
+        #expect(raised)
+        // One to decide whether to hide, then three more until it says yes —
+        // and not a single question after that.
+        #expect(occupancy.asked == 4)
     }
 
     /// An application the user hid themselves is not hidden again, and a click
@@ -24284,36 +24334,15 @@ for line in sys.stdin:
         let activator = AppKitHostApplicationActivator(
             occupancy: OccupancyStub(false),
             applications: { _ in [application] },
-            settle: {}
-        )
-
-        _ = await activator.activate(Self.ghosttyHost())
-        try? await Task.sleep(nanoseconds: 50_000_000)
-
-        #expect(application.calls == [.activate])
-        #expect(application.isHidden)
-    }
-
-    /// A refused activation with nothing left to try puts the host back at
-    /// once, rather than leaving it hidden for the safety net to notice.
-    @Test @MainActor
-    func aRefusedActivationWithNoBundleToOpenPutsTheHostBack() async {
-        let application = FakeRaisableApplication(
-            bundleURL: nil,
-            activationArrives: false,
-            activationRequestSent: false
-        )
-        let activator = AppKitHostApplicationActivator(
-            occupancy: OccupancyStub(false),
-            applications: { _ in [application] },
+            foreground: ForegroundSpy(),
             settle: {}
         )
 
         let raised = await activator.activate(Self.ghosttyHost())
 
         #expect(!raised)
-        #expect(application.calls == [.hide, .activate, .unhide])
-        #expect(!application.isHidden)
+        #expect(application.calls == [.activate])
+        #expect(application.isHidden)
     }
 
     /// Only a window the user could actually see answers "the host is here".
@@ -26704,27 +26733,21 @@ private final class FakeRaisableApplication: RaisableApplication {
     enum Call: Equatable { case hide, unhide, activate }
 
     let processIdentifier: Int32
-    let bundleURL: URL?
     private(set) var isHidden: Bool
     private(set) var calls: [Call] = []
     /// Whether the activation lands. A real one unhides the application as it
     /// comes forward; a refused one leaves it exactly where it was, and answers
-    /// `true` all the same.
+    /// `true` all the same — which is why nothing reads the answer any more.
     private let activationArrives: Bool
-    private let activationRequestSent: Bool
 
     init(
         processIdentifier: Int32 = 665,
-        bundleURL: URL? = URL(fileURLWithPath: "/Applications/Host.app"),
         isHidden: Bool = false,
-        activationArrives: Bool = true,
-        activationRequestSent: Bool = true
+        activationArrives: Bool = true
     ) {
         self.processIdentifier = processIdentifier
-        self.bundleURL = bundleURL
         self.isHidden = isHidden
         self.activationArrives = activationArrives
-        self.activationRequestSent = activationRequestSent
     }
 
     func hide() -> Bool {
@@ -26744,16 +26767,74 @@ private final class FakeRaisableApplication: RaisableApplication {
     func activate(options: NSApplication.ActivationOptions) -> Bool {
         calls.append(.activate)
         if activationArrives { isHidden = false }
-        return activationRequestSent
+        // `true` either way, exactly as the real one answers a refusal.
+        return true
     }
 }
 
-private struct OccupancyStub: ActiveSpaceOccupancyReporting {
-    private let answer: Bool
+/// The window server's one yes/no, written down rather than asked.
+///
+/// It counts the questions as well as answering them: "stops asking at the
+/// first yes" is an invariant about how many times it is consulted, and there
+/// is nowhere else to see that.
+private final class OccupancyStub: ActiveSpaceOccupancyReporting, @unchecked Sendable {
+    private let answers: [Bool]
+    private let lock = NSLock()
+    private var index = 0
 
-    init(_ answer: Bool) { self.answer = answer }
+    /// A host that is, or is not, where the user is looking — and stays that
+    /// way however often it is asked.
+    init(_ answer: Bool) { self.answers = [answer] }
 
-    func hasWindowOnActiveSpace(processIdentifier: Int32) -> Bool { answer }
+    /// One answer per question, the last one repeating: `[false, false, true]`
+    /// is a host that was not here, was still not here, and then arrived.
+    init(answering answers: [Bool]) { self.answers = answers }
+
+    /// How many times the window server was consulted.
+    var asked: Int {
+        lock.lock(); defer { lock.unlock() }
+        return index
+    }
+
+    func hasWindowOnActiveSpace(processIdentifier: Int32) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let answer = answers[min(index, answers.count - 1)]
+        index += 1
+        return answer
+    }
+}
+
+/// This app's own foreground, written down.
+@MainActor
+private final class ForegroundSpy: ForegroundClaiming {
+    enum Call: Equatable { case claim, relinquish }
+
+    private(set) var calls: [Call] = []
+    private(set) var isClaimed = false
+    /// Whether taking the foreground is answered at once, or only when
+    /// ``arrive(hostCalls:)`` is called — so a test can pin that nothing is
+    /// asked of the host until it has been.
+    private let claimsImmediately: Bool
+    /// What the host had been asked by the time the foreground arrived.
+    private(set) var hostCallsAtArrival: [FakeRaisableApplication.Call]?
+
+    init(claimsImmediately: Bool = true) {
+        self.claimsImmediately = claimsImmediately
+    }
+
+    func claim() {
+        calls.append(.claim)
+        if claimsImmediately { isClaimed = true }
+    }
+
+    func relinquish() { calls.append(.relinquish) }
+
+    /// The foreground arriving, at the moment the test chooses.
+    func arrive(hostCalls: [FakeRaisableApplication.Call]) {
+        guard !isClaimed else { return }
+        isClaimed = true
+        hostCallsAtArrival = hostCalls
+    }
 }
 
 @MainActor
