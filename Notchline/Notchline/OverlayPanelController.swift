@@ -115,7 +115,14 @@ final class OverlayPanelController {
             // panel has to re-measure when it gains a digit -- but only then.
             // The readouts advance themselves off a tick no SwiftUI view
             // observes; this fires when one of them changes width.
-            store.$elapsedLayoutRevision.map { _ in () }.eraseToAnyPublisher()
+            store.$elapsedLayoutRevision.map { _ in () }.eraseToAnyPublisher(),
+            // Both collapsed forms are measured from the marks -- the pill from
+            // how many there are, the notched bar from how many are drawing a
+            // session column -- and a product opening or closing with no rows
+            // moves neither the status nor the session list. Without this the
+            // second matrix is drawn into a window still sized for one, until
+            // some unrelated publish happens to resize it.
+            store.$presenceMarks.map { _ in () }.eraseToAnyPublisher()
         ]
 
         Publishers.MergeMany(animatedChanges)
@@ -433,10 +440,11 @@ enum OverlayPanelLayout {
     /// How long the window waits before it starts closing over a wing whose
     /// contents are still leaving.
     ///
-    /// **A collapsed notched wing is exactly as wide as what it draws**, so the
-    /// panel's own edge *is* the slot that opens and closes around a session
-    /// dot, a subagent badge or the elapsed reading — and it has to keep that
-    /// slot's timing, or it stops being one movement. Opening it leads, and the
+    /// **A collapsed surface is exactly as wide as what it draws** -- the
+    /// notched bar on both wings, the notch-less pill on its trailing slot --
+    /// so the panel's own edge *is* the slot that opens and closes around a
+    /// session dot, a subagent badge or the elapsed reading, and it has to keep
+    /// that slot's timing or it stops being one movement. Opening it leads, and the
     /// mark fades in behind it (``PanelMotion/fade(isArriving:)``); closing it
     /// waits ``PanelMotion/closingDelay`` for the mark to go first, because an
     /// edge seen shutting over something still lit reads as that thing being

@@ -366,7 +366,7 @@ private struct OverlayHeader: View {
             Spacer(minLength: 0)
 
             if !store.isExpanded {
-                CompactTrailingSlot(hugsItsReading: !reservesRoom)
+                CompactTrailingSlot()
             }
 
             // The gear lives up here now rather than in the footer, for one and
@@ -399,8 +399,8 @@ private struct OverlayHeader: View {
         reservesRoom
     }
 
-    /// Whether this form holds room it is not drawing into — the reserved
-    /// session columns and the widest elapsed slot.
+    /// Whether this form holds room it is not drawing into, which is now the
+    /// session columns and nothing else.
     ///
     /// ``MonitorStore/reservesCompactRoom``, which is also what the panel's own
     /// width is composed under, so the room reserved and the room drawn into
@@ -436,29 +436,25 @@ private struct OverlayHeader: View {
 private struct CompactTrailingSlot: View {
     @EnvironmentObject private var store: MonitorStore
 
-    /// Whether this wing is exactly as wide as what it draws.
-    ///
-    /// True on the notched bar, which hangs off a cut-out and gives its width
-    /// back; false on the notch-less pill, which reserves the widest reading so
-    /// a menu-bar neighbour is never moved and simply hugs inside it.
-    let hugsItsReading: Bool
-
     /// The box the panel edge opens, held rather than computed so the write
     /// that changes it can say which way the wing is going.
     ///
-    /// **It is the panel's own trailing wing, drawn.** That wing is composed
-    /// from exactly this number (`PanelMetrics.drawnTrailingReadingWidth`), so
-    /// framing the reading to it and drawing the glyphs from its leading edge
-    /// makes the box and the panel's trailing edge two halves of one movement:
-    /// both leave on the same curve, and the figure's own leading edge stands
-    /// still ``PanelMetrics/expandedNotchClearance`` past the cut-out at every
-    /// length the reading can draw. A digit therefore arrives at the far end
-    /// with the black edge opening ahead of it, rather than the whole figure
-    /// sliding sideways to stay flush with an edge that moved first.
+    /// **It is the panel's own trailing slot, drawn.** Every collapsed width is
+    /// composed from exactly this number
+    /// (`PanelMetrics.drawnTrailingReadingWidth`), so framing the reading to it
+    /// and drawing the glyphs from its leading edge makes the box and the
+    /// panel's edge two halves of one movement: both travel on the same curve,
+    /// and their difference — which is everything ahead of the reading — does
+    /// not change while they do. A digit therefore arrives at the far end with
+    /// the edge opening ahead of it, rather than the whole figure sliding
+    /// sideways to stay flush with an edge that moved first. On the notched bar
+    /// that leaves the reading standing ``PanelMetrics/expandedNotchClearance``
+    /// past the cut-out at every length it can draw; on the pill, which is
+    /// centred, the panel takes half the width on each edge and the reading
+    /// rides with it.
     ///
-    /// `nil` while the pill reserves, where the box would have to be the
-    /// reservation and the slack already falls where it belongs — between the
-    /// status name and a reading drawn flush right.
+    /// Optional only until the first application, which places the box rather
+    /// than animating to it.
     @State private var boxWidth: CGFloat?
 
     var body: some View {
@@ -503,10 +499,9 @@ private struct CompactTrailingSlot: View {
         // inserts and removes nothing and must not be faded.
         .animation(PanelMotion.animation, value: presence)
         .onChange(of: targetWidth, initial: true) { previous, width in
-            // Nil either side is the pill's reserved form or a display change
-            // into or out of it: take the value rather than animating a box
-            // that was not there a moment ago.
-            guard let previous, let width, boxWidth != nil, previous != width else {
+            // The first application is the slot being built rather than a
+            // reading arriving: take the width rather than animating to it.
+            guard boxWidth != nil, previous != width else {
                 boxWidth = width
                 return
             }
@@ -516,10 +511,10 @@ private struct CompactTrailingSlot: View {
         }
     }
 
-    /// The width this wing has to be, or `nil` while the pill reserves and the
-    /// reading simply hugs inside the room already held for it.
-    private var targetWidth: CGFloat? {
-        hugsItsReading ? store.compactDrawnTrailingReadingWidth : nil
+    /// The width this slot has to be, on either form: exactly its contents,
+    /// zero when it has none.
+    private var targetWidth: CGFloat {
+        store.compactDrawnTrailingReadingWidth
     }
 
     /// What the slot is currently drawing, as against how wide it is.

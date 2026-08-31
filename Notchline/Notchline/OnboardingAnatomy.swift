@@ -599,9 +599,10 @@ struct CollapsedBarAnatomy: View {
             + PanelMetrics.expandedReadoutSpacing
             + 24
         let trailing = size.width - shoulder - PanelMetrics.expandedHorizontalPadding
-        // The reading is drawn flush right inside a slot wider than itself, so
-        // both trailing pins are measured from the edge inwards rather than
-        // from the reserved width.
+        // The slot is exactly what it draws on both forms now, so both
+        // trailing pins are measured from the panel edge inwards: the ink ends
+        // one trailing padding in, and everything before it is the badges and
+        // their `8`.
         var reading: CGFloat = 0
         if let timerText = store.compactTimerText {
             reading = PanelMetrics.drawnCompactReadingWidth(timerText)

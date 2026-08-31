@@ -1992,7 +1992,9 @@ enum PanelMotion {
     /// **Every horizontal movement the collapsed surface makes.** A session
     /// column's room opening and closing, the trailing reading's box growing a
     /// digit or taking a badge, whatever stands after either of those — and,
-    /// since the notched bar stopped reserving, the panel's own two edges.
+    /// since neither collapsed form reserves a reading, the panel's own edges:
+    /// the notched bar's trailing one, and both of the pill's, which is centred
+    /// and takes half of every change on each.
     ///
     /// Opening, it leads: the room is made and the mark arrives into it.
     /// Closing, it waits for the mark to go first — a slot seen shutting on
@@ -2004,8 +2006,9 @@ enum PanelMotion {
     /// by the window.** `SessionCountDots` opens and closes the column,
     /// `StatusReadout` and `OverlayHeader` carry what stands after it, and
     /// `OverlayPanelController` moves the panel edge that has to arrive at the
-    /// same instant — a notched wing is now exactly as wide as its contents, so
-    /// the black edge and the content inside it are two halves of one movement
+    /// same instant — a collapsed surface is now exactly as wide as its
+    /// contents, so its edge and the content inside it are two halves of one
+    /// movement
     /// and cannot be allowed to keep separate time. A pushed thing that keeps
     /// its own timing stops reading as pushed; an edge that keeps its own
     /// timing clips what it is supposed to be revealing.
