@@ -6,19 +6,25 @@ import Testing
 @testable import Notchline
 
 struct NotchlineTests {
-    /// A no-notch panel is one width across the whole working set — at whatever
-    /// it happens to be reading.
+    /// A no-notch panel is one width across the whole working set — **while
+    /// something is standing after the word**.
     ///
     /// It used to measure itself, so it resized whenever the status changed or
     /// a turn started or finished — which on a menu bar reads as flicker rather
-    /// than information. **The half of that worth keeping is the state**: an
-    /// aggregate crosses `Running`, `Approval` and `Completed` inside one Turn,
-    /// and a pill that answered to the word would move several times a minute
-    /// while saying nothing new. The reading is the other half, and it moves
-    /// the pill on purpose now — a timer or a badge arriving widens it and
-    /// leaving gives the width straight back. So the invariant is per reading:
-    /// whatever the state, whichever product, at any menu bar height, one
-    /// width.
+    /// than information. **The half of that worth keeping is the state under a
+    /// reading**: an aggregate crosses `Running`, `Approval needed` and
+    /// `Completed` inside one Turn, and a reading that slid sideways each time
+    /// would be moving under the eye that is on it. So while the trailing slot
+    /// is drawing, the invariant holds per reading: whatever the state,
+    /// whichever product, at any menu bar height, one width.
+    ///
+    /// **With the slot empty there is nothing to hold still**, and the pill
+    /// takes the word it is saying instead — so the untimed set below is one
+    /// width per name rather than one width at all. The reservation bought no
+    /// stillness anyone could see there: it fell *past* the label and landed
+    /// against the panel's own trailing edge, `35` pt of it, in the state this
+    /// surface spends most of its life in. See
+    /// `theRestingPillIsTheMarksAndTheWordItIsSaying`.
     @Test @MainActor
     func noNotchCompactIsOneFixedWidthAcrossTheWorkingSet() {
         for matrixCount in 1 ... 2 {
@@ -32,7 +38,7 @@ struct NotchlineTests {
                             let size = PanelMetrics.size(
                                 geometry: .noNotch,
                                 isExpanded: false,
-                                statusReadoutText: status.compactDisplayName,
+                                statusReadoutText: status.displayName,
                                 trailing: CompactTrailingReading(timerText: trailingText),
                                 centerOcclusionWidth: 0,
                                 compactHeight: barHeight,
@@ -54,9 +60,20 @@ struct NotchlineTests {
                     trailing: CompactTrailingReading(timerText: trailingText)
                 )
             }
-            for trailingText in readings {
-                #expect(widthsByReading[trailingText ?? ""] == [pill(trailingText)])
+            for trailingText in readings.compactMap({ $0 }) {
+                #expect(widthsByReading[trailingText] == [pill(trailingText)])
             }
+            // Untimed, the set is exactly one width per name the working set
+            // can say: the pill answering to what it is drawing rather than to
+            // the widest thing it might have drawn.
+            #expect(
+                widthsByReading[""] == Set(
+                    PanelMetrics.workingStatuses.map {
+                        PanelMetrics.fixedCompactWidth(for: $0, matrixCount: matrixCount)
+                    }
+                )
+            )
+            #expect((widthsByReading[""] ?? []).count > 1)
             // And the readings order the widths: nothing is narrower than
             // resting, tabular figures hold two readings of the same length at
             // one width, and only a longer one moves the pill.
@@ -82,35 +99,58 @@ struct NotchlineTests {
     /// same composition re-measured, not a relaxation of it.
     @Test @MainActor
     func theFixedCompactWidthsAreTheOnesTheDesignMeasured() {
-        // `126` / `154` are the resting pill: `12` padding, the mark and its
-        // `5.655` dot column, `12`, the widest word the working set can say
-        // (`Connected`, `67` ceiled), `12`. They were `209` / `238` while the
-        // pill held a `00:00:00` slot open in every state, and the difference
-        // is that slot's `65.91` plus its `32` of clearance, less the `14.26`
-        // by which the widest word outruns the widest *timeable* one the
-        // reservation was composed behind.
-        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1) == 126)
-        #expect(PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2) == 154)
-        // `136` is untouched: `Disconnected` never reserved a slot, and it is
-        // sized for its own word, which no change to the working set can move.
+        // `126` / `154` are the resting pill with a thread open per product:
+        // `12` padding, each mark and its `5.655` dot column, the `6` between a
+        // pair, `12`, the word the pill is actually saying (`Connected`, `67`
+        // ceiled), `12`. They were `161` / `189` while every working state was
+        // billed the widest word the set can say (`Approval needed`, `102`),
+        // and the `35` between the two pairs was room no ink stood in: it fell
+        // past the label and left `47` of padding at the trailing edge against
+        // `12` at the leading one.
+        #expect(
+            PanelMetrics.fixedCompactWidth(
+                for: .connected,
+                matrixCount: 1,
+                sessionColumnCount: 1
+            ) == 126
+        )
+        #expect(
+            PanelMetrics.fixedCompactWidth(
+                for: .connected,
+                matrixCount: 2,
+                sessionColumnCount: 2
+            ) == 154
+        )
+        // `120` is the same pill before that product has opened anything: no
+        // rows, no column, `5.655` narrower. The pill takes the column at what
+        // it draws now, the way the notched bar always has.
+        #expect(PanelMetrics.fixedCompactWidth(for: .connected, matrixCount: 1) == 120)
+        // `136` is untouched through all of it: `Disconnected` never reserved a
+        // slot, never reserved the widest word, and has no product behind it
+        // whose sessions could want a column.
         #expect(
             PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) == 136
         )
-        // A reading is added to the resting width rather than absorbed into it:
-        // `32` of clearance and then exactly what the reading draws.
+        // A reading is added rather than absorbed — `32` of clearance and then
+        // exactly what the reading draws — and it is the one thing that brings
+        // the widest word back, so that the figure does not slide sideways as
+        // the aggregate moves. `229` and `257` are unchanged by this whole
+        // change, because a timed pill reserved the word before and still does.
         #expect(
             PanelMetrics.fixedCompactWidth(
                 for: .running,
                 matrixCount: 1,
+                sessionColumnCount: 1,
                 trailing: CompactTrailingReading(timerText: "1:23")
-            ) == 194
+            ) == 229
         )
         #expect(
             PanelMetrics.fixedCompactWidth(
                 for: .running,
                 matrixCount: 1,
+                sessionColumnCount: 1,
                 trailing: CompactTrailingReading(timerText: "00:00:00")
-            ) == 222
+            ) == 257
         )
 
         // Zero connected products is the grey resting mark, which takes the one
@@ -121,111 +161,307 @@ struct NotchlineTests {
         )
     }
 
-    /// The resting pill is the marks, the widest word it can say, and nothing
-    /// else — and every word it can say fits inside it.
+    /// **The pill's two margins are the same margin.**
     ///
-    /// **The maximiser moved when the slot went.** It was `Approval`, the
-    /// widest *timeable* state, because the width was "the longest label that
-    /// also reserves a timer plus that timer": `Connected` and `Completed` are
-    /// longer words and both lost, since neither can be counting. With nothing
-    /// reserved the question is simply which word is widest, and that is
-    /// `Connected`.
+    /// This is the defect the untimed rule was written for, stated as the thing
+    /// a person actually sees: on a notch-less display the resting pill read
+    /// `12` from its leading edge to the first matrix and `47` from `Connected`
+    /// to its trailing edge. Nothing was drawn in the difference — it was the
+    /// widest working word and every mark's dot column, both reserved and
+    /// neither standing in ink — and because the pill is centred and nothing in
+    /// the menu bar is laid out from its frame, the stillness it was buying was
+    /// invisible. What is left is the same number at both ends.
+    ///
+    /// Only while the trailing slot is empty. With a reading after the word the
+    /// reservation comes back and the slack falls between the two of them,
+    /// where it is clearance rather than margin.
     @Test @MainActor
-    func theRestingPillIsTheMarksAndTheWidestWordItCanSay() {
-        let resting = PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1)
-        #expect(
-            resting == ceil(
-                PanelMetrics.expandedHorizontalPadding
-                    + PanelMetrics.marksWidth(1)
-                    + PanelMetrics.expandedReadoutSpacing
-                    + PanelMetrics.widestCompactLabelWidth
-                    + PanelMetrics.expandedHorizontalPadding
-            )
-        )
-
-        for status in PanelMetrics.workingStatuses {
-            // Every word fits, at the ceiled box the raster draws it in.
-            #expect(
-                ceil(PanelMetrics.compactLabelWidth(status))
-                    <= PanelMetrics.widestCompactLabelWidth
-            )
-            // And every working state is that same one width, so the aggregate
-            // moving inside a Turn moves nothing.
-            #expect(PanelMetrics.fixedCompactWidth(for: status, matrixCount: 1) == resting)
+    func theRestingPillsTwoMarginsAreTheSameMargin() {
+        for status in PanelMetrics.workingStatuses.union([.disconnected]) {
+            for matrixCount in 1 ... 2 {
+                for columnCount in 0 ... matrixCount {
+                    // `Disconnected` has no product behind it and so no column.
+                    guard status != .disconnected || columnCount == 0 else { continue }
+                    let width = PanelMetrics.fixedCompactWidth(
+                        for: status,
+                        matrixCount: matrixCount,
+                        sessionColumnCount: columnCount
+                    )
+                    let drawn = PanelMetrics.expandedHorizontalPadding
+                        + PanelMetrics.drawnMarksWidth(
+                            markCount: matrixCount,
+                            sessionColumnCount: columnCount
+                        )
+                        + PanelMetrics.expandedReadoutSpacing
+                        + ceil(PanelMetrics.statusLabelWidth(status))
+                    // The trailing margin is the leading one, to inside the
+                    // single rounding the whole composition takes.
+                    #expect(width - drawn < PanelMetrics.expandedHorizontalPadding + 1)
+                    #expect(width - drawn >= PanelMetrics.expandedHorizontalPadding)
+                }
+            }
         }
 
+        // And the number that used to stand there, so the regression is named:
+        // `Connected` in a pill sized for `Approval needed` left `35` of it.
         #expect(
-            PanelMetrics.workingStatuses.max {
-                PanelMetrics.compactLabelWidth($0) < PanelMetrics.compactLabelWidth($1)
-            } == .connected
-        )
-        for longerWord in [MonitorStatus.connected, .completed] {
-            #expect(
-                PanelMetrics.compactLabelWidth(longerWord)
-                    > PanelMetrics.compactLabelWidth(.approvalNeeded)
-            )
-            #expect(!longerWord.canShowElapsed)
-        }
-        // Which is `14.26` of slack the pill no longer pays for, and which now
-        // falls between `Approval` and the reading beside it instead.
-        #expect(
-            abs(
-                PanelMetrics.widestCompactLabelWidth
-                    - ceil(PanelMetrics.compactLabelWidth(.approvalNeeded))
-                    - 14
-            ) <= 1
+            PanelMetrics.widestCompactLabelWidth
+                - ceil(PanelMetrics.statusLabelWidth(.connected)) == 35
         )
     }
 
-    /// `Disconnected` is the one state sized for its own word.
+    /// **The two margins as drawn**, which is the half the arithmetic cannot
+    /// reach.
     ///
-    /// Every working state is sized for the widest of them, so the pill holds
-    /// still while the aggregate moves; this one has nothing to hold still
-    /// against, no Turn to count and no product behind it whose sessions could
-    /// want a column, so it is exactly its own name and the marks.
+    /// `theRestingPillsTwoMarginsAreTheSameMargin` pins the width the pill is
+    /// composed at, and that was never the defect: the pill was always exactly
+    /// as wide as it asked to be, and the room it asked for was standing empty
+    /// at one end of it. So this hosts the real header at the real width and
+    /// measures where the ink lands — the first matrix one padding in from the
+    /// panel's leading edge, and the last glyph one padding in from its
+    /// trailing one, on the surface a person actually looks at.
     ///
-    /// **It is no longer the narrower of the two, and that is the word's doing
-    /// rather than the rule's.** `Disconnected` outruns every working label by
-    /// more than the dot column a connected mark adds, so a product connecting
-    /// now *narrows* the pill by about `10`. Under the reservation it was
-    /// `73` narrower, because the working pill was carrying a `00:00:00` slot
-    /// nothing was standing in.
+    /// The panel is the window less a shoulder at each side, which is where
+    /// `PanelContour` draws its curve back up to the menu bar; the margins are
+    /// measured from the black edge, not from the window bound.
+    @Test @MainActor
+    func theRestingPillDrawsItsTwoMarginsTheSame() {
+        func snapshot(_ agent: AgentKind) -> AgentSnapshot {
+            AgentSnapshot(
+                agent: agent,
+                availability: .ready,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                setupStatus: .active,
+                presence: .open
+            )
+        }
+        let store = MonitorStore(
+            displays: [NotchSpecimen.display],
+            services: [],
+            initialSnapshots: [snapshot(.codex), snapshot(.claudeCode)],
+            preferences: nil
+        )
+
+        // The state the report was made against: a notch-less pill, collapsed,
+        // both products connected and nothing running, so the trailing slot is
+        // empty and the word is the last thing drawn.
+        #expect(store.geometry == .noNotch)
+        #expect(!store.isExpanded)
+        #expect(store.status == .connected)
+        #expect(store.presenceMarks.count == 2)
+        #expect(store.compactTrailingReading.isEmpty)
+        #expect(store.compactSessionColumnCount == 0)
+
+        let body = store.currentPanelSize
+        let shoulder = store.surfaceShoulderRadius
+        let hosting = NSHostingView(
+            rootView: NotchOverlayView().environmentObject(store)
+        )
+        hosting.frame = NSRect(
+            origin: .zero,
+            size: CGSize(width: body.width + shoulder * 2, height: body.height)
+        )
+        hosting.layoutSubtreeIfNeeded()
+
+        func labels(in view: NSView) -> [SweepingLabelView] {
+            (view as? SweepingLabelView).map { [$0] } ?? view.subviews.flatMap(labels(in:))
+        }
+        let drawn = labels(in: hosting)
+        // One word on this surface, so one view drawing it.
+        #expect(drawn.count == 1)
+        guard let label = drawn.first else { return }
+        let ink = label.convert(label.bounds, to: hosting)
+
+        // The glyph box is the word itself, at the ceiled raster the width was
+        // composed from -- so what is measured below is ink and not a slot.
+        #expect(
+            abs(ink.width - ceil(PanelMetrics.statusLabelWidth(.connected))) < 1
+        )
+
+        let padding = PanelMetrics.expandedHorizontalPadding
+        // **The trailing margin.** In this exact state -- two products, neither
+        // with rows -- it read `58.8` while the pill was billed `Approval
+        // needed` and both dot columns and drew neither: `35` for the word,
+        // `11.3` for the columns, and the `12` that was supposed to be all of
+        // it. A pill whose products both have rows read `47`.
+        #expect(abs((hosting.frame.width - shoulder - ink.maxX) - padding) < 1)
+        // **The leading one**, measured to the first matrix: the word stands
+        // one readout gap past the marks the pill actually drew.
+        #expect(
+            abs(
+                (ink.minX - shoulder)
+                    - (
+                        padding
+                            + store.compactDrawnMarksWidth
+                            + PanelMetrics.expandedReadoutSpacing
+                    )
+            ) < 1
+        )
+    }
+
+    /// The resting pill is the marks it draws and the word it is saying — and
+    /// the widest word is what a *timed* pill is sized for instead.
+    ///
+    /// **The maximiser has moved twice, and it is back where it started.** It
+    /// was `Approval`, the widest *timeable* state, because the width was "the
+    /// longest label that also reserves a timer plus that timer": `Connected`
+    /// and `Completed` are longer words and both lost, since neither can be
+    /// counting. Dropping the reservation made the question simply which word
+    /// is widest, and that was `Connected`. Dropping the abbreviations
+    /// (``MonitorStatus/displayName``) hands it back to the same state under
+    /// its full name — `Approval needed`, `101.56` against `66.05` — and this
+    /// time it wins on the word alone.
+    ///
+    /// **What moved is where that maximum is spent.** It is now billed only
+    /// while a reading stands after the word, which is the case it was always
+    /// protecting: the states that can be timed are the states that move inside
+    /// one Turn, and what must not move with them is the figure at the far end.
+    /// Untimed, there is nothing downstream of the label at all, so the room
+    /// went straight to the trailing edge and made a margin of itself.
+    @Test @MainActor
+    func theRestingPillIsTheMarksAndTheWordItIsSaying() {
+        let timed = CompactTrailingReading(timerText: "1:23")
+        let resting = PanelMetrics.fixedCompactWidth(
+            for: .connected,
+            matrixCount: 1,
+            sessionColumnCount: 1
+        )
+        #expect(
+            resting == ceil(
+                PanelMetrics.expandedHorizontalPadding
+                    + PanelMetrics.drawnMarksWidth(markCount: 1, sessionColumnCount: 1)
+                    + PanelMetrics.expandedReadoutSpacing
+                    + ceil(PanelMetrics.statusLabelWidth(.connected))
+                    + PanelMetrics.expandedHorizontalPadding
+            )
+        )
+
+        var restingWidths: Set<CGFloat> = []
+        for status in PanelMetrics.workingStatuses {
+            // Every word fits, at the ceiled box the raster draws it in.
+            #expect(
+                ceil(PanelMetrics.statusLabelWidth(status))
+                    <= PanelMetrics.widestCompactLabelWidth
+            )
+            // Untimed, each state is exactly its own word: the whole difference
+            // between any two of these pills is the difference between the two
+            // words.
+            let bare = PanelMetrics.fixedCompactWidth(
+                for: status,
+                matrixCount: 1,
+                sessionColumnCount: 1
+            )
+            #expect(
+                bare - resting
+                    == ceil(PanelMetrics.statusLabelWidth(status))
+                        - ceil(PanelMetrics.statusLabelWidth(.connected))
+            )
+            restingWidths.insert(bare)
+            // Timed, every working state is one width, so the aggregate moving
+            // inside a Turn cannot drag the reading sideways.
+            #expect(
+                PanelMetrics.fixedCompactWidth(
+                    for: status,
+                    matrixCount: 1,
+                    sessionColumnCount: 1,
+                    trailing: timed
+                ) == PanelMetrics.fixedCompactWidth(
+                    for: .running,
+                    matrixCount: 1,
+                    sessionColumnCount: 1,
+                    trailing: timed
+                )
+            )
+        }
+        // Which is a genuine difference and not a rounding one.
+        #expect(restingWidths.count == PanelMetrics.workingStatuses.count)
+
+        #expect(
+            PanelMetrics.workingStatuses.max {
+                PanelMetrics.statusLabelWidth($0) < PanelMetrics.statusLabelWidth($1)
+            } == .approvalNeeded
+        )
+        for shorterWord in [MonitorStatus.connected, .completed] {
+            #expect(
+                PanelMetrics.statusLabelWidth(shorterWord)
+                    < PanelMetrics.statusLabelWidth(.approvalNeeded)
+            )
+            #expect(!shorterWord.canShowElapsed)
+        }
+        // And the widest word is a timeable one again, so the pill has no slack
+        // left between the word it is sized for and the word it draws beside a
+        // reading. Under `Approval` there were `14.26` of it.
+        #expect(
+            PanelMetrics.widestCompactLabelWidth
+                == ceil(PanelMetrics.statusLabelWidth(.approvalNeeded))
+        )
+    }
+
+    /// `Disconnected` is sized for its own word in every case, including the
+    /// one where a working state would not be.
+    ///
+    /// A working state under a reading is sized for the widest of them, so the
+    /// pill holds the figure still while the aggregate moves; this one has
+    /// nothing to hold still against, no Turn to count and no product behind it
+    /// whose sessions could want a column, so it is exactly its own name and
+    /// the mark — and would be even if a reading somehow appeared beside it.
+    ///
+    /// **It is the wider of the two resting forms, and that is the word's doing
+    /// rather than the rule's.** `Disconnected` (`83`) outruns `Connected`
+    /// (`67`) by `16`, and a product that has only just connected has no rows
+    /// and so no dot column, so connecting *narrows* the pill by exactly that
+    /// and its first thread hands `5.66` of it back. The reservation used to
+    /// reverse this — every working state billed `Approval needed` (`102`), so
+    /// connecting widened the pill by `25` — and that is the room this change
+    /// took out.
     @Test @MainActor
     func disconnectedIsSizedForItsOwnWordRatherThanTheWidest() {
-        let working = PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1)
+        let timed = CompactTrailingReading(timerText: "1:23")
+        let working = PanelMetrics.fixedCompactWidth(
+            for: .running,
+            matrixCount: 1,
+            trailing: timed
+        )
         let resting = PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1)
         for status in PanelMetrics.workingStatuses {
-            #expect(PanelMetrics.fixedCompactWidth(for: status, matrixCount: 1) == working)
+            #expect(
+                PanelMetrics.fixedCompactWidth(
+                    for: status,
+                    matrixCount: 1,
+                    trailing: timed
+                ) == working
+            )
         }
         #expect(
             resting == ceil(
                 PanelMetrics.expandedHorizontalPadding
-                    + PanelMetrics.marksWidth(1, areProductMarks: false)
+                    + PanelMetrics.drawnMarksWidth(markCount: 1, sessionColumnCount: 0)
                     + PanelMetrics.expandedReadoutSpacing
-                    + ceil(PanelMetrics.compactLabelWidth(.disconnected))
+                    + ceil(PanelMetrics.statusLabelWidth(.disconnected))
                     + PanelMetrics.expandedHorizontalPadding
             )
         )
-        // The whole of the difference is the longer word less the column the
-        // resting mark has not got.
+        // Its own word either way: a reading cannot make this state reserve the
+        // widest one, because there is no other state it could turn into
+        // without ceasing to be this one.
         #expect(
-            abs(
-                (resting - working)
-                    - (
-                        ceil(PanelMetrics.compactLabelWidth(.disconnected))
-                            - PanelMetrics.widestCompactLabelWidth
-                            - PanelMetrics.sessionDotColumnWidth()
-                    )
-            ) <= 1
+            PanelMetrics.sizedCompactLabelWidth(for: .disconnected, trailing: timed)
+                == ceil(PanelMetrics.statusLabelWidth(.disconnected))
         )
-        // And a Turn starting under either of them is wider than both, which is
-        // the one movement this surface is meant to make.
+        // And a Turn starting under a connected mark is wider than either
+        // resting form, which is the one movement this surface is meant to
+        // make.
         #expect(
-            PanelMetrics.fixedCompactWidth(
-                for: .running,
-                matrixCount: 1,
-                trailing: CompactTrailingReading(timerText: "1:23")
-            ) > max(working, resting)
+            working > max(
+                resting,
+                PanelMetrics.fixedCompactWidth(
+                    for: .connected,
+                    matrixCount: 1,
+                    sessionColumnCount: 1
+                )
+            )
         )
     }
 
@@ -285,11 +521,10 @@ struct NotchlineTests {
         #expect(MonitorStatus.updateAgent.displayName == "Update required")
         #expect(MonitorStatus.unsupportedVersion.displayName == "Version unsupported")
         #expect(MonitorStatus.disconnected.displayName == "Disconnected")
-        #expect(MonitorStatus.updateAgent.compactDisplayName == "Update")
         #expect(MonitorAvailability.disconnected.emptyListMessage == "Disconnected")
     }
 
-    /// No label names a product, in either form, in any state.
+    /// No label names a product, in any state.
     ///
     /// This is what let both widths stop folding over configured products.
     /// `Update Claude Code` was the widest compact label and it set the
@@ -303,7 +538,6 @@ struct NotchlineTests {
         for status in MonitorStatus.allCases {
             for agent in AgentKind.allCases {
                 #expect(!status.displayName.contains(agent.displayName))
-                #expect(!status.compactDisplayName.contains(agent.displayName))
             }
         }
     }
@@ -436,15 +670,20 @@ struct NotchlineTests {
         let composed = PanelMetrics.size(
             geometry: .noNotch,
             isExpanded: false,
-            statusReadoutText: shut.compactStatusReadoutText,
+            statusReadoutText: shut.statusDisplayName,
             trailing: shut.compactTrailingReading,
             centerOcclusionWidth: 0,
             compactHeight: shut.compactHeight,
             status: shut.status,
             matrixCount: shut.presenceMarks.count,
+            sessionColumnCount: shut.compactSessionColumnCount,
             drawsCompactMarks: shut.drawsCompactMarks
         )
         #expect(shut.currentPanelSize == composed)
+        // Both specimen products have rows, so both marks draw their column and
+        // the pill is billed for both: the anatomy pins that step past the
+        // marks are measuring a width that is actually there.
+        #expect(shut.compactSessionColumnCount == shut.presenceMarks.count)
 
         // The reading is drawn at exactly the width the pill is billed for, so
         // the trailing pins can be measured inwards from the edge: the slot is
@@ -2340,19 +2579,39 @@ struct NotchlineTests {
             .productAttribution == .nameAndColour)
     }
 
-    /// The notch's label is shorter than the panel's because the matrix beside
-    /// it already says a turn wants the user.
+    /// Every surface says the whole name, the notch included.
+    ///
+    /// The pill used to draw its own abbreviated set — `Approval`, `Input`,
+    /// `Set up`, `Update`, `Unsupported` — on the argument that the matrix
+    /// beside it already said a turn wanted the user. There is one name now
+    /// (``MonitorStatus/displayName``), so what is worth pinning is that no
+    /// second one has grown back: a surface that wants a narrower word has to
+    /// come here and take the width question with it.
     @Test @MainActor
-    func compactLabelsAreShorterThanTheirFullForm() {
-        #expect(MonitorStatus.inputNeeded.compactDisplayName == "Input")
-        #expect(MonitorStatus.approvalNeeded.compactDisplayName == "Approval")
+    func everySurfaceSaysTheWholeName() {
         #expect(MonitorStatus.inputNeeded.displayName == "Input needed")
         #expect(MonitorStatus.approvalNeeded.displayName == "Approval needed")
 
-        for status in MonitorStatus.allCases {
-            #expect(status.compactDisplayName.count <= status.displayName.count)
-            #expect(!status.compactDisplayName.isEmpty)
-        }
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            AgentSnapshot(
+                availability: .ready,
+                sessions: [
+                    MonitoredSession(
+                        threadID: "approval",
+                        turnID: "turn",
+                        projectName: "Chats",
+                        title: "Question",
+                        preview: nil,
+                        status: .approvalNeeded,
+                        startedAt: Date()
+                    )
+                ],
+                quota: QuotaSnapshot(remainingPercent: 100, resetsAt: nil),
+                diagnostic: nil
+            )
+        )
+        #expect(store.statusDisplayName == "Approval needed")
     }
 
     @Test @MainActor
@@ -2897,13 +3156,24 @@ struct NotchlineTests {
         // notched wing's own content less that wing's `12` of padding and `8`
         // of clearance. It held a `00:00:00` slot open instead until the
         // reservation went, and the two cases below were one width.
+        //
+        // **The word underneath moves with it.** A pill with nothing after the
+        // label is sized for the word it is drawing; one with a reading after
+        // it is sized for the widest word the working set can say, so the
+        // figure does not slide as the aggregate moves. So the step is the slot
+        // plus whatever the drawn word gives up to `Approval needed` -- these
+        // two are billed at `Connected`, which is the status `width` leaves at
+        // its default.
         let pillIdle = width(geometry: .noNotch, trailingText: nil, compactHeight: 24)
         let pillTimed = width(geometry: .noNotch, trailingText: "1:23", compactHeight: 24)
         #expect(pillTimed > pillIdle)
+        let timed = CompactTrailingReading(timerText: "1:23")
         #expect(
             pillTimed - pillIdle
                 == PanelMetrics.compactTimerClearance
                     + PanelMetrics.drawnCompactReadingWidth("1:23")
+                    + PanelMetrics.sizedCompactLabelWidth(for: .connected, trailing: timed)
+                    - PanelMetrics.sizedCompactLabelWidth(for: .connected)
         )
     }
 
@@ -3272,12 +3542,20 @@ struct NotchlineTests {
         #expect(view.installedBreath == nil)
     }
 
-    /// The column is reserved in the width and packed in the drawing.
+    /// The column is reserved in the width and packed in the drawing — in the
+    /// **expanded header**, which is the one form left that does either.
     ///
-    /// The panel holds room for every mark's column at every session count, so
-    /// its width never answers to the counts; the marks are packed into that
-    /// room from the leading edge, so an empty column costs no gap between two
-    /// marks and the leftover falls at the trailing end instead.
+    /// That panel is sized from a baseline rather than from its contents, so a
+    /// column opening inside it cannot widen anything and the room has to be
+    /// there already: the marks are packed into it from the leading edge, an
+    /// empty column costs no gap between two marks, and the leftover falls past
+    /// the status name rather than in front of it.
+    ///
+    /// **Both collapsed forms take the column at what they draw.** The notched
+    /// bar always did; the pill joined it, because a reservation on a centred
+    /// panel holds nothing still that a person can see — the room it left went
+    /// past the label and became `5.66` of extra trailing margin per idle
+    /// product, on top of the `35` the widest word was leaving there.
     @Test @MainActor
     func theSessionDotColumnIsReservedInWidthAndPackedInDrawing() {
         let size = PanelMetrics.statusMatrixSize
@@ -3327,23 +3605,46 @@ struct NotchlineTests {
                 > 2 * PanelMetrics.sessionDotGap(matrixSize: size) - 0.001
         )
 
-        // The no-notch pill is one width per mark count at rest, and the
-        // resting form -- which draws no column -- is untouched by any of this.
-        // Within the rounding, since each width ceils independently and
-        // `ceil(a + b)` is not `ceil(a) + ceil(b)`.
+        // The no-notch pill steps by one whole mark -- matrix, gap and column
+        // -- when a second product with rows arrives. Within the rounding,
+        // since each width ceils independently and `ceil(a + b)` is not
+        // `ceil(a) + ceil(b)`.
         #expect(
             abs(
                 (
-                    PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 2)
-                        - PanelMetrics.fixedCompactWidth(for: .running, matrixCount: 1)
+                    PanelMetrics.fixedCompactWidth(
+                        for: .running,
+                        matrixCount: 2,
+                        sessionColumnCount: 2
+                    )
+                        - PanelMetrics.fixedCompactWidth(
+                            for: .running,
+                            matrixCount: 1,
+                            sessionColumnCount: 1
+                        )
                 )
                     - (size + PanelMetrics.compactMatrixSpacing + column)
             ) <= 1
         )
+        // **And it does take the session count now**, which is the change: a
+        // product opening its first thread widens the pill by exactly the
+        // column and closing its last one gives it back. The pill is centred,
+        // so it spends half of that on each edge rather than all of it on one
+        // -- the movement a reservation was buying its way out of, at the price
+        // of holding the room permanently against its trailing edge.
+        for status in PanelMetrics.workingStatuses {
+            #expect(
+                PanelMetrics.fixedCompactWidth(
+                    for: status,
+                    matrixCount: 1,
+                    sessionColumnCount: 1
+                )
+                    - PanelMetrics.fixedCompactWidth(for: status, matrixCount: 1)
+                    == ceil(column)
+            )
+        }
+        // The resting form draws no column and is untouched by any of it.
         #expect(PanelMetrics.fixedCompactWidth(for: .disconnected, matrixCount: 1) == 136)
-        // And it takes no session count at all: a centred pill that resized
-        // with the rows would move both its edges and everything between them,
-        // to save a gap that reads there as spacing before a label.
     }
 
     /// The notched bar reserves nothing, on either side.
@@ -4505,7 +4806,7 @@ struct NotchlineTests {
         )
 
         #expect(store.sessions.count == 1)
-        #expect(store.compactStatusReadoutText == "Running")
+        #expect(store.statusDisplayName == "Running")
         #expect(store.tokenRemainingPercent == 72)
 
         store.applyForTesting(
@@ -4528,8 +4829,7 @@ struct NotchlineTests {
         )
 
         #expect(store.sessions.count == 1)
-        // The notch shows the short form; the panel still says "Input needed".
-        #expect(store.compactStatusReadoutText == "Input")
+        // The notch and the panel say the same thing.
         #expect(store.statusDisplayName == "Input needed")
         #expect(store.tokenRemainingPercent == 72)
     }
@@ -21368,20 +21668,32 @@ for line in sys.stdin:
         let oneOpen = PanelMetrics.fixedCompactWidth(for: .connected, matrixCount: 1)
         let twoOpen = PanelMetrics.fixedCompactWidth(for: .connected, matrixCount: 2)
 
-        // Resting is the *wider* of the two now, and by the word rather than
-        // by the rule: nothing is reserved on either, so each is exactly its
-        // own contents, and `Disconnected` outruns every working label by more
-        // than the dot column a connected mark adds. So the pill narrows by
-        // about `10` when the first product connects — see
+        // Resting is the *wider* of the two, and by the word alone: nothing is
+        // reserved on either, a product that has only just connected has no
+        // rows and so no column, and both marks are one matrix — so the whole
+        // difference is `Disconnected` against `Connected`, `16`, and
+        // connecting narrows the pill by exactly that. It is the reverse of
+        // what stood here: while every working state was billed `Approval
+        // needed` the pill widened by `25` on connecting, and that reservation
+        // is what this change took out. See
         // `disconnectedIsSizedForItsOwnWordRatherThanTheWidest`.
         #expect(restingWidth > oneOpen)
+        #expect(
+            restingWidth - oneOpen
+                == ceil(PanelMetrics.statusLabelWidth(.disconnected))
+                    - ceil(PanelMetrics.statusLabelWidth(.connected))
+        )
         // And the step from one product to two is one matrix and its gap —
         // within the rounding, since each width rounds up independently and
-        // ceil(a + b) is not ceil(a) + ceil(b).
+        // ceil(a + b) is not ceil(a) + ceil(b). Neither product has opened
+        // anything yet, so neither is billed a dot column.
         #expect(
             abs(
                 (twoOpen - oneOpen)
-                    - (PanelMetrics.markWidth() + PanelMetrics.compactMatrixSpacing)
+                    - (
+                        PanelMetrics.statusMatrixSize
+                            + PanelMetrics.compactMatrixSpacing
+                    )
             ) <= 1
         )
     }

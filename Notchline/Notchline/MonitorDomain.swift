@@ -75,7 +75,20 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var id: Self { self }
 
-    /// The panel's full sentence for this state.
+    /// The one name every surface says for this state.
+    ///
+    /// **There is no shorter form any more.** The collapsed pill used to draw
+    /// its own abbreviations — `Approval` for `Approval needed`, `Input` for
+    /// `Input needed` — on the argument that the matrix beside them already
+    /// said a turn wanted the user, so "needed" was only repeating the mark.
+    /// The mark does say it, but it says it in a pattern; the label is the one
+    /// thing on that surface that says it in words, and dropping the verb left
+    /// it naming a thing rather than a state. The pill is also the surface with
+    /// the least context to supply the difference — no panel, no row, no
+    /// caption, and a menu bar full of other applications' icons around it — so
+    /// it is the last place to economise on the word. It costs `35` of pill
+    /// width (``PanelMetrics/widestCompactLabelWidth``), paid once and in every
+    /// state, which is what the word is worth.
     ///
     /// No product argument. Four of these used to name the product they were
     /// about — `Connecting to Codex`, `Claude Code disconnected` — and none of
@@ -104,43 +117,6 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
             "Update required"
         case .unsupportedVersion:
             "Version unsupported"
-        case .disconnected:
-            "Disconnected"
-        }
-    }
-
-    /// The name the notch shows, which is shorter than ``displayName``.
-    ///
-    /// The matrix beside it already says a turn wants the user, so the label
-    /// only has to say which kind — "needed" repeats the indicator. Dropping
-    /// "Codex" costs nothing in the app's own menu bar item either. The panel
-    /// still shows the full sentence, so this is a shorter form, not less
-    /// information.
-    ///
-    /// Nothing here names a product either, for the same reason ``displayName``
-    /// does not — and the collapsed surface had the stronger case: its width is
-    /// already computed from the unattributed names, so an `Update Codex` drawn
-    /// where `Update` was reserved was a label wider than its own pill.
-    var compactDisplayName: String {
-        switch self {
-        case .connected:
-            "Connected"
-        case .setupRequired:
-            "Set up"
-        case .connecting:
-            "Connecting"
-        case .running:
-            "Running"
-        case .inputNeeded:
-            "Input"
-        case .approvalNeeded:
-            "Approval"
-        case .completed:
-            "Completed"
-        case .updateAgent:
-            "Update"
-        case .unsupportedVersion:
-            "Unsupported"
         case .disconnected:
             "Disconnected"
         }
@@ -887,10 +863,13 @@ nonisolated struct PresenceMark: Equatable, Sendable {
     ///
     /// The column is the count's, not the matrix's: a product with nothing open
     /// packs to its matrix alone so the pair keeps the `6` that binds it. The
-    /// resting grey never has one. The *panel* holds every column open anyway
-    /// (``PanelMetrics/marksWidth(_:areProductMarks:)``); what the packing
-    /// leaves over is drawn past the status label rather than in front of it —
-    /// see ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``.
+    /// resting grey never has one. The *expanded panel* holds every column open
+    /// anyway (``PanelMetrics/marksWidth(_:areProductMarks:)``), being sized
+    /// from a baseline rather than from its contents; what the packing leaves
+    /// over is drawn past the status label rather than in front of it — see
+    /// ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``. Both collapsed forms
+    /// are composed from what this answers instead
+    /// (``PanelMetrics/drawnMarksWidth(markCount:sessionColumnCount:)``).
     var drawsSessionColumn: Bool { agent != nil && sessionCount > 0 }
 
     nonisolated init(

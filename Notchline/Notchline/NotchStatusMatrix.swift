@@ -2210,22 +2210,23 @@ final class SweepingLabelView: NSView {
 
     /// Hand one reading over to the next without either of them jumping.
     ///
-    /// Two things change at once when the panel opens or closes: the words, and
-    /// the width the layout gives them. The width is animated, so the words
-    /// have to be handed over on the same curve. Swapped outright at the start
-    /// of it — which is what this used to do, with the glyph layer framed to
-    /// `bounds` — the short raster was stretched across the long frame for the
-    /// whole transition: `Approval` arrived as wide as `Approval needed` and
-    /// then squeezed down into itself.
+    /// The width the layout gives a reading is animated, so a reading arriving
+    /// while it moves has to be handed over on the same curve. Swapped outright
+    /// at the start of it — which is what this used to do, with the glyph layer
+    /// framed to `bounds` — the new raster was stretched across the old frame
+    /// for the whole transition and squeezed down into itself.
     ///
-    /// The two readings are almost never unrelated. A compact form is the
-    /// expanded form with a word taken off it, so where one is the beginning of
-    /// the other the shared glyphs are the same pixels in the same place:
-    /// fading the new copy in over them would only dim a word that never moved,
-    /// once through 75% and back. The new copy is shown at full strength there
-    /// and the old one dissolves off it, which leaves exactly the dropped word
-    /// fading out under the closing edge. Only a genuinely different reading —
-    /// `Running` becoming `Approval` — is cross-faded both ways.
+    /// **Opening and closing the panel no longer changes the word**, only the
+    /// room around it: the collapsed pill drew abbreviations until it stopped
+    /// (``MonitorStatus/displayName``), and `Approval` handing over to
+    /// `Approval needed` mid-collapse was the case this was written for. What
+    /// changes a reading now is the aggregate itself moving, and no two of the
+    /// six names it can reach are related. The prefix rule below is kept for
+    /// what it says rather than for a pair in play today: where one reading is
+    /// the beginning of the other the shared glyphs are the same pixels in the
+    /// same place, and fading the new copy in over them would only dim a word
+    /// that never moved, once through 75% and back. Genuinely different
+    /// readings — `Running` becoming `Approval needed` — cross-fade both ways.
     private func dissolve(
         from previousGlyphs: Any?,
         text previousText: String,

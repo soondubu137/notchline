@@ -385,27 +385,28 @@ private struct OverlayHeader: View {
     }
 
     private var statusText: String {
-        // The resting pill keeps the short word even when it is widened: its
-        // width is composed from the compact label, so drawing the panel's
-        // longer sentence ("Set up integration" where "Set up" was reserved)
-        // would overflow a pill sized for the short form.
-        if store.expandsToPillOnly {
-            return store.status.compactDisplayName
-        }
-        return store.isExpanded ? store.statusDisplayName : store.compactStatusReadoutText
+        // One name in every form. The resting pill used to keep a shorter word
+        // when it widened, because its width was composed from an abbreviated
+        // label and the panel's longer sentence would have overflowed a pill
+        // sized for the short one; with a single name
+        // (``MonitorStatus/displayName``) the width the pill reserves and the
+        // word it draws are the same in both states, expanded or not.
+        store.statusDisplayName
     }
 
     private var showsStatusText: Bool {
-        reservesRoom
+        store.drawsCompactStatusName
     }
 
     /// Whether this form holds room it is not drawing into, which is now the
-    /// session columns and nothing else.
+    /// expanded header's session columns and nothing else.
     ///
     /// ``MonitorStore/reservesCompactRoom``, which is also what the panel's own
     /// width is composed under, so the room reserved and the room drawn into
-    /// cannot come apart. It is the same question `showsStatusText` asks: the
-    /// two forms with a word to draw are the two with a position to hold.
+    /// cannot come apart. It is **not** the question `showsStatusText` asks any
+    /// more: the collapsed pill draws a word and hugs its marks, and for as
+    /// long as the two shared one spelling the pill held column room whose only
+    /// effect was `35` pt of padding against its trailing edge.
     private var reservesRoom: Bool {
         store.reservesCompactRoom
     }
@@ -539,12 +540,18 @@ private struct StatusReadout: View {
     /// Whether the panel this readout is drawn in has held room for every
     /// mark's session column, drawn or not.
     ///
-    /// ``MonitorStore/reservesCompactRoom``: true on the notch-less pill and in
-    /// the expanded header, where the marks are packed into a fixed reservation
-    /// and the status name is drawn back over what no column is using; false on
-    /// the notched bar, where the wing is exactly as wide as the marks and the
-    /// panel's own leading edge is what moves instead. That form draws no
-    /// status name at all, so there is nothing left for the slide to carry.
+    /// ``MonitorStore/reservesCompactRoom``: true in the expanded header alone,
+    /// where the marks are packed into a fixed reservation and the status name
+    /// is drawn back over what no column is using. False on both collapsed
+    /// forms, where the surface is exactly as wide as the marks it draws and
+    /// the panel's own edges move instead — the notched bar's leading one, and
+    /// both of the pill's, since it is centred.
+    ///
+    /// **The pill draws a status name under that and needs no slide.** Its
+    /// mark stack hugs, so a column opening genuinely widens the stack and the
+    /// word after it is carried by the layout, on the curve
+    /// ``SessionCountDots`` animates its own width with. The slide exists for
+    /// the one form whose stack cannot change width.
     let reservesColumnRoom: Bool
     let spacing: CGFloat
     let matrixSize: CGFloat

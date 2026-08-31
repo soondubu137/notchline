@@ -433,7 +433,7 @@ enum PanelMetrics {
         let leading = expandedHorizontalPadding
             + statusMatrixSize
             + expandedReadoutSpacing
-            + compactLabelWidth(.disconnected)
+            + statusLabelWidth(.disconnected)
         let trailing = expandedReadoutSpacing
             + settingsButtonSize(compactHeight: compactHeight)
             + expandedHorizontalPadding
@@ -524,13 +524,13 @@ enum PanelMetrics {
     /// right now. The resting grey has no product behind it and therefore no
     /// rows it could ever count, so it is the matrix alone.
     ///
-    /// **Only the forms that hold a position of their own reserve**: the
-    /// notch-less pill, which sits in the menu bar with icons to its left, and
-    /// the expanded header, which is centred on the display and would move both
-    /// its edges to buy one dot. The notched collapsed bar hangs off a cut-out
-    /// that nothing else is measured from, so it is composed from
-    /// ``drawnMarksWidth(markCount:sessionColumnCount:)`` and gives the room
-    /// back when a column closes.
+    /// **The expanded header alone reserves**, because it is a fixed-width
+    /// sheet: a column opening inside it cannot widen anything, so the room has
+    /// to be there already. Both collapsed forms are composed from
+    /// ``drawnMarksWidth(markCount:sessionColumnCount:)`` instead and give the
+    /// room back when a column closes — the notched bar always did, and the
+    /// pill joined it once the room it was holding turned out to be spent
+    /// against its own trailing edge rather than inside it.
     static func markWidth(isProductMark: Bool = true) -> CGFloat {
         statusMatrixSize + (isProductMark ? sessionDotColumnWidth() : 0)
     }
@@ -555,18 +555,20 @@ enum PanelMetrics {
     /// The marks at the width they are **drawing**: the matrices, the pair
     /// spacing, and one session column for each mark that currently has one.
     ///
-    /// This is what the notched collapsed bar is measured from, and the whole
-    /// of the difference between the two form factors' leading wings. There is
-    /// no slack in it and nothing is held open: a product opening its first
-    /// thread widens the wing by exactly ``sessionDotColumnWidth()``, and
-    /// closing its last one gives that width back.
+    /// This is what **both** collapsed forms are measured from. There is no
+    /// slack in it and nothing is held open: a product opening its first thread
+    /// widens the surface by exactly ``sessionDotColumnWidth()``, and closing
+    /// its last one gives that width back.
     ///
-    /// **Which moves the panel's leading edge, deliberately.** A notched panel
-    /// is pinned by its trailing edge to the cut-out, so a wing that grows can
-    /// only grow leftwards: the edge and every matrix ahead of the new column
-    /// step left together, and the marks between that column and the cut-out
-    /// stand still — they are at fixed spacings from an edge that has not
-    /// moved. The dot therefore pushes exactly what is behind it and nothing
+    /// **Which moves the panel's own edges, deliberately, and differently on
+    /// the two forms.** A notched panel is pinned by its trailing edge to the
+    /// cut-out, so a wing that grows can only grow leftwards: the edge and
+    /// every matrix ahead of the new column step left together, and the marks
+    /// between that column and the cut-out stand still — they are at fixed
+    /// spacings from an edge that has not moved. The pill is centred instead,
+    /// so it takes half the column on each edge and everything after the new
+    /// dot — the rest of the marks, and the status name — glides right by half
+    /// of it. The dot therefore pushes exactly what is behind it and nothing
     /// else, which is the arrangement a reservation was buying with permanent
     /// width. See ``PanelMotion/slot(isOpening:)`` for the curve the edge and
     /// the room travel on together.
@@ -936,10 +938,11 @@ enum PanelMetrics {
         compactHeight: CGFloat,
         status: MonitorStatus = .connected,
         matrixCount: Int = 1,
-        // How many of those marks are drawing a session column right now. Only
-        // the notched collapsed bar reads it -- the two forms that hold a
-        // position of their own reserve every mark's column instead
-        // (`markWidth(isProductMark:)`).
+        // How many of those marks are drawing a session column right now. Both
+        // collapsed forms read it -- neither holds a column open any more. The
+        // expanded header is the one form left that reserves every mark's
+        // column instead (`markWidth(isProductMark:)`), and it is sized from a
+        // baseline rather than from its contents.
         sessionColumnCount: Int = 0,
         drawsCompactMarks: Bool = true,
         expandsToPillOnly: Bool = false,
@@ -974,6 +977,7 @@ enum PanelMetrics {
                     width: fixedCompactWidth(
                         for: status,
                         matrixCount: matrixCount,
+                        sessionColumnCount: sessionColumnCount,
                         trailing: trailing
                     ),
                     height: compactHeight
@@ -996,6 +1000,7 @@ enum PanelMetrics {
                 width: fixedCompactWidth(
                     for: status,
                     matrixCount: matrixCount,
+                    sessionColumnCount: sessionColumnCount,
                     trailing: trailing
                 ),
                 height: compactHeight
@@ -1042,65 +1047,83 @@ enum PanelMetrics {
 
     /// The notch-less pill, at the width of what it is drawing.
     ///
-    /// **At rest that is the marks and the widest word, and nothing else**: a
-    /// matrix, the session-dot column beside it, and the longest name the
-    /// working set can say. So `Connected`, `Running`, `Input`, `Approval` and
-    /// `Completed` are one width and the pill does not twitch as the aggregate
-    /// moves between them inside a Turn; a second product adds a second mark
-    /// and the `6` between the pair, and at rest nothing else adds anything.
+    /// **Nothing is held open while nothing stands after the word.** With an
+    /// empty trailing slot the pill is exactly its own contents: the matrices
+    /// of the connected products, the `6` between a pair, a session-dot column
+    /// only for a product that currently has rows, the gap, and the name it is
+    /// actually saying. So `Connected` is a narrower pill than `Completed`, and
+    /// a product opening its first thread widens it by
+    /// ``sessionDotColumnWidth()`` — the surface answering to its own contents
+    /// rather than standing in a box sized for a word it is not saying.
     ///
-    /// **A reading is added to that rather than reserved inside it.** The
+    /// **The widest word is reserved only while a reading stands after it.**
+    /// Then the label is billed at ``widestCompactLabelWidth`` whatever it is
+    /// drawing, so the aggregate crossing `Running`, `Input needed` and
+    /// `Approval needed` inside one Turn does not drag the reading sideways
+    /// under the eye that is on it. The room the drawn word leaves falls
+    /// *between* the word and the reading, past ``compactTimerClearance``,
+    /// rather than in front of the panel's own trailing edge.
+    ///
+    /// **The reading itself is added rather than reserved, either way.** The
     /// elapsed timer and the subagent badges widen the pill when they arrive,
     /// widen it again when a digit or a count does, and give every point back
     /// when they go — on the slot's own curve, so the panel's two edges and the
     /// box inside them are one movement (``PanelMotion/slot(isOpening:)``).
     ///
-    /// > **This pill used to reserve, and the reasoning is worth keeping.** It
-    /// > held a `00:00:00` slot open in every state so that a Turn crossing ten
-    /// > minutes or an hour moved neither this window nor anything a person
-    /// > reads beside it, and it billed the widest *timeable* label rather than
-    /// > the widest one for the same reason. That bought stillness with `83` pt
-    /// > of empty pill for the whole of every untimed moment — which is most of
-    /// > this surface's life — and bought it against a neighbour this window
+    /// > **This pill used to reserve three things, and the reasoning is worth
+    /// > keeping.** It held a `00:00:00` slot open in every state so that a
+    /// > Turn crossing ten minutes or an hour moved neither this window nor
+    /// > anything a person reads beside it; it billed the widest label in every
+    /// > state, timed or not, so the aggregate could move without moving the
+    /// > pill; and it held every mark's dot column open so the first matrix
+    /// > stood in one place whatever the counts did. All three bought stillness
+    /// > with empty pill for the whole of every untimed moment — which is most
+    /// > of this surface's life — and bought it against a neighbour this window
     /// > overlaps rather than displaces: nothing in the menu bar is laid out
-    /// > from this panel's frame. What survives of the argument is the half
-    /// > that was really load-bearing, and it is the resting width above: the
-    /// > pill still cannot answer to *which* working state is showing, because
-    /// > that changes several times inside one Turn and the pill would flicker
-    /// > with it. It answers to what has arrived, which is the one kind of
-    /// > movement this surface has always accepted.
+    /// > from this panel's frame. The slot went first. The other two are kept
+    /// > exactly where they were load-bearing and dropped where they were not:
+    /// > a reservation with nothing standing after it has no movement to
+    /// > prevent, and it spends its slack against the trailing edge. `35` pt of
+    /// > it was the word, `5.66` more for every product without rows, and all
+    /// > of it landed in one margin: `47` against the leading `12` with every
+    /// > column drawn, and `59` on the two-product pill at rest with none.
     ///
-    /// `Disconnected` is the one state sized for its own word instead of the
-    /// widest: nothing follows it into a reading, and it has no product behind
-    /// it whose sessions could want a column. That word is the longer one, so
-    /// the resting pill is now the wider of the two and a product connecting
-    /// narrows it by `10`.
+    /// `Disconnected` is never sized for the widest word: nothing can follow it
+    /// into a reading, and it has no product behind it whose sessions could
+    /// want a column.
     ///
     /// - Parameter matrixCount: How many product matrices are drawn. Zero and
     ///   one are the same width — the grey resting mark occupies the single
     ///   slot rather than adding one.
+    /// - Parameter sessionColumnCount: How many of those marks are drawing a
+    ///   session column right now
+    ///   (``MonitorStore/compactSessionColumnCount``). Defaults to none, which
+    ///   is a caller asking for the pill at its narrowest.
     /// - Parameter trailing: What the trailing slot is drawing: an elapsed
     ///   value, a subagent badge, or both. Defaults to empty, which is the
     ///   resting width and every caller that only wants that.
     static func fixedCompactWidth(
         for status: MonitorStatus,
         matrixCount: Int,
+        sessionColumnCount: Int = 0,
         trailing: CompactTrailingReading = .empty
     ) -> CGFloat {
-        // ``marksWidth(_:areProductMarks:)`` and not ``drawnMarksWidth``: this
-        // form holds a position in the menu bar, so every product mark keeps
-        // its dot column open whether or not that product has rows, and the
-        // marks are packed into it from the leading edge. The resting grey has
-        // no product behind it and so no column to hold.
-        let marks = marksWidth(
-            max(1, matrixCount),
-            areProductMarks: status != .disconnected
+        // ``drawnMarksWidth(markCount:sessionColumnCount:)`` and not
+        // ``marksWidth(_:areProductMarks:)``: this form no longer holds a
+        // column no mark is standing in. The pill is centred, so a column
+        // opening takes half its width from each edge and the pill glides,
+        // where the notched bar — pinned to the cut-out — takes all of it on
+        // the leading side. The resting grey has no product behind it and so no
+        // column to draw, which the count already says.
+        let marks = drawnMarksWidth(
+            markCount: max(1, matrixCount),
+            sessionColumnCount: sessionColumnCount
         )
         return ceil(
             expandedHorizontalPadding
                 + marks
                 + expandedReadoutSpacing
-                + sizedCompactLabelWidth(for: status)
+                + sizedCompactLabelWidth(for: status, trailing: trailing)
                 + drawnTrailingSlotWidth(trailing: trailing)
                 + expandedHorizontalPadding
         )
@@ -1108,30 +1131,57 @@ enum PanelMetrics {
 
     /// One status name, at the weight the notch actually draws it.
     ///
-    /// No product argument: nothing the collapsed surface can say names a
-    /// product any more.
-    static func compactLabelWidth(_ status: MonitorStatus) -> CGFloat {
-        textWidth(status.compactDisplayName, font: statusLabelFont)
+    /// No product argument: nothing either surface can say names a product any
+    /// more. One function rather than two, because there is one name — the pill
+    /// drew an abbreviated set until it stopped
+    /// (``MonitorStatus/displayName``), and while there were two names in play
+    /// this measure and ``expandedStatusReadoutWidth(status:markCount:)``'s
+    /// were genuinely different sums. They would now be the same sum spelled
+    /// twice, which is how a reservation and the ink inside it come apart.
+    static func statusLabelWidth(_ status: MonitorStatus) -> CGFloat {
+        textWidth(status.displayName, font: statusLabelFont)
     }
 
     /// The word the pill is sized for, which is not always the word it draws.
     ///
-    /// Every working state is sized for the widest of them, so that the pill
-    /// stands still while the aggregate moves between them; `Disconnected` is
-    /// sized for itself, because there is no second state it has to hold still
-    /// against — it is where the surface arrives when everything else is gone.
-    static func sizedCompactLabelWidth(for status: MonitorStatus) -> CGFloat {
-        guard status != .disconnected else { return ceil(compactLabelWidth(status)) }
+    /// **Only while something stands after it.** With a reading in the trailing
+    /// slot every working state is sized for the widest of them, so the pill —
+    /// and the reading riding at its trailing edge — stands still while the
+    /// aggregate moves between `Running`, `Input needed` and `Approval needed`
+    /// inside one Turn.
+    ///
+    /// **With the slot empty the pill takes the word it is saying.** There is
+    /// nothing behind the word for a reservation to hold still: the unused room
+    /// falls past the label and lands against the panel's own trailing edge,
+    /// where `Connected` in a pill sized for `Approval needed` read as `47` pt
+    /// of padding after the word — `59` on the two-product pill at rest, which
+    /// is also billed the columns neither product has rows for — against `12`
+    /// before the first matrix. A word changing width is a movement this
+    /// surface can afford; a permanently lopsided pill is not.
+    ///
+    /// `Disconnected` is sized for itself either way, because there is no
+    /// second state it has to hold still against — it is where the surface
+    /// arrives when everything else is gone, and nothing under it can be timed.
+    static func sizedCompactLabelWidth(
+        for status: MonitorStatus,
+        trailing: CompactTrailingReading = .empty
+    ) -> CGFloat {
+        guard !trailing.isEmpty, status != .disconnected else {
+            return ceil(statusLabelWidth(status))
+        }
         return widestCompactLabelWidth
     }
 
     /// The widest word the working set can say.
     ///
-    /// `Connected`, at `67`. Two facts about that are worth keeping: it is not
-    /// the widest *timeable* label (`Approval`, `52.74`), which is what the
-    /// reserved pill was composed from, and the difference between the two is
-    /// slack that now falls between the drawn word and the reading beside it
-    /// rather than being paid for in width.
+    /// `Approval needed`, at `102`. It has taken the maximum back twice over:
+    /// the reserved pill was composed behind the widest *timeable* label
+    /// (`Approval`, `52.74`), losing it to `Connected`'s `67` when the timer
+    /// slot went, and winning it outright at `101.56` once the pill stopped
+    /// abbreviating (``MonitorStatus/displayName``). That is `35` on every
+    /// no-notch pill in every state, and the slack between the drawn word and
+    /// the reading beside it is gone with it: the widest word is now a timeable
+    /// one, so a Turn on approval fills the pill it is sized for.
     ///
     /// Ceiled for the reason ``drawnCompactReadingWidth(_:)`` is: the label is
     /// rasterised at a ceiled glyph box (`NotchTextRaster.textSize`), so a
@@ -1140,7 +1190,7 @@ enum PanelMetrics {
     /// Computed rather than a stored `static let`: a lazily-initialised one runs
     /// its initialiser in a nonisolated context, and this measures text.
     static var widestCompactLabelWidth: CGFloat {
-        ceil(workingStatuses.map(compactLabelWidth).max() ?? 0)
+        ceil(workingStatuses.map(statusLabelWidth).max() ?? 0)
     }
 
     /// What a reading adds to a resting pill: the clearance and the reading, or
@@ -1246,7 +1296,7 @@ enum PanelMetrics {
             // Ceiled, because the label rasterises its glyphs at a ceiled width
             // (``NotchTextRaster/textSize(_:font:)``) and a reservation a
             // fraction short of what is drawn is short.
-            + ceil(textWidth(status.displayName, font: statusLabelFont))
+            + ceil(statusLabelWidth(status))
     }
 
     private static func textWidth(_ text: String, font: NSFont) -> CGFloat {
@@ -1881,12 +1931,10 @@ final class MonitorStore: ObservableObject {
         isRestingOnly
     }
 
+    /// The name both collapsed forms and the panel read, since there is only
+    /// one of them (``MonitorStatus/displayName``).
     var statusDisplayName: String {
         status.displayName
-    }
-
-    var compactStatusReadoutText: String {
-        status.compactDisplayName
     }
 
     /// The turn the notch is timing.
@@ -1949,12 +1997,13 @@ final class MonitorStore: ObservableObject {
 
     /// How many marks are drawing a session column right now.
     ///
-    /// The notched collapsed bar is measured from this rather than from the
-    /// mark count: its leading wing is as wide as what it draws, so a column
-    /// opening widens the panel leftwards and closing gives that width back
-    /// (``PanelMetrics/drawnMarksWidth(markCount:sessionColumnCount:)``). The
-    /// notch-less pill and the expanded header still reserve every mark's
-    /// column and never read this.
+    /// Both collapsed forms are measured from this rather than from the mark
+    /// count: each is exactly as wide as the marks it draws, so a column
+    /// opening widens the panel and closing gives that width back
+    /// (``PanelMetrics/drawnMarksWidth(markCount:sessionColumnCount:)``) — the
+    /// notched bar leftwards, since it is pinned to the cut-out, and the pill
+    /// by half on each edge, since it is centred. The expanded header is the
+    /// one form left that reserves every mark's column and never reads this.
     var compactSessionColumnCount: Int {
         presenceMarks.filter(\.drawsSessionColumn).count
     }
@@ -1979,27 +2028,48 @@ final class MonitorStore: ObservableObject {
         PanelMetrics.drawnTrailingReadingWidth(compactTrailingReading)
     }
 
+    /// Whether this surface draws the status name beside its marks.
+    ///
+    /// The notch-less pill and the expanded header; not the notched collapsed
+    /// bar, which has a cut-out where the word would go.
+    ///
+    /// **This used to be the same declaration as ``reservesCompactRoom``**, on
+    /// the argument that the two forms with a word to draw are the two with a
+    /// position to hold. That stopped being one question: the pill draws a word
+    /// and reserves nothing, and while the two shared a spelling the column
+    /// room no mark was standing in was spent against the pill's trailing edge.
+    var drawsCompactStatusName: Bool {
+        isExpanded || geometry == .noNotch
+    }
+
     /// Whether this surface holds room for a session column no mark is
     /// standing in.
     ///
-    /// True for the two forms that draw a status name beside their marks: the
-    /// notch-less pill and the expanded header. Both pack the marks into
+    /// **The expanded header alone.** It is sized from a baseline rather than
+    /// from its contents, so a column opening inside it cannot widen anything
+    /// and the room has to be there already: the marks are packed into
     /// ``PanelMetrics/marksWidth(_:areProductMarks:)`` from the leading edge,
-    /// so the first matrix stands still whatever the session counts do and the
+    /// the first matrix stands still whatever the session counts do, and the
     /// room a missing column gives up falls past the name rather than in front
-    /// of it. False for the notched collapsed bar, whose leading wing is
-    /// exactly the marks it draws and whose own edge moves instead.
+    /// of it.
     ///
-    /// **The trailing reading is no longer part of this question.** It was
-    /// while the pill reserved a `00:00:00` slot; now every collapsed surface
-    /// hugs its reading (``PanelMetrics/drawnTrailingReadingWidth(_:)``) and
-    /// the only thing still reserved anywhere is the column.
+    /// **Both collapsed forms hug what they draw.** The notched bar always did;
+    /// the pill joined it
+    /// (``PanelMetrics/fixedCompactWidth(for:matrixCount:sessionColumnCount:trailing:)``),
+    /// and its own two edges move for a column the way the notched bar's
+    /// leading edge does. What that fixed was the padding: a reservation with a
+    /// centred panel around it does not hold anything still that the drawing
+    /// can see — the room falls past the status name and lands against the
+    /// trailing edge, which is a `12` pt margin at one end of the pill and `47`
+    /// to `59` at the other, in the state this surface spends most of its life
+    /// in.
     ///
-    /// One declaration for the width and the drawing alike: it is the same
-    /// question `showsStatusText` answers, and two spellings of it would let
-    /// the panel reserve room the readout had stopped drawing into.
+    /// **The trailing reading is no longer part of this question either.** It
+    /// was while the pill reserved a `00:00:00` slot; now every collapsed
+    /// surface hugs its reading
+    /// (``PanelMetrics/drawnTrailingReadingWidth(_:)``).
     var reservesCompactRoom: Bool {
-        isExpanded || geometry == .noNotch
+        isExpanded
     }
 
     /// The spoken form of ``compactSubagentBadges``, since VoiceOver can read
@@ -2331,7 +2401,7 @@ final class MonitorStore: ObservableObject {
         PanelMetrics.size(
             geometry: geometry,
             isExpanded: isExpanded,
-            statusReadoutText: compactStatusReadoutText,
+            statusReadoutText: statusDisplayName,
             trailing: compactTrailingReading,
             centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight,

@@ -79,8 +79,8 @@ enum NotchSpecimen {
     /// whole of what the two drawings have to say:
     ///
     /// - The Codex turn is **running with a subagent stopped on a question**.
-    ///   That is what makes the bar say `Approval`, what lights the blue badge,
-    ///   and what puts a white ground under the first row's reading.
+    ///   That is what makes the bar say `Approval needed`, what lights the blue
+    ///   badge, and what puts a white ground under the first row's reading.
     /// - Three more Codex turns are **finished and nobody has looked at them**.
     ///   Four rows is one past ``PanelMetrics/sessionDotCap``, so the dot
     ///   column draws `dot · dot · dash`; and finished turns sitting under a
