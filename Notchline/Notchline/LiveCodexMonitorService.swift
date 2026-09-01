@@ -131,14 +131,21 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// thread's current setting and lags a switch by however long Desktop takes
     /// to persist one.
     private let turnReviewer: any TurnReviewerReading
-    /// Whether a Turn this app still holds open was stopped by the user.
+    /// Whether a Turn this app still holds open was stopped by the user, and
+    /// which Turn that thread's rollout says it is on.
     ///
     /// The Codex half of [ADR 0011](../../docs/adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md):
     /// pressing stop sends no `Stop` and no `PostToolUse` for the call left
     /// open, so without this the row says *Running* until the user resumes that
     /// thread or waves the row away. The same rollout the reviewer is read
     /// from carries the answer — see ``CodexRolloutTurnAbortReader``.
-    private let turnAbort: any CodexTurnAbortReading
+    ///
+    /// **One reader, two questions, one read.** They are the two halves of what
+    /// a file can settle about a Turn this app is holding open — whose it is
+    /// and whether it is over — and both are answered from the same cached tail
+    /// of the same rollout, so the second costs nothing the first had not
+    /// already spent. See ``CodexTurnOnRecordReading`` for the identity half.
+    private let turnAbort: any CodexTurnAbortReading & CodexTurnOnRecordReading
     /// The rollouts of the Turns that are still going, and nothing else.
     ///
     /// The edge under the reading above, and the same shape as the Claude Code
@@ -317,7 +324,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         approvalRouting: any DesktopApprovalRoutingProviding =
             CodexDesktopApprovalRoutingRepository(),
         turnReviewer: any TurnReviewerReading = CodexRolloutTurnReviewerReader(),
-        turnAbort: any CodexTurnAbortReading = CodexRolloutTurnAbortReader(),
+        turnAbort: any CodexTurnAbortReading & CodexTurnOnRecordReading =
+            CodexRolloutTurnAbortReader(),
         screenAvailability: any ScreenAvailabilityReporting =
             ScreenAvailabilityWatcher(),
         clock: any MonitorClock = SystemMonitorClock(),
@@ -562,6 +570,13 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 // write the abort down, in the same rollout the reviewer is
                 // read from (ADR 0011, ``CodexRolloutTurnAbortReader``).
                 //
+                // Identity before termination: a prompt held back is settled
+                // first, so that a Turn resumed and then stopped again inside
+                // one refresh interval is the Turn the abort reading below is
+                // asked about. The same rollout answers both, and the two
+                // questions are the two halves of ADR 0011 — which Turn this
+                // thread is on, and whether it is over.
+                hookState = await adoptTurnsOnRecord(in: hookState)
                 // After the reconciliation above, so a Turn this refresh is
                 // about to drop is never asked about, and before the rows are
                 // built, so an abort found here is a Completed row in this
@@ -1409,9 +1424,22 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             // A read already out for this thread is going to write the record
             // the checks below are looking for, stamped when it was issued.
             guard !inFlightMetadataThreadIDs.contains(threadID) else { continue }
+            // **A prompt this thread is holding back counts as its newest
+            // Turn here.** Settling one reads the rollout path this record
+            // carries (``adoptTurnsOnRecord(in:)``), and the resumed-Turn case
+            // is the very one that moves that path -- so a hold is behind the
+            // record for the same reason a Turn is, and asks again on the same
+            // terms. Without it the path stayed up to an interval behind and
+            // the resumed Turn waited that long to take its row back.
+            let newestTurn: (id: String, startedAt: Date) =
+                if let held = state.heldTurnStart, held.startedAt > state.startedAt {
+                    (held.turnID, held.startedAt)
+                } else {
+                    (state.turnID, state.startedAt)
+                }
             guard let record = threadRecords[threadID] else {
                 staleThreadIDs.insert(threadID)
-                metadataReadTurnIDsByThreadID[threadID] = state.turnID
+                metadataReadTurnIDsByThreadID[threadID] = newestTurn.id
                 continue
             }
             // **A record older than the Turn is a reason to ask again,
@@ -1436,13 +1464,13 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             // rollout, and it is the same read the title and preview already
             // come from.
             let isFirstLookAtThisTurn =
-                metadataReadTurnIDsByThreadID[threadID] != state.turnID
+                metadataReadTurnIDsByThreadID[threadID] != newestTurn.id
             let isBehindTheTurn = isFirstLookAtThisTurn
-                && record.observedAt < state.startedAt
+                && record.observedAt < newestTurn.startedAt
             let isBehindTheInterval = now.timeIntervalSince(record.observedAt)
                 >= timing.threadMetadataRefreshInterval
             if isBehindTheTurn {
-                metadataReadTurnIDsByThreadID[threadID] = state.turnID
+                metadataReadTurnIDsByThreadID[threadID] = newestTurn.id
             }
             if isBehindTheTurn || isBehindTheInterval {
                 staleThreadIDs.insert(threadID)
@@ -1981,6 +2009,53 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         turnProgressRetryAfter = nil
         pendingProgressReads.removeAll()
         inFlightProgressReads.removeAll()
+    }
+
+    /// Gives a thread the held Turn its own rollout names, and only that one.
+    ///
+    /// **The Codex side of "a Turn's identity may be settled by evidence that
+    /// is not a hook event"**, and the companion to the abort reading below.
+    /// A prompt naming a Turn the reducer was not holding is held back rather
+    /// than adopted, because a nested agent runs under the parent thread's
+    /// `session_id` with a turn id of its own and no `agent_id` to be told
+    /// apart by (``HookTurnState/heldTurnStart``). Its own events prove nothing
+    /// — they carry that same id — so what settles it is the thread's rollout,
+    /// where Codex writes each Turn's `turn_context` ~65 ms *before* that
+    /// Turn's first hook. A reviewer's turns are written to a rollout of its
+    /// own, so this thread's record never names one.
+    ///
+    /// Asked only of threads with a prompt actually held, which is a thread
+    /// with something nested running on it or a Turn the user has just resumed
+    /// — and asked of the same cached tail the abort reading below already
+    /// takes of the same file on the same refresh, so it adds no read. Nothing
+    /// is asked about a thread whose rollout the App Server has not handed
+    /// over, on the same terms as that reading: a row this app cannot draw is
+    /// not one worth reading a file for.
+    ///
+    /// **Deliberately not held to Turns that are still going**, which is the
+    /// one place it differs from the abort reading. The resumed-Turn case ends
+    /// with the interrupted Turn *finished* — by that reading, a refresh
+    /// earlier — and the prompt held during it still waiting to be adopted, so
+    /// a `keepsTiming` filter here would close the door on the very case this
+    /// exists to open. A hold left on a finished Turn costs one `lstat`: its
+    /// rollout has stopped changing, so the reader answers from its cache.
+    private func adoptTurnsOnRecord(in hookState: HookStateSnapshot) async -> HookStateSnapshot {
+        var records: [TurnOnRecord] = []
+        for turn in hookState.turns {
+            guard let held = turn.heldTurnStart,
+                  let rolloutPath = rolloutPath(ofThread: turn.threadID) else {
+                continue
+            }
+            guard await turnAbort.turnOnRecord(inRolloutAt: rolloutPath)
+                == held.turnID else {
+                continue
+            }
+            records.append(
+                TurnOnRecord(threadID: turn.threadID, turnID: held.turnID)
+            )
+        }
+        guard !records.isEmpty else { return hookState }
+        return await hookEvents.adoptTurnsOnRecord(records)
     }
 
     /// Ends the Turns Codex recorded as aborted, and only those.

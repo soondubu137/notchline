@@ -405,6 +405,28 @@ protocol AgentHookVocabulary: Sendable {
     /// changed and says so directly (``HookSessionPreviewStore/fold``). Waking
     /// on its tool calls as well would be a second wake for the same edge.
     nonisolated var wakesOnToolCallOpened: Bool { get }
+    /// Whether a prompt this thread held back waits for the product's own
+    /// record to name it, rather than for an event under its turn id.
+    ///
+    /// **The two products need opposite answers, and the difference is whether
+    /// anything can run under a thread's identity without saying so.** Codex
+    /// has one that can: the `--approve-for-me` reviewer is a session of its
+    /// own whose hooks carry the parent thread's `session_id`, its own
+    /// `turn_id`, and **no `agent_id`** -- so an event under a held turn id
+    /// proves nothing there, and the only thing that can settle it is the
+    /// thread's own rollout (``HookEventRepository/adoptTurnsOnRecord(_:)``).
+    ///
+    /// Claude Code has no such caller and no such record. Its subagents stamp
+    /// `agent_id`, so they never reach turn identity at all, and its one
+    /// nested agent -- the read-only fork Claude Desktop opens -- runs with
+    /// `settingSources: []` and fires no hook of any kind (`CONTEXT.md`, *Side
+    /// chat*). So a held prompt there is the user's own next turn, and taking
+    /// it away from an event would cost the one case it exists for: **a human
+    /// refusing an approval aborts that turn with no hook at all** (measured
+    /// 2026-08-23, CLI 2.1.241, twice), so the turn stays open and the user's
+    /// next prompt is exactly the held case -- with nothing else to redeem it,
+    /// the row would sit on the abandoned turn until the prompt after that.
+    nonisolated var settlesHeldTurnsFromRecord: Bool { get }
     /// What to tell the user when a definition this product registered has
     /// stopped running.
     ///
@@ -431,6 +453,10 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     /// tool call opening is the only sign it has moved. See
     /// ``AgentHookVocabulary/wakesOnToolCallOpened``.
     nonisolated let wakesOnToolCallOpened = true
+    /// The product with a nested agent that carries no `agent_id`, so the only
+    /// thing that can say whose turn a held prompt is, is this thread's own
+    /// rollout.
+    nonisolated let settlesHeldTurnsFromRecord = true
 
     /// Seven definitions, and this exact set is the contract §4.2 freezes.
     ///
@@ -559,6 +585,12 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// The fold carries its own edge, so a tool call would only wake the panel
     /// a second time for text it has already reported.
     nonisolated let wakesOnToolCallOpened = false
+    /// Nothing runs under this product's thread identity without saying so, and
+    /// there is no rollout to ask -- so a held prompt is redeemed here by the
+    /// first event under its id, as it was on both products before Codex's
+    /// reviewer proved that test worthless on that one. See
+    /// ``AgentHookVocabulary/settlesHeldTurnsFromRecord``.
+    nonisolated let settlesHeldTurnsFromRecord = false
 
     /// The tool Claude Code uses to put a question to the user.
     static let inputToolName = "AskUserQuestion"
@@ -1256,14 +1288,48 @@ struct HookTurnState: Sendable {
     /// 2026-08-24 (`docs/tech-design.md` §9.2).
     ///
     /// So a prompt whose turn is not this thread's open one is **held** rather
-    /// than adopted, and held is recoverable where retiring is not: the id is
-    /// redeemed by ``mutateExactTurn`` the moment any event arrives under it,
-    /// which is what proves the turn was this thread's after all. The reviewer
-    /// sends no such event -- measured, it emits no hook of any kind on CLI
-    /// `0.149.0-alpha.4.3` -- so its prompt simply expires with the turn.
+    /// than adopted, and held is recoverable where retiring is not.
+    ///
+    /// **What redeems it used to be "any event arrives under that id", and
+    /// that was not evidence.** The sentence it was standing in for is *this
+    /// turn was this thread's after all*, and a nested agent's own events
+    /// arrive under its own turn id exactly as a resumed turn's do -- so the
+    /// test was satisfied word for word by the one caller it was written to
+    /// exclude. It held only while the reviewer emitted nothing but its prompt
+    /// (measured on CLI `0.149.0-alpha.4.3`, which emitted no hook at all).
+    /// A reviewer that runs one read-only check, as its own instructions
+    /// permit, walked straight back into the defect above and landed on
+    /// whichever assessment was held at the time: a row saying `Working...`
+    /// for ever whose preview read *"The following is the Codex agent history
+    /// added since your last approval assessment"* -- the reviewer's **second
+    /// and later** prompts, one guardian thread running a fresh turn per
+    /// assessment (up to 8 per parent turn, measured over 1 970 of them).
+    ///
+    /// Redemption is now the thread's **own record**: a `turn_context` in this
+    /// thread's rollout naming that turn ([ADR 0011](../../docs/adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md)'s
+    /// evidence, asked about a turn's identity rather than its end), applied by
+    /// ``HookEventRepository/adoptTurnsOnRecord(_:)``. A nested agent's turn is
+    /// written to a rollout of its **own**, so this thread's record never names
+    /// it, and no reading is needed to exclude it -- silence does.
     var heldTurnStart: HeldTurnStart?
 
-    /// A turn start waiting for an event to prove whose turn it is.
+    /// Every turn id this thread has ever held back.
+    ///
+    /// **The refusal has to outlive the candidate above.** That slot holds one
+    /// turn start, the newest, because that is the only one a redemption could
+    /// ever want -- but a reviewer opens a turn per assessment, so by the time
+    /// its third prompt is the candidate its first two are no longer named
+    /// anywhere, and an event under either of those would have found the thread
+    /// with nothing to refuse it. This set is what refuses them, and it holds
+    /// ids rather than starts so that remembering one costs a string.
+    ///
+    /// Carried across every turn boundary, exactly like ``retiredTurnIDs`` and
+    /// bounded by the same thing: the thread leaving ``HookEventRepository``.
+    /// A turn proven to be another agent's does not become this thread's
+    /// because this thread started a new one.
+    var heldTurnIDs: Set<String> = []
+
+    /// A turn start waiting for this thread's own record to name it.
     nonisolated struct HeldTurnStart: Sendable, Equatable {
         let turnID: String
         let startedAt: Date
@@ -1414,6 +1480,29 @@ struct TurnInterruption: Sendable, Equatable {
         self.turnID = turnID
         self.endedAt = endedAt
         self.orphansSubagents = orphansSubagents
+    }
+}
+
+/// One Turn a thread's own record says is that thread's.
+///
+/// The mirror of ``TurnInterruption``, and produced from the same file by the
+/// same sweep: that one carries what the product wrote down about a Turn
+/// **ending**, this one what it wrote down about a Turn **beginning**. Codex
+/// writes a `turn_context` at the head of every Turn naming the Turn it opens,
+/// in the rollout of the thread that Turn belongs to — so a Turn running under
+/// a thread's identity that this thread's rollout does not name belongs to
+/// something else running under that identity, which is the whole question
+/// ``HookTurnState/heldTurnStart`` exists to ask.
+///
+/// It is consumed by ``HookEventRepository/adoptTurnsOnRecord(_:)`` and, like
+/// the interruption beside it, it may only speak about the Turn it names.
+struct TurnOnRecord: Sendable, Equatable {
+    let threadID: String
+    let turnID: String
+
+    nonisolated init(threadID: String, turnID: String) {
+        self.threadID = threadID
+        self.turnID = turnID
     }
 }
 
@@ -2654,6 +2743,72 @@ actor HookEventRepository {
         return snapshot()
     }
 
+    /// Gives a thread the Turn its own record says it is on.
+    ///
+    /// **The only thing that redeems a held prompt, and the reason it is not an
+    /// event.** A prompt naming a Turn this thread was not holding is held back
+    /// (``HookTurnState/heldTurnStart``) because it may have come from a nested
+    /// agent running under this thread's identity. What settles it has to be
+    /// something a nested agent cannot produce, and its own events are not that:
+    /// they arrive under its own turn id exactly as a resumed Turn's do. Its
+    /// **rollout** is: Codex writes each Turn's `turn_context` into the rollout
+    /// of the thread that Turn belongs to, and a reviewer's turns are written
+    /// to a rollout of its own. So this thread's record naming the held Turn is
+    /// the proof, and this thread's record staying silent is the refusal — no
+    /// reading has to say "no", and none can.
+    ///
+    /// **It may only redeem what is already held.** Like
+    /// ``endInterruptedTurns(_:)`` it carries a turn identity and is held to it,
+    /// and unlike that one it may put a thread onto a Turn rather than take it
+    /// off one — so it is deliberately the narrower of the two: it can promote
+    /// the one start this thread already took in and set aside, and it cannot
+    /// invent a Turn from a record alone.
+    ///
+    /// The promoted Turn is `Running` because that is what it is: a prompt
+    /// opened it and no terminal has arrived for it. It keeps its own start and
+    /// its own text, which is the point — the alternative on the resumed-Turn
+    /// path is a row timing the Turn the user interrupted.
+    func adoptTurnsOnRecord(_ records: [TurnOnRecord]) -> HookStateSnapshot {
+        for record in records {
+            guard let current = turnsByThreadID[record.threadID],
+                  current.turnID != record.turnID,
+                  let held = current.heldTurnStart,
+                  held.turnID == record.turnID,
+                  !current.retiredTurnIDs.contains(record.turnID),
+                  // The same monotonic rule every other route obeys: a start
+                  // older than the Turn this thread is holding describes a
+                  // moment that Turn has already been seen past.
+                  held.startedAt > current.lastEventAt else {
+                continue
+            }
+            var retiredTurnIDs = current.retiredTurnIDs
+            retiredTurnIDs.insert(current.turnID)
+            var heldTurnIDs = current.heldTurnIDs
+            heldTurnIDs.remove(record.turnID)
+            turnsByThreadID[record.threadID] = HookTurnState(
+                threadID: record.threadID,
+                turnID: record.turnID,
+                sessionStatus: .running,
+                pendingInputToolUseID: nil,
+                pendingApproval: nil,
+                openToolUse: nil,
+                startedAt: held.startedAt,
+                lastEventAt: held.startedAt,
+                retiredTurnIDs: retiredTurnIDs,
+                promptPreview: held.promptPreview,
+                assistantPreview: nil,
+                // A subagent outlives the Turn that spawned it, so it survives
+                // this boundary as it survives every other one.
+                runningSubagentIDs: current.runningSubagentIDs,
+                lastSubagentBoundaryAt: current.lastSubagentBoundaryAt,
+                subagentSlots: current.subagentSlots,
+                heldTurnIDs: heldTurnIDs
+            )
+        }
+        signalIfProjectionChanged()
+        return snapshot()
+    }
+
     /// Ends one open turn on evidence that is not a hook event.
     ///
     /// - Parameter named: The turn the evidence names, when it names one. Nil is
@@ -2988,13 +3143,25 @@ actor HookEventRepository {
             // And neither is the dialog one of them is sitting on: the user
             // typing again does not answer it.
             let subagentSlots = turnsByThreadID[threadID]?.subagentSlots ?? [:]
+            // A turn this thread once held back stays held back, whatever this
+            // thread has done since -- so the set crosses this boundary the way
+            // the subagent facts above it do.
+            let heldTurnIDs = turnsByThreadID[threadID]?.heldTurnIDs ?? []
             if let current = turnsByThreadID[threadID] {
                 if current.turnID == turnID {
                     guard receivedAt >= current.lastEventAt else { return true }
                     retiredTurnIDs = current.retiredTurnIDs
                 } else {
                     guard receivedAt > current.lastEventAt,
-                          !current.retiredTurnIDs.contains(turnID) else {
+                          !current.retiredTurnIDs.contains(turnID),
+                          // **And a held turn may not start one either.** A
+                          // reviewer's next assessment arriving after this
+                          // thread's own turn had finished would otherwise be
+                          // adopted outright rather than held, which is the
+                          // same takeover reached through the one branch the
+                          // hold does not cover.
+                          !(vocabulary.settlesHeldTurnsFromRecord
+                            && current.heldTurnIDs.contains(turnID)) else {
                         return true
                     }
                     // **A thread has one agent and one open turn.** A second
@@ -3024,6 +3191,9 @@ actor HookEventRepository {
                                 ? HookSessionPreviewStore.normalized(event.prompt)
                                 : nil
                         )
+                        // The candidate is the newest; the refusal is every one
+                        // of them. See ``HookTurnState/heldTurnIDs``.
+                        holder.heldTurnIDs.insert(turnID)
                         turnsByThreadID[threadID] = holder
                         return true
                     }
@@ -3047,7 +3217,8 @@ actor HookEventRepository {
                 assistantPreview: nil,
                 runningSubagentIDs: runningSubagentIDs,
                 lastSubagentBoundaryAt: lastSubagentBoundaryAt,
-                subagentSlots: subagentSlots
+                subagentSlots: subagentSlots,
+                heldTurnIDs: heldTurnIDs
             )
         case .approvalWaitInferred:
             mutateExactTurn(
@@ -3478,25 +3649,34 @@ actor HookEventRepository {
                 guard date >= current.lastEventAt else { return }
                 state = current
             } else {
+                // **A turn this thread held back may never be continued into.**
+                // Everything else about an unknown turn id stays as it was: an
+                // event naming one is still taken for this thread's own turn,
+                // which is what recovers a thread whose `UserPromptSubmit` this
+                // app never saw -- it launched mid-turn, or the reducer was
+                // emptied under it. What that recovery cannot be allowed to do
+                // is finish the job a held prompt started: the prompt is
+                // refused at the door and then the same turn's next event walks
+                // in through the window. See ``HookTurnState/heldTurnStart``
+                // for the reviewer that did exactly this.
                 guard let continuationStatus,
                       date > current.lastEventAt,
-                      !current.retiredTurnIDs.contains(turnID) else {
+                      !current.retiredTurnIDs.contains(turnID),
+                      !(vocabulary.settlesHeldTurnsFromRecord
+                        && current.heldTurnIDs.contains(turnID)) else {
                     return
                 }
                 var retiredTurnIDs = current.retiredTurnIDs
                 retiredTurnIDs.insert(current.turnID)
-                // This event is what proves the turn is this thread's own, so a
-                // prompt held back for it is redeemed here rather than lost.
-                // Codex sends no terminal for an interrupted turn -- measured
-                // 2026-08-24 against CLI `0.149.0-alpha.4.3`: `turn/interrupt`
-                // produced no `Stop` and not even the open call's `PostToolUse`
-                // -- so the turn the user interrupts stays open, and their next
-                // prompt is exactly the held case. Without this it would be
-                // adopted with the interrupted turn's start and text, and the
-                // row would time the wrong turn.
+                // On the product whose held prompts are settled by an event
+                // rather than by a record, this is that event, so the start and
+                // text it was holding come with it. On the other, a held id
+                // never reaches this line at all and this is always nil.
                 let redeemed = current.heldTurnStart?.turnID == turnID
                     ? current.heldTurnStart
                     : nil
+                var heldTurnIDs = current.heldTurnIDs
+                heldTurnIDs.remove(turnID)
                 state = HookTurnState(
                     threadID: threadID,
                     turnID: turnID,
@@ -3511,7 +3691,8 @@ actor HookEventRepository {
                     assistantPreview: nil,
                     runningSubagentIDs: current.runningSubagentIDs,
                     lastSubagentBoundaryAt: current.lastSubagentBoundaryAt,
-                    subagentSlots: current.subagentSlots
+                    subagentSlots: current.subagentSlots,
+                    heldTurnIDs: heldTurnIDs
                 )
             }
         } else {

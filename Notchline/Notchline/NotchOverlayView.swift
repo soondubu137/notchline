@@ -959,14 +959,12 @@ private struct SessionRow: View {
         .buttonStyle(SessionRowButtonStyle())
         .frame(maxWidth: .infinity)
         .frame(height: PanelMetrics.sessionRowHeight)
-        // Only a finished row. The catcher is not installed at all on the
-        // others, so a secondary press on a running Turn lands on nothing
-        // rather than on a handler that decides to do nothing -- which is also
-        // what keeps the primary click's own behaviour identical either way.
+        // Every row, and it used to be finished ones only -- see
+        // ``MonitorStore/dismiss(_:)`` for what that cost. The catcher claims
+        // nothing but a secondary press, so the primary click's behaviour is
+        // identical either way.
         .overlay {
-            if isDismissable {
-                SecondaryClickCatcher { store.dismiss(session) }
-            }
+            SecondaryClickCatcher { store.dismiss(session) }
         }
         .onHover { isHovered = $0 }
         .accessibilityLabel(accessibilityText)
@@ -974,14 +972,9 @@ private struct SessionRow: View {
         // produce, so the same intent is offered as an action rather than left
         // reachable only by mouse.
         .accessibilityActions {
-            if isDismissable {
-                Button("Remove this row") { store.dismiss(session) }
-            }
+            Button("Remove this row") { store.dismiss(session) }
         }
     }
-
-    /// Finished rows only -- see ``MonitorStore/dismiss(_:)`` for why.
-    private var isDismissable: Bool { session.status == .completed }
 
     private var accessibilityText: String {
         let preview = session.preview.map { ", current content: \($0)" } ?? ""

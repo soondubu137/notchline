@@ -82,6 +82,31 @@ nonisolated protocol CodexTurnAbortReading: Sendable {
     func retain(rolloutPaths: Set<String>) async
 }
 
+/// Which Turn a thread's own rollout says the thread is on.
+///
+/// **The second question the tail of a running Thread's rollout answers**, and
+/// the reason it is asked of the same reader rather than of the one named for
+/// `turn_context`: ``CodexRolloutTurnReviewerReader`` reads that record once,
+/// at the head of a Turn, while this is asked for as long as a prompt is being
+/// held back — the cadence above, and the cache above, which already pays for a
+/// tail read of this file on every refresh. Asking it here costs nothing beyond
+/// the decode of the lines already in hand.
+///
+/// **Its silence is the refusal, and no reading has to produce one.** `nil`
+/// means the record was not found — no such file, an unreadable one, or a Turn
+/// that has appended more than the tail holds since — and a held prompt that is
+/// never answered for simply stays held, which is the safe direction. Nothing
+/// here ever has to prove a Turn belongs to *another* agent: a Turn this
+/// thread's own record does not name is one this app declines to adopt.
+nonisolated protocol CodexTurnOnRecordReading: Sendable {
+    /// The Turn named by the newest `turn_context` in this rollout.
+    ///
+    /// Newest and nothing else, which is what makes it an answer about
+    /// identity: at any instant the last `turn_context` a thread's rollout
+    /// holds names the Turn that thread is on.
+    func turnOnRecord(inRolloutAt rolloutPath: String) async -> String?
+}
+
 /// Reads `turn_aborted` from the tail of a running Thread's rollout.
 ///
 /// **A stopped Codex Turn sends nothing, and this is the only thing it leaves.**
@@ -126,17 +151,27 @@ nonisolated protocol CodexTurnAbortReading: Sendable {
 /// is late, not for one that is on time. The answer is cached on the file's
 /// `(size, mtime)`, so the ordinary refresh — asked once per open Turn — costs
 /// one `lstat` and no read at all.
-actor CodexRolloutTurnAbortReader: CodexTurnAbortReading {
+actor CodexRolloutTurnAbortReader: CodexTurnAbortReading, CodexTurnOnRecordReading {
     /// How much of the end of the rollout is scanned for the record.
     nonisolated private static let maximumTailByteCount = 64 * 1_024
     /// The substring every `turn_aborted` line carries, whatever the spacing.
     nonisolated private static let abortMarker = Data("turn_aborted".utf8)
+    /// The substring every `turn_context` line carries, whatever the spacing.
+    nonisolated private static let turnContextMarker = Data("turn_context".utf8)
 
-    /// One rollout's newest abort, as of one revision of the file.
+    /// One rollout's two newest records, as of one revision of the file.
+    ///
+    /// **Both, from one read.** They are the two halves of what this app has to
+    /// ask a file about a Turn it is holding open — whose Turn it is, and
+    /// whether it is over — and they are written to the same file by the same
+    /// process. Reading them separately would double a cost that is already
+    /// paid once per open Turn per refresh.
     private struct Entry: Sendable {
         let size: Int
         let modifiedAt: Date
         let abort: TurnAbort?
+        /// The Turn the newest `turn_context` names, where it names one.
+        let turnOnRecord: String?
     }
 
     private struct TurnAbort: Sendable {
@@ -200,6 +235,52 @@ actor CodexRolloutTurnAbortReader: CodexTurnAbortReading {
         }
     }
 
+    /// The record at the head of a Turn, reduced to the Turn it names.
+    ///
+    /// The reviewer's reader decodes the same record for the other field it
+    /// carries. Not shared, and deliberately: that one falls back to a time
+    /// window when the record does not name its Turn, which is a good proxy for
+    /// *which reviewer* and no proxy at all for *whose Turn* — a nested agent's
+    /// turn begins inside its parent's, which is the one place the two cannot
+    /// be told apart by time. Here an unnamed Turn is no answer, so the field
+    /// is required and its absence throws.
+    private struct TurnContextRecord: Decodable {
+        let turnID: String
+
+        private enum CodingKeys: String, CodingKey {
+            case type
+            case payload
+        }
+
+        private struct Payload: Decodable {
+            let turnID: String?
+
+            private enum CodingKeys: String, CodingKey {
+                case turnID = "turn_id"
+            }
+        }
+
+        private enum DecodingFailure: Error {
+            case notATurnContext
+            case unnamedTurn
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            guard try container.decode(String.self, forKey: .type)
+                == "turn_context" else {
+                throw DecodingFailure.notATurnContext
+            }
+            guard let turnID = try container.decodeIfPresent(
+                Payload.self,
+                forKey: .payload
+            )?.turnID, !turnID.isEmpty else {
+                throw DecodingFailure.unnamedTurn
+            }
+            self.turnID = turnID
+        }
+    }
+
     private let tail: CodexRolloutTail
     private var entries: [String: Entry] = [:]
 
@@ -215,53 +296,74 @@ actor CodexRolloutTurnAbortReader: CodexTurnAbortReading {
         inRolloutAt rolloutPath: String,
         after lastEventAt: Date
     ) -> Date? {
-        let (size, modifiedAt) = Self.revision(ofFileAt: rolloutPath)
-        let abort: TurnAbort?
-        if let cached = entries[rolloutPath],
-           cached.size == size, cached.modifiedAt == modifiedAt {
-            abort = cached.abort
-        } else {
-            abort = newestAbort(inRolloutAt: rolloutPath)
-            entries[rolloutPath] = Entry(
-                size: size,
-                modifiedAt: modifiedAt,
-                abort: abort
-            )
-        }
-
-        guard let abort, abort.turnID == turnID, abort.at > lastEventAt else {
+        guard let abort = entry(forRolloutAt: rolloutPath).abort,
+              abort.turnID == turnID,
+              abort.at > lastEventAt else {
             return nil
         }
         return abort.at
+    }
+
+    func turnOnRecord(inRolloutAt rolloutPath: String) -> String? {
+        entry(forRolloutAt: rolloutPath).turnOnRecord
+    }
+
+    /// This rollout's two newest records, read once per revision of the file.
+    private func entry(forRolloutAt rolloutPath: String) -> Entry {
+        let (size, modifiedAt) = Self.revision(ofFileAt: rolloutPath)
+        if let cached = entries[rolloutPath],
+           cached.size == size, cached.modifiedAt == modifiedAt {
+            return cached
+        }
+        let records = newestRecords(inRolloutAt: rolloutPath)
+        let entry = Entry(
+            size: size,
+            modifiedAt: modifiedAt,
+            abort: records.abort,
+            turnOnRecord: records.turnOnRecord
+        )
+        entries[rolloutPath] = entry
+        return entry
     }
 
     func retain(rolloutPaths: Set<String>) {
         entries = entries.filter { rolloutPaths.contains($0.key) }
     }
 
-    /// The newest abort in the tail, whichever Turn it names.
+    /// The newest abort and the newest `turn_context` in the tail.
     ///
-    /// Newest and nothing else: an older abort naming this Turn would describe
-    /// a Turn that ended before one this rollout has since recorded ending,
-    /// which is not a thing a Turn this app is still holding open can be.
-    /// Reading only the last one is what keeps this a single decode.
-    private func newestAbort(inRolloutAt rolloutPath: String) -> TurnAbort? {
+    /// Newest and nothing else, for both. An older abort naming this Turn would
+    /// describe a Turn that ended before one this rollout has since recorded
+    /// ending, which is not a thing a Turn this app is still holding open can
+    /// be; an older `turn_context` names a Turn this thread has since moved
+    /// past. Reading only the last of each is what keeps this to two decodes,
+    /// and stopping once both are in hand is what keeps a long tail from being
+    /// walked to its head.
+    private func newestRecords(
+        inRolloutAt rolloutPath: String
+    ) -> (abort: TurnAbort?, turnOnRecord: String?) {
         guard let tail = try? tail.read(ofFileAt: rolloutPath) else {
-            return nil
+            return (nil, nil)
         }
         let decoder = JSONDecoder()
+        var abort: TurnAbort?
+        var turnOnRecord: String?
         for line in tail.split(separator: UInt8(ascii: "\n")).reversed() {
-            // The decode is the test of what a line is. This only keeps the
+            if abort != nil, turnOnRecord != nil { break }
+            // The decode is the test of what a line is. These only keep the
             // other lines from reaching it, and a rollout line can be tens of
             // kilobytes of assistant text.
-            guard line.range(of: Self.abortMarker) != nil else { continue }
-            guard let record = try? decoder.decode(
-                TurnAbortRecord.self,
-                from: line
-            ) else { continue }
-            return TurnAbort(turnID: record.turnID, at: record.timestamp)
+            if abort == nil, line.range(of: Self.abortMarker) != nil,
+               let record = try? decoder.decode(TurnAbortRecord.self, from: line) {
+                abort = TurnAbort(turnID: record.turnID, at: record.timestamp)
+                continue
+            }
+            if turnOnRecord == nil, line.range(of: Self.turnContextMarker) != nil,
+               let record = try? decoder.decode(TurnContextRecord.self, from: line) {
+                turnOnRecord = record.turnID
+            }
         }
-        return nil
+        return (abort, turnOnRecord)
     }
 
     /// The file's size and modification time, or a revision nothing matches.

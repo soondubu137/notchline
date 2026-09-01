@@ -5095,13 +5095,17 @@ struct NotchlineTests {
         #expect(store.sessions.map(\.id) == [finished.id])
     }
 
-    /// Only a finished row can be dismissed.
+    /// A row in any state can be dismissed, and it used to be finished ones
+    /// only.
     ///
-    /// The other three statuses are Turns that are still going: the user has
-    /// not been told anything yet, so there is nothing to dismiss, and a row
-    /// taken away by a stray click could not be recovered until it ended.
+    /// The restriction read well -- a running Turn has not told the user
+    /// anything yet, so a stray click threw away a notice they could not get
+    /// back -- and it was protecting the wrong thing. A Turn stuck open is
+    /// never Completed, so the one gesture that removes a row was missing in
+    /// exactly the state a user needs it in, and quitting the app was the only
+    /// way out. See ``MonitorStore/dismiss(_:)``.
     @Test @MainActor
-    func onlyAFinishedRowCanBeDismissed() {
+    func aRowInAnyStateCanBeDismissed() {
         for status in [SessionStatus.running, .inputNeeded, .approvalNeeded] {
             let live = MonitoredSession(
                 threadID: "thread-\(status)",
@@ -5121,8 +5125,28 @@ struct NotchlineTests {
                 )
             )
 
-            #expect(!store.dismiss(live))
-            #expect(store.sessions.map(\.id) == [live.id])
+            #expect(store.dismiss(live))
+            #expect(store.sessions.isEmpty)
+            // And it is the Turn that was dismissed, not the thread: the same
+            // thread's next Turn is a row again.
+            let next = MonitoredSession(
+                threadID: live.threadID,
+                turnID: "turn-2",
+                projectName: "Chats",
+                title: "Live turn",
+                preview: nil,
+                status: status,
+                startedAt: Date()
+            )
+            store.applyForTesting(
+                AgentSnapshot(
+                    availability: .ready,
+                    sessions: [next],
+                    quota: .unavailable,
+                    diagnostic: nil
+                )
+            )
+            #expect(store.sessions.map(\.id) == [next.id])
         }
     }
 
@@ -8765,17 +8789,24 @@ struct NotchlineTests {
         #expect(ended?.status == .completed)
     }
 
-    /// The held prompt is not thrown away — it is redeemed by the first event
-    /// that proves the turn really is this thread's own.
+    /// The held prompt is redeemed by this thread's own record, and by nothing
+    /// else.
     ///
-    /// Codex sends no terminal for an interrupted turn (measured 2026-08-24
-    /// against CLI `0.149.0-alpha.4.3`: `turn/interrupt` produced no `Stop`,
-    /// and not even the open call's `PostToolUse`), so the interrupted turn
-    /// stays open and the user's next prompt is exactly the held case. Without
-    /// the redemption below, the new turn would be timed from the interrupted
-    /// one and would show its text.
+    /// **"Any event arrives under that id" was never evidence.** The sentence
+    /// it stood in for is *this turn was this thread's after all*, and a nested
+    /// agent's own events arrive under its own turn id exactly as a resumed
+    /// turn's do -- so the test was satisfied word for word by the one caller
+    /// it was written to exclude. What separates them is the rollout: Codex
+    /// writes each turn's `turn_context` into the rollout of the thread that
+    /// turn belongs to, and the reviewer's go into a rollout of its own.
+    ///
+    /// The case this has to keep working is still the interrupt: Codex sends no
+    /// terminal for a turn the user stopped (measured 2026-08-24 against CLI
+    /// `0.149.0-alpha.4.3`), so that turn stays open and the user's next prompt
+    /// is exactly the held case. Without the redemption the new turn would be
+    /// timed from the interrupted one and would show its text.
     @Test
-    func aHeldPromptIsAdoptedByTheFirstEventThatProvesItsTurn() async throws {
+    func aHeldPromptIsRedeemedByTheThreadsOwnRecordAndNotByAnEvent() async throws {
         let paths = makeTemporaryHookPaths()
         defer {
             try? FileManager.default.removeItem(
@@ -8812,18 +8843,279 @@ struct NotchlineTests {
         // Held, so the row is still showing the turn it can still account for.
         #expect(await repository.drainDeliveredEvents().turns.first?.turnID == "turn-first")
 
-        // The new turn's first call proves it, and the held start and text come
-        // with it rather than the interrupted turn's.
+        // The new turn's first call proves nothing, because a nested agent's
+        // first call would say exactly the same thing.
         try emit([
             "hook_event_name": "PreToolUse",
             "turn_id": "turn-second",
             "tool_name": "Bash",
             "tool_use_id": "exec-second"
         ])
-        let adopted = await repository.drainDeliveredEvents().turns.first
+        #expect(await repository.drainDeliveredEvents().turns.first?.turnID == "turn-first")
+
+        // The thread's own rollout does, and the held start and text come with
+        // it rather than the interrupted turn's.
+        let adopted = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "thread-interrupted", turnID: "turn-second")
+        ]).turns.first
         #expect(adopted?.turnID == "turn-second")
         #expect(adopted?.promptPreview == "the prompt after the interrupt")
+        #expect(adopted?.status == .running)
         #expect(adopted?.startedAt ?? firstStart > firstStart)
+    }
+
+    /// A record naming a turn this thread never held redeems nothing.
+    ///
+    /// The reading may promote the one start this thread already took in and
+    /// set aside; it may not invent a turn out of a file. Its whole job is to
+    /// settle a question the reducer had already asked.
+    @Test
+    func aRecordMayOnlyRedeemAPromptThisThreadIsHolding() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(paths: paths)
+        var clock = 7_500.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-open"
+            payload["turn_id"] = payload["turn_id"] ?? "turn-real"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the user's own prompt"])
+        _ = await repository.drainDeliveredEvents()
+
+        let unmoved = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "thread-open", turnID: "turn-nobody-held")
+        ]).turns.first
+        #expect(unmoved?.turnID == "turn-real")
+        #expect(unmoved?.promptPreview == "the user's own prompt")
+    }
+
+    /// The reviewer's *own* events no longer take the row's turn over.
+    ///
+    /// **The defect `c26f6ea` fixed, reached one event later.** That fix held
+    /// the reviewer's prompt back and redeemed it on the first event to arrive
+    /// under its id, on the measurement that the reviewer emits none. A
+    /// reviewer that runs one read-only check -- which its own instructions
+    /// permit -- supplies that event and walks back into the takeover: the real
+    /// turn is retired, its own `Stop` is refused as late, and nothing can end
+    /// what is left. Reported 2026-08-31 as a row that said `Working...` for
+    /// ever, could not be dismissed because dismissal was for finished rows,
+    /// and went away only when the app was restarted.
+    ///
+    /// **Every assessment, not just the newest.** One guardian thread runs a
+    /// fresh turn per approval assessment -- up to 8 per parent turn, measured
+    /// over 1 970 of them -- and the second and later ones open *"The following
+    /// is the Codex agent history added since your last approval assessment"*,
+    /// which is what the reported row was showing. So the refusal is a set and
+    /// not one slot: an event under the reviewer's *first* turn arriving while
+    /// its third is the candidate must be refused too.
+    @Test
+    func aNestedAgentsOwnEventsCannotTakeTheRowsTurn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(paths: paths)
+        var clock = 8_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-reviewed"
+            payload["turn_id"] = payload["turn_id"] ?? "turn-real"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the user's own prompt"])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewed"
+        ])
+        try emit(["hook_event_name": "PermissionRequest", "tool_name": "Bash"])
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .approvalNeeded)
+
+        // Two assessments, each a turn of its own on the reviewer's thread,
+        // both stamped with the parent's `session_id` and no `agent_id`.
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-reviewer-1",
+            "prompt": "The following is the Codex agent history whose request action you are assessing."
+        ])
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-reviewer-2",
+            "prompt": "The following is the Codex agent history added since your last approval assessment."
+        ])
+        // The read-only check the reviewer's instructions permit, under the
+        // assessment that is no longer the candidate, and then under the one
+        // that is.
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "turn_id": "turn-reviewer-1",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewer-1"
+        ])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "turn_id": "turn-reviewer-2",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewer-2"
+        ])
+        // And its own terminal, which carries no `agent_id` either.
+        try emit(["hook_event_name": "Stop", "turn_id": "turn-reviewer-2"])
+
+        let held = await repository.drainDeliveredEvents().turns.first
+        #expect(held?.turnID == "turn-real")
+        #expect(held?.promptPreview == "the user's own prompt")
+        #expect(held?.status == .approvalNeeded)
+
+        // The turn's own terminal still lands, which is the whole point: a
+        // retired turn id could never be heard from again.
+        try emit([
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewed"
+        ])
+        try emit(["hook_event_name": "Stop", "last_assistant_message": "Done."])
+        let ended = await repository.drainDeliveredEvents().turns.first
+        #expect(ended?.turnID == "turn-real")
+        #expect(ended?.status == .completed)
+        #expect(ended?.assistantPreview == "Done.")
+    }
+
+    /// Claude Code still redeems a held prompt on the first event under it, and
+    /// must.
+    ///
+    /// **The refusal is Codex's because the caller is.** Nothing runs under a
+    /// Claude Code thread's identity without saying so -- its subagents stamp
+    /// `agent_id`, and the read-only fork Claude Desktop opens fires no hook at
+    /// all -- and there is no rollout to ask instead. So a held prompt there is
+    /// the user's own next turn, and it has exactly one case: **a human
+    /// refusing an approval aborts that turn with no hook whatsoever**
+    /// (measured 2026-08-23, CLI 2.1.241, twice), leaving it open with the
+    /// user's next prompt held behind it. Taking the event away would leave the
+    /// row on the abandoned turn until the prompt after that.
+    @Test
+    func claudeCodeRedeemsAHeldPromptFromItsOwnEvent() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        var clock = 9_500.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "session-refused"
+            payload["prompt_id"] = payload["prompt_id"] ?? "turn-abandoned"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the abandoned prompt"])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-refused"
+        ])
+        try emit(["hook_event_name": "PermissionRequest", "tool_name": "Bash"])
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .approvalNeeded)
+
+        // The user says No. That turn is gone and says nothing about it, so
+        // their next prompt lands while it is still open, and is held.
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "prompt_id": "turn-after-refusal",
+            "prompt": "the prompt after the refusal"
+        ])
+        #expect(
+            await repository.drainDeliveredEvents().turns.first?.turnID
+                == "turn-abandoned"
+        )
+
+        // And its own first call redeems it, start and text included.
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "prompt_id": "turn-after-refusal",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-after"
+        ])
+        let adopted = await repository.drainDeliveredEvents().turns.first
+        #expect(adopted?.turnID == "turn-after-refusal")
+        #expect(adopted?.promptPreview == "the prompt after the refusal")
+        #expect(adopted?.status == .running)
+    }
+
+    /// A held turn may not start one either, once the row's turn has finished.
+    ///
+    /// The hold covers a prompt arriving *during* a turn. The reviewer's next
+    /// assessment arriving after this thread's own turn had ended would
+    /// otherwise be adopted outright — the same takeover, reached through the
+    /// one branch the hold does not cover.
+    @Test
+    func aTurnThisThreadHeldBackMayNotStartOneAfterwards() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(paths: paths)
+        var clock = 9_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-reviewed"
+            payload["turn_id"] = payload["turn_id"] ?? "turn-real"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the user's own prompt"])
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-reviewer",
+            "prompt": "The following is the Codex agent history added since your last approval assessment."
+        ])
+        try emit(["hook_event_name": "Stop", "last_assistant_message": "Done."])
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .completed)
+
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-reviewer",
+            "prompt": "The following is the Codex agent history added since your last approval assessment."
+        ])
+        let unmoved = await repository.drainDeliveredEvents().turns.first
+        #expect(unmoved?.turnID == "turn-real")
+        #expect(unmoved?.status == .completed)
+        #expect(unmoved?.promptPreview == "the user's own prompt")
+
+        // The user's own next prompt still opens a turn, which is what the
+        // refusal must not cost.
+        try emit(["hook_event_name": "UserPromptSubmit", "turn_id": "turn-next", "prompt": "next"])
+        let next = await repository.drainDeliveredEvents().turns.first
+        #expect(next?.turnID == "turn-next")
+        #expect(next?.status == .running)
     }
 
     @Test @MainActor
@@ -9276,6 +9568,79 @@ struct NotchlineTests {
                 + paddedLines
         )
         #expect(await read(pastTheWindow) == nil)
+    }
+
+    /// Which Turn a thread's rollout says the thread is on.
+    ///
+    /// The second question the same reader answers from the same tail, and the
+    /// one that settles a held prompt: a nested agent's turns are written to a
+    /// rollout of its own, so a thread's record names the reviewer's turn
+    /// never and its own turn always. Newest wins, because at any instant the
+    /// last `turn_context` a rollout holds is the Turn that thread is on.
+    @Test @MainActor
+    func rolloutReaderNamesTheTurnTheThreadsOwnRecordIsOn() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+
+        let stampFormatter = ISO8601DateFormatter()
+        stampFormatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds
+        ]
+        func line(_ object: [String: Any]) throws -> String {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            return String(decoding: data, as: UTF8.self)
+        }
+        func turnContext(_ turnID: String?) throws -> String {
+            var payload: [String: Any] = ["cwd": "/tmp"]
+            if let turnID { payload["turn_id"] = turnID }
+            return try line([
+                "timestamp": stampFormatter.string(from: Date()),
+                "type": "turn_context",
+                "payload": payload
+            ])
+        }
+        // Carries the word and is not the record: the prefilter is an
+        // optimisation and the decode is what decides.
+        let noise = try line([
+            "timestamp": stampFormatter.string(from: Date()),
+            "type": "response_item",
+            "payload": ["type": "message", "text": "about the turn_context"]
+        ])
+        func writeRollout(_ lines: [String]) throws -> String {
+            let file = root.appendingPathComponent("\(UUID().uuidString).jsonl")
+            try Data(lines.joined(separator: "\n").appending("\n").utf8)
+                .write(to: file, options: .atomic)
+            return file.path
+        }
+
+        let reader = CodexRolloutTurnAbortReader()
+
+        let onRecord = try writeRollout([
+            noise,
+            try turnContext("turn-0"),
+            noise,
+            try turnContext("turn-1"),
+            noise
+        ])
+        #expect(await reader.turnOnRecord(inRolloutAt: onRecord) == "turn-1")
+
+        // Nothing to say is the refusal, and it is the only one this reading
+        // ever has to make: a held prompt no record names simply stays held.
+        let silent = try writeRollout([noise, noise])
+        #expect(await reader.turnOnRecord(inRolloutAt: silent) == nil)
+
+        // A build that stops writing the field answers nothing rather than
+        // answering with the record it happens to have found.
+        let unnamed = try writeRollout([try turnContext(nil)])
+        #expect(await reader.turnOnRecord(inRolloutAt: unnamed) == nil)
+
+        #expect(await reader.turnOnRecord(inRolloutAt: root.path + "/absent.jsonl") == nil)
     }
 
     /// The abort record, which is all a stopped Codex Turn ever reports.
@@ -9849,6 +10214,16 @@ struct NotchlineTests {
         // map again rather than inheriting the answer its predecessor pinned.
         // Desktop writes the file at this Turn's start as it did at the last
         // one's, carrying the same reviewer it has held since the switch.
+        //
+        // After the first Turn's terminal, which is the only order a thread's
+        // own Turns arrive in: a prompt landing *during* one is held rather
+        // than adopted (``HookTurnState/heldTurnStart``).
+        try deliver([
+            "received_at": timestamp + 2.5,
+            "hook_event_name": "Stop",
+            "session_id": "thread-1",
+            "turn_id": "turn-1"
+        ])
         try deliver([
             "received_at": timestamp + 3,
             "hook_event_name": "UserPromptSubmit",
@@ -15444,6 +15819,16 @@ for line in sys.stdin:
             [
                 "received_at": 100.0,
                 "hook_event_name": "UserPromptSubmit",
+                "session_id": "thread-1",
+                "turn_id": "turn-1"
+            ],
+            // The first turn ends before the second begins, which is the only
+            // order a thread's own turns ever arrive in: Codex Desktop queues
+            // a follow-up until the running turn's terminal, and a prompt that
+            // lands *during* a turn is held rather than adopted (``HookTurnState/heldTurnStart``).
+            [
+                "received_at": 150.0,
+                "hook_event_name": "Stop",
                 "session_id": "thread-1",
                 "turn_id": "turn-1"
             ],

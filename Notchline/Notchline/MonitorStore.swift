@@ -2585,13 +2585,27 @@ final class MonitorStore: ObservableObject {
         requestRefresh()
     }
 
-    /// Takes one finished row off the list, at the user's asking.
+    /// Takes one row off the list, at the user's asking.
     ///
-    /// **Only a Completed row.** Every other status is a Turn that is still
-    /// going — the user has not been told anything yet, and a row they dismiss
-    /// by accident is one they cannot get back until the Turn ends. Dismissing
-    /// a finished row throws away only the notice that it finished, which is
-    /// the whole of what the row was still there to say.
+    /// **Any status, and it used to be Completed only.** The argument for the
+    /// restriction was that a running Turn has not told the user anything yet,
+    /// so a row dismissed by accident is one they cannot get back until it
+    /// ends — true, and the wrong thing to weigh it against. What it was
+    /// actually weighed against turned out to be a row that could not be got
+    /// rid of *at all*: a Turn stuck open by a defect is by definition never
+    /// Completed, so the one gesture that removes a row was unavailable in
+    /// exactly the state where a user most needs it, and the only way out was
+    /// to quit the app (a nested agent taking a thread's Turn over,
+    /// ``HookTurnState/heldTurnStart``). A control that works only when the app
+    /// is behaving is not an escape hatch.
+    ///
+    /// So the cost is accepted rather than argued away: dismissing a running
+    /// row does throw away a notice that has not arrived yet, and it is the
+    /// user's to throw. It is one right-click on a row they are looking at,
+    /// it names the Turn rather than the thread, and the thread's next Turn
+    /// draws a new row — so what an accident costs is one Turn's notice, and
+    /// the answer itself is still in the product, one click away on the same
+    /// row's thread.
     ///
     /// **What it does not do.** Nothing is deleted, in either product: the
     /// thread, its Turn and its transcript are untouched. Nor is it a claim
@@ -2612,6 +2626,11 @@ final class MonitorStore: ObservableObject {
     /// this layer can tell a removal from a Turn ending; what goes down with
     /// each snapshot request is which rows it covers.
     ///
+    /// **It is not a stop button and must not be read as one.** Nothing is sent
+    /// to either product, and the Turn behind a dismissed running row goes on
+    /// exactly as it was — this removes the app's report of it, which is all
+    /// this app has ever done to a Turn.
+    ///
     /// This is the only way a user can take a terminal Claude Code row off the
     /// list: read state is not a question those rows can be asked (see
     /// [ADR 0012](../../docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)),
@@ -2622,7 +2641,6 @@ final class MonitorStore: ObservableObject {
     /// first, to do in bulk what this does in place.
     @discardableResult
     func dismiss(_ session: MonitoredSession) -> Bool {
-        guard session.status == .completed else { return false }
         guard !isDismissed(session) else { return false }
 
         dismissedSessionIDsByAgent[session.agent, default: []].insert(session.id)
