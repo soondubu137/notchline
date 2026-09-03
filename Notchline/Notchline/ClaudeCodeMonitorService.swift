@@ -35,6 +35,13 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     private let listener: AgentHookListener
     private let transcripts: ClaudeCodeTranscriptReader
     private let usage: ClaudeCodeUsageReader
+    /// Whether there is a `claude` on this machine for the registry to run.
+    ///
+    /// Asked only when the registry has stopped answering, so on a healthy
+    /// machine it costs nothing: a list that came back is itself proof that
+    /// an executable was found. Injected so the suite's own answer does not
+    /// depend on whether Claude Code happens to be installed beside it.
+    nonisolated private let commandIsInstalled: @Sendable () -> Bool
     /// Held, because a watcher nobody holds is a watcher that has already
     /// stopped.
     ///
@@ -221,9 +228,15 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         /// launched. Injected only so the rule can be tested without launching
         /// one — see ``sessionsChanged(_:invalidating:in:ownedBy:)``.
         ownsSessionRecord: (@Sendable (String) -> Bool)? = nil,
+        /// Whether a `claude` executable can be found at all. Injected for the
+        /// reason the readers above are: left with the default, a test would
+        /// answer with whatever the developer happens to have installed.
+        commandIsInstalled: (@Sendable () -> Bool)? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard
     ) {
+        self.commandIsInstalled = commandIsInstalled
+            ?? { ClaudeExecutableLocator.locate() != nil }
         let resolvedSetup = setup ?? ClaudeCodeHookSetup(paths: paths)
         self.setup = resolvedSetup
         // The one folder this app's own quota reading runs in, named once and
@@ -912,8 +925,25 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         }
         transcriptWatcher.watch(paths: watchedTranscripts)
 
+        // **The card may not say Connected while the mark is absent.**
+        //
+        // Registration used to be the whole of what this product reported, so
+        // `Connected · hooks installed` was said on a machine where nothing was
+        // being watched at all -- the notch drew no Claude Code mark, no row
+        // ever appeared, and the one surface with room to explain that agreed
+        // with none of it. `unknown` is the registry saying it has no reading
+        // to offer, which is `AGENTS.md` §6.7's plain sense of the word: there
+        // is no working connection to report on. `closed` is not the same
+        // sentence and must not be caught by it -- that is `claude` answering
+        // that nothing is open, which is a healthy machine with no session
+        // running.
+        //
+        // Only the availability moves. Rows and presence are decided exactly
+        // as before, and the mark this now agrees with was already absent.
+        let watchFailure = presence == .unknown ? unwatchableReason() : nil
+
         return snapshot(
-            availability: .ready,
+            availability: watchFailure == nil ? .ready : .disconnected,
             // A product that is not connected contributes no rows.
             //
             // The registry is written against exactly this: it goes on handing
@@ -928,7 +958,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // and it is the surface's half of the contract, not the registry's.
             sessions: presence.isOpen ? visibleRows : [],
             setupStatus: status,
-            diagnostic: MonitorDiagnostics.combined(hookDiagnostic, read.diagnostic),
+            diagnostic: MonitorDiagnostics.combined(
+                watchFailure,
+                hookDiagnostic,
+                read.diagnostic
+            ),
             // Whatever is known right now. Awaiting the reading here is what
             // made a hook event's row wait on a `claude` launch.
             quota: await usage.currentQuota(),
@@ -1708,6 +1742,40 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     private func projectName(for session: ClaudeCodeSession) -> String {
         let component = session.workingDirectory.lastPathComponent
         return component.isEmpty ? "Untitled folder" : component
+    }
+
+    /// Why this app has no reading of Claude Code's sessions, in words a user
+    /// can act on.
+    ///
+    /// Asked only where presence is already `unknown`, and never re-asking it:
+    /// presence is read once per refresh so the rows and the mark describe one
+    /// instant, and a second reading here could land the other side of one.
+    ///
+    /// **Two failures reach that one word, and they ask opposite things of the
+    /// person reading it.** One is that there is no `claude` on the machine to
+    /// run at all -- the ordinary shape of which was a user with Claude Desktop
+    /// who never installed the terminal command, invisible until
+    /// ``ClaudeExecutableLocator`` learned to fall back to Desktop's own copy,
+    /// so reaching this now means neither exists. The other is a `claude` that
+    /// is there and will not answer, which is where a command wedged behind an
+    /// MCP server lands; telling that user to install what they already have
+    /// would send them the wrong way entirely.
+    ///
+    /// It is a sentence and not a state. Nothing branches on which of the two
+    /// it is -- the availability is `.disconnected` either way -- and the card
+    /// draws this underneath a headline that claims neither.
+    private func unwatchableReason() -> String? {
+        if commandIsInstalled() {
+            return "Claude Code is registered, but `claude agents --json` is "
+                + "not answering, so this app cannot see which sessions are "
+                + "open. It is the command Claude Code itself provides; try "
+                + "running it in a terminal to see what it says."
+        }
+        return "Claude Code is registered, but no `claude` command could be "
+            + "found to ask which sessions are open — not in ~/.local/bin, "
+            + "Homebrew, /usr/local/bin, this app's PATH, or Claude Desktop's "
+            + "own copy. Install Claude Code, or set NOTCHLINE_CLAUDE_PATH to "
+            + "where it lives."
     }
 
     /// - Parameter presence: Defaults to `unknown` because the branches that do

@@ -591,6 +591,20 @@ struct ProductSettingsCopy: Equatable {
     /// the current one. Until somebody does, the notch stays empty and nothing
     /// anywhere reports an error, which is why this cannot share a line with
     /// "the integration is off".
+    ///
+    /// **`Connected` is a claim about being able to watch, and this line used
+    /// to make it on the registration alone.** Codex's copy above has always
+    /// read `availability`; this one read `setup`, so it said
+    /// `Connected · hooks installed` on a machine drawing no Claude Code mark
+    /// and no rows — which is exactly the state a user hits when they enable
+    /// the integration on a machine with no `claude` for the session list to
+    /// run (`ClaudeExecutableLocator`). It now defers to availability the way
+    /// the Codex line does, and to one neutral headline for all three ways of
+    /// being registered and blind: the helper and its socket, no command to
+    /// run, and a command that will not answer. **The headline stays neutral
+    /// on purpose** — each of the three writes its own diagnostic, that
+    /// sentence is drawn directly underneath this one, and a headline naming
+    /// one of the three would be wrong about the other two.
     static func claudeCode(
         setup: HookSetupStatus,
         availability: MonitorAvailability?,
@@ -600,7 +614,7 @@ struct ProductSettingsCopy: Equatable {
         let color: Color
         switch setup {
         case .active where availability == .disconnected:
-            status = "Registered · the hook helper could not be set up"
+            status = "Registered · not watching Claude Code"
             color = MacOSWindowColor.statusWarning
         case .active:
             status = "Connected · hooks installed"

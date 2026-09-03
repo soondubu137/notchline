@@ -23435,6 +23435,165 @@ for line in sys.stdin:
         #expect(stale.diagnostic == reported)
     }
 
+    /// A machine with Claude Desktop and no terminal install can still be
+    /// watched.
+    ///
+    /// This is the whole bug, in one assertion. Installing the `claude`
+    /// command is a separate step in Claude Desktop's install hub, so a user
+    /// who only ever runs Claude Code inside Desktop has none of the three
+    /// paths this looked in and nothing on the app's `PATH` — a Finder-launched
+    /// app inherits launchd's, not a login shell's. `claude agents --json`
+    /// therefore never ran, presence never left `unknown`, and Claude Code drew
+    /// no mark and no row while its hooks were registered and firing.
+    ///
+    /// It pins the version ordering in the same breath, because the two cannot
+    /// be separated on a real machine: Desktop keeps one directory per
+    /// downloaded version and more than one at a time (`2.1.255` beside
+    /// `2.1.258` here on 2026-09-02, the day after an update). `2.1.9` and
+    /// `2.1.10` are the pair a string comparison gets backwards, which is the
+    /// only way this choice can go wrong quietly.
+    @Test
+    func theSessionCommandIsFoundInsideClaudeDesktopWhenNothingElseHasIt() throws {
+        let root = try ClaudeInstallLayout()
+        defer { root.tearDown() }
+        try root.writeDesktopBundledClaude(version: "2.1.9")
+        try root.writeDesktopBundledClaude(version: "2.1.10")
+
+        let found = try #require(
+            ClaudeExecutableLocator.locate(
+                environment: root.environment(),
+                fileManager: root.fileManager
+            )
+        )
+        #expect(root.isSameFile(found, as: root.desktopBundledClaude(version: "2.1.10")))
+    }
+
+    /// The command the user installed themselves is the one they update, so it
+    /// is the one asked. Both read the same `~/.claude/sessions` and either
+    /// would answer correctly; this only decides which.
+    @Test
+    func aClaudeTheUserInstalledOutranksClaudeDesktopsOwnCopy() throws {
+        let root = try ClaudeInstallLayout()
+        defer { root.tearDown() }
+        try root.writeDesktopBundledClaude(version: "2.1.258")
+        let onPath = try root.writeExecutable(at: "bin/claude")
+
+        let found = try #require(
+            ClaudeExecutableLocator.locate(
+                environment: root.environment(path: [root.url("bin")]),
+                fileManager: root.fileManager
+            )
+        )
+        #expect(root.isSameFile(found, as: onPath))
+    }
+
+    /// The escape hatch still outranks everything discovered, including a
+    /// Claude Desktop that is sitting right there.
+    @Test
+    func theExplicitPathOverrideOutranksEveryDiscoveredClaude() throws {
+        let root = try ClaudeInstallLayout()
+        defer { root.tearDown() }
+        try root.writeDesktopBundledClaude(version: "2.1.258")
+        let chosen = try root.writeExecutable(at: "somewhere/odd/claude")
+
+        var environment = root.environment()
+        environment[ClaudeExecutableLocator.overrideEnvironmentKey] = chosen.path
+        let found = try #require(
+            ClaudeExecutableLocator.locate(
+                environment: environment,
+                fileManager: root.fileManager
+            )
+        )
+        #expect(root.isSameFile(found, as: chosen))
+    }
+
+    /// And nothing is invented where there is nothing: a missing Desktop tree
+    /// is the ordinary state of a machine without Claude Desktop, not an error,
+    /// and a version directory with no runnable file in it is passed over
+    /// rather than returned.
+    @Test
+    func noClaudeAnywhereIsAnswerednilRatherThanGuessedAt() throws {
+        let root = try ClaudeInstallLayout()
+        defer { root.tearDown() }
+
+        #expect(
+            ClaudeExecutableLocator.locate(
+                environment: root.environment(),
+                fileManager: root.fileManager
+            ) == nil
+        )
+
+        // The shape a half-finished download leaves: the version directory is
+        // there and the executable is not.
+        try FileManager.default.createDirectory(
+            at: root.desktopBundledClaude(version: "2.1.258")
+                .deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        #expect(
+            ClaudeExecutableLocator.locate(
+                environment: root.environment(),
+                fileManager: root.fileManager
+            ) == nil
+        )
+    }
+
+    /// A product nobody can watch stops describing itself as connected.
+    ///
+    /// The card used to read `setup` alone, so `Connected · hooks installed`
+    /// was printed on a machine where the notch drew no Claude Code mark and no
+    /// row had ever appeared — the registration was the only thing it was
+    /// reporting, and the registration was fine. Presence `unknown` is the
+    /// registry saying it has no reading at all, and the two ways of reaching
+    /// it want opposite things from the reader, so each writes its own
+    /// sentence under one headline that claims neither.
+    @Test @MainActor
+    func aProductNobodyCanWatchSaysSoRatherThanSayingConnected() async throws {
+        let missing = try ClaudeCodeHarness(commandIsInstalled: false)
+        defer { missing.tearDown() }
+        try await missing.service.installHooks()
+        missing.presence = .unknown
+
+        let blind = await missing.service.fetchSnapshot()
+        #expect(blind.availability == .disconnected)
+        #expect(blind.setupStatus == .active)
+        #expect(blind.isConnected == false)
+        let noCommand = try #require(blind.diagnostic)
+        #expect(noCommand.contains("no `claude` command could be found"))
+
+        // The same silence with the command sitting right there is a different
+        // problem, and telling this user to install what they already have
+        // would send them the wrong way entirely.
+        let silent = try ClaudeCodeHarness(commandIsInstalled: true)
+        defer { silent.tearDown() }
+        try await silent.service.installHooks()
+        silent.presence = .unknown
+
+        let unanswered = await silent.service.fetchSnapshot()
+        #expect(unanswered.availability == .disconnected)
+        let notAnswering = try #require(unanswered.diagnostic)
+        #expect(notAnswering.contains("not answering"))
+
+        // And a machine that is simply not running Claude Code is healthy.
+        // `closed` is the command answering that nothing is open, which is not
+        // the same sentence and must not be caught by it.
+        silent.presence = .closed
+        let quiet = await silent.service.fetchSnapshot()
+        #expect(quiet.availability == .ready)
+        #expect(quiet.diagnostic == nil)
+
+        // What the user actually reads. The headline names none of the three
+        // ways of being registered and blind, because the diagnostic under it
+        // names the one that happened.
+        let card = ProductSettingsCopy.claudeCode(
+            setup: .active,
+            availability: .disconnected,
+            diagnostic: noCommand
+        )
+        #expect(!card.status.contains("Connected"))
+        #expect(card.diagnostic == noCommand)
+    }
+
     /// The socket is this user's alone, and rubbish on it is dropped.
     ///
     /// This replaced a test that asserted `403` for a wrong bearer token and
@@ -26636,9 +26795,15 @@ private final class ClaudeCodeHarness {
     ///     from. The default answers nothing and runs no command; a test about
     ///     the reader's own state -- whether a reading was ever attempted, what
     ///     it has left on disk -- passes one it can see into.
+    /// - Parameter commandIsInstalled: Whether the service should believe a
+    ///   `claude` executable exists. `true` unless a test says otherwise --
+    ///   left with the product's default this would answer with whatever the
+    ///   developer running the suite happens to have installed, which is the
+    ///   one thing a test must never be.
     init(
         ownedSessionRecords: Set<String> = [],
-        usage: ClaudeCodeUsageReader = .silent()
+        usage: ClaudeCodeUsageReader = .silent(),
+        commandIsInstalled: Bool = true
     ) throws {
         root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-svc-\(UUID().uuidString.prefix(8))")
@@ -26720,7 +26885,8 @@ private final class ClaudeCodeHarness {
             // report on the developer's lock screen rather than on the code.
             screenAvailability: screenStub,
             sessionsDirectory: root.appendingPathComponent("sessions", isDirectory: true),
-            ownsSessionRecord: { ownedSessionRecords.contains($0) }
+            ownsSessionRecord: { ownedSessionRecords.contains($0) },
+            commandIsInstalled: { commandIsInstalled }
         )
     }
 
@@ -27192,6 +27358,125 @@ private final class StubDesktopReading: DesktopReadingReporting, @unchecked Send
     /// is locked, a screensaver is running, or another user is switched in.
     var isInFront = false
     func isInFrontOfTheUser() async -> Bool { isInFront }
+}
+
+/// A machine's `claude` installs, entirely inside a throwaway directory.
+///
+/// ``ClaudeExecutableLocator`` reaches three absolute paths and the home
+/// directory, so a test left with the real `FileManager` would answer with
+/// whatever the developer running the suite happens to have installed — and
+/// would pass on a machine with `~/.local/bin/claude` for exactly the reason
+/// the bug it pins was invisible. ``ScopedFileManager`` moves the home and
+/// refuses to call anything outside this root executable, so the only installs
+/// that exist are the ones a test wrote.
+private struct ClaudeInstallLayout {
+    let root: URL
+    let fileManager: ScopedFileManager
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cin-claude-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        fileManager = ScopedFileManager(
+            root: root,
+            home: root.appendingPathComponent("home", isDirectory: true)
+        )
+    }
+
+    func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func url(_ relativePath: String) -> URL {
+        root.appendingPathComponent(relativePath)
+    }
+
+    /// Whether two URLs name the same file, rather than spell it the same way.
+    ///
+    /// `/var` is a symlink to `/private/var` and the temporary directory is
+    /// under it, so a path this fixture built and a path Foundation handed back
+    /// from `contentsOfDirectory(at:)` can name one file and compare unequal.
+    /// Which spelling comes back is not stable — the same assertion passed
+    /// alone and failed inside the full suite — so nothing here compares
+    /// paths as strings.
+    func isSameFile(_ lhs: URL, as rhs: URL) -> Bool {
+        lhs.resolvingSymlinksInPath().standardizedFileURL
+            == rhs.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    /// Claude Desktop's application-support root, pointed at by the same
+    /// override its session records honour — one variable moves the whole tree.
+    var desktopHome: URL {
+        url("desktop")
+    }
+
+    func desktopBundledClaude(version: String) -> URL {
+        desktopHome
+            .appendingPathComponent("claude-code", isDirectory: true)
+            .appendingPathComponent(version, isDirectory: true)
+            .appendingPathComponent("claude.app/Contents/MacOS/claude")
+    }
+
+    func environment(path: [URL] = []) -> [String: String] {
+        [
+            ClaudeCodeDesktopReadStateRepository.homeOverrideKey: desktopHome.path,
+            "PATH": path.map(\.path).joined(separator: ":")
+        ]
+    }
+
+    @discardableResult
+    func writeDesktopBundledClaude(version: String) throws -> URL {
+        try write(executableAt: desktopBundledClaude(version: version))
+    }
+
+    @discardableResult
+    func writeExecutable(at relativePath: String) throws -> URL {
+        try write(executableAt: url(relativePath))
+    }
+
+    private func write(executableAt destination: URL) throws -> URL {
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: destination)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: destination.path
+        )
+        return destination
+    }
+}
+
+/// A `FileManager` whose world ends at one directory.
+private final class ScopedFileManager: FileManager, @unchecked Sendable {
+    /// Resolved once, because everything asked of this is compared against it
+    /// and the paths arriving are not all spelled the same way — see
+    /// ``ClaudeInstallLayout/isSameFile(_:as:)``. Comparing the literal strings
+    /// rejected the very files the fixture had just written, but only under the
+    /// full suite, which is the worst version of that mistake.
+    private let rootPath: String
+    private let home: URL
+
+    init(root: URL, home: URL) {
+        rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        self.home = home
+        super.init()
+    }
+
+    override var homeDirectoryForCurrentUser: URL { home }
+
+    /// Nothing outside the root is executable, whatever the disk says. This is
+    /// what keeps `/opt/homebrew/bin/claude` on the developer's own machine out
+    /// of the answer.
+    override func isExecutableFile(atPath path: String) -> Bool {
+        let resolved = URL(fileURLWithPath: path)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        guard resolved.hasPrefix(rootPath + "/") else { return false }
+        return super.isExecutableFile(atPath: path)
+    }
 }
 
 private final class StubSessionListing: ClaudeCodeSessionListing, @unchecked Sendable {

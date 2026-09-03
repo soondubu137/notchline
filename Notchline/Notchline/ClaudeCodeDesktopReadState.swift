@@ -340,24 +340,37 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
     private var cachedRecords: [URL: (revision: FileRevision, record: Record?)] = [:]
     private var lastKnownGood: ClaudeCodeReadStateSnapshot?
 
+    /// Claude Desktop's application-support root.
+    ///
+    /// Named here rather than spelled at each use because two unrelated things
+    /// now read this tree: the session records below, and the CLI copy Desktop
+    /// keeps under `claude-code/<version>` that ``ClaudeExecutableLocator``
+    /// falls back to on a machine where nobody installed the terminal command.
+    /// One override has to move both, or a test pointing this at its own tree
+    /// silently leaves the other reading the developer's real Claude Desktop.
+    nonisolated static func liveHomeURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let configured = environment[homeOverrideKey], !configured.isEmpty {
+            return URL(
+                fileURLWithPath: (configured as NSString).expandingTildeInPath,
+                isDirectory: true
+            )
+        }
+        return fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support/Claude",
+                isDirectory: true
+            )
+    }
+
     nonisolated static func liveStateDirectoryURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> URL {
-        let home: URL
-        if let configured = environment[homeOverrideKey], !configured.isEmpty {
-            home = URL(
-                fileURLWithPath: (configured as NSString).expandingTildeInPath,
-                isDirectory: true
-            )
-        } else {
-            home = fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent(
-                    "Library/Application Support/Claude",
-                    isDirectory: true
-                )
-        }
-        return home.appendingPathComponent(sessionsDirectoryName, isDirectory: true)
+        liveHomeURL(environment: environment, fileManager: fileManager)
+            .appendingPathComponent(sessionsDirectoryName, isDirectory: true)
     }
 
     init(

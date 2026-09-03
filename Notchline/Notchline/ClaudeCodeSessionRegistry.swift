@@ -158,10 +158,45 @@ extension ClaudeCodeSessionListing {
     }
 }
 
-/// Finds the `claude` executable the same way a user's shell would.
+/// Finds the `claude` executable the same way a user's shell would, and then
+/// in the one place a shell would never look.
+///
+/// **A machine can be running Claude Code and have no `claude` on `PATH`.**
+/// Claude Desktop ships its own copy of the CLI and runs desktop-hosted
+/// sessions with it; installing the terminal command is a separate step in its
+/// install hub, and plenty of people never take it. Every candidate below the
+/// override used to assume they had — so on a Desktop-only machine this
+/// returned `nil`, `claude agents --json` never ran, presence never left
+/// `unknown`, and Claude Code drew no mark and no row while its hooks were
+/// registered and firing perfectly. The settings card said `Connected` the
+/// whole time, because it was reporting the registration and nothing else.
+///
+/// Desktop's copy answers the same command against the same
+/// `~/.claude/sessions`, verified against `2.1.258` on 2026-09-02, so nothing
+/// downstream has to know which one replied. It is tried **last**: a user who
+/// installed the CLI themselves is the one who updates it, and that is the one
+/// they drive.
 enum ClaudeExecutableLocator {
     /// An override for tests and for a user whose install is somewhere unusual.
     static let overrideEnvironmentKey = "NOTCHLINE_CLAUDE_PATH"
+
+    /// Where Claude Desktop keeps the CLI versions it has downloaded.
+    ///
+    /// One directory per version, and **more than one at a time**: measured
+    /// here on 2026-09-02, `2.1.255` and `2.1.258` sat side by side the day
+    /// after an update, with `2.1.247` already collected. So this is a choice
+    /// rather than a lookup, and it is made on the version in the name.
+    nonisolated private static let desktopVersionsDirectoryName = "claude-code"
+
+    /// The path inside one of those version directories.
+    ///
+    /// The bundle is `com.anthropic.claude-code`, which is the same fact
+    /// ``ClaudeCodeNavigator`` already depends on from the other end -- it
+    /// walks a session's ancestors and has to start at the *parent*, because a
+    /// desktop-hosted `claude` is itself inside this bundle and would otherwise
+    /// be found hosting itself.
+    nonisolated private static let desktopRelativeExecutablePath =
+        "claude.app/Contents/MacOS/claude"
 
     nonisolated static func locate(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -186,7 +221,72 @@ enum ClaudeExecutableLocator {
                     .appendingPathComponent("claude")
             )
         }
+        // And the copy that is there whether or not the user ever installed
+        // the command themselves.
+        candidates.append(
+            contentsOf: desktopBundledExecutables(
+                environment: environment,
+                fileManager: fileManager
+            )
+        )
         return candidates.first { fileManager.isExecutableFile(atPath: $0.path) }
+    }
+
+    /// Claude Desktop's own CLI copies, newest version first.
+    ///
+    /// Nothing here is filtered on the name looking like a version: an entry
+    /// whose name this cannot parse is still offered, last, because a naming
+    /// scheme this app failed to anticipate is a reason to rank a directory
+    /// low and never a reason to refuse a working executable. `.verified` --
+    /// the sha256 Desktop drops beside a version it has checked -- is
+    /// deliberately not read: what this needs to know is whether a file will
+    /// run, and `isExecutableFile` answers that without borrowing a meaning
+    /// from a marker nothing documents.
+    nonisolated static func desktopBundledExecutables(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        let versions = ClaudeCodeDesktopReadStateRepository
+            .liveHomeURL(environment: environment, fileManager: fileManager)
+            .appendingPathComponent(desktopVersionsDirectoryName, isDirectory: true)
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: versions,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return entries
+            .sorted { isNewer($0.lastPathComponent, than: $1.lastPathComponent) }
+            .map { $0.appendingPathComponent(desktopRelativeExecutablePath) }
+    }
+
+    /// Version-directory order, on the numbers rather than on the string.
+    ///
+    /// `2.1.9` sorts above `2.1.10` on any string comparison, which is the one
+    /// mistake this ordering exists to avoid. A name that is not all-numeric
+    /// dotted components compares as older than every one that is, and two of
+    /// those fall back to the string so the order is total and stable.
+    nonisolated private static func isNewer(_ lhs: String, than rhs: String) -> Bool {
+        let left = versionComponents(lhs)
+        let right = versionComponents(rhs)
+        if left == nil, right == nil { return lhs > rhs }
+        guard let left else { return false }
+        guard let right else { return true }
+        for (a, b) in zip(left, right) where a != b { return a > b }
+        if left.count != right.count { return left.count > right.count }
+        return lhs > rhs
+    }
+
+    nonisolated private static func versionComponents(_ name: String) -> [Int]? {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard !parts.isEmpty else { return nil }
+        var numbers: [Int] = []
+        for part in parts {
+            guard let number = Int(part), number >= 0 else { return nil }
+            numbers.append(number)
+        }
+        return numbers
     }
 }
 
