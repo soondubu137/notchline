@@ -62,7 +62,7 @@ The notch-less form **does not widen with the current state while a Turn is bein
 
 > Before the side padding went from `24` to `12`, those four numbers were `71.2` / `48.6` / `331.6` / `309`, and the notch-less cell still carried a state-dependent `215.6`.
 
-With `Hide the wings` ([`figma-design.md`](figma-design.md) §8.4) on, the notched column zeroes out entirely: neither wing is drawn and the notched width equals the occlusion width, regardless of how many products are connected. The notch-less column is unaffected — that row is disabled in settings on screens where the notch cannot be measured, including notch-less ones.
+With `Hide the wings` ([`figma-design.md`](figma-design.md) §8.4) on, the notched column zeroes out while neither product is waiting on the user: neither wing is drawn and the notched width equals the occlusion width, regardless of how many products are connected. **The leading wing is then billed per product rather than for the pair** — a product holding a Turn on `Approval needed`, `Input needed` or `Completed` draws its matrix and its session column, so the notched width is the occlusion, or the occlusion plus a one-mark wing, or plus a two-mark one, by how many products are waiting; the trailing wing stays at zero throughout. The notch-less column is unaffected — that row is disabled in settings on screens where the notch cannot be measured, including notch-less ones.
 
 ### 3.3 Timer and status name
 

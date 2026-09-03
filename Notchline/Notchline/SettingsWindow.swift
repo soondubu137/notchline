@@ -177,7 +177,8 @@ struct AppSettingsView: View {
         }
     }
 
-    /// Give the cut-out back, and draw nothing beside it.
+    /// Give the cut-out back, and draw nothing beside it until something is
+    /// wanted.
     ///
     /// **Always drawn, greyed where it cannot apply.** A switch that appears
     /// only on a notched display is one nobody finds: the person who would want
@@ -197,8 +198,11 @@ struct AppSettingsView: View {
                 .disabled(!store.canHideCompactWings)
                 .help(
                     "Leaves the collapsed component as the cut-out alone, with "
-                        + "no marks and no timer beside it. Needs a display "
-                        + "whose cut-out Notchline can measure."
+                        + "no timer beside it. A product's mark slides out "
+                        + "while one of its turns is waiting on approval, on "
+                        + "an answer, or to be read, and goes back when it is "
+                        + "dealt with. Needs a display whose cut-out Notchline "
+                        + "can measure."
                 )
         }
     }
@@ -245,8 +249,9 @@ struct AppSettingsView: View {
             return "This display reports a notch but not where it is, so there "
                 + "is nothing to shrink the collapsed component onto."
         }
-        return "Collapsed, Notchline is the cut-out and nothing else — no marks "
-            + "and no timer. Hovering still opens the panel."
+        return "Collapsed, Notchline is the cut-out and nothing else — until a "
+            + "turn needs you, when that product's mark slides out. Hovering "
+            + "still opens the panel."
     }
 
     // MARK: - Session list

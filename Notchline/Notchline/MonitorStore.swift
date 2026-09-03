@@ -880,6 +880,12 @@ enum PanelMetrics {
     /// because a control that vanishes from the menu bar takes its position
     /// with it and everything to its left slides over.
     ///
+    /// **It is a count and not a switch, which is what lets a hidden wing come
+    /// back one mark at a time.** With `Hide the wings` on, the marks the bar
+    /// draws are only the products holding a Turn to attend to
+    /// (``MonitorStore/compactDrawnMarks``), so this wing is `0`, one matrix,
+    /// or both — the same arithmetic, asked of a shorter list.
+    ///
     /// The marks enter at what they draw, so this wing is as wide as its
     /// contents and no wider — see
     /// ``drawnMarksWidth(markCount:sessionColumnCount:)``.
@@ -944,7 +950,15 @@ enum PanelMetrics {
         // column instead (`markWidth(isProductMark:)`), and it is sized from a
         // baseline rather than from its contents.
         sessionColumnCount: Int = 0,
-        drawsCompactMarks: Bool = true,
+        // How many of those marks the *collapsed notched* bar actually draws,
+        // where that is not all of them. Nil is "all of them", which is every
+        // other form and every state but two: a notched display resting with
+        // nothing connected draws none, and one that has given up its wings
+        // draws only the products holding a Turn to attend to
+        // (`MonitorStore.compactDrawnMarks`). The session columns are already
+        // counted over the drawn marks alone, so they need no second parameter
+        // -- and `drawnMarksWidth` clamps them to the marks that are left.
+        drawnMarkCount: Int? = nil,
         expandsToPillOnly: Bool = false,
         expandedContentHeight: CGFloat = expandedContentHeight
     ) -> CGSize {
@@ -989,8 +1003,8 @@ enum PanelMetrics {
             // both edges answer to their own wing's contents and to nothing
             // else.
             let width = notchedLeadingWidth(
-                markCount: drawsCompactMarks ? matrixCount : 0,
-                sessionColumnCount: drawsCompactMarks ? sessionColumnCount : 0
+                markCount: drawnMarkCount ?? matrixCount,
+                sessionColumnCount: sessionColumnCount
             )
                 + centerOcclusionWidth
                 + compactTrailingWingWidth(trailing: trailing)
@@ -1515,11 +1529,23 @@ final class MonitorStore: ObservableObject {
     /// Whether the collapsed surface gives up its wings and leaves the cut-out
     /// to speak for itself.
     ///
-    /// The form is not a new one: it is exactly what a notched display already
-    /// draws while nothing is connected (``drawsCompactMarks``), held for every
-    /// state instead of only for that one. The cut-out is a shape the hardware
-    /// puts on the screen whatever this app does, and this is the preference
-    /// for people who want that shape and nothing beside it.
+    /// The resting form is not a new one: it is exactly what a notched display
+    /// already draws while nothing is connected (``drawsCompactMarks``), asked
+    /// for on purpose rather than arrived at. The cut-out is a shape the
+    /// hardware puts on the screen whatever this app does, and this is the
+    /// preference for people who want that shape and nothing beside it while
+    /// nothing is being asked of them.
+    ///
+    /// **It is quiet, not blind.** A wing that never came back would make this
+    /// a preference for turning the product off: the notch is the only thing
+    /// this app has to say anything with, and a Turn stopped on an approval is
+    /// exactly what it exists to say. So the leading wing comes out for a
+    /// product holding a Turn to attend to and goes back when that Turn is
+    /// dealt with (``compactDrawnMarks``), one matrix per product and neither
+    /// while both are merely working. **The trailing wing never comes out at
+    /// all**: the badges and the elapsed reading say how much and how long, not
+    /// that anything is wanted, and the whole point of this preference is that
+    /// a running turn is nobody's business but the agent's.
     ///
     /// **Collapsed only, and deliberately.** Hover still opens the panel, and
     /// the panel still carries the marks, the rows and the gear. The cut-out is
@@ -1559,8 +1585,9 @@ final class MonitorStore: ObservableObject {
     ///
     /// Collapsed and expanded alike, because the reason is the wallpaper
     /// behind it and that does not change on hover. The one form it is not
-    /// drawn on is ``hidesCompactSurface``, where the user has asked for the
-    /// cut-out and nothing else; see ``showsSurfaceOutline``.
+    /// drawn on is ``givesUpCompactWings`` with no mark out, where the user has
+    /// asked for the cut-out and the surface is exactly that; see
+    /// ``showsSurfaceOutline``.
     ///
     /// Off by default and remembered across launches. It is a fact about the
     /// wallpaper somebody chose, and nothing here can read that.
@@ -1848,19 +1875,41 @@ final class MonitorStore: ObservableObject {
         quota.remainingPercent
     }
 
-    /// Whether the collapsed surface draws any mark.
+    /// The marks the collapsed surface actually draws, in the bar's own order.
     ///
-    /// False for a notched display resting with nothing connected, where the
-    /// whole leading wing goes away and the panel is just the cut-out. This is
-    /// the one place the two form factors differ in *what is visible* rather
-    /// than in how it is drawn: a no-notch pill has no cut-out to hide behind,
-    /// so it keeps the grey mark and holds its position in the menu bar.
+    /// Every mark on every form but one. A notched display resting with
+    /// nothing connected draws none — the whole leading wing goes away and the
+    /// panel is just the cut-out, because that cut-out is already a shape on
+    /// the screen and a grey mark beside it is a second one carrying no
+    /// information. This is the one place the two form factors differ in *what
+    /// is visible* rather than in how it is drawn: a no-notch pill has no
+    /// cut-out to hide behind, so it keeps the grey mark and holds its position
+    /// in the menu bar.
     ///
-    /// False for the whole of ``hidesCompactSurface`` as well, which is that
-    /// same resting form asked for on purpose rather than arrived at.
+    /// **With the wings given up, it is the products holding a Turn to attend
+    /// to** (``PresenceMark/hasATurnToAttendTo``) — none while both are merely
+    /// working, one matrix for the product that is waiting, both when both are.
+    /// Which mark it is, is said by hue rather than by position: there is
+    /// nothing beside it to read a position against, and the order is
+    /// ``AgentKind``'s here as everywhere else, so the pair never swaps under
+    /// the eye reading it.
+    ///
+    /// A filtered list rather than a narrower state: the panel's own width is
+    /// composed from what this holds
+    /// (``PanelMetrics/size(geometry:isExpanded:statusReadoutText:trailing:centerOcclusionWidth:compactHeight:status:matrixCount:sessionColumnCount:drawnMarkCount:expandsToPillOnly:expandedContentHeight:)``)
+    /// and the header draws exactly it, so the room made and the marks put in
+    /// it cannot come apart.
+    var compactDrawnMarks: [PresenceMark] {
+        guard !isExpanded, geometry == .notched else { return presenceMarks }
+        guard !isRestingOnly else { return [] }
+        guard givesUpCompactWings else { return presenceMarks }
+        return presenceMarks.filter(\.hasATurnToAttendTo)
+    }
+
+    /// Whether the collapsed surface draws any mark at all, which is the
+    /// question the leading wing's existence turns on.
     var drawsCompactMarks: Bool {
-        guard !isExpanded, geometry == .notched else { return true }
-        return !isRestingOnly && !hidesCompactSurface
+        !compactDrawnMarks.isEmpty
     }
 
     /// Whether ``hidesCompactWings`` is something the selected display could
@@ -1888,33 +1937,52 @@ final class MonitorStore: ObservableObject {
         return (selectedDisplay?.centerOcclusionWidth ?? 0) >= 1
     }
 
-    /// Whether the collapsed surface is drawing nothing at all.
+    /// Whether the collapsed surface has given up its wings: the preference,
+    /// on a display that can honour it.
     ///
-    /// Says nothing about hover: both readers of this are already collapsed-only
-    /// (``drawsCompactMarks`` guards on it, and the compact timer is drawn only
+    /// **Not "drawing nothing at all", which is what this used to say.** The
+    /// trailing wing does go entirely, and so does the leading one for as long
+    /// as neither product is waiting on the user — but a Turn stopped on an
+    /// approval, a question or an unread answer brings its own matrix out
+    /// (``compactDrawnMarks``), so this answers what the preference is doing
+    /// rather than what is left on screen. ``drawsCompactMarks`` is the second
+    /// question, and it is asked separately.
+    ///
+    /// Says nothing about hover: every reader of this is already collapsed-only
+    /// (the drawn marks guard on it, and the trailing reading is drawn only
     /// while collapsed), and scoping it here as well would make the answer
     /// change under the pointer for no drawn difference.
-    var hidesCompactSurface: Bool {
+    var givesUpCompactWings: Bool {
         hidesCompactWings && canHideCompactWings
     }
 
     /// Whether the outline is actually drawn, which is the preference minus the
     /// one form that has no edge of its own to trace.
     ///
-    /// A collapsed surface that has given up its wings *is* the cut-out: its
-    /// body is exactly the occlusion, and the only part of the contour still
-    /// on lit pixels is the pair of shoulders curving back to the menu bar.
-    /// Outlining those draws two grey hooks either side of the notch -- marks,
-    /// on the one form whose whole point is that there are none. So the two
-    /// preferences do not fight: the outline stands down while that form is on
-    /// screen, and comes back the moment the panel drops.
+    /// A collapsed surface that has given up its wings *and is drawing no mark*
+    /// **is** the cut-out: its body is exactly the occlusion, and the only part
+    /// of the contour still on lit pixels is the pair of shoulders curving back
+    /// to the menu bar. Outlining those draws two grey hooks either side of the
+    /// notch -- marks, on the one form whose whole point is that there are
+    /// none. So the two preferences do not fight: the outline stands down while
+    /// that form is on screen, and comes back the moment the panel drops.
     ///
-    /// Scoped to the collapsed state here rather than in ``hidesCompactSurface``
+    /// **A wing coming out gives it an edge back, and the outline returns with
+    /// it.** Once a matrix is standing past the cut-out the body is no longer
+    /// the occlusion, so the leading side and its lower corner are on lit pixels
+    /// like any other collapsed bar's -- and this preference is about a black
+    /// panel needing a boundary against a black wallpaper, which is as true of
+    /// a one-matrix bar as of a full one. The added clause is an *or* rather
+    /// than a replacement, which leaves the resting notched form exactly where
+    /// it was: it draws no mark either, and it has always been outlined, hooks
+    /// and all. The difference is that nobody asked for the cut-out there.
+    ///
+    /// Scoped to the collapsed state here rather than in ``givesUpCompactWings``
     /// for the reason given there: that property answers about the collapsed
     /// form and each reader says when it is asking.
     var showsSurfaceOutline: Bool {
         guard drawsSurfaceOutline else { return false }
-        return isExpanded || !hidesCompactSurface
+        return isExpanded || !givesUpCompactWings || drawsCompactMarks
     }
 
     /// Nothing is connected, so the only mark is the grey one.
@@ -1956,7 +2024,7 @@ final class MonitorStore: ObservableObject {
         // reserves goes away with the readout it was reserving for. Every
         // reader is the collapsed surface or its width: the header, the two
         // width compositions below, and the tick's own re-measure signature.
-        guard !hidesCompactSurface else { return nil }
+        guard !givesUpCompactWings else { return nil }
         return SessionElapsedFormatter.elapsed(
             since: longestRunningSessionStart,
             now: Self.readableNow(timerNow, forStart: longestRunningSessionStart)
@@ -1971,7 +2039,7 @@ final class MonitorStore: ObservableObject {
     /// the badges have to draw in, and deriving the badges from anything else
     /// would let the two ends of the bar disagree about the same list.
     var compactSubagentBadges: [AgentSubagentBadge] {
-        guard !hidesCompactSurface else { return [] }
+        guard !givesUpCompactWings else { return [] }
         return presenceMarks.compactMap { mark in
             guard let agent = mark.agent, !mark.subagents.isEmpty else { return nil }
             return AgentSubagentBadge(agent: agent, badge: mark.subagents)
@@ -2004,15 +2072,20 @@ final class MonitorStore: ObservableObject {
     /// notched bar leftwards, since it is pinned to the cut-out, and the pill
     /// by half on each edge, since it is centred. The expanded header is the
     /// one form left that reserves every mark's column and never reads this.
+    ///
+    /// Counted over the marks that are **drawn** (``compactDrawnMarks``) rather
+    /// than over every mark, so a wing held back behind the cut-out is not
+    /// billed for the column it is not drawing. It is the same list on every
+    /// other form.
     var compactSessionColumnCount: Int {
-        presenceMarks.filter(\.drawsSessionColumn).count
+        compactDrawnMarks.filter(\.drawsSessionColumn).count
     }
 
     /// The leading wing's marks at the width they are drawing, for the view
     /// that has to draw them into exactly the room the panel was sized for.
     var compactDrawnMarksWidth: CGFloat {
         PanelMetrics.drawnMarksWidth(
-            markCount: presenceMarks.count,
+            markCount: compactDrawnMarks.count,
             sessionColumnCount: compactSessionColumnCount
         )
     }
@@ -2101,8 +2174,10 @@ final class MonitorStore: ObservableObject {
     /// cannot see the column has no cheap way to ask for it, and nothing about
     /// the drawing has to change to hand it over.
     var spokenBuriedCompletionText: String? {
-        guard !hidesCompactSurface else { return nil }
-        let buried = presenceMarks.filter(\.buriesAFinishedTurn).compactMap(\.agent)
+        // Over the drawn marks: a column that is not on screen has no breath to
+        // compensate for, and with the wings given up a product holding a
+        // finished turn is out from behind the cut-out precisely because of it.
+        let buried = compactDrawnMarks.filter(\.buriesAFinishedTurn).compactMap(\.agent)
         guard !buried.isEmpty else { return nil }
         let count = sessions.filter { session in
             buried.contains(session.agent)
@@ -2406,11 +2481,14 @@ final class MonitorStore: ObservableObject {
             centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight,
             status: status,
-            // Exactly what the header draws. The resting mark counts as one,
-            // because it takes the single slot rather than adding one beside it.
+            // Every mark the surface *could* draw. The resting mark counts as
+            // one, because it takes the single slot rather than adding one
+            // beside it. What the collapsed notched bar is actually drawing is
+            // `drawnMarkCount` below -- the two differ only where the wings
+            // have been given up.
             matrixCount: presenceMarks.count,
             sessionColumnCount: compactSessionColumnCount,
-            drawsCompactMarks: drawsCompactMarks,
+            drawnMarkCount: compactDrawnMarks.count,
             expandsToPillOnly: expandsToPillOnly,
             expandedContentHeight: expandedContentHeight
         )

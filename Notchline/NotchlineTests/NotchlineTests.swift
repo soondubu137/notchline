@@ -677,7 +677,7 @@ struct NotchlineTests {
             status: shut.status,
             matrixCount: shut.presenceMarks.count,
             sessionColumnCount: shut.compactSessionColumnCount,
-            drawsCompactMarks: shut.drawsCompactMarks
+            drawnMarkCount: shut.compactDrawnMarks.count
         )
         #expect(shut.currentPanelSize == composed)
         // Both specimen products have rows, so both marks draw their column and
@@ -1300,7 +1300,7 @@ struct NotchlineTests {
             compactHeight: 46,
             status: .disconnected,
             matrixCount: 1,
-            drawsCompactMarks: false
+            drawnMarkCount: 0
         )
         #expect(restingNotched.width == 200)
 
@@ -1313,17 +1313,11 @@ struct NotchlineTests {
             centerOcclusionWidth: 200,
             compactHeight: 46,
             status: .connected,
-            matrixCount: 1,
-            drawsCompactMarks: true
+            matrixCount: 1
         )
         #expect(connectedNotched.width > restingNotched.width)
     }
 
-    /// Hiding the wings leaves the cut-out alone in every state, not only the
-    /// resting one.
-    ///
-    /// `onlyTheNotchedFormDrawsNothingWhileResting` already pins this *shape* —
-    /// what is added here is that a connected product with a turn running gets
     /// A turn that started since the last tick still draws a readout.
     ///
     /// **The tick is not the clock; it is a once-a-second sample of it.** A row
@@ -1372,10 +1366,19 @@ struct NotchlineTests {
         #expect(store.elapsedStart(for: finished) == nil)
     }
 
+    /// Hiding the wings leaves the cut-out alone for a turn that is merely
+    /// working, and not only for the resting state.
+    ///
+    /// `onlyTheNotchedFormDrawsNothingWhileResting` already pins this *shape* —
+    /// what is added here is that a connected product with a turn running gets
     /// it too, marks and timer alike, and that the body still lands exactly on
-    /// the cut-out's own edges rather than merely near them.
+    /// the cut-out's own edges rather than merely near them. `Working...` is
+    /// the state the notch spends most of its life in and the one asking
+    /// nothing of anybody, which is why it is the state this preference is
+    /// really about; the three that do want a person are
+    /// `aHiddenWingComesOutForTheProductWithATurnToAttendTo`.
     @Test @MainActor
-    func hidingTheWingsLeavesTheNotchedPanelAsTheCutOutAlone() {
+    func hidingTheWingsLeavesAWorkingNotchedPanelAsTheCutOutAlone() {
         let display = makeDisplay(
             id: "notched",
             ordinal: 1,
@@ -1401,7 +1404,8 @@ struct NotchlineTests {
 
         store.hidesCompactWings = true
 
-        #expect(store.hidesCompactSurface)
+        #expect(store.givesUpCompactWings)
+        #expect(store.compactDrawnMarks.isEmpty)
         #expect(!store.drawsCompactMarks)
         #expect(store.compactTimerText == nil)
         #expect(store.currentPanelSize.width == display.centerOcclusionWidth)
@@ -1412,6 +1416,193 @@ struct NotchlineTests {
         store.isExpanded = true
         #expect(store.drawsCompactMarks)
         #expect(store.currentPanelSize.width > display.centerOcclusionWidth)
+    }
+
+    /// A hidden wing is quiet, not blind: the product with a Turn to attend to
+    /// comes out from behind the cut-out, and only that one.
+    ///
+    /// The preference is for people who do not want to be told that an agent is
+    /// working. It is not a preference for not being told that one is *stuck* —
+    /// the notch is the only thing this app has to say anything with, and a
+    /// Turn parked on an approval is exactly what it exists to say. So the
+    /// three states that wait on a person each bring their own product's matrix
+    /// out, `Working...` brings none, and the two products answer separately
+    /// because they are two independent readouts.
+    ///
+    /// **The trailing wing stays behind the cut-out throughout**, approval and
+    /// all: the badges and the elapsed reading say how much and how long, which
+    /// is the running commentary this preference exists to switch off. What
+    /// comes out is the one mark that says a person is wanted.
+    @Test @MainActor
+    func aHiddenWingComesOutForTheProductWithATurnToAttendTo() {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let store = MonitorStore(displays: [display], services: [])
+        store.hidesCompactWings = true
+
+        func apply(codex: SessionStatus, claudeCode: SessionStatus) {
+            for (agent, status) in [
+                (AgentKind.codex, codex),
+                (AgentKind.claudeCode, claudeCode)
+            ] {
+                store.applyForTesting(
+                    makeAgentSnapshot(
+                        agent,
+                        sessions: [
+                            makeSession(
+                                agent: agent,
+                                threadID: "\(agent)",
+                                status: status,
+                                startedAt: Date(timeIntervalSinceNow: -90),
+                                // So the trailing wing has something to draw
+                                // that the preference is holding back, rather
+                                // than being empty for want of contents. Not on
+                                // a finished turn, where a subagent still in
+                                // flight would make that Thread Running --
+                                // which is the case
+                                // `aFinishedTurnBuriedUnderARunningOneStillOpensTheHiddenWing`
+                                // is about.
+                                runningSubagentCount: status == .completed ? 0 : 2
+                            )
+                        ]
+                    )
+                )
+            }
+        }
+
+        /// The bar a hidden surface would be if it drew exactly `marks` of the
+        /// products it is holding, and nothing on the trailing side.
+        func hiddenWidth(marks: Int) -> CGFloat {
+            PanelMetrics.size(
+                geometry: .notched,
+                isExpanded: false,
+                statusReadoutText: store.statusDisplayName,
+                trailing: .empty,
+                centerOcclusionWidth: display.centerOcclusionWidth,
+                compactHeight: store.compactHeight,
+                status: store.status,
+                matrixCount: 2,
+                sessionColumnCount: marks,
+                drawnMarkCount: marks
+            ).width
+        }
+
+        // Both merely working: the whole surface is the cut-out, exactly as it
+        // is at rest.
+        apply(codex: .running, claudeCode: .running)
+        #expect(store.presenceMarks.count == 2)
+        #expect(store.compactDrawnMarks.isEmpty)
+        #expect(store.currentPanelSize.width == display.centerOcclusionWidth)
+
+        // Codex stops on an approval. Its matrix comes out; Claude Code's,
+        // still working, does not -- and neither does the timer that has been
+        // running the whole time.
+        apply(codex: .approvalNeeded, claudeCode: .running)
+        #expect(store.compactDrawnMarks.map(\.agent) == [.codex])
+        #expect(store.compactSessionColumnCount == 1)
+        #expect(store.compactTrailingReading == .empty)
+        #expect(store.currentPanelSize.width == hiddenWidth(marks: 1))
+        // Pinned to the cut-out still: the wing takes its width leftwards.
+        #expect(store.currentPanelTrailingAnchor == display.centerOcclusionMaxX)
+        // And that empty trailing slot is the preference holding two badges and
+        // a running timer back, not a slot with nothing to put in it.
+        store.hidesCompactWings = false
+        #expect(store.compactTrailingReading != .empty)
+        #expect(store.compactSubagentBadges.count == 2)
+        #expect(store.compactTimerText != nil)
+        store.hidesCompactWings = true
+
+        // Claude Code is asked a question as well. Both come out, in the bar's
+        // own order and never in urgency's.
+        apply(codex: .approvalNeeded, claudeCode: .inputNeeded)
+        #expect(store.compactDrawnMarks.map(\.agent) == [.codex, .claudeCode])
+        #expect(store.currentPanelSize.width == hiddenWidth(marks: 2))
+
+        // Codex is answered and carries on working; Claude Code's turn ends and
+        // goes unread. A finished Turn waits on a person too -- to be read --
+        // so it is Claude Code's mark that is out now, alone.
+        apply(codex: .running, claudeCode: .completed)
+        #expect(store.compactDrawnMarks.map(\.agent) == [.claudeCode])
+        #expect(store.currentPanelSize.width == hiddenWidth(marks: 1))
+
+        // Everything is dealt with. The wing goes back and the surface is the
+        // cut-out again.
+        apply(codex: .running, claudeCode: .running)
+        #expect(store.compactDrawnMarks.isEmpty)
+        #expect(store.currentPanelSize.width == display.centerOcclusionWidth)
+
+        // And the preference reaches none of this with the panel open: hover
+        // is where both products are listed whatever they are doing.
+        store.isExpanded = true
+        #expect(store.compactDrawnMarks.count == 2)
+    }
+
+    /// A Turn that finished under a running one still brings its product's
+    /// matrix out, because the summary beside it cannot say so.
+    ///
+    /// `Completed` is the one state that both loses the summary and waits: a
+    /// product's mark takes its most urgent row, so a turn that ended while
+    /// another one was still working is spoken for by `buriesAFinishedTurn` and
+    /// by nothing else. Reading only the mark's own status here would make the
+    /// wing come out for a finished turn *unless* the product happened to be
+    /// busy, which is precisely backwards.
+    ///
+    /// A finished turn whose own subagents are still working is not one of
+    /// these: `effectiveStatus` calls that Thread running, and it is.
+    @Test @MainActor
+    func aFinishedTurnBuriedUnderARunningOneStillOpensTheHiddenWing() {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 38,
+            hasNotch: true
+        )
+        let store = MonitorStore(displays: [display], services: [])
+        store.hidesCompactWings = true
+
+        let started = Date(timeIntervalSinceNow: -90)
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                sessions: [
+                    makeSession(threadID: "busy", status: .running, startedAt: started),
+                    makeSession(threadID: "done", status: .completed, startedAt: started)
+                ]
+            )
+        )
+        // The mark says `Working...` -- the most urgent of the two rows -- and
+        // the finished one is underneath it.
+        #expect(store.presenceMarks.first?.status == .running)
+        #expect(store.presenceMarks.first?.buriesAFinishedTurn == true)
+        #expect(store.compactDrawnMarks.map(\.agent) == [.codex])
+        // Which VoiceOver says as well: the column is on screen, so the breath
+        // it cannot see has something to be spoken in place of.
+        #expect(store.spokenBuriedCompletionText == "1 turn finished and unread")
+
+        // The same row with a subagent still in flight is a Thread that is
+        // still working, so nothing is waiting on anybody and the wing stays
+        // behind the cut-out.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                sessions: [
+                    makeSession(threadID: "busy", status: .running, startedAt: started),
+                    makeSession(
+                        threadID: "done",
+                        status: .completed,
+                        startedAt: started,
+                        runningSubagentCount: 1
+                    )
+                ]
+            )
+        )
+        #expect(store.presenceMarks.first?.buriesAFinishedTurn == false)
+        #expect(store.compactDrawnMarks.isEmpty)
+        #expect(store.spokenBuriedCompletionText == nil)
     }
 
     /// The preference belongs to the user; whether it can be honoured belongs
@@ -1445,7 +1636,7 @@ struct NotchlineTests {
         #expect(store.canHideCompactWings)
 
         store.hidesCompactWings = true
-        #expect(store.hidesCompactSurface)
+        #expect(store.givesUpCompactWings)
         // Remembered across launches, like the fold and the display itself.
         #expect(
             MonitorStore(displays: [notched], services: [], preferences: defaults)
@@ -1454,14 +1645,14 @@ struct NotchlineTests {
 
         store.selectDisplay(id: external.id)
         #expect(!store.canHideCompactWings)
-        #expect(!store.hidesCompactSurface)
+        #expect(!store.givesUpCompactWings)
         // The pill keeps its mark and its position, exactly as it does resting.
         #expect(store.drawsCompactMarks)
         // And the preference survived the display that could not honour it.
         #expect(store.hidesCompactWings)
 
         store.selectDisplay(id: notched.id)
-        #expect(store.hidesCompactSurface)
+        #expect(store.givesUpCompactWings)
     }
 
     /// A notch this app cannot place is a notch it cannot shrink onto.
@@ -1520,7 +1711,7 @@ struct NotchlineTests {
         // Even asked for outright, it does not take effect: the emulated pill
         // keeps its mark, because hiding it would leave nothing on the screen.
         store.hidesCompactWings = true
-        #expect(!store.hidesCompactSurface)
+        #expect(!store.givesUpCompactWings)
         #expect(store.drawsCompactMarks)
         #expect(store.currentPanelSize.width > 0)
     }
@@ -1529,11 +1720,13 @@ struct NotchlineTests {
     /// remembered and it asks nothing of the display.
     ///
     /// The one form it stands down on is the collapsed surface that has given
-    /// up its wings: there the body *is* the cut-out and the only lit part of
-    /// the contour is the pair of shoulders, so an outline would draw two grey
-    /// hooks on the one form whose point is that it carries no marks. Hovering
-    /// drops a panel with an edge of its own, and the outline comes back with
-    /// it.
+    /// up its wings *and has no mark out*: there the body **is** the cut-out
+    /// and the only lit part of the contour is the pair of shoulders, so an
+    /// outline would draw two grey hooks on the one form whose point is that it
+    /// carries no marks. Hovering drops a panel with an edge of its own, and
+    /// the outline comes back with it -- and so does a wing coming out for a
+    /// Turn that wants a person, which gives the body a leading edge that is no
+    /// longer the notch's.
     @Test @MainActor
     func theOutlineIsRememberedAndStandsDownOnlyForTheHiddenCompactSurface() {
         let defaults = UserDefaults(suiteName: "outline-\(UUID().uuidString)")!
@@ -1571,13 +1764,64 @@ struct NotchlineTests {
         #expect(store.showsSurfaceOutline)
         store.selectDisplay(id: notched.id)
 
-        // The two preferences do not fight. Collapsed onto the cut-out there is
-        // no edge to trace; the panel that hover drops has one.
+        // The two preferences do not fight. Collapsed onto the cut-out with
+        // nothing waiting on anybody there is no edge to trace; the panel that
+        // hover drops has one.
+        //
+        // The working turn is stated rather than assumed: a store built with no
+        // services still opens on `previewSnapshot`, whose Codex rows are on
+        // `Input needed` -- which is now a state that brings a wing out.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                sessions: [
+                    makeSession(
+                        status: .running,
+                        startedAt: Date(timeIntervalSinceNow: -30)
+                    )
+                ]
+            )
+        )
         store.hidesCompactWings = true
-        #expect(store.hidesCompactSurface)
+        #expect(store.givesUpCompactWings)
+        #expect(!store.drawsCompactMarks)
         #expect(!store.showsSurfaceOutline)
         store.isExpanded = true
         #expect(store.showsSurfaceOutline)
+        store.isExpanded = false
+
+        // A mark coming out from behind the cut-out gives the body its own
+        // leading edge back, so there is something to trace again.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                sessions: [
+                    makeSession(
+                        status: .approvalNeeded,
+                        startedAt: Date(timeIntervalSinceNow: -30)
+                    )
+                ]
+            )
+        )
+        #expect(store.givesUpCompactWings)
+        #expect(store.drawsCompactMarks)
+        #expect(store.showsSurfaceOutline)
+
+        // The same turn, answered and working again: the wing goes back behind
+        // the cut-out and the stroke stands down with it.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                sessions: [
+                    makeSession(
+                        status: .running,
+                        startedAt: Date(timeIntervalSinceNow: -30)
+                    )
+                ]
+            )
+        )
+        #expect(!store.drawsCompactMarks)
+        #expect(!store.showsSurfaceOutline)
     }
 
     /// A second mark widens the notched wing by exactly one matrix and its gap
@@ -1594,8 +1838,7 @@ struct NotchlineTests {
                 compactHeight: 46,
                 status: .running,
                 matrixCount: markCount,
-                sessionColumnCount: columnCount,
-                drawsCompactMarks: true
+                sessionColumnCount: columnCount
             ).width
         }
         // One more mark is one more matrix and the pair gap between them, and
@@ -1641,7 +1884,7 @@ struct NotchlineTests {
                 compactHeight: 46,
                 status: .disconnected,
                 matrixCount: 1,
-                drawsCompactMarks: geometry == .noNotch
+                drawnMarkCount: geometry == .noNotch ? 1 : 0
             )
             let hovered = PanelMetrics.size(
                 geometry: geometry,
@@ -2963,7 +3206,7 @@ struct NotchlineTests {
     ///
     /// It is one loop rather than three now: the wing answers to the trailing
     /// reading and to nothing else. It used to be measured across every menu
-    /// bar height and both `drawsCompactMarks` values as well, because the
+    /// bar height and a drawn wing and a bare cut-out as well, because the
     /// wingless branch derived a step from the panel's height (§3.6) -- the
     /// one place a fraction could ever have entered this from outside the
     /// reading. That branch is gone, so the panel's height cannot reach any
@@ -3091,8 +3334,7 @@ struct NotchlineTests {
             centerOcclusionWidth: 200,
             compactHeight: bar,
             status: .running,
-            matrixCount: 1,
-            drawsCompactMarks: true
+            matrixCount: 1
         ).width
         let leading = PanelMetrics.compactLeadingWidth(
             statusReadoutText: "Working...",
@@ -29574,7 +29816,7 @@ extension NotchlineTests {
         )
 
         store.hidesCompactWings = true
-        #expect(store.hidesCompactSurface, "the display can honour it")
+        #expect(store.givesUpCompactWings, "the display can honour it")
         #expect(store.compactRunningSubagentCount == 0)
         #expect(store.compactTrailingReading == .empty)
     }

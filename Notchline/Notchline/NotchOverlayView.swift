@@ -352,8 +352,7 @@ private struct OverlayHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             StatusReadout(
-                marks: store.presenceMarks,
-                drawsMarks: store.drawsCompactMarks,
+                marks: store.compactDrawnMarks,
                 text: statusText,
                 showsText: showsStatusText,
                 reservesColumnRoom: reservesRoom,
@@ -533,8 +532,9 @@ private struct CompactTrailingSlot: View {
 }
 
 private struct StatusReadout: View {
+    /// What this surface draws, which on a collapsed notched bar is not
+    /// necessarily every mark: ``MonitorStore/compactDrawnMarks``.
     let marks: [PresenceMark]
-    let drawsMarks: Bool
     let text: String
     let showsText: Bool
     /// Whether the panel this readout is drawn in has held room for every
@@ -572,7 +572,7 @@ private struct StatusReadout: View {
 
     var body: some View {
         HStack(spacing: spacing) {
-            if drawsMarks {
+            if !marks.isEmpty {
                 HStack(spacing: markSpacing) {
                     // Order is `AgentKind`'s and never urgency's, so a mark
                     // never moves out from under the eye reading it.
@@ -599,6 +599,7 @@ private struct StatusReadout: View {
                                 )
                             }
                         }
+                        .transition(Self.markFade)
                     }
                 }
                 // **The anchor, on the two forms that hold a position.** The
@@ -642,6 +643,11 @@ private struct StatusReadout: View {
             }
         }
         .fixedSize(horizontal: true, vertical: false)
+        // The transaction the mark transitions above run in. Each carries its
+        // own curve, so what this supplies is only the fact that a mark
+        // arriving or leaving is animated at all -- on the same curve the
+        // panel's own edge travels, since the two are one movement.
+        .animation(PanelMotion.animation, value: drawnProducts)
         // Moved by an explicit write on the column's own curve rather than by
         // inheriting one. A packed mark's width change animates inside the mark
         // that owns it; two stacks out, at the label, that arrived as a jump --
@@ -695,6 +701,30 @@ private struct StatusReadout: View {
     private var isActive: Bool {
         marks.contains { NotchMatrixState($0.status).isActive }
     }
+
+    /// What the readout is drawing, as against what those marks are saying.
+    ///
+    /// A mark changing status is redrawn where it stands; a mark *arriving* or
+    /// *leaving* is a wing opening or closing around it, and that is the only
+    /// change this animation is for. Keyed on the products drawn rather than on
+    /// the marks themselves so a matrix falling from `Working...` to
+    /// `Completed` starts no transition.
+    private var drawnProducts: [AgentKind?] {
+        marks.map(\.agent)
+    }
+
+    /// A mark arriving into the wing that opened for it, or leaving before it
+    /// shuts -- the same fade, and the same reasoning, as the badges and the
+    /// reading in the trailing slot (``PanelMotion/fade(isArriving:)``).
+    ///
+    /// It earns its keep on the collapsed notched bar with `Hide the wings` on,
+    /// where a matrix comes out from behind the cut-out on its own account: at
+    /// full ink from the first frame it would be drawn *over* the cut-out for
+    /// as long as the panel's edge took to clear it.
+    private static let markFade = AnyTransition.asymmetric(
+        insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),
+        removal: .opacity.animation(PanelMotion.fade(isArriving: false))
+    )
 }
 
 /// The gear, shared by the expanded top bar and the resting pill.

@@ -894,6 +894,34 @@ nonisolated struct PresenceMark: Equatable, Sendable {
     /// (``PanelMetrics/drawnMarksWidth(markCount:sessionColumnCount:)``).
     var drawsSessionColumn: Bool { agent != nil && sessionCount > 0 }
 
+    /// Whether this product is holding a Turn the user still has to attend to.
+    ///
+    /// The three states that wait on a person, against the one that does not:
+    /// approval and input are stopped until they are answered, a finished Turn
+    /// is stopped until it is read (`CONTEXT.md`, *unread terminal state*), and
+    /// a running Turn asks for nobody and ends by itself. It is deliberately
+    /// **not** ``MonitorStatus/wantsPerson`` plus a case: that property answers
+    /// what the *reading's ground* says, which is about being asked something,
+    /// while this one answers whether there is anything here for the user at
+    /// all.
+    ///
+    /// **Both halves of "has a finished Turn", because the summary can lose
+    /// one.** ``status`` is this product's most urgent row, so a Turn that
+    /// finished under a running one is spoken for by ``buriesAFinishedTurn``
+    /// and by nothing else -- the same asymmetry the breathing column exists
+    /// for. Both read ``MonitorAggregation/effectiveStatus(of:)``, so a
+    /// finished Turn whose subagents are still working counts as running here
+    /// too: that Thread is still working, and nothing is waiting on the user
+    /// yet.
+    ///
+    /// Read by the collapsed surface with `Hide the wings` on, where it decides
+    /// which matrices come out from behind the cut-out
+    /// (``MonitorStore/compactDrawnMarks``). Nothing else reads it: with the
+    /// wings drawn, every mark is drawn whatever it is saying.
+    var hasATurnToAttendTo: Bool {
+        status.wantsPerson || status == .completed || buriesAFinishedTurn
+    }
+
     nonisolated init(
         agent: AgentKind?,
         status: MonitorStatus,
