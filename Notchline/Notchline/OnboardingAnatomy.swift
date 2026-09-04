@@ -608,10 +608,14 @@ struct CollapsedBarAnatomy: View {
             reading = PanelMetrics.drawnCompactReadingWidth(timerText)
         }
         let timer = trailing - reading / 2
-        let badges = trailing
-            - reading
-            - PanelMetrics.subagentBadgeTimerSpacing
-            - PanelMetrics.subagentBadgesWidth(store.compactSubagentBadges) / 2
+        // **This page is knowingly stale** — `compact-view-v2.md` §8. The bar
+        // it pins is now one aggregate mark and two numerals, so four of the
+        // six labels below name things the collapsed surface no longer draws:
+        // there is no mark per product, no dot column, and no badge in this
+        // wing. It is redrawn in a change of its own; what is kept here is
+        // enough to compile and to leave the two pins that are still true —
+        // the mark and the reading — standing where they were.
+        let badges = trailing - reading - PanelMetrics.subagentBadgeTimerSpacing
         let top = -AnatomyMetrics.leaderClearance - AnatomyMetrics.pinSize / 2
         let bottom = store.currentPanelSize.height
             + AnatomyMetrics.leaderClearance

@@ -351,16 +351,26 @@ private struct OverlayHeader: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            StatusReadout(
-                marks: store.compactDrawnMarks,
-                text: statusText,
-                showsText: showsStatusText,
-                reservesColumnRoom: reservesRoom,
-                spacing: PanelMetrics.expandedReadoutSpacing,
-                matrixSize: PanelMetrics.statusMatrixSize,
-                markSpacing: PanelMetrics.compactMatrixSpacing,
-                breathesBuriedCompletions: !store.isExpanded
-            )
+            // **Two different leading groups, not one drawn two ways.**
+            // Collapsed, this surface draws one mark for every product at once
+            // and counts the whole list in two numerals; expanded, it is still
+            // V1's matrix per product with the status name beside it. The band
+            // folds to match in `expanded-header-v2.md`, which this document's
+            // own dependency order puts second.
+            if store.isExpanded {
+                StatusReadout(
+                    marks: store.compactDrawnMarks,
+                    text: statusText,
+                    showsText: showsStatusText,
+                    reservesColumnRoom: reservesRoom,
+                    spacing: PanelMetrics.expandedReadoutSpacing,
+                    matrixSize: PanelMetrics.statusMatrixSize,
+                    markSpacing: PanelMetrics.compactMatrixSpacing,
+                    breathesBuriedCompletions: false
+                )
+            } else {
+                CompactLeadingGroup()
+            }
 
             Spacer(minLength: 0)
 
@@ -421,18 +431,67 @@ private struct OverlayHeader: View {
     }
 }
 
-/// The collapsed surface's trailing wing: the subagent badges, the elapsed
-/// reading, or both sharing the slot.
+/// The collapsed surface's leading wing: one aggregate mark, and the counts.
 ///
-/// Present while a turn is timed or a subagent is still working, absent
-/// otherwise so a notched display shows no empty second cut-out. The expanded
-/// view times each row individually instead.
+/// **Nothing here is per product.** The mark draws the most urgent status any
+/// product is holding, in the ink the user has chosen rather than in one that
+/// says whose it is; the numerals count every row and every subagent on the
+/// list. So the wing moves when the *work* changes and never because something
+/// was installed — which is the whole of `compact-view-v2.md` §1, and worth
+/// `167` pt at five products against V1's per-product bar.
+private struct CompactLeadingGroup: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    var body: some View {
+        // Absent rather than empty on a notched bar with nothing to say: the
+        // cut-out is already a shape on the screen, and a grey mark beside it
+        // carries no information. Both other forms keep the mark, because a
+        // control that vanishes from the menu bar takes its position with it.
+        if store.drawsCompactMarks {
+            HStack(spacing: 0) {
+                NotchStatusMatrix(
+                    state: NotchMatrixState(store.status),
+                    size: PanelMetrics.statusMatrixSize,
+                    ink: store.aggregateMatrixInk
+                )
+                AggregateCountsColumn(
+                    sessionCount: store.aggregateSessionCount,
+                    subagentCount: store.aggregateSubagentCount,
+                    matrixSize: PanelMetrics.statusMatrixSize,
+                    // The pill is centred and fixed in width, so its ends are
+                    // anchored and the middle gives way; the notched bar is
+                    // pinned to the cut-out and hugs what it draws.
+                    reservesTwoDigits: store.geometry == .noNotch
+                )
+            }
+            .transition(Self.wingFade)
+        }
+    }
+
+    /// The mark arriving into a wing that opened for it, or leaving before it
+    /// shuts — the same fade, and the same reasoning, as everything else that
+    /// stands in a slot on this surface.
+    ///
+    /// It earns its keep with `Hide the wings` on, where the whole group comes
+    /// out from behind the cut-out on its own account: at full ink from the
+    /// first frame it would be drawn *over* the cut-out for as long as the
+    /// panel's edge took to clear it.
+    private static let wingFade = AnyTransition.asymmetric(
+        insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),
+        removal: .opacity.animation(PanelMotion.fade(isArriving: false))
+    )
+}
+
+/// The collapsed surface's trailing wing: the elapsed reading.
 ///
-/// The badges and the reading are two views sharing one slot, not one raster
-/// the way the count used to be baked into the timer's own prefix: a badge is a
-/// static reading that only changes when a subagent starts, stops or is stopped
-/// on a question, and drawing it apart from the reading's once-a-second layer
-/// keeps that layer from re-rastering on every badge change and vice versa.
+/// Present while a turn is timed, absent otherwise so a notched display shows
+/// no empty second cut-out. The expanded view times each row individually
+/// instead.
+///
+/// **The subagent badges have left it.** They were one tinted tile per product
+/// saying how many were in flight, and that count is now the leading wing's
+/// second numeral — aggregate, untinted, and inside the room the mark already
+/// had (`compact-view-v2.md` §3).
 private struct CompactTrailingSlot: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -458,10 +517,15 @@ private struct CompactTrailingSlot: View {
     @State private var boxWidth: CGFloat?
 
     var body: some View {
-        HStack(spacing: PanelMetrics.subagentBadgeTimerSpacing) {
-            let badges = store.compactSubagentBadges
-            if !badges.isEmpty {
-                SubagentBadgeRow(badges: badges)
+        HStack(spacing: 0) {
+            if store.buriesAFinishedTurn {
+                BuriedFinishDot()
+                    .padding(
+                        .trailing,
+                        store.compactTimerText == nil
+                            ? 0
+                            : PanelMetrics.buriedFinishDotSpacing
+                    )
                     .transition(Self.markFade)
             }
             // The reading is drawn the one way, whatever the aggregate is:
@@ -479,10 +543,18 @@ private struct CompactTrailingSlot: View {
             // The ground stays a `.clear` ``ReadingGround`` rather than no
             // ground at all: it carries the padding both trailing widths bill
             // for, so the composed bar width is unchanged.
-            if let startedAt = store.compactTimerStart {
-                ReadingGround(fill: .clear) {
+            //
+            // **Except when it has stopped**, which is the one thing the digits
+            // cannot say alone: the turn ends, the figure freezes at the length
+            // it reached, and the ground it was already standing on fills. That
+            // is a property of the figure rather than a comparison with a
+            // neighbour, which is why a ground is allowed here where the white
+            // flip is not (`compact-view-v2.md` §4.2).
+            if let span = store.compactReadingSpan {
+                ReadingGround(fill: span.end == nil ? .clear : Self.stoppedGround) {
                     ElapsedReadout(
-                        startedAt: startedAt,
+                        startedAt: span.start,
+                        stoppedAt: span.end,
                         tick: store.elapsedTick.eraseToAnyPublisher(),
                         tint: NotchPalette.labelDrawingColor,
                         weight: .light
@@ -519,8 +591,13 @@ private struct CompactTrailingSlot: View {
 
     /// What the slot is currently drawing, as against how wide it is.
     private var presence: [Bool] {
-        [store.compactSubagentBadges.isEmpty, store.compactTimerStart == nil]
+        [store.compactReadingSpan == nil, store.buriesAFinishedTurn]
     }
+
+    /// The ground a stopped reading fills with: the dim end of the row's own
+    /// pair, unchanged, so a frozen figure up here and a finished row below it
+    /// are the same mark.
+    private static let stoppedGround = NotchPalette.restingInk.chipFill(over: .black)
 
     /// Fading rather than appearing, because the wing they stand in is a width
     /// that opens for them: a reading arriving at full ink would be drawn over

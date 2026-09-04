@@ -121,6 +121,42 @@ enum NotchPalette {
         onRed: 0x15 / 255, onGreen: 0x15 / 255, onBlue: 0x15 / 255
     )
 
+    /// The one mark both collapsed forms draw, in the ink it draws it in.
+    ///
+    /// **Hue stopped being identity when the marks folded into one.** With a
+    /// matrix per product, hue was the only thing saying which product a mark
+    /// belonged to; with one aggregate mark there is no product to name, so the
+    /// channel is free — and it is the user's
+    /// (`compact-view-v2.md` §2.2, `aggregate-ink-palette.md`).
+    ///
+    /// Sage · hint, `#1B1F1C` → `#DEE8E0`: the hue furthest in OKLCH from both
+    /// products at once (`150°`, `108°` from each, the maximum any hue can be),
+    /// so the aggregate can never read as a dim Codex or a dim Claude Code.
+    /// Both lightnesses are the greyscale's own — `#E5E5EA` lit and `#1E1E1E`
+    /// unlit — because **brightness is this surface's attention channel** and a
+    /// preference able to dim the mark asking for a person would be a
+    /// preference that changes what the mark means. The whole recorded set of
+    /// 36 shares those two lightnesses for that reason; only chroma and hue
+    /// move.
+    ///
+    /// Not yet a preference: the picker is `compact-view-v2.md` §12's third
+    /// Settings row, and this is what an install that has never seen it takes.
+    static let defaultAggregateInk = MatrixInk(
+        offRed: 0x1B / 255, offGreen: 0x1F / 255, offBlue: 0x1C / 255,
+        onRed: 0xDE / 255, onGreen: 0xE8 / 255, onBlue: 0xE0 / 255
+    )
+
+    /// The aggregate mark's ink, which is the user's hue only once something is
+    /// behind it.
+    ///
+    /// ``restingInk`` is not tinted and must not be: `#151515` means *nothing
+    /// is connected*, and colouring it would say the preference applies to a
+    /// state with no agent in it. The hue arrives with the first connection
+    /// (`aggregate-ink-palette.md` §5).
+    nonisolated static func aggregateInk(isConnected: Bool) -> MatrixInk {
+        isConnected ? defaultAggregateInk : restingInk
+    }
+
     /// Two inks in one matrix, cut on the mark's diagonal.
     ///
     /// The surface never draws this. Every mark on the notch belongs to exactly
@@ -240,6 +276,21 @@ enum NotchPalette {
         srgbRed: labelRGB.red,
         green: labelRGB.green,
         blue: labelRGB.blue,
+        alpha: 1
+    )
+    /// The sessions numeral, which is the brighter of the counts column's two
+    /// steps (`compact-view-v2.md` §3.2 rule 01).
+    ///
+    /// **Hierarchy here is size and brightness, never hue.** Hue meant "which
+    /// product" and there is no product left for a collapsed numeral to name;
+    /// white stays reserved for attention, which this column never signals. The
+    /// subagent numeral is ``labelDrawingColor`` — `#7C7C80`, the dim step this
+    /// surface already draws every reading in — so the pair is one existing
+    /// ramp rather than a new one.
+    static let countsSessionDrawingColor = NSColor(
+        srgbRed: 0xC7 / 255,
+        green: 0xC7 / 255,
+        blue: 0xCC / 255,
         alpha: 1
     )
     static let spotlightDrawingColor = NSColor.white
@@ -636,22 +687,6 @@ struct ReadingGround<Content: View>: View {
                 )
                 .fill(fill)
             )
-    }
-}
-
-/// The collapsed surface's badges: one per product, tinted, Codex leading.
-///
-/// `dual-agent-design.md` §10. Spaced at the matrices' own `6`, because this
-/// pair is that pair read at the other end of the bar.
-struct SubagentBadgeRow: View {
-    let badges: [AgentSubagentBadge]
-
-    var body: some View {
-        HStack(spacing: PanelMetrics.subagentBadgeSpacing) {
-            ForEach(badges, id: \.agent) { mark in
-                SubagentBadgeView(badge: mark.badge, tint: .product(mark.agent))
-            }
-        }
     }
 }
 
@@ -1106,6 +1141,316 @@ final class SessionDotColumnView: NSView {
     private static let settleKey = "sessionDotBreathSettle"
 }
 
+/// The collapsed surface's counts: sessions over subagents, stacked inside the
+/// height of one matrix.
+///
+/// **It asks for no room the mark did not already have.** The two numerals are
+/// anchored to the matrix's own edges rather than set on a line of their own —
+/// the sessions cap-top on its top edge, the subagents baseline on its bottom —
+/// so the whole column is exactly ``PanelMetrics/statusMatrixSize`` tall and
+/// draws identically under a `46` pt menu bar and a `22` pt one. That is the
+/// test the session-dot column was built to pass and the reason a numeral set
+/// *beside* the matrix failed it (`compact-view-v2.md` §3.1).
+///
+/// **Nothing here is per product.** One numeral counts every row on the
+/// monitored list and the other every subagent in flight across both, which is
+/// what lets this replace a dot column and a badge per product at a fixed
+/// width. Hierarchy is size and brightness and never hue, because there is no
+/// product left for a colour to name (§3.2).
+struct AggregateCountsColumn: View {
+    /// Rows on the monitored list, finished-but-not-yet-aged-out included.
+    let sessionCount: Int
+    /// Subagents in flight, across every row of both products.
+    let subagentCount: Int
+    let matrixSize: CGFloat
+    /// Whether this form holds the column open at two digits rather than
+    /// hugging the digits it draws.
+    ///
+    /// The pill alone (`compact-view-v2.md` §6.1): it is centred and fixed in
+    /// width, so a tenth session must widen nothing and move nothing. The
+    /// notched bar hugs and gives the width back, because it is pinned to the
+    /// cut-out and its leading edge is free to travel.
+    var reservesTwoDigits = false
+
+    var body: some View {
+        CountsNumerals(
+            sessionCount: sessionCount,
+            subagentCount: subagentCount,
+            matrixSize: matrixSize
+        )
+        .frame(width: digitsWidth, height: matrixSize, alignment: .leading)
+        // Drawn at its resting distance from the mark whatever the slot is
+        // doing: `offset` moves the drawing and not the layout, so the room
+        // below can open and close under numerals that never move. The same
+        // arrangement, for the same reason, as ``SessionCountDots``.
+        .offset(x: PanelMetrics.aggregateCountsGap)
+        .frame(width: slotWidth, alignment: .leading)
+        .animation(PanelMotion.slot(isOpening: sessionCount > 0), value: slotWidth)
+        .accessibilityHidden(true)
+    }
+
+    /// The room the column takes out of the wing, gap included. Zero is never
+    /// drawn, so no rows is no column at all (§3.2 rule 03) — except on the
+    /// pill, which holds the room open whatever it draws.
+    private var slotWidth: CGFloat {
+        PanelMetrics.countsSlotWidth(
+            sessionCount: sessionCount,
+            reserved: reservesTwoDigits
+        )
+    }
+
+    /// What the numerals themselves are given, which on the pill is two digits
+    /// whether or not it is drawing two.
+    private var digitsWidth: CGFloat {
+        reservesTwoDigits
+            ? PanelMetrics.reservedCountsColumnWidth
+            : PanelMetrics.countsColumnWidth(sessionCount: sessionCount)
+    }
+}
+
+private struct CountsNumerals: NSViewRepresentable {
+    let sessionCount: Int
+    let subagentCount: Int
+    let matrixSize: CGFloat
+
+    func makeNSView(context: Context) -> CountsNumeralsView {
+        let view = CountsNumeralsView()
+        apply(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: CountsNumeralsView, context: Context) {
+        apply(to: nsView)
+    }
+
+    private func apply(to view: CountsNumeralsView) {
+        view.apply(
+            sessionCount: sessionCount,
+            subagentCount: subagentCount,
+            matrixSize: matrixSize
+        )
+    }
+}
+
+/// The two numerals, on two layers.
+///
+/// **Layer-backed for placement, not for cost.** A numeral has to land on the
+/// matrix's own edges to a fraction of a point, and the one thing this surface
+/// can measure exactly is a glyph raster drawn at a baseline it chose
+/// (``NotchTextRaster/glyphImage(text:font:color:size:scale:)`` draws the line
+/// box bottom at the origin, so the baseline is one descender above it). It
+/// also gives the two movements somewhere to happen independently: a subagent
+/// count arriving fades its own layer while the sessions layer rises under a
+/// separate animation, and neither re-renders the overlay.
+///
+/// Both movements have a beginning and an end, which is what `AGENTS.md` §7
+/// allows here — nothing on this view ticks.
+final class CountsNumeralsView: NSView {
+    private let sessions = CALayer()
+    private let subagents = CALayer()
+
+    private var sessionCount = 0
+    private var subagentCount = 0
+    private var matrixSize: CGFloat = 0
+    private var hasApplied = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        // The subagent numeral's baseline is the column's own bottom edge, so
+        // its descenders — and the ceil the raster takes — fall outside these
+        // bounds by design.
+        layer?.masksToBounds = false
+        for numeral in [sessions, subagents] {
+            numeral.contentsGravity = .bottomLeft
+            numeral.opacity = 0
+            layer?.addSublayer(numeral)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func apply(sessionCount: Int, subagentCount: Int, matrixSize: CGFloat) {
+        let rises = (self.subagentCount > 0) != (subagentCount > 0)
+        self.sessionCount = sessionCount
+        self.subagentCount = subagentCount
+        self.matrixSize = matrixSize
+        // The first application places the column rather than animating into
+        // it: a panel opening on a turn already running has nothing to move
+        // from.
+        let animates = hasApplied
+        hasApplied = true
+        redraw(animatingRise: rises && animates, animatingFade: animates)
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        redraw(animatingRise: false, animatingFade: false)
+    }
+
+    private func redraw(animatingRise: Bool, animatingFade: Bool) {
+        let scale = window?.backingScaleFactor ?? 2
+        place(
+            sessions,
+            text: sessionCount > 0 ? "\(sessionCount)" : nil,
+            font: PanelMetrics.countsSessionFont,
+            colour: NotchPalette.countsSessionDrawingColor,
+            baseline: PanelMetrics.countsSessionBaseline(
+                hasSubagents: subagentCount > 0,
+                matrixSize: matrixSize
+            ),
+            scale: scale,
+            animatingPosition: animatingRise,
+            animatingFade: animatingFade
+        )
+        place(
+            subagents,
+            // Zero is never drawn, and neither is a second numeral with no
+            // sessions above it to belong to.
+            text: subagentCount > 0 && sessionCount > 0 ? "\(subagentCount)" : nil,
+            font: PanelMetrics.countsSubagentFont,
+            colour: NotchPalette.labelDrawingColor,
+            baseline: PanelMetrics.countsSubagentBaseline,
+            scale: scale,
+            animatingPosition: false,
+            animatingFade: animatingFade
+        )
+    }
+
+    /// One numeral, at the baseline the column gives it.
+    ///
+    /// The layer's own frame carries the glyphs' box; `baseline` is where the
+    /// figures stand, measured up from the column's bottom edge, and the
+    /// descender is what converts one into the other.
+    private func place(
+        _ numeral: CALayer,
+        text: String?,
+        font: NSFont,
+        colour: NSColor,
+        baseline: CGFloat,
+        scale: CGFloat,
+        animatingPosition: Bool,
+        animatingFade: Bool
+    ) {
+        guard let text else {
+            fade(numeral, to: 0, animated: animatingFade)
+            return
+        }
+        let size = NotchTextRaster.textSize(text, font: font)
+        let frame = CGRect(
+            x: 0,
+            y: baseline + font.descender,
+            width: size.width,
+            height: size.height
+        )
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        numeral.contentsScale = scale
+        numeral.contents = NotchTextRaster.glyphImage(
+            text: text,
+            font: font,
+            color: colour,
+            size: size,
+            scale: scale
+        )
+        if !animatingPosition || numeral.opacity == 0 {
+            numeral.frame = frame
+        }
+        CATransaction.commit()
+
+        if animatingPosition, numeral.opacity != 0, numeral.frame != frame {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(PanelMotion.duration)
+            CATransaction.setAnimationTimingFunction(PanelMotion.timingFunction)
+            numeral.frame = frame
+            CATransaction.commit()
+        }
+        fade(numeral, to: 1, animated: animatingFade)
+    }
+
+    private func fade(_ numeral: CALayer, to opacity: Float, animated: Bool) {
+        guard numeral.opacity != opacity else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(!animated)
+        if animated {
+            CATransaction.setAnimationDuration(PanelMotion.duration)
+            CATransaction.setAnimationTimingFunction(PanelMotion.timingFunction)
+        }
+        numeral.opacity = opacity
+        CATransaction.commit()
+    }
+}
+
+/// The trailing wing's stand-in for a finished turn nobody has read.
+///
+/// **The one state a summary loses.** The mark draws the most urgent status
+/// anywhere and the reading belongs to whatever is being timed, so a turn that
+/// finished while another is still running has no representative at all: the
+/// mark is on Radar and the frozen reading belongs to a Completed aggregate
+/// this is not. The dot is that reading's stand-in
+/// (`compact-view-v2.md` §4.3).
+///
+/// **It breathes within its own ink, never above it.** The modulation only ever
+/// dims `#7C7C80`, so it cannot approach the aggregate's lit ink and cannot be
+/// read as the one thing brightness means on this surface. Its slot is a fixed
+/// `4`, so nothing on the wing changes width while it moves. This is V1's
+/// breath on a new carrier — the session-dot column that used to carry it went
+/// with the per-product marks.
+struct BuriedFinishDot: View {
+    var body: some View {
+        BreathingDot()
+            .frame(
+                width: PanelMetrics.buriedFinishDotSize,
+                height: PanelMetrics.buriedFinishDotSize
+            )
+            // Spoken instead by `MonitorStore.spokenBuriedCompletionText`,
+            // which says how many — something the movement never does.
+            .accessibilityHidden(true)
+    }
+}
+
+private struct BreathingDot: NSViewRepresentable {
+    func makeNSView(context: Context) -> BreathingDotView { BreathingDotView() }
+    func updateNSView(_ nsView: BreathingDotView, context: Context) {}
+}
+
+/// The dot, on a layer, so the loop is evaluated by the render server and the
+/// overlay is not re-rendered for it (`AGENTS.md` §7).
+final class BreathingDotView: NSView {
+    private let ink = CALayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        ink.backgroundColor = NotchPalette.labelDrawingColor.cgColor
+        ink.opacity = Float(SessionDotBreath.restingOpacity)
+        layer?.addSublayer(ink)
+        // Installed once, for the life of the view: this dot exists only while
+        // it has something to say, so its presence is the condition and it has
+        // no second state to settle back to.
+        ink.add(SessionDotBreath.animation(), forKey: Self.breathKey)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ink.frame = bounds
+        ink.cornerRadius = min(bounds.width, bounds.height) / 2
+        CATransaction.commit()
+    }
+
+    /// Exposed for the test that the breath reaches the layer at all.
+    var breathAnimation: CAAnimation? { ink.animation(forKey: Self.breathKey) }
+
+    static let breathKey = "notch.buriedFinish.breath"
+}
+
 /// The mark's own grid, in the units its design files are drawn in.
 ///
 /// `27`-unit cells on a `32`-unit pitch with a `2`-unit corner radius — the
@@ -1383,7 +1728,13 @@ struct NotchStatusMatrix: View {
     let size: CGFloat
     var isAnimated = true
     /// Which product this mark belongs to, or nil for the resting grey.
+    ///
+    /// Read only when ``ink`` is absent: the collapsed surface draws one mark
+    /// for every product at once and passes the aggregate ink directly, and
+    /// there is no `AgentKind` that could stand for it.
     var agent: AgentKind?
+    /// The ink to draw in, in place of the one ``agent`` would choose.
+    var ink: NotchPalette.MatrixInk?
     /// Draw one specimen for both products instead, cut on the mark's diagonal.
     ///
     /// Only the first-run legend passes this; on the surface a mark always
@@ -1395,7 +1746,7 @@ struct NotchStatusMatrix: View {
             state: state,
             size: size,
             isAnimated: isAnimated,
-            ink: NotchPalette.ink(for: agent),
+            ink: ink ?? NotchPalette.ink(for: agent),
             split: split
         )
         .frame(width: size, height: size)

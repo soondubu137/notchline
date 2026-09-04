@@ -40,6 +40,8 @@ The extinguished colour is `15%` of the lit one's brightness in both pairs, so a
 
 ## 3. Collapsed
 
+> **Superseded by [`compact-view-v2.md`](compact-view-v2.md), and implemented.** Everything in this section describes a collapsed surface that draws one matrix per product. It draws **one aggregate mark for every product at once** now, in an ink that is the user's rather than any product's, with two numerals counting the whole list beside it — so §3.1's pair, §3.2's per-product arithmetic and §3.3's status name are all gone from both collapsed forms. The notched bar is `304` at three sessions and five subagents whatever is installed; the pill is `209` in every connected state. What survives is §3.3's first paragraph: one timer, the longest unfinished Turn across both products. Kept as the record of what the pair cost and why it was drawn that way.
+
 ### 3.1 Matrices appear in pairs
 
 Two matrices sit side by side in the leading wing, `16.6` square, `6` apart. The `6` is chosen because it lands on the matrix's own `5.84` cell pitch, so it reads as a missing column rather than an arbitrary gap; `4` would merge with the `0.9` inner gap into a single 3×6 grid, and `8` would stop reading as a pair.
@@ -274,7 +276,10 @@ Degraded navigation is confirmed, accepted and implemented: a Claude Code row ca
 
 The exception is the settings window: `figma-design.md` §8 has been rewritten for macOS 26, with the `Products` group holding both products directly and the `Session list` group coming from §6 here. The settings window's structure, geometry and colour are governed by §8, and this file keeps only the semantics of `Distinguish products`.
 
-## 10. The subagent badge (decided, implemented)
+## 10. The subagent badge (decided; in-row implemented, collapsed superseded)
+
+> **Rule 4 and rule 6 are void, and rule 5 has moved.** The collapsed pair is gone: every subagent in flight is counted by one aggregate numeral in the *leading* wing, under the sessions numeral and in the same grey ramp ([`compact-view-v2.md`](compact-view-v2.md) §3). So there is no per-product ink here any more, no pair to space, and the inversion has nowhere left to go on this surface — a subagent stopped on a question is already inside the aggregate the one mark animates (§3.2 rule 04). **The in-row badge is untouched**: rules 1, 2 and 3 stand exactly as written, and `SubagentBadgeView` still draws them.
+
 
 [`12 — Counting: sessions and subagents`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Notchline-%E2%80%94-V1?node-id=857-2) (`857:2`) supersedes the split treatment of `C — Numeral Chip` on the §11 page. It is still a `15 × 15` filled numeral square with a `4` corner (the badge), numbered with the current count and never spelling out "subagent(s)"; what changed is **what it counts, how many there are, and what colour they are**.
 
@@ -297,7 +302,10 @@ The exception is the settings window: `figma-design.md` §8 has been rewritten f
 
 **Record of the previous version**: page §11 (`812:2`) chose `C — Numeral Chip` from four options, and its rules 1–6 specified "coloured with one product, neutral grey with two", "white is never coloured and always comes first", and "Running and needs-attention are two independent counts with a badge each". All three are superseded here — colouring is now per product (since there is one badge per product, so the "cannot represent anyone" case does not arise), white became the neutral badge's inverted state (in-row only), and the split is cancelled entirely. Reference nodes are `01` (one in-row) and `03` (a collapsed pair and its inversion) under `857:2`.
 
-## 11. Session count dots (decided, implemented)
+## 11. Session count dots (decided; superseded on both collapsed forms)
+
+> **Gone from the bar and the pill, kept in the expanded header** until [`expanded-header-v2.md`](expanded-header-v2.md) lands. A column of dots counts one product's rows beside that product's matrix, and neither half of that survives one aggregate mark: the count is a numeral now, it counts every row on the list, and it stands inside the mark's own `16.6` rather than beside it ([`compact-view-v2.md`](compact-view-v2.md) §3). The vertical-placement argument below is why those numerals are anchored to the matrix's own edges rather than set on a line of their own, so it is still the reasoning this surface runs on.
+
 
 The other half of the same page (`857:2`): **both the collapsed state and the expanded top bar must say how many rows each product has.**
 
@@ -349,7 +357,10 @@ The other half of the same page (`857:2`): **both the collapsed state and the ex
 
 **The expanded top bar takes the dot columns but not the badges.** The top bar has no timer to sit beside, and the list directly beneath it is about to name every subagent row by row, so a summary pair up top says the same thing twice. The Status Readout reservation therefore goes from `107.2` to `118.5`, the gear stays at `464`, and the notch-less panel stays `520 × 370` (on a notched display the panel has to yield those `11.3` itself, see [`figma-design.md`](figma-design.md) §3.2). **The status name's start follows the columns actually drawn**: `63.2` with neither product holding rows (`12 + 39.2 + 12`), `68.9` with one, `74.5` with both.
 
-## 12. The column breathes (decided, implemented)
+## 12. The column breathes (decided; the carrier has changed)
+
+> **The breath is the trailing wing's dot now**, and it is asked of the aggregate rather than of each product. The column it used to live on left with the per-product marks; what replaced it is a `4` pt dot in the wing's own `#7C7C80`, breathing by opacity within that ink and never above it ([`compact-view-v2.md`](compact-view-v2.md) §4.3). **The condition also widened, and had to**: a product holding nothing but a finished row while the *other* product runs is a buried finish for the bar and false for both marks in it, so the question is asked of the one list and the one mark that stand for all of them (`MonitorStore.buriesAFinishedTurn`). Everything below about *why* this state needs a second channel is unchanged, and is the reason the dot exists at all.
+
 
 Design in [`15 — The column breathes`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Notchline-%E2%80%94-V1?node-id=973-2) (`973:2`).
 

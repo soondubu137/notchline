@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed and settled, not implemented.** Every decision on the V2 board is answered; no Swift has been written against it. The board's four pages are the drawings, this document is the contract. |
+| Status | **Designed, settled, and implemented as far as §5.** The aggregate mark (§2), the counts column (§3), the trailing wing's frozen reading and buried-finish dot (§4), the notched bar's composition (§5), the pill's `209` (§6.1, §6.3) and the status name's removal (§7) are drawn by the app. **Not yet implemented:** the pill's rotating Project name (§6.2), `Hide the wings` under one mark (§9) beyond the dot's own clause, the accessibility amendments (§10), and every Settings row in §12. The board's four pages are the drawings, this document is the contract. |
 | Version | 2.0 |
 | Date | 2026-09-03 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `01 — Compact V2`, `02 — Aggregate ink palette`, `03 — Trailing wing & the word` (superseded), `04 — The subject and the wing that stops` |
@@ -63,21 +63,29 @@ Two numerals stacked in the height of one matrix, `4` after it.
 16.6  = the matrix's own height
 ```
 
-**The faces.** Sessions at `10` pt medium, subagents at `8` pt medium, both
-`monospacedDigitSystemFont` — the elapsed reading's own face at the two sizes
-this column needs, so rule 05's tabular figures cost nothing new. **The column
-is billed `6.6` per digit whatever the face measures**, and `10` pt medium is
-the largest weight-and-size pair whose digit advance clears it: `6.57`, against
-`6.64` at `10.5` Light and `6.93` at `11`. Medium rather than the reading's
-Light because Light at this size on near-black draws thinner than the mark
-standing beside it.
+**The faces: `11` pt and `8` pt regular, monospaced digits, at the display
+optical size.** Every figure above is SF Pro Display's at `11` pt — a `6.6`
+digit advance, a `7.85` cap, `5.71` under it — and AppKit hands out SF Pro
+*Text* at that size, the optical cut macOS uses at small sizes, whose digits
+measure `6.99`. Asking CoreText for the display optical size instead gives
+`6.616` and a `7.750` cap: **the drawing, to within a hundredth and a tenth**,
+so every published width in this document stands as drawn rather than being
+re-derived to meet a wider face.
+
+Regular rather than the reading's Light: light measures `6.549` and medium
+`6.784`, so regular is also the only weight whose digits land inside the `6.6`
+the column is billed at. The reservation and the ink agree by construction.
+
+> The `0.016` per digit the drawn advance runs over the nominal `6.6` lands
+> inside the single `ceil` every composed width takes — the notched bar is still
+> `304` at one digit and `310` at two — and the pill absorbs it in the middle,
+> which is what a subtraction is for (§6.1).
 
 **The stack is defined by its two anchors, not by the `3.03`.** The large
 numeral's cap-top stands on the matrix's top edge and the small numeral's
-baseline on its bottom; the gap is whatever the drawn caps leave — `3.91` at
-these faces, whose caps measure `7.05` and `5.64` rather than the drawing's
-`7.85` and `5.71`. The `16.6` the column occupies is unchanged, which is the
-only figure anything else reads.
+baseline on its bottom; the gap is whatever the drawn caps leave, `3.213` at
+these faces. The `16.6` the column occupies is unchanged, which is the only
+figure anything else reads.
 
 **Both numerals are leading-aligned in the column.** A tenth session then adds
 its digit at the trailing end and the subagent numeral does not move, which is
@@ -97,7 +105,7 @@ Width hugs the digits: `6.6` at one, `13.2` at two. On the notched bar it gives 
 | 02 | Neither numeral moves once both are present. | A subagent count arriving or leaving fades in place. |
 | 03 | Zero is never drawn. | No sessions, no column. No subagents, no second numeral. A bar at rest is one grey matrix — never a bar reading `0`. |
 | 04 | The matrix carries attention; the numbers only count. | A subagent stopped on approval is already inside the aggregate the matrix animates, so V1's inverting badge ground has nowhere left to go. |
-| 05 | Tabular figures. | Both numerals use the monospaced-digit face the reading already does, at `10` pt and `8` pt medium (§3.1). A proportional `1` would resize the leading wing every time a session opened. |
+| 05 | Tabular figures. | Both numerals use the monospaced-digit face the reading already does, at `11` pt and `8` pt regular (§3.1). A proportional `1` would resize the leading wing every time a session opened. |
 
 ### 3.3 The large numeral counts the list
 
@@ -105,7 +113,9 @@ It counts **rows in the monitored list**, finished-but-not-yet-aged-out included
 
 ### 3.4 The large numeral when it is alone
 
-**Centred.** With no subagent the large numeral is optically centred on the matrix's `16.6`, its cap-top `4.375` below the matrix's top edge. When a subagent starts it **rises `4.375` into the fixed slot** — cap-top on the matrix's top edge — and the small numeral fades in beneath it. It drops back when the last subagent stops.
+**Centred.** With no subagent the large numeral is optically centred on the matrix's `16.6`, its cap-top `4.375` below the matrix's top edge. When a subagent starts it **rises into the fixed slot** — cap-top on the matrix's top edge — and the small numeral fades in beneath it. It drops back when the last subagent stops.
+
+The rise is half the leftover, so it follows the cap: `4.375` at the board's `7.85`, **`4.425` at the drawn `7.750`** (§3.1). The rule is "centred"; the figure is what the face makes of it.
 
 This takes a vertical move on the figure the eye is on, caused by something the user did not do. It is taken deliberately: the resting drawing is the one this surface spends most of its life showing.
 
@@ -132,6 +142,7 @@ When the turn ends the reading does not leave. The digits freeze at the last val
 
 - What it says: that turn's own length, from `MonitoredSession.finishedAt` — a stamp deliberately not moved forward by subagent activity, and the same number the expanded row has drawn since V1.
 - How long it holds: while the aggregate says Completed, which is until the row leaves the monitored list (§3.3).
+- **Which finished turn, when more than one has:** the earliest-started of them — the same rule the live reading follows, and therefore the same turn it was counting a moment ago. Decided at implementation rather than on the board, because "the last value the timer showed" has to name a row: any other choice lets the figure jump when a row it was never drawing ages out.
 - Why a filled ground is allowed here when V1 §4.7 kept grounds off the bar: that argument holds for the white flip — "one of these wants you" needs a neighbour to mean anything — and the white flip stays gone. "This figure has stopped" is a property of the figure, not a comparison, and it is the one thing the digits cannot say alone.
 
 ### 4.3 The buried-finish dot
@@ -309,14 +320,14 @@ The setting still requires a *measurable* cut-out, so it is disabled on every sc
 - [ ] Notched bar totals match §5.2 at every state, including `316`.
 - [ ] Pill is `209` in every connected state and `41` disconnected.
 - [ ] The counts column draws identically at a 46 pt and a 22 pt menu bar.
-- [ ] The large numeral rises `4.375` when the first subagent arrives and drops back when the last one leaves.
+- [ ] The large numeral rises half the matrix's leftover — `4.425` at the drawn cap — when the first subagent arrives, and drops back when the last one leaves.
 - [ ] The reading freezes rather than leaving, and the panel edge does not move at that instant.
 - [ ] The dot appears on the *aggregate* buried finish — including one product's lone finished row under another product's running one — breathes by opacity, and never changes the wing's width.
 - [ ] The middle cycles at `5 s`, holds its place across set changes, and never restarts on join or leave.
 - [ ] The clock is the longest unfinished turn anywhere, independent of which Project the middle names.
 - [ ] All 36 inks clear `#151515`, and switching ink changes no width and no brightness.
 - [ ] `Hide the wings` brings out the mark for a buried finish and the dot with it, and the numerals beside it read the whole list.
-- [ ] The numerals draw at `10` pt and `8` pt medium monospaced digits, leading-aligned, inside a column billed `6.6` per digit.
+- [ ] The numerals draw at `11` pt and `8` pt regular monospaced digits at the display optical size, leading-aligned, inside a column billed at the drawn `6.616` per digit.
 - [ ] The pill's middle draws its name at `13` pt Light in `#C7C7CC`, fading over the middle's last `12`.
 
 ## 12. Implementation mapping

@@ -179,16 +179,35 @@ struct DisplayOption: Identifiable {
 /// one: the panel's width is measured from it, so badges and a timer that
 /// could independently disagree about what they drew would leave the width
 /// composed from several readings instead of one.
+/// What the collapsed surface draws on the far side of the notch.
+///
+/// **The badges are gone from it.** Every subagent in flight is counted by the
+/// leading wing's second numeral now — one aggregate figure rather than a
+/// tinted tile per product — so this end of the bar carries the reading and
+/// nothing else (`compact-view-v2.md` §3, §4).
 struct CompactTrailingReading: Equatable {
-    /// In ``AgentKind`` order, Codex leading, and only for products that
-    /// actually have a subagent in flight — a product with none has no badge,
-    /// and no slot is held open for it.
-    var badges: [AgentSubagentBadge] = []
     var timerText: String?
+    /// Whether those digits have stopped.
+    ///
+    /// A turn ending does not take the reading away: it freezes at the last
+    /// value the timer showed and the ground it was already standing on fills,
+    /// so the panel's edge does not move by a point at that instant. A filled
+    /// ground is allowed here where the white flip is not, because "this figure
+    /// has stopped" is a property of the figure rather than a comparison with
+    /// its neighbours — and it is the one thing the digits cannot say alone
+    /// (`compact-view-v2.md` §4.2).
+    var isFrozen = false
+    /// Whether a finished, unread turn is sitting under a mark that is drawing
+    /// something else.
+    ///
+    /// That turn has no representative: the mark draws the most urgent status
+    /// anywhere, and the reading belongs to whatever is being timed. The dot is
+    /// its stand-in (§4.3).
+    var buriesAFinishedTurn = false
 
     static let empty = CompactTrailingReading()
 
-    var isEmpty: Bool { badges.isEmpty && timerText == nil }
+    var isEmpty: Bool { timerText == nil && !buriesAFinishedTurn }
 }
 
 enum PanelMetrics {
@@ -489,6 +508,125 @@ enum PanelMetrics {
         weight: .light
     )
 
+    // MARK: - The aggregate counts column
+
+    /// The sessions numeral, and the face the whole column is measured from.
+    ///
+    /// **`11` pt, at the optical size the column was drawn at.** The board's
+    /// figures are SF Pro Display's: a `6.6` digit advance, a `7.85` cap, a
+    /// `5.71` cap under it. AppKit hands out SF Pro *Text* at `11` pt — the
+    /// optical cut macOS uses at small sizes, whose digits are `6.99` — so the
+    /// drawing's own `6.6` is unreachable through ``NSFont/systemFont(ofSize:)``
+    /// and every published width would have had to move to meet it. Asking
+    /// CoreText for the display optical size gives `6.616` and a `7.750` cap:
+    /// the drawing, to within a hundredth and a tenth.
+    ///
+    /// Regular rather than the reading's Light. Light measures `6.549` and
+    /// medium `6.784`, so regular is also the weight whose digits land inside
+    /// the `6.6` the column is billed at — the reservation and the ink agree by
+    /// construction rather than by luck.
+    static let countsSessionFont = countsFont(ofSize: 11)
+    /// The subagents numeral: the same face, two steps down (`5.637` cap).
+    static let countsSubagentFont = countsFont(ofSize: 8)
+
+    /// One counts face: monospaced digits at the display optical size.
+    ///
+    /// Tabular figures for the reason the reading uses them — a proportional
+    /// `1` would resize the leading wing every time a session opened
+    /// (`compact-view-v2.md` §3.2 rule 05) — and the optical override so the
+    /// digits measure what the column reserves.
+    private static func countsFont(ofSize size: CGFloat) -> NSFont {
+        let base = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
+        let descriptor = base.fontDescriptor.addingAttributes([
+            NSFontDescriptor.AttributeName(kCTFontOpticalSizeAttribute as String):
+                countsOpticalSize
+        ])
+        return NSFont(descriptor: descriptor, size: size) ?? base
+    }
+
+    /// Where the display cut begins. Anything past SF's `20` pt crossover
+    /// gives the same digits; this is the smallest value that is plainly on
+    /// the far side of it.
+    private static let countsOpticalSize: CGFloat = 20
+
+    /// Between the mark and the counts beside it.
+    static let aggregateCountsGap: CGFloat = 4
+
+    /// One numeral's width, which is every numeral's width.
+    ///
+    /// `6.616`, the drawn advance rather than the board's nominal `6.6`. The
+    /// difference is under a hundredth of a point and it lands inside the
+    /// single `ceil` every composed width takes, so the published totals stand:
+    /// the notched bar is still `304` at one digit and `310` at two, and the
+    /// pill is still `209` because its middle is a subtraction and absorbs it
+    /// (`compact-view-v2.md` §6.1).
+    static var countsDigitWidth: CGFloat {
+        textWidth("8", font: countsSessionFont)
+    }
+
+    /// The column at the digits it is drawing: nothing, one numeral, or two.
+    ///
+    /// Zero sessions is no column at all — a bar at rest is one grey matrix and
+    /// never a bar reading `0` (§3.2 rule 03). The subagent numeral is narrower
+    /// than the sessions numeral above it and never widens this.
+    static func countsColumnWidth(sessionCount: Int) -> CGFloat {
+        guard sessionCount > 0 else { return 0 }
+        return CGFloat(String(sessionCount).count) * countsDigitWidth
+    }
+
+    /// The column at two digits, which is what the pill holds open.
+    static var reservedCountsColumnWidth: CGFloat { 2 * countsDigitWidth }
+
+    /// The room the column stands in, gap and all.
+    ///
+    /// The gap belongs to the column rather than to the mark, so a bar with no
+    /// rows gives back both together and the matrix is the whole wing. The pill
+    /// holds the room at two digits whatever it is drawing, including nothing.
+    static func countsSlotWidth(sessionCount: Int, reserved: Bool) -> CGFloat {
+        if reserved { return aggregateCountsGap + reservedCountsColumnWidth }
+        guard sessionCount > 0 else { return 0 }
+        return aggregateCountsGap + countsColumnWidth(sessionCount: sessionCount)
+    }
+
+    /// Where the sessions numeral stands, measured up from the matrix's bottom
+    /// edge.
+    ///
+    /// Two positions and one movement between them. With a subagent under it
+    /// the numeral's cap-top is **on the matrix's top edge**; alone it is
+    /// optically centred on the matrix's `16.6`, which puts its baseline
+    /// exactly half the leftover above the bottom. So the rise when the first
+    /// subagent starts is that same half — `4.425` at the drawn cap, where the
+    /// board says `4.375` for a `7.85` one (§3.4).
+    ///
+    /// This takes a vertical move on the figure the eye is on, caused by
+    /// something the user did not do. It is taken deliberately: the resting
+    /// drawing is the one this surface spends most of its life showing.
+    static func countsSessionBaseline(
+        hasSubagents: Bool,
+        matrixSize: CGFloat = statusMatrixSize
+    ) -> CGFloat {
+        let cap = countsSessionFont.capHeight
+        return hasSubagents ? matrixSize - cap : (matrixSize - cap) / 2
+    }
+
+    /// Where the subagents numeral stands: on the matrix's bottom edge.
+    static let countsSubagentBaseline: CGFloat = 0
+
+    /// The leading group at what it draws: the aggregate mark, and the counts
+    /// where there are any.
+    ///
+    /// The gap goes with the column, so a bar with no rows is the matrix alone
+    /// and gives back every point the numerals were taking.
+    static func drawnLeadingGroupWidth(sessionCount: Int) -> CGFloat {
+        let counts = countsColumnWidth(sessionCount: sessionCount)
+        return statusMatrixSize + (counts > 0 ? aggregateCountsGap + counts : 0)
+    }
+
+    /// The leading group at the room the pill holds open for it: `33.8`.
+    static var reservedLeadingGroupWidth: CGFloat {
+        statusMatrixSize + aggregateCountsGap + reservedCountsColumnWidth
+    }
+
     /// Compact content leading the notch: padding, the marks, and — where there
     /// is no physical notch to work around — the status label as well.
     ///
@@ -598,13 +736,6 @@ enum PanelMetrics {
     static let subagentBadgeMinSize: CGFloat = 15
     static let subagentBadgeCornerRadius: CGFloat = 4
     static let subagentBadgeHorizontalPadding: CGFloat = 4
-    /// Between the collapsed surface's two badges.
-    ///
-    /// ``compactMatrixSpacing``, not a second number: the badge pair is the
-    /// matrix pair read at the other end of the bar, so it is spaced the way
-    /// that pair is. Tying them together is also what stops the two ends of
-    /// one bar drifting apart the next time either is tuned.
-    static var subagentBadgeSpacing: CGFloat { compactMatrixSpacing }
     /// Between the badges and the timer they share the trailing slot with.
     static let subagentBadgeTimerSpacing: CGFloat = 8
 
@@ -638,16 +769,6 @@ enum PanelMetrics {
         return max(subagentBadgeMinSize, ceil(measured))
     }
 
-    /// What the badges occupy together, spaced apart when there are two. A
-    /// product with nothing in flight contributes nothing: see
-    /// ``CompactTrailingReading/badges``.
-    static func subagentBadgesWidth(_ badges: [AgentSubagentBadge]) -> CGFloat {
-        let widths = badges.filter { !$0.badge.isEmpty }
-            .map { subagentBadgeWidth($0.badge.count) }
-        guard !widths.isEmpty else { return 0 }
-        return widths.reduce(0, +) + CGFloat(widths.count - 1) * subagentBadgeSpacing
-    }
-
     /// Everything the collapsed trailing slot draws: the badges, the timer, and
     /// the gap between them when both are present.
     ///
@@ -665,16 +786,14 @@ enum PanelMetrics {
     /// ``readingGroundWidthCost`` bills for here.
     ///
     /// **Nothing here is held open.** The panel steps outwards when the timer
-    /// gains a digit, when a badge arrives, or when a badge's count gains one —
-    /// and steps back in when each of those leaves. The notched bar takes that
+    /// gains a digit and steps back in when it loses one. The notched bar takes that
     /// on its trailing wing alone, and its leading edge cannot feel any of it
     /// because ``compactTrailingWingWidth(trailing:)`` is a whole number of
     /// points and cancels out of the sum that places it; the pill is centred,
     /// so it takes half on each edge and glides.
     ///
     /// **And it leaves the reading's own leading edge standing still** in the
-    /// panel's own coordinates. Every term here is a whole number — the badges
-    /// ceil their measured digits, the two spacings are integers, and
+    /// panel's own coordinates. Every term here is a whole number —
     /// ``drawnCompactReadingWidth(_:)`` ceils the glyph box the way the raster
     /// does — so the notched wing is exactly `reading + 12 + 8` with no
     /// rounding of its own and the reading starts ``expandedNotchClearance``
@@ -684,11 +803,29 @@ enum PanelMetrics {
     /// reading and pushes the edge out in front of it, rather than sliding the
     /// whole figure sideways.
     static func drawnTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
-        let badgesWidth = subagentBadgesWidth(trailing.badges)
-        guard let timerText = trailing.timerText else { return badgesWidth }
-        let timer = drawnCompactReadingWidth(timerText)
-        guard badgesWidth > 0 else { return timer }
-        return badgesWidth + subagentBadgeTimerSpacing + timer
+        let dot = trailing.buriesAFinishedTurn ? buriedFinishDotSize : 0
+        guard let timerText = trailing.timerText else {
+            // The dot alone, with nothing for its gap to stand off: each gap on
+            // this surface exists only where content stands on both sides of it.
+            return dot
+        }
+        guard trailing.buriesAFinishedTurn else {
+            return drawnCompactReadingWidth(timerText)
+        }
+        return dot + buriedFinishDotSpacing + drawnCompactReadingWidth(timerText)
+    }
+
+    /// The buried-finish dot, and the gap it stands off the digits by.
+    ///
+    /// `4` in the wing's own `#7C7C80`, `8` before the reading. Both whole
+    /// numbers, so the wing stays integral and the leading edge still cannot
+    /// feel anything the trailing side does
+    /// (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
+    static let buriedFinishDotSize: CGFloat = 4
+    static let buriedFinishDotSpacing: CGFloat = 8
+    /// What the dot costs a wing that is also drawing a reading.
+    static var buriedFinishSlotWidth: CGFloat {
+        buriedFinishDotSize + buriedFinishDotSpacing
     }
 
     /// The session-count dots, in a `91`-unit viewBox of their own.
@@ -880,25 +1017,21 @@ enum PanelMetrics {
     /// because a control that vanishes from the menu bar takes its position
     /// with it and everything to its left slides over.
     ///
-    /// **It is a count and not a switch, which is what lets a hidden wing come
-    /// back one mark at a time.** With `Hide the wings` on, the marks the bar
-    /// draws are only the products holding a Turn to attend to
-    /// (``MonitorStore/compactDrawnMarks``), so this wing is `0`, one matrix,
-    /// or both — the same arithmetic, asked of a shorter list.
+    /// **It is a switch and not a count.** There is one mark for every product
+    /// at once, so the wing is either drawn or it is not: with `Hide the wings`
+    /// on it stays behind the cut-out until something is waiting on a person,
+    /// and comes out whole (`compact-view-v2.md` §9). What it costs is no
+    /// longer a count of products either — it is the mark, and the numerals
+    /// beside it if the list has any rows.
     ///
-    /// The marks enter at what they draw, so this wing is as wide as its
-    /// contents and no wider — see
-    /// ``drawnMarksWidth(markCount:sessionColumnCount:)``.
+    /// `47.2` at one session digit, `53.8` at two, `36.6` with no rows at all.
     private static func notchedLeadingWidth(
-        markCount: Int,
-        sessionColumnCount: Int
+        drawsMark: Bool,
+        sessionCount: Int
     ) -> CGFloat {
-        guard markCount > 0 else { return 0 }
+        guard drawsMark else { return 0 }
         return expandedHorizontalPadding
-            + drawnMarksWidth(
-                markCount: markCount,
-                sessionColumnCount: sessionColumnCount
-            )
+            + drawnLeadingGroupWidth(sessionCount: sessionCount)
             + expandedNotchClearance
     }
 
@@ -944,21 +1077,16 @@ enum PanelMetrics {
         compactHeight: CGFloat,
         status: MonitorStatus = .connected,
         matrixCount: Int = 1,
-        // How many of those marks are drawing a session column right now. Both
-        // collapsed forms read it -- neither holds a column open any more. The
-        // expanded header is the one form left that reserves every mark's
-        // column instead (`markWidth(isProductMark:)`), and it is sized from a
-        // baseline rather than from its contents.
-        sessionColumnCount: Int = 0,
-        // How many of those marks the *collapsed notched* bar actually draws,
-        // where that is not all of them. Nil is "all of them", which is every
-        // other form and every state but two: a notched display resting with
-        // nothing connected draws none, and one that has given up its wings
-        // draws only the products holding a Turn to attend to
-        // (`MonitorStore.compactDrawnMarks`). The session columns are already
-        // counted over the drawn marks alone, so they need no second parameter
-        // -- and `drawnMarksWidth` clamps them to the marks that are left.
-        drawnMarkCount: Int? = nil,
+        // Rows on the monitored list. The collapsed leading wing is billed for
+        // the numerals that counts them (`countsColumnWidth(sessionCount:)`),
+        // and for nothing per product: one mark stands for every product at
+        // once, so nothing on this form answers to how many are installed.
+        sessionCount: Int = 0,
+        // Whether the *collapsed notched* bar draws its mark at all. False in
+        // exactly two states: a notched display resting with nothing connected,
+        // and one that has given up its wings while nothing is waiting on a
+        // person (`MonitorStore.drawsCompactMarks`).
+        drawsMark: Bool = true,
         expandsToPillOnly: Bool = false,
         expandedContentHeight: CGFloat = expandedContentHeight
     ) -> CGSize {
@@ -988,12 +1116,7 @@ enum PanelMetrics {
                 // Notched display with no measurable cut-out: nothing to wrap
                 // around, so lay it out as an emulated notch instead.
                 return CGSize(
-                    width: fixedCompactWidth(
-                        for: status,
-                        matrixCount: matrixCount,
-                        sessionColumnCount: sessionColumnCount,
-                        trailing: trailing
-                    ),
+                    width: fixedCompactWidth(for: status),
                     height: compactHeight
                 )
             }
@@ -1003,20 +1126,15 @@ enum PanelMetrics {
             // both edges answer to their own wing's contents and to nothing
             // else.
             let width = notchedLeadingWidth(
-                markCount: drawnMarkCount ?? matrixCount,
-                sessionColumnCount: sessionColumnCount
+                drawsMark: drawsMark,
+                sessionCount: sessionCount
             )
                 + centerOcclusionWidth
                 + compactTrailingWingWidth(trailing: trailing)
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
             return CGSize(
-                width: fixedCompactWidth(
-                    for: status,
-                    matrixCount: matrixCount,
-                    sessionColumnCount: sessionColumnCount,
-                    trailing: trailing
-                ),
+                width: fixedCompactWidth(for: status),
                 height: compactHeight
             )
         }
@@ -1042,104 +1160,78 @@ enum PanelMetrics {
         ceil(textWidth(text, font: timerFont)) + readingGroundWidthCost
     }
 
-    /// Between the status name and the reading that follows it.
-    ///
-    /// Wider than the gap after the matrix, and not the same kind of distance:
-    /// the `12` after the marks binds a label to the thing it names, while this
-    /// separates two readings that answer different questions.
-    ///
-    /// **It is the gap now, rather than its floor.** While the timer was
-    /// right-aligned in a `00:00:00` slot, `32` was the distance at the one
-    /// reading long enough to fill that slot and every shorter one stood
-    /// further off — `62` at `0:12`, which is most of them. Hugging, the pill
-    /// puts `32` between the widest word it can say and whatever it is drawing,
-    /// and the only slack left is between that word and the shorter one
-    /// actually on screen.
-    static let compactTimerClearance: CGFloat = 32
     /// Between two product matrices, when both are drawn.
+    ///
+    /// The expanded header alone: the collapsed forms draw one mark for every
+    /// product at once and have no pair to space.
     static let compactMatrixSpacing: CGFloat = 6
 
-    /// The notch-less pill, at the width of what it is drawing.
+    /// The notch-less pill: **one width in every connected state**.
     ///
-    /// **Nothing is held open while nothing stands after the word.** With an
-    /// empty trailing slot the pill is exactly its own contents: the matrices
-    /// of the connected products, the `6` between a pair, a session-dot column
-    /// only for a product that currently has rows, the gap, and the name it is
-    /// actually saying. So `Connected` is a narrower pill than `Completed`, and
-    /// a product opening its first thread widens it by
-    /// ``sessionDotColumnWidth()`` — the surface answering to its own contents
-    /// rather than standing in a box sized for a word it is not saying.
+    /// `209` whatever is running, whatever is waiting, however many rows are
+    /// open and however long the reading is. It is not a new number — it is
+    /// what this form last held still at, the reserved composition at one
+    /// product (`12 + 22.26 + 12 + 52.74 + 32 + 65.91 + 12 = 208.91`), so the
+    /// pill is never wider than it has already shipped.
     ///
-    /// **The widest word is reserved only while a reading stands after it.**
-    /// Then the label is billed at ``widestCompactLabelWidth`` whatever it is
-    /// drawing, so the aggregate crossing `Running`, `Input needed` and
-    /// `Approval needed` inside one Turn does not drag the reading sideways
-    /// under the eye that is on it. The room the drawn word leaves falls
-    /// *between* the word and the reading, past ``compactTimerClearance``,
-    /// rather than in front of the panel's own trailing edge.
+    /// **The two forms are inverses, and this is the half that cannot move its
+    /// ends.** The notched bar has a fixed middle and moving ends: it is pinned
+    /// to the cut-out, so a wing growing pushes an edge that nothing is
+    /// measured from. The pill is centred on the display and pinned to nothing,
+    /// so every point either end took would be taken from *both* edges at once
+    /// and its whole contents would travel with them. So its ends are anchored
+    /// — the leading group at `33.8`, the trailing reading at `12` from the
+    /// trailing edge — and the middle gives way instead
+    /// (``pillMiddleWidth(trailing:)``).
     ///
-    /// **The reading itself is added rather than reserved, either way.** The
-    /// elapsed timer and the subagent badges widen the pill when they arrive,
-    /// widen it again when a digit or a count does, and give every point back
-    /// when they go — on the slot's own curve, so the panel's two edges and the
-    /// box inside them are one movement (``PanelMotion/slot(isOpening:)``).
+    /// **The reservation comes back, and this time the room is not empty.**
+    /// `figma-design.md` §6.4 removed it on a finding that was correct when
+    /// made — a reservation protects a neighbour, and nothing in the menu bar
+    /// is laid out from this window — but both halves of that argument turned
+    /// on the room standing empty. It now holds the only thing on this surface
+    /// a person reads as a word, and what it protects is the pill's own
+    /// contents: the mark, the counts and the reading stand in one place in
+    /// every state, and the only thing that changes anywhere is how much of a
+    /// name fits (`compact-view-v2.md` §6.1).
     ///
-    /// > **This pill used to reserve three things, and the reasoning is worth
-    /// > keeping.** It held a `00:00:00` slot open in every state so that a
-    /// > Turn crossing ten minutes or an hour moved neither this window nor
-    /// > anything a person reads beside it; it billed the widest label in every
-    /// > state, timed or not, so the aggregate could move without moving the
-    /// > pill; and it held every mark's dot column open so the first matrix
-    /// > stood in one place whatever the counts did. All three bought stillness
-    /// > with empty pill for the whole of every untimed moment — which is most
-    /// > of this surface's life — and bought it against a neighbour this window
-    /// > overlaps rather than displaces: nothing in the menu bar is laid out
-    /// > from this panel's frame. The slot went first. The other two are kept
-    /// > exactly where they were load-bearing and dropped where they were not:
-    /// > a reservation with nothing standing after it has no movement to
-    /// > prevent, and it spends its slack against the trailing edge. `35` pt of
-    /// > it was the word, `5.66` more for every product without rows, and all
-    /// > of it landed in one margin: `47` against the leading `12` with every
-    /// > column drawn, and `59` on the two-product pill at rest with none.
+    /// `Disconnected` is the one state still sized to itself. Nothing can
+    /// follow it and there is no product behind it, so neither `8` of clearance
+    /// applies — each exists only where content stands on both sides of it.
+    static func fixedCompactWidth(for status: MonitorStatus) -> CGFloat {
+        status == .disconnected ? disconnectedPillWidth : pillBodyWidth
+    }
+
+    /// `209`, the width above.
     ///
-    /// `Disconnected` is never sized for the widest word: nothing can follow it
-    /// into a reading, and it has no product behind it whose sessions could
-    /// want a column.
+    /// Stated rather than composed, because it is the *sum* that is the
+    /// contract here and the middle is what absorbs everything else: composing
+    /// it upwards from a leading group measured at `33.83` would land on
+    /// `209.03` and ceil to `210`, which is this form growing a point for a
+    /// hundredth of one. See ``pillMiddleWidth(trailing:)``.
+    static let pillBodyWidth: CGFloat = 209
+
+    /// `41` — the mark, and a margin either side of it.
+    static var disconnectedPillWidth: CGFloat {
+        ceil(expandedHorizontalPadding + statusMatrixSize + expandedHorizontalPadding)
+    }
+
+    /// The middle, which is a subtraction and nothing else.
     ///
-    /// - Parameter matrixCount: How many product matrices are drawn. Zero and
-    ///   one are the same width — the grey resting mark occupies the single
-    ///   slot rather than adding one.
-    /// - Parameter sessionColumnCount: How many of those marks are drawing a
-    ///   session column right now
-    ///   (``MonitorStore/compactSessionColumnCount``). Defaults to none, which
-    ///   is a caller asking for the pill at its narrowest.
-    /// - Parameter trailing: What the trailing slot is drawing: an elapsed
-    ///   value, a subagent badge, or both. Defaults to empty, which is the
-    ///   resting width and every caller that only wants that.
-    static func fixedCompactWidth(
-        for status: MonitorStatus,
-        matrixCount: Int,
-        sessionColumnCount: Int = 0,
-        trailing: CompactTrailingReading = .empty
-    ) -> CGFloat {
-        // ``drawnMarksWidth(markCount:sessionColumnCount:)`` and not
-        // ``marksWidth(_:areProductMarks:)``: this form no longer holds a
-        // column no mark is standing in. The pill is centred, so a column
-        // opening takes half its width from each edge and the pill glides,
-        // where the notched bar — pinned to the cut-out — takes all of it on
-        // the leading side. The resting grey has no product behind it and so no
-        // column to draw, which the count already says.
-        let marks = drawnMarksWidth(
-            markCount: max(1, matrixCount),
-            sessionColumnCount: sessionColumnCount
-        )
-        return ceil(
-            expandedHorizontalPadding
-                + marks
-                + expandedReadoutSpacing
-                + sizedCompactLabelWidth(for: status, trailing: trailing)
-                + drawnTrailingSlotWidth(trailing: trailing)
-                + expandedHorizontalPadding
+    /// No cap, no reservation, no constant of its own: it is whatever `209`
+    /// has left once the two anchored ends and their clearances are taken out,
+    /// so a reading gaining a digit narrows the name by exactly that digit and
+    /// moves nothing else on the surface. `135.2` with nothing being timed,
+    /// `99.2` at `1:23`, `71.2` at `10:00:00`.
+    static func pillMiddleWidth(trailing: CompactTrailingReading) -> CGFloat {
+        max(
+            0,
+            pillBodyWidth
+                - expandedHorizontalPadding
+                - reservedLeadingGroupWidth
+                - expandedNotchClearance
+                - expandedNotchClearance
+                - drawnTrailingReadingWidth(trailing)
+                - expandedHorizontalPadding
         )
     }
 
@@ -1156,66 +1248,6 @@ enum PanelMetrics {
         textWidth(status.displayName, font: statusLabelFont)
     }
 
-    /// The word the pill is sized for, which is not always the word it draws.
-    ///
-    /// **Only while something stands after it.** With a reading in the trailing
-    /// slot every working state is sized for the widest of them, so the pill —
-    /// and the reading riding at its trailing edge — stands still while the
-    /// aggregate moves between `Running`, `Input needed` and `Approval needed`
-    /// inside one Turn.
-    ///
-    /// **With the slot empty the pill takes the word it is saying.** There is
-    /// nothing behind the word for a reservation to hold still: the unused room
-    /// falls past the label and lands against the panel's own trailing edge,
-    /// where `Connected` in a pill sized for `Approval needed` read as `47` pt
-    /// of padding after the word — `59` on the two-product pill at rest, which
-    /// is also billed the columns neither product has rows for — against `12`
-    /// before the first matrix. A word changing width is a movement this
-    /// surface can afford; a permanently lopsided pill is not.
-    ///
-    /// `Disconnected` is sized for itself either way, because there is no
-    /// second state it has to hold still against — it is where the surface
-    /// arrives when everything else is gone, and nothing under it can be timed.
-    static func sizedCompactLabelWidth(
-        for status: MonitorStatus,
-        trailing: CompactTrailingReading = .empty
-    ) -> CGFloat {
-        guard !trailing.isEmpty, status != .disconnected else {
-            return ceil(statusLabelWidth(status))
-        }
-        return widestCompactLabelWidth
-    }
-
-    /// The widest word the working set can say.
-    ///
-    /// `Approval needed`, at `102`. It has taken the maximum back twice over:
-    /// the reserved pill was composed behind the widest *timeable* label
-    /// (`Approval`, `52.74`), losing it to `Connected`'s `67` when the timer
-    /// slot went, and winning it outright at `101.56` once the pill stopped
-    /// abbreviating (``MonitorStatus/displayName``). That is `35` on every
-    /// no-notch pill in every state, and the slack between the drawn word and
-    /// the reading beside it is gone with it: the widest word is now a timeable
-    /// one, so a Turn on approval fills the pill it is sized for.
-    ///
-    /// Ceiled for the reason ``drawnCompactReadingWidth(_:)`` is: the label is
-    /// rasterised at a ceiled glyph box (`NotchTextRaster.textSize`), so a
-    /// width taking the bare metric is a fraction short of the ink.
-    ///
-    /// Computed rather than a stored `static let`: a lazily-initialised one runs
-    /// its initialiser in a nonisolated context, and this measures text.
-    static var widestCompactLabelWidth: CGFloat {
-        ceil(workingStatuses.map(statusLabelWidth).max() ?? 0)
-    }
-
-    /// What a reading adds to a resting pill: the clearance and the reading, or
-    /// nothing at all.
-    ///
-    /// Nothing at all is the state this surface spends most of its life in, and
-    /// it is the whole of the change — `209` resting became `126`.
-    static func drawnTrailingSlotWidth(trailing: CompactTrailingReading) -> CGFloat {
-        guard !trailing.isEmpty else { return 0 }
-        return compactTimerClearance + drawnTrailingReadingWidth(trailing)
-    }
 
     /// What either surface can say while an agent is connected.
     ///
@@ -1906,10 +1938,19 @@ final class MonitorStore: ObservableObject {
         return presenceMarks.filter(\.hasATurnToAttendTo)
     }
 
-    /// Whether the collapsed surface draws any mark at all, which is the
+    /// Whether the collapsed surface draws its mark at all, which is the
     /// question the leading wing's existence turns on.
+    ///
+    /// **One mark for every product at once**, so this is a switch rather than
+    /// a count: the wing is whole or it is absent. It is off in exactly two
+    /// states, both of them notched and collapsed — nothing connected, and
+    /// `Hide the wings` with nothing waiting on a person
+    /// (`compact-view-v2.md` §9).
     var drawsCompactMarks: Bool {
-        !compactDrawnMarks.isEmpty
+        guard !isExpanded, geometry == .notched else { return true }
+        guard !isRestingOnly else { return false }
+        guard givesUpCompactWings else { return true }
+        return presenceMarks.contains(where: \.hasATurnToAttendTo)
     }
 
     /// Whether ``hidesCompactWings`` is something the selected display could
@@ -2024,11 +2065,53 @@ final class MonitorStore: ObservableObject {
         // reserves goes away with the readout it was reserving for. Every
         // reader is the collapsed surface or its width: the header, the two
         // width compositions below, and the tick's own re-measure signature.
-        guard !givesUpCompactWings else { return nil }
+        guard !givesUpCompactWings, let span = compactReadingSpan else { return nil }
         return SessionElapsedFormatter.elapsed(
-            since: longestRunningSessionStart,
-            now: Self.readableNow(timerNow, forStart: longestRunningSessionStart)
+            since: span.start,
+            now: span.end ?? Self.readableNow(timerNow, forStart: span.start)
         )
+    }
+
+    /// The two instants the collapsed reading is drawn between: a turn's start,
+    /// and its end where it has one.
+    ///
+    /// **A stopped reading does not leave.** While something is unfinished this
+    /// is the longest of those turns and the second stamp is absent, so the
+    /// figure is advanced by the tick. When the last one ends the reading
+    /// freezes on the turn it was timing rather than going away: the digits
+    /// hold at that turn's own length, measured between its two stamps, and the
+    /// panel's edge does not move at that instant
+    /// (`compact-view-v2.md` §4.2).
+    ///
+    /// **Which finished turn**, when more than one has: the earliest-started of
+    /// them, which is the same rule the live reading follows and therefore the
+    /// same turn it was counting a moment ago. The doc leaves this open; it is
+    /// decided here because "the last value the timer showed" has to name a
+    /// row, and any other choice would let the figure jump when a row it was
+    /// never drawing ages out.
+    var compactReadingSpan: (start: Date, end: Date?)? {
+        if let start = longestRunningSessionStart { return (start, nil) }
+        let finished = sessions
+            .filter { MonitorAggregation.effectiveStatus(of: $0) == .completed }
+            .compactMap(finishedElapsed(for:))
+            .min { $0.start < $1.start }
+        return finished.map { ($0.start, $0.end) }
+    }
+
+    /// Whether the list holds a finished, unread turn that the aggregate mark
+    /// is not drawing — the dot's own condition.
+    ///
+    /// **The aggregate's question, not each product's.** `PresenceMark`'s own
+    /// flag answers it per product, and the case this surface now has to draw
+    /// is one no product's flag can see: Codex holding nothing but a finished
+    /// row while Claude Code runs is a buried finish for the *bar*, and false
+    /// for both marks in it. So it is asked here, of the one list and the one
+    /// mark that stand for all of them.
+    var buriesAFinishedTurn: Bool {
+        guard status != .completed else { return false }
+        return sessions.contains {
+            MonitorAggregation.effectiveStatus(of: $0) == .completed
+        }
     }
 
     /// One badge per product with a subagent in flight, in ``AgentKind``
@@ -2060,7 +2143,42 @@ final class MonitorStore: ObservableObject {
     /// width is measured from it, and the elapsed half redraws itself once a
     /// second inside its own raster instead of laying out a stack every tick.
     var compactTrailingReading: CompactTrailingReading {
-        CompactTrailingReading(badges: compactSubagentBadges, timerText: compactTimerText)
+        CompactTrailingReading(
+            timerText: compactTimerText,
+            isFrozen: compactReadingSpan?.end != nil,
+            // The reading still never comes out from behind a hidden wing; the
+            // dot does, because a finished turn nobody has read is precisely a
+            // thing that wants a person (`compact-view-v2.md` §9).
+            buriesAFinishedTurn: buriesAFinishedTurn
+        )
+    }
+
+    /// The large numeral: **rows on the monitored list**.
+    ///
+    /// Finished-but-not-yet-aged-out included, because it counts the same set
+    /// the panel below it draws (`compact-view-v2.md` §3.3). It does not fall
+    /// to zero the moment work stops; it falls when the row leaves, on the same
+    /// clock that governs how long a stopped reading holds.
+    ///
+    /// **Ungated by `Hide the wings`.** That preference decides whether the
+    /// leading wing is drawn; it never decides what the numerals count. A
+    /// figure that meant the whole list under one display preference and the
+    /// waiting subset under another would mean neither (§9).
+    var aggregateSessionCount: Int { sessions.count }
+
+    /// The small numeral: every subagent in flight, both products together.
+    ///
+    /// Summed off ``presenceMarks`` rather than re-derived, so the two ends of
+    /// one bar cannot disagree about the same list. Ungated, for the reason
+    /// above.
+    var aggregateSubagentCount: Int {
+        presenceMarks.reduce(0) { $0 + $1.subagents.count }
+    }
+
+    /// The aggregate mark's ink: the user's hue once a product is behind it,
+    /// the resting grey until then.
+    var aggregateMatrixInk: NotchPalette.MatrixInk {
+        NotchPalette.aggregateInk(isConnected: !isRestingOnly)
     }
 
     /// How many marks are drawing a session column right now.
@@ -2081,13 +2199,10 @@ final class MonitorStore: ObservableObject {
         compactDrawnMarks.filter(\.drawsSessionColumn).count
     }
 
-    /// The leading wing's marks at the width they are drawing, for the view
-    /// that has to draw them into exactly the room the panel was sized for.
-    var compactDrawnMarksWidth: CGFloat {
-        PanelMetrics.drawnMarksWidth(
-            markCount: compactDrawnMarks.count,
-            sessionColumnCount: compactSessionColumnCount
-        )
+    /// The leading group at the width it is drawing, for the view that has to
+    /// draw it into exactly the room the panel was sized for.
+    var compactDrawnLeadingGroupWidth: CGFloat {
+        PanelMetrics.drawnLeadingGroupWidth(sessionCount: aggregateSessionCount)
     }
 
     /// The trailing reading at the width the collapsed surface bills it for,
@@ -2103,16 +2218,17 @@ final class MonitorStore: ObservableObject {
 
     /// Whether this surface draws the status name beside its marks.
     ///
-    /// The notch-less pill and the expanded header; not the notched collapsed
-    /// bar, which has a cut-out where the word would go.
+    /// **No collapsed form does any more.** Every row in the panel states its
+    /// own status, and the word was a summary of the line below it; the notched
+    /// bar never had room for it, and the pill has given up the room to say
+    /// what the *work* is instead (`compact-view-v2.md` §7). It stays the
+    /// accessibility label on both forms — it stops being drawn, not being
+    /// said.
     ///
-    /// **This used to be the same declaration as ``reservesCompactRoom``**, on
-    /// the argument that the two forms with a word to draw are the two with a
-    /// position to hold. That stopped being one question: the pill draws a word
-    /// and reserves nothing, and while the two shared a spelling the column
-    /// room no mark was standing in was spent against the pill's trailing edge.
+    /// The expanded header still draws it, and the resting pill widened to
+    /// reach its gear with it. Both go with `expanded-header-v2.md`.
     var drawsCompactStatusName: Bool {
-        isExpanded || geometry == .noNotch
+        isExpanded
     }
 
     /// Whether this surface holds room for a session column no mark is
@@ -2174,14 +2290,13 @@ final class MonitorStore: ObservableObject {
     /// cannot see the column has no cheap way to ask for it, and nothing about
     /// the drawing has to change to hand it over.
     var spokenBuriedCompletionText: String? {
-        // Over the drawn marks: a column that is not on screen has no breath to
-        // compensate for, and with the wings given up a product holding a
-        // finished turn is out from behind the cut-out precisely because of it.
-        let buried = compactDrawnMarks.filter(\.buriesAFinishedTurn).compactMap(\.agent)
-        guard !buried.isEmpty else { return nil }
+        // **On the aggregate, like the dot it speaks for.** It used to fold
+        // each product's own flag, which cannot see a finished row on one
+        // product buried under another product's running one -- the exact case
+        // the one mark and the one dot now have to answer for.
+        guard buriesAFinishedTurn else { return nil }
         let count = sessions.filter { session in
-            buried.contains(session.agent)
-                && MonitorAggregation.effectiveStatus(of: session) == .completed
+            MonitorAggregation.effectiveStatus(of: session) == .completed
         }.count
         guard count > 0 else { return nil }
         return count == 1
@@ -2192,8 +2307,14 @@ final class MonitorStore: ObservableObject {
     /// The instant the compact readout counts from, or nil when there is nothing
     /// to draw. The readout advances itself from ``elapsedTick``, so it needs the
     /// start rather than a string that would go stale between re-renders.
+    ///
+    /// **Only while the figure is still moving.** A frozen reading is drawn
+    /// between two stamps and ignores the tick, so it is
+    /// ``compactReadingSpan`` that the view reads; this stays the question
+    /// "is something being counted", which is what the tick itself answers to.
     var compactTimerStart: Date? {
-        compactTimerText == nil ? nil : longestRunningSessionStart
+        guard compactTimerText != nil else { return nil }
+        return longestRunningSessionStart
     }
 
     /// As ``compactTimerStart``, for one row.
@@ -2487,8 +2608,8 @@ final class MonitorStore: ObservableObject {
             // `drawnMarkCount` below -- the two differ only where the wings
             // have been given up.
             matrixCount: presenceMarks.count,
-            sessionColumnCount: compactSessionColumnCount,
-            drawnMarkCount: compactDrawnMarks.count,
+            sessionCount: aggregateSessionCount,
+            drawsMark: drawsCompactMarks,
             expandsToPillOnly: expandsToPillOnly,
             expandedContentHeight: expandedContentHeight
         )
