@@ -262,12 +262,11 @@ struct AppSettingsView: View {
             Toggle("Name the work", isOn: $store.namesWorkOnPill)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .disabled(!store.canNameWorkOnPill)
                 .help(
                     "Names each project with a live turn in the middle of the "
-                        + "collapsed component, five seconds apiece. Needs a "
-                        + "display without a notch — on a notched one the "
-                        + "cut-out is where the name would stand."
+                        + "collapsed component, five seconds apiece. Takes "
+                        + "effect on a display without a notch — on a notched "
+                        + "one the cut-out is where the name would stand."
                 )
         }
     }
@@ -275,8 +274,8 @@ struct AppSettingsView: View {
     /// What the row says, which is the consequence on *this* display.
     private var nameWorkDescription: String {
         guard store.canNameWorkOnPill else {
-            return "Needs a display without a notch. On a notched one the "
-                + "cut-out stands where the name would go."
+            return "On this display the cut-out stands where the name would "
+                + "go, so this waits for one without a notch."
         }
         return "Each project with a live turn, named in turn between the "
             + "counts and the clock. The component keeps its width either way."
@@ -285,13 +284,23 @@ struct AppSettingsView: View {
     /// Give the cut-out back, and draw nothing beside it until something is
     /// wanted.
     ///
-    /// **Always drawn, greyed where it cannot apply.** A switch that appears
-    /// only on a notched display is one nobody finds: the person who would want
-    /// it is looking for it on the laptop they have just plugged an external
-    /// monitor into, which is exactly the moment it would be missing. Greyed,
-    /// the row still says what it would do and why it will not do it here —
-    /// which is the same argument `Distinguish products` is kept visible under
-    /// (§8.2).
+    /// **Always drawn, and always settable — including where it cannot apply
+    /// yet.** A switch that appears only on a notched display is one nobody
+    /// finds: the person who would want it is looking for it on the laptop they
+    /// have just plugged an external monitor into, which is exactly the moment
+    /// it would be missing. That argument was answered by drawing the row and
+    /// greying out the switch, which fixed the finding and broke the setting —
+    /// the display that cannot honour a preference is precisely the display
+    /// somebody is sitting at when they decide what they want, and a greyed
+    /// switch makes them come back later, on the right screen, to say it.
+    ///
+    /// **A preference is a standing answer, not a command for right now.** This
+    /// one already survives the display that cannot honour it — the store keeps
+    /// `hidesCompactWings` and asks `canHideCompactWings` separately, so the
+    /// wings come back on the external monitor and go again on the built-in
+    /// screen without the setting moving. Blocking the switch never protected
+    /// anything; it only stopped the answer being given. What the row owes the
+    /// user instead is the truth about *this* screen, which the caption says.
     private var hideWingsRow: some View {
         SettingsRow(
             title: "Hide the wings",
@@ -300,14 +309,13 @@ struct AppSettingsView: View {
             Toggle("Hide the wings", isOn: $store.hidesCompactWings)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .disabled(!store.canHideCompactWings)
                 .help(
                     "Leaves the collapsed component as the cut-out alone, with "
                         + "no clock beside it. The mark and its counts slide "
                         + "out while a turn is waiting on approval, on an "
                         + "answer, or to be read, and go back when it is dealt "
-                        + "with. Needs a display whose cut-out Notchline can "
-                        + "measure."
+                        + "with. Takes effect on a display whose cut-out "
+                        + "Notchline can measure."
                 )
         }
     }
@@ -339,20 +347,21 @@ struct AppSettingsView: View {
 
     /// What the row says, which is the consequence on *this* display.
     ///
-    /// Greyed, it says why rather than what. The two ways a display can fail to
-    /// qualify are named apart rather than merged into one sentence about
+    /// Where the display cannot honour it, the caption says why and says the
+    /// setting is waiting rather than refused. The two ways a display can fail
+    /// to qualify are named apart rather than merged into one sentence about
     /// cut-outs: a laptop's built-in screen reporting a notch it cannot place
-    /// is a different situation from an external monitor, and a user reading a
-    /// greyed switch on a MacBook under the words `Needs a notched display`
-    /// would reasonably conclude the app was broken.
+    /// is a different situation from an external monitor, and a user reading
+    /// `Needs a notched display` on a MacBook would reasonably conclude the app
+    /// was broken.
     private var hideWingsDescription: String {
         guard store.canHideCompactWings else {
             guard store.geometry == .notched else {
-                return "Needs a notched display. Without a cut-out to hide "
-                    + "behind there would be nothing left to hover."
+                return "This display has no cut-out to hide behind, so this "
+                    + "waits for one that has."
             }
-            return "This display reports a notch but not where it is, so there "
-                + "is nothing to shrink the collapsed component onto."
+            return "This display reports a notch but not where it is, so this "
+                + "waits for one Notchline can measure."
         }
         return "Collapsed, Notchline is the cut-out and nothing else — until a "
             + "turn needs you, when the mark and its counts slide out. "

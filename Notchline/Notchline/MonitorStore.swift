@@ -1817,14 +1817,16 @@ final class MonitorStore: ObservableObject {
     }
 
     /// Whether ``namesWorkOnPill`` is something the selected display could
-    /// honour — which is what greys the switch that sets it.
+    /// honour — which is what the row's caption reports, and nothing else.
     ///
     /// **The mirror image of ``canHideCompactWings``.** That preference needs a
     /// cut-out to shrink onto; this one needs the absence of one, because the
     /// notched bar has no middle to name anything in. Both rows stay visible
-    /// and grey where they cannot apply: a switch that appears only on one kind
-    /// of display is one nobody finds, and the person looking for it is looking
-    /// on the machine it is missing from.
+    /// *and settable* on both kinds of display: a switch that appears only on
+    /// one kind is one nobody finds, and one that is greyed on the other is one
+    /// nobody can answer — the screen a preference cannot be honoured on is
+    /// exactly the screen somebody is sitting at when they decide what they
+    /// want. This gates the drawing, never the setting.
     var canNameWorkOnPill: Bool { geometry == .noNotch }
 
     /// Whether the collapsed surface draws its mark at all, which is the
@@ -1843,7 +1845,7 @@ final class MonitorStore: ObservableObject {
     }
 
     /// Whether ``hidesCompactWings`` is something the selected display could
-    /// honour -- which is what greys the switch that sets it.
+    /// honour -- which is what the row's caption reports, and nothing else.
     ///
     /// **The condition is a measured cut-out, not a reported one.** Giving up
     /// the wings means shrinking the collapsed body onto the hardware's own
@@ -1861,7 +1863,9 @@ final class MonitorStore: ObservableObject {
     ///   zero-width panel: nothing drawn, and nothing to hover.
     ///
     /// The preference itself is untouched by either -- it survives unplugging
-    /// the display that could not honour it.
+    /// the display that could not honour it, and can be set on one. The switch
+    /// is not greyed here: this answers what the display can draw, not what the
+    /// user is allowed to ask for.
     var canHideCompactWings: Bool {
         guard geometry == .notched else { return false }
         return (selectedDisplay?.centerOcclusionWidth ?? 0) >= 1

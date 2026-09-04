@@ -1437,8 +1437,11 @@ struct NotchlineTests {
     ///
     /// A no-notch pill has nothing to hide behind — hiding it would take its
     /// place in the menu bar with it and leave no shape to hover — so the
-    /// switch is greyed there rather than the preference being cleared. Sending
-    /// the component to an external monitor and back must not cost the setting.
+    /// drawing stands down there rather than the preference being cleared. The
+    /// switch itself is never blocked: the screen that cannot honour a setting
+    /// is exactly the screen somebody is sitting at when they decide they want
+    /// it. Sending the component to an external monitor and back must not cost
+    /// the setting either.
     @Test @MainActor
     func onlyANotchedDisplayHonoursTheWingPreferenceAndTheOtherOneDoesNotClearIt() {
         let defaults = UserDefaults(suiteName: "wings-\(UUID().uuidString)")!
@@ -1488,8 +1491,8 @@ struct NotchlineTests {
     /// hardware's own shape, and there is nothing else left on screen to place
     /// it by. A display reporting a notch but no gap between its auxiliary
     /// areas is already laid out as an *emulated* notch for that reason; the
-    /// switch is greyed there for the same one, rather than being movable into
-    /// a state that would draw a zero-width panel.
+    /// drawing stands down there for the same one, so the preference can be
+    /// set and simply does not take effect until a display can carry it.
     @Test @MainActor
     func aNotchWithNoMeasurableGapCannotGiveUpItsWings() {
         let frame = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
@@ -4115,10 +4118,10 @@ struct NotchlineTests {
         #expect(store.currentPanelSize.width == named)
         store.namesWorkOnPill = true
 
-        // And it is greyed rather than hidden where it cannot apply, which is
-        // the mirror of `Hide the wings`: one wants a cut-out, the other wants
-        // the absence of one, and both rows stay visible on both kinds of
-        // display.
+        // And it simply does not draw where it cannot apply, which is the
+        // mirror of `Hide the wings`: one wants a cut-out, the other wants the
+        // absence of one, and both rows stay visible *and settable* on both
+        // kinds of display.
         let notched = MonitorStore(
             displays: [
                 makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 46, hasNotch: true)
