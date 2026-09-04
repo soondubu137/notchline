@@ -1213,6 +1213,7 @@ struct NotchlineTests {
         // timer trailing it.
         #expect(store.drawsCompactMarks)
         #expect(store.compactTimerText != nil)
+        #expect(store.compactReadingSpan?.start != nil)
         #expect(store.currentPanelSize.width > display.centerOcclusionWidth)
 
         store.hidesCompactWings = true
@@ -1220,6 +1221,14 @@ struct NotchlineTests {
         #expect(store.givesUpCompactWings)
         #expect(!store.drawsCompactMarks)
         #expect(store.compactTimerText == nil)
+        // **The span as well as the string**, which is the invariant this used
+        // to state only half of. The trailing wing is billed from the string
+        // and the reading is drawn from the span, so a gate standing on the
+        // string alone put a full timer into a slot billed at zero -- and a
+        // zero-width frame does not clip, so the figure was drawn out through
+        // the cut-out's trailing edge. Asked as `?.start` because the span is a
+        // tuple and therefore has no `==` against `nil`.
+        #expect(store.compactReadingSpan?.start == nil)
         #expect(store.currentPanelSize.width == display.centerOcclusionWidth)
         #expect(store.currentPanelTrailingAnchor == display.centerOcclusionMaxX)
 
@@ -1330,7 +1339,9 @@ struct NotchlineTests {
         #expect(store.compactTrailingReading != .empty)
         #expect(store.aggregateSubagentCount == 4)
         #expect(store.compactTimerText != nil)
+        #expect(store.compactReadingSpan?.start != nil)
         store.hidesCompactWings = true
+        #expect(store.compactReadingSpan?.start == nil)
 
         // Claude Code is asked a question as well. The wing is already out and
         // stays exactly as wide: a second waiting product used to bring a
@@ -1353,6 +1364,14 @@ struct NotchlineTests {
         #expect(store.drawsCompactMarks)
         #expect(store.buriesAFinishedTurn)
         #expect(store.compactTimerText == nil, "the reading stays behind the cut-out")
+        // And is not drawn there either. This is the one hidden-wing state
+        // whose trailing slot is a real width -- `8 + 4 + 12` for the dot -- so
+        // a reading that outlived the preference would be drawn *beside* the
+        // dot rather than merely past the panel's edge.
+        #expect(
+            store.compactReadingSpan?.start == nil,
+            "and is not drawn beside the dot"
+        )
         #expect(store.currentPanelSize.width == hiddenWidth(marks: 1, buried: true))
 
         // Everything is dealt with. The wing goes back and the surface is the

@@ -1954,11 +1954,13 @@ final class MonitorStore: ObservableObject {
     }
 
     var compactTimerText: String? {
-        // Nil rather than gated at the view, so the trailing wing this string
-        // reserves goes away with the readout it was reserving for. Every
-        // reader is the collapsed surface or its width: the header, the two
-        // width compositions below, and the tick's own re-measure signature.
-        guard !givesUpCompactWings, let span = compactReadingSpan else { return nil }
+        // The drawn reading, measured. `Hide the wings` is answered by the span
+        // below rather than here, so the width composed from this string and the
+        // figure drawn from that span cannot disagree about whether there is a
+        // reading at all. Every reader is the collapsed surface or its width:
+        // the header, the two width compositions below, and the tick's own
+        // re-measure signature.
+        guard let span = compactReadingSpan else { return nil }
         return SessionElapsedFormatter.elapsed(
             since: span.start,
             now: span.end ?? Self.readableNow(timerNow, forStart: span.start)
@@ -1982,7 +1984,24 @@ final class MonitorStore: ObservableObject {
     /// decided here because "the last value the timer showed" has to name a
     /// row, and any other choice would let the figure jump when a row it was
     /// never drawing ages out.
+    ///
+    /// **Nil while the wings are given up**, which is where that preference is
+    /// answered for the whole trailing slot. The collapsed body is composed from
+    /// ``compactTimerText`` and drawn from this, and the gate used to stand on
+    /// the string alone: the slot was then billed at zero while the view still
+    /// had a span to draw into it, and a zero-width frame does not clip --
+    /// ``ElapsedReadout`` paints its own raster from its leading edge whatever
+    /// width it is offered. The figure ran out through the cut-out's trailing
+    /// edge and was cut off by the window bound one shoulder past it, which is
+    /// `12 + 4.75` pt of timer standing on a bar whose whole point is that there
+    /// is nothing there. One answer, and it is this one, because everything the
+    /// slot draws is derived from it.
+    ///
+    /// The dot beside it is untouched: it comes out from behind a hidden wing on
+    /// its own account, billed for and drawn (`compact-view-v2.md` §9 -- the
+    /// reading never comes out, the dot does).
     var compactReadingSpan: (start: Date, end: Date?)? {
+        guard !givesUpCompactWings else { return nil }
         if let start = longestRunningSessionStart { return (start, nil) }
         let finished = sessions
             .filter { MonitorAggregation.effectiveStatus(of: $0) == .completed }
