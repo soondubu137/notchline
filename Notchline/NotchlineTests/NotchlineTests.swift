@@ -4074,6 +4074,180 @@ struct NotchlineTests {
         #expect(PanelMetrics.compactTrailingWingWidth(trailing: .empty) == 0)
     }
 
+    /// **`Hide the wings`, under one mark: the three widths it can be.**
+    ///
+    /// The setting survives V2 simplified. With one aggregate mark the leading
+    /// wing is simply present or absent — there is no per-product table left —
+    /// and the one sentence that had to change rather than be re-scoped is the
+    /// trailing side's: the reading still never comes out, because it says how
+    /// long rather than that a person is wanted, but **the dot does**, because
+    /// a finished turn nobody has read is precisely a thing that wants a person
+    /// (`compact-view-v2.md` §9).
+    @Test @MainActor
+    func hidingTheWingsLeavesTheCutOutTheMarkOrTheMarkAndTheDot() {
+        func width(drawsMark: Bool, buried: Bool, sessionCount: Int) -> CGFloat {
+            PanelMetrics.size(
+                geometry: .notched,
+                isExpanded: false,
+                statusReadoutText: MonitorStatus.approvalNeeded.displayName,
+                trailing: CompactTrailingReading(buriesAFinishedTurn: buried),
+                centerOcclusionWidth: 200,
+                compactHeight: 46,
+                status: .approvalNeeded,
+                sessionCount: sessionCount,
+                drawsMark: drawsMark
+            ).width
+        }
+        // Nothing waiting: the cut-out and nothing else.
+        #expect(width(drawsMark: false, buried: false, sessionCount: 3) == 200)
+        // A turn wants a person: the mark and the totals at one digit.
+        #expect(width(drawsMark: true, buried: false, sessionCount: 1) == 248)
+        // ...with a buried finish beside it: the trailing wing opens for the
+        // dot alone, `8 + 4 + 12`.
+        #expect(width(drawsMark: true, buried: true, sessionCount: 1) == 272)
+        #expect(
+            width(drawsMark: true, buried: true, sessionCount: 1)
+                - width(drawsMark: true, buried: false, sessionCount: 1)
+                == PanelMetrics.buriedFinishDotSize
+                    + PanelMetrics.expandedNotchClearance
+                    + PanelMetrics.expandedHorizontalPadding
+        )
+    }
+
+    /// **The status name stops being drawn and does not stop being said.**
+    ///
+    /// Neither collapsed form has a word on it any more, so the accessibility
+    /// label is the only place `MonitorStatus.displayName` is spoken for the
+    /// collapsed surface — and the counts column, which draws two figures and
+    /// names neither, is spoken as what those figures mean
+    /// (`compact-view-v2.md` §7, §10).
+    @Test @MainActor
+    func theCollapsedSurfaceSaysTheCountsAndTheWordItNoLongerDraws() {
+        let store = MonitorStore(
+            displays: [
+                makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 46, hasNotch: true)
+            ],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([])
+        )
+        func session(_ id: String, subagents: Int = 0) -> MonitoredSession {
+            MonitoredSession(
+                agent: .codex,
+                threadID: id,
+                turnID: "turn-\(id)",
+                projectName: "notchline",
+                title: "Turn",
+                preview: nil,
+                status: .running,
+                startedAt: Date(),
+                runningSubagentCount: subagents
+            )
+        }
+
+        #expect(!store.drawsCompactStatusName, "no collapsed form draws it")
+        #expect(store.spokenCollapsedCountsText == nil, "a zero is never said either")
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [session("a")])
+        )
+        #expect(store.spokenCollapsedCountsText == "1 session")
+
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: [session("a", subagents: 2), session("b")]
+            )
+        )
+        #expect(store.spokenCollapsedCountsText == "2 sessions, 2 subagents")
+        // Whatever it says, the word is still available to say beside it.
+        #expect(store.statusDisplayName == MonitorStatus.running.displayName)
+
+        // **And what is spoken is ungated by the preference**, like the
+        // numerals themselves: hiding the wings changes what is drawn, never
+        // what is counted (§9).
+        store.hidesCompactWings = true
+        #expect(store.givesUpCompactWings)
+        #expect(store.spokenCollapsedCountsText == "2 sessions, 2 subagents")
+    }
+
+    /// **The pill names the work, one Project at a time.**
+    ///
+    /// The roster is the panel's own row order, deduplicated with the first
+    /// occurrence winning, so the middle and the list under it cannot disagree
+    /// about what is first. One Project does not cycle; none draws nothing.
+    @Test @MainActor
+    func theMiddleNamesEveryProjectWithARowInThePanelsOwnOrder() {
+        // An explicit notch-less display: the test host is the app, on a Mac
+        // that has a notch, so a store left to find its own screens is notched.
+        let store = MonitorStore(
+            displays: [
+                makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)
+            ],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([])
+        )
+        func session(_ project: String, _ id: String) -> MonitoredSession {
+            MonitoredSession(
+                agent: .codex,
+                threadID: id,
+                turnID: "turn-\(id)",
+                projectName: project,
+                title: "Turn",
+                preview: nil,
+                status: .running,
+                startedAt: Date()
+            )
+        }
+
+        #expect(store.compactProjectNames.isEmpty)
+        #expect(!store.drawsCompactMiddle, "nothing to name")
+
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: [
+                    session("notchline", "a"),
+                    session("hello-agents", "b"),
+                    // A second row on a Project already named adds nothing: the
+                    // middle names Projects, not rows.
+                    session("notchline", "c")
+                ]
+            )
+        )
+        // **The panel's own order, deduplicated, first occurrence winning.**
+        // Stated against `sessions` rather than against the order they were
+        // applied in: that list is already sorted by `MonitorAggregation
+        // .rowOrder`, and the roster has to be the same order the list under it
+        // draws or the two disagree about what is first.
+        var seen: Set<String> = []
+        let expected = store.sessions.map(\.projectName).filter { seen.insert($0).inserted }
+        #expect(store.compactProjectNames == expected)
+        #expect(Set(store.compactProjectNames) == ["notchline", "hello-agents"])
+        #expect(store.compactProjectNames.count < store.sessions.count)
+        #expect(store.drawsCompactMiddle, "a notch-less pill with work to name")
+
+        // The notched bar has no middle to give: the cut-out is where one would
+        // stand, and the only way to give it one is a wing.
+        let notched = MonitorStore(
+            displays: [
+                makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 46, hasNotch: true)
+            ],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([])
+        )
+        notched.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [session("notchline", "a")])
+        )
+        #expect(notched.geometry == .notched)
+        #expect(!notched.drawsCompactMiddle)
+
+        // Nor does the expanded panel, where every row names its own Project.
+        store.isExpanded = true
+        #expect(!store.drawsCompactMiddle)
+    }
+
     /// **The reading freezes rather than leaving.**
     ///
     /// V1 took the timer away the instant the last turn ended, so the panel

@@ -1383,6 +1383,203 @@ final class CountsNumeralsView: NSView {
     }
 }
 
+/// The pill's middle: **the name of the work**.
+///
+/// Nothing on any collapsed form has ever named it. The mark says what is most
+/// urgent, the numerals say how much, the clock says how long — and with five
+/// checkouts open, the Project is the fact that decides whether you interrupt
+/// yourself, which all three of them leave unanswered
+/// (`compact-view-v2.md` §6.2).
+///
+/// **It cycles**, `5 s` each, because the middle belongs to no one row. The
+/// clock does not follow it: the reading stays the longest unfinished turn
+/// anywhere, so the bar stops claiming to be one row's report and becomes what
+/// it is — two totals, a clock, and a rotating roster of the work behind them,
+/// with no term pretending to describe another.
+///
+/// > The cost, stated plainly: for one frame in every *N*, the name beside an
+/// > urgent mark is a Project that is not the one waiting. The rotation is what
+/// > makes that legible over a few seconds; a static glance cannot distinguish
+/// > it. This is the weakest point in the V2 collapsed surface and the thing to
+/// > watch first on a real menu bar.
+struct RotatingProjectName: View {
+    /// Every Project with an active row, in the panel's own order,
+    /// deduplicated, first occurrence winning.
+    let names: [String]
+    /// What `209` has left once the anchored ends are taken out.
+    let width: CGFloat
+
+    var body: some View {
+        ProjectNameMarquee(names: names, width: width)
+            .frame(width: width, height: PanelMetrics.readingGroundHeight)
+            // Spoken by the panel's own label, which names the whole list
+            // rather than whichever one the rotation is on.
+            .accessibilityHidden(true)
+    }
+}
+
+private struct ProjectNameMarquee: NSViewRepresentable {
+    let names: [String]
+    let width: CGFloat
+
+    func makeNSView(context: Context) -> ProjectNameView {
+        let view = ProjectNameView()
+        view.apply(names: names, width: width)
+        return view
+    }
+
+    func updateNSView(_ nsView: ProjectNameView, context: Context) {
+        nsView.apply(names: names, width: width)
+    }
+
+    static func dismantleNSView(_ nsView: ProjectNameView, coordinator: ()) {
+        nsView.stop()
+    }
+}
+
+/// The name, on a layer, with the rotation driven off a timer of its own.
+///
+/// **Nothing here re-renders the overlay.** A cross-fade every five seconds
+/// through SwiftUI would invalidate the whole panel twelve times a minute and
+/// animate it for a fifth of a second each time — the same shape of cost as the
+/// once-a-second readout that `AGENTS.md` §7 was written about. So the rotation
+/// swaps one layer's contents inside a `CATransition` and the SwiftUI graph
+/// never hears about it.
+final class ProjectNameView: NSView {
+    private let ink = CALayer()
+    private let fade = CAGradientLayer()
+
+    private var names: [String] = []
+    private var width: CGFloat = 0
+    private var index = 0
+    private var timer: Timer?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        ink.contentsGravity = .bottomLeft
+        layer?.addSublayer(ink)
+        // The trailing fade, as a mask: opaque across everything but the last
+        // `12`, where it runs out. Read as a mask, so only alpha matters.
+        fade.startPoint = CGPoint(x: 0, y: 0.5)
+        fade.endPoint = CGPoint(x: 1, y: 0.5)
+        fade.colors = [CGColor(gray: 0, alpha: 1), CGColor(gray: 0, alpha: 1), CGColor(gray: 0, alpha: 0)]
+        layer?.mask = fade
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    deinit { timer?.invalidate() }
+
+    func apply(names: [String], width: CGFloat) {
+        let previous = currentName
+        self.names = names
+        self.width = width
+        // **The cycle holds its place when the set changes.** A Project joining
+        // or leaving does not restart it: the name that was on screen keeps the
+        // slot it is in, and only a name that has actually gone moves anything.
+        if let previous, let kept = names.firstIndex(of: previous) {
+            index = kept
+        } else if index >= names.count {
+            index = 0
+        }
+        // One Project does not cycle; it is simply named. None draws nothing.
+        if names.count > 1 { start() } else { stop() }
+        redraw(crossFading: currentName != previous)
+        layoutFade()
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    override func layout() {
+        super.layout()
+        layoutFade()
+    }
+
+    private var currentName: String? {
+        names.indices.contains(index) ? names[index] : nil
+    }
+
+    private func start() {
+        guard timer == nil else { return }
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: PanelMetrics.projectNameInterval,
+            repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.advance() }
+        }
+        // The overlay's run loop is in common modes while a menu is tracking,
+        // and a name frozen mid-cycle behind a menu reads as a stall.
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func advance() {
+        guard names.count > 1 else { return }
+        index = (index + 1) % names.count
+        redraw(crossFading: true)
+    }
+
+    private func redraw(crossFading: Bool) {
+        let scale = window?.backingScaleFactor ?? 2
+        guard let name = currentName else {
+            ink.contents = nil
+            return
+        }
+        let font = PanelMetrics.projectNameFont
+        let size = NotchTextRaster.textSize(name, font: font)
+        let image = NotchTextRaster.glyphImage(
+            text: name,
+            font: font,
+            color: NotchPalette.countsSessionDrawingColor,
+            size: size,
+            scale: scale
+        )
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ink.contentsScale = scale
+        ink.frame = CGRect(
+            x: 0,
+            y: (bounds.height - size.height) / 2,
+            width: size.width,
+            height: size.height
+        )
+        CATransaction.commit()
+        if crossFading {
+            let cross = CATransition()
+            cross.type = .fade
+            cross.duration = PanelMotion.duration
+            cross.timingFunction = PanelMotion.timingFunction
+            ink.add(cross, forKey: Self.crossFadeKey)
+        }
+        ink.contents = image
+    }
+
+    private func layoutFade() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fade.frame = bounds
+        let fadeWidth = PanelMetrics.projectNameFadeWidth
+        let start = bounds.width > fadeWidth ? (bounds.width - fadeWidth) / bounds.width : 0
+        fade.locations = [0, NSNumber(value: Double(start)), 1]
+        CATransaction.commit()
+    }
+
+    /// Exposed for the test that the rotation is a layer cross-fade rather than
+    /// a SwiftUI one.
+    var crossFadeAnimation: CAAnimation? { ink.animation(forKey: Self.crossFadeKey) }
+    /// Exposed for the test that one Project does not cycle.
+    var isCycling: Bool { timer != nil }
+    var drawnName: String? { currentName }
+
+    static let crossFadeKey = "notch.projectName.crossFade"
+}
+
 /// The trailing wing's stand-in for a finished turn nobody has read.
 ///
 /// **The one state a summary loses.** The mark draws the most urgent status

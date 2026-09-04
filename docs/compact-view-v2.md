@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, settled, and implemented as far as §5.** The aggregate mark (§2), the counts column (§3), the trailing wing's frozen reading and buried-finish dot (§4), the notched bar's composition (§5), the pill's `209` (§6.1, §6.3) and the status name's removal (§7) are drawn by the app. **Not yet implemented:** the pill's rotating Project name (§6.2), `Hide the wings` under one mark (§9) beyond the dot's own clause, the accessibility amendments (§10), and every Settings row in §12. The board's four pages are the drawings, this document is the contract. |
+| Status | **Designed, settled and implemented.** Every section is drawn by the app except §12's three Settings rows, which are behaviour the user cannot yet reach a control for: the aggregate ink ships at its default, `Name the work on the pill` ships on, and `Hide the wings`' own caption is still V1's wording. The board's four pages are the drawings, this document is the contract. |
 | Version | 2.0 |
 | Date | 2026-09-03 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `01 — Compact V2`, `02 — Aggregate ink palette`, `03 — Trailing wing & the word` (superseded), `04 — The subject and the wing that stops` |
@@ -221,7 +221,7 @@ The reservation comes back, and this time the room it holds is not empty. §6.4 
 
 The middle draws **the name of the work**: the Project of each row in the monitored list, drawn from the middle's own leading edge — `54` from the pill's leading edge in every state that draws one — and fading where the middle ends.
 
-**`13` pt Light, in the sessions numeral's `#C7C7CC`.** That is the face the
+**`13` pt Light, in the sessions numeral's `#C7C7CC`.** *(Implemented: `PanelMetrics.projectNameFont`, `NotchPalette.countsSessionDrawingColor`.)* That is the face the
 status name used to take, and it is already the face this document measured the
 middle against: `notchline`'s `55.10` in §6.3 is `13` pt Light measured, so
 naming the face moves none of §6.1's arithmetic. `#C7C7CC` rather than white
@@ -235,7 +235,7 @@ Nothing on any collapsed form has ever named the work. Page 01 removed hue and t
 
 **It cycles.** Every Project with an active row is named in turn:
 
-- `5 s` each, cross-fading on the slot curve the wings' contents already use.
+- `5 s` each, cross-fading on the slot curve the wings' contents already use. *(Implemented as a `CATransition` on one layer, driven by the view's own timer: a cross-fade through SwiftUI would invalidate the whole overlay twelve times a minute and animate it for a fifth of a second each time, which is the shape of cost `AGENTS.md` §7 exists to prevent.)*
 - The panel's own row order, **deduplicated**, first occurrence winning.
 - The cycle **holds its place when the set changes** — a Project joining or leaving does not restart it.
 - One Project does not cycle; it is simply named. None draws nothing.
@@ -311,7 +311,7 @@ The setting still requires a *measurable* cut-out, so it is disabled on every sc
 
 §10's rules carry over, with one honest amendment.
 
-- `MonitorStatus.displayName` **stops being drawn, not being said.** It remains the accessibility label on both collapsed forms and the word every expanded row draws for itself.
+- `MonitorStatus.displayName` **stops being drawn, not being said.** It remains the accessibility label on both collapsed forms and the word every expanded row draws for itself. *(Implemented. The collapsed label is now `Notchline, 3 sessions, 5 subagents, status Working…, longest running for …, 1 turn finished and unread, …% usage remaining`: the counts column names neither product, because there is no product in either figure, so what is spoken is what the numerals mean rather than whose they are.)*
 - The dot's breath is spoken, on exactly the terms it moves on — `MonitorStore.spokenBuriedCompletionText`, `2 turns finished and unread`. It says how many, which the movement never does.
 - **The amendment.** §10 records that Reduce Motion is not supported because "every status is already carried by text and by a ground that states it without movement". With the word gone, `Input needed` and `Approval needed` are told apart **by pattern alone** on both collapsed forms — one channel, made of movement. This is less a new loss than an extended one: the notched bar has been in exactly this position since V1, because it never had room for a word. What changes is that the pill joins it. The decision not to read `accessibilityDisplayShouldReduceMotion` stands, but **its stated reason no longer covers the collapsed surface**, and this document records that rather than leaving §10 looking sound.
 
@@ -332,12 +332,12 @@ The setting still requires a *measurable* cut-out, so it is disabled on every sc
 
 ## 12. Implementation mapping
 
-Nothing in this document is implemented. `NotchPalette.MatrixInk` today holds V1's per-agent pair (`codexInk`, `claudeCodeInk`, `restingInk`); there is no aggregate ink, no counts column and no middle.
+~~Nothing in this document is implemented.~~ All of it is, bar §12's controls. `NotchPalette.aggregateInk(isConnected:)` returns the default Sage · hint pair or the resting grey; `AggregateCountsColumn` draws the numerals; `RotatingProjectName` draws the middle; `BuriedFinishDot` carries the breath; `PanelMetrics.pillMiddleWidth(trailing:)` is the subtraction §6.1 describes; and `MonitorStore.aggregateSessionCount` / `aggregateSubagentCount` / `buriesAFinishedTurn` / `compactProjectNames` are what they read.
 
-**Settings — recorded, not drawn.** Three changes fall due when the settings window is next opened. They are decided here, so §8.4's standing rule against pushing undecided features into settings is satisfied.
+**Settings — recorded, not drawn.** Three changes fall due when the settings window is next opened. They are decided here, so §8.4's standing rule against pushing undecided features into settings is satisfied. Each is a *control* that is missing rather than a behaviour: the surface already draws every one of these at its recorded default.
 
 | Row | Change |
 | --- | --- |
-| `Hide the wings` | Rewrite. The per-product table and the hue sentence go; caption and tooltip both need rewriting, and neither can keep the phrase "that product's mark". §9. |
-| `Name the work on the pill` | **New.** Display, beside `Hide the wings` and `Outline the panel`. Default **on**, notch-less only. Off, the middle draws nothing and the pill holds its `209` rather than shrinking. |
+| | `Hide the wings` | Rewrite. The per-product table and the hue sentence go; caption and tooltip both need rewriting, and neither can keep the phrase "that product's mark". §9. **The behaviour is implemented; the copy is not.** |
+| `Name the work on the pill` | **New.** Display, beside `Hide the wings` and `Outline the panel`. Default **on**, notch-less only. Off, the middle draws nothing and the pill holds its `209` rather than shrinking. **The default is what ships today** — the middle draws — and the control that could turn it off is what is owed. |
 | The aggregate mark's ink | **New.** Display. Twelve hues at `hint`, ordered by distance from both product hues, the two equidistant ones marked and neither blocked. Default Sage · hint; existing installs take the same. [`aggregate-ink-palette.md`](aggregate-ink-palette.md) §5. |

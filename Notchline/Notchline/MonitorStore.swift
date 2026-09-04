@@ -627,6 +627,26 @@ enum PanelMetrics {
         statusMatrixSize + aggregateCountsGap + reservedCountsColumnWidth
     }
 
+    // MARK: - The pill's middle
+
+    /// The face the name of the work is drawn in.
+    ///
+    /// `13` pt Light — the face the status name used to take, and the one this
+    /// document's own measurements were made against: `notchline` is `55.10`
+    /// here, which is the figure `compact-view-v2.md` §6.3 fits the middle
+    /// around. Naming the face therefore moves nothing.
+    static let projectNameFont = statusLabelFont
+
+    /// How long the name is faded out over where the middle ends.
+    ///
+    /// A name too long to fit fades rather than clipping or ellipsing: a reader
+    /// can act on the start of a name, and an ellipsis would spend three glyphs
+    /// saying that a name exists.
+    static let projectNameFadeWidth: CGFloat = 12
+
+    /// How long each Project is named before the next one.
+    static let projectNameInterval: TimeInterval = 5
+
     /// Compact content leading the notch: padding, the marks, and — where there
     /// is no physical notch to work around — the status label as well.
     ///
@@ -1938,6 +1958,15 @@ final class MonitorStore: ObservableObject {
         return presenceMarks.filter(\.hasATurnToAttendTo)
     }
 
+    /// Whether this surface draws the name of the work between its two ends.
+    ///
+    /// **The notch-less pill, collapsed, with something to name.** The notched
+    /// bar has no middle — the cut-out is where one would stand — and the
+    /// expanded panel names every Project in the rows below.
+    var drawsCompactMiddle: Bool {
+        !isExpanded && geometry == .noNotch && !compactProjectNames.isEmpty
+    }
+
     /// Whether the collapsed surface draws its mark at all, which is the
     /// question the leading wing's existence turns on.
     ///
@@ -2175,6 +2204,24 @@ final class MonitorStore: ObservableObject {
         presenceMarks.reduce(0) { $0 + $1.subagents.count }
     }
 
+    /// Every Project with an active row, in the panel's own order,
+    /// deduplicated, first occurrence winning — the roster the pill's middle
+    /// names in turn.
+    ///
+    /// **A Project name is the opposite of a product name.** The collapsed
+    /// surface dropped hue and the matrix pair on the argument that a product
+    /// name is a colour rather than a row, and that was right; this is the one
+    /// fact the mark, the numerals and the clock all leave unanswered, and with
+    /// several checkouts open it is the one that decides whether the user
+    /// interrupts themselves (`compact-view-v2.md` §6.2).
+    ///
+    /// Ordered by ``sessions``, which is already the panel's own row order, so
+    /// the roster and the list under it cannot disagree about what is first.
+    var compactProjectNames: [String] {
+        var seen: Set<String> = []
+        return sessions.map(\.projectName).filter { seen.insert($0).inserted }
+    }
+
     /// The aggregate mark's ink: the user's hue once a product is behind it,
     /// the resting grey until then.
     var aggregateMatrixInk: NotchPalette.MatrixInk {
@@ -2267,6 +2314,11 @@ final class MonitorStore: ObservableObject {
     /// Names the product each badge belongs to, because two badges drawn side
     /// by side are told apart by ink alone, and a reader who cannot see the
     /// ink would otherwise hear two bare numbers.
+    ///
+    /// **The collapsed surface no longer draws those badges** and no longer
+    /// speaks this: what it draws is one aggregate numeral, so what it says is
+    /// ``spokenCollapsedCountsText``. Kept for the expanded row's own badge,
+    /// which is still per product and still told apart by ink.
     var spokenRunningSubagentText: String? {
         let spoken = compactSubagentBadges.compactMap { mark -> String? in
             guard let summary = mark.badge.spokenSummary else { return nil }
@@ -2274,6 +2326,27 @@ final class MonitorStore: ObservableObject {
         }
         guard !spoken.isEmpty else { return nil }
         return spoken.joined(separator: ", ")
+    }
+
+    /// The counts column, in words.
+    ///
+    /// **What the numerals say, on the terms they say it.** Two figures with no
+    /// product in either of them, so this names neither: hierarchy on that
+    /// column is size and brightness, and the spoken form has neither channel —
+    /// what it has instead is the two words the numerals cannot draw.
+    ///
+    /// **Ungated by `Hide the wings`**, like the numerals themselves: that
+    /// preference decides whether the wing is drawn, never what it counts.
+    var spokenCollapsedCountsText: String? {
+        guard aggregateSessionCount > 0 else { return nil }
+        let sessions = aggregateSessionCount == 1
+            ? "1 session"
+            : "\(aggregateSessionCount) sessions"
+        guard aggregateSubagentCount > 0 else { return sessions }
+        let subagents = aggregateSubagentCount == 1
+            ? "1 subagent"
+            : "\(aggregateSubagentCount) subagents"
+        return "\(sessions), \(subagents)"
     }
 
     /// What a breathing column is saying, in words.

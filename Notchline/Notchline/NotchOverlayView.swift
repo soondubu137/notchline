@@ -68,18 +68,20 @@ struct NotchOverlayView: View {
         // because a bare duration beside a summary status is unattributable.
         let elapsed = store.spokenLongestElapsedText.map { ", longest running for \($0)" }
             ?? ""
-        // The collapsed slot draws one bare badge per product, told apart by
-        // ink alone; spoken, each has to name its product and say what it
-        // counts -- and together they are the only thing on the surface saying
-        // work is still in flight once every turn has finished.
-        let subagents = store.spokenRunningSubagentText.map { ", \($0)" } ?? ""
-        // The breathing column, which VoiceOver cannot see move. It is the one
+        // The counts column, which draws two figures and names neither: there
+        // is no product left for a collapsed numeral to belong to, so what is
+        // spoken is what the numerals mean rather than whose they are.
+        let counts = store.spokenCollapsedCountsText ?? "nothing running"
+        // The breathing dot, which VoiceOver cannot see move. It is the one
         // thing on this surface said by motion alone, so it has to be said here
         // too -- §10's rule about colour, applied to the channel that replaced
-        // it.
+        // the column's own breath.
         let finished = store.spokenBuriedCompletionText.map { ", \($0)" } ?? ""
-        return "Codex, \(store.sessions.count) related sessions, status "
-            + "\(store.statusDisplayName)\(elapsed)\(subagents)\(finished), \(usage)"
+        // **The status name stops being drawn and does not stop being said.**
+        // Neither collapsed form has a word on it any more; this is where that
+        // word went (`compact-view-v2.md` §7, §10).
+        return "Notchline, \(counts), status "
+            + "\(store.statusDisplayName)\(elapsed)\(finished), \(usage)"
     }
 }
 
@@ -370,6 +372,22 @@ private struct OverlayHeader: View {
                 )
             } else {
                 CompactLeadingGroup()
+            }
+
+            // **The pill's middle, and only the pill's.** The notched bar has
+            // no middle to give: the cut-out is where one would stand, and the
+            // only way to give it one is a wing — `102` pt of black beside the
+            // hardware for the whole of every turn, which is the reservation
+            // both wings spent V1 and V2 getting rid of. That is permanent
+            // rather than deferred (`compact-view-v2.md` §5.2).
+            if store.drawsCompactMiddle {
+                RotatingProjectName(
+                    names: store.compactProjectNames,
+                    width: PanelMetrics.pillMiddleWidth(
+                        trailing: store.compactTrailingReading
+                    )
+                )
+                .padding(.horizontal, PanelMetrics.expandedNotchClearance)
             }
 
             Spacer(minLength: 0)
