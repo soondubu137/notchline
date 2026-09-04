@@ -480,7 +480,7 @@ struct NotchlineTests {
 
         // A subagent stopped on a question is what the whole drawing is of.
         #expect(shut.status == .approvalNeeded)
-        #expect(shut.compactSubagentBadges.count == 2)
+        #expect(shut.expandedAgentColumns.count == 2)
         #expect(shut.compactTimerText != nil)
 
         // The pill the pins are measured against.
@@ -501,6 +501,7 @@ struct NotchlineTests {
         // drawn: the anatomy pins that step past the mark are measuring a
         // width that is actually there.
         #expect(shut.aggregateSessionCount > 0)
+        #expect(shut.aggregateSubagentCount > 0)
 
         // The reading is drawn at exactly the width the pill is billed for, so
         // the trailing pins can be measured inwards from the edge: the slot is
@@ -510,15 +511,13 @@ struct NotchlineTests {
         let dot = shut.buriesAFinishedTurn ? PanelMetrics.buriedFinishSlotWidth : 0
         #expect(shut.compactDrawnTrailingReadingWidth == drawn + dot)
 
-        // Four Codex rows: one past the dot cap, which is what turns the third
-        // dot into the dash the key names -- and three of them finished under a
-        // mark that is drawing something else, which is what sets that column
-        // breathing. Both are drawn facts with no text beside them, so the key
-        // is the only place they are explained and this is the only place they
-        // are pinned.
+        // Four Codex rows, three of them finished under a mark that is drawing
+        // something else -- which is what sets the buried-finish dot breathing.
+        // A drawn fact with no text beside it, so the key is the only place it
+        // is explained and this is the only place it is pinned.
         let codex = shut.presenceMarks.first { $0.agent == .codex }
-        #expect((codex?.sessionCount ?? 0) > PanelMetrics.sessionDotCap)
-        #expect(codex?.buriesAFinishedTurn == true)
+        #expect((codex?.sessionCount ?? 0) > 3)
+        #expect(shut.buriesAFinishedTurn)
 
         // Claude Code has finished with a subagent still working. That is one
         // row drawing a badge where a reading would be -- the seventh pin on
@@ -1219,7 +1218,6 @@ struct NotchlineTests {
         store.hidesCompactWings = true
 
         #expect(store.givesUpCompactWings)
-        #expect(store.compactDrawnMarks.isEmpty)
         #expect(!store.drawsCompactMarks)
         #expect(store.compactTimerText == nil)
         #expect(store.currentPanelSize.width == display.centerOcclusionWidth)
@@ -1309,32 +1307,37 @@ struct NotchlineTests {
         // is at rest.
         apply(codex: .running, claudeCode: .running)
         #expect(store.presenceMarks.count == 2)
-        #expect(store.compactDrawnMarks.isEmpty)
+        #expect(!store.drawsCompactMarks)
         #expect(store.currentPanelSize.width == display.centerOcclusionWidth)
 
         // Codex stops on an approval. Its matrix comes out; Claude Code's,
         // still working, does not -- and neither does the timer that has been
         // running the whole time.
         apply(codex: .approvalNeeded, claudeCode: .running)
-        #expect(store.compactDrawnMarks.map(\.agent) == [.codex])
-        #expect(store.compactSessionColumnCount == 1)
+        // **The wing comes out whole**, because there is one mark for every
+        // product at once: what the preference decides is whether it is drawn,
+        // never which of them it is.
+        #expect(store.drawsCompactMarks)
         #expect(store.compactTrailingReading == .empty)
         #expect(store.currentPanelSize.width == hiddenWidth(marks: 1))
         // Pinned to the cut-out still: the wing takes its width leftwards.
         #expect(store.currentPanelTrailingAnchor == display.centerOcclusionMaxX)
-        // And that empty trailing slot is the preference holding two badges and
-        // a running timer back, not a slot with nothing to put in it.
+        // And that empty trailing slot is the preference holding a running
+        // timer back, not a slot with nothing to put in it. The counts beside
+        // the mark are ungated either way.
+        #expect(store.aggregateSessionCount == 2)
         store.hidesCompactWings = false
         #expect(store.compactTrailingReading != .empty)
-        #expect(store.compactSubagentBadges.count == 2)
+        #expect(store.aggregateSubagentCount == 4)
         #expect(store.compactTimerText != nil)
         store.hidesCompactWings = true
 
-        // Claude Code is asked a question as well. Both come out, in the bar's
-        // own order and never in urgency's.
+        // Claude Code is asked a question as well. The wing is already out and
+        // stays exactly as wide: a second waiting product used to bring a
+        // second matrix with it, and there is one mark for both of them now.
         apply(codex: .approvalNeeded, claudeCode: .inputNeeded)
-        #expect(store.compactDrawnMarks.map(\.agent) == [.codex, .claudeCode])
-        #expect(store.currentPanelSize.width == hiddenWidth(marks: 2))
+        #expect(store.drawsCompactMarks)
+        #expect(store.currentPanelSize.width == hiddenWidth(marks: 1))
 
         // Codex is answered and carries on working; Claude Code's turn ends and
         // goes unread. A finished Turn waits on a person too -- to be read --
@@ -1355,13 +1358,14 @@ struct NotchlineTests {
         // Everything is dealt with. The wing goes back and the surface is the
         // cut-out again.
         apply(codex: .running, claudeCode: .running)
-        #expect(store.compactDrawnMarks.isEmpty)
+        #expect(!store.drawsCompactMarks)
         #expect(store.currentPanelSize.width == display.centerOcclusionWidth)
 
         // And the preference reaches none of this with the panel open: hover
         // is where both products are listed whatever they are doing.
         store.isExpanded = true
-        #expect(store.compactDrawnMarks.count == 2)
+        #expect(store.drawsCompactMarks)
+        #expect(store.expandedAgentColumns.count == 2)
     }
 
     /// A Turn that finished under a running one still brings its product's
@@ -1401,9 +1405,9 @@ struct NotchlineTests {
         // the finished one is underneath it.
         #expect(store.presenceMarks.first?.status == .running)
         #expect(store.presenceMarks.first?.buriesAFinishedTurn == true)
-        #expect(store.compactDrawnMarks.map(\.agent) == [.codex])
-        // Which VoiceOver says as well: the column is on screen, so the breath
-        // it cannot see has something to be spoken in place of.
+        #expect(store.drawsCompactMarks)
+        // Which VoiceOver says as well: the dot is on screen, so the breath it
+        // cannot see has something to be spoken in place of.
         #expect(store.spokenBuriedCompletionText == "1 turn finished and unread")
 
         // The same row with a subagent still in flight is a Thread that is
@@ -1424,7 +1428,7 @@ struct NotchlineTests {
             )
         )
         #expect(store.presenceMarks.first?.buriesAFinishedTurn == false)
-        #expect(store.compactDrawnMarks.isEmpty)
+        #expect(!store.drawsCompactMarks)
         #expect(store.spokenBuriedCompletionText == nil)
     }
 
@@ -1738,6 +1742,62 @@ struct NotchlineTests {
         // Once a product connects, hovering opens the panel properly again.
         store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
         #expect(!store.expandsToPillOnly)
+    }
+
+    /// **Nothing connected: the gear keeps its `8`, at every cut-out.**
+    ///
+    /// This form used to add its two sides up — `leading + cut-out + trailing`
+    /// — and the panel is centred while expanded, so that sum was never the
+    /// drawing: the room beside the cut-out is `(width − cut-out) ÷ 2` on both
+    /// sides. Added up it left the gear `0.5` from the hardware instead of `8`,
+    /// at every scaling step, and the leading side it reserved for
+    /// `Disconnected` put about `25` pt of that word behind the cut-out.
+    /// Dropping the word is what makes the symmetric rule affordable
+    /// (`expanded-header-v2.md` §5).
+    @Test @MainActor
+    func theRestingHoveredPanelClearsTheCutOutOnBothSides() {
+        // The four cut-outs this app has measured, each with the menu bar it
+        // comes with — the gear tracks the bar, so the two move together.
+        for (occlusion, bar, expected) in [
+            (CGFloat(127), CGFloat(22), CGFloat(207)),
+            (185, 32, 274),
+            (200, 46, 304),
+            (220, 38, 316)
+        ] {
+            let width = PanelMetrics.restingExpandedWidth(
+                geometry: .notched,
+                centerOcclusionWidth: occlusion,
+                compactHeight: bar
+            )
+            #expect(width == expected, "at \(occlusion) × \(bar)")
+            // The half the additive sum could not see: what each side actually
+            // gets once the window is centred on the display.
+            let shoulder = (width - occlusion) / 2
+            #expect(
+                shoulder >= PanelMetrics.expandedTrailingSideWidth(compactHeight: bar),
+                "the gear is inside the cut-out at \(occlusion)"
+            )
+            // And the leading side, which is a bare mark and never binds here.
+            #expect(
+                shoulder >= PanelMetrics.expandedHorizontalPadding
+                    + PanelMetrics.statusMatrixSize
+                    + PanelMetrics.expandedNotchClearance
+            )
+        }
+
+        // A flat display has nothing to be symmetric about, so this form
+        // composes to itself: the mark, one clearance, the gear.
+        #expect(
+            PanelMetrics.restingExpandedWidth(
+                geometry: .noNotch,
+                centerOcclusionWidth: 0,
+                compactHeight: 24
+            ) == ceil(
+                PanelMetrics.expandedHorizontalPadding
+                    + PanelMetrics.statusMatrixSize
+                    + PanelMetrics.expandedTrailingSideWidth(compactHeight: 24)
+            )
+        )
     }
 
     /// The footer has exactly as many rules as the notch has marks.
@@ -2705,10 +2765,9 @@ struct NotchlineTests {
         // Idle: leading wing + the cut-out, and nothing at all to its right —
         // an empty trailing *wing* would render as a second, fake notch.
         let idle = size(trailingText: nil)
-        let leading = PanelMetrics.compactLeadingWidth(
-            statusReadoutText: "Working...",
-            showsStatusText: false
-        ) + PanelMetrics.expandedNotchClearance
+        let leading = PanelMetrics.expandedHorizontalPadding
+            + PanelMetrics.drawnLeadingGroupWidth(sessionCount: 0)
+            + PanelMetrics.expandedNotchClearance
         #expect(abs(idle.width - (leading + occlusion)) <= 1)
 
         #expect(size(trailingText: "1:23").width > idle.width)
@@ -3039,10 +3098,9 @@ struct NotchlineTests {
             let wing = PanelMetrics.compactTrailingWingWidth(trailing: reading)
             #expect(wing == wing.rounded(), "\(reading)")
             // The identity itself, on the leading wing this app draws.
-            let leadingAndCutOut = PanelMetrics.compactLeadingWidth(
-                statusReadoutText: "Working...",
-                showsStatusText: false
-            ) + PanelMetrics.expandedNotchClearance + 220
+            let leadingAndCutOut = PanelMetrics.expandedHorizontalPadding
+                + PanelMetrics.drawnLeadingGroupWidth(sessionCount: 0)
+                + PanelMetrics.expandedNotchClearance + 220
             #expect(ceil(leadingAndCutOut + wing) == ceil(leadingAndCutOut) + wing)
         }
     }
@@ -3149,10 +3207,9 @@ struct NotchlineTests {
             status: .running,
             matrixCount: 1
         ).width
-        let leading = PanelMetrics.compactLeadingWidth(
-            statusReadoutText: "Working...",
-            showsStatusText: false
-        ) + PanelMetrics.expandedNotchClearance
+        let leading = PanelMetrics.expandedHorizontalPadding
+            + PanelMetrics.drawnLeadingGroupWidth(sessionCount: 0)
+            + PanelMetrics.expandedNotchClearance
         #expect(body == ceil(leading + 200))
     }
 
@@ -3223,50 +3280,6 @@ struct NotchlineTests {
         )
     }
 
-    /// The session count stands beside the matrix in a column exactly as tall
-    /// as the matrix, so it asks for no room the mark did not already have.
-    ///
-    /// **That identity is the whole placement argument.** Two row pitches and
-    /// one cell is the matrix's own height, so the column draws the same on a
-    /// `46` pt menu bar and a `22` pt one. Under the matrix -- where this was
-    /// drawn first -- it needed `5.66` of clearance below the mark, which the
-    /// short bars have not got, and had to be dropped there entirely.
-    @Test @MainActor
-    func theSessionDotColumnIsExactlyAsTallAsTheMatrix() {
-        let size = PanelMetrics.statusMatrixSize
-
-        #expect(
-            abs(
-                2 * PanelMetrics.sessionDotPitch(matrixSize: size)
-                    + PanelMetrics.sessionDotDashLength(matrixSize: size)
-                    - size
-            ) < 0.001
-        )
-        // Which is what makes every menu bar the app supports draw it alike:
-        // the column never asks for more than the mark beside it already does.
-        for bar in [46.0, 38.0, 32.0, 28.0, 24.0, 22.0] as [CGFloat] {
-            #expect(size <= bar, "the mark itself fits every supported bar")
-        }
-        // A dot is shorter than the cell it is centred in, so a run of three
-        // dots is shorter still than the run that ends in a dash.
-        #expect(
-            PanelMetrics.sessionDotDiameter(matrixSize: size)
-                < PanelMetrics.sessionDotDashLength(matrixSize: size)
-        )
-
-        // The figures `dual-agent-design.md` §11 draws, in the matrix's own
-        // 91-unit viewBox.
-        #expect(abs(PanelMetrics.sessionDotDiameter(matrixSize: size) - 2.74) < 0.01)
-        #expect(abs(PanelMetrics.sessionDotGap(matrixSize: size) - 2.92) < 0.01)
-        #expect(abs(PanelMetrics.sessionDotDashLength(matrixSize: size) - 4.93) < 0.01)
-        // And they scale with the mark, because they are shares of it.
-        #expect(
-            abs(
-                PanelMetrics.sessionDotDiameter(matrixSize: size * 2)
-                    - 2 * PanelMetrics.sessionDotDiameter(matrixSize: size)
-            ) < 0.001
-        )
-    }
 
     /// The column moves on exactly one condition, and that condition is the
     /// defect itself.
@@ -3493,53 +3506,6 @@ struct NotchlineTests {
         #expect(swing > SessionDotBreath.restingOpacity / 2)
     }
 
-    /// The run of marks starts at the column's top edge and ends on the
-    /// matrix's lower one.
-    ///
-    /// **The direction is the part worth pinning.** The design states this
-    /// column downwards and a layer's space runs upwards, so one subtraction
-    /// stands between the two — and if it were ever read the wrong way round
-    /// the whole column would be mirrored, which on three identical dots is
-    /// invisible until the day the third becomes a dash and the run ends at the
-    /// wrong end of the mark.
-    @Test @MainActor
-    func theDashEndsOnTheMatrixsLowerEdge() throws {
-        let size = PanelMetrics.statusMatrixSize
-        let diameter = PanelMetrics.sessionDotDiameter(matrixSize: size)
-        let dash = PanelMetrics.sessionDotDashLength(matrixSize: size)
-        let inset = (dash - diameter) / 2
-
-        let past = SessionDotColumnView.markFrames(
-            drawnCount: PanelMetrics.sessionDotCap,
-            isPastCap: true,
-            matrixSize: size
-        )
-        #expect(past.count == PanelMetrics.sessionDotCap)
-        // The first mark sits one half-cell in from the top, and the dash runs
-        // out flush with the bottom -- which is the column being exactly as
-        // tall as the matrix, drawn rather than merely asserted.
-        #expect(abs(try #require(past.first).maxY - (size - inset)) < 0.001)
-        #expect(abs(try #require(past.last).minY) < 0.001)
-        // Downwards, in the order the rows are packed.
-        for (upper, lower) in zip(past, past.dropFirst()) {
-            #expect(lower.minY < upper.minY)
-        }
-
-        // Under the cap every mark is a dot, and the run stops one half-cell
-        // short of the bottom instead of reaching it.
-        let under = SessionDotColumnView.markFrames(
-            drawnCount: PanelMetrics.sessionDotCap,
-            isPastCap: false,
-            matrixSize: size
-        )
-        #expect(abs(try #require(under.last).minY - inset) < 0.001)
-        #expect(under.allSatisfy { abs($0.height - diameter) < 0.001 })
-        // And a mark never leaves the column it stands in.
-        for frame in past + under {
-            #expect(frame.minY >= -0.001)
-            #expect(frame.maxY <= size + 0.001)
-        }
-    }
 
     /// The breath reaches Core Animation, and leaves when the condition does.
     ///
@@ -3548,119 +3514,35 @@ struct NotchlineTests {
     /// which draws exactly like the design that came before it.
     @Test @MainActor
     func theBreathReachesTheLayerAndLeavesWithTheCondition() throws {
-        let size = PanelMetrics.statusMatrixSize
-        let view = SessionDotColumnView(
-            frame: NSRect(
-                x: 0,
-                y: 0,
-                width: PanelMetrics.sessionDotDiameter(matrixSize: size),
-                height: size
-            )
+        // **The carrier has changed and the loop has not.** The session-dot
+        // column left with the per-product marks; what breathes now is the
+        // trailing wing's own dot, which exists only while it has something to
+        // say — so its presence *is* the condition, and it has no second state
+        // to settle back to (`compact-view-v2.md` §4.3).
+        let size = PanelMetrics.buriedFinishDotSize
+        let view = BreathingDotView(
+            frame: NSRect(x: 0, y: 0, width: size, height: size)
         )
-        func apply(breathes: Bool) {
-            view.apply(
-                drawnCount: 2,
-                isPastCap: false,
-                agent: .codex,
-                matrixSize: size,
-                breathes: breathes
-            )
-        }
-
-        apply(breathes: false)
-        #expect(view.installedBreath == nil, "a column with nothing buried is still")
-
-        apply(breathes: true)
-        let breath = try #require(view.installedBreath as? CABasicAnimation)
+        let breath = try #require(view.breathAnimation as? CABasicAnimation)
         #expect(breath.keyPath == "opacity")
         #expect(breath.repeatCount == .infinity)
         #expect(breath.autoreverses)
         #expect(!breath.isRemovedOnCompletion)
+        // Within its own ink, never above it: the modulation only ever dims
+        // `#7C7C80`, so it cannot approach the aggregate's lit ink and cannot
+        // be read as the one thing brightness means on this surface.
+        #expect(SessionDotBreath.floorOpacity < SessionDotBreath.restingOpacity)
+        #expect(SessionDotBreath.restingOpacity <= 1)
 
-        // Idempotent: the view is re-applied on every state change upstream,
-        // and re-adding the loop each time would restart it -- and with it the
-        // phase that keeps two products together.
-        let first = try #require(view.installedBreath)
-        apply(breathes: true)
-        #expect(view.installedBreath === first)
-
-        apply(breathes: false)
-        #expect(view.installedBreath == nil)
+        // A second view is a second dot, in phase with the first: the loop is
+        // anchored to the clock rather than to the moment of installation.
+        let other = BreathingDotView(
+            frame: NSRect(x: 0, y: 0, width: size, height: size)
+        )
+        let second = try #require(other.breathAnimation as? CABasicAnimation)
+        #expect(abs(second.beginTime - breath.beginTime) < 0.001)
     }
 
-    /// The column is reserved in the width and packed in the drawing — in the
-    /// **expanded header**, which is the one form left that does either.
-    ///
-    /// That panel is sized from a baseline rather than from its contents, so a
-    /// column opening inside it cannot widen anything and the room has to be
-    /// there already: the marks are packed into it from the leading edge, an
-    /// empty column costs no gap between two marks, and the leftover falls past
-    /// the status name rather than in front of it.
-    ///
-    /// **Both collapsed forms take the column at what they draw.** The notched
-    /// bar always did; the pill joined it, because a reservation on a centred
-    /// panel holds nothing still that a person can see — the room it left went
-    /// past the label and became `5.66` of extra trailing margin per idle
-    /// product, on top of the `35` the widest word was leaving there.
-    @Test @MainActor
-    func theSessionDotColumnIsReservedInWidthAndPackedInDrawing() {
-        let size = PanelMetrics.statusMatrixSize
-        let column = PanelMetrics.sessionDotColumnWidth()
-
-        #expect(
-            abs(
-                column
-                    - (PanelMetrics.sessionDotGap(matrixSize: size)
-                        + PanelMetrics.sessionDotDiameter(matrixSize: size))
-            ) < 0.001
-        )
-        // `5.66` against the `22` a numeral beside the matrix wanted.
-        #expect(abs(column - 5.66) < 0.01)
-
-        // A product mark carries the column; the resting grey has no product
-        // behind it and so no rows it could ever count.
-        #expect(PanelMetrics.markWidth(isProductMark: true) == size + column)
-        #expect(PanelMetrics.markWidth(isProductMark: false) == size)
-        #expect(
-            PanelMetrics.marksWidth(2)
-                == 2 * (size + column) + PanelMetrics.compactMatrixSpacing
-        )
-        #expect(PanelMetrics.marksWidth(1, areProductMarks: false) == size)
-
-        // The room is the widest the marks ever draw: every mark's column, at
-        // once. Nothing about this expression can be told how many sessions
-        // there are, which is the point -- the panel cannot answer to a count
-        // it is never given.
-        #expect(
-            PanelMetrics.marksWidth(2)
-                == 2 * size + 2 * column + PanelMetrics.compactMatrixSpacing
-        )
-        // Packed into that room the pair sits at the gap it was tuned to sit
-        // at; held open, it sat at nearly twice that, past the `8` at which
-        // the pair stops reading as a pair.
-        #expect(column + PanelMetrics.compactMatrixSpacing > 8)
-        // And the slack a missing column leaves is never wide enough for a dot
-        // to reach the next mark: the pair gap outruns the whole column, so the
-        // dot is drawn where it belongs with nothing to collide with.
-        #expect(PanelMetrics.compactMatrixSpacing > column)
-
-        // The pair gap still binds the pair more loosely than a column is
-        // bound to its own matrix, which is what keeps the grouping readable.
-        #expect(
-            PanelMetrics.compactMatrixSpacing
-                > 2 * PanelMetrics.sessionDotGap(matrixSize: size) - 0.001
-        )
-
-        // **Neither collapsed form draws this column any more.** It counted
-        // one product's rows beside that product's matrix, and both halves of
-        // that are gone from the bar: one aggregate mark, one aggregate
-        // numeral (`compact-view-v2.md` §7). What is checked above is the
-        // expanded header, which still reserves a column per mark and is where
-        // this geometry now lives alone — until `expanded-header-v2.md` takes
-        // it too.
-        #expect(PanelMetrics.fixedCompactWidth(for: .disconnected) == 41)
-        #expect(PanelMetrics.fixedCompactWidth(for: .running) == 209)
-    }
 
     /// The notched bar reserves nothing, on either side.
     ///
@@ -3669,7 +3551,6 @@ struct NotchlineTests {
     /// narrowing this surface now does is one of these four moves.
     @Test @MainActor
     func theNotchedBarIsExactlyAsWideAsWhatItDraws() {
-        let column = PanelMetrics.sessionDotColumnWidth()
         let matrix = PanelMetrics.statusMatrixSize
         let gap = PanelMetrics.compactMatrixSpacing
 
@@ -3690,34 +3571,44 @@ struct NotchlineTests {
                 == PanelMetrics.reservedLeadingGroupWidth
         )
 
-        // The expanded header still reserves a column per mark, and this is
-        // the arithmetic it reserves by. No mark is billed for a column it has
-        // not got, and none for more than one.
-        #expect(PanelMetrics.drawnMarksWidth(markCount: 0, sessionColumnCount: 0) == 0)
-        #expect(PanelMetrics.drawnMarksWidth(markCount: 1, sessionColumnCount: 0) == matrix)
+        // **And the expanded band reserves where this wing hugs**, which is
+        // the two forms' one difference in composition: the band is sized from
+        // a baseline, so a column gaining a digit inside it cannot widen
+        // anything and the room has to be there already; the bar is pinned to
+        // the cut-out and its leading edge is free to travel.
         #expect(
-            PanelMetrics.drawnMarksWidth(markCount: 1, sessionColumnCount: 1)
-                == matrix + column
+            PanelMetrics.expandedLeadingSideWidth(workingAgentCount: 1)
+                == PanelMetrics.expandedHorizontalPadding
+                    + matrix
+                    + PanelMetrics.aggregateCountsGap
+                    + PanelMetrics.reservedCountsColumnWidth
+                    + PanelMetrics.expandedNotchClearance
         )
-        #expect(
-            PanelMetrics.drawnMarksWidth(markCount: 2, sessionColumnCount: 0)
-                == 2 * matrix + gap
-        )
-        #expect(
-            PanelMetrics.drawnMarksWidth(markCount: 2, sessionColumnCount: 2)
-                == PanelMetrics.marksWidth(2)
-        )
-        // At every column open it is the reservation, and never more than it.
-        for markCount in 0...2 {
-            for columnCount in 0...markCount {
-                #expect(
-                    PanelMetrics.drawnMarksWidth(
-                        markCount: markCount,
-                        sessionColumnCount: columnCount
-                    ) <= PanelMetrics.marksWidth(markCount)
-                )
-            }
+        // **The second working agent costs `25.2` and every one after it
+        // `19.2`.** The first costs nothing at all: with one there is nothing
+        // to decompose, so the second brings the gap after the totals *and*
+        // both columns with it.
+        func side(_ agents: Int) -> CGFloat {
+            PanelMetrics.expandedLeadingSideWidth(workingAgentCount: agents)
         }
+        #expect(
+            abs(
+                (side(2) - side(1))
+                    - (PanelMetrics.totalsToPartsSpacing
+                        + 2 * PanelMetrics.agentColumnWidth
+                        + PanelMetrics.agentColumnSpacing)
+            ) < 0.001
+        )
+        for agents in 3 ... 5 {
+            #expect(
+                abs(
+                    (side(agents) - side(agents - 1))
+                        - (PanelMetrics.agentColumnWidth
+                            + PanelMetrics.agentColumnSpacing)
+                ) < 0.001
+            )
+        }
+        #expect(PanelMetrics.agentColumnSpacing == gap)
 
         // **The trailing wing is the reading it draws**, at every length the
         // formatter can produce -- including one past the `00:00:00` template
@@ -3808,77 +3699,6 @@ struct NotchlineTests {
         )
     }
 
-    /// The status name keeps one distance from the mark it names.
-    ///
-    /// The reservation has to be spent somewhere, and where it is spent is the
-    /// whole of this: in front of the label it put `23.3` between the last
-    /// matrix and the word describing it while the pair beside it sat at their
-    /// own `6`, permanently and in the state this surface is in most of the
-    /// time. Past the label it costs the label a push when a column opens ahead
-    /// of it -- the same push every mark after that column already takes.
-    @Test @MainActor
-    func theStatusNameKeepsOneDistanceFromTheMarkItNames() {
-        let column = PanelMetrics.sessionDotColumnWidth()
-        let gap = PanelMetrics.expandedReadoutSpacing
-
-        func marks(_ counts: [Int]) -> [PresenceMark] {
-            counts.enumerated().map { index, count in
-                PresenceMark(
-                    agent: AgentKind.allCases[index],
-                    status: .running,
-                    sessionCount: count
-                )
-            }
-        }
-        /// Where the label starts, measured from the panel's leading edge: the
-        /// inset, the room the marks actually draw into, and the one gap.
-        func labelOrigin(_ marks: [PresenceMark]) -> CGFloat {
-            PanelMetrics.expandedHorizontalPadding
-                + PanelMetrics.marksWidth(marks.count)
-                - PanelMetrics.unpackedColumnRoom(marks)
-                + gap
-        }
-
-        // Every product mark missing its column contributes one column's room.
-        #expect(PanelMetrics.unpackedColumnRoom(marks([0, 0])) == 2 * column)
-        #expect(PanelMetrics.unpackedColumnRoom(marks([1, 0])) == column)
-        #expect(PanelMetrics.unpackedColumnRoom(marks([0, 1])) == column)
-        #expect(PanelMetrics.unpackedColumnRoom(marks([1, 4])) == 0)
-        // The resting grey has no product behind it and so no column to miss.
-        #expect(
-            PanelMetrics.unpackedColumnRoom([PresenceMark(agent: nil, status: .disconnected)])
-                == 0
-        )
-
-        // The label sits one `expandedReadoutSpacing` past whatever the marks
-        // last drew -- which is the matrix itself when that product has no
-        // rows, and its column when it has.
-        #expect(abs(labelOrigin(marks([0, 0])) - (12 + (2 * 16.6 + 6) + gap)) < 0.001)
-        #expect(abs(labelOrigin(marks([0, 0])) - 63.2) < 0.001)
-        // It moves by exactly one column when one opens ahead of it, and by
-        // both when both do. Held still, it was at `74.5` in all three.
-        #expect(abs(labelOrigin(marks([1, 0])) - labelOrigin(marks([0, 0])) - column) < 0.001)
-        #expect(abs(labelOrigin(marks([1, 1])) - labelOrigin(marks([0, 0])) - 2 * column) < 0.001)
-        #expect(abs(labelOrigin(marks([1, 1])) - 74.5) < 0.05)
-        // Past the dash cap it stops moving: the column is one width at every
-        // count above zero.
-        #expect(labelOrigin(marks([4, 9])) == labelOrigin(marks([1, 1])))
-
-        // And none of it reaches the panel. The reservation is the same number
-        // it always was -- the packed marks and this slack are the two halves
-        // of it -- so no width and neither edge answers to a session count.
-        for counts in [[0, 0], [1, 0], [0, 1], [2, 3], [9, 9]] {
-            let drawn = PanelMetrics.marksWidth(counts.count)
-                - PanelMetrics.unpackedColumnRoom(marks(counts))
-            #expect(
-                abs(
-                    drawn + PanelMetrics.unpackedColumnRoom(marks(counts))
-                        - PanelMetrics.marksWidth(counts.count)
-                ) < 0.001
-            )
-            #expect(drawn <= PanelMetrics.marksWidth(counts.count))
-        }
-    }
 
     /// The name moves on the column's own curve, because it is the column
     /// pushing it.
@@ -4144,7 +3964,6 @@ struct NotchlineTests {
             )
         }
 
-        #expect(!store.drawsCompactStatusName, "no collapsed form draws it")
         #expect(store.spokenCollapsedCountsText == nil, "a zero is never said either")
 
         store.applyForTesting(
@@ -4665,9 +4484,10 @@ struct NotchlineTests {
             centerOcclusionWidth: 0,
             compactHeight: 24
         )
-        // Two marks, because that is now what decides whether a cut-out
-        // outgrows the baseline at all: one product's readout fits inside `520`
-        // beside a `200` cut-out, and the panel stays at the baseline there.
+        // Two working agents, which used to be what pushed a notched panel
+        // past the baseline: it was `570` at a `200` cut-out because of a
+        // sentence. **The panel is one size now** — the same object whatever
+        // is open, on a notched screen and a flat one alike.
         let notchedSize = PanelMetrics.size(
             geometry: .notched,
             isExpanded: true,
@@ -4675,7 +4495,7 @@ struct NotchlineTests {
             trailing: .empty,
             centerOcclusionWidth: 200,
             compactHeight: 38,
-            matrixCount: 2
+            workingAgentCount: 2
         )
         let notchedSingle = PanelMetrics.size(
             geometry: .notched,
@@ -4687,114 +4507,242 @@ struct NotchlineTests {
         )
 
         #expect(noNotchSize.width == 520)
-        #expect(notchedSize.width > noNotchSize.width)
+        #expect(notchedSize.width == noNotchSize.width)
         #expect(notchedSingle.width == noNotchSize.width)
         #expect(noNotchSize.height == 24 + PanelMetrics.expandedContentHeight)
         #expect(notchedSize.height == 38 + PanelMetrics.expandedContentHeight)
     }
 
-    /// Every sentence this header can say clears the cut-out, at every mark
-    /// count — measured the way the header *draws* it.
+    /// **The band decomposes the totals, and only where there is something to
+    /// decompose.**
     ///
-    /// What this replaces built its `required` out of
-    /// ``PanelMetrics/expandedStatusReadoutWidth(status:markCount:)``, the same
-    /// expression the width is composed from, so it could only ever pass: it
-    /// checked the formula against itself, and went on passing while a second
-    /// matrix and then two session columns arrived on the side it was
-    /// measuring. Nothing about the mark count could reach it.
-    ///
-    /// This one composes the leading side the way `StatusReadout` does, and
-    /// takes the glyphs at the width the *label* rasterises them —
-    /// ``NotchTextRaster/textSize(_:font:)``, which ceils where `PanelMetrics`
-    /// did not, so a reservation a fraction short of the drawing fails here.
-    @Test
-    func everySentenceTheExpandedHeaderCanSayClearsTheCutOut() {
-        // The font `StatusReadout` leaves `SearchlightLabel` to default to.
-        let font = NSFont.systemFont(ofSize: 13, weight: .light)
+    /// One column per *working* agent, in Settings' order, packed — and none at
+    /// all with one, where a column would repeat the totals digit for digit in
+    /// a second ink. What the band shows is what is running rather than what is
+    /// installed (`expanded-header-v2.md` §4.3 rules 02, 04 and 07).
+    @Test @MainActor
+    func theBandDrawsOneColumnPerWorkingAgentAndNoneForOne() {
+        let store = MonitorStore(services: [], initialSnapshot: makeSessionSnapshot([]))
+        func session(_ agent: AgentKind, _ id: String, subagents: Int = 0) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id,
+                turnID: "turn-\(id)",
+                projectName: "notchline",
+                title: "Turn",
+                preview: nil,
+                status: .running,
+                startedAt: Date(),
+                runningSubagentCount: subagents
+            )
+        }
 
-        // One product and both; cut-outs from `Larger Text` (`127`) up to
-        // `More Space` (`220`), taking in the `168` at which the old width
-        // started drawing the sentence under the hardware.
-        for markCount in 1...AgentKind.allCases.count {
-            for occlusion in [127, 152, 168, 200, 220] as [CGFloat] {
+        // Two agents connected, one of them working. There is nothing to
+        // decompose: the band draws the totals alone, in grey, and colour
+        // arrives with the second working agent.
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex, "a")])
+        )
+        store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
+        #expect(store.presenceMarks.count == 2)
+        #expect(store.workingAgentCount == 1)
+        #expect(store.expandedAgentColumns.isEmpty)
+
+        // The second starts working. Both columns appear, in `AgentKind` order
+        // and never in urgency's.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                sessions: [session(.claudeCode, "b"), session(.claudeCode, "c")]
+            )
+        )
+        #expect(store.workingAgentCount == 2)
+        #expect(store.expandedAgentColumns.map(\.agent) == [.codex, .claudeCode])
+        #expect(store.expandedAgentColumns.map(\.sessionCount) == [1, 2])
+        // The parts add up to the totals, which is the whole claim a
+        // decomposition makes.
+        #expect(
+            store.expandedAgentColumns.reduce(0) { $0 + $1.sessionCount }
+                == store.aggregateSessionCount
+        )
+
+        // Codex empties. It leaves the band — the sum is still on the surface
+        // beside it — and the column after it closes up rather than holding a
+        // slot.
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
+        #expect(store.workingAgentCount == 1)
+        #expect(store.expandedAgentColumns.isEmpty, "nothing left to decompose")
+        #expect(store.aggregateSessionCount == 2, "the totals still count them")
+    }
+
+    /// **One row or two, and a dash where an agent has none.**
+    ///
+    /// The subagent row is drawn when there are subagents *anywhere*, and then
+    /// every column fills it — so the band keeps one baseline at a time rather
+    /// than one per agent. A zero inside a drawn row is a dash: a blank would
+    /// leave the reader deciding whether the number was absent or the agent
+    /// was, and a `0` would be a figure that adds nothing in a row of figures
+    /// that add (§4.3 rules 05 and 06).
+    @Test @MainActor
+    func theBandsSubagentRowIsDrawnEverywhereOrNowhere() {
+        let store = MonitorStore(services: [], initialSnapshot: makeSessionSnapshot([]))
+        func session(_ agent: AgentKind, subagents: Int) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: "\(agent)",
+                turnID: "turn-\(agent)",
+                projectName: "notchline",
+                title: "Turn",
+                preview: nil,
+                status: .running,
+                startedAt: Date(),
+                runningSubagentCount: subagents
+            )
+        }
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: [session(.codex, subagents: 0)]
+            )
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                sessions: [session(.claudeCode, subagents: 0)]
+            )
+        )
+        // No subagents anywhere: one row, and every numeral centres on the
+        // mark's own middle.
+        #expect(!store.expandedDrawsSubagentRow)
+        #expect(
+            PanelMetrics.countsSessionBaseline(hasSubagents: false)
+                < PanelMetrics.countsSessionBaseline(hasSubagents: true)
+        )
+
+        // One subagent, on one agent. The row is drawn for both, and the agent
+        // without any reads a dash rather than a `0` or a blank.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode,
+                availability: .ready,
+                sessions: [session(.claudeCode, subagents: 3)]
+            )
+        )
+        #expect(store.expandedDrawsSubagentRow)
+        #expect(store.expandedAgentColumns.map(\.subagentCount) == [0, 3])
+        #expect(PanelMetrics.countsDashText == "\u{2013}", "an en dash, not a hyphen")
+
+        // **And the dash is spoken as `none`**, never as zero sessions: colour
+        // is the only thing on this band saying whose a number is, so the
+        // accessible name is what spells each column out (§9).
+        let codex = store.expandedAgentColumns[0]
+        #expect(codex.spokenSummary == "Codex, 1 session, no subagents")
+        let claudeCode = store.expandedAgentColumns[1]
+        #expect(claudeCode.spokenSummary == "Claude Code, 1 session, 3 subagents")
+        // The totals can never show a dash: that row is drawn only when the
+        // total is at least one.
+        #expect(store.aggregateSubagentCount == 3)
+    }
+
+    /// **The band clears the cut-out at every working-agent count it can
+    /// reach**, measured the way the header draws it.
+    ///
+    /// This replaces `everySentenceTheExpandedHeaderCanSayClearsTheCutOut`,
+    /// which measured a sentence: the band draws no word now
+    /// (`expanded-header-v2.md` §3), so what has to clear the hardware is the
+    /// collapsed bar's own group plus one column of numbers per working agent.
+    /// The sentence it checked is gone; the thing it was really protecting —
+    /// that the leading side fits the shoulder on every Mac — is what stands.
+    @Test
+    func theBandClearsTheCutOutAtEveryWorkingAgentCount() {
+        for workingAgents in 1 ... AgentKind.allCases.count {
+            for occlusion in [127, 152, 168, 185, 200, 220] as [CGFloat] {
                 let width = PanelMetrics.expandedWidth(
                     centerOcclusionWidth: occlusion,
-                    markCount: markCount
+                    workingAgentCount: workingAgents
                 )
-                // The expanded panel is centred on the display rather than
-                // pinned to the cut-out, so each side gets half of what the
-                // cut-out leaves.
+                // The panel is centred on the display rather than pinned to the
+                // cut-out, so each side gets half of what the cut-out leaves.
                 let availableSideWidth = (width - occlusion) / 2
-
-                for status in PanelMetrics.workingStatuses {
-                    let drawn = PanelMetrics.expandedHorizontalPadding
-                        + PanelMetrics.marksWidth(markCount)
-                        + PanelMetrics.expandedReadoutSpacing
-                        + NotchTextRaster.textSize(
-                            status.displayName,
-                            font: font
-                        ).width
-                    #expect(
-                        drawn + PanelMetrics.expandedNotchClearance
-                            <= availableSideWidth
-                    )
-                }
+                let drawn = PanelMetrics.expandedLeadingSideWidth(
+                    workingAgentCount: workingAgents
+                )
+                #expect(drawn <= availableSideWidth, "\(workingAgents) at \(occlusion)")
+                // And the trailing side, which is the one that binds when
+                // nothing is connected.
+                #expect(
+                    PanelMetrics.expandedTrailingSideWidth(compactHeight: 46)
+                        <= availableSideWidth
+                )
             }
         }
     }
 
-    /// The width answers to the marks, and stops paying for sentences the
-    /// header cannot say.
+    /// **The width answers to a count of working agents, and to nothing that
+    /// can be said in words.**
     ///
-    /// Both halves are the same correction. Reserving for one bare matrix was
-    /// `33.9` short of what two products draw; folding over
-    /// `MonitorStatus.allCases` was `23.3` long, for a `Version unsupported`
-    /// no aggregate can produce. The long half covered the short one until the
-    /// session columns arrived, and then it did not.
+    /// This replaces `theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames`
+    /// — the width answers to neither now. A two-agent panel was `570` because
+    /// of a sentence while a one-agent panel was `520` because of a baseline,
+    /// so the same object was two sizes depending on what happened to be open
+    /// and changed size the first time a second agent connected. It is `520` at
+    /// every cut-out this product meets, at every agent count a machine is
+    /// likely to run.
     @Test
-    func theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames() {
-        // At a `200` cut-out this was `547` whatever was connected. Measured
-        // against what the header draws, one product does not need the cut-out
-        // branch at all and takes the baseline; two ask for more than the `547`
-        // that was not enough for them.
-        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 200, markCount: 1) == 520)
-        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 200, markCount: 2) == 570)
-        // The widest cut-out this app has measured, where one product needs the
-        // branch too.
-        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 220, markCount: 1) == 533)
-        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 220, markCount: 2) == 590)
-        // No cut-out, no sum: the baseline stands whatever is connected.
-        #expect(PanelMetrics.expandedWidth(centerOcclusionWidth: 0, markCount: 2) == 520)
+    func theExpandedWidthAnswersToWorkingAgentsAndNotToWords() {
+        // The four cut-outs this app has measured, and no cut-out at all.
+        for occlusion in [0, 127, 185, 200, 220] as [CGFloat] {
+            for workingAgents in 1 ... 4 {
+                #expect(
+                    PanelMetrics.expandedWidth(
+                        centerOcclusionWidth: occlusion,
+                        workingAgentCount: workingAgents
+                    ) == 520,
+                    "\(workingAgents) agents at \(occlusion)"
+                )
+            }
+        }
+        // V1 was past the baseline at the second product on three of those.
+        // The lever now sits four agents out, and moves at five on the widest
+        // cut-out this product meets.
+        #expect(
+            PanelMetrics.expandedWidth(centerOcclusionWidth: 220, workingAgentCount: 5)
+                == 532
+        )
+        #expect(
+            PanelMetrics.expandedWidth(centerOcclusionWidth: 200, workingAgentCount: 5)
+                == 520
+        )
+        // Six is `571` rather than the doc's `570`, and by the same hundredth
+        // the pill absorbs in its middle: a drawn digit is `6.616` against the
+        // board's nominal `6.6`, so six reserved columns run `0.19` over and
+        // the ceil takes the point. Two agents past anything that ships.
+        #expect(
+            PanelMetrics.expandedWidth(centerOcclusionWidth: 220, workingAgentCount: 6)
+                == 571
+        )
 
-        // What the second mark costs the side is the mark and the pair gap --
-        // the column included, because the panel reserves every mark's column
-        // whatever the counts are doing (§11).
+        // The first working agent costs the totals and the gap after them; each
+        // one after it costs a column and its `6`.
+        let one = PanelMetrics.expandedLeadingSideWidth(workingAgentCount: 1)
+        let two = PanelMetrics.expandedLeadingSideWidth(workingAgentCount: 2)
+        let three = PanelMetrics.expandedLeadingSideWidth(workingAgentCount: 3)
+        // The board's `53.8` and `98.2`, plus the drawn digit's hundredth per
+        // reserved numeral.
+        #expect(abs(one - 53.8) < 0.05)
+        #expect(abs(two - 98.2) < 0.1)
         #expect(
             abs(
-                PanelMetrics.expandedStatusReadoutWidth(status: .approvalNeeded, markCount: 2)
-                    - PanelMetrics.expandedStatusReadoutWidth(status: .approvalNeeded, markCount: 1)
-                    - (PanelMetrics.statusMatrixSize
-                        + PanelMetrics.compactMatrixSpacing
-                        + PanelMetrics.sessionDotColumnWidth())
+                (three - two)
+                    - (PanelMetrics.agentColumnWidth + PanelMetrics.agentColumnSpacing)
             ) < 0.001
         )
-
-        // The set the fold runs over is the aggregate's own, and the names it
-        // leaves out are the wide ones: `Version unsupported` alone would add
-        // `23` to each side, `46` to the panel, for a sentence this header has
-        // no way to reach.
-        #expect(!PanelMetrics.workingStatuses.contains(.unsupportedVersion))
-        #expect(!PanelMetrics.workingStatuses.contains(.setupRequired))
-        let widestReachable = PanelMetrics.workingStatuses
-            .map { PanelMetrics.expandedStatusReadoutWidth(status: $0, markCount: 2) }
-            .max() ?? 0
-        #expect(
-            widestReachable
-                < PanelMetrics.expandedStatusReadoutWidth(
-                    status: .unsupportedVersion,
-                    markCount: 2
-                )
-        )
+        // Two working agents ask `196.4` between them, so the cut-out branch
+        // fires only past `323.6` — half again the widest cut-out on any Mac.
+        #expect(abs(two * 2 - 196.4) < 0.2)
     }
 
     @Test
@@ -12782,70 +12730,6 @@ struct NotchlineTests {
         await service.disconnect()
     }
 
-    @Test @MainActor
-    func notchLabelDrawsGlyphsAndSweepsThroughCoreAnimation() throws {
-        // The notch label is layer-backed so its sweep costs no per-frame view
-        // work. That trade is only worth anything if it still draws text: the
-        // failure modes are a blank label, or an unmasked band painting a solid
-        // bar across the notch. Neither is visible from a unit test directly,
-        // but both are visible in the rasterised glyphs and the mask.
-        let font = NSFont.systemFont(ofSize: 13, weight: .light)
-        let text = "Approval needed"
-        let view = SweepingLabelView()
-        view.apply(text: text, font: font, isSweeping: true)
-
-        // The same metrics PanelMetrics reserves compact width with, so the
-        // label cannot be wider than the panel drawn for it.
-        let measured = (text as NSString).size(withAttributes: [.font: font])
-        #expect(view.intrinsicContentSize.width == ceil(measured.width))
-
-        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
-        view.layout()
-
-        // Named rather than indexed: the reading on its way out is drawn above
-        // both copies, and asserting on positions makes adding it look like a
-        // regression. The order still matters and is asserted as an order.
-        let sublayers = try #require(view.layer?.sublayers)
-        #expect(sublayers.count == 3)
-        let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)
-        let highlight = try Self.labelLayer(
-            named: SweepingLabelView.highlightLayerName,
-            in: view
-        )
-        let outgoing = try Self.labelLayer(
-            named: SweepingLabelView.outgoingLayerName,
-            in: view
-        )
-        #expect(sublayers.firstIndex(of: glyphs)! < sublayers.firstIndex(of: highlight)!)
-        #expect(sublayers.firstIndex(of: highlight)! < sublayers.firstIndex(of: outgoing)!)
-
-        // Nothing has been replaced yet, so nothing is mid-hand-over.
-        #expect(outgoing.contents == nil)
-        #expect(outgoing.opacity == 0)
-
-        // The glyphs are framed to their own raster and never to the view, so a
-        // frame the layout is still animating cannot stretch them.
-        #expect(glyphs.frame.width == ceil(measured.width))
-
-        let contents = try #require(glyphs.contents)
-        let image = unsafeDowncast(contents as AnyObject, to: CGImage.self)
-        #expect(image.width >= Int(measured.width))
-
-        // Text, not a filled rectangle: a solid band would have no transparent
-        // pixels, and a label that failed to draw would have no opaque ones.
-        let alphas = try Self.alphaExtremes(of: image)
-        #expect(alphas.minimum == 0)
-        #expect(alphas.maximum > 0.5)
-
-        // The highlight rides a mask that Core Animation drives.
-        #expect(!highlight.isHidden)
-        let mask = try #require(highlight.mask)
-        #expect(mask.animation(forKey: "notch.searchlight") != nil)
-
-        view.apply(text: text, font: font, isSweeping: false)
-        #expect(highlight.isHidden)
-        #expect(mask.animation(forKey: "notch.searchlight") == nil)
-    }
 
     private static func labelLayer(
         named name: String,
@@ -12855,91 +12739,7 @@ struct NotchlineTests {
         return try #require(sublayers.first { $0.name == name })
     }
 
-    @Test @MainActor
-    func notchLabelHandsALongerReadingToAShorterOneWithoutStretchingIt() throws {
-        // Collapsing turns `Approval needed` into `Approval` while the width
-        // underneath the label is still animating down from the longer one. The
-        // glyph layer used to be framed to `bounds`, so the short raster was
-        // stretched across the long frame for the whole transition: the word
-        // arrived as wide as the one it replaced and then squeezed into itself.
-        //
-        // The glyphs are framed to their own raster now, and the word that was
-        // dropped dissolves out over the top of them instead.
-        let font = NSFont.systemFont(ofSize: 13, weight: .light)
-        let expanded = "Approval needed"
-        let compact = "Approval"
-        let view = SweepingLabelView()
-        view.apply(text: expanded, font: font, isSweeping: true)
-        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
-        view.layout()
 
-        let expandedWidth = view.intrinsicContentSize.width
-        let compactWidth = ceil(
-            (compact as NSString).size(withAttributes: [.font: font]).width
-        )
-        #expect(compactWidth < expandedWidth)
-
-        // The reading changes first and the layout follows it, so this is the
-        // view exactly as it is drawn mid-collapse: new text, old frame.
-        view.apply(text: compact, font: font, isSweeping: true)
-        view.layout()
-
-        let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)
-        #expect(glyphs.frame.width == compactWidth)
-        #expect(glyphs.frame.width < view.bounds.width)
-
-        // The reading being taken away is still drawn, at its own width, and on
-        // its way out on the same curve the panel is closing on.
-        let outgoing = try Self.labelLayer(
-            named: SweepingLabelView.outgoingLayerName,
-            in: view
-        )
-        #expect(outgoing.contents != nil)
-        #expect(outgoing.frame.width == expandedWidth)
-        let fadeOut = try #require(
-            outgoing.animation(forKey: SweepingLabelView.dissolveAnimationKey)
-                as? CABasicAnimation
-        )
-        #expect(fadeOut.duration == PanelMotion.duration)
-        #expect(fadeOut.toValue as? Float == 0)
-        // It rests invisible, so there is nothing to tear down on a timer.
-        #expect(outgoing.opacity == 0)
-
-        // `Approval` is the beginning of `Approval needed`: those glyphs are the
-        // same pixels in the same place, and fading a second copy in over them
-        // would only dim a word that never moved.
-        #expect(glyphs.animation(forKey: SweepingLabelView.dissolveAnimationKey) == nil)
-
-        // The tail is drawn past the view for as long as it is leaving, so the
-        // closing edge has to be what cuts it off -- otherwise those glyphs are
-        // outside the black surface and over the desktop.
-        #expect(view.layer?.masksToBounds == true)
-    }
-
-    @Test @MainActor
-    func notchLabelCrossFadesTwoUnrelatedReadings() throws {
-        // `Working...` and `Approval needed` share nothing, so the new reading
-        // has to arrive as well as the old one leaving. Shown at full strength,
-        // as the shared-prefix case deliberately does, it would stamp itself
-        // over the copy still dissolving underneath it.
-        let font = NSFont.systemFont(ofSize: 13, weight: .light)
-        let view = SweepingLabelView()
-        view.apply(text: "Working...", font: font, isSweeping: true)
-        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
-        view.layout()
-
-        view.apply(text: "Approval needed", font: font, isSweeping: true)
-        view.layout()
-
-        let glyphs = try Self.labelLayer(named: SweepingLabelView.baseLayerName, in: view)
-        let fadeIn = try #require(
-            glyphs.animation(forKey: SweepingLabelView.dissolveAnimationKey)
-                as? CABasicAnimation
-        )
-        #expect(fadeIn.fromValue as? Float == 0)
-        #expect(fadeIn.toValue as? Float == 1)
-        #expect(fadeIn.duration == PanelMotion.duration)
-    }
 
     private static func alphaExtremes(
         of image: CGImage
@@ -29755,7 +29555,7 @@ extension NotchlineTests {
         await clock.settle()
         #expect(store.status == .running)
         #expect(store.compactTrailingReading == CompactTrailingReading(timerText: "0:30"))
-        #expect(store.spokenRunningSubagentText == nil)
+        #expect(store.aggregateSubagentCount == 0)
 
         store.applyForTesting(
             makeSessionSnapshot([
@@ -29773,7 +29573,7 @@ extension NotchlineTests {
         // not wait for a row's turn to stop timing before counting them.
         #expect(store.compactTrailingReading == CompactTrailingReading(timerText: "0:30"))
         #expect(store.aggregateSubagentCount == 1)
-        #expect(store.spokenRunningSubagentText == "Codex 1 subagent")
+        #expect(store.aggregateSubagentCount == 1)
 
         // The main agent's `Stop` lands. The row is Completed and the clock has
         // stopped -- both correct -- and the thread is still working.
@@ -29795,7 +29595,7 @@ extension NotchlineTests {
         #expect(
             store.compactTrailingReading == .empty
         )
-        #expect(store.spokenRunningSubagentText == "Codex 2 subagents")
+        #expect(store.aggregateSubagentCount == 2)
         // The row itself is untouched: `effectiveStatus` must not reach it.
         #expect(store.sessions.first?.status == .completed)
         #expect(store.elapsedText(for: try #require(store.sessions.first)) == nil)
@@ -29811,7 +29611,7 @@ extension NotchlineTests {
         await clock.settle()
         #expect(store.status == .completed)
         #expect(store.compactTrailingReading == .empty)
-        #expect(store.spokenRunningSubagentText == nil)
+        #expect(store.aggregateSubagentCount == 0)
     }
 
     /// The count is a total across the list, like the summary beside it.
@@ -29860,78 +29660,6 @@ extension NotchlineTests {
         #expect(store.compactRunningSubagentCount == 0)
     }
 
-    /// Two products get two badges, in `AgentKind` order and never in
-    /// urgency's, each carrying only its own product's subagents.
-    ///
-    /// `dual-agent-design.md` §10. The badges are the matrices read at the
-    /// other end of the bar: once the two hues are learned, position is the
-    /// other half of what identifies a mark, so the one that wants the user
-    /// must not jump to the front.
-    @Test @MainActor
-    func theCollapsedBadgesAreOnePerProductInAFixedOrder() async {
-        let clock = TestClock(now: Date(timeIntervalSince1970: 3_000))
-        let store = MonitorStore(
-            displays: [makeDisplay(id: "d", ordinal: 1, menuBarHeight: 46, hasNotch: true)],
-            services: [],
-            clock: clock
-        )
-
-        // Codex is running three subagents quietly; Claude Code is running four
-        // and two of those are stopped on a prompt. The urgent product is the
-        // trailing one and must stay there.
-        store.applyForTesting(
-            makeAgentSnapshot(
-                .codex,
-                sessions: [
-                    makeSession(status: .completed, startedAt: nil, runningSubagentCount: 3)
-                ]
-            ),
-            observedAt: clock.now()
-        )
-        store.applyForTesting(
-            makeAgentSnapshot(
-                .claudeCode,
-                sessions: [
-                    MonitoredSession(
-                        agent: .claudeCode,
-                        threadID: "cc", turnID: "u", projectName: "p", title: "t",
-                        preview: nil, status: .completed, startedAt: nil,
-                        runningSubagentCount: 4,
-                        subagentsAwaitingApprovalCount: 2
-                    )
-                ]
-            ),
-            observedAt: clock.now()
-        )
-        await clock.settle()
-
-        #expect(
-            store.compactSubagentBadges == [
-                AgentSubagentBadge(agent: .codex, badge: SubagentBadge(count: 3)),
-                AgentSubagentBadge(
-                    agent: .claudeCode,
-                    badge: SubagentBadge(count: 4, wantsAttention: true)
-                )
-            ]
-        )
-        // Both figures are totals of their own product, never of the list.
-        #expect(store.compactRunningSubagentCount == 7)
-        // Spoken with the product named, because two badges side by side are
-        // told apart by ink alone.
-        #expect(
-            store.spokenRunningSubagentText
-                == "Codex 3 subagents, Claude Code 4 subagents, waiting for you"
-        )
-
-        // A product with nothing in flight has no badge, and no slot is held
-        // open where it would have been.
-        store.applyForTesting(
-            makeAgentSnapshot(.codex, sessions: []),
-            observedAt: clock.now()
-        )
-        await clock.settle()
-        #expect(store.compactSubagentBadges.map(\.agent) == [.claudeCode])
-    }
 
     /// A row saying work is still in flight sorts with the working ones.
     ///

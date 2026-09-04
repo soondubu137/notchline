@@ -623,9 +623,33 @@ nonisolated struct SubagentBadge: Equatable, Sendable {
 /// once the two hues are learned, position is the other half of what
 /// identifies a mark, and re-sorting would swap them under the eye reading
 /// them.
-nonisolated struct AgentSubagentBadge: Equatable, Sendable {
+
+/// One agent's share of the two totals, which is what the expanded band
+/// decomposes them into.
+///
+/// The counts are already on ``PresenceMark``; this is the pair of them read as
+/// one column, so the band and the bar cannot disagree about the same list.
+nonisolated struct AgentCounts: Equatable, Sendable, Identifiable {
     let agent: AgentKind
-    let badge: SubagentBadge
+    let sessionCount: Int
+    let subagentCount: Int
+
+    nonisolated var id: AgentKind { agent }
+
+    /// What this column says out loud, since colour is the only thing on the
+    /// band saying whose a number is (`expanded-header-v2.md` §9).
+    ///
+    /// The dash is spoken as `none` rather than as a hyphen, and never as
+    /// zero sessions: it appears only in the subagent row.
+    nonisolated var spokenSummary: String {
+        let sessions = sessionCount == 1 ? "1 session" : "\(sessionCount) sessions"
+        let subagents = switch subagentCount {
+        case 0: "no subagents"
+        case 1: "1 subagent"
+        default: "\(subagentCount) subagents"
+        }
+        return "\(agent.displayName), \(sessions), \(subagents)"
+    }
 }
 
 /// One rate-limit window, and what is left of it.
@@ -881,18 +905,6 @@ nonisolated struct PresenceMark: Equatable, Sendable {
     /// twice over.
     let buriesAFinishedTurn: Bool
 
-    /// Whether this mark has a session column to stand beside it.
-    ///
-    /// The column is the count's, not the matrix's: a product with nothing open
-    /// packs to its matrix alone so the pair keeps the `6` that binds it. The
-    /// resting grey never has one. The *expanded panel* holds every column open
-    /// anyway (``PanelMetrics/marksWidth(_:areProductMarks:)``), being sized
-    /// from a baseline rather than from its contents; what the packing leaves
-    /// over is drawn past the status label rather than in front of it — see
-    /// ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``. Both collapsed forms
-    /// are composed from what this answers instead
-    /// (``PanelMetrics/drawnMarksWidth(markCount:sessionColumnCount:)``).
-    var drawsSessionColumn: Bool { agent != nil && sessionCount > 0 }
 
     /// Whether this product is holding a Turn the user still has to attend to.
     ///

@@ -585,19 +585,22 @@ struct CollapsedBarAnatomy: View {
         let size = NotchSpecimen.windowSize(of: store)
         let shoulder = store.surfaceShoulderRadius
         let matrix = PanelMetrics.statusMatrixSize
-        let mark = PanelMetrics.markWidth()
-        let dotGap = PanelMetrics.sessionDotGap(matrixSize: matrix)
-        let dot = PanelMetrics.sessionDotDiameter(matrixSize: matrix)
         let leading = shoulder + PanelMetrics.expandedHorizontalPadding
+        // **The coordinates are V2's; the six labels below are not.** The bar
+        // this specimen draws is one aggregate mark and two numerals, so the
+        // pins land on what is actually there — the mark, the sessions numeral,
+        // the subagents numeral under it, the reading — while four of the
+        // labels still name V1 parts that no longer exist. The page is redrawn
+        // in a change of its own (`compact-view-v2.md` §8); pinning correct
+        // coordinates in the meantime keeps this file honest about the
+        // geometry it composes from and lets the retired metrics go.
+        let counts = leading
+            + matrix
+            + PanelMetrics.aggregateCountsGap
+            + PanelMetrics.countsDigitWidth / 2
         let codexMatrix = leading + matrix / 2
-        let codexDots = leading + matrix + dotGap + dot / 2
-        let claudeMatrix = leading + mark + PanelMetrics.compactMatrixSpacing + matrix / 2
-        // The label is drawn in a font this file does not own, so the pin goes
-        // a fixed step into the word rather than to a measured centre.
-        let statusWord = leading
-            + PanelMetrics.marksWidth(2)
-            + PanelMetrics.expandedReadoutSpacing
-            + 24
+        let codexDots = counts
+        let claudeMatrix = counts
         let trailing = size.width - shoulder - PanelMetrics.expandedHorizontalPadding
         // The slot is exactly what it draws on both forms now, so both
         // trailing pins are measured from the panel edge inwards: the ink ends
@@ -615,7 +618,7 @@ struct CollapsedBarAnatomy: View {
         // wing. It is redrawn in a change of its own; what is kept here is
         // enough to compile and to leave the two pins that are still true —
         // the mark and the reading — standing where they were.
-        let badges = trailing - reading - PanelMetrics.subagentBadgeTimerSpacing
+        let badges = counts
         let top = -AnatomyMetrics.leaderClearance - AnatomyMetrics.pinSize / 2
         let bottom = store.currentPanelSize.height
             + AnatomyMetrics.leaderClearance
@@ -644,7 +647,7 @@ struct CollapsedBarAnatomy: View {
             ),
             AnatomyPin(
                 id: 4,
-                x: statusWord,
+                x: codexMatrix,
                 y: bottom,
                 leader: .up(stem),
                 label: "Most urgent state"

@@ -353,25 +353,20 @@ private struct OverlayHeader: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // **Two different leading groups, not one drawn two ways.**
-            // Collapsed, this surface draws one mark for every product at once
-            // and counts the whole list in two numerals; expanded, it is still
-            // V1's matrix per product with the status name beside it. The band
-            // folds to match in `expanded-header-v2.md`, which this document's
-            // own dependency order puts second.
-            if store.isExpanded {
-                StatusReadout(
-                    marks: store.compactDrawnMarks,
-                    text: statusText,
-                    showsText: showsStatusText,
-                    reservesColumnRoom: reservesRoom,
-                    spacing: PanelMetrics.expandedReadoutSpacing,
-                    matrixSize: PanelMetrics.statusMatrixSize,
-                    markSpacing: PanelMetrics.compactMatrixSpacing,
-                    breathesBuriedCompletions: false
-                )
-            } else {
-                CompactLeadingGroup()
+            // **One leading group, drawn the same on both forms.** The mark
+            // stands at `12` and the totals at `32.6` whether the panel is open
+            // or shut, so expanding *adds* rather than replaces: the figure the
+            // eye was on when it hovered does not move, change colour or go
+            // away (`expanded-header-v2.md` §4.1).
+            CompactLeadingGroup()
+
+            // The parts, `12` after the totals. One column per working agent,
+            // in Settings' order, packed — and none at all with one, where a
+            // column would repeat the totals digit for digit in a second ink.
+            if store.isExpanded, !store.expandedAgentColumns.isEmpty {
+                AgentCountsColumns()
+                    .padding(.leading, PanelMetrics.totalsToPartsSpacing)
+                    .transition(Self.partsFade)
             }
 
             // **The pill's middle, and only the pill's.** The notched bar has
@@ -411,32 +406,16 @@ private struct OverlayHeader: View {
         .animation(headerAnimation, value: store.isExpanded)
     }
 
-    private var statusText: String {
-        // One name in every form. The resting pill used to keep a shorter word
-        // when it widened, because its width was composed from an abbreviated
-        // label and the panel's longer sentence would have overflowed a pill
-        // sized for the short one; with a single name
-        // (``MonitorStatus/displayName``) the width the pill reserves and the
-        // word it draws are the same in both states, expanded or not.
-        store.statusDisplayName
-    }
-
-    private var showsStatusText: Bool {
-        store.drawsCompactStatusName
-    }
-
-    /// Whether this form holds room it is not drawing into, which is now the
-    /// expanded header's session columns and nothing else.
+    /// The parts fading in beside the totals, which hold still.
     ///
-    /// ``MonitorStore/reservesCompactRoom``, which is also what the panel's own
-    /// width is composed under, so the room reserved and the room drawn into
-    /// cannot come apart. It is **not** the question `showsStatusText` asks any
-    /// more: the collapsed pill draws a word and hugs its marks, and for as
-    /// long as the two shared one spelling the pill held column room whose only
-    /// effect was `35` pt of padding against its trailing edge.
-    private var reservesRoom: Bool {
-        store.reservesCompactRoom
-    }
+    /// **The decomposition performed rather than stated.** It is also the
+    /// answer to where the collapsed reading goes when the panel opens: the
+    /// trailing slot holds one thing at a time, so the reading gives way to the
+    /// gear in place and nothing travels (§10, question 04).
+    private static let partsFade = AnyTransition.asymmetric(
+        insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),
+        removal: .opacity.animation(PanelMotion.fade(isArriving: false))
+    )
 
     private var horizontalPadding: CGFloat {
         PanelMetrics.expandedHorizontalPadding
@@ -472,14 +451,17 @@ private struct CompactLeadingGroup: View {
                     size: PanelMetrics.statusMatrixSize,
                     ink: store.aggregateMatrixInk
                 )
-                AggregateCountsColumn(
+                CountsColumn(
                     sessionCount: store.aggregateSessionCount,
-                    subagentCount: store.aggregateSubagentCount,
+                    subagentCount: store.aggregateSubagentCount > 0
+                        ? store.aggregateSubagentCount
+                        : nil,
                     matrixSize: PanelMetrics.statusMatrixSize,
-                    // The pill is centred and fixed in width, so its ends are
-                    // anchored and the middle gives way; the notched bar is
-                    // pinned to the cut-out and hugs what it draws.
-                    reservesTwoDigits: store.geometry == .noNotch
+                    // The pill is centred and fixed in width and the band is
+                    // sized from a baseline, so both hold the room open; the
+                    // notched bar is pinned to the cut-out and hugs what it
+                    // draws, because its leading edge is free to travel.
+                    reservesTwoDigits: store.geometry == .noNotch || store.isExpanded
                 )
             }
             .transition(Self.wingFade)
@@ -626,200 +608,45 @@ private struct CompactTrailingSlot: View {
     )
 }
 
-private struct StatusReadout: View {
-    /// What this surface draws, which on a collapsed notched bar is not
-    /// necessarily every mark: ``MonitorStore/compactDrawnMarks``.
-    let marks: [PresenceMark]
-    let text: String
-    let showsText: Bool
-    /// Whether the panel this readout is drawn in has held room for every
-    /// mark's session column, drawn or not.
-    ///
-    /// ``MonitorStore/reservesCompactRoom``: true in the expanded header alone,
-    /// where the marks are packed into a fixed reservation and the status name
-    /// is drawn back over what no column is using. False on both collapsed
-    /// forms, where the surface is exactly as wide as the marks it draws and
-    /// the panel's own edges move instead — the notched bar's leading one, and
-    /// both of the pill's, since it is centred.
-    ///
-    /// **The pill draws a status name under that and needs no slide.** Its
-    /// mark stack hugs, so a column opening genuinely widens the stack and the
-    /// word after it is carried by the layout, on the curve
-    /// ``SessionCountDots`` animates its own width with. The slide exists for
-    /// the one form whose stack cannot change width.
-    let reservesColumnRoom: Bool
-    let spacing: CGFloat
-    let matrixSize: CGFloat
-    let markSpacing: CGFloat
-    /// Whether a column may breathe here at all.
-    ///
-    /// The breath exists to compensate for a summary, and only the collapsed
-    /// form summarises: expanded, the list naming every row is directly beneath
-    /// this readout, so a moving column would be saying what the rows are about
-    /// to spell out. The same reason the top bar takes the dot columns but not
-    /// the subagent badges ([`dual-agent-design.md`](dual-agent-design.md) §11).
-    let breathesBuriedCompletions: Bool
-
-    /// How far the label is drawn back over its own slot, animated on the
-    /// column's curve. Held rather than computed so the write that moves it can
-    /// say which way the room went.
-    @State private var slide: CGFloat = 0
+/// The band's parts: one column of numbers per working agent, in that agent's
+/// own two inks.
+///
+/// **The counts are the one fold that is a sum.** Status is ordinal — the
+/// aggregate is the most urgent status any agent is in — and a fold like that
+/// has no parts to show: its decomposition is one animated mark per agent,
+/// which is what the collapsed surface removed and what four moving marks on a
+/// `46` pt band would be. The clock is a maximum and has no parts either. So
+/// this is the one thing the band can say that the bar has no room for
+/// (`expanded-header-v2.md` §2).
+private struct AgentCountsColumns: View {
+    @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
-        HStack(spacing: spacing) {
-            if !marks.isEmpty {
-                HStack(spacing: markSpacing) {
-                    // Order is `AgentKind`'s and never urgency's, so a mark
-                    // never moves out from under the eye reading it.
-                    ForEach(marks, id: \.agent) { mark in
-                        // A product's mark is the matrix and the column of
-                        // session dots beside it; the resting grey is the
-                        // matrix alone, because nothing is connected behind it
-                        // to have rows. Spacing is zero here because the column
-                        // owns the gap it stands off by, so the two collapse
-                        // together at no rows -- see ``SessionCountDots``.
-                        HStack(spacing: 0) {
-                            NotchStatusMatrix(
-                                state: NotchMatrixState(mark.status),
-                                size: matrixSize,
-                                agent: mark.agent
-                            )
-                            if let agent = mark.agent {
-                                SessionCountDots(
-                                    count: mark.sessionCount,
-                                    agent: agent,
-                                    matrixSize: matrixSize,
-                                    breathes: breathesBuriedCompletions
-                                        && mark.buriesAFinishedTurn
-                                )
-                            }
-                        }
-                        .transition(Self.markFade)
-                    }
-                }
-                // **The anchor, on the two forms that hold a position.** The
-                // marks are given the room every column would take and packed
-                // into it from the leading edge, so the first matrix stands in
-                // one place whatever the counts do: a column opening pushes
-                // only the marks after it, and the last mark's column pushes
-                // nothing.
-                //
-                // This is `PanelMetrics.marksWidth`, the same expression those
-                // panels are measured from (``MonitorStore/currentPanelSize``),
-                // so the room reserved and the room drawn into cannot drift.
-                //
-                // **The notched bar takes `nil` and hugs.** Its wing is
-                // `PanelMetrics.drawnMarksWidth` — the marks and nothing else —
-                // so a frame here would be holding open room the panel has
-                // already given back, and the last mark would stand a column
-                // short of the cut-out it is supposed to meet. The column
-                // widths inside still animate on their own
-                // (``SessionCountDots``), which is what carries this stack's
-                // width, and the panel's leading edge travels the same curve to
-                // meet it.
-                .frame(width: reservedMarksWidth, alignment: .leading)
-            }
-
-            if showsText {
-                // **The label rides with the marks, by its drawing and not by
-                // its layout.** Its slot stays where the reservation put it and
-                // the glyphs are drawn back over the room no column is using,
-                // which is the same trick the dot itself is placed with (see
-                // ``SessionCountDots``) -- and the reason the readout is still
-                // exactly ``PanelMetrics/marksWidth`` plus a gap plus a word,
-                // whatever the counts are doing.
-                //
-                // Everything inside the label is framed to its own glyph raster
-                // rather than to its bounds, and its sweep is installed against
-                // that raster too, so a translation costs it nothing: no
-                // re-rasterising, no sweep rebuilt, no hand-over disturbed.
-                SearchlightLabel(text: text, isSweeping: isActive)
-                .offset(x: slide)
+        HStack(spacing: PanelMetrics.agentColumnSpacing) {
+            ForEach(store.expandedAgentColumns) { column in
+                let ink = NotchPalette.countsInk(for: column.agent)
+                CountsColumn(
+                    sessionCount: column.sessionCount,
+                    // Drawn when there are subagents anywhere, and then filled
+                    // by every column -- with a dash where this agent has none.
+                    subagentCount: store.expandedDrawsSubagentRow
+                        ? column.subagentCount
+                        : nil,
+                    sessionInk: ink.sessions,
+                    subagentInk: ink.subagents,
+                    matrixSize: PanelMetrics.statusMatrixSize,
+                    reservesTwoDigits: true
+                )
+                // Colour is the only thing saying whose a number is, and it is
+                // the one channel this band can afford. Two answers that cost
+                // no width: this name, and an order that is permanently
+                // Settings' own (§9).
+                .accessibilityElement()
+                .accessibilityLabel(column.spokenSummary)
             }
         }
-        .fixedSize(horizontal: true, vertical: false)
-        // The transaction the mark transitions above run in. Each carries its
-        // own curve, so what this supplies is only the fact that a mark
-        // arriving or leaving is animated at all -- on the same curve the
-        // panel's own edge travels, since the two are one movement.
-        .animation(PanelMotion.animation, value: drawnProducts)
-        // Moved by an explicit write on the column's own curve rather than by
-        // inheriting one. A packed mark's width change animates inside the mark
-        // that owns it; two stacks out, at the label, that arrived as a jump --
-        // the marks glided and the name snapped. What the eye is on here is the
-        // name, so it is the one thing on this surface that cannot be left to
-        // inherit.
-        //
-        // On the readout and not on the label, which is drawn only where there
-        // is room for a word (``showsStatusText``): tracked from inside that
-        // branch, a collapsed notched surface would stop following the counts
-        // and hand the panel a stale offset to open with.
-        .onChange(of: unpackedColumnRoom, initial: true) { previous, room in
-            // The first application is the readout being built, not a column
-            // moving: take the position rather than animating to it.
-            guard previous != room else {
-                slide = -room
-                return
-            }
-            // Less room going unused means a column opened ahead of the label
-            // and is pushing it along.
-            withAnimation(PanelMotion.slot(isOpening: room < previous)) {
-                slide = -room
-            }
-        }
+        .frame(height: PanelMetrics.statusMatrixSize)
     }
-
-    /// The reserved column room no mark is standing in, which is how far back
-    /// over its own slot the label is drawn -- see
-    /// ``PanelMetrics/unpackedColumnRoom(_:matrixSize:)``.
-    ///
-    /// Zero where nothing is reserved: there is no unused room to draw back
-    /// over, and the notched bar draws no label to do it with.
-    private var unpackedColumnRoom: CGFloat {
-        guard reservesColumnRoom else { return 0 }
-        return PanelMetrics.unpackedColumnRoom(marks, matrixSize: matrixSize)
-    }
-
-    /// The room the panel has already reserved for the marks, or `nil` where it
-    /// has reserved none and this stack simply hugs what it draws.
-    private var reservedMarksWidth: CGFloat? {
-        guard reservesColumnRoom else { return nil }
-        return PanelMetrics.marksWidth(
-            marks.count,
-            areProductMarks: marks.contains { $0.agent != nil }
-        )
-    }
-
-    /// The label sweeps if *any* mark is in flight. There is one label for both
-    /// products and it takes the most urgent status, so it has to follow the
-    /// most urgent mark rather than a single product's.
-    private var isActive: Bool {
-        marks.contains { NotchMatrixState($0.status).isActive }
-    }
-
-    /// What the readout is drawing, as against what those marks are saying.
-    ///
-    /// A mark changing status is redrawn where it stands; a mark *arriving* or
-    /// *leaving* is a wing opening or closing around it, and that is the only
-    /// change this animation is for. Keyed on the products drawn rather than on
-    /// the marks themselves so a matrix falling from `Working...` to
-    /// `Completed` starts no transition.
-    private var drawnProducts: [AgentKind?] {
-        marks.map(\.agent)
-    }
-
-    /// A mark arriving into the wing that opened for it, or leaving before it
-    /// shuts -- the same fade, and the same reasoning, as the badges and the
-    /// reading in the trailing slot (``PanelMotion/fade(isArriving:)``).
-    ///
-    /// It earns its keep on the collapsed notched bar with `Hide the wings` on,
-    /// where a matrix comes out from behind the cut-out on its own account: at
-    /// full ink from the first frame it would be drawn *over* the cut-out for
-    /// as long as the panel's edge took to clear it.
-    private static let markFade = AnyTransition.asymmetric(
-        insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),
-        removal: .opacity.animation(PanelMotion.fade(isArriving: false))
-    )
 }
 
 /// The gear, shared by the expanded top bar and the resting pill.

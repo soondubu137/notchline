@@ -124,7 +124,7 @@ Nothing in `NotchlineTests` can catch this: the elision is an `-O` behaviour abs
 
 ### What the tests cannot protect
 
-Tests assert that `NotchStatusMatrix` and the two layer-backed labels are still driven by `CAAnimation` and still have their masks, so reverting them to SwiftUI fails to compile. **A new continuous animation elsewhere in the panel is caught by nothing** — that dimension is held only by this section and the comments on the views. Separately, `SearchlightLabel`'s font and `PanelMetrics.statusLabelFont` are two independent declarations of the same `NSFont`; change one and the drawn label no longer matches the width reserved for it.
+Tests assert that `NotchStatusMatrix` and the layer-backed readouts are still driven by `CAAnimation` and still have their masks, so reverting them to SwiftUI fails to compile. **A new continuous animation elsewhere in the panel is caught by nothing** — that dimension is held only by this section and the comments on the views. The font warning that stood here retired with `SearchlightLabel`: no surface draws a status name any more, so there is no second declaration of the panel's label font to drift from a reserved width. What replaced it is the same hazard one step along — `PanelMetrics.countsSessionFont` is measured for the width *and* drawn into the glyph raster, so it is one declaration by construction, and the pill's rotating name and the buried-finish dot are layer-backed for the same reason the readouts are: a SwiftUI cross-fade every five seconds, or a breath on any curve, re-renders the whole overlay.
 
 ## 8. Codex integrations without official public support
 

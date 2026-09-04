@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed and settled, not implemented.** Every question §10 parked is now answered, closed or standing on its own recommendation, and the resting form's width is corrected (§5). No Swift has been written against any of it. |
+| Status | **Designed, settled and implemented.** The band folds the marks, drops the name, keeps the totals and decomposes the counts, and the panel is `520` at every cut-out this product meets. The one thing recorded and not drawn is §10 question 05's fallback — a tooltip naming the columns — which is not needed unless the accessible name and the fixed order prove insufficient. |
 | Version | 2.0 |
 | Date | 2026-09-03 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `05 — The expanded header` |
@@ -175,7 +175,9 @@ The gear is `settingsButtonSize(compactHeight:)`, which tracks the menu bar, so 
 | 3 | `76.8` | `117.4` | 520 | 520 |
 | 4 | `96.0` | `136.6` | 520 | 520 |
 | 5 | `115.2` | `155.8` | **532** | 520 |
-| 6 | `134.4` | `175.0` | **570** | **550** |
+| 6 | `134.4` | `175.0` | **571** | **550** |
+
+> The `571` is drawn rather than nominal: a reserved digit measures `6.616` against the board's `6.6` ([`compact-view-v2.md`](compact-view-v2.md) §3.1), so six columns run `0.19` over and the `ceil` takes the point. Every count this product can reach is unaffected — the band is `520` through four working agents and `532` at five.
 
 The totals are `13.2` and the `12` after them is the panel's own spacing, so the first working agent costs `25.2` and every one after it `19.2` — and all of it is the numbers, because the identity is the ink they are already drawn in. **Four agents at this machine's `220`; five at the reference and at default scaling; seven at Larger Text.** V1 was past `520` at the second product.
 
@@ -239,16 +241,16 @@ None are open. Three were answered by the board's owner, one is closed as out of
 
 ## 12. Implementation mapping
 
-Nothing here is implemented. The work is concentrated in three places.
+~~Nothing here is implemented.~~ All of it is. The work landed in three places, and took a fourth with it: with no surface drawing a mark per product or a word, about `1,000` lines of V1 machinery had nothing left to draw.
 
 | Symbol | Change |
 | --- | --- |
-| `PanelMetrics.expandedWidth(centerOcclusionWidth:markCount:)` | Sizes from the working-agent count rather than from `workingStatuses`' widest readout. `markCount` becomes a count of columns |
-| `PanelMetrics.expandedStatusReadoutWidth(status:markCount:)` | Retired. Nothing in the band is a status readout any more |
-| `PanelMetrics.marksWidth(_:areProductMarks:)` | No longer reached from the band: the header draws one aggregate mark, so `drawnMarksWidth` governs both forms |
-| `PanelMetrics.restingExpandedWidth(…)` | Drops `statusLabelWidth(.disconnected)` and stops adding its two sides up: composes `centerOcclusionWidth + 2 × (expandedNotchClearance + gear + expandedHorizontalPadding)`, which is `304` at the reference cut-out and a `46` bar. The trailing gap becomes `expandedNotchClearance` rather than `expandedReadoutSpacing`, and the no-cut-out branch keeps composing to itself |
-| `OverlayHeader` / `StatusReadout` | The header stops passing `text`/`showsText`, and gains the per-agent columns after the aggregate column |
-| `NotchPalette.MatrixInk` | Gains the per-agent numeral pair, which is the existing lit ink over the existing caption ink — no new values for the two shipped products |
-| `everySentenceTheExpandedHeaderCanSayClearsTheCutOut`, `theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames` | Both retire with the sentence they check. What replaces them is a test that the leading side clears the cut-out at four working agents, and that the panel is `520` at every cut-out this product meets |
+| `PanelMetrics.expandedWidth(centerOcclusionWidth:workingAgentCount:)` | **Done.** Sizes from the working-agent count rather than from `workingStatuses`' widest readout, through `expandedLeadingSideWidth(workingAgentCount:)` |
+| `PanelMetrics.expandedStatusReadoutWidth(status:markCount:)` | **Retired**, and with it `statusLabelWidth`, `compactLeadingWidth` and `workingStatuses`' role in any width |
+| `PanelMetrics.marksWidth(_:areProductMarks:)` | **Retired**, and so is `drawnMarksWidth`: with the band folded, *nothing* draws a mark per product, so `markWidth`, the whole session-dot column (`sessionDotColumnWidth`, `sessionDotGap`, `sessionDotDiameter`, `sessionDotDashLength`, `sessionDotCap`, `unpackedColumnRoom`), `SessionCountDots` and `SessionDotColumnView` went with them. `SearchlightLabel` / `SweepingLabelView` too — the band was the last surface drawing a word |
+| `PanelMetrics.restingExpandedWidth(…)` | **Done.** Drops `statusLabelWidth(.disconnected)` and stops adding its two sides up: composes `centerOcclusionWidth + 2 × expandedTrailingSideWidth`, which is `304` at the reference cut-out and a `46` bar. The no-cut-out branch keeps composing to itself |
+| `OverlayHeader` / `StatusReadout` | **Done**, by deleting `StatusReadout` outright: the header draws `CompactLeadingGroup` — the collapsed bar's own group, unchanged — and then `AgentCountsColumns` after it |
+| `NotchPalette.MatrixInk` | **Done** as `NotchPalette.countsInk(for:)` rather than on the ink type, since the aggregate and resting inks have no caption pair to carry. The values are `dual-agent-design.md` §2's own |
+| `everySentenceTheExpandedHeaderCanSayClearsTheCutOut`, `theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames` | **Retired**, replaced by `theBandClearsTheCutOutAtEveryWorkingAgentCount` and `theExpandedWidthAnswersToWorkingAgentsAndNotToWords` — the leading side clears the cut-out at every count, and the panel is `520` at every cut-out this product meets |
 
 This document depends on [`compact-view-v2.md`](compact-view-v2.md) being implemented first: the band draws that document's aggregate mark and that document's counts column, and it has no meaning while the collapsed bar still draws one matrix per product.

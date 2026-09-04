@@ -439,33 +439,37 @@ enum PanelMetrics {
     /// dropping one would open an empty box; the reason lives in Settings, and
     /// the gear is the one action that reaches it.
     ///
-    /// Composed from measured text like every other compact width rather than
-    /// taken as a constant. `figma-design.md` §6.4 gives `400 × 46` notched and
-    /// `208 × 46` no-notch, while its own checklist gives `400.6` and `224.6`;
-    /// the two disagree, so the composition rule is authoritative here and the
-    /// derived values are recorded in that doc.
+    /// **Composed symmetrically, like every other width on this panel.** It was
+    /// added up instead — `leading + cut-out + trailing` — and the panel is
+    /// centred while expanded, so that sum was never the drawing: the room
+    /// beside the cut-out is `(width − cut-out) ÷ 2` on *both* sides. The
+    /// trailing side is the wider of the two here, so this form is
+    /// `cut-out + 2 × (8 + gear + 12)` and the gear keeps its `8` at every
+    /// scaling step — `207` at `127 × 22`, `274` at `185 × 32`, `304` at the
+    /// reference `200 × 46`, `316` at this machine's `220 × 38`.
+    ///
+    /// **Dropping the word is what makes that affordable.** The old sum
+    /// reserved `Disconnected` on the leading side and drew it there
+    /// (`drawsCompactStatusName` is `isExpanded || noNotch`), which put about
+    /// `25` pt of that word behind the cut-out on a notched screen; with the
+    /// name gone from every surface the leading side falls to `36.6`, the
+    /// trailing side binds, and `304` is still `92` narrower than the form that
+    /// had the fault. `figma-design.md` §6.4's `400` and its checklist's
+    /// `400.6` are void with the rest (`expanded-header-v2.md` §5).
     static func restingExpandedWidth(
         geometry: DisplayGeometry,
         centerOcclusionWidth: CGFloat,
         compactHeight: CGFloat
     ) -> CGFloat {
-        let leading = expandedHorizontalPadding
-            + statusMatrixSize
-            + expandedReadoutSpacing
-            + statusLabelWidth(.disconnected)
-        let trailing = expandedReadoutSpacing
-            + settingsButtonSize(compactHeight: compactHeight)
-            + expandedHorizontalPadding
+        let trailing = expandedTrailingSideWidth(compactHeight: compactHeight)
         guard geometry == .notched, centerOcclusionWidth >= 1 else {
-            return ceil(leading + trailing)
+            // Nothing to be symmetric about: this form composes to itself, the
+            // mark and the gear with one clearance between them.
+            return ceil(
+                expandedHorizontalPadding + statusMatrixSize + trailing
+            )
         }
-        return ceil(
-            leading
-                + expandedNotchClearance
-                + centerOcclusionWidth
-                + expandedNotchClearance
-                + trailing
-        )
+        return ceil(centerOcclusionWidth + trailing * 2)
     }
 
     /// Folded, the footer keeps today's line and nothing else.
@@ -612,6 +616,70 @@ enum PanelMetrics {
     /// Where the subagents numeral stands: on the matrix's bottom edge.
     static let countsSubagentBaseline: CGFloat = 0
 
+    /// What an agent with sessions and no subagents reads in the lower row.
+    ///
+    /// An en dash, and only ever in that row: the totals cannot show one,
+    /// because that row is drawn at all only when the total is at least one
+    /// (`expanded-header-v2.md` §4.3 rule 06).
+    static let countsDashText = "\u{2013}"
+
+    // MARK: - The expanded band
+
+    /// Between the totals and the parts they decompose into.
+    ///
+    /// ``expandedReadoutSpacing`` -- the panel's own spacing, and the gap the
+    /// status name used to take.
+    static var totalsToPartsSpacing: CGFloat { expandedReadoutSpacing }
+
+    /// Between two agents' columns.
+    ///
+    /// ``compactMatrixSpacing``, which is where the pair of matrices used to
+    /// stand off each other: this row of columns is that pair, read as numbers.
+    static var agentColumnSpacing: CGFloat { compactMatrixSpacing }
+
+    /// One agent's column, at the room it holds: two digits, whatever it draws.
+    ///
+    /// **The band reserves where the bar hugs**, and that is the panel being a
+    /// panel: it is sized from a baseline rather than from its contents, so a
+    /// column gaining a digit inside it cannot widen anything and the room has
+    /// to be there already. The price is visible at one digit -- two single
+    /// digits stand `12.6` apart with `6.6` of held room between them -- and it
+    /// is paid in black rather than in width.
+    static var agentColumnWidth: CGFloat { reservedCountsColumnWidth }
+
+    /// Every working agent's column, packed, with the gaps between them.
+    ///
+    /// Zero and one are both nothing: with one working agent there is nothing
+    /// to decompose, because that column would repeat the totals digit for
+    /// digit in a second ink (§4.3 rule 07).
+    static func agentColumnsWidth(workingAgentCount: Int) -> CGFloat {
+        guard workingAgentCount > 1 else { return 0 }
+        return CGFloat(workingAgentCount) * agentColumnWidth
+            + CGFloat(workingAgentCount - 1) * agentColumnSpacing
+    }
+
+    /// The band's leading side: the collapsed bar's own group, then the parts.
+    ///
+    /// `53.8` with nothing to decompose, `98.2` at two working agents, and
+    /// `19.2` for each one after that. All of it is the numbers -- the identity
+    /// is the ink they are already drawn in, which asks for no width at all.
+    static func expandedLeadingSideWidth(workingAgentCount: Int) -> CGFloat {
+        let columns = agentColumnsWidth(workingAgentCount: workingAgentCount)
+        return expandedHorizontalPadding
+            + statusMatrixSize
+            + aggregateCountsGap
+            + reservedCountsColumnWidth
+            + (columns > 0 ? totalsToPartsSpacing + columns : 0)
+            + expandedNotchClearance
+    }
+
+    /// The band's trailing side: the one control this surface has.
+    static func expandedTrailingSideWidth(compactHeight: CGFloat) -> CGFloat {
+        expandedNotchClearance
+            + settingsButtonSize(compactHeight: compactHeight)
+            + expandedHorizontalPadding
+    }
+
     /// The leading group at what it draws: the aggregate mark, and the counts
     /// where there are any.
     ///
@@ -647,101 +715,9 @@ enum PanelMetrics {
     /// How long each Project is named before the next one.
     static let projectNameInterval: TimeInterval = 5
 
-    /// Compact content leading the notch: padding, the marks, and — where there
-    /// is no physical notch to work around — the status label as well.
-    ///
-    /// Menu bar height no longer appears here. Neither the indicator nor the
-    /// label scales with it, so it governs panel height and corner radius only.
-    ///
-    /// The marks enter at ``drawnMarksWidth(markCount:sessionColumnCount:)`` —
-    /// what they are drawing — rather than at the reservation. Only the two
-    /// forms that hold a position of their own still reserve; see that method.
-    static func compactLeadingWidth(
-        statusReadoutText: String,
-        showsStatusText: Bool,
-        markCount: Int = 1,
-        sessionColumnCount: Int = 0
-    ) -> CGFloat {
-        var width = expandedHorizontalPadding
-            + drawnMarksWidth(
-                markCount: markCount,
-                sessionColumnCount: sessionColumnCount
-            )
-        if showsStatusText {
-            width += expandedReadoutSpacing
-                + textWidth(statusReadoutText, font: statusLabelFont)
-        }
-        return width
-    }
 
-    /// One mark's width at the widest it ever draws — the reservation, not the
-    /// drawing.
-    ///
-    /// A product's mark is its matrix plus the column of session dots beside it
-    /// (``sessionDotColumnWidth``), held whether or not that product has rows
-    /// right now. The resting grey has no product behind it and therefore no
-    /// rows it could ever count, so it is the matrix alone.
-    ///
-    /// **The expanded header alone reserves**, because it is a fixed-width
-    /// sheet: a column opening inside it cannot widen anything, so the room has
-    /// to be there already. Both collapsed forms are composed from
-    /// ``drawnMarksWidth(markCount:sessionColumnCount:)`` instead and give the
-    /// room back when a column closes — the notched bar always did, and the
-    /// pill joined it once the room it was holding turned out to be spent
-    /// against its own trailing edge rather than inside it.
-    static func markWidth(isProductMark: Bool = true) -> CGFloat {
-        statusMatrixSize + (isProductMark ? sessionDotColumnWidth() : 0)
-    }
 
-    /// The marks themselves: one each, with the pair spacing between.
-    ///
-    /// `6` because it lands on the matrix's own `5.84` cell pitch, so the gap
-    /// reads as a missing column rather than an arbitrary space. `4` merges the
-    /// pair into one 3×6 grid; `8` stops reading as a pair at all. It stays `6`
-    /// now that each mark carries a dot column: the column stands `2.92` from
-    /// its own matrix, so the pair gap is still more than twice the gap that
-    /// binds a column to the mark it belongs to.
-    /// This is the width the marks are *given*, at every session count. What
-    /// they draw inside it is packed from the leading edge, so the first
-    /// matrix stands in one place for the life of the panel.
-    static func marksWidth(_ markCount: Int, areProductMarks: Bool = true) -> CGFloat {
-        guard markCount > 0 else { return 0 }
-        return CGFloat(markCount) * markWidth(isProductMark: areProductMarks)
-            + CGFloat(markCount - 1) * compactMatrixSpacing
-    }
 
-    /// The marks at the width they are **drawing**: the matrices, the pair
-    /// spacing, and one session column for each mark that currently has one.
-    ///
-    /// This is what **both** collapsed forms are measured from. There is no
-    /// slack in it and nothing is held open: a product opening its first thread
-    /// widens the surface by exactly ``sessionDotColumnWidth()``, and closing
-    /// its last one gives that width back.
-    ///
-    /// **Which moves the panel's own edges, deliberately, and differently on
-    /// the two forms.** A notched panel is pinned by its trailing edge to the
-    /// cut-out, so a wing that grows can only grow leftwards: the edge and
-    /// every matrix ahead of the new column step left together, and the marks
-    /// between that column and the cut-out stand still — they are at fixed
-    /// spacings from an edge that has not moved. The pill is centred instead,
-    /// so it takes half the column on each edge and everything after the new
-    /// dot — the rest of the marks, and the status name — glides right by half
-    /// of it. The dot therefore pushes exactly what is behind it and nothing
-    /// else, which is the arrangement a reservation was buying with permanent
-    /// width. See ``PanelMotion/slot(isOpening:)`` for the curve the edge and
-    /// the room travel on together.
-    ///
-    /// Takes counts rather than the marks themselves so that the composition
-    /// stays a pure arithmetic statement about the two things that can change
-    /// it. Which marks have a column is ``PresenceMark/drawsSessionColumn``'s
-    /// answer, and the resting grey never has one.
-    static func drawnMarksWidth(markCount: Int, sessionColumnCount: Int) -> CGFloat {
-        guard markCount > 0 else { return 0 }
-        return CGFloat(markCount) * statusMatrixSize
-            + CGFloat(markCount - 1) * compactMatrixSpacing
-            + CGFloat(min(max(0, sessionColumnCount), markCount))
-                * sessionDotColumnWidth()
-    }
 
     /// The subagent badge: font, minimum size, and the padding that lets a
     /// two-digit count grow it rather than clip it.
@@ -848,125 +824,6 @@ enum PanelMetrics {
         buriedFinishDotSize + buriedFinishDotSpacing
     }
 
-    /// The session-count dots, in a `91`-unit viewBox of their own.
-    ///
-    /// **They are measured as thirds of the mark.** A dot is `15` of these
-    /// units across, the column stands `16` clear of the mark, and past three
-    /// the third dot stretches to `27`. At the surface's `16.6` mark that is
-    /// `2.74`, `2.92` and `4.93`.
-    ///
-    /// `91` was the matrix's own viewBox when it was 3×3 — `27`-unit cells on
-    /// a `32`-unit pitch, three to a side — and every figure here was the
-    /// matrix's own: the dots sat on its row centres and the dash was one of
-    /// its cells. The matrix is 4×4 now (`MatrixGrid`) and its viewBox is
-    /// `123`, and these figures deliberately did **not** follow it there.
-    /// Reading them in the new units would put a `2.02` dot beside a `2.16`
-    /// gap, which is under the size at which a run of them can be counted at
-    /// all — and it would narrow the column from `5.66` to `4.18`, moving
-    /// every collapsed width on the surface for a change the dots are not
-    /// party to. The count is the one thing here that is not the matrix's to
-    /// say, so it keeps the size it was legible at.
-    ///
-    /// **The column is exactly as tall as the mark.** Two pitches and a dash
-    /// is `16.6` — the same identity the horizontal arrangement had, stood on
-    /// its end. That is what makes this placement work on a menu bar of any
-    /// height: the dots ask for no room the mark did not already have, so a
-    /// `22` pt bar draws them exactly as a `46` pt one does. Under the matrix
-    /// they needed `5.66` of vertical clearance that a short bar has not got,
-    /// and were dropped there entirely.
-    ///
-    /// What it costs instead is `sessionDotColumnWidth` on the leading wing,
-    /// per product mark — `5.66`, against the `22` a numeral beside the matrix
-    /// wanted.
-    static let sessionDotViewBox: CGFloat = 91
-    static func sessionDotDiameter(matrixSize: CGFloat) -> CGFloat {
-        matrixSize * 15 / sessionDotViewBox
-    }
-    /// From the matrix's trailing edge to the column of dots.
-    static func sessionDotGap(matrixSize: CGFloat) -> CGFloat {
-        matrixSize * 16 / sessionDotViewBox
-    }
-    /// The pitch the dots are centred on: three of them span the whole mark.
-    static func sessionDotPitch(matrixSize: CGFloat) -> CGFloat {
-        matrixSize * 32 / sessionDotViewBox
-    }
-    /// How long the "and more" dash is drawn.
-    static func sessionDotDashLength(matrixSize: CGFloat) -> CGFloat {
-        matrixSize * 27 / sessionDotViewBox
-    }
-    /// The room one product mark reserves beside its matrix for the dots.
-    ///
-    /// **Reserved in the width, packed in the drawing.** A product with no rows
-    /// draws no column, so a pair at rest sits at its own `6` rather than at
-    /// the `11.66` an empty column put between them — past the `8` at which
-    /// ``marksWidth`` records that the pair stops reading as a pair at all, in
-    /// exactly the state the bar is in most of the time. But the *panel* keeps
-    /// the room either way, and the marks are packed from their leading edge
-    /// inside it, so what a missing column gives up becomes slack at the
-    /// trailing end of the marks instead of width off the panel.
-    ///
-    /// **Which buys the one anchor worth having.** The leading matrix never
-    /// moves — not when its own product opens a session, not when the other one
-    /// does, not when the timer arrives. A column opening pushes only the marks
-    /// after it, and a column belonging to the last mark pushes nothing at all.
-    /// The dot itself never moves either: it stands a fixed `2.92` from the
-    /// matrix that owns it, and that matrix has already stopped moving by the
-    /// time the dot appears. ``SessionCountDots`` draws that.
-    ///
-    /// **And it costs no motion the eye can find.** The slack lands between the
-    /// last mark and the cut-out, where the wing's black runs into the
-    /// cut-out's own — there is no boundary there for a gap to be visible
-    /// against. It is the one place on this surface that can absorb width for
-    /// free, which is why the reservation is spent there rather than between
-    /// two marks that have to read as a pair.
-    static func sessionDotColumnWidth(matrixSize: CGFloat = statusMatrixSize) -> CGFloat {
-        sessionDotGap(matrixSize: matrixSize) + sessionDotDiameter(matrixSize: matrixSize)
-    }
-    /// The column room the marks were given and are not drawing into.
-    ///
-    /// ``marksWidth`` gives every mark its column at every session count and
-    /// the drawing packs the empty ones out, so this is the difference between
-    /// the two -- and the only question left is what that slack sits in front
-    /// of. It sits in front of nothing: it falls *past* the status label rather
-    /// than between the label and the marks, so the label keeps one distance
-    /// from the mark it names whatever the counts do.
-    ///
-    /// **Because the label is downstream of a column, and everything
-    /// downstream of a column moves.** Held in front of the label, the
-    /// reservation put `23.3` between the last matrix and a word describing it
-    /// while the pair sat at their own `6` -- the label read as belonging to
-    /// nothing, in the state this surface spends most of its time in, and it
-    /// read that way in every frame of it. Spent past the label instead, the
-    /// gap is `expandedReadoutSpacing` at every count, and the label moves
-    /// `sessionDotColumnWidth` when a column opens ahead of it: the same push
-    /// the marks after that column already take, on the same curve, at the
-    /// moment the dot causing it appears alongside. What must not move is the
-    /// *leading* matrix, and nothing here touches it -- the panel is still
-    /// measured from ``marksWidth``, so its width and both its edges are the
-    /// same as they were.
-    ///
-    /// Takes the marks rather than a count so the readout that draws this and
-    /// the assertion that checks it read the same expression: which marks have
-    /// a column is ``PresenceMark/drawsSessionColumn``'s answer, and the
-    /// resting grey never had one to miss.
-    static func unpackedColumnRoom(
-        _ marks: [PresenceMark],
-        matrixSize: CGFloat = statusMatrixSize
-    ) -> CGFloat {
-        let missing = marks.filter { $0.agent != nil && !$0.drawsSessionColumn }.count
-        return CGFloat(missing) * sessionDotColumnWidth(matrixSize: matrixSize)
-    }
-
-    /// How many dots are drawn before the run stops counting exactly.
-    ///
-    /// Three, because a fourth will not fit beside the matrix without shrinking
-    /// every dot below the size at which they can be counted — the column is
-    /// the mark's own height and three dots and a dash is what that height
-    /// divides into. Past this the third dot stretches into a dash and the run
-    /// means "more than three". The matrix behind them has four rows now, and
-    /// this is still three: the dots count sessions, not cells, and they were
-    /// never made countable by lining up with anything.
-    static let sessionDotCap = 3
 
         /// Compact content trailing the notch, including its own trailing padding.
     ///
@@ -1097,6 +954,11 @@ enum PanelMetrics {
         compactHeight: CGFloat,
         status: MonitorStatus = .connected,
         matrixCount: Int = 1,
+        // How many agents have anything at all on the list, which is the one
+        // thing the expanded panel's width answers to. Not how many are
+        // configured and not how many are connected: what the band shows is
+        // what is running (`expanded-header-v2.md` §4.3 rule 04).
+        workingAgentCount: Int = 1,
         // Rows on the monitored list. The collapsed leading wing is billed for
         // the numerals that counts them (`countsColumnWidth(sessionCount:)`),
         // and for nothing per product: one mark stands for every product at
@@ -1124,7 +986,7 @@ enum PanelMetrics {
             return CGSize(
                 width: expandedWidth(
                     centerOcclusionWidth: centerOcclusionWidth,
-                    markCount: matrixCount
+                    workingAgentCount: workingAgentCount
                 ),
                 height: compactHeight + expandedContentHeight
             )
@@ -1255,18 +1117,6 @@ enum PanelMetrics {
         )
     }
 
-    /// One status name, at the weight the notch actually draws it.
-    ///
-    /// No product argument: nothing either surface can say names a product any
-    /// more. One function rather than two, because there is one name — the pill
-    /// drew an abbreviated set until it stopped
-    /// (``MonitorStatus/displayName``), and while there were two names in play
-    /// this measure and ``expandedStatusReadoutWidth(status:markCount:)``'s
-    /// were genuinely different sums. They would now be the same sum spelled
-    /// twice, which is how a reservation and the ink inside it come apart.
-    static func statusLabelWidth(_ status: MonitorStatus) -> CGFloat {
-        textWidth(status.displayName, font: statusLabelFont)
-    }
 
 
     /// What either surface can say while an agent is connected.
@@ -1298,72 +1148,49 @@ enum PanelMetrics {
         return sessionViewportHeight(forSessionCount: sessionCount) + footerHeight
     }
 
-    /// No product argument. It used to fold over the configured products,
-    /// because the widest sentence a panel could show named one of them; now
-    /// that no status label names a product, every configured set folds to the
-    /// same number and the widest name is `Version unsupported` for everybody.
-    /// A Claude Code user's panel is ~79pt narrower for it.
-    /// - Parameter markCount: How many marks the header draws, which is how
-    ///   many products are connected. The resting form never reaches here — it
-    ///   expands to the pill instead — so every mark this sizes for is a
-    ///   product's, and every one of them reserves its session column.
+    /// The expanded panel's width, which answers to a **count of working
+    /// agents** and to nothing that can be said in words.
+    ///
+    /// **The sentence is gone from both sides of this sum.** It used to reserve
+    /// the longest status name the aggregate could reach — `Approval needed`,
+    /// `102` at 13 pt Light — so a two-agent panel was `570` because of a
+    /// sentence while a one-agent panel was `520` because of a baseline: the
+    /// same object at two sizes depending on what happened to be open, changing
+    /// size the first time a second agent connected. The band draws no word now
+    /// (`expanded-header-v2.md` §3), and what is left on the leading side is
+    /// the collapsed bar's own group and one column of numbers per working
+    /// agent.
+    ///
+    /// **Doubled, because the panel is centred on the display** rather than
+    /// pinned to the cut-out (``MonitorStore/currentPanelTrailingAnchor`` is
+    /// nil while expanded), so the leading side can only be widened by widening
+    /// both. The trailing side wants a gear and no more, and never binds here.
+    ///
+    /// The branch is `520` at every cut-out this product meets up to **four**
+    /// working agents: a side asks `98.2` with two, so the baseline is passed
+    /// only where the cut-out is wider than `520 − 196.4 = 323.6`, half again
+    /// the widest cut-out on any Mac. `expandedNotchClearance` therefore stays
+    /// as the guard that this band clears the hardware and stops being the rule
+    /// that decides a width.
+    ///
+    /// - Parameter workingAgentCount: How many agents have anything at all on
+    ///   the list. Not how many are configured, and not how many are connected:
+    ///   what the band shows is what is running (§4.3 rule 04).
     static func expandedWidth(
         centerOcclusionWidth: CGFloat,
-        markCount: Int = 1
+        workingAgentCount: Int = 1
     ) -> CGFloat {
         guard centerOcclusionWidth >= 1 else {
             return expandedBaselineWidth
         }
-
-        // Only the status readout flanks the notch now — the usage readout that
-        // used to claim the trailing side moved into the footer.
-        //
-        // **Only what this header can actually say**, which is
-        // ``MonitorAggregation/status(agents:sessions:)``'s answer and nothing
-        // else. The fold used to run over `MonitorStatus.allCases` and reserved
-        // for `Version unsupported` — `23.3` wider than `Approval needed`, and
-        // a sentence no aggregate can produce. That is the same over-reservation
-        // ``fixedCompactWidth(for:matrixCount:trailing:)`` was rid of for the
-        // collapsed pill (issue #29), left standing here because nothing was
-        // measuring the other side of the sum.
-        let widestStatusReadout = workingStatuses
-            .map { expandedStatusReadoutWidth(status: $0, markCount: markCount) }
-            .max() ?? 0
-        let requiredSideWidth = expandedHorizontalPadding
-            + widestStatusReadout
-            + expandedNotchClearance
-        // Doubled because the expanded panel is centred on the display rather
-        // than pinned to the cut-out (``MonitorStore/currentPanelTrailingAnchor``
-        // is nil while expanded), so the leading side can only be widened by
-        // widening both. The trailing side needs a gear and no more.
+        let requiredSideWidth = expandedLeadingSideWidth(
+            workingAgentCount: workingAgentCount
+        )
         let notchSafeWidth = centerOcclusionWidth + requiredSideWidth * 2
 
         return ceil(max(expandedBaselineWidth, notchSafeWidth))
     }
 
-    /// One reading beside the cut-out, composed the way `StatusReadout`
-    /// composes it: the marks at the room the panel reserves them, the gap, and
-    /// the sentence.
-    ///
-    /// **The marks, not one matrix.** This was `statusMatrixSize` — correct
-    /// when there was one product and nothing standing beside its matrix, and
-    /// quietly wrong from the second matrix onwards. It survived the pair
-    /// because the fold above was reserving for a sentence the header cannot
-    /// say, and that accident covered the second matrix's `22.6` with `0.72` to
-    /// spare; the session columns' `11.31` (§11) is what overdrew it. On a
-    /// `200` cut-out that put the last `2.57` of `Approval needed` behind the
-    /// hardware, with the `8` of clearance gone before it.
-    static func expandedStatusReadoutWidth(
-        status: MonitorStatus,
-        markCount: Int = 1
-    ) -> CGFloat {
-        marksWidth(markCount)
-            + expandedReadoutSpacing
-            // Ceiled, because the label rasterises its glyphs at a ceiled width
-            // (``NotchTextRaster/textSize(_:font:)``) and a reservation a
-            // fraction short of what is drawn is short.
-            + ceil(statusLabelWidth(status))
-    }
 
     private static func textWidth(_ text: String, font: NSFont) -> CGFloat {
         (text as NSString).size(withAttributes: [.font: font]).width
@@ -1868,10 +1695,13 @@ final class MonitorStore: ObservableObject {
     private func publishTick(_ now: Date) {
         elapsedTick.send(now)
 
-        var signature = compactSubagentBadges.flatMap {
-            [$0.badge.count, $0.badge.wantsAttention ? 1 : 0]
-        }
+        // **The counts go in beside the reading.** A numeral gaining a digit
+        // widens the leading wing exactly as a digit widens the trailing one,
+        // and the collapsed bar is composed from both -- so a tick that finds
+        // either changed is a tick the panel has to be re-measured for.
+        var signature = [aggregateSessionCount, aggregateSubagentCount]
         signature.append(compactTimerText?.count ?? -1)
+        signature.append(buriesAFinishedTurn ? 1 : 0)
         signature.append(contentsOf: sessions.map { elapsedText(for: $0)?.count ?? -1 })
         guard signature != elapsedLayoutSignature else { return }
         elapsedLayoutSignature = signature
@@ -1927,36 +1757,6 @@ final class MonitorStore: ObservableObject {
         quota.remainingPercent
     }
 
-    /// The marks the collapsed surface actually draws, in the bar's own order.
-    ///
-    /// Every mark on every form but one. A notched display resting with
-    /// nothing connected draws none — the whole leading wing goes away and the
-    /// panel is just the cut-out, because that cut-out is already a shape on
-    /// the screen and a grey mark beside it is a second one carrying no
-    /// information. This is the one place the two form factors differ in *what
-    /// is visible* rather than in how it is drawn: a no-notch pill has no
-    /// cut-out to hide behind, so it keeps the grey mark and holds its position
-    /// in the menu bar.
-    ///
-    /// **With the wings given up, it is the products holding a Turn to attend
-    /// to** (``PresenceMark/hasATurnToAttendTo``) — none while both are merely
-    /// working, one matrix for the product that is waiting, both when both are.
-    /// Which mark it is, is said by hue rather than by position: there is
-    /// nothing beside it to read a position against, and the order is
-    /// ``AgentKind``'s here as everywhere else, so the pair never swaps under
-    /// the eye reading it.
-    ///
-    /// A filtered list rather than a narrower state: the panel's own width is
-    /// composed from what this holds
-    /// (``PanelMetrics/size(geometry:isExpanded:statusReadoutText:trailing:centerOcclusionWidth:compactHeight:status:matrixCount:sessionColumnCount:drawnMarkCount:expandsToPillOnly:expandedContentHeight:)``)
-    /// and the header draws exactly it, so the room made and the marks put in
-    /// it cannot come apart.
-    var compactDrawnMarks: [PresenceMark] {
-        guard !isExpanded, geometry == .notched else { return presenceMarks }
-        guard !isRestingOnly else { return [] }
-        guard givesUpCompactWings else { return presenceMarks }
-        return presenceMarks.filter(\.hasATurnToAttendTo)
-    }
 
     /// Whether this surface draws the name of the work between its two ends.
     ///
@@ -2143,26 +1943,12 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// One badge per product with a subagent in flight, in ``AgentKind``
-    /// order (`dual-agent-design.md` §10).
-    ///
-    /// Read straight off ``presenceMarks`` rather than re-summed here: the
-    /// marks already carry each product's total and already sit in the order
-    /// the badges have to draw in, and deriving the badges from anything else
-    /// would let the two ends of the bar disagree about the same list.
-    var compactSubagentBadges: [AgentSubagentBadge] {
-        guard !givesUpCompactWings else { return [] }
-        return presenceMarks.compactMap { mark in
-            guard let agent = mark.agent, !mark.subagents.isEmpty else { return nil }
-            return AgentSubagentBadge(agent: agent, badge: mark.subagents)
-        }
-    }
 
     /// Every subagent still in flight across every listed row, both products
     /// together. Kept for VoiceOver's total and for callers that only need to
     /// know whether the collapsed surface has anything to say here.
     var compactRunningSubagentCount: Int {
-        compactSubagentBadges.reduce(0) { $0 + $1.badge.count }
+        givesUpCompactWings ? 0 : aggregateSubagentCount
     }
 
     /// Everything the collapsed surface draws in the slot after the notch: a
@@ -2222,29 +2008,52 @@ final class MonitorStore: ObservableObject {
         return sessions.map(\.projectName).filter { seen.insert($0).inserted }
     }
 
+    /// The parts the band decomposes the totals into: one column per
+    /// **working** agent, in Settings' order, packed.
+    ///
+    /// **Working, not configured and not connected.** An agent with nothing at
+    /// all leaves the band, because the sum is still on the surface beside it
+    /// (`expanded-header-v2.md` §4.3 rule 04): what the band shows is what is
+    /// running rather than what is installed. Nothing re-sorts — not by count,
+    /// not by urgency, not by which agent moved last — so an agent that empties
+    /// gives its room back and the columns after it close up.
+    ///
+    /// **Empty at one working agent**, where there is nothing to decompose: a
+    /// lone column would repeat the totals digit for digit in a second ink, so
+    /// the band draws the totals alone in grey and colour arrives with the
+    /// second working agent (rule 07).
+    var expandedAgentColumns: [AgentCounts] {
+        let working = presenceMarks.compactMap { mark -> AgentCounts? in
+            guard let agent = mark.agent, mark.sessionCount > 0 else { return nil }
+            return AgentCounts(
+                agent: agent,
+                sessionCount: mark.sessionCount,
+                subagentCount: mark.subagents.count
+            )
+        }
+        return working.count > 1 ? working : []
+    }
+
+    /// How many agents have anything at all on the list, which is what the
+    /// expanded panel's width answers to.
+    var workingAgentCount: Int {
+        presenceMarks.filter { $0.agent != nil && $0.sessionCount > 0 }.count
+    }
+
+    /// Whether the band draws its subagent row at all.
+    ///
+    /// **Anywhere, not per column.** The row is drawn when there are subagents
+    /// on any agent, and then every column fills it — with a dash where an
+    /// agent has none — so the band keeps one baseline at a time rather than
+    /// one per agent (§4.3 rule 05).
+    var expandedDrawsSubagentRow: Bool { aggregateSubagentCount > 0 }
+
     /// The aggregate mark's ink: the user's hue once a product is behind it,
     /// the resting grey until then.
     var aggregateMatrixInk: NotchPalette.MatrixInk {
         NotchPalette.aggregateInk(isConnected: !isRestingOnly)
     }
 
-    /// How many marks are drawing a session column right now.
-    ///
-    /// Both collapsed forms are measured from this rather than from the mark
-    /// count: each is exactly as wide as the marks it draws, so a column
-    /// opening widens the panel and closing gives that width back
-    /// (``PanelMetrics/drawnMarksWidth(markCount:sessionColumnCount:)``) — the
-    /// notched bar leftwards, since it is pinned to the cut-out, and the pill
-    /// by half on each edge, since it is centred. The expanded header is the
-    /// one form left that reserves every mark's column and never reads this.
-    ///
-    /// Counted over the marks that are **drawn** (``compactDrawnMarks``) rather
-    /// than over every mark, so a wing held back behind the cut-out is not
-    /// billed for the column it is not drawing. It is the same list on every
-    /// other form.
-    var compactSessionColumnCount: Int {
-        compactDrawnMarks.filter(\.drawsSessionColumn).count
-    }
 
     /// The leading group at the width it is drawing, for the view that has to
     /// draw it into exactly the room the panel was sized for.
@@ -2263,70 +2072,8 @@ final class MonitorStore: ObservableObject {
         PanelMetrics.drawnTrailingReadingWidth(compactTrailingReading)
     }
 
-    /// Whether this surface draws the status name beside its marks.
-    ///
-    /// **No collapsed form does any more.** Every row in the panel states its
-    /// own status, and the word was a summary of the line below it; the notched
-    /// bar never had room for it, and the pill has given up the room to say
-    /// what the *work* is instead (`compact-view-v2.md` §7). It stays the
-    /// accessibility label on both forms — it stops being drawn, not being
-    /// said.
-    ///
-    /// The expanded header still draws it, and the resting pill widened to
-    /// reach its gear with it. Both go with `expanded-header-v2.md`.
-    var drawsCompactStatusName: Bool {
-        isExpanded
-    }
 
-    /// Whether this surface holds room for a session column no mark is
-    /// standing in.
-    ///
-    /// **The expanded header alone.** It is sized from a baseline rather than
-    /// from its contents, so a column opening inside it cannot widen anything
-    /// and the room has to be there already: the marks are packed into
-    /// ``PanelMetrics/marksWidth(_:areProductMarks:)`` from the leading edge,
-    /// the first matrix stands still whatever the session counts do, and the
-    /// room a missing column gives up falls past the name rather than in front
-    /// of it.
-    ///
-    /// **Both collapsed forms hug what they draw.** The notched bar always did;
-    /// the pill joined it
-    /// (``PanelMetrics/fixedCompactWidth(for:matrixCount:sessionColumnCount:trailing:)``),
-    /// and its own two edges move for a column the way the notched bar's
-    /// leading edge does. What that fixed was the padding: a reservation with a
-    /// centred panel around it does not hold anything still that the drawing
-    /// can see — the room falls past the status name and lands against the
-    /// trailing edge, which is a `12` pt margin at one end of the pill and `47`
-    /// to `59` at the other, in the state this surface spends most of its life
-    /// in.
-    ///
-    /// **The trailing reading is no longer part of this question either.** It
-    /// was while the pill reserved a `00:00:00` slot; now every collapsed
-    /// surface hugs its reading
-    /// (``PanelMetrics/drawnTrailingReadingWidth(_:)``).
-    var reservesCompactRoom: Bool {
-        isExpanded
-    }
 
-    /// The spoken form of ``compactSubagentBadges``, since VoiceOver can read
-    /// neither a flipped ground nor which product a hue belongs to.
-    ///
-    /// Names the product each badge belongs to, because two badges drawn side
-    /// by side are told apart by ink alone, and a reader who cannot see the
-    /// ink would otherwise hear two bare numbers.
-    ///
-    /// **The collapsed surface no longer draws those badges** and no longer
-    /// speaks this: what it draws is one aggregate numeral, so what it says is
-    /// ``spokenCollapsedCountsText``. Kept for the expanded row's own badge,
-    /// which is still per product and still told apart by ink.
-    var spokenRunningSubagentText: String? {
-        let spoken = compactSubagentBadges.compactMap { mark -> String? in
-            guard let summary = mark.badge.spokenSummary else { return nil }
-            return "\(mark.agent.displayName) \(summary)"
-        }
-        guard !spoken.isEmpty else { return nil }
-        return spoken.joined(separator: ", ")
-    }
 
     /// The counts column, in words.
     ///
@@ -2681,6 +2428,7 @@ final class MonitorStore: ObservableObject {
             // `drawnMarkCount` below -- the two differ only where the wings
             // have been given up.
             matrixCount: presenceMarks.count,
+            workingAgentCount: workingAgentCount,
             sessionCount: aggregateSessionCount,
             drawsMark: drawsCompactMarks,
             expandsToPillOnly: expandsToPillOnly,
