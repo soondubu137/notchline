@@ -1676,6 +1676,18 @@ struct NotchStatusMatrix: View {
     /// Only the first-run legend passes this; on the surface a mark always
     /// belongs to one product. When set it replaces `agent`'s ink entirely.
     var split: NotchPalette.MatrixSplit?
+    /// Play the pattern from its first frame, rather than joining the phase
+    /// the rest of the bar's marks share.
+    ///
+    /// **For a mark that is played rather than reported.** A mark on the bar
+    /// starts when a turn starts, and it is anchored to a per-period grid so
+    /// that two marks saying the same thing say it in step
+    /// (``MatrixIndicatorView/phaseAnchor(for:now:)``). The Settings specimen
+    /// has nothing beside it to be in step with, and it runs for exactly as
+    /// long as it is asked to — so the grid would only drop the viewer into
+    /// the middle of a loop, and the two turns of the sweep they were shown
+    /// would begin and end mid-stride.
+    var startsAtItsFirstFrame = false
 
     var body: some View {
         MatrixIndicator(
@@ -1683,7 +1695,8 @@ struct NotchStatusMatrix: View {
             size: size,
             isAnimated: isAnimated,
             ink: ink ?? NotchPalette.ink(for: agent),
-            split: split
+            split: split,
+            startsAtItsFirstFrame: startsAtItsFirstFrame
         )
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -1696,6 +1709,7 @@ private struct MatrixIndicator: NSViewRepresentable {
     let isAnimated: Bool
     let ink: NotchPalette.MatrixInk
     let split: NotchPalette.MatrixSplit?
+    let startsAtItsFirstFrame: Bool
 
     func makeNSView(context: Context) -> MatrixIndicatorView {
         MatrixIndicatorView()
@@ -1707,7 +1721,8 @@ private struct MatrixIndicator: NSViewRepresentable {
             size: size,
             isAnimated: isAnimated,
             ink: ink,
-            split: split
+            split: split,
+            startsAtItsFirstFrame: startsAtItsFirstFrame
         )
     }
 }
@@ -1748,6 +1763,7 @@ final class MatrixIndicatorView: NSView {
     private var appliedIsAnimated = true
     private var appliedInk = NotchPalette.codexInk
     private var appliedSplit: NotchPalette.MatrixSplit?
+    private var appliedStartsAtItsFirstFrame = false
     /// What the mark is currently drawing, which the next `apply` compares
     /// against to decide whether the change is one to fade across.
     private var appliedDrawing: NotchMatrixState?
@@ -1773,13 +1789,15 @@ final class MatrixIndicatorView: NSView {
         size: CGFloat,
         isAnimated: Bool,
         ink: NotchPalette.MatrixInk,
-        split: NotchPalette.MatrixSplit? = nil
+        split: NotchPalette.MatrixSplit? = nil,
+        startsAtItsFirstFrame: Bool = false
     ) {
         guard state != appliedState
             || size != appliedSize
             || isAnimated != appliedIsAnimated
             || ink != appliedInk
-            || split != appliedSplit else {
+            || split != appliedSplit
+            || startsAtItsFirstFrame != appliedStartsAtItsFirstFrame else {
             return
         }
         // A dissolve crosses one pattern over another on the same mark. If the
@@ -1797,6 +1815,7 @@ final class MatrixIndicatorView: NSView {
         appliedIsAnimated = isAnimated
         appliedInk = ink
         appliedSplit = split
+        appliedStartsAtItsFirstFrame = startsAtItsFirstFrame
         rebuild(dissolvingFrom: sameMark ? wasDrawing : nil)
     }
 
@@ -1847,6 +1866,9 @@ final class MatrixIndicatorView: NSView {
         // One reading for every cell of this mark, so the sixteen are on one
         // clock however long the layers take to build.
         let now = CACurrentMediaTime()
+        // A specimen starts where the clock is; every other mark joins the
+        // grid the rest of the bar's are already on.
+        let anchorsPhase = !appliedStartsAtItsFirstFrame
 
         /// One cell, in one colour or cut into two on the mark's diagonal.
         ///
@@ -1920,7 +1942,8 @@ final class MatrixIndicatorView: NSView {
                         Self.trackAnimation(
                             track: track,
                             period: period,
-                            now: now
+                            now: now,
+                            anchorsPhase: anchorsPhase
                         ),
                         forKey: "notch.matrix.opacity"
                     )
@@ -1983,6 +2006,12 @@ final class MatrixIndicatorView: NSView {
     /// half of each, because it is never half in one state and half in
     /// another. Fading them would also be the fade the eye reads *least*, both
     /// sides being lit and moving.
+    /// **The Settings specimen leans on both halves of this rule rather than
+    /// opting out of it.** Its sweep arrives on a *hue change*, which is a
+    /// different drawing and therefore a cut — the answer to a press should
+    /// land on the press — and it leaves on a state change with the same ink,
+    /// which dissolves, so two turns of the sweep sink back into the dark
+    /// instead of snapping to the still.
     static func dissolves(from previous: NotchMatrixState?, to next: NotchMatrixState) -> Bool {
         guard let previous, previous != next else { return false }
         return (previous == .inactive) != (next == .inactive)
@@ -2098,10 +2127,17 @@ final class MatrixIndicatorView: NSView {
     /// frames are drawn at, and a wrap that interpolates like every other
     /// step. It matters most to the radar and the knock, whose tracks end far
     /// from where they begin.
+    ///
+    /// **`anchorsPhase` is what a specimen gives up.** There is nothing beside
+    /// it to be in step with, and it runs for a counted number of loops, so the
+    /// grid would only start it wherever the clock happened to be and end it
+    /// the same distance short. It begins at `now` instead, which is the first
+    /// frame of the pattern.
     private static func trackAnimation(
         track: [Double],
         period: TimeInterval,
-        now: CFTimeInterval
+        now: CFTimeInterval,
+        anchorsPhase: Bool = true
     ) -> CAKeyframeAnimation {
         let animation = CAKeyframeAnimation(keyPath: "opacity")
         animation.values = (track + [track[0]]).map { NSNumber(value: $0) }
@@ -2109,7 +2145,7 @@ final class MatrixIndicatorView: NSView {
         animation.calculationMode = .linear
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
-        animation.beginTime = phaseAnchor(for: period, now: now)
+        animation.beginTime = anchorsPhase ? phaseAnchor(for: period, now: now) : now
         return animation
     }
 

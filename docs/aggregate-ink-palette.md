@@ -1,8 +1,8 @@
 # The aggregate mark's ink — a palette, and the preference it became
 
 **Status: implemented.** The twelve `hint` inks are `AggregateInk`, the picker is
-the Display group's `Mark colour`, and §5's five questions are answered below in
-the order they were asked. What stays recorded rather than built is the other
+the Display group's `Mark colour`, §5's five questions are answered below in the
+order they were asked, and §7 is what the row draws beside the names. What stays recorded rather than built is the other
 twenty-four entries — `whisper` and `tint` — which wait on an intensity control
 earning its place.
 
@@ -123,8 +123,11 @@ but never the default.
    `theDisplayPreferencesReachTheSurfaceTheyDescribe` pins it.
 2. **The user can now break §1's constraint.** ~~Recommend the picker orders by hue distance…~~
    **It does.** `AggregateInk.ordered` runs farthest-from-the-nearer-product first — Sage `108°`,
-   then Sea, Moss, Mauve — and Steel `8°` last; the two equidistant entries carry a `★` in the
-   picker; nothing is blocked. It is their bar.
+   then Sea, Moss, Mauve — and Steel `8°` last; nothing is blocked. It is their bar. ~~The two
+   equidistant entries carry a `★` in the picker.~~ **They no longer do**: the ordering is the
+   argument, and a star beside two of twelve names reads as a rating on a choice nobody is
+   marking. `isEquidistantFromBothProducts` still picks the default and still sorts the list; it
+   is simply not said out loud any more. §7 is what the row spends that space on instead.
 3. **36 rows is too many for a Settings list.** **12 at `hint`**, as recommended. `whisper` and
    `tint` are recorded here and are not offered; an intensity control can come later if it earns
    its place.
@@ -149,3 +152,51 @@ This table is that output. Rebuild the page from these parameters if it is neede
 whole input, `AggregateInk` carries the twelve `hint` pairs verbatim, and what the picker needed on
 top of them was an ordering rule rather than a re-look at the swatches. The page earns its place
 again only if the other two chromas are ever offered.
+
+## 7. The reference mark
+
+**The row shows the mark, not a swatch.** What it hands over is the ink of the one 4×4 mark the
+collapsed surface draws — on black, at `16.6 pt`, lighting and falling away on a pattern — and a
+disc of the lit value said almost none of that. Worse, it said it at the one lightness the whole
+palette shares (§2): twelve discs at `L 0.922` and `C 0.016` are twelve pale circles, so the
+control that existed to distinguish the hues was the place they were hardest to tell apart.
+
+So the popup carries plain names, and beside it stands a specimen: `NotchStatusMatrix` at
+`PanelMetrics.statusMatrixSize` on the same `NotchChip` the first-run legend uses, in the selected
+ink.
+
+- **At rest it is `inactive`** — dim, still, and the honest answer to what the mark looks like on a
+  bar with nothing waiting on anybody.
+- **A change of selection runs `running` twice round**, `2.4 s`, two whole turns of the radar. The
+  hue is then seen lit, mid-decay and nearly out *at the same instant*, which is the range the eye
+  wants drawn side by side rather than one reading after another.
+- **It starts at its first frame** (`NotchStatusMatrix.startsAtItsFirstFrame`). A mark on the bar is
+  anchored to a per-period grid so two of them saying the same thing say it in step; a specimen has
+  nothing beside it to be in step with and runs for a counted two loops, so the grid would only
+  start the beam at whatever bearing the clock was at and stop it the same distance short. Changing
+  hue mid-sweep restarts it in the new colour rather than queueing behind the old one.
+- **It cuts in and dissolves out**, both from the rule the mark already has
+  (`MatrixIndicatorView.dissolves(from:to:)`) rather than from anything this row asks for: a hue
+  change is a different drawing, so the sweep lands on the press; the return is the same ink
+  changing state, so the beam sinks back into the still instead of snapping to it.
+
+### Why the radar and not the double knock
+
+The first build of this ran `approvalNeeded`. Both patterns loop in `1.2 s`, so the only thing
+separating them is how much of that loop has colour in it — and the knock is mostly dark by design.
+It is two beats `300 ms` apart and then `900 ms` at `0.05`, the darkest this surface ever goes: for
+**22 of its 36 frames every cell together sits at or under `0.142`**, below even the `0.150` the
+resting mark holds. Judging `Rose` against `Clay` from that means judging it from four flashes.
+
+The radar decays instead of stopping, so it is never off anywhere:
+
+| Measured over one loop | Radar (`running`) | Double knock (`approvalNeeded`) |
+| --- | --- | --- |
+| Brightest cell, worst frame | `0.853` | `0.050` |
+| Mean cell level, range across frames | `0.330` – `0.417` | `0.050` – `1.000` |
+| Frames at or below the resting `0.150` | none | 22 of 36 |
+
+Two `1.2 s` loops of the radar therefore show the hue continuously; two of the knock showed it for
+about a tenth of the time it was on screen. The knock's other supposed advantage — that it has no
+spatial reading to compete with the colour — turns out to be the same fact stated kindly: what it
+has instead of a reading is silence.

@@ -193,67 +193,55 @@ struct AppSettingsView: View {
     /// all, since brightness is the collapsed surface's attention channel
     /// (`aggregate-ink-palette.md` §2).
     ///
-    /// Ordered farthest-from-both-products first, with the two equidistant hues
-    /// marked and **nothing blocked**. Picking `Steel` puts the mark `8°` from
-    /// Codex, which is exactly the confusion the palette was built to avoid —
-    /// and it is their bar (§5).
+    /// Ordered farthest-from-both-products first and **nothing blocked**.
+    /// Picking `Steel` puts the mark `8°` from Codex, which is exactly the
+    /// confusion the palette was built to avoid — and it is their bar (§5).
+    ///
+    /// **The list is twelve names and nothing else.** It used to carry a dot
+    /// per row and a `★` on the two hues equidistant from both products, and
+    /// both were answering questions the row can answer better elsewhere. The
+    /// dot was an `11 pt` circle of the *lit* colour — a colour these hues are
+    /// deliberately hard to tell apart at, one lightness and one chroma across
+    /// the whole set — so twelve of them down a menu read as twelve pale
+    /// circles, and the real mark is a 4×4 grid that pulses, not a disc. The
+    /// star was the palette's own reasoning about hue distance printed on a
+    /// control, where it read as a rating on a choice that is not being marked.
+    /// What replaces both is the specimen beside the popup, which shows the one
+    /// thing being chosen — this colour, on the surface it will be drawn on,
+    /// moving the way it will move.
     private var aggregateInkRow: some View {
         SettingsRow(
             title: "Mark colour",
             caption: "The one mark on the collapsed component. Brightness is "
                 + "unaffected — it is how Notchline says a turn wants you."
         ) {
-            // **The swatch is an `NSImage` rather than a `Circle`.** A shape
-            // in a `Label`'s icon slot is dropped by the menu that draws these
-            // rows — the list came back as twelve names and no colour, which is
-            // a colour picker with the colour taken out. An image survives into
-            // the menu item, and into the closed state beside the name.
-            Picker("Mark colour", selection: $store.aggregateInk) {
-                ForEach(AggregateInk.ordered) { hue in
-                    Label {
-                        Text(hue.pickerTitle)
-                    } icon: {
-                        Image(nsImage: Self.swatch(for: hue))
-                    }
-                    .tag(hue)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .help(
-                "Tints the aggregate mark once a product is connected. The "
-                    + "resting grey is left alone: it means nothing is "
-                    + "connected, and a colour there would apply to a state "
-                    + "with no agent in it."
-            )
-        }
-    }
+            HStack(spacing: 10) {
+                AggregateInkSpecimen(hue: store.aggregateInk)
 
-    /// One hue, drawn as a dot the size of the text beside it.
-    ///
-    /// Lit rather than unlit: at `L 0.235` the twelve are indistinguishable
-    /// from each other and from the window they are drawn on, and what the user
-    /// is choosing between is what the mark looks like when it is saying
-    /// something.
-    private static func swatch(for hue: AggregateInk) -> NSImage {
-        let side: CGFloat = 11
-        let image = NSImage(size: CGSize(width: side, height: side))
-        image.lockFocus()
-        NSColor(hue.ink.on).setFill()
-        NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: side, height: side)).fill()
-        image.unlockFocus()
-        // Drawn colour, not a template: a template swatch is tinted by the menu
-        // and every entry would come back the same grey.
-        image.isTemplate = false
-        return image
+                Picker("Mark colour", selection: $store.aggregateInk) {
+                    ForEach(AggregateInk.ordered) { hue in
+                        Text(hue.displayName).tag(hue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+                .help(
+                    "Tints the aggregate mark once a product is connected. The "
+                        + "resting grey is left alone: it means nothing is "
+                        + "connected, and a colour there would apply to a state "
+                        + "with no agent in it."
+                )
+            }
+        }
     }
 
     /// Name the work between the pill's two ends.
     ///
-    /// **Greyed on a notched display, and drawn there anyway** — the mirror of
-    /// `Hide the wings`, and kept visible for the same reason: the person who
-    /// wants it is looking for it on the machine it does not apply to.
+    /// **Live on a notched display too, where it has nothing to do yet** — the
+    /// mirror of `Hide the wings`, and settable for the same reason: the person
+    /// who wants it is setting it on the machine it does not apply to, and a
+    /// preference is a standing answer rather than a command for right now.
     private var nameWorkRow: some View {
         SettingsRow(
             title: "Name the work",
@@ -416,6 +404,96 @@ struct AppSettingsView: View {
             set: { store.selectDisplay(id: $0) }
         )
     }
+}
+
+/// The chosen colour, on a scrap of the notch, swept twice when it changes.
+///
+/// **A reference rather than a swatch.** What the `Mark colour` row hands over
+/// is not a colour in the abstract — it is the ink of the one mark the
+/// collapsed component draws, on black, at `16.6 pt`, lighting and falling away
+/// on a pattern. A disc of the lit value said one twelfth of that, and said it
+/// at the one lightness the whole palette shares, which is to say it barely
+/// distinguished the twelve at all. This is the mark itself, the size the notch
+/// draws it (``MarkSpecimenMetrics``), on the ground it belongs to.
+///
+/// **At rest it is `inactive`, which is what the mark spends most of its life
+/// as.** Dim, still, and the honest answer to "what will this look like up
+/// there" for a bar with nothing waiting on anybody. Left there it would also
+/// be the *least* legible reading of a hue, so a change of selection runs the
+/// radar — ``NotchMatrixState/running`` — twice round and drops back.
+///
+/// **The radar and not the knock, because the knock spends most of itself
+/// dark.** Both loops last `1.2s`, so the choice is only about what is on
+/// screen during them. The knock is four flashes: the whole grid to full twice
+/// per loop and then `900ms` at `0.05`, which is the darkest this surface ever
+/// goes — for `22` of its `36` frames every cell together is at or under
+/// `0.142`, below even the resting level. A hue is unreadable there, and the
+/// answer to "what does Rose look like" arrived as two blinks and a black
+/// square. The radar's beam decays instead of stopping: its brightest cell
+/// never falls below `0.853` on any frame of the loop and the mark's average
+/// cell holds between `0.330` and `0.417` throughout, so the colour is
+/// continuously legible for the whole two and a half seconds rather than for a
+/// tenth of it. It also sweeps, which shows the hue lit, mid-decay and nearly
+/// out at the same instant — the range the eye wants, drawn side by side
+/// instead of one after the other.
+struct AggregateInkSpecimen: View {
+    let hue: AggregateInk
+
+    @State private var isSweeping = false
+    @State private var sweep: Task<Void, Never>?
+
+    var body: some View {
+        NotchChip {
+            NotchStatusMatrix(
+                state: isSweeping ? .running : .inactive,
+                size: MarkSpecimenMetrics.matrixSize,
+                ink: hue.ink,
+                startsAtItsFirstFrame: true
+            )
+        }
+        // The hue rather than the picker's press, so a colour arriving any
+        // other way — a menu dismissed with the arrow keys, a default restored
+        // — sweeps too, and re-choosing the colour already selected does not.
+        .onChange(of: hue) { _, _ in sweepTwice() }
+        .onDisappear { sweep?.cancel() }
+    }
+
+    /// Start the sweep, or start it again from the top.
+    ///
+    /// A second change while the first is still running restarts it in the new
+    /// colour rather than queueing behind it: someone stepping down the list is
+    /// asking about the hue they have just landed on, not the one before it.
+    /// ``NotchStatusMatrix/startsAtItsFirstFrame`` is what makes the restart a
+    /// restart — the beam begins at the same bearing every time instead of
+    /// joining the phase grid the bar's own marks share.
+    ///
+    /// **The arrival is a cut and the departure is a dissolve**, and neither is
+    /// asked for here: the mark reaches both through the rule it already has
+    /// (``MatrixIndicatorView/dissolves(from:to:)``). A hue change is a
+    /// different drawing, so the sweep lands on the press; the return is the
+    /// same ink changing state, so two turns of the beam sink back into the
+    /// still rather than snapping to it.
+    private func sweepTwice() {
+        sweep?.cancel()
+        isSweeping = true
+        sweep = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.sweepDuration))
+            guard !Task.isCancelled else { return }
+            isSweeping = false
+        }
+    }
+
+    /// Two whole turns of the beam.
+    ///
+    /// Exactly two periods, with nothing trimmed off the end. The radar is
+    /// continuous — every frame of it has a cell near full and a cell near its
+    /// floor — so there is no frame that is a bad one to stop on, and two
+    /// periods puts the beam back at the bearing it started from. What it stops
+    /// *into* is a `320ms` dissolve down to the still, which is where the
+    /// pattern's own decay was heading anyway.
+    static let sweepDuration: TimeInterval = {
+        (NotchMatrixState.running.period ?? 1.2) * 2
+    }()
 }
 
 /// The two connections the app needs, as the two rows that ask for them.

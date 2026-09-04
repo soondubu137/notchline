@@ -256,13 +256,13 @@ private struct MatrixLegend: View {
                         VStack(spacing: PanelMetrics.compactMatrixSpacing) {
                             NotchStatusMatrix(
                                 state: entry.0,
-                                size: OnboardingMetrics.matrixSize,
+                                size: MarkSpecimenMetrics.matrixSize,
                                 agent: .codex
                             )
 
                             NotchStatusMatrix(
                                 state: entry.0,
-                                size: OnboardingMetrics.matrixSize,
+                                size: MarkSpecimenMetrics.matrixSize,
                                 agent: .claudeCode
                             )
                         }
@@ -289,16 +289,20 @@ private struct MatrixLegend: View {
 ///
 /// The matrix is drawn for one surface only — a black one — and its unlit bed
 /// is nearly black by design. Dropped straight onto a light card it would read
-/// as a smudge, so the legend brings the ground it belongs to with it. The chip
+/// as a smudge, so a specimen brings the ground it belongs to with it. The chip
 /// is also what contains the glow: the lit passes bleed `cell × 10.5/27 × 3`
 /// past the matrix's own bounds, which at this size is less than the padding
 /// here.
-private struct NotchChip<Content: View>: View {
+///
+/// Shared by the two windows that stand a mark on a light card — this one's
+/// legend and Settings' `Mark colour` row — rather than each cutting its own
+/// scrap. A mark shown off the notch should look the same wherever it is shown.
+struct NotchChip<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         content()
-            .padding((OnboardingMetrics.chipSize - OnboardingMetrics.matrixSize) / 2)
+            .padding((MarkSpecimenMetrics.chipSize - MarkSpecimenMetrics.matrixSize) / 2)
             .background(
                 Color.black,
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -306,9 +310,9 @@ private struct NotchChip<Content: View>: View {
     }
 }
 
-private enum OnboardingMetrics {
-    /// The size the notch itself draws a matrix at, so the legend is a
-    /// specimen rather than an illustration of one.
+enum MarkSpecimenMetrics {
+    /// The size the notch itself draws a matrix at, so a specimen is one
+    /// rather than an illustration of one.
     static let matrixSize = PanelMetrics.statusMatrixSize
     static let chipSize: CGFloat = 30
 }

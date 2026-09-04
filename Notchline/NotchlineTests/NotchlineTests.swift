@@ -4036,9 +4036,15 @@ struct NotchlineTests {
     ///
     /// The constraint the palette was built under is that the aggregate must
     /// never read as a dim Codex or a dim Claude Code. So the farthest hue
-    /// comes first and the most confusable last, the two equidistant ones are
-    /// marked, and `Steel` — `8°` from Codex — is offered anyway, because it is
-    /// the user's bar (`aggregate-ink-palette.md` §5).
+    /// comes first and the most confusable last, and `Steel` — `8°` from Codex
+    /// — is offered anyway, because it is the user's bar
+    /// (`aggregate-ink-palette.md` §5).
+    ///
+    /// **The equidistant pair is no longer said out loud.** The row used to
+    /// print a `★` beside the two, which is the palette's reasoning shown on a
+    /// control as a rating; the ordering carries it, and the row spends that
+    /// space on a specimen of the mark instead. What the pair still decides is
+    /// the default, so it stays pinned here.
     @Test @MainActor
     func theMarkColourPickerLeadsWithTheHuesFurthestFromBothProducts() {
         let ordered = AggregateInk.ordered
@@ -4051,15 +4057,112 @@ struct NotchlineTests {
         #expect(ordered.last == .steel, "the most confusable hue is offered last")
 
         // `150°` and `330°` are the only two as far from both products as any
-        // hue can be, and they are the two the picker marks.
-        let starred = AggregateInk.allCases.filter(\.isEquidistantFromBothProducts)
-        #expect(Set(starred) == [.sage, .mauve])
-        #expect(AggregateInk.sage.pickerTitle.hasSuffix("★"))
-        #expect(!AggregateInk.steel.pickerTitle.hasSuffix("★"))
+        // hue can be.
+        let equidistant = AggregateInk.allCases.filter(\.isEquidistantFromBothProducts)
+        #expect(Set(equidistant) == [.sage, .mauve])
+        // And every row in the list is the plain name: no star, and no swatch
+        // either — the reference mark beside the popup is what shows the hue.
+        #expect(AggregateInk.sage.displayName == "Sage")
+        #expect(AggregateInk.allCases.allSatisfy { !$0.displayName.contains("★") })
         // The default is one of them, and it is what an install that has never
         // opened this row draws.
         #expect(AggregateInk.default == .sage)
         #expect(AggregateInk.default.isEquidistantFromBothProducts)
+    }
+
+    /// **The reference mark sweeps twice, and the sweep is why it is legible.**
+    ///
+    /// `Mark colour` answers a change of selection by running the radar for two
+    /// whole turns, so the hue is seen lit, mid-decay and nearly out at once,
+    /// on the surface it will actually be drawn on. It used to run the double
+    /// knock, and that is the choice this pins: both patterns loop in `1.2s`,
+    /// so what separates them is only how much of that loop has colour in it.
+    /// The knock is four flashes and then the darkest this surface ever goes —
+    /// every cell together, well under the resting level, for most of the loop
+    /// — which is a hue shown for a tenth of the time it is on screen.
+    @Test @MainActor
+    func theMarkColourSpecimenSweepsTwiceAndStaysLitThroughout() throws {
+        let radar = NotchMatrixState.running
+        let period = try #require(radar.period)
+        #expect(AggregateInkSpecimen.sweepDuration == period * 2)
+
+        let cells = (0 ..< MatrixGrid.cellCount).map { radar.track(forCell: $0) }
+        let frames = try #require(cells.first?.count)
+        // The beam is one waveform at sixteen bearings, so no two frames of the
+        // loop draw the same mark and every frame draws a range.
+        func mark(at frame: Int) -> [Double] { cells.map { $0[frame % frames] } }
+
+        let brightest = (0 ..< frames).map { mark(at: $0).max() ?? 0 }
+        let average = (0 ..< frames).map { mark(at: $0).reduce(0, +) / 16 }
+        // Continuously legible: on every frame of the loop some cell is nearly
+        // full, and the mark as a whole never sinks to a flat dark.
+        #expect((brightest.min() ?? 0) > 0.85)
+        #expect((average.min() ?? 0) > 0.3)
+        // And the pattern it replaced, measured the same way: for most of its
+        // loop the whole grid is darker than the still it is drawn against.
+        let resting = try #require(NotchMatrixState.inactive.track(forCell: 0).first)
+        let knock = NotchMatrixState.approvalNeeded.track(forCell: 0)
+        let dark = knock.filter { $0 <= resting }
+        #expect(dark.count > knock.count / 2)
+        #expect((knock.min() ?? 1) < 0.06)
+    }
+
+    /// **A specimen starts at its first frame; a mark on the bar joins a grid.**
+    ///
+    /// Marks on the surface are anchored to a per-period grid so that two of
+    /// them saying the same thing say it in step. The Settings specimen has
+    /// nothing beside it to be in step with, and it runs for a counted two
+    /// loops — so the grid would only start its beam at whatever bearing the
+    /// clock happened to be at and stop it the same distance short.
+    @Test @MainActor
+    func aSpecimenStartsAtItsFirstFrameAndAMarkOnTheBarDoesNot() throws {
+        let size = PanelMetrics.statusMatrixSize
+        let ink = AggregateInk.sage.ink
+        let period = try #require(NotchMatrixState.running.period)
+
+        func sweep(_ view: MatrixIndicatorView, startsAtItsFirstFrame: Bool) -> CFTimeInterval {
+            view.frame = NSRect(x: 0, y: 0, width: size, height: size)
+            view.apply(
+                state: .inactive,
+                size: size,
+                isAnimated: true,
+                ink: ink,
+                startsAtItsFirstFrame: startsAtItsFirstFrame
+            )
+            view.apply(
+                state: .running,
+                size: size,
+                isAnimated: true,
+                ink: ink,
+                startsAtItsFirstFrame: startsAtItsFirstFrame
+            )
+            return CACurrentMediaTime()
+        }
+
+        /// The opacity animation on one cell of the topmost lit pass.
+        func animation(on view: MatrixIndicatorView) throws -> CAAnimation {
+            let pass = try #require(view.layer?.sublayers?.last)
+            let cell = try #require(pass.sublayers?.first)
+            return try #require(cell.animation(forKey: "notch.matrix.opacity"))
+        }
+
+        let specimen = MatrixIndicatorView()
+        let now = sweep(specimen, startsAtItsFirstFrame: true)
+        #expect(abs(try animation(on: specimen).beginTime - now) < 0.05)
+
+        let onTheBar = MatrixIndicatorView()
+        let barNow = sweep(onTheBar, startsAtItsFirstFrame: false)
+        let anchored = try animation(on: onTheBar).beginTime
+        #expect(anchored == MatrixIndicatorView.phaseAnchor(for: period, now: barNow))
+        // Which is a whole-period boundary at or before now, so the pattern is
+        // already part-way through by the time anybody sees it.
+        #expect(anchored <= barNow)
+        #expect(barNow - anchored < period)
+
+        // Both dissolve, because both are the same mark changing what it says:
+        // the unlit bed, four lit passes, and the four the still left behind.
+        #expect(specimen.layer?.sublayers?.count == 9)
+        #expect(onTheBar.layer?.sublayers?.count == 9)
     }
 
     /// **The three Settings rows reach what they claim to.**

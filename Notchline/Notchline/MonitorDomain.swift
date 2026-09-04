@@ -644,9 +644,8 @@ nonisolated struct SubagentBadge: Equatable, Sendable {
 /// as a dim Codex or a dim Claude Code: Codex sits at `258°` in OKLCH and
 /// Claude Code at `42°`, so the two hues equidistant from both are `150°` and
 /// `330°`, and everything else is closer to one product than the other. The
-/// picker puts the farthest first and the nearest last, marks the two
-/// equidistant ones, and lets the user pick `Steel` at `8°` from Codex if they
-/// want to — it is their bar (§5).
+/// picker puts the farthest first and the nearest last, and lets the user pick
+/// `Steel` at `8°` from Codex if they want to — it is their bar (§5).
 nonisolated enum AggregateInk: String, CaseIterable, Identifiable, Sendable {
     case sage, sea, moss, mauve, cyan, sand, blush, violet, ice, rose, clay, steel
 
@@ -700,7 +699,12 @@ nonisolated enum AggregateInk: String, CaseIterable, Identifiable, Sendable {
 
     /// Whether this hue is as far from both products as any hue can be.
     ///
-    /// `150°` and `330°`, marked in the picker rather than enforced.
+    /// `150°` and `330°`. It picks the default and it sorts the list, and it is
+    /// no longer *said* anywhere: the picker used to print a `★` beside these
+    /// two, which put the palette's own reasoning on a control as if it were a
+    /// rating on a choice nobody is marking. The ordering already carries it —
+    /// the confusable hues are last — and the row now spends that space on a
+    /// specimen of the mark instead.
     nonisolated var isEquidistantFromBothProducts: Bool {
         Self.distance(hue, 258) == Self.distance(hue, 42)
     }
@@ -727,16 +731,6 @@ nonisolated enum AggregateInk: String, CaseIterable, Identifiable, Sendable {
         case .mauve: "Mauve"
         case .violet: "Violet"
         }
-    }
-
-    /// The name, and the mark that says this hue is as far from both products
-    /// as any hue can be.
-    ///
-    /// Marked rather than enforced: the ordering already puts the confusable
-    /// hues last, and what this adds is the *reason* they are ordered that way,
-    /// for a reader who is about to pick one anyway.
-    nonisolated var pickerTitle: String {
-        isEquidistantFromBothProducts ? "\(displayName) ★" : displayName
     }
 
     private static func pair(unlit: Int, lit: Int) -> NotchPalette.MatrixInk {
