@@ -6,6 +6,8 @@
 | Version | 1.7 |
 | Date | 2026-08-28 |
 | File | [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1) |
+| Collapsed surface | **Superseded for the collapsed forms by [`compact-view-v2.md`](compact-view-v2.md)**, which replaces §4.6, §6.4's collapsed compositions and §8.4's `Hide the wings`, and amends §10's reduce-motion premise. This document still governs the expanded panel, the row, the settings window and everything else. |
+| Expanded header | **Superseded for the panel's top band by [`expanded-header-v2.md`](expanded-header-v2.md)**, which replaces §3.3's expanded widening rule and §4.2's expanded half. The band folds the marks, drops the status name and decomposes the counts one column per working agent; the list, the footer and the settings window are untouched. |
 
 ## 1. Design principles
 
