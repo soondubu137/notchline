@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, not implemented.** One question was answered by the board's owner during the drawing (§4.1); five remain open (§10). No Swift has been written against any of it. |
+| Status | **Designed and settled, not implemented.** Every question §10 parked is now answered, closed or standing on its own recommendation, and the resting form's width is corrected (§5). No Swift has been written against any of it. |
 | Version | 2.0 |
 | Date | 2026-09-03 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `05 — The expanded header` |
@@ -118,10 +118,10 @@ Every agent's pair is the two inks it already owns — its lit matrix colour ove
 | The totals, kept from the bar | `#C7C7CC` | `#7C7C80` |
 | Codex | `#6CB4FF` | `#4D81B7` |
 | Claude Code | `#D97757` | `#9C553E` |
-| A third agent — **proposed** | `#57D9A3` | `#3E9C75` |
-| A fourth — **proposed** | `#A78BFA` | `#7862B4` |
+| ~~A third agent~~ | — | — |
+| ~~A fourth~~ | — | — |
 
-The last two are placeholders. What has to be settled is the rule that generates them, not these values: §10, question 03.
+**The third and fourth pairs are struck rather than settled.** This product monitors Codex and Claude Code, and the rule that would generate a third pair is recorded at §10 question 03 for the day a third product exists. Nothing in the band's geometry depends on it: §6.2 sizes from a count, and the count is free of what colour each column is. The two placeholder values this table used to carry (`#57D9A3` / `#A78BFA`) are gone, so nothing can be built against them by accident.
 
 ## 5. States
 
@@ -129,7 +129,7 @@ True size, against the `200 × 46` reference cut-out.
 
 | State | The band draws | Width |
 | --- | --- | --- |
-| Nothing connected | Resting grey mark, gear. No total, nothing to decompose | `289` — was `396` |
+| Nothing connected | Resting grey mark, gear. No total, nothing to decompose, and no word | `304` — was `396` |
 | One agent, connected, no rows | Steady mark, gear. A zero is never drawn | `520` |
 | Two agents connected, one working | Mark, grey totals, gear. One term, so no parts (rule 07) | `520` |
 | Two agents, running · 2 and 1 | `3` grey, `2` Codex, `1` Claude Code — one row, centred | `520` — was `570` |
@@ -138,7 +138,21 @@ True size, against the `200 × 46` reference cut-out.
 | Ten or more, one agent with no subagents | `15 / 7` grey, `12 / 7` Codex, `3 / –` Claude Code | `520` |
 | Four agents | `9 / 4` grey and four columns — the widest count that fits at `220` | `520` |
 
-**Nothing connected** is the resting form widening in place to put the gear within reach, and it composes `12 + 16.6 + 8 + 200 + 8 + 32 + 12 = 288.6 → 289`. V1's is `12 + 16.6 + 12 + 82.96 + 8 + 200 + 8 + 12 + 32 + 12 = 395.56 → 396`; [`figma-design.md`](figma-design.md) §6.4 publishes `400` for it and its own checklist `400.6`, and the composition rule is authoritative, as it was for the collapsed series.
+The three- and four-agent rows are **width headroom, not a contract**: they say what the composition costs if a third product is ever monitored, and §4.4 no longer carries inks to draw them in. Everything this product ships is the rows above them.
+
+**Nothing connected** is the resting form widening in place to put the gear within reach — and **it composes symmetrically, like every other width in this document**. The panel is centred on the display while it is expanded (`MonitorStore.currentPanelTrailingAnchor` is nil there, and `OverlayPanelLayout.frame` centres what it is given), so the room beside the cut-out is `(width − cut-out) ÷ 2` on *both* sides and a width added up as `leading + cut-out + trailing` does not survive being drawn. The trailing side is the wider of the two — `8 + gear + 12`, against a bare mark's `12 + 16.6 + 8` — so this form is `cut-out + 2 × (8 + gear + 12)` and the gear keeps its `8` at every cut-out.
+
+| Cut-out | Gear | Trailing side | Resting width |
+| --- | --- | --- | --- |
+| `127 × 22` | `20` | `40` | **207** |
+| `185 × 32` | `24.36` | `44.36` | **274** |
+| `200 × 46` | `32` | `52` | **304** |
+| `220 × 38` | `27.64` | `47.64` | **316** |
+| no cut-out | by bar height | — | `12 + 16.6 + 8 + gear + 12`, sized to itself |
+
+The gear is `settingsButtonSize(compactHeight:)`, which tracks the menu bar, so the cut-out and the gear move together and the two columns are one machine's answer rather than two.
+
+**The additive figure this section first published — `288.6 → 289` — was V1's own composition with the word taken out of it, and V1's composition is where the fault is.** `12 + 16.6 + 12 + 82.96 + 8 + 200 + 8 + 12 + 32 + 12 = 395.56 → 396` gives `98` of shoulder to a leading side wanting `123.56`, so roughly `25` pt of `Disconnected` is drawn behind the cut-out — and `drawsCompactStatusName` is `isExpanded || noNotch`, which is to say that the hovered resting pill on a notched screen is precisely where that word is drawn. **Dropping the word is what makes the symmetric rule affordable**: the leading side falls to `36.6`, the trailing side binds, and `304` is still `92` narrower than the form that had the fault. This is the last surface that drew `MonitorStatus.displayName`; with it gone the name is drawn nowhere and said everywhere (§9). [`figma-design.md`](figma-design.md) §6.4's `400` and its checklist's `400.6` are void with the rest.
 
 ## 6. Widths
 
@@ -197,14 +211,16 @@ A side asks `98.2` with two agents against a trailing side wanting `52`, so the 
 
 ## 10. Open questions
 
-| | Question | Recommendation |
+None are open. Three were answered by the board's owner, one is closed as out of scope, and two stand on the recommendations written here — recorded as standing rather than as decided, so that a later reader can see which is which.
+
+| | Question | Where it stands |
 | --- | --- | --- |
 | 01 | Do the parts replace the totals? | **Answered — they do not.** §4.1 |
-| 02 | Do the columns pack, or hold a slot per configured agent? | Packing, as drawn. The movement is real and lands where it does least harm: the totals are anchored to the mark and never move. Worth watching on a machine that runs three agents in earnest |
-| 03 | What colour is a third agent, and a fourth? | Settle the rule rather than the values: each new product takes the hue farthest in OKLCH from every product already configured, at the products' own chroma and their two lightnesses — the construction [`aggregate-ink-palette.md`](aggregate-ink-palette.md) used for its starred entries. Two collisions to judge on screen: Completed is green in a row's status control, and the aggregate mark's default ink is a near-neutral at `150°`. Neither is fatal — hue means agent in this band and status in the row, which is already true of Codex blue standing beside Running blue |
-| 04 | Where does the collapsed reading go when the panel opens? | It descends: the same glyphs travel to the first row's timer while the gear fades into the slot they leave. The counts have the better answer already — the totals hold still and the parts fade in beside them, which is the decomposition performed rather than stated. Motion needs its own page and its own curve |
-| 05 | Is colour enough? | §9. If the accessible name and the fixed order are not enough, the panel is already a hover surface and a tooltip on the block can name the columns without drawing a word. What is not available is the word itself |
-| 06 | Is `520` still the right baseline, now that nothing widens it? | Leave it. That width was bought by a status name on a panel that changed size when a second agent connected, and a row that ends in a fade rather than an ellipsis loses characters, not meaning. The lever moves down — two agents need `196.4` plus the cut-out — and up costs a panel that is a different size on different machines again |
+| 02 | Do the columns pack, or hold a slot per configured agent? | **Standing recommendation: packing, as drawn.** The movement is real and lands where it does least harm — the totals are anchored to the mark and never move. Worth watching on a machine that runs both agents in earnest |
+| 03 | What colour is a third agent, and a fourth? | **Closed as out of scope.** The product monitors Codex and Claude Code; §4.4's third and fourth pairs are struck. The rule to settle when a third product arrives, unchanged: each new product takes the hue farthest in OKLCH from every product already configured, at the products' own chroma and their two lightnesses — the construction [`aggregate-ink-palette.md`](aggregate-ink-palette.md) used for its starred entries. Two collisions to judge on screen then: Completed is green in a row's status control, and the aggregate mark's default ink is a near-neutral at `150°`. Neither is fatal — hue means agent in this band and status in the row, which is already true of Codex blue standing beside Running blue |
+| 04 | Where does the collapsed reading go when the panel opens? | **Answered — nowhere. It gives way to the gear.** The trailing slot holds one thing at a time: collapsed it is the reading, expanded it is the gear, and opening the panel cross-fades one into the other in place, on the slot curve the wings' contents already use. Nothing travels and nothing descends — the turn the reading was timing draws its own timer in the list below, from its own start, so the figure is not lost by being let go. It is also the cheaper answer: the reading re-rasters once a second, and a travelling raster would have to keep doing it in flight. The counts are the other half of the same rule, already drawn: the totals hold still and the parts fade in beside them |
+| 05 | Is colour enough? | **Standing recommendation.** §9. If the accessible name and the fixed order are not enough, the panel is already a hover surface and a tooltip on the block can name the columns without drawing a word. What is not available is the word itself |
+| 06 | Is `520` still the right baseline, now that nothing widens it? | **Standing recommendation: leave it.** That width was bought by a status name on a panel that changed size when a second agent connected, and a row that ends in a fade rather than an ellipsis loses characters, not meaning. The lever moves down — two agents need `196.4` plus the cut-out — and up costs a panel that is a different size on different machines again |
 
 ## 11. Verification
 
@@ -216,7 +232,9 @@ A side asks `98.2` with two agents against a trailing side wanting `52`, so the 
 - [ ] With no subagents anywhere, every numeral centres `4.375` below the matrix's top edge, totals included.
 - [ ] A tenth session widens nothing and moves no neighbouring column.
 - [ ] The band draws identically under a `46` pt menu bar and a `22` pt one.
-- [ ] Nothing connected composes `289`, and the gear is reachable in that form.
+- [ ] Nothing connected composes `cut-out + 2 × (8 + gear + 12)` — `304` at the reference — and the gear stands a full `8` clear of the cut-out at every scaling step, measured against the window's own centred frame rather than the sum.
+- [ ] No form of this band draws `MonitorStatus.displayName`, the hovered resting pill included.
+- [ ] Opening the panel cross-fades the collapsed reading into the gear in place, with neither travelling.
 - [ ] Every column has an accessible name naming its agent and both figures.
 
 ## 12. Implementation mapping
@@ -228,7 +246,7 @@ Nothing here is implemented. The work is concentrated in three places.
 | `PanelMetrics.expandedWidth(centerOcclusionWidth:markCount:)` | Sizes from the working-agent count rather than from `workingStatuses`' widest readout. `markCount` becomes a count of columns |
 | `PanelMetrics.expandedStatusReadoutWidth(status:markCount:)` | Retired. Nothing in the band is a status readout any more |
 | `PanelMetrics.marksWidth(_:areProductMarks:)` | No longer reached from the band: the header draws one aggregate mark, so `drawnMarksWidth` governs both forms |
-| `PanelMetrics.restingExpandedWidth(…)` | Drops `statusLabelWidth(.disconnected)`; composes `289` at a `46` bar |
+| `PanelMetrics.restingExpandedWidth(…)` | Drops `statusLabelWidth(.disconnected)` and stops adding its two sides up: composes `centerOcclusionWidth + 2 × (expandedNotchClearance + gear + expandedHorizontalPadding)`, which is `304` at the reference cut-out and a `46` bar. The trailing gap becomes `expandedNotchClearance` rather than `expandedReadoutSpacing`, and the no-cut-out branch keeps composing to itself |
 | `OverlayHeader` / `StatusReadout` | The header stops passing `text`/`showsText`, and gains the per-agent columns after the aggregate column |
 | `NotchPalette.MatrixInk` | Gains the per-agent numeral pair, which is the existing lit ink over the existing caption ink — no new values for the two shipped products |
 | `everySentenceTheExpandedHeaderCanSayClearsTheCutOut`, `theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames` | Both retire with the sentence they check. What replaces them is a test that the leading side clears the cut-out at four working agents, and that the panel is `520` at every cut-out this product meets |

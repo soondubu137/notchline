@@ -63,6 +63,28 @@ Two numerals stacked in the height of one matrix, `4` after it.
 16.6  = the matrix's own height
 ```
 
+**The faces.** Sessions at `10` pt medium, subagents at `8` pt medium, both
+`monospacedDigitSystemFont` — the elapsed reading's own face at the two sizes
+this column needs, so rule 05's tabular figures cost nothing new. **The column
+is billed `6.6` per digit whatever the face measures**, and `10` pt medium is
+the largest weight-and-size pair whose digit advance clears it: `6.57`, against
+`6.64` at `10.5` Light and `6.93` at `11`. Medium rather than the reading's
+Light because Light at this size on near-black draws thinner than the mark
+standing beside it.
+
+**The stack is defined by its two anchors, not by the `3.03`.** The large
+numeral's cap-top stands on the matrix's top edge and the small numeral's
+baseline on its bottom; the gap is whatever the drawn caps leave — `3.91` at
+these faces, whose caps measure `7.05` and `5.64` rather than the drawing's
+`7.85` and `5.71`. The `16.6` the column occupies is unchanged, which is the
+only figure anything else reads.
+
+**Both numerals are leading-aligned in the column.** A tenth session then adds
+its digit at the trailing end and the subagent numeral does not move, which is
+rule 02. Centring the small numeral under the large one reads better standing
+still and breaks that rule the moment the session count crosses `9`; alignment
+is the half of this worth looking at on a real bar first.
+
 The column asks for **no room the mark did not already have**, so it draws identically under a 46 pt menu bar and a 22 pt one. That is the test the V1 dot column was built to pass, and the reason a numeral set beside the matrix failed it.
 
 Width hugs the digits: `6.6` at one, `13.2` at two. On the notched bar it gives the width back when the count drops; on the pill it is reserved at two digits (§6.1).
@@ -75,7 +97,7 @@ Width hugs the digits: `6.6` at one, `13.2` at two. On the notched bar it gives 
 | 02 | Neither numeral moves once both are present. | A subagent count arriving or leaving fades in place. |
 | 03 | Zero is never drawn. | No sessions, no column. No subagents, no second numeral. A bar at rest is one grey matrix — never a bar reading `0`. |
 | 04 | The matrix carries attention; the numbers only count. | A subagent stopped on approval is already inside the aggregate the matrix animates, so V1's inverting badge ground has nowhere left to go. |
-| 05 | Tabular figures. | Both numerals use the monospaced-digit face the reading already does. A proportional `1` would resize the leading wing every time a session opened. |
+| 05 | Tabular figures. | Both numerals use the monospaced-digit face the reading already does, at `10` pt and `8` pt medium (§3.1). A proportional `1` would resize the leading wing every time a session opened. |
 
 ### 3.3 The large numeral counts the list
 
@@ -83,7 +105,7 @@ It counts **rows in the monitored list**, finished-but-not-yet-aged-out included
 
 ### 3.4 The large numeral when it is alone
 
-**Centred.** With no subagent the large numeral is optically centred on the matrix's `16.6`, its cap-top `4.37` below the matrix's top edge. When a subagent starts it **rises `4.37` into the fixed slot** — cap-top on the matrix's top edge — and the small numeral fades in beneath it. It drops back when the last subagent stops.
+**Centred.** With no subagent the large numeral is optically centred on the matrix's `16.6`, its cap-top `4.375` below the matrix's top edge. When a subagent starts it **rises `4.375` into the fixed slot** — cap-top on the matrix's top edge — and the small numeral fades in beneath it. It drops back when the last subagent stops.
 
 This takes a vertical move on the figure the eye is on, caused by something the user did not do. It is taken deliberately: the resting drawing is the one this surface spends most of its life showing.
 
@@ -117,7 +139,7 @@ When the turn ends the reading does not leave. The digits freeze at the last val
 A turn that has finished while another is still running has no representative: the mark draws Radar, and the frozen reading belongs to a Completed aggregate that this is not. The dot is that reading's stand-in.
 
 - **4 pt, 8 before the digits, in the wing's own `#7C7C80`.**
-- Drawn only while the list holds a Completed row **and** the mark is drawing something else — `buriesAFinishedTurn`, which the domain already computes for V1's breath.
+- Drawn only while the list holds a Completed row **and** the mark is drawing something else. That is V1's `buriesAFinishedTurn` asked of the aggregate, and the domain does **not** already answer it: `PresenceMark.buriesAFinishedTurn` is per product, and the case this surface now has to draw — Codex holding nothing but a finished row while Claude Code runs — is true of the aggregate and false of every product in it. The same correction is owed to `MonitorStore.spokenBuriedCompletionText`, which folds the per-product flag today (§10).
 - Never when the aggregate is itself Completed; the frozen reading is then that row.
 - On the notched bar it widens the trailing wing by `12`. On the pill it takes the same `12` out of the middle and moves nothing.
 
@@ -188,6 +210,16 @@ The reservation comes back, and this time the room it holds is not empty. §6.4 
 
 The middle draws **the name of the work**: the Project of each row in the monitored list, drawn from the middle's own leading edge — `54` from the pill's leading edge in every state that draws one — and fading where the middle ends.
 
+**`13` pt Light, in the sessions numeral's `#C7C7CC`.** That is the face the
+status name used to take, and it is already the face this document measured the
+middle against: `notchline`'s `55.10` in §6.3 is `13` pt Light measured, so
+naming the face moves none of §6.1's arithmetic. `#C7C7CC` rather than white
+because white is this surface's attention channel and a Project name never
+signals attention — it is the same ink, and the same reason, as the numeral it
+shares the bar with. A name too long for the middle **fades out over the last
+`12`** rather than clipping or ellipsing: a reader can act on the start of a
+name, and an ellipsis would spend three glyphs saying that a name exists.
+
 Nothing on any collapsed form has ever named the work. Page 01 removed hue and the matrix pair on the argument that a product name is a colour rather than a row, and that was correct — but a Project name is the opposite of a product name. With five checkouts open it is the fact that decides whether you interrupt yourself, and it is the one thing the mark, the two numerals and the clock all leave unanswered.
 
 **It cycles.** Every Project with an active row is named in turn:
@@ -228,10 +260,11 @@ Nothing on any collapsed form has ever named the work. Page 01 removed hue and t
 
 ## 8. What this reaches outside the collapsed bar
 
-Two things, both consequences rather than choices:
+Three things, all consequences rather than choices:
 
 1. **The expanded header stops drawing the status name.** Every row in the list under it already states its own status, so the header's word was a summary of the line below it. With the name gone the cut-out branch stops firing, `PanelMetrics.size` stops taking a `statusReadoutText`, and `everySentenceTheExpandedHeaderCanSayClearsTheCutOut` retires with the sentence it was checking. **The panel is `520` on every machine at every agent count a machine is likely to run.**
 2. **`Hide the wings` (§9).**
+3. **The first-run anatomy page goes stale, knowingly.** `OnboardingAnatomy.swift` pins six labels on the V1 bar — `Codex`, `Claude Code`, `One dot per session`, `Most urgent state`, `Subagents`, `Longest turn` — and four of the six name things V2 removes. **That page is redrawn separately, after this**, and its pins are wrong from the moment the collapsed surface changes until it is. Nothing in this document waits on it.
 
 ~~With the name gone the widest a side can want is `70.51`, and `70.51 + 220 + 70.51 = 361`~~ is void: that figure kept one matrix per product in the header, which is the first of the two questions below, and both have since been answered the other way.
 
@@ -243,12 +276,22 @@ The setting survives, simplified. With one aggregate mark the leading wing is **
 
 **What brings the wing out is unchanged.** Approval, input, and a Completed turn nobody has read — and the buried case still counts, with the mark drawing Radar, exactly as §8.4 already has it per product. `Working…` alone asks for nobody and keeps the bar at the cut-out.
 
+**The counts are the whole list's, whatever brought the wing out.** The setting
+decides whether the leading wing is drawn; it never decides what the numerals
+count. So the wing is `47.2` at one digit and `53.8` at two exactly as §5.2 has
+it, the small numeral is drawn whenever there are subagents anywhere, and a bar
+showing `3` while one turn waits is reporting the list, not the waiting turn.
+Counting only the rows that brought the wing out was rejected: the same numeral
+would then mean two different things depending on a display preference, and
+§3.3's answer — it counts the rows the panel draws — is the one thing on this
+surface that must not depend on how the surface is configured.
+
 **The trailing wing now comes out too, for the dot alone.** This is the one sentence in §8.4 that has to change rather than be re-scoped — and it changes on its own reasoning: "the badges and the elapsed reading say *how much* and *how long*, and neither says that a person is wanted." The reading still never comes out. The dot does, because a finished turn nobody has read is precisely a thing that wants a person.
 
 | State | Body width |
 | --- | --- |
 | Nothing waiting | **200** — the cut-out and nothing else |
-| A turn wants a person | **248** — `47.2 + 200`, mark and one session digit |
+| A turn wants a person | **248** — `47.2 + 200`, mark and the totals at one digit |
 | …with a buried finish beside it | **272** — trailing wing `8 + 4 + 12 = 24` |
 
 The setting still requires a *measurable* cut-out, so it is disabled on every screen the pill is drawn on. Nothing in §6 reaches it.
@@ -266,13 +309,15 @@ The setting still requires a *measurable* cut-out, so it is disabled on every sc
 - [ ] Notched bar totals match §5.2 at every state, including `316`.
 - [ ] Pill is `209` in every connected state and `41` disconnected.
 - [ ] The counts column draws identically at a 46 pt and a 22 pt menu bar.
-- [ ] The large numeral rises `4.37` when the first subagent arrives and drops back when the last one leaves.
+- [ ] The large numeral rises `4.375` when the first subagent arrives and drops back when the last one leaves.
 - [ ] The reading freezes rather than leaving, and the panel edge does not move at that instant.
-- [ ] The dot appears only when `buriesAFinishedTurn`, breathes by opacity, and never changes the wing's width.
+- [ ] The dot appears on the *aggregate* buried finish — including one product's lone finished row under another product's running one — breathes by opacity, and never changes the wing's width.
 - [ ] The middle cycles at `5 s`, holds its place across set changes, and never restarts on join or leave.
 - [ ] The clock is the longest unfinished turn anywhere, independent of which Project the middle names.
 - [ ] All 36 inks clear `#151515`, and switching ink changes no width and no brightness.
-- [ ] `Hide the wings` brings out the mark for a buried finish and the dot with it.
+- [ ] `Hide the wings` brings out the mark for a buried finish and the dot with it, and the numerals beside it read the whole list.
+- [ ] The numerals draw at `10` pt and `8` pt medium monospaced digits, leading-aligned, inside a column billed `6.6` per digit.
+- [ ] The pill's middle draws its name at `13` pt Light in `#C7C7CC`, fading over the middle's last `12`.
 
 ## 12. Implementation mapping
 
