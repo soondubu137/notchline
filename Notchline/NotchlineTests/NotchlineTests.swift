@@ -4209,6 +4209,50 @@ struct NotchlineTests {
         #expect(!store.drawsCompactMiddle)
     }
 
+    /// **The name is centred in the slot, on the first frame it is drawn.**
+    ///
+    /// The middle rasterises its glyphs into a layer and places that layer
+    /// itself, so where the name sits is decided by a number this view reads
+    /// rather than by a superview's alignment. SwiftUI builds an
+    /// `NSViewRepresentable` before it sizes it: `makeNSView` and the update
+    /// that follows both run against a zero `bounds`, so a placement made
+    /// *there* and never revisited puts the name half its own height below the
+    /// slot and lets the mask cut the top off it. The layer's position is
+    /// therefore asserted after a real hosting layout rather than after a
+    /// direct `apply`, because a direct one would supply the very bounds the
+    /// bug consists of not having had.
+    @Test @MainActor
+    func theMiddlesNameIsCentredInTheSlotFromTheFirstFrame() throws {
+        let width = PanelMetrics.pillMiddleWidth(trailing: .empty)
+        let host = NSHostingView(
+            rootView: RotatingProjectName(names: ["notchline"], width: width)
+        )
+        host.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: width,
+            height: PanelMetrics.referenceCompactHeight
+        )
+        host.layoutSubtreeIfNeeded()
+
+        let name = try #require(Self.projectNameView(in: host))
+        #expect(name.drawnName == "notchline")
+        #expect(name.bounds.height == PanelMetrics.readingGroundHeight)
+        let ink = try #require(name.layer?.sublayers?.first)
+        #expect(abs(ink.frame.midY - name.bounds.midY) < 0.5)
+        // And the whole of it is inside the slot, which is what the mask keeps.
+        #expect(ink.frame.minY >= -0.5)
+        #expect(ink.frame.maxY <= name.bounds.height + 0.5)
+    }
+
+    private static func projectNameView(in view: NSView) -> ProjectNameView? {
+        if let found = view as? ProjectNameView { return found }
+        for child in view.subviews {
+            if let found = projectNameView(in: child) { return found }
+        }
+        return nil
+    }
+
     /// **The reading freezes rather than leaving.**
     ///
     /// V1 took the timer away the instant the last turn ended, so the panel

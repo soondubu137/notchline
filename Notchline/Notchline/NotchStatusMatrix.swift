@@ -883,6 +883,10 @@ final class ProjectNameView: NSView {
     private var width: CGFloat = 0
     private var index = 0
     private var timer: Timer?
+    /// The glyph box last rasterised, which is what ``layout()`` centres. Held
+    /// because placing the layer and drawing into it happen at different
+    /// moments -- see ``layoutInk()``.
+    private var renderedSize: CGSize = .zero
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -928,6 +932,7 @@ final class ProjectNameView: NSView {
 
     override func layout() {
         super.layout()
+        layoutInk()
         layoutFade()
     }
 
@@ -959,6 +964,8 @@ final class ProjectNameView: NSView {
         let scale = window?.backingScaleFactor ?? 2
         guard let name = currentName else {
             ink.contents = nil
+            renderedSize = .zero
+            layoutInk()
             return
         }
         let font = PanelMetrics.projectNameFont
@@ -973,13 +980,9 @@ final class ProjectNameView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         ink.contentsScale = scale
-        ink.frame = CGRect(
-            x: 0,
-            y: (bounds.height - size.height) / 2,
-            width: size.width,
-            height: size.height
-        )
         CATransaction.commit()
+        renderedSize = size
+        layoutInk()
         if crossFading {
             let cross = CATransition()
             cross.type = .fade
@@ -988,6 +991,34 @@ final class ProjectNameView: NSView {
             ink.add(cross, forKey: Self.crossFadeKey)
         }
         ink.contents = image
+    }
+
+    /// The glyphs, centred in the slot.
+    ///
+    /// **Placed on every layout rather than only where they are drawn.**
+    /// SwiftUI builds an `NSViewRepresentable` before it sizes it, so
+    /// `makeNSView` and the update that follows both run against a zero
+    /// `bounds` -- and a centring done only there reads `(0 - 16) / 2` and
+    /// leaves the name half its own height below the slot, with the mask taking
+    /// the top off it. That is what shipped: the pill's middle drew the lower
+    /// half of a name sunk `8` pt, and it stayed that way until something
+    /// happened to redraw it, which for a single Project is never, because one
+    /// Project does not cycle.
+    ///
+    /// Splitting it costs nothing this view was avoiding. The raster is the
+    /// expensive half and still runs only when the name changes; this is
+    /// arithmetic against two sizes, and it has to run wherever either of them
+    /// can move.
+    private func layoutInk() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ink.frame = CGRect(
+            x: 0,
+            y: (bounds.height - renderedSize.height) / 2,
+            width: renderedSize.width,
+            height: renderedSize.height
+        )
+        CATransaction.commit()
     }
 
     private func layoutFade() {
