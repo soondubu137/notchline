@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, settled and implemented.** Every section is drawn by the app except §12's three Settings rows, which are behaviour the user cannot yet reach a control for: the aggregate ink ships at its default, `Name the work on the pill` ships on, and `Hide the wings`' own caption is still V1's wording. The board's four pages are the drawings, this document is the contract. |
+| Status | **Designed, settled and implemented in full**, §12's three Settings rows included. The board's four pages are the drawings, this document is the contract. |
 | Version | 2.0 |
 | Date | 2026-09-03 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `01 — Compact V2`, `02 — Aggregate ink palette`, `03 — Trailing wing & the word` (superseded), `04 — The subject and the wing that stops` |
@@ -334,10 +334,10 @@ The setting still requires a *measurable* cut-out, so it is disabled on every sc
 
 ~~Nothing in this document is implemented.~~ All of it is, bar §12's controls. `NotchPalette.aggregateInk(isConnected:)` returns the default Sage · hint pair or the resting grey; `AggregateCountsColumn` draws the numerals; `RotatingProjectName` draws the middle; `BuriedFinishDot` carries the breath; `PanelMetrics.pillMiddleWidth(trailing:)` is the subtraction §6.1 describes; and `MonitorStore.aggregateSessionCount` / `aggregateSubagentCount` / `buriesAFinishedTurn` / `compactProjectNames` are what they read.
 
-**Settings — recorded, not drawn.** Three changes fall due when the settings window is next opened. They are decided here, so §8.4's standing rule against pushing undecided features into settings is satisfied. Each is a *control* that is missing rather than a behaviour: the surface already draws every one of these at its recorded default.
+~~**Settings — recorded, not drawn.**~~ **Drawn.** All three are in the Display group, and each shipped at the default recorded here for the two commits before the control existed.
 
 | Row | Change |
 | --- | --- |
-| | `Hide the wings` | Rewrite. The per-product table and the hue sentence go; caption and tooltip both need rewriting, and neither can keep the phrase "that product's mark". §9. **The behaviour is implemented; the copy is not.** |
-| `Name the work on the pill` | **New.** Display, beside `Hide the wings` and `Outline the panel`. Default **on**, notch-less only. Off, the middle draws nothing and the pill holds its `209` rather than shrinking. **The default is what ships today** — the middle draws — and the control that could turn it off is what is owed. |
-| The aggregate mark's ink | **New.** Display. Twelve hues at `hint`, ordered by distance from both product hues, the two equidistant ones marked and neither blocked. Default Sage · hint; existing installs take the same. [`aggregate-ink-palette.md`](aggregate-ink-palette.md) §5. |
+| | `Hide the wings` | **Done.** The per-product table and the hue sentence are struck in [`figma-design.md`](figma-design.md) §8.4; caption and tooltip both say *the mark and its counts* now, and neither keeps "that product's mark". §9 |
+| `Name the work on the pill` | **Done**, as `Name the work` — the row is already in the Display group and the title does not have to repeat where it applies. Default on (`namesWorkOnPill`, read with `object(forKey:)` so a fresh install and one that has switched it off are told apart), greyed on a notched display, and off the pill holds its `209` rather than shrinking |
+| The aggregate mark's ink | **Done**, as `Mark colour`. Twelve hues at `hint` (`AggregateInk`), ordered farthest-from-both-products first, the two equidistant ones marked `★` and nothing blocked. Default Sage; existing installs take the same, because until the row existed the mark was drawn at exactly it |

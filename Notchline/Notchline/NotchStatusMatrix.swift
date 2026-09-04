@@ -153,8 +153,11 @@ enum NotchPalette {
     /// is connected*, and colouring it would say the preference applies to a
     /// state with no agent in it. The hue arrives with the first connection
     /// (`aggregate-ink-palette.md` §5).
-    nonisolated static func aggregateInk(isConnected: Bool) -> MatrixInk {
-        isConnected ? defaultAggregateInk : restingInk
+    nonisolated static func aggregateInk(
+        _ hue: AggregateInk = .sage,
+        isConnected: Bool
+    ) -> MatrixInk {
+        isConnected ? hue.ink : restingInk
     }
 
     /// Two inks in one matrix, cut on the mark's diagonal.

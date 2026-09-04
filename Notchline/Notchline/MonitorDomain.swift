@@ -624,6 +624,139 @@ nonisolated struct SubagentBadge: Equatable, Sendable {
 /// identifies a mark, and re-sorting would swap them under the eye reading
 /// them.
 
+/// The hue the aggregate mark is drawn in, which is the user's.
+///
+/// **The palette is the greyscale, rotated.** Every entry shares one lit
+/// lightness and one unlit lightness — `#E5E5EA`'s and `#1E1E1E`'s, the
+/// greyscale this replaced — so changing colour cannot change brightness. That
+/// is the whole of why this can be a preference at all: brightness is the
+/// collapsed surface's attention channel, and a setting able to dim the mark
+/// asking for a person would be a setting that changes what the mark *means*
+/// (`aggregate-ink-palette.md` §2).
+///
+/// **Twelve hues at one chroma.** The recorded set is 36 — three chromas apiece
+/// — and 36 rows is too many for a Settings list, so the middle step (`hint`,
+/// chroma `0.016`) is the one offered and the other two stay in the document
+/// (§5). An intensity control can come later if it earns its place.
+///
+/// **Ordered by distance from both products, and nothing is blocked.** The
+/// constraint the palette was built under is that the aggregate must never read
+/// as a dim Codex or a dim Claude Code: Codex sits at `258°` in OKLCH and
+/// Claude Code at `42°`, so the two hues equidistant from both are `150°` and
+/// `330°`, and everything else is closer to one product than the other. The
+/// picker puts the farthest first and the nearest last, marks the two
+/// equidistant ones, and lets the user pick `Steel` at `8°` from Codex if they
+/// want to — it is their bar (§5).
+nonisolated enum AggregateInk: String, CaseIterable, Identifiable, Sendable {
+    case sage, sea, moss, mauve, cyan, sand, blush, violet, ice, rose, clay, steel
+
+    nonisolated var id: String { rawValue }
+
+    /// What existing installs take, and what a fresh one starts at.
+    static let `default` = AggregateInk.sage
+
+    /// The unlit and lit pair, straight from `aggregate-ink-palette.md` §3's
+    /// `hint` row.
+    nonisolated var ink: NotchPalette.MatrixInk {
+        switch self {
+        case .steel: Self.pair(unlit: 0x1B1E22, lit: 0xDEE6F0)
+        case .ice: Self.pair(unlit: 0x1A1F21, lit: 0xDBE8ED)
+        case .cyan: Self.pair(unlit: 0x191F20, lit: 0xDAE9E9)
+        case .sea: Self.pair(unlit: 0x1A1F1E, lit: 0xDBE9E4)
+        case .sage: Self.pair(unlit: 0x1B1F1C, lit: 0xDEE8E0)
+        case .moss: Self.pair(unlit: 0x1E1F1A, lit: 0xE4E7DB)
+        case .sand: Self.pair(unlit: 0x1F1E19, lit: 0xE9E5DA)
+        case .clay: Self.pair(unlit: 0x211D1A, lit: 0xEEE3DB)
+        case .rose: Self.pair(unlit: 0x221D1C, lit: 0xF0E1E0)
+        case .blush: Self.pair(unlit: 0x221C1E, lit: 0xEFE1E5)
+        case .mauve: Self.pair(unlit: 0x211D20, lit: 0xECE2EA)
+        case .violet: Self.pair(unlit: 0x1E1D22, lit: 0xE5E4EF)
+        }
+    }
+
+    /// This hue's own angle in OKLCH, which is what the ordering is by.
+    nonisolated var hue: Int {
+        switch self {
+        case .steel: 250
+        case .ice: 225
+        case .cyan: 200
+        case .sea: 172
+        case .sage: 150
+        case .moss: 118
+        case .sand: 92
+        case .clay: 58
+        case .rose: 25
+        case .blush: 0
+        case .mauve: 330
+        case .violet: 292
+        }
+    }
+
+    /// How far this hue is from the *nearer* of the two products, which is the
+    /// figure that says how confusable it is.
+    nonisolated var distanceFromNearestProduct: Int {
+        min(Self.distance(hue, 258), Self.distance(hue, 42))
+    }
+
+    /// Whether this hue is as far from both products as any hue can be.
+    ///
+    /// `150°` and `330°`, marked in the picker rather than enforced.
+    nonisolated var isEquidistantFromBothProducts: Bool {
+        Self.distance(hue, 258) == Self.distance(hue, 42)
+    }
+
+    /// The order the picker offers them in: farthest from either product first,
+    /// nearest last.
+    ///
+    /// Declared as the case order rather than sorted at read time, so the list
+    /// a person learns the position of cannot be re-ordered by a rounding.
+    static let ordered = AggregateInk.allCases
+
+    nonisolated var displayName: String {
+        switch self {
+        case .steel: "Steel"
+        case .ice: "Ice"
+        case .cyan: "Cyan"
+        case .sea: "Sea"
+        case .sage: "Sage"
+        case .moss: "Moss"
+        case .sand: "Sand"
+        case .clay: "Clay"
+        case .rose: "Rose"
+        case .blush: "Blush"
+        case .mauve: "Mauve"
+        case .violet: "Violet"
+        }
+    }
+
+    /// The name, and the mark that says this hue is as far from both products
+    /// as any hue can be.
+    ///
+    /// Marked rather than enforced: the ordering already puts the confusable
+    /// hues last, and what this adds is the *reason* they are ordered that way,
+    /// for a reader who is about to pick one anyway.
+    nonisolated var pickerTitle: String {
+        isEquidistantFromBothProducts ? "\(displayName) ★" : displayName
+    }
+
+    private static func pair(unlit: Int, lit: Int) -> NotchPalette.MatrixInk {
+        NotchPalette.MatrixInk(
+            offRed: Double((unlit >> 16) & 0xFF) / 255,
+            offGreen: Double((unlit >> 8) & 0xFF) / 255,
+            offBlue: Double(unlit & 0xFF) / 255,
+            onRed: Double((lit >> 16) & 0xFF) / 255,
+            onGreen: Double((lit >> 8) & 0xFF) / 255,
+            onBlue: Double(lit & 0xFF) / 255
+        )
+    }
+
+    /// The shorter way round a circle of hues.
+    private static func distance(_ a: Int, _ b: Int) -> Int {
+        let raw = abs(a - b) % 360
+        return min(raw, 360 - raw)
+    }
+}
+
 /// One agent's share of the two totals, which is what the expanded band
 /// decomposes them into.
 ///

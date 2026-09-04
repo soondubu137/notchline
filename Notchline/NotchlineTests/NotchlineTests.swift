@@ -3990,6 +3990,148 @@ struct NotchlineTests {
         #expect(store.spokenCollapsedCountsText == "2 sessions, 2 subagents")
     }
 
+    /// **The mark's palette is the greyscale, rotated.**
+    ///
+    /// This is the whole of why the hue can be a preference at all: brightness
+    /// is the collapsed surface's attention channel, so a setting able to dim
+    /// the mark asking for a person would be a setting that changes what the
+    /// mark *means*. Every entry shares one lit lightness and one unlit one, so
+    /// choosing a colour cannot change how bright the mark gets — and cannot
+    /// change any width either (`aggregate-ink-palette.md` §2).
+    @Test @MainActor
+    func everyMarkColourIsTheSameBrightnessAndClearsTheRestingGrey() {
+        func luminance(_ red: Double, _ green: Double, _ blue: Double) -> Double {
+            0.2126 * red + 0.7152 * green + 0.0722 * blue
+        }
+        let resting = NotchPalette.restingInk
+        let restingLuminance = luminance(resting.onRed, resting.onGreen, resting.onBlue)
+
+        var lit: [Double] = []
+        var unlit: [Double] = []
+        for hue in AggregateInk.allCases {
+            let ink = hue.ink
+            lit.append(luminance(ink.onRed, ink.onGreen, ink.onBlue))
+            unlit.append(luminance(ink.offRed, ink.offGreen, ink.offBlue))
+            // **Every unlit colour is brighter than the resting grey**, so
+            // "an agent is connected" never looks dimmer than "nothing is
+            // connected" (§4).
+            #expect(
+                luminance(ink.offRed, ink.offGreen, ink.offBlue) > restingLuminance,
+                "\(hue.displayName) sinks under the resting grey"
+            )
+            #expect(ink.on != ink.off, "an aggregate mark can light")
+        }
+        // One lightness at each end, to within the rounding a hex triple takes.
+        #expect((lit.max() ?? 0) - (lit.min() ?? 0) < 0.05)
+        #expect((unlit.max() ?? 0) - (unlit.min() ?? 0) < 0.01)
+        // And the whole set is plainly the greyscale it replaced, rather than a
+        // set of colours that happen to be pale.
+        #expect((lit.min() ?? 0) > 0.75)
+    }
+
+    /// **The picker orders by distance from both products, and blocks nothing.**
+    ///
+    /// The constraint the palette was built under is that the aggregate must
+    /// never read as a dim Codex or a dim Claude Code. So the farthest hue
+    /// comes first and the most confusable last, the two equidistant ones are
+    /// marked, and `Steel` — `8°` from Codex — is offered anyway, because it is
+    /// the user's bar (`aggregate-ink-palette.md` §5).
+    @Test @MainActor
+    func theMarkColourPickerLeadsWithTheHuesFurthestFromBothProducts() {
+        let ordered = AggregateInk.ordered
+        #expect(ordered.count == 12, "twelve hues at one chroma, not thirty-six")
+        #expect(Set(ordered) == Set(AggregateInk.allCases), "nothing is hidden")
+
+        let distances = ordered.map(\.distanceFromNearestProduct)
+        #expect(distances == distances.sorted(by: >), "\(distances)")
+        #expect(ordered.first == .sage)
+        #expect(ordered.last == .steel, "the most confusable hue is offered last")
+
+        // `150°` and `330°` are the only two as far from both products as any
+        // hue can be, and they are the two the picker marks.
+        let starred = AggregateInk.allCases.filter(\.isEquidistantFromBothProducts)
+        #expect(Set(starred) == [.sage, .mauve])
+        #expect(AggregateInk.sage.pickerTitle.hasSuffix("★"))
+        #expect(!AggregateInk.steel.pickerTitle.hasSuffix("★"))
+        // The default is one of them, and it is what an install that has never
+        // opened this row draws.
+        #expect(AggregateInk.default == .sage)
+        #expect(AggregateInk.default.isEquidistantFromBothProducts)
+    }
+
+    /// **The three Settings rows reach what they claim to.**
+    ///
+    /// Each of the three was recorded as a decision before there was a control
+    /// for it, and each shipped at its default in the meantime
+    /// (`compact-view-v2.md` §12). What this pins is that the switch and the
+    /// drawing are now the same fact.
+    @Test @MainActor
+    func theDisplayPreferencesReachTheSurfaceTheyDescribe() {
+        let flat = makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)
+        let store = MonitorStore(
+            displays: [flat],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([])
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: [
+                    MonitoredSession(
+                        agent: .codex,
+                        threadID: "a", turnID: "u", projectName: "notchline",
+                        title: "Turn", preview: nil, status: .running,
+                        startedAt: Date()
+                    )
+                ]
+            )
+        )
+
+        // **The ink.** Chosen, and reaching the mark — but only once something
+        // is connected: the resting grey is not tinted, because it means
+        // nothing is connected and a colour there would apply to a state with
+        // no agent in it.
+        #expect(store.aggregateInk == .default)
+        #expect(store.aggregateMatrixInk == AggregateInk.sage.ink)
+        store.aggregateInk = .mauve
+        #expect(store.aggregateMatrixInk == AggregateInk.mauve.ink)
+        let disconnected = MonitorStore(displays: [flat], services: [])
+        disconnected.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
+        )
+        #expect(disconnected.isRestingOnly)
+        #expect(disconnected.aggregateMatrixInk == NotchPalette.restingInk)
+
+        // **Naming the work.** On by default, and the pill holds its `209`
+        // either way -- the ends are anchored, so a width that answered to this
+        // preference would move the mark and the reading with it.
+        #expect(store.namesWorkOnPill)
+        #expect(store.canNameWorkOnPill)
+        #expect(store.drawsCompactMiddle)
+        let named = store.currentPanelSize.width
+        store.namesWorkOnPill = false
+        #expect(!store.drawsCompactMiddle)
+        #expect(store.currentPanelSize.width == named)
+        store.namesWorkOnPill = true
+
+        // And it is greyed rather than hidden where it cannot apply, which is
+        // the mirror of `Hide the wings`: one wants a cut-out, the other wants
+        // the absence of one, and both rows stay visible on both kinds of
+        // display.
+        let notched = MonitorStore(
+            displays: [
+                makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 46, hasNotch: true)
+            ],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([])
+        )
+        #expect(!notched.canNameWorkOnPill)
+        #expect(notched.canHideCompactWings)
+        #expect(store.canNameWorkOnPill)
+        #expect(!store.canHideCompactWings)
+    }
+
     /// **The pill names the work, one Project at a time.**
     ///
     /// The roster is the panel's own row order, deduplicated with the first

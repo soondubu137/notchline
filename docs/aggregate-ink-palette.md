@@ -1,11 +1,17 @@
-# The aggregate mark's ink — a palette, and eventually a preference
+# The aggregate mark's ink — a palette, and the preference it became
 
-**Status: recorded, not implemented.** V2's collapsed bar draws one matrix for every product at
-once ([`figma-design.md`](figma-design.md) is still V1; the V2 board is
+**Status: implemented.** The twelve `hint` inks are `AggregateInk`, the picker is
+the Display group's `Mark colour`, and §5's five questions are answered below in
+the order they were asked. What stays recorded rather than built is the other
+twenty-four entries — `whisper` and `tint` — which wait on an intensity control
+earning its place.
+
+The collapsed surface draws **one mark for every product at once**
+([`compact-view-v2.md`](compact-view-v2.md) §2; the drawings are on
 [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2?node-id=2-2)).
 With one aggregate mark, hue stops meaning *which product* and becomes free. This document records
-the 36 inks that were drawn for it and the rule that generates them, so that the choice can be
-handed to the user rather than made once here.
+the 36 inks that were drawn for it and the rule that generates them, and the choice is now the
+user's rather than one made once here.
 
 ## 1. Why there is no single right answer
 
@@ -110,17 +116,23 @@ but never the default.
 
 ## 5. Making it a preference — what that still needs
 
-1. **Does the resting grey take the hue?** Recommend no. `#151515` means *nothing is connected*,
-   and tinting it would say the user's colour applies to a state that has no agent in it. The hue
-   should arrive with the first connection.
-2. **The user can now break §1's constraint.** Picking Steel puts the aggregate mark 8° from Codex,
-   which is exactly the confusion the hue analysis exists to avoid. Recommend the picker orders by
-   hue distance and marks the two starred entries, but does not block — it is their bar.
-3. **36 rows is too many for a Settings list.** Recommend 12 hues at `hint`, with `whisper`/`tint`
-   behind an intensity control only if it earns its place. The full set is recorded here either way.
-4. **Where it lives.** [`figma-design.md`](figma-design.md) §8.4 `Display` already holds
-   `Hide the wings` and `Outline the panel`.
-5. **What existing installs get.** Sage · hint, `#1B1F1C` → `#DEE8E0`.
+1. **Does the resting grey take the hue?** ~~Recommend no.~~ **No, and implemented as no.**
+   `#151515` means *nothing is connected*, and tinting it would say the user's colour applies to a
+   state that has no agent in it. The hue arrives with the first connection —
+   `NotchPalette.aggregateInk(_:isConnected:)` returns `restingInk` until then, and
+   `theDisplayPreferencesReachTheSurfaceTheyDescribe` pins it.
+2. **The user can now break §1's constraint.** ~~Recommend the picker orders by hue distance…~~
+   **It does.** `AggregateInk.ordered` runs farthest-from-the-nearer-product first — Sage `108°`,
+   then Sea, Moss, Mauve — and Steel `8°` last; the two equidistant entries carry a `★` in the
+   picker; nothing is blocked. It is their bar.
+3. **36 rows is too many for a Settings list.** **12 at `hint`**, as recommended. `whisper` and
+   `tint` are recorded here and are not offered; an intensity control can come later if it earns
+   its place.
+4. **Where it lives.** [`figma-design.md`](figma-design.md) §8.4 `Display`, second row, above
+   `Hide the wings`.
+5. **What existing installs get.** Sage · hint, `#1B1F1C` → `#DEE8E0` — the same as everybody else,
+   because until this preference existed the mark was drawn at exactly it. There is no hue to
+   migrate.
 
 ## 6. The picker
 
@@ -131,5 +143,9 @@ true `16.6`. It generates the `MatrixInk` for whatever is selected.
 
 It lives at `.claude/tmp/matrix-ink.html`, which is **local and gitignored**, following the same
 rule the README figure generators do: the generator stays out of the repo and its output comes in.
-This table is that output. Rebuild the page from these parameters if it is needed again — or move
-it into `design/` and commit it when the Settings feature is actually being built.
+This table is that output. Rebuild the page from these parameters if it is needed again.
+
+**The Settings feature is built and the page did not have to come with it**: §3's table is the
+whole input, `AggregateInk` carries the twelve `hint` pairs verbatim, and what the picker needed on
+top of them was an ordering rule rather than a re-look at the swatches. The page earns its place
+again only if the other two chromas are ever offered.

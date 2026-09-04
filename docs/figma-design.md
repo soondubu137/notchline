@@ -634,7 +634,9 @@ The board has this group and the implementation does not. `Show current content 
 
 ### 8.4 Display
 
-Not on the board, present in the implementation, between `Products` and `Session list`. The card now holds three rows.
+Not on the board, present in the implementation, between `Products` and `Session list`. The card now holds **five** rows: `Show Notchline on`, `Mark colour`, `Hide the wings`, `Name the work` and `Outline the panel`.
+
+> **Two of them are [`compact-view-v2.md`](compact-view-v2.md) §12's**, and one of the three below is rewritten by it. `Mark colour` hands the aggregate mark's hue to the user, which is only possible because the palette is the greyscale rotated — every entry shares one lit and one unlit lightness, so a choice cannot change brightness, and brightness is what says a turn wants a person ([`aggregate-ink-palette.md`](aggregate-ink-palette.md)). `Name the work` turns the pill's rotating Project name on and off, default on, and is greyed on a notched display for the reason `Hide the wings` is greyed on a flat one: the two are mirrors, one wanting a cut-out and the other wanting the absence of one. Both are recorded here rather than on the board, which has neither.
 
 `Show Notchline on` is an existing control: the component appears on one display, chosen by the user, with the caption reporting that display's form and real menu-bar height (`Notch display · 39 pt menu bar`). Deleting it would take away a real feature, so it keeps the same shape — a small heading and one card. **No footnote**: ~~the footnote used to say the component occupies the selected display's menu bar and takes its geometry from it, a cut-out to work around or a pill where there is none.~~ Both rows' captions already report the conclusion for the currently selected display — its form, its menu-bar height, and why the wings cannot be hidden on this screen — and the footnote only restated the same thing abstractly.
 
@@ -643,10 +645,12 @@ Not on the board, present in the implementation, between `Products` and `Session
 | Label | `Hide the wings` |
 | --- | --- |
 | Control | Native macOS switch, default off, remembered across launches (`hidesCompactWings`) |
-| Caption (notched) | `Collapsed, Notchline is the cut-out and nothing else — until a turn needs you, when that product's mark slides out. Hovering still opens the panel.` |
+| Caption (notched) | `Collapsed, Notchline is the cut-out and nothing else — until a turn needs you, when the mark and its counts slide out. Hovering still opens the panel.` |
 | Caption (notch-less, disabled) | `Needs a notched display. Without a cut-out to hide behind there would be nothing left to hover.` |
 | Caption (notched but unmeasurable, disabled) | `This display reports a notch but not where it is, so there is nothing to shrink the collapsed component onto.` |
-| Tooltip | `Leaves the collapsed component as the cut-out alone, with no timer beside it. A product's mark slides out while one of its turns is waiting on approval, on an answer, or to be read, and goes back when it is dealt with. Needs a display whose cut-out Notchline can measure.` |
+| Tooltip | `Leaves the collapsed component as the cut-out alone, with no clock beside it. The mark and its counts slide out while a turn is waiting on approval, on an answer, or to be read, and go back when it is dealt with. Needs a display whose cut-out Notchline can measure.` |
+
+> **Both strings are rewritten, and neither can keep the phrase "that product's mark"** ([`compact-view-v2.md`](compact-view-v2.md) §12): there is one mark for every product at once, so what comes out is the mark and its counts, whole. The table below is void for the same reason — the wing is present or absent, never one matrix or two.
 
 At rest the collapsed state is then the notch alone: neither wing is drawn, no matrix leading and no timer trailing, with the panel body's width exactly the occlusion width and its trailing edge on the cut-out's right edge. This **is not a new form**: §6.4's "notched, resting, draws nothing" is that form, and this preference generalises it from "no product connected" to every state that asks for nobody.
 
@@ -655,17 +659,20 @@ At rest the collapsed state is then the notch alone: neither wing is drawn, no m
 | What the two products are doing | Collapsed, wings hidden |
 | --- | --- |
 | Nothing connected, or every Turn `Working...` | The cut-out alone; body width = occlusion width |
-| Codex holds a Turn on `Approval needed`, `Input needed` or `Completed` | Codex's matrix slides out of the leading wing |
-| Claude Code holds one | Claude Code's matrix slides out |
-| Both hold one | Both matrices, in `AgentKind` order as everywhere else |
+| ~~Codex holds a Turn on `Approval needed`, `Input needed` or `Completed`~~ | ~~Codex's matrix slides out of the leading wing~~ |
+| ~~Claude Code holds one~~ | ~~Claude Code's matrix slides out~~ |
+| ~~Both hold one~~ | ~~Both matrices, in `AgentKind` order as everywhere else~~ |
+| **Either product holds one** | **The leading wing comes out whole: the mark and its counts, `248` at one session digit** |
 
 **Three states and not two.** Approval and input are stopped until they are answered; a `Completed` Turn is stopped until it is *read* (`CONTEXT.md`, *unread terminal state*) and clears itself the moment somebody looks at it, which is exactly the shape of a thing worth showing. `Working...` asks for nobody and ends by itself, and it is the state the notch spends most of its life in — which is what this preference is really about.
 
 **A Turn that finished under a running one counts too.** A product's matrix draws its most urgent row, so a `Completed` Turn under a `Working...` one is invisible to the mark's own status; the wing reads the buried case as well (`PresenceMark.hasATurnToAttendTo`, `MonitorStore.compactDrawnMarks`). A finished Turn whose subagents are still working is *not* one of these — derived status calls that Thread Running, and it is (`CONTEXT.md`, *derived status*).
 
-**Which mark it is, is said by hue.** With one matrix out there is nothing beside it to read a position against, and the pair is ordered by `AgentKind` here as everywhere else, so the two never swap under the eye reading them (§4.1). The wing is composed exactly as any other leading wing — `12` padding + the marks it draws + `8` clearance — so one matrix with a session column stands `36.6 + 5.66` past the cut-out at every scaling step (none of those three terms is measured off the display), and the panel takes that width **leftwards**, its trailing edge still pinned to the cut-out's right edge (§3.4). The matrix fades in behind the opening edge on `PanelMotion.fade(isArriving:)`, exactly as a badge or the reading does in the trailing slot (§4.8).
+~~**Which mark it is, is said by hue.**~~ Void: there is no "which". The wing is composed exactly as any other leading wing — `12` padding + the group it draws + `8` clearance — so it stands `47.2` past the cut-out at one session digit (none of those terms is measured off the display), and the panel takes that width **leftwards**, its trailing edge still pinned to the cut-out's right edge (§3.4). The group fades in behind the opening edge on `PanelMotion.fade(isArriving:)`, exactly as the reading does in the trailing slot.
 
-**The trailing wing never comes out.** The badges and the elapsed reading say *how much* and *how long* — the running commentary this preference exists to switch off — and neither says that a person is wanted. What comes out is the one mark that does. So `compactTimerText` and `compactSubagentBadges` are empty for the whole of this preference, approval and all.
+**The counts read the whole list either way.** The preference decides whether the wing is drawn; it never decides what the numerals count. A figure meaning the whole list under one display preference and the waiting subset under another would mean neither ([`compact-view-v2.md`](compact-view-v2.md) §9).
+
+**The trailing wing comes out for one thing only.** The elapsed reading says *how long* — the running commentary this preference exists to switch off — and never comes out; `compactTimerText` is nil for the whole of this preference, approval and all. **The buried-finish dot does come out**, because a finished turn nobody has read is precisely a thing that wants a person: `8 + 4 + 12` of trailing wing, taking the body to `272`.
 
 **It affects the collapsed state only.** Hover still drops the panel, with its matrices, session rows and gear. The notch is this product's only entry point — no menu bar item, no Dock icon ([`PRD.md`](PRD.md) §11) — so hiding it too would hide the app for good.
 

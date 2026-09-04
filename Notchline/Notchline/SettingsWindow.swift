@@ -169,12 +169,117 @@ struct AppSettingsView: View {
 
             SettingsSeparator()
 
+            aggregateInkRow
+
+            SettingsSeparator()
+
             hideWingsRow
+
+            SettingsSeparator()
+
+            nameWorkRow
 
             SettingsSeparator()
 
             outlineRow
         }
+    }
+
+    /// The colour of the one mark this surface draws.
+    ///
+    /// **It is taste, and it cannot become anything else.** Every hue offered
+    /// shares the greyscale's two lightnesses, so choosing one changes no
+    /// brightness and no width — which is what makes it safe to hand over at
+    /// all, since brightness is the collapsed surface's attention channel
+    /// (`aggregate-ink-palette.md` §2).
+    ///
+    /// Ordered farthest-from-both-products first, with the two equidistant hues
+    /// marked and **nothing blocked**. Picking `Steel` puts the mark `8°` from
+    /// Codex, which is exactly the confusion the palette was built to avoid —
+    /// and it is their bar (§5).
+    private var aggregateInkRow: some View {
+        SettingsRow(
+            title: "Mark colour",
+            caption: "The one mark on the collapsed component. Brightness is "
+                + "unaffected — it is how Notchline says a turn wants you."
+        ) {
+            // **The swatch is an `NSImage` rather than a `Circle`.** A shape
+            // in a `Label`'s icon slot is dropped by the menu that draws these
+            // rows — the list came back as twelve names and no colour, which is
+            // a colour picker with the colour taken out. An image survives into
+            // the menu item, and into the closed state beside the name.
+            Picker("Mark colour", selection: $store.aggregateInk) {
+                ForEach(AggregateInk.ordered) { hue in
+                    Label {
+                        Text(hue.pickerTitle)
+                    } icon: {
+                        Image(nsImage: Self.swatch(for: hue))
+                    }
+                    .tag(hue)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .help(
+                "Tints the aggregate mark once a product is connected. The "
+                    + "resting grey is left alone: it means nothing is "
+                    + "connected, and a colour there would apply to a state "
+                    + "with no agent in it."
+            )
+        }
+    }
+
+    /// One hue, drawn as a dot the size of the text beside it.
+    ///
+    /// Lit rather than unlit: at `L 0.235` the twelve are indistinguishable
+    /// from each other and from the window they are drawn on, and what the user
+    /// is choosing between is what the mark looks like when it is saying
+    /// something.
+    private static func swatch(for hue: AggregateInk) -> NSImage {
+        let side: CGFloat = 11
+        let image = NSImage(size: CGSize(width: side, height: side))
+        image.lockFocus()
+        NSColor(hue.ink.on).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: side, height: side)).fill()
+        image.unlockFocus()
+        // Drawn colour, not a template: a template swatch is tinted by the menu
+        // and every entry would come back the same grey.
+        image.isTemplate = false
+        return image
+    }
+
+    /// Name the work between the pill's two ends.
+    ///
+    /// **Greyed on a notched display, and drawn there anyway** — the mirror of
+    /// `Hide the wings`, and kept visible for the same reason: the person who
+    /// wants it is looking for it on the machine it does not apply to.
+    private var nameWorkRow: some View {
+        SettingsRow(
+            title: "Name the work",
+            caption: nameWorkDescription
+        ) {
+            Toggle("Name the work", isOn: $store.namesWorkOnPill)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(!store.canNameWorkOnPill)
+                .help(
+                    "Names each project with a live turn in the middle of the "
+                        + "collapsed component, five seconds apiece. Needs a "
+                        + "display without a notch — on a notched one the "
+                        + "cut-out is where the name would stand."
+                )
+        }
+    }
+
+    /// What the row says, which is the consequence on *this* display.
+    private var nameWorkDescription: String {
+        guard store.canNameWorkOnPill else {
+            return "Needs a display without a notch. On a notched one the "
+                + "cut-out stands where the name would go."
+        }
+        return "Each project with a live turn, named in turn between the "
+            + "counts and the clock. The component keeps its width either way."
     }
 
     /// Give the cut-out back, and draw nothing beside it until something is
@@ -198,11 +303,11 @@ struct AppSettingsView: View {
                 .disabled(!store.canHideCompactWings)
                 .help(
                     "Leaves the collapsed component as the cut-out alone, with "
-                        + "no timer beside it. A product's mark slides out "
-                        + "while one of its turns is waiting on approval, on "
-                        + "an answer, or to be read, and goes back when it is "
-                        + "dealt with. Needs a display whose cut-out Notchline "
-                        + "can measure."
+                        + "no clock beside it. The mark and its counts slide "
+                        + "out while a turn is waiting on approval, on an "
+                        + "answer, or to be read, and go back when it is dealt "
+                        + "with. Needs a display whose cut-out Notchline can "
+                        + "measure."
                 )
         }
     }
@@ -250,8 +355,8 @@ struct AppSettingsView: View {
                 + "is nothing to shrink the collapsed component onto."
         }
         return "Collapsed, Notchline is the cut-out and nothing else — until a "
-            + "turn needs you, when that product's mark slides out. Hovering "
-            + "still opens the panel."
+            + "turn needs you, when the mark and its counts slide out. "
+            + "Hovering still opens the panel."
     }
 
     // MARK: - Session list

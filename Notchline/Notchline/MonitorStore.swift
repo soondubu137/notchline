@@ -1478,6 +1478,41 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
+    /// Whether the notch-less pill names the work between its two ends.
+    ///
+    /// **Default on, and notch-less only.** The pill is the one form with a
+    /// middle to give: the notched bar has a cut-out where a name would stand,
+    /// and the only way to give it one is `102` pt of black beside the hardware
+    /// for the whole of every turn — the reservation both wings spent V1 and V2
+    /// getting rid of (`compact-view-v2.md` §5.2).
+    ///
+    /// Off, the middle draws nothing and **the pill holds its `209` rather than
+    /// shrinking**: its two ends are anchored, so a width that answered to this
+    /// preference would move the mark and the reading with it, which is the one
+    /// thing this form is arranged not to do.
+    @Published var namesWorkOnPill: Bool {
+        didSet {
+            preferences?.set(
+                namesWorkOnPill,
+                forKey: Self.namesWorkOnPillDefaultsKey
+            )
+        }
+    }
+    /// The hue the aggregate mark is drawn in.
+    ///
+    /// Taste, and it cannot become anything else: every entry shares the
+    /// greyscale's two lightnesses, so this changes no brightness and no width
+    /// (``AggregateInk``). Existing installs take the default with everybody
+    /// else — there is no hue to migrate, because until this preference existed
+    /// the mark was drawn at exactly it.
+    @Published var aggregateInk: AggregateInk {
+        didSet {
+            preferences?.set(
+                aggregateInk.rawValue,
+                forKey: Self.aggregateInkDefaultsKey
+            )
+        }
+    }
     @Published private(set) var lastIntegrationMessage: String
     @Published private(set) var hasCompletedOnboarding: Bool
 
@@ -1485,6 +1520,8 @@ final class MonitorStore: ObservableObject {
     private static let quotaFoldedDefaultsKey = "quotaFolded"
     private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
     private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
+    private static let namesWorkOnPillDefaultsKey = "namesWorkOnPill"
+    private static let aggregateInkDefaultsKey = "aggregateInk"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
@@ -1612,6 +1649,15 @@ final class MonitorStore: ObservableObject {
         self.drawsSurfaceOutline = preferences?.bool(
             forKey: Self.drawsSurfaceOutlineDefaultsKey
         ) ?? false
+        // `object(forKey:)` rather than `bool(forKey:)`: this one defaults to
+        // *on*, and `bool` cannot tell an install that has never seen the
+        // switch from one that has turned it off.
+        self.namesWorkOnPill = preferences?.object(
+            forKey: Self.namesWorkOnPillDefaultsKey
+        ) as? Bool ?? true
+        self.aggregateInk = preferences?.string(
+            forKey: Self.aggregateInkDefaultsKey
+        ).flatMap(AggregateInk.init(rawValue:)) ?? .default
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
         ) ?? false
@@ -1764,8 +1810,22 @@ final class MonitorStore: ObservableObject {
     /// bar has no middle — the cut-out is where one would stand — and the
     /// expanded panel names every Project in the rows below.
     var drawsCompactMiddle: Bool {
-        !isExpanded && geometry == .noNotch && !compactProjectNames.isEmpty
+        namesWorkOnPill
+            && !isExpanded
+            && geometry == .noNotch
+            && !compactProjectNames.isEmpty
     }
+
+    /// Whether ``namesWorkOnPill`` is something the selected display could
+    /// honour — which is what greys the switch that sets it.
+    ///
+    /// **The mirror image of ``canHideCompactWings``.** That preference needs a
+    /// cut-out to shrink onto; this one needs the absence of one, because the
+    /// notched bar has no middle to name anything in. Both rows stay visible
+    /// and grey where they cannot apply: a switch that appears only on one kind
+    /// of display is one nobody finds, and the person looking for it is looking
+    /// on the machine it is missing from.
+    var canNameWorkOnPill: Bool { geometry == .noNotch }
 
     /// Whether the collapsed surface draws its mark at all, which is the
     /// question the leading wing's existence turns on.
@@ -2051,7 +2111,7 @@ final class MonitorStore: ObservableObject {
     /// The aggregate mark's ink: the user's hue once a product is behind it,
     /// the resting grey until then.
     var aggregateMatrixInk: NotchPalette.MatrixInk {
-        NotchPalette.aggregateInk(isConnected: !isRestingOnly)
+        NotchPalette.aggregateInk(aggregateInk, isConnected: !isRestingOnly)
     }
 
 
