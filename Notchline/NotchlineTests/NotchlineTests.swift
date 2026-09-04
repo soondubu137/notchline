@@ -4363,11 +4363,159 @@ struct NotchlineTests {
         let name = try #require(Self.projectNameView(in: host))
         #expect(name.drawnName == "notchline")
         #expect(name.bounds.height == PanelMetrics.readingGroundHeight)
-        let ink = try #require(name.layer?.sublayers?.first)
+        let ink = name.nameLayer
         #expect(abs(ink.frame.midY - name.bounds.midY) < 0.5)
         // And the whole of it is inside the slot, which is what the mask keeps.
         #expect(ink.frame.minY >= -0.5)
         #expect(ink.frame.maxY <= name.bounds.height + 0.5)
+    }
+
+    /// **The middle hands one name to the next; it does not cross-fade them.**
+    ///
+    /// The name going out draws in towards its own middle as it goes, and the
+    /// one coming in opens back out of that same middle — so the size is
+    /// continuous across the swap and the two read as one movement handed over
+    /// rather than as two marks dissolving through each other. A `CATransition`,
+    /// which is what this was, cannot say that: it crosses one layer's old
+    /// contents into its new ones, and a transform on that layer scales the old
+    /// and the new together.
+    @Test @MainActor
+    func theMiddleHandsOneNameToTheNextThroughOneSize() throws {
+        let width = PanelMetrics.pillMiddleWidth(trailing: .empty)
+        let host = NSHostingView(
+            rootView: RotatingProjectName(names: ["notchline"], width: width)
+        )
+        host.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: width,
+            height: PanelMetrics.referenceCompactHeight
+        )
+        host.layoutSubtreeIfNeeded()
+        let view = try #require(Self.projectNameView(in: host))
+
+        // A name drawn for the first time has nothing to take the middle
+        // from: it comes up out of the middle on its own, and nothing leaves.
+        #expect(view.drawnName == "notchline")
+        #expect(view.arrivingAnimation != nil)
+        #expect(view.leavingAnimation == nil)
+
+        let stood = view.nameLayer.frame
+        view.apply(names: ["hello-agents"], width: width)
+        #expect(view.drawnName == "hello-agents")
+
+        func channel(_ animation: CAAnimation?, _ keyPath: String) -> CABasicAnimation? {
+            (animation as? CAAnimationGroup)?.animations?
+                .compactMap { $0 as? CABasicAnimation }
+                .first { $0.keyPath == keyPath }
+        }
+        func number(_ value: Any?) -> Double? { (value as? NSNumber)?.doubleValue }
+
+        let leavingInk = try #require(channel(view.leavingAnimation, "opacity"))
+        let leavingSize = try #require(channel(view.leavingAnimation, "transform.scale"))
+        let arrivingInk = try #require(channel(view.arrivingAnimation, "opacity"))
+        let arrivingSize = try #require(channel(view.arrivingAnimation, "transform.scale"))
+
+        // In towards its own middle and out; out of that same middle and up.
+        #expect(number(leavingSize.fromValue) == 1)
+        #expect(number(leavingSize.toValue) == Double(ProjectNameHandover.scale))
+        #expect(number(arrivingSize.fromValue) == Double(ProjectNameHandover.scale))
+        #expect(number(arrivingSize.toValue) == 1)
+        // **One size, read by both halves.** The name going out stops exactly
+        // where the one coming in starts; that is what makes the pair one
+        // movement rather than two that happen to overlap.
+        #expect(number(leavingSize.toValue) == number(arrivingSize.fromValue))
+
+        #expect(number(leavingInk.fromValue) == 1)
+        #expect(number(leavingInk.toValue) == 0)
+        #expect(number(arrivingInk.fromValue) == 0)
+        #expect(number(arrivingInk.toValue) == 1)
+
+        // **Both turn about their own glyph box's middle.** Anchored at the
+        // leading edge, or on the slot, a name would travel as it scaled --
+        // which is a slide, not a name receding into itself.
+        #expect(view.nameLayer.anchorPoint == CGPoint(x: 0.5, y: 0.5))
+        #expect(view.departingNameLayer.anchorPoint == CGPoint(x: 0.5, y: 0.5))
+
+        // What leaves, leaves from where it stood, not from the arriving
+        // name's box -- the two names are different widths, and it is the
+        // old raster that goes, not a copy of the new one.
+        #expect(view.departingNameLayer.contents != nil)
+        #expect(view.departingNameLayer.frame == stood)
+        #expect(view.nameLayer.frame.width != stood.width)
+
+        // The arriving half waits, held at its own start values through the
+        // wait rather than at the layer's: filled forwards from the model
+        // instead, the new name would stand at full ink for the length of the
+        // delay and the handover would be a cut with a fade after it.
+        let arriving = try #require(view.arrivingAnimation)
+        #expect(arriving.beginTime > 0)
+        #expect(arriving.fillMode == .backwards)
+        #expect(try #require(view.leavingAnimation).beginTime == 0)
+    }
+
+    /// **The middle is never held by two names at once, and never by none.**
+    ///
+    /// This is the claim that makes the handover something other than a
+    /// cross-fade, and the reason it cannot borrow ``MatrixDissolve``. A matrix
+    /// is an abstract figure and reads as genuinely half of each through the
+    /// middle of a dissolve; two Project names are drawn in one face from one
+    /// leading edge, so their glyphs collide exactly where the eye is and a
+    /// frame holding both at half ink holds neither.
+    ///
+    /// So the halves are offset in time, and the whole design sits on where
+    /// they cross. Read off the two curves at every millisecond of the
+    /// handover, that crossing is **about an eighth of full ink** — which is
+    /// one figure standing as both bounds: two names are never both more
+    /// legible than that, and the slot is never *less* legible than that
+    /// either, so there is no blink between them.
+    @Test @MainActor
+    func neitherNameHoldsTheMiddleWhileTheOtherIsStillInIt() {
+        // The arithmetic the curves are then read against: the arriving name
+        // starts past the leaving one's own midpoint, and before its end.
+        #expect(ProjectNameHandover.arrivingDelay > ProjectNameHandover.leavingDuration / 2)
+        #expect(ProjectNameHandover.arrivingDelay < ProjectNameHandover.leavingDuration)
+        // And the leaving one is gone before the arriving one is half way up,
+        // so what overlaps is two tails rather than two words.
+        #expect(
+            ProjectNameHandover.leavingDuration
+                < ProjectNameHandover.arrivingDelay + ProjectNameHandover.arrivingDuration / 2
+        )
+        // Leaving is quicker than arriving, as every reading on this surface
+        // is: something starting is worth catching and something ending is not.
+        #expect(ProjectNameHandover.leavingDuration < ProjectNameHandover.arrivingDuration)
+        // And the whole of it is a small fraction of the time a name is held.
+        #expect(ProjectNameHandover.duration < PanelMetrics.projectNameInterval / 10)
+
+        func leaving(at moment: Double) -> Double {
+            guard moment > 0 else { return 1 }
+            guard moment < ProjectNameHandover.leavingDuration else { return 0 }
+            return 1 - Self.progress(
+                of: ProjectNameHandover.leavingTimingFunction,
+                atFractionOfDuration: moment / ProjectNameHandover.leavingDuration
+            )
+        }
+        func arriving(at moment: Double) -> Double {
+            let started = moment - ProjectNameHandover.arrivingDelay
+            guard started > 0 else { return 0 }
+            guard started < ProjectNameHandover.arrivingDuration else { return 1 }
+            return Self.progress(
+                of: ProjectNameHandover.arrivingTimingFunction,
+                atFractionOfDuration: started / ProjectNameHandover.arrivingDuration
+            )
+        }
+
+        /// The most ink two names ever carry at one instant.
+        var together = 0.0
+        /// The least ink the slot ever carries at all.
+        var thinnest = 1.0
+        for millisecond in 0 ... 400 {
+            let moment = Double(millisecond) / 1000
+            together = max(together, min(leaving(at: moment), arriving(at: moment)))
+            thinnest = min(thinnest, max(leaving(at: moment), arriving(at: moment)))
+        }
+        #expect(together < 0.2)
+        #expect(thinnest > 0.1)
     }
 
     private static func projectNameView(in view: NSView) -> ProjectNameView? {

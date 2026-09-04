@@ -813,6 +813,138 @@ enum SessionDotBreath {
     }
 }
 
+/// How the middle hands one name to the next.
+///
+/// **One movement handed over, not two fades.** The name going out draws in
+/// towards its own middle as it goes; the name coming in resumes at exactly
+/// the size the last one reached and opens back out to full. The size is
+/// continuous across the swap, so the pair reads as the slot being passed from
+/// one word to the next rather than as one mark being swapped for another —
+/// which is why ``scale`` is one constant read by both halves rather than a
+/// figure each.
+///
+/// **It is not a cross-fade, and that is the whole of the design.**
+/// ``MatrixDissolve`` crosses two patterns straight through their middle
+/// because a matrix is an abstract figure and genuinely reads as half of each
+/// there. Two words do not. They are drawn in one face from one leading edge,
+/// so a frame holding both at half ink holds neither, and the glyphs of the
+/// two collide exactly where the eye is. The halves are therefore offset in
+/// time: the one leaving is short and starts at once, the one arriving is half
+/// again as long and waits until the first is nearly spent. Sampled across the
+/// whole handover, the most ink two names ever carry at one instant is about
+/// `13%` each — `#1a1a1a` on this ground, under one legible word — and the
+/// slot is never emptier than that either. Both halves of that are read off
+/// the curves by
+/// `neitherNameHoldsTheMiddleWhileTheOtherIsStillInIt`.
+///
+/// **What it does take from ``MatrixDissolve`` is the finding underneath it**:
+/// a swap wants a middle, and ``PanelMotion``'s curve does not leave one.
+enum ProjectNameHandover {
+    /// How far in a name draws before it goes, and the size the next one
+    /// resumes at.
+    ///
+    /// At `13` pt that is `0.9` pt off the cap height and, on `notchline`'s
+    /// `55.10`, `2.8` pt off each end: a name receding, which is what the
+    /// middle wants — the roster is a quiet channel and a Project name never
+    /// signals attention. `0.80` is a zoom and puts the loudest movement on
+    /// this surface under the one reading that means nothing urgent; `0.95`
+    /// leaves a short name with nothing to move, since the width channel is
+    /// the length of the word and the height channel is `0.5` pt.
+    static let scale: CGFloat = 0.90
+
+    /// The name going out. It starts the instant the name changes.
+    static let leavingDuration: TimeInterval = 0.16
+
+    /// How long the name coming in waits before it starts.
+    ///
+    /// **Past the leaving name's own midpoint**, so the middle is never held
+    /// by two words at once — and short of its end, so the slot is never seen
+    /// empty: the arriving name is already a fifth of the way up as the
+    /// leaving one finishes. The `60 ms` those two bounds leave is the whole
+    /// overlap, and both names spend it under `13%`.
+    static let arrivingDelay: TimeInterval = 0.10
+
+    /// The name coming in.
+    ///
+    /// Half again as long as the one going out, for the reason every reading
+    /// on this surface fades in slower than it fades out
+    /// (``PanelMotion/fade(isArriving:)``): something starting is worth
+    /// catching and something ending is not.
+    static let arrivingDuration: TimeInterval = 0.24
+
+    /// End to end: `0.34 s`, against the `5 s` a name is held.
+    static var duration: TimeInterval { arrivingDelay + arrivingDuration }
+
+    /// **From rest, and too short to stall.** The name was standing still, so
+    /// a curve carrying speed at its start reads as a snatch; symmetric gives
+    /// it the still beginning, and over `0.16 s` the tail an `easeInEaseOut`
+    /// parks in is too brief to be seen doing it.
+    static let leavingTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+    /// **An arrival, and one of the few places on this surface where that is
+    /// the right shape.**
+    ///
+    /// Deliberately not ``PanelMotion``'s `(0.22, 1, 0.36, 1)`, which is `96%`
+    /// across at its own midpoint: over `0.24 s` it would have the name at
+    /// full size inside `80 ms` and there would be no expansion left to see —
+    /// the same failure ``MatrixDissolve`` was written to undo, arriving by
+    /// the same route.
+    static let arrivingTimingFunction = CAMediaTimingFunction(name: .easeOut)
+
+    /// The name leaving: in towards its own middle, and out.
+    ///
+    /// It leaves from where the name has *actually* got to rather than from
+    /// full — ``MatrixIndicatorView/crossFade(from:to:)``'s rule, for the same
+    /// reason: a second change inside one handover would otherwise jump the
+    /// name back to full ink at full size before starting away again.
+    static func leaving(fromOpacity: Float, fromScale: CGFloat) -> CAAnimationGroup {
+        let ink = CABasicAnimation(keyPath: "opacity")
+        ink.fromValue = fromOpacity
+        ink.toValue = 0
+        let size = CABasicAnimation(keyPath: "transform.scale")
+        size.fromValue = fromScale
+        size.toValue = scale
+        return group(of: [ink, size], over: leavingDuration, on: leavingTimingFunction)
+    }
+
+    /// The name arriving: out of the middle the last one drew into, and up.
+    static func arriving(now: CFTimeInterval = CACurrentMediaTime()) -> CAAnimationGroup {
+        let ink = CABasicAnimation(keyPath: "opacity")
+        ink.fromValue = 0
+        ink.toValue = 1
+        let size = CABasicAnimation(keyPath: "transform.scale")
+        size.fromValue = scale
+        size.toValue = 1
+        let arriving = group(of: [ink, size], over: arrivingDuration, on: arrivingTimingFunction)
+        arriving.beginTime = now + arrivingDelay
+        // Held at its start values through the wait rather than at the layer's
+        // own, or the new name stands at full ink for the length of the delay
+        // and the handover is a cut with a fade after it.
+        arriving.fillMode = .backwards
+        return arriving
+    }
+
+    /// The two channels of one half, as a single animation.
+    ///
+    /// The curve goes on each channel rather than on the group: a group's own
+    /// timing function warps the clock its children run on, so declaring it in
+    /// both places composes two curves rather than stating one twice.
+    private static func group(
+        of animations: [CABasicAnimation],
+        over duration: TimeInterval,
+        on timing: CAMediaTimingFunction
+    ) -> CAAnimationGroup {
+        for animation in animations {
+            animation.duration = duration
+            animation.timingFunction = timing
+        }
+        let group = CAAnimationGroup()
+        group.animations = animations
+        group.duration = duration
+        return group
+    }
+}
+
 /// The pill's middle: **the name of the work**.
 ///
 /// Nothing on any collapsed form has ever named it. The mark says what is most
@@ -869,14 +1001,24 @@ private struct ProjectNameMarquee: NSViewRepresentable {
 
 /// The name, on a layer, with the rotation driven off a timer of its own.
 ///
-/// **Nothing here re-renders the overlay.** A cross-fade every five seconds
+/// **Nothing here re-renders the overlay.** A handover every five seconds
 /// through SwiftUI would invalidate the whole panel twelve times a minute and
-/// animate it for a fifth of a second each time — the same shape of cost as the
+/// animate it for a third of a second each time — the same shape of cost as the
 /// once-a-second readout that `AGENTS.md` §7 was written about. So the rotation
-/// swaps one layer's contents inside a `CATransition` and the SwiftUI graph
-/// never hears about it.
+/// is two layers moving against each other under Core Animation, and the
+/// SwiftUI graph never hears about it.
+///
+/// **Two layers, because the two halves move in opposite directions.** A
+/// `CATransition` crosses one layer's old contents into its new ones, which is
+/// what this was; but a transform on that layer scales the old and the new
+/// together, so a name cannot draw in while the next one opens out. The name
+/// on screen is therefore handed to a layer of its own and leaves from there
+/// (``ProjectNameHandover``).
 final class ProjectNameView: NSView {
+    /// The name in the slot.
     private let ink = CALayer()
+    /// The name leaving it: empty and unlit except during a handover.
+    private let departing = CALayer()
     private let fade = CAGradientLayer()
 
     private var names: [String] = []
@@ -892,8 +1034,21 @@ final class ProjectNameView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = true
-        ink.contentsGravity = .bottomLeft
-        layer?.addSublayer(ink)
+        // The arriving name in front of the departing one, though at the ink
+        // the two ever share at once it is not a difference anyone can see.
+        for glyphs in [departing, ink] {
+            glyphs.contentsGravity = .bottomLeft
+            // **Both turn about their own glyph box's middle.** It is the
+            // default, and it is written out because the whole shape of the
+            // handover rests on it: anchored at the leading edge a name would
+            // draw sideways into the margin, and anchored on the slot it would
+            // slide as it shrank. Anchored here it recedes into itself.
+            glyphs.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            layer?.addSublayer(glyphs)
+        }
+        // At rest the departing layer is unlit, so the only thing that ever
+        // shows it is the animation taking it away.
+        departing.opacity = 0
         // The trailing fade, as a mask: opaque across everything but the last
         // `12`, where it runs out. Read as a mask, so only alpha matters.
         fade.startPoint = CGPoint(x: 0, y: 0.5)
@@ -921,7 +1076,7 @@ final class ProjectNameView: NSView {
         }
         // One Project does not cycle; it is simply named. None draws nothing.
         if names.count > 1 { start() } else { stop() }
-        redraw(crossFading: currentName != previous)
+        redraw(handingOver: currentName != previous)
         layoutFade()
     }
 
@@ -957,11 +1112,15 @@ final class ProjectNameView: NSView {
     private func advance() {
         guard names.count > 1 else { return }
         index = (index + 1) % names.count
-        redraw(crossFading: true)
+        redraw(handingOver: true)
     }
 
-    private func redraw(crossFading: Bool) {
+    private func redraw(handingOver: Bool) {
         let scale = window?.backingScaleFactor ?? 2
+        // Before anything overwrites what is on screen, and including the case
+        // where nothing follows it: the last Project leaving the list takes
+        // its name out the way every other name goes, rather than blinking off.
+        if handingOver { handOver() }
         guard let name = currentName else {
             ink.contents = nil
             renderedSize = .zero
@@ -980,17 +1139,44 @@ final class ProjectNameView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         ink.contentsScale = scale
+        ink.contents = image
         CATransaction.commit()
         renderedSize = size
         layoutInk()
-        if crossFading {
-            let cross = CATransition()
-            cross.type = .fade
-            cross.duration = PanelMotion.duration
-            cross.timingFunction = PanelMotion.timingFunction
-            ink.add(cross, forKey: Self.crossFadeKey)
+        if handingOver {
+            ink.add(ProjectNameHandover.arriving(), forKey: Self.arrivingKey)
         }
-        ink.contents = image
+    }
+
+    /// The name on screen moves to the departing layer and leaves from there,
+    /// so the two halves of the swap can move against each other.
+    ///
+    /// A handover landing on top of one still running takes the departing
+    /// name's start values from where it has *actually* got to, so a Project
+    /// joining the list a fifth of a second after the rotation advanced does
+    /// not snap the outgoing name back to full ink before dismissing it.
+    /// Whatever was already departing is dropped at that instant: a third
+    /// layer would carry it, and two names inside `0.34 s` is not a sight this
+    /// surface can produce twice in a row.
+    private func handOver() {
+        guard ink.contents != nil else { return }
+        let shown = ink.presentation()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        departing.contents = ink.contents
+        departing.contentsScale = ink.contentsScale
+        // Its own geometry rather than the new name's, which is a different
+        // width: what leaves has to leave from where it stood.
+        departing.bounds = ink.bounds
+        departing.position = ink.position
+        CATransaction.commit()
+        departing.add(
+            ProjectNameHandover.leaving(
+                fromOpacity: shown?.opacity ?? ink.opacity,
+                fromScale: shown.map { $0.transform.m11 } ?? 1
+            ),
+            forKey: Self.leavingKey
+        )
     }
 
     /// The glyphs, centred in the slot.
@@ -1031,14 +1217,20 @@ final class ProjectNameView: NSView {
         CATransaction.commit()
     }
 
-    /// Exposed for the test that the rotation is a layer cross-fade rather than
-    /// a SwiftUI one.
-    var crossFadeAnimation: CAAnimation? { ink.animation(forKey: Self.crossFadeKey) }
+    /// The layer the name in the slot is drawn on, and the one a name leaves
+    /// on. Exposed for the tests that read where each of them stands.
+    var nameLayer: CALayer { ink }
+    var departingNameLayer: CALayer { departing }
+    /// Exposed for the test that the rotation is a Core Animation handover
+    /// rather than a SwiftUI one.
+    var arrivingAnimation: CAAnimation? { ink.animation(forKey: Self.arrivingKey) }
+    var leavingAnimation: CAAnimation? { departing.animation(forKey: Self.leavingKey) }
     /// Exposed for the test that one Project does not cycle.
     var isCycling: Bool { timer != nil }
     var drawnName: String? { currentName }
 
-    static let crossFadeKey = "notch.projectName.crossFade"
+    static let arrivingKey = "notch.projectName.arriving"
+    static let leavingKey = "notch.projectName.leaving"
 }
 
 /// The collapsed surface's counts: sessions over subagents, stacked inside the
