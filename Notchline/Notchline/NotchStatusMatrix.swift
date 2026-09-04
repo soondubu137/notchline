@@ -1582,21 +1582,30 @@ final class BreathingDotView: NSView {
 /// The mark's own grid, in the units its design files are drawn in.
 ///
 /// `27`-unit cells on a `32`-unit pitch with a `2`-unit corner radius — the
-/// same three proportions the 3×3 matrix used, four to a side instead of
-/// three, so the viewBox goes from `91` to `123`. The mark itself does not
-/// grow: ``PanelMetrics/statusMatrixSize`` is still `16.6`, and the cell it
-/// buys shrinks from `4.92` to `3.64`.
+/// same three proportions the 3×3 and 4×4 matrices used, five to a side, so
+/// the viewBox goes from `123` to `155`.
+///
+/// **The mark does not grow, so the cell pays for the row.**
+/// ``PanelMetrics/statusMatrixSize`` is still `16.6`, and stretching the box
+/// by a fifth without giving it more room takes the cell from `3.64` to
+/// `2.89` and the gap from `0.68` to `0.54` — which on a Retina display is a
+/// gap of about one device pixel. Holding today's cell size instead would mean
+/// a `20.9` mark and a compact bar `4.3` wider, and the bar's width is a
+/// number other things are measured against. The cell was the cheaper of the
+/// two, and the four patterns were chosen to survive it: every one of them
+/// moves whole rows, whole columns or the whole grid, and none asks the eye to
+/// resolve a single cell.
 enum MatrixGrid {
-    static let side = 4
+    static let side = 5
     static let cellCount = side * side
     static let cell: CGFloat = 27
     static let pitch: CGFloat = 32
     static let cornerRadius: CGFloat = 2
-    /// `4` cells and the `3` gaps between them.
+    /// `5` cells and the `4` gaps between them.
     static let viewBox = CGFloat(side) * pitch - (pitch - cell)
 }
 
-/// What the 4×4 indicator is doing, independent of which status drove it.
+/// What the 5×5 indicator is doing, independent of which status drove it.
 ///
 /// One collapse is left, and it is the one that costs nothing: every
 /// non-session state (connected, disconnected, and the retired thin states
@@ -1641,8 +1650,9 @@ enum NotchMatrixState: Equatable {
     /// Loop length, or `nil` when the state is a still.
     ///
     /// Three lengths for four patterns, and the pairing is the design's:
-    /// the radar and the knock share `1.2`, so a bar showing one of each is
-    /// showing two things on one grid rather than two clocks.
+    /// the rain and the knock share `1.2`, so a bar showing one of each is
+    /// showing two things on one grid rather than two clocks. The four
+    /// patterns changed at 5×5; these four periods did not.
     var period: TimeInterval? {
         switch self {
         case .running, .approvalNeeded: 1.2
@@ -1653,68 +1663,138 @@ enum NotchMatrixState: Equatable {
     }
 }
 
-/// Per-cell opacity tracks, taken from the four animated SVGs in
-/// `design/assets/matrix-states/`.
+/// Per-cell opacity tracks, one per state.
 ///
-/// Every one of those files draws **one** waveform and gives each of its
-/// sixteen cells that same waveform at its own offset, so that is how they
-/// are held here: the curve sampled once per state, plus the rule that says
-/// how far a given cell lags it. Writing out sixteen tracks per state would
-/// be the same numbers sixteen times over, and the rule — a beam going
-/// round, a column stepping across, a wave crossing the diagonal — is the
-/// half that has to survive being read.
+/// Every one of the four draws **one** waveform and gives each cell that same
+/// waveform at its own offset, so that is how they are held here: the curve
+/// sampled once per state, plus the rule that says how far a given cell lags
+/// it. Writing out twenty-five tracks per state would be the same numbers
+/// twenty-five times over, and the rule — rain falling down five columns, a
+/// wedge crossing and wrapping, three bars breathing — is the half that has to
+/// survive being read.
 ///
-/// **The offsets are whole frames.** The files' own phases are not: a
-/// bearing lands where it lands, and the lull's diagonals are `48.7/6`
-/// frames apart. But each file is sampled at 30fps and so lights a cell on a
-/// frame boundary anyway, and taking the frame the file itself lights
-/// reproduces what the file draws. Measured against all sixteen tracks of
-/// all four files, that costs at most `0.85` of a frame of phase and `0.065`
-/// of opacity, both of them on the radar, whose beam crosses a cell up to
-/// that far before the frame that first shows it lit.
+/// **The offsets are whole frames.** A pattern's own phases are not: the bars
+/// want their tiers `10.8` frames apart. But each track is sampled at its
+/// state's frame rate and so lights a cell on a frame boundary anyway, and
+/// rounding to the frame the pattern itself lights costs at most `0.4` of a
+/// frame of phase and `0.015` of opacity, both of them on the bars.
 ///
-/// Nothing here deviates from the design file. The old tracks did, in two
-/// places, because that file rested every dim cell at one level and left a
-/// mark waiting on the user as dark as a mark with nothing running. These
-/// four sit at three floors of their own — `0.05` under the knock and
-/// between the advance's columns, `0.139` behind the radar, `0.182` at the
-/// bottom of the lull — so a mark asking something of the user is legible
-/// from the darkness alone and there is nothing left to correct. What moves
-/// to keep that true is the resting level, which threads between them; see
-/// ``MatrixTrack/inactiveLevel``.
+/// **Three of the four share one scale, and the knock does not.** Each pattern
+/// was drawn against a floor and a ceiling that suited it alone; shipping four
+/// of them means the same cell value has to mean the same thing whichever
+/// state the mark is in, so rain, wedge and bars are each stretched linearly
+/// until their dimmest cell sits at ``floor`` and their brightest at `1`. The
+/// stretch is linear, so no pattern's *shape* moves — only the two ends it is
+/// measured between.
+///
+/// The knock keeps its own `0.05`. Approval is the one state whose silence has
+/// to stay darker than a resting mark: a mark asking for a person is three
+/// times darker than a bar with nothing connected, and that darkness is half
+/// of how it asks (`dual-agent-design.md` §2). Lifting it to ``floor`` would
+/// have made the two indistinguishable for the `900ms` after the second knock.
+///
+/// **Nothing rests where a disconnected mark rests.** Three patterns now floor
+/// at exactly ``inactiveLevel``, so the old argument — that the resting grey
+/// threaded between the levels the patterns fell to — no longer holds and is
+/// not what keeps them apart. What keeps them apart is that none of the three
+/// is ever at its floor *everywhere at once*: the rain always has a drop
+/// somewhere, the wedge always has a band, and the bars' three rules never all
+/// go down together. A live mark always has a lit cell and a still one never
+/// does, which was the load-bearing half of that argument all along.
 private enum MatrixTrack {
-    /// **Radar**, 36 frames over `1.2s`.
+    /// The level the three normalised patterns rest at, and the level a mark
+    /// with nothing behind it holds.
+    static let floor = 0.150
+
+    /// Stretch tracks so the dimmest sample across all of them sits at
+    /// `floor` and the brightest at `1`.
     ///
-    /// A beam sweeps clockwise about the mark's centre. A cell goes to full
-    /// as the beam crosses its bearing and then decays towards a `0.139`
-    /// floor with a time constant of 10.2 frames — `341ms`, so a cell is
-    /// still visibly warm a third of a turn later and the sweep reads as one
-    /// moving thing rather than as sixteen cells taking turns.
-    static let radar: [Double] = [
-        1.000, 0.930, 0.853, 0.784, 0.721, 0.664, 0.613, 0.566,
-        0.523, 0.485, 0.450, 0.418, 0.389, 0.363, 0.340, 0.318,
-        0.299, 0.281, 0.265, 0.251, 0.238, 0.226, 0.215, 0.205,
-        0.196, 0.188, 0.181, 0.174, 0.168, 0.163, 0.158, 0.153,
-        0.149, 0.146, 0.142, 0.139
-    ]
-    /// **Advance**, 24 frames over `0.8s`, for the top three rows.
+    /// Taken over the whole set at once rather than track by track, because
+    /// the rain's five rows are one pattern and scaling them separately would
+    /// flatten the difference between a drop at the top of the grid and one at
+    /// the bottom.
+    private static func stretched(_ tracks: [[Double]], floor: Double) -> [[Double]] {
+        let samples = tracks.flatMap { $0 }
+        guard let low = samples.min(), let high = samples.max(), high - low > 1e-9
+        else { return tracks }
+        let scale = (1 - floor) / (high - low)
+        return tracks.map { $0.map { floor + ($0 - low) * scale } }
+    }
+
+    // MARK: Running — rain
+
+    /// **Rain**, 36 frames over `1.2s`, one curve per row.
     ///
-    /// One column at a time, `200ms` each, left to right. Unlike the other
-    /// three patterns nothing here decays: a column is on or it is off,
-    /// which is what makes the advance read as a position rather than as a
-    /// pulse — the thing being asked for is the next step, not attention.
-    static let advance: [Double] = [
-        1.000, 1.000, 1.000, 1.000, 1.000, 1.000,
-        0.050, 0.050, 0.050, 0.050, 0.050, 0.050,
-        0.050, 0.050, 0.050, 0.050, 0.050, 0.050,
-        0.050, 0.050, 0.050, 0.050, 0.050, 0.050
-    ]
-    /// The advance's bottom row, which never moves.
+    /// A drop enters above the grid, falls through it trailing a tail about
+    /// four cells long, and leaves below. Each column runs one drop across
+    /// `0.72` of the loop, so for the rest of it that column is empty — and
+    /// the emptiness is the whole difference between rain and a conveyor belt.
+    /// Without it every column always holds a head and the mark reads as
+    /// machinery rather than as something falling.
     ///
-    /// A floor under the three rows that do, held at a level no other
-    /// pattern rests at. It is what stops a single column crossing an
-    /// otherwise black mark from reading as a mark that has gone out.
-    static let advanceBaseline = 0.300
+    /// A row's curve is not a delayed copy of the row above: the drop's tail
+    /// is cut when the column's window closes, so the lower a row is the more
+    /// of its tail is still lit when the cut comes. The bottom row loses the
+    /// most, dropping from `0.40` to the floor in a frame as the drop clears
+    /// the grid.
+    static let rain: [[Double]] = {
+        let frames = 36, fall = Double(frames) * 0.72
+        let travel = Double(MatrixGrid.side + 4)   // enters two above, leaves two below
+        let tail = 2.1                              // cells, as a decay constant
+        let tracks = (0 ..< MatrixGrid.side).map { row -> [Double] in
+            (0 ..< frames).map { frame in
+                let t = Double(frame)
+                guard t <= fall else { return 0 }
+                let head = t / fall * travel - 2
+                let behind = head - Double(row)
+                return behind < 0 ? 0 : exp(-behind / tail)
+            }
+        }
+        return stretched(tracks, floor: floor)
+    }()
+
+    /// The frame each column's drop begins on.
+    ///
+    /// Uneven on purpose. Evenly spaced starts put the five heads on a
+    /// diagonal, and a diagonal is a thing the eye follows — which is a
+    /// different mark from rain, where there is nothing to follow.
+    static let rainStart = [0, 21, 8, 29, 14]
+
+    // MARK: Input needed — wedge
+
+    /// **Wedge**, 40 frames over `0.8s`.
+    ///
+    /// A `>`-fronted band crosses the grid, the middle row three quarters of a
+    /// cell ahead of the top and bottom ones. The distance behind the front is
+    /// taken **around** the grid rather than across it, so a column the front
+    /// has just left re-enters on the other side and the band never runs out of
+    /// room. Nothing resets at the right edge because nothing ever reaches it:
+    /// the figure is always mid-crossing.
+    ///
+    /// This is the curve for the cell the front reaches first — row `2`,
+    /// column `0`. Every other cell is it, later.
+    static let wedge: [Double] = {
+        let frames = 40, span = Double(MatrixGrid.side), depth = 1.3
+        let track = (0 ..< frames).map { frame -> Double in
+            let behind = (Double(frame) / Double(frames) * span)
+                .truncatingRemainder(dividingBy: span)
+            return exp(-behind / depth)
+        }
+        return stretched([track], floor: floor)[0]
+    }()
+
+    /// The frame the front reaches this cell on.
+    ///
+    /// `8` frames a column — a fifth of the loop — and `6` more for every row
+    /// away from the middle, which is the `0.75` of a cell the middle row
+    /// leads by. Both fall on whole frames, so the wedge needs no rounding.
+    static func wedgeOffset(row: Int, column: Int) -> Int {
+        let lead = abs(row - (MatrixGrid.side - 1) / 2)
+        return (column * 8 + lead * 6) % wedge.count
+    }
+
+    // MARK: Approval needed — double knock
+
     /// **Double knock**, 36 frames over `1.2s`, every cell together.
     ///
     /// The whole grid to full twice, `300ms` apart, each knock falling away
@@ -1723,6 +1803,10 @@ private enum MatrixTrack {
     /// bar that has no spatial reading at all — there is nothing to follow
     /// and nowhere to look, only two beats and a silence — and that is why
     /// it is the state that outranks the rest.
+    ///
+    /// Carried across from the 4×4 mark unchanged. It already ran the full
+    /// `0.05` to `1`, so it is the one chosen track the stretch would not have
+    /// moved even if it had been applied.
     static let doubleKnock: [Double] = [
         1.000, 1.000, 0.731, 0.538, 0.399, 0.300, 0.229, 0.179,
         0.142, 1.000, 1.000, 0.731, 0.538, 0.399, 0.300, 0.229,
@@ -1730,72 +1814,54 @@ private enum MatrixTrack {
         0.059, 0.056, 0.055, 0.053, 0.052, 0.052, 0.051, 0.051,
         0.051, 0.050, 0.050, 0.050
     ]
-    /// **Lull**, 60 frames over `2s`.
-    ///
-    /// A crest crosses the mark along its anti-diagonal — the mark's own
-    /// seam — and a cell the crest has left sinks to `0.182` and stays down
-    /// there about three quarters of a second before the next one reaches
-    /// it. The trough is the point: a finished turn is not asking for
-    /// anything, so a cell spends a good part of the loop saying nothing.
-    /// The mark as a whole never does, because the diagonals are staggered
-    /// across four fifths of the loop and one of them always holds the crest.
-    static let lull: [Double] = [
-        0.359, 0.407, 0.454, 0.505, 0.561, 0.616, 0.673, 0.730, 0.784, 0.834,
-        0.884, 0.918, 0.952, 0.975, 0.988, 1.000, 0.988, 0.975, 0.952, 0.918,
-        0.884, 0.834, 0.784, 0.730, 0.673, 0.616, 0.561, 0.505, 0.454, 0.407,
-        0.359, 0.325, 0.291, 0.263, 0.242, 0.220, 0.210, 0.199, 0.192, 0.188,
-        0.183, 0.183, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.182, 0.183,
-        0.183, 0.188, 0.192, 0.199, 0.210, 0.220, 0.242, 0.263, 0.291, 0.325
-    ]
-    /// Connected and disconnected hold still at a level no live pattern
-    /// rests at.
-    ///
-    /// It threads between the floors the four patterns fall to: above the
-    /// `0.05` the knock and the advance drop to, below the `0.182` the
-    /// lull's trough holds, and just above the radar's `0.139`. Only the
-    /// first of those three gaps is a difference the eye reads as darkness,
-    /// and it is the one that has to be — a mark waiting on the user is
-    /// three times darker than a resting one, and "the agent wants you"
-    /// against "nothing is happening" is the pair it would be worst to
-    /// confuse. The other two are ordering rather than contrast, and they do
-    /// not have to carry weight on their own: the radar and the lull are
-    /// never at their floors everywhere at once, so a live mark always has a
-    /// lit cell somewhere and a still one never does.
-    ///
-    /// It was `0.180` while the lull rested at `0.343`. The design file
-    /// brought that trough down to `0.182`, which would have left the two
-    /// indistinguishable, so the level came down with it rather than the
-    /// ordering being given up.
-    static let inactiveLevel = 0.150
 
-    /// The frame the beam reaches this cell on.
+    // MARK: Completed — bars
+
+    /// **Bars**, 60 frames over `2s`.
     ///
-    /// The bearing of the cell's centre from the mark's centre, in a space
-    /// where y grows downwards, so the sweep turns clockwise on screen.
-    /// Rounded **up**, because a discretely sampled beam lights a cell on
-    /// the first frame at or after it crosses; that is the frame the design
-    /// file lights, on all sixteen of the cells it draws.
-    static func radarOffset(row: Int, column: Int) -> Int {
-        let centre = Double(MatrixGrid.side - 1) / 2
-        let bearing = atan2(Double(row) - centre, Double(column) - centre)
-        let turns = (bearing < 0 ? bearing + 2 * .pi : bearing) / (2 * .pi)
-        return Int((turns * Double(radar.count)).rounded(.up)) % radar.count
-    }
-
-    /// The frame this cell's column lights on: `200ms` per column.
-    static func advanceOffset(column: Int) -> Int {
-        column * advance.count / MatrixGrid.side
-    }
-
-    /// The frame this cell's anti-diagonal takes the crest.
+    /// Rows `0`, `2` and `4` breathe from `0.32` to full, each a little behind
+    /// the one above; rows `1` and `3` hold at the floor and are the gaps
+    /// between them. Three evenly spaced rules with a clear row between each
+    /// is a figure only an odd grid can draw, and a level, closed, horizontal
+    /// one carries nothing that could be read as a fault — which the diagonals
+    /// it was chosen over could not manage.
     ///
-    /// The crest crosses the six steps from the first cell to the last in
-    /// 48.7 of the loop's 60 frames — a little over four fifths of it — so a
-    /// mark is never entirely at rest and never entirely lit.
-    static func lullOffset(row: Int, column: Int) -> Int {
-        Int((Double(row + column) * 48.7 / 6).rounded())
-    }
+    /// A finished turn asks for nothing, so the pattern is the slowest on the
+    /// bar and the only one that never moves faster than `0.036` of opacity in
+    /// a frame.
+    static let bars: [Double] = {
+        let frames = 60
+        let track = (0 ..< frames).map { frame in
+            0.5 * (1 + cos(2 * .pi * Double(frame) / Double(frames)))
+        }
+        // 0.22 → 0.70 before the stretch, so the two ends are exact and the
+        // rows between land on `floor` by construction.
+        return track.map { 0.32 + 0.68 * $0 }
+    }()
 
+    /// The gap rows, and the level a finished mark's dark rows hold.
+    static let barsQuiet = floor
+
+    /// The frame this bar takes the crest: `11` frames a tier.
+    ///
+    /// The pattern wants `10.8` — `0.18` of the loop — and this is the whole
+    /// frame nearest it. See the note on rounding above.
+    static func barsOffset(row: Int) -> Int { row / 2 * 11 }
+
+    // MARK: Nothing running
+
+    /// Connected and disconnected hold still.
+    ///
+    /// The same level the three live patterns floor at. That is no longer a
+    /// distinction they are asked to carry — see the note above on why a live
+    /// mark is still never mistakable for a still one — and holding it here
+    /// keeps the resting mark from being brighter than any pattern's floor,
+    /// which is the direction that would actually mislead.
+    ///
+    /// It stays above the knock's `0.05`, so a mark waiting on a decision is
+    /// still three times darker in its silence than a mark with nothing
+    /// behind it.
+    static let inactiveLevel = floor
 }
 
 private extension [Double] {
@@ -1821,26 +1887,26 @@ extension NotchMatrixState {
         let column = index % MatrixGrid.side
         switch self {
         case .running:
-            return MatrixTrack.radar
-                .delayed(by: MatrixTrack.radarOffset(row: row, column: column))
+            // A row's own curve, started when this column's drop starts.
+            return MatrixTrack.rain[row]
+                .delayed(by: MatrixTrack.rainStart[column])
         case .inputNeeded:
-            // The bottom row is the baseline the advance crosses above.
-            return row == MatrixGrid.side - 1
-                ? [MatrixTrack.advanceBaseline]
-                : MatrixTrack.advance
-                    .delayed(by: MatrixTrack.advanceOffset(column: column))
+            return MatrixTrack.wedge
+                .delayed(by: MatrixTrack.wedgeOffset(row: row, column: column))
         case .approvalNeeded:
             return MatrixTrack.doubleKnock
         case .completed:
-            return MatrixTrack.lull
-                .delayed(by: MatrixTrack.lullOffset(row: row, column: column))
+            // The odd rows are the gaps the three bars breathe between.
+            return row % 2 == 1
+                ? [MatrixTrack.barsQuiet]
+                : MatrixTrack.bars.delayed(by: MatrixTrack.barsOffset(row: row))
         case .inactive:
             return [MatrixTrack.inactiveLevel]
         }
     }
 }
 
-/// The 4×4 status matrix that replaced the notch status dot.
+/// The 5×5 status matrix that replaced the notch status dot.
 ///
 /// Sized by the caller to the fixed ``PanelMetrics/statusMatrixSize``.
 ///
@@ -2045,7 +2111,7 @@ final class MatrixIndicatorView: NSView {
 
         // Proportions come straight from the design file's viewBox, by way of
         // ``MatrixGrid``: 27-unit cells on a 32-unit pitch, 2-unit corner
-        // radius, four to a side.
+        // radius, five to a side.
         let size = appliedSize
         let cell = size * MatrixGrid.cell / MatrixGrid.viewBox
         let radius = cell * MatrixGrid.cornerRadius / MatrixGrid.cell
@@ -2055,7 +2121,7 @@ final class MatrixIndicatorView: NSView {
         // would clip its own halo.
         let bleed = cell * 10.5 / 27 * 3
         let scale = window?.backingScaleFactor ?? 2
-        // One reading for every cell of this mark, so the sixteen are on one
+        // One reading for every cell of this mark, so the twenty-five are on one
         // clock however long the layers take to build.
         let now = CACurrentMediaTime()
         // A specimen starts where the clock is; every other mark joins the
@@ -2187,7 +2253,8 @@ final class MatrixIndicatorView: NSView {
     /// **Only the changes with the still on one side of them.** Those are the
     /// ones where the mark starts or stops having something to say, and cut
     /// they read as a light being thrown: a mark that was a dark square is
-    /// suddenly a radar, or a lull the user has just read is suddenly gone.
+    /// suddenly raining, or a finished turn the user has just read is
+    /// suddenly gone.
     /// Neither is a lie about the product, but both are louder than the news
     /// they carry — a turn beginning and a turn being read are quiet events,
     /// and the mark arrives out of the dark and sinks back into it.
@@ -2317,7 +2384,7 @@ final class MatrixIndicatorView: NSView {
     /// cut straight to the first. Repeating the opening frame at the end makes
     /// it N+1 values across N intervals -- the cadence the design file's
     /// frames are drawn at, and a wrap that interpolates like every other
-    /// step. It matters most to the radar and the knock, whose tracks end far
+    /// step. It matters most to the rain and the knock, whose tracks end far
     /// from where they begin.
     ///
     /// **`anchorsPhase` is what a specimen gives up.** There is nothing beside

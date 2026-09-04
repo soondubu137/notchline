@@ -203,7 +203,7 @@ struct AppSettingsView: View {
     /// dot was an `11 pt` circle of the *lit* colour — a colour these hues are
     /// deliberately hard to tell apart at, one lightness and one chroma across
     /// the whole set — so twelve of them down a menu read as twelve pale
-    /// circles, and the real mark is a 4×4 grid that pulses, not a disc. The
+    /// circles, and the real mark is a 5×5 grid that pulses, not a disc. The
     /// star was the palette's own reasoning about hue distance printed on a
     /// control, where it read as a rating on a choice that is not being marked.
     /// What replaces both is the specimen beside the popup, which shows the one

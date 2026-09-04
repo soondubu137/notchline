@@ -39,7 +39,7 @@ Approval needed > Input needed > Running > Completed
 
 This is [`figma-design.md`](figma-design.md) §5.2's sort, deliberately, so the mark and the panel's first row can never disagree about what is most urgent. It is *not* `SessionStatus.transitioned`'s within-row rule, where an approval yields to an input ([`tech-design.md`](tech-design.md) §6.2); that governs one row's own status, this governs which row is first.
 
-The four animated patterns — Radar, Double Knock, Advance, Lull — are unchanged from V1 and now carry the whole state reading alone. **This is the one channel V2 does not touch.**
+The four animated patterns — Rain, Wedge, Double Knock, Bars — carry the whole state reading alone. **This is the one channel V2 does not touch**, though the patterns themselves have since been redrawn for the 5×5 grid ([`figma-design.md`](figma-design.md) §4.1); what V2 leaves alone is the channel, not the drawings.
 
 ### 2.2 Hue is no longer identity
 
@@ -147,7 +147,7 @@ When the turn ends the reading does not leave. The digits freeze at the last val
 
 ### 4.3 The buried-finish dot
 
-A turn that has finished while another is still running has no representative: the mark draws Radar, and the frozen reading belongs to a Completed aggregate that this is not. The dot is that reading's stand-in.
+A turn that has finished while another is still running has no representative: the mark draws Rain, and the frozen reading belongs to a Completed aggregate that this is not. The dot is that reading's stand-in.
 
 - **4 pt, 8 before the digits, in the wing's own `#7C7C80`.**
 - Drawn only while the list holds a Completed row **and** the mark is drawing something else. That is V1's `buriesAFinishedTurn` asked of the aggregate, and the domain does **not** already answer it: `PresenceMark.buriesAFinishedTurn` is per product, and the case this surface now has to draw — Codex holding nothing but a finished row while Claude Code runs — is true of the aggregate and false of every product in it. The same correction is owed to `MonitorStore.spokenBuriedCompletionText`, which folds the per-product flag today (§10).
@@ -288,7 +288,7 @@ Three things, all consequences rather than choices:
 
 The setting survives, simplified. With one aggregate mark the leading wing is **simply present or absent**; §8.4's per-product table and its "which mark it is, is said by hue" sentence both go.
 
-**What brings the wing out is unchanged.** Approval, input, and a Completed turn nobody has read — and the buried case still counts, with the mark drawing Radar, exactly as §8.4 already has it per product. `Working…` alone asks for nobody and keeps the bar at the cut-out.
+**What brings the wing out is unchanged.** Approval, input, and a Completed turn nobody has read — and the buried case still counts, with the mark drawing Rain, exactly as §8.4 already has it per product. `Working…` alone asks for nobody and keeps the bar at the cut-out.
 
 **The counts are the whole list's, whatever brought the wing out.** The setting
 decides whether the leading wing is drawn; it never decides what the numerals

@@ -140,7 +140,7 @@ but never the default.
 ## 6. The picker
 
 The swatches were chosen against a live page that draws all 36 in the real Running state — the
-36-frame radar track from `MatrixTrack.radar`, each cell delayed by the bearing of its own centre —
+36-frame rain track from `MatrixTrack.rain`, each column delayed by the frame its own drop begins on —
 with controls for both lightnesses, a chroma multiplier and the unlit ratio, at sizes down to the
 true `16.6`. It generates the `MatrixInk` for whatever is selected.
 
@@ -155,7 +155,7 @@ again only if the other two chromas are ever offered.
 
 ## 7. The reference mark
 
-**The row shows the mark, not a swatch.** What it hands over is the ink of the one 4×4 mark the
+**The row shows the mark, not a swatch.** What it hands over is the ink of the one 5×5 mark the
 collapsed surface draws — on black, at `16.6 pt`, lighting and falling away on a pattern — and a
 disc of the lit value said almost none of that. Worse, it said it at the one lightness the whole
 palette shares (§2): twelve discs at `L 0.922` and `C 0.016` are twelve pale circles, so the
@@ -167,36 +167,45 @@ ink.
 
 - **At rest it is `inactive`** — dim, still, and the honest answer to what the mark looks like on a
   bar with nothing waiting on anybody.
-- **A change of selection runs `running` twice round**, `2.4 s`, two whole turns of the radar. The
+- **A change of selection runs `running` twice round**, `2.4 s`, two whole turns of the rain. The
   hue is then seen lit, mid-decay and nearly out *at the same instant*, which is the range the eye
   wants drawn side by side rather than one reading after another.
 - **It starts at its first frame** (`NotchStatusMatrix.startsAtItsFirstFrame`). A mark on the bar is
   anchored to a per-period grid so two of them saying the same thing say it in step; a specimen has
   nothing beside it to be in step with and runs for a counted two loops, so the grid would only
-  start the beam at whatever bearing the clock was at and stop it the same distance short. Changing
-  hue mid-sweep restarts it in the new colour rather than queueing behind the old one.
+  start the drops wherever the clock happened to have them and stop them the same distance short.
+  Changing hue mid-sweep restarts it in the new colour rather than queueing behind the old one.
 - **It cuts in and dissolves out**, both from the rule the mark already has
   (`MatrixIndicatorView.dissolves(from:to:)`) rather than from anything this row asks for: a hue
   change is a different drawing, so the sweep lands on the press; the return is the same ink
-  changing state, so the beam sinks back into the still instead of snapping to it.
+  changing state, so the rain sinks back into the still instead of snapping to it.
 
-### Why the radar and not the double knock
+### Why the rain and not the double knock
 
 The first build of this ran `approvalNeeded`. Both patterns loop in `1.2 s`, so the only thing
 separating them is how much of that loop has colour in it — and the knock is mostly dark by design.
 It is two beats `300 ms` apart and then `900 ms` at `0.05`, the darkest this surface ever goes: for
-**22 of its 36 frames every cell together sits at or under `0.142`**, below even the `0.150` the
+**20 of its 36 frames every cell together sits at or under `0.142`**, below even the `0.150` the
 resting mark holds. Judging `Rose` against `Clay` from that means judging it from four flashes.
 
-The radar decays instead of stopping, so it is never off anywhere:
+The rain always has a drop somewhere, so it is never off everywhere:
 
-| Measured over one loop | Radar (`running`) | Double knock (`approvalNeeded`) |
+| Measured over one loop | Rain (`running`) | Double knock (`approvalNeeded`) |
 | --- | --- | --- |
-| Brightest cell, worst frame | `0.853` | `0.050` |
-| Mean cell level, range across frames | `0.330` – `0.417` | `0.050` – `1.000` |
-| Frames at or below the resting `0.150` | none | 22 of 36 |
+| Brightest cell, worst frame | `0.749` | `0.050` |
+| Mean cell level, range across frames | `0.253` – `0.309` | `0.050` – `1.000` |
+| Frames at or below the resting `0.150` | none | 20 of 36 |
 
-Two `1.2 s` loops of the radar therefore show the hue continuously; two of the knock showed it for
+Two `1.2 s` loops of the rain therefore show the hue continuously; two of the knock showed it for
 about a tenth of the time it was on screen. The knock's other supposed advantage — that it has no
 spatial reading to compete with the colour — turns out to be the same fact stated kindly: what it
 has instead of a reading is silence.
+
+> **The rain spends less light than the radar it replaced**, which is the cost of having gaps at
+> all — gaps are what make it fall rather than turn. Worst-frame brightest cell went `0.853` →
+> `0.749` and the mean band `0.330`–`0.417` → `0.253`–`0.309`. The claim the row rests on is the
+> comparison above rather than those absolutes, and it is unchanged: none of the rain's frames are
+> under the resting level and more than half the knock's are.
+
+> The previous figure here was `22 of 36`; the knock's track has 20 samples at or under `0.150`,
+> and 20 is also the count at or under `0.142`. Corrected in passing.

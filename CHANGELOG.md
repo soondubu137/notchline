@@ -44,7 +44,7 @@ Those shipped with `0.1.0` still stand, with one addition measured while fixing 
 
 ### What it does
 
-- **Live status without another window.** The collapsed surface wraps a physical notch, or becomes a compact pill on a display without one. One 4×4 matrix per product tells `Running`, `Input needed`, `Approval needed` and `Completed` apart by motion rather than by colour alone, with a column of session dots, the most urgent state name, one subagent badge per product and the longest turn's elapsed time.
+- **Live status without another window.** The collapsed surface wraps a physical notch, or becomes a compact pill on a display without one. One 5×5 matrix per product tells `Running`, `Input needed`, `Approval needed` and `Completed` apart by motion rather than by colour alone, with a column of session dots, the most urgent state name, one subagent badge per product and the longest turn's elapsed time.
 - **One list for both products.** Codex Desktop and Claude Code Threads share a single urgency-sorted panel on hover, each row carrying its Project, title, current-content preview, live reading and subagent count. Finished rows stay until they are read, navigated to, or dismissed with a secondary click.
 - **Navigation back to the originating work.** A Codex row is confirmed still navigable before its official deep link is used. Claude Code rows raise Claude Desktop or the originating terminal; Terminal.app and iTerm2 select the exact tab when its tty is known.
 - **Quota and daily usage.** The panel's footer draws Codex's primary rate-limit window, Claude Code's 5-hour and 7-day windows and today's token count, and folds down to the totals line. A reading that cannot be trusted is shown as unavailable rather than estimated.

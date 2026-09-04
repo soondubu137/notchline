@@ -418,14 +418,15 @@ struct NotchlineTests {
         // Row 0 is the top row, which is what makes "above" mean above.
         #expect(MatrixIndicatorView(frame: .zero).isFlipped)
 
-        // Six cells a side, four on the seam itself.
+        // Ten cells a side, five on the seam itself.
         let sides = (0 ..< MatrixGrid.cellCount)
             .map { MatrixIndicatorView.DiagonalSide.of(cell: $0) }
         #expect(sides == [
-            .above, .above, .above, .onSeam,
-            .above, .above, .onSeam, .below,
-            .above, .onSeam, .below, .below,
-            .onSeam, .below, .below, .below
+            .above, .above, .above, .above, .onSeam,
+            .above, .above, .above, .onSeam, .below,
+            .above, .above, .onSeam, .below, .below,
+            .above, .onSeam, .below, .below, .below,
+            .onSeam, .below, .below, .below, .below
         ])
 
         // The trailing half is the lower-right one: y grows downwards, so the
@@ -623,20 +624,19 @@ struct NotchlineTests {
         )
     }
 
-    /// Each state draws the pattern its design file draws.
+    /// Each state draws the pattern the sheet draws.
     ///
-    /// The four files in `design/assets/matrix-states/` are the contract, and
-    /// what makes them checkable is that each writes one waveform sixteen
-    /// times at sixteen offsets. The code holds the waveform once and computes
-    /// the offsets, so the offsets are the half that can drift silently — a
-    /// sign flipped on the radar's bearing sweeps it anticlockwise and still
-    /// looks like a radar. They are transcribed here from the files.
+    /// Every one of the four writes one waveform twenty-five times at
+    /// twenty-five offsets. The code holds the waveform once and computes the
+    /// offsets, so the offsets are the half that can drift silently — an even
+    /// spacing on the rain's column starts puts all five heads on a diagonal
+    /// and still looks like rain. They are transcribed here.
     ///
     /// Read off the layers rather than off ``NotchMatrixState/track(forCell:)``
     /// so that what is asserted is what the render server is actually given,
     /// closing keyframe and all.
     @Test @MainActor
-    func eachStateDrawsThePatternItsDesignFileDraws() throws {
+    func eachStateDrawsThePatternTheSheetDraws() throws {
         /// The lit cells of one mark, in row-major order.
         func cells(_ state: NotchMatrixState) throws -> [CALayer] {
             let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
@@ -651,46 +651,64 @@ struct NotchlineTests {
             )
             return try #require(animation.values as? [NSNumber]).map(\.doubleValue)
         }
+        // `CALayer.opacity` is a Float, so a level read back off a layer is
+        // only good to about 6e-8. Every difference this test cares about is
+        // larger than a thousandth.
+        func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-6 }
 
-        // Radar: 36 frames, and the frame each cell lights on is the bearing of
-        // its centre from the mark's, swept clockwise.
-        let radar = try cells(.running)
-        #expect(radar.count == MatrixGrid.cellCount)
-        let radarPeaks = [
-            23, 26, 29, 32,
-            20, 23, 32, 35,
-            17, 14, 5, 2,
-            14, 11, 8, 5
+        // Rain: 36 frames. A row's own curve — the lower the row, the later its
+        // head and the more of its tail is still lit when the column's window
+        // closes — started on the frame that column's drop begins.
+        let rain = try cells(.running)
+        #expect(rain.count == MatrixGrid.cellCount)
+        // Head at frame `3 × row + 6`, plus the column's own start. The starts
+        // are 0, 21, 8, 29, 14: uneven, so the five heads never line up.
+        let rainPeaks = [
+             6, 27, 14, 35, 20,
+             9, 30, 17,  2, 23,
+            12, 33, 20,  5, 26,
+            15,  0, 23,  8, 29,
+            18,  3, 26, 11, 32
         ]
-        for (index, cell) in radar.enumerated() {
+        for (index, cell) in rain.enumerated() {
             let track = try values(cell)
             // 36 frames plus the repeat of frame 0 that closes the loop.
             #expect(track.count == 37)
             #expect(track.first == track.last)
-            #expect(track[radarPeaks[index]] == 1)
-            // And it decays to the radar's own floor, never to black.
-            #expect(track.min() == 0.139)
+            let brightest = try #require(track.max())
+            #expect(track.firstIndex(of: brightest) == rainPeaks[index])
+            // Every drop falls back to the shared floor and no further.
+            #expect(close(try #require(track.min()), 0.15))
         }
+        // Only the top row's head reaches full: it is the least decayed, and
+        // the stretch is taken over all five rows at once so that the
+        // difference between a drop at the top and one at the bottom survives.
+        #expect(close(try #require(values(rain[0]).max()), 1))
+        #expect(try #require(values(rain[MatrixGrid.cellCount - 1]).max()) < 0.95)
 
-        // Advance: one column at full for a quarter of the loop, left to
-        // right, over a bottom row that holds and never animates.
-        let advance = try cells(.inputNeeded)
-        for (index, cell) in advance.enumerated() {
-            let row = index / MatrixGrid.side
-            let column = index % MatrixGrid.side
-            guard row < MatrixGrid.side - 1 else {
-                #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
-                #expect(cell.opacity == 0.3)
-                continue
-            }
+        // Wedge: 40 frames, every cell on one curve. Eight frames a column, and
+        // six more for every row away from the middle — the three quarters of a
+        // cell the middle row leads by. Nothing is exempt and nothing is still.
+        let wedge = try cells(.inputNeeded)
+        let wedgePeaks = [
+            12, 20, 28, 36,  4,
+             6, 14, 22, 30, 38,
+             0,  8, 16, 24, 32,
+             6, 14, 22, 30, 38,
+            12, 20, 28, 36,  4
+        ]
+        for (index, cell) in wedge.enumerated() {
             let track = try values(cell)
-            #expect(track.count == 25)
-            let lit = track.indices.filter { track[$0] == 1 }
-            #expect(lit == Array(column * 6 ..< column * 6 + 6) + (column == 0 ? [24] : []))
-            #expect(track.min() == 0.05)
+            #expect(track.count == 41)
+            #expect(track.first == track.last)
+            #expect(track.firstIndex(of: try #require(track.max())) == wedgePeaks[index])
+            // The band wraps, so every cell takes the front and the floor.
+            #expect(close(try #require(track.max()), 1))
+            #expect(close(try #require(track.min()), 0.15))
         }
 
-        // Double knock: every cell together, twice, 300ms apart.
+        // Double knock: every cell together, twice, 300ms apart. Carried across
+        // from the 4×4 mark unchanged.
         let knock = try cells(.approvalNeeded)
         let knockTrack = try values(knock[0])
         #expect(knockTrack.count == 37)
@@ -699,42 +717,64 @@ struct NotchlineTests {
             #expect(try values(cell) == knockTrack)
         }
 
-        // Lull: the crest crosses the anti-diagonal, so a cell's track is the
-        // first cell's delayed by its own diagonal's share of those 48.7
-        // frames, and cells on one diagonal are the same track exactly.
-        let lull = try cells(.completed)
-        let first = try values(lull[0])
-        #expect(first.count == 61)
-        // Full at the crest, and down to the trough the design file rests at.
-        #expect(first.max() == 1)
-        #expect(first.min() == 0.182)
-        let lullDelays = [0, 8, 16, 24, 32, 41, 49]
-        for (index, cell) in lull.enumerated() {
-            let delay = lullDelays[index / MatrixGrid.side + index % MatrixGrid.side]
-            let expected = (0 ... 60).map { first[(($0 - delay) % 60 + 60) % 60] }
+        // Bars: rows 0, 2 and 4 breathe eleven frames apart; rows 1 and 3 are
+        // the gaps between them and never animate at all.
+        let bars = try cells(.completed)
+        let barsFirst = try values(bars[0])
+        #expect(barsFirst.count == 61)
+        #expect(close(try #require(barsFirst.max()), 1))
+        #expect(close(try #require(barsFirst.min()), 0.32))
+        for (index, cell) in bars.enumerated() {
+            let row = index / MatrixGrid.side
+            guard row % 2 == 0 else {
+                #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
+                #expect(close(Double(cell.opacity), 0.15))
+                continue
+            }
+            let delay = row / 2 * 11
+            let expected = (0 ... 60).map { barsFirst[(($0 - delay) % 60 + 60) % 60] }
             #expect(try values(cell) == expected)
         }
 
-        // Connected and disconnected: a still, held between the floors the
-        // four live patterns fall to. The ordering is the claim, not the
-        // number — a mark waiting on the user must be darker than a resting
-        // one, and a finished turn must never be darker — and it is what a
-        // revised design file moves without touching the resting level, which
-        // is how the lull came to rest at `0.182` against a resting `0.180`.
-        // So it is read off the tracks rather than retyped.
+        // Connected and disconnected: a still, at the level three of the four
+        // patterns now floor at. That shared floor is why the old argument —
+        // that the resting grey threaded between the levels the patterns fell
+        // to — is not what keeps them apart any more.
         let inactive = try cells(.inactive)
         for cell in inactive {
             #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
         }
         let resting = Double(inactive[0].opacity)
-        let advanceFloor = try #require(values(advance[0]).min())
-        let knockFloor = try #require(values(knock[0]).min())
-        let radarFloor = try #require(values(radar[0]).min())
-        let lullFloor = try #require(first.min())
-        #expect(advanceFloor < resting)
-        #expect(knockFloor < resting)
-        #expect(radarFloor < resting)
-        #expect(resting < lullFloor)
+
+        // What keeps them apart is that no live pattern is ever at its floor
+        // everywhere at once. A mark with something behind it always has a lit
+        // cell; a mark with nothing behind it never does.
+        func dimmestMark(_ cells: [CALayer]) throws -> Double {
+            var animated: [[Double]] = []
+            var stillTotal = 0.0
+            for cell in cells {
+                if cell.animation(forKey: "notch.matrix.opacity") == nil {
+                    stillTotal += Double(cell.opacity)
+                } else {
+                    animated.append(try values(cell))
+                }
+            }
+            let frames = animated.first?.count ?? 1
+            return (0 ..< frames)
+                .map { frame in
+                    (animated.reduce(stillTotal) { $0 + $1[frame] })
+                        / Double(MatrixGrid.cellCount)
+                }
+                .min() ?? 0
+        }
+        #expect(try dimmestMark(rain) > resting)
+        #expect(try dimmestMark(wedge) > resting)
+        #expect(try dimmestMark(bars) > resting)
+        // And the one ordering that still has to hold on the level alone: a
+        // mark waiting on a decision is darker in its silence than a mark with
+        // nothing behind it, which is half of how Approval asks.
+        #expect(try #require(values(knock[0]).min()) < resting)
+        #expect(try dimmestMark(knock) < resting)
     }
 
     /// A mark arrives out of the dark and sinks back into it.
@@ -4091,32 +4131,39 @@ struct NotchlineTests {
 
     /// **The reference mark sweeps twice, and the sweep is why it is legible.**
     ///
-    /// `Mark colour` answers a change of selection by running the radar for two
+    /// `Mark colour` answers a change of selection by running the rain for two
     /// whole turns, so the hue is seen lit, mid-decay and nearly out at once,
     /// on the surface it will actually be drawn on. It used to run the double
     /// knock, and that is the choice this pins: both patterns loop in `1.2s`,
     /// so what separates them is only how much of that loop has colour in it.
     /// The knock is four flashes and then the darkest this surface ever goes —
-    /// every cell together, well under the resting level, for most of the loop
-    /// — which is a hue shown for a tenth of the time it is on screen.
+    /// every cell together, under the resting level for twenty of its
+    /// thirty-six frames — which is a hue shown for a tenth of the time it is
+    /// on screen. The rain is under it on none of them.
     @Test @MainActor
     func theMarkColourSpecimenSweepsTwiceAndStaysLitThroughout() throws {
-        let radar = NotchMatrixState.running
-        let period = try #require(radar.period)
+        let rain = NotchMatrixState.running
+        let period = try #require(rain.period)
         #expect(AggregateInkSpecimen.sweepDuration == period * 2)
 
-        let cells = (0 ..< MatrixGrid.cellCount).map { radar.track(forCell: $0) }
-        let frames = try #require(cells.first?.count)
-        // The beam is one waveform at sixteen bearings, so no two frames of the
-        // loop draw the same mark and every frame draws a range.
-        func mark(at frame: Int) -> [Double] { cells.map { $0[frame % frames] } }
+        let cells = (0 ..< MatrixGrid.cellCount).map { rain.track(forCell: $0) }
+        let frames = cells.map(\.count).max() ?? 1
+        // Five drops on five different clocks, so no two frames of the loop
+        // draw the same mark and every frame draws a range.
+        func mark(at frame: Int) -> [Double] { cells.map { $0[frame % $0.count] } }
+        #expect(Set((0 ..< frames).map { mark(at: $0) }).count == frames)
 
         let brightest = (0 ..< frames).map { mark(at: $0).max() ?? 0 }
-        let average = (0 ..< frames).map { mark(at: $0).reduce(0, +) / 16 }
-        // Continuously legible: on every frame of the loop some cell is nearly
-        // full, and the mark as a whole never sinks to a flat dark.
-        #expect((brightest.min() ?? 0) > 0.85)
-        #expect((average.min() ?? 0) > 0.3)
+        let average = (0 ..< frames).map {
+            mark(at: $0).reduce(0, +) / Double(MatrixGrid.cellCount)
+        }
+        // Continuously legible: on every frame of the loop some cell is at
+        // least three quarters lit, and the mark as a whole never sinks to a
+        // flat dark. The rain spends less light than the radar it replaced —
+        // it has gaps, which is what makes it fall — so these are lower than
+        // they were, and the claim they carry is the comparison below.
+        #expect((brightest.min() ?? 0) > 0.7)
+        #expect((average.min() ?? 0) > 0.25)
         // And the pattern it replaced, measured the same way: for most of its
         // loop the whole grid is darker than the still it is drawn against.
         let resting = try #require(NotchMatrixState.inactive.track(forCell: 0).first)
