@@ -69,7 +69,7 @@ Figma page 09 draws `[Codex] notchline`; page 10 draws `[Codex] · notchline`, c
 
 [`figma-design.md`](figma-design.md) §4.7 puts the reading — a duration — on the white ground, and Figma page 06 draws `0:42` there. [`answer-in-notch.md`](answer-in-notch.md) §3.3 says the mark says `Approval needed` or `Input needed`, and page 10 draws that.
 
-**The name, and it is the composition that decides it rather than either document.** §3.3 also holds that the ground **does not resize** when the word inside it becomes `Answer` under the pointer or under keyboard focus — and a ground sized for `0:42` cannot hold `Answer` without moving. So the ground is sized for the longest name it can say, and the duration keeps the place it already had: the finished row's dark ground, the one object on this panel that reports how long a Turn took.
+**The name, and it is the composition that decides it rather than either document.** §3.3 also holds that the ground **does not resize** when the word inside it becomes `Answer` under the pointer — nor under keyboard focus, once [`answer-in-notch.md`](answer-in-notch.md) §9.3 gives it one — and a ground sized for `0:42` cannot hold `Answer` without moving. So the ground is sized for the longest name it can say, and the duration keeps the place it already had: the finished row's dark ground, the one object on this panel that reports how long a Turn took.
 
 ## 4. How big it is
 
@@ -111,7 +111,7 @@ Nothing new, and as of 2026-09-05 nothing undecided either. All six were put to 
 | 03 | How does a user learn that quota is unreadable? | [`quota-footer-v2.md`](quota-footer-v2.md) §8.5 q01 | **The field says so itself.** `-- today`, `-- left`, `--` — the unreadable field is replaced in its own place, with its unit if it has one, and marked in no other way |
 | 04 ★ | Will this app keep the `tool_input` it is already sent? | [`answer-in-notch.md`](answer-in-notch.md) §15 q02 | **Under investigation.** Ours, and still the first thing to build |
 | 05 ★ | Will either product accept an answer from outside it? | [`answer-in-notch.md`](answer-in-notch.md) §15 q01 | **Under investigation.** Gates the answering half alone; §11's reading form ships without it |
-| 06 | Which chord, and what happens when it is taken? | [`answer-in-notch.md`](answer-in-notch.md) §15 q03 | **`⌥Space`, as recommended** — user-settable, registered so a clash fails at registration, with the settings row showing the chord actually held |
+| 06 | Which chord, and what happens when it is taken? | [`answer-in-notch.md`](answer-in-notch.md) §15 q03 | **`⌥Space`, as recommended** — user-settable, registered so a clash fails at registration, with the settings row showing the chord actually held. **Since answered, and deferred**: the answering experience ships pointer-first, and the chord with the rest of the keyboard ([`answer-in-notch.md`](answer-in-notch.md) §1.1, §9.3). The answer stands for when it lands, and nothing on this page moves either way |
 
 **Five of the six close without moving a figure on this page.** Question 02 is the exception, and it takes something off rather than adding it: the footer loses its second closed height, so the composed panel is `308` in every state the user did not open.
 

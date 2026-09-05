@@ -2,24 +2,38 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, not implemented.** Two dependencies gate it and they are not the same size: §14.1 is one field this app already receives and discards, and §14.2 is a capability neither product offers. The reading half needs only the first. |
-| Version | 1.1 |
+| Status | **Designed, not implemented, and it ships in three stages.** §11 reads a request and needs only §14.1, one field this app already receives and discards. §3 to §8 answer one with the pointer and need §14.2, a capability neither product offers. §9.3 — the chord, and everything that navigates without a pointer — is designed, deferred behind both, and kept here whole. |
+| Version | 1.2 |
 | Date | 2026-09-05 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `10 — The answer`. `11 — The panel, whole` redraws the open row on the composed surface and corrects §12's panel column — see [`panel-v2.md`](panel-v2.md). |
-| Scope | What happens between a request arriving and a person answering it: how the request reaches somebody who is not looking at the notch, every shape the two products ask in, what an opened row draws for each of them, which key does what, and what the row becomes once the answer has gone. The band, the quota footer and both collapsed forms are untouched, and nothing here reaches the collapsed surface. |
-| Supersedes | [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 entire. Four of its clauses are corrected rather than extended, each marked below: §3.1's opening gesture (§3), §3.2's fade and its three-line cap (§4), §3.4's forces on the affirmative (§6), §3.5's close-on-send (§8). §2 — the Recent queue — is untouched and independent. |
+| Scope | What happens between a request arriving and a person answering it: how the request reaches somebody who is not looking at the notch, every shape the two products ask in, what an opened row draws for each of them, what a click takes, which keys the panel answers to and which wait for the keyboard half, and what the row becomes once the answer has gone. The band, the quota footer and both collapsed forms are untouched, and nothing here reaches the collapsed surface. |
+| Supersedes | [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 entire. Three of its clauses are corrected rather than extended, each marked below: §3.1's opening gesture (§3), §3.2's fade and its three-line cap (§4), §3.5's close-on-send (§8). A fourth — §3.4's forces on the affirmative — **is not corrected in the initial version**: it is right for a surface answered with the pointer, and the correction arrives with the keys that make it necessary (§6, §9.3). §2 — the Recent queue — is untouched and independent. |
 
-## 1. What this designs, and the two things it waits on
+## 1. What this designs, what it waits on, and what it ships first
 
 [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 established the idea: a row already draws a bright ground on exactly the two states with something to answer, so make that ground the control. It then drew one open approval row and stopped. Three things were left undone, and each of them turns out to decide the shape of the whole.
 
-**The journey was never designed, only the destination.** A request arrives while a person is inside an editor or a terminal with both hands on the keyboard. Answering it today costs eleven steps — notice, look up, find the pointer, travel to the notch, hover, hold still, read one truncated line, click the row, wait for the product to take the screen, find the dialogue, answer, come back — of which six cannot be taken without the pointer and only five happen on a surface this app draws. What disturbs the work is not the answering. It is the journey to the place where answering is possible.
+**The journey was never designed, only the destination.** A request arrives while a person is inside an editor or a terminal with both hands on the keyboard. Answering it today costs eleven steps — the bar knocks, look up, find the pointer, travel to the notch, hover and hold still, read one truncated line, click the row, the product takes the screen, find the dialogue, answer, come back — of which six cannot be taken without the pointer and only five happen on a surface this app draws. What disturbs the work is not the answering. It is the journey to the place where answering is possible — and that journey has two halves, **the travel to the notch and the departure to the product**, which are removed by different things. §1.1 is why they are removed in a different order.
 
 **One shape was designed for; there are seven.** Both products ask in more than one way, and the ways are not interchangeable: one carries a command, one carries a document, one carries a list of answers somebody else wrote, and one carries a form built at run time by code this app has never seen. §2 enumerates them from the event set this app already registers.
 
 **The request itself has never reached this app.** `HookPayload` decodes `tool_name` and `tool_use_id` and not `tool_input`; `HookPayloadDistiller` steps over every top-level key `CodingKeys` does not name. That is deliberate and correct — an oversized `PostToolUse` tool result once took a lifecycle event down with it (CR-030) — but its effect is that the bytes for every request below already arrive on the socket and are discarded one step before the decode. §14.1.
 
 **What follows adds no region, no ink, no corner and no curve.** Every state in it is an object the panel already draws, given one more dimension.
+
+### 1.1 Three stages, and the initial version is the second
+
+| | Stage | What it waits on | The journey it leaves |
+| --- | --- | --- | --- |
+| 01 | **Read it here** — §11 | §14.1, one field this app already throws away | Eleven steps still, and not one of them a guess: the reader decides whether to leave at all knowing the whole request, instead of leaving in order to find out what it says |
+| 02 | **Answer it here, with the pointer** — §3 to §8 | §14.2, a write path per product | **Eight steps on one surface**: the bar knocks, look up, find the pointer, travel to the notch, click the mark, read it in full, type or don't, click the answer |
+| 03 | **Answer it here, without the pointer** — §9.3 | Nothing outside this app: a chord, and the navigation under it | **Five steps and no pointer**: the bar knocks, `⌥Space`, read it in full, type or don't, `⏎` |
+
+**Stage 02 is the initial version of this experience, and stage 03 is deferred.** This document keeps stage 03 whole rather than deleting it: the argument is the expensive part, and half a keyboard model is worse than none.
+
+Eleven to eight removes four steps, **three of which belonged to another application** — the screen surrendered, the dialogue found, the journey back — and turns the single act of answering into two, which is what doing it here costs. Eight to five removes four more, **three of which are the pointer's**. Both are worth having, and the first is at once the larger removal and the cheaper one to build: it needs a write path and no new mechanic, where the chord is the only genuinely new mechanic on this page — a global hotkey that can fail at registration, a settings row to report what it actually holds, and a keyboard model that has to be complete before it is honest. **Shipping them together would hold the larger saving behind the smaller one.**
+
+Nothing is thrown away by taking them in this order. Every object stage 03 touches is one stage 02 already draws; it adds keys, and the only thing it draws is a word this surface already draws under the pointer (§3.3). What waiting for it costs is stated where it is felt — §13.3, and it is not merely a delay: **the initial version cannot be operated from the keyboard alone.**
 
 ## 2. The forms a request arrives in
 
@@ -75,9 +89,9 @@ Where the mark was, an open row draws **the quota block's own control unchanged*
 
 ### 3.3 The word in the mark
 
-At rest the mark says `Approval needed` or `Input needed`. Under the pointer **or under keyboard focus** it says `Answer` where the request can be answered here and `Read` where it cannot (§11). **The ground does not resize** — only the word inside it changes, so nothing on the row moves under a passing pointer. Which settles what the ground says at rest: it is sized for the longest name it can hold, so [`figma-design.md`](figma-design.md) §4.7's *reading* — a duration — cannot be what is in it, or `Answer` would not fit without moving it. The duration keeps the place it already had, on the finished row's dark ground ([`panel-v2.md`](panel-v2.md) §3.5).
+At rest the mark says `Approval needed` or `Input needed`. Under the pointer it says `Answer` where the request can be answered here and `Read` where it cannot (§11). **The ground does not resize** — only the word inside it changes, so nothing on the row moves under a passing pointer. Which settles what the ground says at rest: it is sized for the longest name it can hold, so [`figma-design.md`](figma-design.md) §4.7's *reading* — a duration — cannot be what is in it, or `Answer` would not fit without moving it. The duration keeps the place it already had, on the finished row's dark ground ([`panel-v2.md`](panel-v2.md) §3.5).
 
-Drawing the word under focus as well as under the pointer is **a correction to §6** of the superseded document, and §9 is why: once the chord makes the keyboard the primary path, a keyboard user would otherwise never see the affordance they are about to use.
+Drawing the word under keyboard focus as well as under the pointer would be **a correction to §6** of the superseded document, and it is **not made in the initial version**: with no keyboard path there is no focus to draw it under. It arrives with the keys that create one, because a keyboard user would otherwise never see the affordance they are about to use — §9.3.
 
 ## 4. The body
 
@@ -110,7 +124,7 @@ A plan's product offers three answers: accept and auto-approve the edits that fo
 
 A fade is right for a title, where what is lost is more of the same sentence. It is wrong for a command, where what is lost may be a second command after `&&`, a `--force`, or a path outside the project. So the body ends in **a count of the lines not on screen** — `+2 lines`, `11` pt at `#7C7C80`, at the body's trailing foot over the fade its last line already has — and the count **clears when the last line is on screen**.
 
-A count that names something unreachable is an apology, which is why the two arrived together: the body scrolls on the pointer's wheel and on the arrow keys where the row has no answers to move between (§6.2), with a `1.5` pt rail at the body's trailing edge in the panel's own hairline value (white at `15%`) and a thumb at white `50%`. **Nothing else on this surface scrolls, and nothing else needs to.**
+A count that names something unreachable is an apology, which is why the two arrived together: the body scrolls on the pointer's wheel — the only thing that scrolls it until §9.3's arrows land — with a `1.5` pt rail at the body's trailing edge in the panel's own hairline value (white at `15%`) and a thumb at white `50%`. The rail reports where the reader is; at `1.5` points it is not a grip, and it is never the only way to move. **Nothing else on this surface scrolls, and nothing else needs to.**
 
 ### 4.5 Wrapping preserves what indentation meant
 
@@ -130,7 +144,7 @@ No verb list, no warning glyph, no colour, ever. A heuristic that knows `rm` doe
 | An option | `24` | Numeral, label, description, on one line |
 | The answer row | `28` | The field and `Send` |
 
-An option's numeral is `11` pt SF Mono at `#6E6E73` at `+9` from the option's leading edge; the label is `13` pt Medium at `#F5F5F7` at `+28`; the description follows it after `12`, `13` pt Regular at `#7C7C80`, ending in the row's own fade. **The focused option carries the white ground** across the full content width at corner `4`, with its label at `#0D0D0F` and its numeral and description at `#5A5A5E`.
+An option's numeral is `11` pt SF Mono at `#6E6E73` at `+9` from the option's leading edge; the label is `13` pt Medium at `#F5F5F7` at `+28`; the description follows it after `12`, `13` pt Regular at `#7C7C80`, ending in the row's own fade. **The option the ground is on carries the white ground** across the full content width at corner `4`, with its label at `#0D0D0F` and its numeral and description at `#5A5A5E`. An option under the pointer takes the list's own hover fill instead, and the ground does not move to meet it (§6.6).
 
 ### 5.2 The position in the set
 
@@ -149,7 +163,7 @@ Both products accept an answer that is not on the list, and it is often the real
 
 ### 5.5 Several answers means no option can be the return key
 
-With `multiSelect` the ground **starts on `Send` and never leaves it**, the numerals become `12 × 12` boxes at corner `4` — `#242424` empty, the theme ink's lit value filled — and the space bar ticks the focused one. The alternative, `⏎` toggling and something else sending, would make the brightest object on the row stop being what `⏎` does, on the one form where a person is most likely to press it twice.
+With `multiSelect` the ground **starts on `Send` and never leaves it**, the numerals become `12 × 12` boxes at corner `4` — `#242424` empty, the theme ink's lit value filled — and a click on a box or its label ticks it. (`Space` ticks the option the ground is on when §9.3 lands. Until it does, no option ever holds the ground — it never leaves `Send` — so a click is the only thing that could tick one.) The alternative, `⏎` toggling and something else sending, would make the brightest object on the row stop being what `⏎` does, on the one form where a person is most likely to press it twice.
 
 ### 5.6 A restatement is a question whose question is long
 
@@ -159,38 +173,44 @@ Claude Code will sometimes put back what it understood and ask whether that is r
 
 **The brightest object on the row is always the thing the return key will do.**
 
-It begins on the affirmative, or on the first option a question offers. **Only two forces move it**, and both are the person's own act:
+It begins on the affirmative, or on the first option a question offers. **One force moves it in the initial version, and it is the person's own act: typing**, which moves it to the answer that carries text — `Deny` on an approval, `Send` on a question — because a note cannot travel with a yes. The answer it left is still clickable and still discards what was typed; it is simply no longer the key.
 
-1. **The arrow keys**, which move it along whatever answers this row has — two on an approval, up to four options and a field on a question, one on a question with nothing to pick.
-2. **Typing**, which moves it to the field, because a note cannot travel with a yes. The answer it left is still clickable and still discards what was typed; it is simply no longer the key.
-
-This is **a correction to §3.4**, which gave typing that job alone. With the chord in §9 making the keyboard the primary path, a rule that only typing moves the ground leaves the non-default answer reachable by pointer alone — approving with a note attached becomes a mouse-only act.
+**§3.4 therefore stands as written**, and the second force it needs is deferred with the keys that need it. Once the arrow keys exist they move the ground along whatever answers this row has — two on an approval, up to four options and a field on a question, one on a question with nothing to pick — and the rule becomes *only two forces, and both are the person's own act*. That is a correction to §3.4 the moment there is a keyboard user, because a rule where only typing moves the ground would leave the non-default answer reachable by pointer alone. Until there is one, nothing on the row is out of reach: every answer is one click away (§6.6). §9.3.
 
 ### 6.1 One rule, every form
 
-An approval has two answers, a question up to five, a plan two, and a question with nothing to pick one. On all of them the ground is the current answer, the arrows move it, `⏎` takes it, and typing sends it to the field. **There is no second selection model for lists and no separate default-button concept underneath — the ground is the state.**
+An approval has two answers, a question up to five, a plan two, and a question with nothing to pick one. On all of them the ground is the current answer, a click takes whichever answer it lands on, `⏎` takes the one the ground is on, and typing moves the ground to the answer that carries text. **There is no second selection model for lists and no separate default-button concept underneath — the ground is the state.**
 
-### 6.2 The arrows split by axis, and only where they have to
+### 6.2 The wheel is the only thing that scrolls, and the list does not walk
 
-On a row whose body holds **options**, all four arrows move the ground and the body scrolls to keep it in view. There is no second axis to give away.
+The pointer's wheel scrolls a body taller than the space it has, and nothing else does. With no row open there is nothing to move at all: opening is a click on a mark, and the list is browsed by hover exactly as it always was.
 
-On a row whose body holds **no answers** — a command, a patch, a plan — the body may be taller than the row while the answers are two controls side by side, so the axes divide the way the drawing already does: **`←` and `→` move the ground between the two answers, and `↑` and `↓` scroll the body.** That is the whole of it; no key is overloaded and none is added.
+The arrows arrive with §9.3, and so does the one thing they need decided — that on a row whose body holds **options** all four move the ground and the body scrolls to keep it in view, while on a row whose body holds **no answers** the axes divide the way the drawing already does: `←` and `→` between the two controls, `↑` and `↓` down the body. That argument is kept there rather than deleted, because it is the part that took the thinking.
 
-With **no row open**, all four walk the list and `⏎` opens the row the ground is on.
+### 6.3 A ground that has not finished arriving is not a key, and not a target
 
-### 6.3 A ground that has not finished arriving is not a key
+Answering one question draws the next, and answering one request opens the next row (§8.2). Both put something the reader has never seen under a control the pointer is already on — and, later, under a return key a finger is already on. So the affirmative is **armed by the arrival it already animates**: the ground grows on the panel's own slot curve, and it takes a click, or a return, when the growth ends. Nothing new is drawn and nothing is delayed that the eye was not already waiting for.
 
-The chord opens a row, answering one question draws the next, and answering one request opens the next row (§8.2). All three put something the reader has never seen under a return key their finger is already on. So the affirmative is **armed by the arrival it already animates**: the ground grows on the panel's own slot curve, and `⏎` is live when the growth ends. Nothing new is drawn and nothing is delayed that the eye was not already waiting for.
+**This is worth more with a pointer than it was with a keyboard**, and the drawing is why: an answered row is replaced in place by the next thing to answer, so the affirmative that arrives lands where the affirmative just clicked was. A hand has to travel to press `⏎` a second time. A pointer has to do nothing at all.
 
 The rejected alternative was a fixed delay before the control becomes live, which would have been a new timing to tune and would have felt slow on the row a person opened deliberately.
 
 ### 6.4 Denial is the cheap direction
 
-An empty `Deny` sends a plain no. A `Deny` carrying text sends the text, which is the third answer both products actually offer — *no, and here is what to do instead*. Refusing is one keystroke from anywhere in the row; granting needs either an untouched field or a deliberate move back to the affirmative.
+An empty `Deny` sends a plain no. A `Deny` carrying text sends the text, which is the third answer both products actually offer — *no, and here is what to do instead*. The caret is in the field from the moment the row opens, so refusing with a reason is a sentence and a return and no travel at all; granting needs either an untouched field or a deliberate move back to the affirmative.
 
 ### 6.5 `Always` is not offered, and neither is a plan's mode
 
 Both products' second answer is *yes, and do not ask again*. It is a policy about every future request, taken from a panel showing part of the current one. Notchline answers this request and hands policy back to the product. If it is ever added it belongs beside the affirmative in the recessed ink and **never on the white ground, because the white ground is the return key**.
+
+### 6.6 What a click takes, and what hover never does
+
+The initial version is answered with the pointer, so the pointer's rules are the ones that have to be exact.
+
+- **A click takes the answer it lands on**, whether or not the ground is on it: `Approve`, `Deny`, `Send`, `Accept`, an option, or — where several answers are allowed — the tick beside one (§5.5). An option is a button. There is no select-then-confirm on this surface, because the confirm would be a second control saying what the first already said.
+- **Hover moves nothing.** An answer under the pointer takes the list's own hover fill and the white ground stays where the person's own typing left it. The ground is a statement about `⏎`, and a pointer crossing an answer is not an act.
+- **The field takes the caret when the row opens**, so a note costs no click of its own and §6.4's cheap refusal stays cheap.
+- **A click that is not on an answer is not an answer.** The body and the rail take clicks and do nothing with them. The only two regions on an open row that lead anywhere else are the chevron, which collapses it, and the row's own text, which opens the Thread (§3).
 
 ## 7. The answer row
 
@@ -230,57 +250,65 @@ It is tempting to file an answered request beside the read and the dismissed and
 Two at once is the ordinary case, not the edge one: a Turn asks while a subagent it forked is already asking ([`PRD.md`](PRD.md) §6.2 band 2). The panel gains no counter for it.
 
 - **The answered row falls exactly one place.** `Approval needed` sits directly above `Input needed` in the sort the list has always had, so with one other request waiting the two exchange places on the panel's own slot curve and nothing else moves.
-- **The next request opens itself**, with its affirmative unarmed by §6.3. The advance is the whole notification: there is another one, and here it is, already open and already read to you.
+- **The next request opens itself**, with its affirmative unarmed by §6.3 — which is what stops the click that answered the first from answering the second. The advance is the whole notification: there is another one, and here it is, already open and already legible.
 - **One row is open at a time**, and it is the subject: opening scrolls it to the top of the viewport and holds it there against re-sorting, lays the hover fill under it permanently, and drops every other row to `45%`.
 
 ### 8.3 The panel does not close on send
 
 **A correction to §3.5.** Closing on send would shut the panel in front of a second request nobody had seen. With nothing left waiting the panel **unlatches** — it hands the keyboard back and starts answering the pointer again — and that release is how it says you are finished. It still closes on `⎋`, on a click outside, and on the pointer leaving, as it always did.
 
-## 9. Arrival, and the keyboard
+## 9. Arrival, the pointer, and the keys the field keeps
 
-### 9.1 Three doors
+### 9.1 Two doors, and a third that is drawn and not built
 
 - **The knock is unchanged**, and it is still the notification. The collapsed bar draws the double-knock curve the moment a request arrives ([`compact-view-v2.md`](compact-view-v2.md)). Nothing on this page reaches the collapsed surface: it says a person is wanted, and it never says what for.
-- **The pointer keeps every door it had.** Hover browses, a click on the mark engages.
-- **The chord** brings the panel down already latched, with the first row by the existing sort already open and the caret in its field. With nothing waiting it opens the panel latched at the top of the list instead, so **the chord is never a key that sometimes does nothing** — the only variable is whether a row is already open when it lands.
+- **The pointer keeps every door it had, and in the initial version it is the only one.** Hover browses, a click on the mark engages, a click answers (§6.6). None of that is new machinery and none of it can fail at registration, which is most of the argument in §1.1.
+- **The chord is the third door**, and it is §9.3.
 
-It is user-settable, defaulting to `⌥Space`, and registered through the ordinary system path so that a clash **fails loudly at registration** rather than quietly at use; the settings row shows the chord it actually holds, not the one it asked for. This is the only genuinely new mechanic on this page, it draws nothing, and its whole behaviour is read off an ordering the list has had since V1.
+### 9.2 The bindings, and they are the field's
 
-### 9.2 The bindings
+The panel takes the keyboard so that a row can be read without being lost and a note can be typed into it (§10), and that is the whole of why it takes it. So the keys it answers to are the field's own, plus the one that hands the keyboard back.
 
 | Key | Does | Notes |
 | --- | --- | --- |
-| `⌥Space` | Brings the panel down, latched, on the subject | §9.1 |
-| `↑ ↓ ← →` | Move the white ground; with no row open, walk the list | The body scrolls to keep the ground in view. On a row whose body has no answers to move between, `↑ ↓` scroll that body directly (§6.2) |
-| `⏎` | Takes the answer the white ground is on | With no row open, opens the row it is on. On a question that is one of a set, draws the next and sends nothing |
-| `⇧⏎` | A new line in the field | The only way to get one, which is why `⏎` can be unambiguous everywhere else |
-| `1`–`4` | Takes a numbered option directly | **Only while the ground is still on an option**, which is to say before anything has been typed. After that a digit is a character like any other |
-| `Space` | Ticks the focused option | `multiSelect` only (§5.5) |
-| `⎋` | Collapses the row; again, closes the panel | The chevron's own action. Hands the keyboard back to the list, leaves the row on it holding its text and its part-answered set |
-| anything printable | Goes into the field, and moves the ground there | No type-ahead, no first-letter jump, no single-letter shortcut: each would put a keystroke somewhere the caret is not |
+| anything printable | Goes into the field, and moves the ground to the answer that carries text | The caret is in the field from the moment the row opens. No type-ahead, no first-letter jump, no single-letter shortcut: each would put a keystroke somewhere the caret is not |
+| `⇧⏎` | A new line in the field | A refusal that explains itself is often two sentences, and an alternative command is often two lines. It is the only way to get one, which is why `⏎` can be unambiguous |
+| `⏎` | Takes the answer the white ground is on | Which is what the ground has said all along. On a question that is one of a set, draws the next and sends nothing; on the last, sends the set |
+| `⎋` | Collapses the row; again, closes the panel | The chevron's own action. A surface that takes key status has to hand it back, and this is the key that does it: the row stays on the list holding its text and its part-answered set |
 | `⌘⏎` | **Unbound, and it stays that way** | A second way to approve would make the white ground advisory rather than definitive, and the whole safety of this surface rests on the ground being the literal truth about `⏎` |
+| everything else | **Unbound** | §9.3 holds the keys with a reason to exist later. Binding one of them early would be a keyboard model with a hole in it, which is worse than a panel that plainly does not navigate |
 
-### 9.3 There is no `⇥`
+### 9.3 The keyboard half, deferred and kept whole
 
-**Decided, and it costs nothing to reverse.** An earlier draft bound `⇥` / `⇧⇥` to the next and previous row. It is redundant: with no row open the arrows already walk the list, `⎋` puts a person back there, and an answered request opens the next one itself (§8.2) — so every journey `⇥` would have served already has a key. A second one would be a second answer to a question this design has answered once, and the surface's whole safety argument rests on no key doing a thing another key already does.
+Stage 03 of §1.1. It adds no region, no ink, no control and no height; it adds keys, and one word this surface already draws under the pointer. It is recorded here so that landing it is a build rather than a second design.
 
-Nothing depends on its absence, so binding it later is additive. What would justify it is a list long enough that walking it with the arrows is tedious, and the viewport caps at three rows.
+| Key | Would do | Argued in |
+| --- | --- | --- |
+| `⌥Space` | Bring the panel down already latched, with the first row by the existing sort already open and the caret in its field. With nothing waiting it opens the panel latched at the top of the list instead, so **the chord is never a key that sometimes does nothing** — the only variable is whether a row is already open when it lands. User-settable, defaulting to `⌥Space`, and registered through the ordinary system path so that a clash **fails loudly at registration** rather than quietly at use; the settings row shows the chord it actually holds, not the one it asked for | §15 q03 |
+| `↑ ↓ ← →` | Move the white ground, and walk the list where no row is open. The body scrolls to keep the ground in view; on a row whose body has no answers to move between, `↑ ↓` scroll that body directly | §6, §6.2 |
+| `1`–`4` | Take a numbered option directly — **only while the ground is still on an option**, which is to say before anything has been typed. After that a digit is a character like any other | §15 q08 |
+| `Space` | Tick the option the ground is on, `multiSelect` only | §5.5 |
+| `⇥` | **Still unbound.** Once the arrows exist, every journey `⇥` would serve already has a key | §15 q10 |
 
+Three clauses of this document arrive with those keys, and each is a correction only a keyboard user makes necessary: the word drawn under focus as well as under the pointer (§3.3), the arrows as a second force on the ground (§6), and the axis split on a body with no answers in it (§6.2). Two of the three are corrections to [`expanded-panel-v2.md`](expanded-panel-v2.md) that this document deliberately does not make yet.
+
+**What waiting for this costs is in §13.3.** It is the one consequence of the ordering in §1.1 that is not merely a delay.
 
 ### 9.4 The panel never takes the keyboard unasked
 
-Hover browses and cannot latch, however long it lasts. **Only a click on the mark or the chord makes the panel key**, and both are unambiguous acts. This matters more than it looks: the panel sits over whatever the person is typing into, and a surface that took focus on proximity would eat a line of their code. Latching takes key status from the application underneath, so `⎋`, a send with nothing left waiting, and a click outside all give it back to the same window; if that window has gone, focus goes wherever the system would have sent it and the panel does not hold it open waiting.
+Hover browses and cannot latch, however long it lasts. **Only a click on the mark makes the panel key** — an unambiguous act, and the chord will be the second one. This matters more than it looks: the panel sits over whatever the person is typing into, and a surface that took focus on proximity would eat a line of their code. Latching takes key status from the application underneath, so `⎋`, a send with nothing left waiting, and a click outside all give it back to the same window; if that window has gone, focus goes wherever the system would have sent it and the panel does not hold it open waiting.
 
 ## 10. Latching
 
-**A click latches the panel; hover stops holding it.** Hover is browsing and a click is engaging. From the moment a row opens, the panel stops answering the pointer and takes the keyboard — without this it would shut mid-sentence, because moving to the keyboard is not a pointer movement and any drift is.
+**A click latches the panel; hover stops holding it.** Hover is browsing and a click is engaging. From the moment a row opens, the panel stops answering the pointer and takes the keyboard, for two reasons in this order. **The first holds even where there is nothing to type**: a body of `140` points is read rather than glanced at, and a row somebody is reading must not close because their pointer drifted off it — moving to the keyboard is not a pointer movement, and any drift is. The second is the field: a note cannot be typed into a panel that is not key. So a row that can only be read (§11) latches on the same rule as one that can be answered, and gives the keyboard back the same way.
 
 Text typed but not sent, and any part of a set already answered, stay with their row for as long as that row lives.
 
 ## 11. Before a door exists — the half that ships anyway
 
-Notchline observes through hooks, and a hook is a notification: neither product currently offers a way back in (§14.2). **Half of this needs no way back in.** Reading a request in full, in the notch, without surrendering the screen, removes six of §1's eleven steps on its own — and none of the six was the answering.
+Notchline observes through hooks, and a hook is a notification: neither product currently offers a way back in (§14.2). **Half of this needs no way back in.**
+
+Reading a request in full, in the notch, without surrendering the screen, barely shortens §1's eleven steps — it removes the hold-still, and that is all — and shortening them is not what it is for. **It makes the journey optional.** Today the walk to the product is compulsory even when the answer is obvious, because one faded line is enough to notice a request and never enough to grant it; read in full, most requests are settled in the reader's head before anybody leaves, and the ones that still need the product are entered already knowing what they are for. ~~removes six of §1's eleven steps on its own~~ was version 1.1's claim, and it does not survive being counted.
 
 | | Rule | |
 | --- | --- | --- |
@@ -342,7 +370,9 @@ The scrolling body is the second thing to watch: it must scroll its own layer ra
 - The open row's answers are one group named for the question or the request. A question's options are a radio group, or a checkbox group where several are allowed, and **the white ground is the selected state**, so a screen reader announces exactly what the ground says.
 - The position in the set is spoken with the question — *question two of three*.
 - **The count of lines below the fold is spoken with the body.** A reader who cannot see the count must not be the only one who does not know something is missing.
-- A closed waiting row keeps the accessible action `Answer this request` (or `Read this request`, §11) regardless of hover, and it is the same action the keyboard reaches.
+- A closed waiting row keeps the accessible action `Answer this request` (or `Read this request`, §11) regardless of hover, and every answer on an open row carries an action of the same kind. Assistive technology therefore reaches all of them by its own means, which are not key bindings and do not wait on §9.3.
+
+**What the initial version does not give is full keyboard access.** With no chord and no arrows, somebody who works without a pointer answers in the product exactly as they do today: nothing they could do gets worse, and nothing this page adds is for them yet. That is the largest cost of shipping the pointer half first, it is why §9.3 is deferred rather than dropped, and it is stated here rather than in a footnote.
 
 ## 14. What this reaches outside the viewport
 
@@ -366,7 +396,7 @@ To answer a live approval or a question, each product has to offer a way in. **U
 
 ### 14.3 The panel has to be able to take the keyboard
 
-Latching means the `NSPanel` becomes key, which takes focus from whatever the user was in and must give it back on `⎋`, on send, and on a click outside. `PanelMetrics` has nothing to say about it and `OverlayPanelController` has everything.
+Latching means the `NSPanel` becomes key, which takes focus from whatever the user was in and must give it back on `⎋`, on send, and on a click outside. `PanelMetrics` has nothing to say about it and `OverlayPanelController` has everything. **This one belongs to the initial version, not to §9.3**: a panel that cannot become key cannot hold a caret, whatever opened the row.
 
 ### 14.4 Two stated non-goals move, and the same two as before
 
@@ -383,15 +413,18 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 | --- | --- | --- |
 | 01 | Will either product accept an answer from outside it? | **Not a design question, and under investigation** (the board's owner, 2026-09-05). It gates §3 to §8 and nothing else, so it is answered by measuring the two products rather than by drawing. §11 is what ships meanwhile, and §11 is not blocked on it |
 | 02 | Will this app keep the request it is already sent? | **Also not a design question, and this one is ours. Under investigation** (the board's owner, 2026-09-05). §14.1, and the first thing to build. The bytes already arrive on the socket; what is being established is what carrying them costs, against the `PostToolUse` result that took a lifecycle event down with it (CR-030) |
-| 03 | Which chord, and what happens when it is taken? | **Answered by the board's owner on 2026-09-05 — the recommendation, as it stands.** `⌥Space`, user-settable, registered through the ordinary system path so a clash **fails at registration rather than silently at use**, and the settings row shows the chord the app actually holds rather than the one it asked for (§9.1). Still worth testing against a machine already running a launcher on that chord — that is a check on the failure path, not a reopening of the choice |
+| 03 | Which chord, and what happens when it is taken? | **Answered by the board's owner on 2026-09-05, and now deferred with the chord itself.** `⌥Space`, user-settable, registered through the ordinary system path so a clash **fails at registration rather than silently at use**, and the settings row shows the chord the app actually holds rather than the one it asked for (§9.3). The initial version registers no global hotkey, so that failure path is off the critical path until stage 03 — and the answer stands, unreopened, for when it lands. Still worth testing against a machine already running a launcher on that chord |
 | 04 | Does the count say lines, or bytes? | **Standing recommendation: lines.** A byte count is precise and unreadable; a line count matches what the reader is looking at and is the unit in which a hidden clause hides. Where a request arrives as one enormous unbroken line, the count is of wrapped lines |
-| 05 | Should `⏎` ever take an answer the reader has not seen? | **Answered — no**, and §6.3 is how. The rejected alternative was a fixed delay before the control becomes live |
+| 05 | Should `⏎` ever take an answer the reader has not seen? | **Answered — no**, and §6.3 is how. It now answers the sharper version of the same question — should a *click* — because a pointer already resting on the answer does not have to move to press twice. The rejected alternative was a fixed delay before the control becomes live |
 | 06 | Is `Always` ever offered from here? | **Answered — no.** §6.5, and [`expanded-panel-v2.md`](expanded-panel-v2.md) §8.5 question 05 |
 | 07 | Does the notch choose how a plan's edits will be approved? | **Answered — no**, and for the same reason. §4.3 |
-| 08 | Do the digits stay bound once a question has been typed into? | **Answered — no.** Reserving them permanently would silently eat the first character of an answer beginning with a number |
+| 08 | Do the digits stay bound once a question has been typed into? | **Answered — no**, and deferred with the digits themselves (§9.3). Reserving them permanently would silently eat the first character of an answer beginning with a number |
 | 09 | Does an MCP elicitation ever get drawn here? | **Answered — no.** §2.2. Reopen only on a measurement of what servers actually send |
-| 10 | Is `⇥` ever bound? | **Answered — no, for now.** §9.3. Every journey it would serve already has a key, so it is additive rather than load-bearing; what would justify it is a list long enough that the arrows are tedious, and the viewport caps at three rows |
+| 10 | Is `⇥` ever bound? | **Answered — no, and moot until the arrows exist.** §9.3. Every journey it would serve has a key *in the stage that has keys*; in the initial version it would be the only key that navigates, which is a keyboard model of one binding. What would justify it later is a list long enough that the arrows are tedious, and the viewport caps at three rows |
 | 11 | Does a row that cannot be answered still knock? | **Answered — yes, unchanged.** The collapsed bar reports that a person is wanted, which is true whether the answer will be given here or in the product |
+| 12 | Does a click on an option answer with it, or only select it? | **Answered — it answers**, and where several answers are allowed it ticks instead and `Send` answers. §6.6, §5.5. A select-then-confirm pair would put a second control on the row saying what the first already said |
+| 13 | Does a row that can only be read still take the keyboard? | **Answered — yes.** §10. It has nothing to type into, but it is the state a person reads longest, and a row closing because a pointer drifted is exactly the failure that rule exists to prevent |
+| 14 | When does the keyboard half land? | **Not answered here, and deliberately.** §1.1 orders it after a write path exists and after the pointer version has been used; §9.3 is what it will be built from. The one thing that would move it earlier is §13.3 |
 
 ## 16. Verification
 
@@ -401,17 +434,17 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 - [ ] The chevron and `⎋` both collapse the row, send nothing, and preserve typed text and any part-answered set; reopening resumes at the same question.
 - [ ] The body is at most `140` and the open row at most `240`, in every form; a one-line question makes a `117` pt row.
 - [ ] Prose draws with no ground and machine text on `#242424`, chosen by payload and not by length, on all seven shapes in §2.
-- [ ] A body longer than its cap scrolls, draws the rail, and shows a count that clears when the last line is on screen.
+- [ ] A body longer than its cap scrolls on the wheel, draws the rail, and shows a count that clears when the last line is on screen.
 - [ ] A wrapped line's continuation carries its own indent plus two spaces; no whitespace is collapsed and no token is dropped.
 - [ ] No command is ever marked, coloured or flagged by the app.
 - [ ] Every question draws `header · n/N`, including a one-question call; a Codex question draws the chevron alone.
 - [ ] `⏎` on any question but the last draws the next and sends nothing; the last sends the whole set.
 - [ ] Every question form draws the field; typing moves the white ground onto `Send`.
-- [ ] With `multiSelect` the ground never leaves `Send`, the numerals are boxes, and `Space` ticks the focused one.
+- [ ] With `multiSelect` the ground never leaves `Send`, the numerals are boxes, and a click on a box or its label ticks it.
 - [ ] The white ground is on the affirmative with an empty field and on the refusal with a non-empty one; neither control moves as it crosses.
-- [ ] The arrows move the ground inside an open row and walk the list when none is open; `1`–`4` take an option only before anything has been typed.
-- [ ] `⌘⏎` and `⇥` are unbound.
-- [ ] A row opened by the chord, by an advance, or by the next question of a set does not accept `⏎` until its opening animation has ended.
+- [ ] Nothing but typing moves the white ground: hover moves it nowhere, and a click takes whichever answer it lands on whether the ground is there or not.
+- [ ] The only keys the panel answers to are the field's — anything printable, `⇧⏎`, `⏎` — and `⎋`. `⌥Space`, `↑ ↓ ← →`, `1`–`4`, `Space`, `⌘⏎` and `⇥` are all unbound, and the app registers no global hotkey.
+- [ ] A row opened by an advance, and a question drawn by answering the one before it, take neither a click nor a return until the opening animation has ended.
 - [ ] While a row is open the panel does not close on pointer exit, holds the keyboard, and returns it on `⎋`, on send and on an outside click.
 - [ ] A request settled elsewhere closes the open row within one publish; a send that fails keeps the text and says why in the preview's ink.
 - [ ] An answered row returns to `80` and to the Thread's current status, and does not retire.
@@ -429,6 +462,6 @@ Nothing here is implemented. The work lands in six places, and the first is the 
 | `HookEventRepository` | A `PendingRequest` on the Turn's wait slots, per `(agent_id, tool_use_id)`, carrying the form (§2.1), the payload and, for a question, the set and how much of it has been answered |
 | `MonitorSnapshot`, `MonitorStore` | The request reaches the UI on the one data contract; the store holds each row's draft text and part-answered set for the row's lifetime, and `openRowID` beside `quotaFolded` and `recentFolded` |
 | `PanelMetrics` | New: `requestBodyMaximumHeight = 140`, `openRowHeight(bodyHeight:)`, `optionRowHeight = 24`, `answerRowHeight = 28`. `openRowHeight(requestLines:)` from [`expanded-panel-v2.md`](expanded-panel-v2.md) §10 is not introduced — it counted lines, and §4.1 does not |
-| `NotchOverlayView` | `OpenRow` and its four bodies, `OptionRow`, `AnswerRow`, the chevron in the trailing head slot, and the mark's second hit region. The field is an `NSViewRepresentable` over an AppKit text view (§13.2) |
-| `OverlayPanelController` | Latching and key-window handover (§14.3), and the global chord's registration and failure reporting (§9.1) |
+| `NotchOverlayView` | `OpenRow` and its four bodies, `OptionRow`, `AnswerRow`, the chevron in the trailing head slot, the mark's second hit region, and a hit region and hover fill on every answer (§6.6). The field is an `NSViewRepresentable` over an AppKit text view (§13.2) |
+| `OverlayPanelController` | Latching and key-window handover (§14.3). The chord's registration and its failure reporting are stage 03 and are not in the initial version (§9.3) |
 | A `RequestAnswering` provider per product | The write path. **No implementation exists to write against** (§14.2); the protocol is what §11 draws around |
