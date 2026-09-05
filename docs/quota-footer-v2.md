@@ -3,12 +3,13 @@
 | Field | Value |
 | --- | --- |
 | Status | **Designed, not implemented.** Nothing here needs a capability the app lacks: the data model is already a list of products each holding a list of windows (`MonitorStore.footerRules`), and only the layout is written for two. |
-| Version | 3.3 |
+| Version | 3.4 |
 | Date | 2026-09-05 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `08 — The footer without a gauge`. `07 — The quota footer (superseded)` is kept as the record of the direction this one leaves (§9). `11 — The panel, whole` draws this footer composed with the other two V2 decisions — see [`panel-v2.md`](panel-v2.md). |
 | Scope | The expanded panel's footer only: the quota rules and today's tokens. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the session list is [`expanded-panel-v2.md`](expanded-panel-v2.md), both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None is touched, and the panel's width does not move. |
 | Supersedes | [`dual-agent-design.md`](dual-agent-design.md) §5.1 (structure and the four heights), §5.2 (which windows are drawn), §5.4 (the fold, its default and its trap). |
 | Answered since | §8.5 questions 01 and 03, by the board's owner on 2026-09-05, from Figma page `11` §07. **There is no critical threshold and the concept is removed rather than re-tuned**, so §4 is void and no window speaks. **A field this app cannot read draws `--` in its own place** and is marked in no other way — §8.3, which is what the void threshold leaves behind. |
+| Overruled since | 3.3 kept tightest-first ordering inside a product and said so in §4. **The board's owner overruled that the same day: the order is fixed, and it is the order the product reports.** §5 is the rule, and it deletes work rather than adding it — `footerRules` already preserves the reader's order, so nothing is sorted anywhere. |
 | Superseded in | §2's ~~two heights~~ one height, by [`colour-v2.md`](colour-v2.md) §5 — the product name is a badge, so the table is `19W + 30P + 17`; the second of the two was the spoken line's `47`, and 3.3 removed the line under it (§4). §6's two tables were written before that and are corrected in place below; [`panel-v2.md`](panel-v2.md) §3.2 records the correction. Nothing else here moves. |
 
 ## 1. What V2 changes here, and why
@@ -120,7 +121,9 @@ Every rule this section held is void. They are kept below because all but the fi
 - **The selection rule and its trade disappear.** Rule 05 put the line on the product with the most spend today, which could put an `11%` ahead of an `8%` and could hand the line to a different product mid-afternoon. Both were defended by the table being one click away, and both simply do not arise.
 - **No time-remaining term is needed at all.** Rule 01's second half read `resetsAt` against each window's nominal length. Nothing else on this page wants a nominal length, so the concept leaves the design with the rule.
 
-**What is deliberately kept: windows still sort tightest first inside their product (§5).** An order is not an indication — it does not draw anything differently, and it is the only order the inner rows can have that means anything. Removing it would leave the table's one repeated column arranged by nothing.
+~~**What is deliberately kept: windows still sort tightest first inside their product (§5).** An order is not an indication — it does not draw anything differently, and it is the only order the inner rows can have that means anything. Removing it would leave the table's one repeated column arranged by nothing.~~
+
+**Overruled the same day, and rightly: the order is fixed, and it is the product's own (§5).** The paragraph above defended a sort on the grounds that an order is not an indication. That is true and it was the wrong question — the objection to sorting by share is not that it indicates something, it is that it **moves**. A share crossing another share would have re-ordered two rows for a reason nobody asked about, which is the re-sorting reference this page has objected to since version 3.0, one level further in. The fixed order is also not arranged by nothing: it is the order each reader already publishes, and it is the same order every other surface in this app sees.
 
 ## 5. The table
 
@@ -136,7 +139,15 @@ Every rule this section held is void. They are kept below because all but the fi
 
 **Brightness was always doing this work, and now it is doing all of it.** Three steps already separated the product, its spend and its windows; the lit ink only said *which* product, which the name inside the badge says outright. The badge's own ground is darker than the panel, so it adds a step downwards rather than a fourth step up, and the group's brightest thing is still its spend.
 
-**Products in Settings' order; windows tightest first inside each.** ~~This is deliberately *not* the speaking line's order — that one picks by spend, because it is a selection rather than a list, and a reference that re-sorted itself every minute would be unreadable.~~ The contrast it was drawn against is gone with the line (§4), and what it was protecting stands on its own. It restores [`expanded-header-v2.md`](expanded-header-v2.md) §4.3 rule 02 at the level where it belongs — nothing re-sorts between products — and keeps ordering by tightness where it is the only order that means anything. **The grouping is what lets both be true at once**, and it is the one thing version 3.0 could not do.
+**Products in Settings' order; windows in the order the product reports them. Nothing on this table sorts.** ~~windows tightest first inside each~~ and ~~This is deliberately *not* the speaking line's order — that one picks by spend, because it is a selection rather than a list, and a reference that re-sorted itself every minute would be unreadable.~~ are both void: the line went with the threshold (§4), and the sort was overruled on 2026-09-05.
+
+**The reader's order is fixed, published and already the one the rest of the app sees.** `ClaudeCodeUsageReader.windows` is a static pair — `Current session:` as `5 h`, then `Current week (all models):` as `7 d` — and Codex reports a single unlabelled window. `MonitorStore.footerRules` maps `snapshot.quota.windows` straight through, so **this rule is the absence of code rather than any**.
+
+Three things follow, and the third is the one that could not have been got by sorting:
+
+- **[`expanded-header-v2.md`](expanded-header-v2.md) §4.3 rule 02 is restored at both levels rather than one.** *Nothing re-sorts — not by count, not by urgency, not by which agent moved last* was written about the band's columns; the table now keeps it between products **and** inside one. Version 3.0's flat list could hold it at neither.
+- **One list has one order.** `Quota.remainingPercent` and `resetsAt` read `windows.first`, so a sort applied in `footerRules` alone would have made the footer's first inner row a different window from the one every single-rule surface calls first. Two orders for one list is a defect waiting to be found, and there is now no place for it to arise.
+- **A row that becomes unreadable does not move.** Under a share sort, `-- left` needed a tie-break rule of its own — *unanswerable last* — and a window would have jumped position at the moment its reading failed, which is precisely the extra marking §8.3 refuses. With a fixed order, an unreadable field changes a field. The tie-break rule is deleted along with the sort.
 
 **A product with no limits still gets its row** — an outer row and no inner ones. Its spend is attributed and the absence of lines says there is nothing to report. That is also how a connected product this app does not yet read quota for appears: present and counted, with nothing claimed about it. The current footer has no form for this at all.
 
@@ -226,7 +237,7 @@ The accessible name says `unavailable` in every one of these cases (§7). `--` i
 
 ### 8.6 The data model was already right
 
-`MonitorStore.footerRules` returns one `FooterRule` per connected product, each holding its `FooterWindow`s — which is exactly §5's outer and inner levels. Version 3.0 flattened it into a single sorted list of windows; grouping is both truer to the data and what lets products keep Settings' order while windows sort by tightness.
+`MonitorStore.footerRules` returns one `FooterRule` per connected product, each holding its `FooterWindow`s — which is exactly §5's outer and inner levels. Version 3.0 flattened it into a single sorted list of windows; grouping is both truer to the data and what lets products keep Settings' order while windows keep the reader's. Since 3.4 **neither level sorts at all**, so the accessor needs no change whatever: `footerRules` already returns both orders correctly by doing nothing to them.
 
 ## 9. What this replaces
 
@@ -238,7 +249,7 @@ Version 3.1 stacked one spoken line per window past the threshold, tightest firs
 
 ### 9.2 Version 3.0, on this same page
 
-The first draft of the gaugeless footer kept a `59% left` figure at the trailing end of the collapsed line and drew its per-product spend as coloured numerals beside the total, and its table was a **flat** list of windows sorted tightest-first across products. Both were folded into the two-level table: the outer row labels each product's spend so colour is not needed to attribute it, and grouping lets products hold Settings' order while windows sort by tightness — which the flat list could not do without contradicting [`expanded-header-v2.md`](expanded-header-v2.md) §4.3 rule 02. The collapsed line lost its quota figure with it; 3.3 makes that permanent (§4) and answers §8.5 question 01 with a fallback that reports only unreadability (§8.3). `Resets in` went too, repeated once a window.
+The first draft of the gaugeless footer kept a `59% left` figure at the trailing end of the collapsed line and drew its per-product spend as coloured numerals beside the total, and its table was a **flat** list of windows sorted tightest-first across products. Both were folded into the two-level table: the outer row labels each product's spend so colour is not needed to attribute it, and grouping lets each level hold an order of its own — which the flat list could not do without contradicting [`expanded-header-v2.md`](expanded-header-v2.md) §4.3 rule 02. ~~while windows sort by tightness~~ was the inner order 3.0 and 3.2 both assumed; 3.4 makes it the reader's own and sorts nothing (§5). The collapsed line lost its quota figure with it; 3.3 makes that permanent (§4) and answers §8.5 question 01 with a fallback that reports only unreadability (§8.3). `Resets in` went too, repeated once a window.
 
 ### 9.3 Version 2.0, on page 07
 
@@ -256,7 +267,7 @@ Two things were wrong with it. It answered §1.3 and left §1.1 and §1.2 standi
 - [ ] Every `--` announces as `unavailable`, and no figure announces as zero.
 - [ ] Opened, there is one outer row per connected product and one inner row per window it reports, the per-model weekly cap included.
 - [ ] A connected product with no windows draws its outer row and no inner ones.
-- [ ] Products are in Settings' order; windows inside a product are tightest first, unanswerable last.
+- [ ] Products are in Settings' order; windows inside a product are in the order the reader published them — `5 h` before `7 d` for Claude Code — and **no list on this footer is sorted by any value it draws**. A window whose share changes, or stops being readable, keeps its row.
 - [ ] The window column is indented `12` from the product's; the share is right-aligned at `300` and the timer at `508`, where the product's spend is right-aligned too.
 - [ ] No reset draws the words `Resets in`, and no timer draws more than two units.
 - [ ] Folding the table from any product and window count leaves the pointer inside the panel.
@@ -270,7 +281,7 @@ Nothing here is implemented. **The data model needs no change** — `footerRules
 | Symbol | Change |
 | --- | --- |
 | `PanelMetrics.footerHeight(rules:isFolded:)` | Becomes `footerHeight(rules:isExpanded:)`: `22` or `19W + 30P + 17` (§2's badge-carrying form — `19W + 28P + 17` is the pre-badge figure). ~~`isSpeaking`, and a `47` between them~~ — void (§4): the closed footer has one height. The four constants behind it go, with `footerRuleHeight` and `footerWindowSpacing` |
-| `MonitorStore.footerRules` | Unchanged in shape. Sorts each rule's windows by remaining share ascending, unanswerable last. ~~Gains `spokenWindows`~~ — void (§4); no window is selected, and nothing reads a share against a threshold |
+| `MonitorStore.footerRules` | **Unchanged, entirely.** It already maps `snapshot.quota.windows` straight through in the reader's order, which is what §5 now asks for. ~~Sorts each rule's windows by remaining share ascending, unanswerable last~~ — void (§5), and the only line of this table that retires without being replaced. ~~Gains `spokenWindows`~~ — void (§4); no window is selected, and nothing reads a share against a threshold |
 | `MonitorStore.footerTodayText` | Loses its `rules.count > 1` guard, its product names and its parts: it returns the whole alone. Each product's own figure moves onto its `FooterRule` |
 | `UsageSummaryFormatter.resetText` | Gains a compact countdown form — `47m`, `2h`, `3d 12h`, two units at most — and keeps the absolute form for the accessible name (§7). **Returns `--` where it now returns `Reset unavailable`** (§8.3); `Not started` is unchanged, and so is the reasoning above it in `MonitorDomain.swift` that tells the two apart |
 | `MonitorStore.quotaFolded` | Renamed `quotaExpanded`, default `false` (§8.1) |
