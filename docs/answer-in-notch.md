@@ -5,7 +5,7 @@
 | Status | **Designed, not implemented.** Two dependencies gate it and they are not the same size: §14.1 is one field this app already receives and discards, and §14.2 is a capability neither product offers. The reading half needs only the first. |
 | Version | 1.0 |
 | Date | 2026-09-04 |
-| File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `10 — The answer` |
+| File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `10 — The answer`. `11 — The panel, whole` redraws the open row on the composed surface and corrects §12's panel column — see [`panel-v2.md`](panel-v2.md). |
 | Scope | What happens between a request arriving and a person answering it: how the request reaches somebody who is not looking at the notch, every shape the two products ask in, what an opened row draws for each of them, which key does what, and what the row becomes once the answer has gone. The band, the quota footer and both collapsed forms are untouched, and nothing here reaches the collapsed surface. |
 | Supersedes | [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 entire. Four of its clauses are corrected rather than extended, each marked below: §3.1's opening gesture (§3), §3.2's fade and its three-line cap (§4), §3.4's forces on the affirmative (§6), §3.5's close-on-send (§8). §2 — the Recent queue — is untouched and independent. |
 
@@ -75,7 +75,7 @@ Where the mark was, an open row draws **the quota block's own control unchanged*
 
 ### 3.3 The word in the mark
 
-At rest the mark says `Approval needed` or `Input needed`. Under the pointer **or under keyboard focus** it says `Answer` where the request can be answered here and `Read` where it cannot (§11). **The ground does not resize** — only the word inside it changes, so nothing on the row moves under a passing pointer.
+At rest the mark says `Approval needed` or `Input needed`. Under the pointer **or under keyboard focus** it says `Answer` where the request can be answered here and `Read` where it cannot (§11). **The ground does not resize** — only the word inside it changes, so nothing on the row moves under a passing pointer. Which settles what the ground says at rest: it is sized for the longest name it can hold, so [`figma-design.md`](figma-design.md) §4.7's *reading* — a duration — cannot be what is in it, or `Answer` would not fit without moving it. The duration keeps the place it already had, on the finished row's dark ground ([`panel-v2.md`](panel-v2.md) §3.5).
 
 Drawing the word under focus as well as under the pointer is **a correction to §6** of the superseded document, and §9 is why: once the chord makes the keyboard the primary path, a keyboard user would otherwise never see the affordance they are about to use.
 
@@ -307,15 +307,17 @@ Every open row is `100` plus its body.
 | Anything at the maximum | `240` | The body's cap, `140`. The row **is** the viewport |
 | In flight | unchanged | Nothing resizes; the controls lose `55%` of their opacity |
 
-At the `46` pt menu bar reference with both products connected and the quota expanded:
+At the `46` pt menu bar reference with both products connected and the footer at rest — `22`, [`quota-footer-v2.md`](quota-footer-v2.md) §2:
 
 | The list | Panel | Note |
 | --- | --- | --- |
-| One waiting row, opened at `117` | **279** | Viewport `149` — the row and the seam beneath it |
-| One waiting row, opened at three lines | **332** | Viewport `202`. [`expanded-panel-v2.md`](expanded-panel-v2.md) §4, unchanged |
-| One waiting row, opened at the maximum | **370** | Viewport `240`, and the seam is below the fold |
-| Two waiting rows, the first opened | **370** | Content over the cap; the second row is clipped, not hidden |
-| Three live rows, one of them opened | **370** | The cap has been reached since V1 and does not move |
+| One waiting row, opened at `117` | **217** | Viewport `149` — the row and the seam beneath it |
+| One waiting row, opened at three lines | **270** | Viewport `202`. [`expanded-panel-v2.md`](expanded-panel-v2.md) §4, unchanged |
+| One waiting row, opened at the maximum | **308** | Viewport `240`, and the seam is below the fold |
+| Two waiting rows, the first opened | **308** | Content over the cap; the second row is clipped, not hidden |
+| Three live rows, one of them opened | **308** | The cap has been reached since V1 and does not move |
+
+These read `279` / `332` / `370` in version 1.0, taken with a footer of `84` — [`dual-agent-design.md`](dual-agent-design.md)'s two-product figure, which [`quota-footer-v2.md`](quota-footer-v2.md) had already replaced with `22` at every product count. **Every one of them falls by exactly `62`** ([`panel-v2.md`](panel-v2.md) §3.1). Nothing in this document's own arithmetic moves: the viewport cap is `240` and the open row's cap is the viewport. Opening the quota table adds `112` on top, at two products and three windows.
 
 Width is [`expanded-header-v2.md`](expanded-header-v2.md)'s `520` in every state, and [`colour-v2.md`](colour-v2.md) §3 keeps it there at every agent count.
 

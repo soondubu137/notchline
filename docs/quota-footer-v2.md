@@ -5,10 +5,10 @@
 | Status | **Designed, not implemented.** Nothing here needs a capability the app lacks: the data model is already a list of products each holding a list of windows (`MonitorStore.footerRules`), and only the layout is written for two. |
 | Version | 3.2 |
 | Date | 2026-09-04 |
-| File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `08 — The footer without a gauge`. `07 — The quota footer (superseded)` is kept as the record of the direction this one leaves (§9). |
+| File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `08 — The footer without a gauge`. `07 — The quota footer (superseded)` is kept as the record of the direction this one leaves (§9). `11 — The panel, whole` draws this footer composed with the other two V2 decisions — see [`panel-v2.md`](panel-v2.md). |
 | Scope | The expanded panel's footer only: the quota rules and today's tokens. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the session list is [`expanded-panel-v2.md`](expanded-panel-v2.md), both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None is touched, and the panel's width does not move. |
 | Supersedes | [`dual-agent-design.md`](dual-agent-design.md) §5.1 (structure and the four heights), §5.2 (which windows are drawn), §5.4 (the fold, its default and its trap). |
-| Superseded in | §2's two heights, by [`colour-v2.md`](colour-v2.md) §5 — the product name is a badge, so the spoken line is `47` and the table `19W + 30P + 17`. Nothing else here moves. |
+| Superseded in | §2's two heights, by [`colour-v2.md`](colour-v2.md) §5 — the product name is a badge, so the spoken line is `47` and the table `19W + 30P + 17`. §6's two tables were written before that and are corrected in place below; [`panel-v2.md`](panel-v2.md) §3.2 records the correction. Nothing else here moves. |
 
 ## 1. What V2 changes here, and why
 
@@ -128,20 +128,22 @@ A product group is `14 + 19w`, so the table is `31 + Σ(14 + 19w) + 14(P − 1)`
 
 | Connected | P | W | Footer today | Collapsed | Opened | Panel today | Panel now |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex alone | 1 | 1 | `30` | **22** | `64` | 316 | **308** |
-| Claude Code alone | 1 | 2 | `53` | **22** | `83` | 339 | **308** |
-| Both products | 2 | 3 | `84` | **22** | `130` | 370 | **308** |
-| Three products | 3 | 4 | `115` | **22** | `177` | 401 | **308** |
-| Three, six windows | 3 | 6 | `115` | **22** | `215` | 401 | **308** |
+| Codex alone | 1 | 1 | `30` | **22** | `66` | 316 | **308** |
+| Claude Code alone | 1 | 2 | `53` | **22** | `85` | 339 | **308** |
+| Both products | 2 | 3 | `84` | **22** | `134` | 370 | **308** |
+| Three products | 3 | 4 | `115` | **22** | `183` | 401 | **308** |
+| Three, six windows | 3 | 6 | `115` | **22** | `221` | 401 | **308** |
+
+> The `Opened` column is `19W + 30P + 17` — §2's badge-carrying form. It read `64` / `83` / `130` / `177` / `215` at `19W + 28P + 17`, which is the arithmetic this page was written with and §2 then corrected; the two disagreed until [`panel-v2.md`](panel-v2.md) §3.2 settled it.
 
 Panel figures are `46 + 240 + footer` — three live rows at the reference menu bar, with the footer collapsed. **Every connected form gets smaller**, the single-product case included.
 
 | Form | Footer | Panel | Caused by |
 | --- | --- | --- | --- |
 | Collapsed | `22` | 308 | nothing — every connected form |
-| A window speaking | `45` | 331 | a share crossing `15%`, one line at any count |
-| Opened, two products | `130` | 416 | the control |
-| Opened, three and six | `215` | 501 | the control |
+| A window speaking | `47` | 333 | a share crossing `15%`, one line at any count |
+| Opened, two products | `134` | 420 | the control |
+| Opened, three and six | `221` | 507 | the control |
 
 The table is the only thing here that grows, and it grows because somebody opened it.
 
@@ -192,7 +194,7 @@ The `15%` threshold, used on both the share and the time. Everything else on thi
 
 ### 9.1 Version 3.1, on this same page
 
-Version 3.1 stacked one spoken line per window past the threshold, tightest first and uncapped, and drew the table's outer rows with no leader. Both are settled here: the line is **one**, chosen by today's spend (§4 rule 05), so the speaking footer is `45` at any count; and each outer row carries a faint leader between the product and its figure (§5).
+Version 3.1 stacked one spoken line per window past the threshold, tightest first and uncapped, and drew the table's outer rows with no leader. Both are settled here: the line is **one**, chosen by today's spend (§4 rule 05), so the speaking footer is one height at any count (`45` as written, `47` once the product name is a badge); and each outer row carries a faint leader between the product and its figure (§5).
 
 ### 9.2 Version 3.0, on this same page
 
@@ -225,7 +227,7 @@ Nothing here is implemented. **The data model needs no change** — `footerRules
 
 | Symbol | Change |
 | --- | --- |
-| `PanelMetrics.footerHeight(rules:isFolded:)` | Becomes `footerHeight(rules:isSpeaking:isExpanded:)`: `22`, `45`, or `19W + 28P + 17`. The four constants behind it go, with `footerRuleHeight` and `footerWindowSpacing` |
+| `PanelMetrics.footerHeight(rules:isFolded:)` | Becomes `footerHeight(rules:isSpeaking:isExpanded:)`: `22`, `47`, or `19W + 30P + 17` (§2's badge-carrying form — `45` and `19W + 28P + 17` are the pre-badge figures). The four constants behind it go, with `footerRuleHeight` and `footerWindowSpacing` |
 | `MonitorStore.footerRules` | Unchanged in shape. Gains `spokenWindows` — the windows past §4's threshold, tightest first — and sorts each rule's windows by remaining share ascending, unanswerable last |
 | `MonitorStore.footerTodayText` | Loses its `rules.count > 1` guard, its product names and its parts: it returns the whole alone. Each product's own figure moves onto its `FooterRule` |
 | `UsageSummaryFormatter.resetText` | Gains a compact countdown form — `47m`, `2h`, `3d 12h`, two units at most — and keeps the absolute form for the accessible name (§7) |

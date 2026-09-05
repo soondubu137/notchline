@@ -1,0 +1,125 @@
+# Notchline — The panel, whole: three decisions composed
+
+| Field | Value |
+| --- | --- |
+| Status | **A composition, not a new decision.** Every rule here is already taken in [`colour-v2.md`](colour-v2.md), [`quota-footer-v2.md`](quota-footer-v2.md) and [`answer-in-notch.md`](answer-in-notch.md). What this file adds is the arithmetic of the three together and the five places where their drafts contradict one another — four of which are figures taken before a neighbouring decision landed, and one of which is a genuine disagreement neither document could settle alone. |
+| Version | 1.0 |
+| Date | 2026-09-05 |
+| File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2?node-id=272-2) — `11 — The panel, whole` |
+| Scope | The expanded panel in every state it can reach, and nothing else. Neither collapsed form is touched: none of the three decisions reaches the bar or the pill, and [`compact-view-v2.md`](compact-view-v2.md) stands whole. |
+| Supersedes | Nothing outright. It **corrects** [`quota-footer-v2.md`](quota-footer-v2.md) §6's two height tables, [`answer-in-notch.md`](answer-in-notch.md) §12's panel column, and [`figma-design.md`](figma-design.md) §4.7's treatment of the waiting reading; and it settles the separator that Figma pages 09 and 10 draw differently. All five are §3. |
+
+## 1. The three decisions are one decision
+
+| The page | What it took off the panel | What was already saying it |
+| --- | --- | --- |
+| `08 — The footer without a gauge` | A `496 × 3` rule for every quota window, drawn whether or not anything was close | The percentage its own caption printed exactly, two points to its right |
+| `09 — Identity without a palette` | A hue per product, and the band's column of sessions and subagents per agent | The product's own name on the caption line the hue was tinting — and, `46` below the band, one row per session naming its agent in words |
+| `10 — The answer` | The eleven-step journey from a request arriving to a person answering it | Nothing. This is the one that adds a job rather than removing a duplicate — and it adds it to an object the panel already draws on exactly the two states with something to answer |
+
+Three rules follow, and they are the whole of what the composed surface is:
+
+1. **Brightness is the only channel left, and it means one thing.** Hue said which product; a bar's length said how much of a window was left; a white ground said a person was wanted. Two of those are gone and the third has been given the extra job of being the control that answers. Every value on this surface brighter than the values around it is brighter for the same reason.
+2. **Nothing is drawn while it has nothing to say.** The band and the footer were the two surfaces exempt from a rule the rest of the panel already kept — one drew a column per agent whatever it held, the other drew four numbers every time the panel opened. Both now keep it, and so does the open row: where there is no write path the affirmative is **absent rather than greyed out**, because a disabled control is a promise made quietly ([`answer-in-notch.md`](answer-in-notch.md) §11 rule 03).
+3. **Every one of the three re-uses an object already on the panel.** The badge is the finished reading's chip, at its corner, in the mark's ink. The footer's table is `FooterRule` drawn as the two-level thing it already was. The answer row is the waiting ground grown `16 → 28`, with the quota block's own chevron standing where it sat. **No new constant is introduced by any of the three**, which is why they compose rather than merely coexist.
+
+## 2. The panel, region by region
+
+```
+46   band       the aggregate mark, the two totals, the gear.  Leading side 53.8 at every agent count
+240  viewport   at most three live rows at 80, or one open request at at most 240
+22   footer     today's spend, and the control
+```
+
+- **A row's caption is the badge and then the Project** — no separator (§3.4). The caption line is `16` whether or not a badge is in it, so nothing on a row moves at the moment a second product connects. The badge itself is drawn on `showsProductAttribution`: presence, not "who has threads right now".
+- **The reading is one slot in three outlines**: white ground on a waiting row, bare on a running one, the dark chip on a finished one holding how long the Turn took. The badge is that same chip in the theme ink.
+- **The theme ink has three readers**: the mark, the badge, and — since [`answer-in-notch.md`](answer-in-notch.md) §5.5 — the `12 × 12` tick box on a question that accepts more than one answer. That box is the only coloured object anywhere inside an open row; everything else in there is white, `#C7C7CC`, `#7C7C80` or `#242424`.
+- **The footer draws one number at rest**, grows one line when a window crosses `15%` with more than `15%` of its time left, and becomes the two-level table when somebody opens it.
+
+## 3. The five corrections
+
+### 3.1 Page 10's panel heights were taken with the pre-V2 footer
+
+[`answer-in-notch.md`](answer-in-notch.md) §12 computes `279` / `332` / `370` from a footer of `84` — [`dual-agent-design.md`](dual-agent-design.md)'s two-product figure. [`quota-footer-v2.md`](quota-footer-v2.md) had already replaced that footer with `22` at every product count.
+
+**Recomputed on the V2 footer the three are `217` / `270` / `308`**, and every open-row panel figure in that table falls by exactly `62`. The viewport cap does not move — an open row at its maximum is still the viewport — so what changed is the floor under it. §4 carries the corrected series.
+
+### 3.2 The quota table's own heights were taken before the badge
+
+[`quota-footer-v2.md`](quota-footer-v2.md) §2 says a caption line carrying a badge is the badge's own `16` rather than `footerCaptionHeight`'s `14`, and gives `19W + 30P + 17` with a spoken line of `47`. Its §6 tables, and Figma page 08's §05, still carry `19W + 28P + 17` and `45`.
+
+**The note is right and the tables are stale.** `45 → 47`, `64 → 66`, `83 → 85`, `130 → 134`, `177 → 183`, `215 → 221`, with the panel figures following. No constant is introduced: the `16` is the badge height the `Badge` option already defined.
+
+### 3.3 Figma page 09 draws a grey chip and keeps `Name and colour` as the default
+
+The page argues that the badge is the one presentation of four that still answers when the hue is taken away, and proposes it as an option among four, in `#242424` / `#C7C7CC`. [`colour-v2.md`](colour-v2.md) §4 makes it the **only** presentation, in the theme ink's own pair.
+
+The decision is later and went further on both counts, and says so itself. **Page 09 stays as the argument that produced it; page 11 §02 is the drawing.** This answers [`colour-v2.md`](colour-v2.md) §10 question 05.
+
+### 3.4 The separator between the chip and the Project
+
+Figma page 09 draws `[Codex] notchline`; page 10 draws `[Codex] · notchline`, carrying the dot over from the `Codex ·` prefix the badge replaced.
+
+**No dot.** [`colour-v2.md`](colour-v2.md) §5 says *the badge, then the Project* — the whole prefix is what the chip replaces. The dot divided two words inside one grey run and there is no longer a run to divide; a boundary after a boundary is a mark doing nothing. The `6` between chip and Project is the badge's own padding, so nothing is measured that was not measured before.
+
+### 3.5 What the white ground on a waiting row says
+
+[`figma-design.md`](figma-design.md) §4.7 puts the reading — a duration — on the white ground, and Figma page 06 draws `0:42` there. [`answer-in-notch.md`](answer-in-notch.md) §3.3 says the mark says `Approval needed` or `Input needed`, and page 10 draws that.
+
+**The name, and it is the composition that decides it rather than either document.** §3.3 also holds that the ground **does not resize** when the word inside it becomes `Answer` under the pointer or under keyboard focus — and a ground sized for `0:42` cannot hold `Answer` without moving. So the ground is sized for the longest name it can say, and the duration keeps the place it already had: the finished row's dark ground, the one object on this panel that reports how long a Turn took.
+
+## 4. How big it is
+
+```
+panel  =  46  +  viewport (at most 240)  +  footer            width  =  520
+```
+
+Two of the three terms cannot move at all, and the third moves only between `0` and its cap.
+
+| The state | Band | Viewport | Footer | Panel | What it was, and where |
+| --- | --- | --- | --- | --- | --- |
+| At rest — Codex alone, one working agent | 46 | 240 | 22 | **308** | `316` — [`figma-design.md`](figma-design.md) §4.5 |
+| At rest — Claude Code alone, two windows | 46 | 240 | 22 | **308** | `339` — the footer grew with the windows |
+| At rest — both products, four working agents | 46 | 240 | 22 | **308** | `370`, and `536` wide |
+| At rest — three products, eight working agents | 46 | 240 | 22 | **308** | `401`, and `649` wide |
+| A window past the threshold speaks | 46 | 240 | 47 | **333** | `331` — §3.2 |
+| One waiting row, opened at one prose line | 46 | 149 | 22 | **217** | `279` — §3.1 |
+| One waiting row, opened at three lines | 46 | 202 | 22 | **270** | `332` — §3.1 |
+| One waiting row, opened at the body's cap | 46 | 240 | 22 | **308** | `370` — §3.1 |
+| The quota table opened, two products, three windows | 46 | 240 | 134 | **420** | `416` — §3.2 |
+| The quota table opened, three products, six windows | 46 | 240 | 221 | **507** | `501` — §3.2 |
+
+**The width series is one number.** At a `220 × 38` cut-out the panel was `520` up to four working agents and then `532` / `571` / `610` / `649`; the band's leading side ran `53.8 → 213.4` across the same range. The band was the only term that read an agent count, and holding it at `53.8` removes the count from the width entirely.
+
+Three consequences:
+
+- **Two of those ten figures are the user's own doing and the other eight are not.** Opening the quota table takes the panel to `420` or `507`, on a control that is always drawn. Everything else is `308` or below, whatever is connected, whatever is running, and whatever the machine's cut-out measures.
+- **The cap has not moved; the floor under it has.** `308` is still reached by three live rows or by one request opened at the body's cap — not by owning a second product.
+- **A limit speaking is the one state neither the user nor the machine chose.** It costs `25`, once, at any product and window count, and it arrives as a line that was not there a moment ago.
+
+## 5. What still gates this
+
+Nothing new. Six questions survive the composition, and only the two marked **★** gate anything drawn.
+
+| | Question | Recorded in |
+| --- | --- | --- |
+| 01 | Is the badge's lit text too loud on a real list? | [`colour-v2.md`](colour-v2.md) §10 q01 |
+| 02 | Is `15%` right on both sides of the speaking rule? | [`quota-footer-v2.md`](quota-footer-v2.md) §8.5 q03 |
+| 03 | How does a user learn that quota is unreadable? | [`quota-footer-v2.md`](quota-footer-v2.md) §8.5 q01 |
+| 04 ★ | Will this app keep the `tool_input` it is already sent? | [`answer-in-notch.md`](answer-in-notch.md) §15 q02 — ours, and the first thing to build |
+| 05 ★ | Will either product accept an answer from outside it? | [`answer-in-notch.md`](answer-in-notch.md) §15 q01 — gates the answering half alone |
+| 06 | Which chord, and what happens when it is taken? | [`answer-in-notch.md`](answer-in-notch.md) §15 q03 |
+
+So the three can be built in the order they were argued: the badge and the band, then the footer, then the field this app already receives and throws away.
+
+## 6. Verification
+
+These are the checks that span more than one of the three; each document keeps its own.
+
+- [ ] The panel is `520 × 308` with three live rows, at every cut-out, every working-agent count and every connected-product count, and no width or height term reads either count.
+- [ ] Opening the quota table is the only act that takes the panel past `308` other than a window crossing the threshold, which takes it to `333`.
+- [ ] A row's caption draws the badge and then the Project, with no separator between them, and the caption line measures `16` with a badge and without one.
+- [ ] The theme ink reaches the mark, the badge and the `multiSelect` tick box, and those three change together when the `Theme colour` selection changes.
+- [ ] A waiting row's white ground is sized for `Approval needed` / `Input needed` and does not resize when the word inside it becomes `Answer` or `Read`.
+- [ ] A finished row's dark ground is the only place on the panel that reports how long a Turn took.
+- [ ] With every colour rendered as flat grey, no figure, name or state on the expanded panel becomes ambiguous.

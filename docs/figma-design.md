@@ -263,7 +263,7 @@ PRD §8.2 and the technical design settled authoritative time semantics, waiting
 | Status | Treatment | Ink |
 | --- | --- | --- |
 | Running | A bare reading, no ground | `#7C7C80` Light 13, monospaced digits |
-| Approval / Input needed | The same reading on a white ground | ground `#FFFFFF`, text `#0D0D0F` Medium |
+| Approval / Input needed | ~~The same reading~~ **the status name** — `Approval needed` / `Input needed` — on a white ground | ground `#FFFFFF`, text `#0D0D0F` Medium |
 | Completed | The reading on a dark ground, holding **how long this Turn took** | ground `row ground + 0.06` (so `#242424` on black), text `#7C7C80` Light |
 
 The ground is §4.6's subagent badge scaled to the reading's width: the same `16` height, `4` corner and `4` each side. It was always "a reading on a ground that inverts", and that one mark now answers for both this Turn and the subagents it spawned, so **combining them on one row needs no special case at all** — a finished row with subagents still running keeps the slot for the badge, the outline unchanged, with a count inside instead of a duration.

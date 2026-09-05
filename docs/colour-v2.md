@@ -5,7 +5,7 @@
 | Status | **Decided by the board's owner, not implemented.** The decision is §1; everything after it is the consequence worked out. |
 | Version | 1.0 |
 | Date | 2026-09-04 |
-| File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `09 — Identity without a palette` records the argument that led here. **It draws a weaker proposal than this document**: it kept `Name and colour` as the default and made the badge grey. The decision went further on both counts, so that page is the reasoning and this file is the contract. |
+| File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `09 — Identity without a palette` records the argument that led here. **It draws a weaker proposal than this document**: it kept `Name and colour` as the default and made the badge grey. The decision went further on both counts, so that page is the reasoning and this file is the contract. `11 — The panel, whole` is where the decision is drawn as decided, composed with the other two V2 decisions — see [`panel-v2.md`](panel-v2.md). |
 | Scope | Every surface that draws a product hue or a per-agent figure: the expanded header band, the session row's attribution, the quota footer's product names, and the Display settings that name them. The collapsed bar is already free of both and is untouched. |
 | Supersedes | [`dual-agent-design.md`](dual-agent-design.md) §2 (the colour table) and §4 (the four attribution presentations and the setting behind them). [`expanded-header-v2.md`](expanded-header-v2.md) §4 entire, §4.4's inks, §5's per-agent states, §6.2's sizing by agent count, §7's new row, §9's first bullet, and §10 questions 02, 03 and 05. [`quota-footer-v2.md`](quota-footer-v2.md) §2's two heights and §4's product-in-its-lit-ink rule. [`expanded-panel-v2.md`](expanded-panel-v2.md) §2.3's product-in-caption-ink and the four presentations reaching the breadcrumb. [`figma-design.md`](figma-design.md) §3.2's colour tokens, §4.1's `Colour bar` gutter rule, §8.4's `Mark colour` label and §8.5's `Distinguish products` control. [`PRD.md`](PRD.md) §12's Display list, items 1 and 3. [`CONTEXT.md`](../CONTEXT.md)'s **Product** and **Disconnected**. |
 
@@ -89,7 +89,7 @@ At the default **Sage · hint** that is ground `#1B1F1C`, text `#DEE8E0`. Every 
 
 | Surface | Today | Now |
 | --- | --- | --- |
-| Session row caption | `Codex ·` in the product's caption ink, or one of three other presentations | The badge, then the Project |
+| Session row caption | `Codex ·` in the product's caption ink, or one of three other presentations | The badge, then the Project, with **no separator between them** ([`panel-v2.md`](panel-v2.md) §3.4) |
 | A row's breadcrumb below the seam ([`expanded-panel-v2.md`](expanded-panel-v2.md)) | All four presentations reach it | The badge, in place of the prefix |
 | Quota footer, opened table's outer row | `Codex ────── 310.1M today` | Badge, leader, spend |
 | Quota footer, the spoken line | `Claude Code · 5 h · 8% left · 47m` | Badge, then `5 h · 8% left · 47m` |
@@ -157,7 +157,7 @@ The two footer figures move for one reason: a caption line carrying a badge is `
 | 02 | Does the badge ground need to change on a hovered or finished row? | **Standing recommendation: no.** `L 0.234` against the hover ground's `0.290` and a finished row's `0.260`, so the chip reads as an inset in every state, and every entry in the palette sits inside `0.003` of that figure — this is one check, not twelve. The old grounds `#101B26` / `#21120D` sat in the same relation and it was never raised |
 | 03 | Does the footer's table need the badge on its outer row, or would the name alone do? | **Standing recommendation: the badge.** The outer row is the only place the footer names a product, and a name drawn one way in the list and another way ten points below it is the kind of inconsistency this decision exists to remove. It costs `2` pt per product group |
 | 04 | Do the two `product/*` tokens go, or stay unused? | **Standing recommendation: go.** A token nothing binds to is a value the next person will bind something to. The Settings list needs no marker |
-| 05 | Does Figma page `09` get redrawn to the decision? | **Open.** It currently draws the proposal that led here — grey badge, `Name and colour` kept as default — and the two differ in exactly the places the decision went further |
+| 05 | Does Figma page `09` get redrawn to the decision? | **Answered — no, and a later page draws it instead.** Page `09` stays as the argument that produced the decision, grey badge and kept default and all; `11 — The panel, whole` draws the badge in the theme ink's own pair, as the only presentation, alongside the other two V2 decisions ([`panel-v2.md`](panel-v2.md) §3.3) |
 
 ## 11. Implementation mapping
 
