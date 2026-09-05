@@ -1411,8 +1411,9 @@ final class MonitorStore: ObservableObject {
             // nobody watched for six hours is empty by the time it could be
             // drawn, with no background work having run while the panel was
             // shut.
-            guard isExpanded, isExpanded != oldValue else { return }
-            refreshRecentDepartures(at: clock.now())
+            guard isExpanded != oldValue else { return }
+            if isExpanded { refreshRecentDepartures(at: clock.now()) }
+            updateRecentTicking()
         }
     }
     /// Whether somebody has opened what the list has let go of.
@@ -1432,6 +1433,15 @@ final class MonitorStore: ObservableObject {
                 isRecentExpanded,
                 forKey: Self.recentExpandedDefaultsKey
             )
+            guard isRecentExpanded != oldValue else { return }
+            // The fold decides *which* instants matter, so a wake-up parked
+            // before it moved is parked on the wrong one — see
+            // ``nextRecentReadingChange(at:)``. Cancelled rather than left to
+            // fire, because the tick is otherwise free to be wrong all the way
+            // to the next boundary.
+            recentTickTask?.cancel()
+            recentTickTask = nil
+            updateRecentTicking()
         }
     }
     /// What the queue holds right now, most recently departed first.
@@ -1620,6 +1630,7 @@ final class MonitorStore: ObservableObject {
     private var wakeTask: Task<Void, Never>?
     private var refreshEventTask: Task<Void, Never>?
     private var elapsedTickTask: Task<Void, Never>?
+    private var recentTickTask: Task<Void, Never>?
     private let refreshEvents: AsyncStream<Void>?
     private var refreshGate = SingleFlightGate()
     private var refreshTask: Task<Void, Never>?
@@ -1781,6 +1792,7 @@ final class MonitorStore: ObservableObject {
         refreshEventTask?.cancel()
         pendingHoverTask?.cancel()
         elapsedTickTask?.cancel()
+        recentTickTask?.cancel()
         refreshTask?.cancel()
         for task in integrationTasks.values {
             task.cancel()
@@ -3380,6 +3392,88 @@ final class MonitorStore: ObservableObject {
         if recentDepartures != ordered {
             recentDepartures = ordered
         }
+        updateRecentTicking()
+    }
+
+    /// Moves the queue's ages while somebody is looking at them.
+    ///
+    /// **This is the visible half only, and it is the smaller one.** Eviction
+    /// and the readings are both correct without it, because
+    /// ``refreshRecentDepartures(at:)`` is a filter as of `now` and opening the
+    /// panel is a read -- so a queue nobody watched for six hours is empty
+    /// before it is drawn, and every age is right at the instant somebody
+    /// looks. What this adds is the one case that read cannot cover: a panel
+    /// held open across a boundary, where `9m` has to become `10m` under a
+    /// pointer that has not moved.
+    ///
+    /// **It runs only while the panel is open and the queue has members**, so
+    /// on the overwhelming majority of this app's life it does not exist. The
+    /// panel is a hover surface: it is open for seconds at a time, and most
+    /// openings will not cross a boundary at all.
+    ///
+    /// It sleeps to the **next boundary any member actually crosses**, not to a
+    /// flat minute. A flat minute would drift into crossing two boundaries in
+    /// one wake-up and visibly skip a reading -- the fault
+    /// ``secondsUntilNextTick(after:now:)`` exists to avoid one rule up -- and
+    /// it would also wake up to change nothing at all for a queue whose members
+    /// all departed within the same few seconds.
+    private func updateRecentTicking() {
+        // Nothing to move: stop entirely rather than wake to discover it.
+        guard isExpanded, !recentDepartures.isEmpty else {
+            recentTickTask?.cancel()
+            recentTickTask = nil
+            return
+        }
+        guard recentTickTask == nil else { return }
+
+        recentTickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                guard let deadline = self.nextRecentReadingChange(
+                    at: self.clock.now()
+                ) else { return }
+                try? await self.clock.sleep(
+                    seconds: max(deadline.timeIntervalSince(self.clock.now()), 0)
+                )
+                guard !Task.isCancelled else { return }
+                // `MainActor.run`, not a bare call, for the reason
+                // ``scheduleHoverAction(after:action:)`` spells out: the task
+                // body is `nonisolated(nonsending)` under
+                // `SWIFT_APPROACHABLE_CONCURRENCY`, so resuming from a
+                // suspension does not put this back on the main thread, and
+                // every property the overlay renders from must be written there
+                // (`AGENTS.md` §7).
+                await MainActor.run {
+                    self.refreshRecentDepartures(at: self.clock.now())
+                }
+            }
+        }
+    }
+
+    /// When the first thing the panel is drawing changes, or `nil` if nothing
+    /// can.
+    ///
+    /// **Which instants matter depends on the fold**, because that decides what
+    /// is on screen. Open, every age is drawn, and a member reads in whole
+    /// minutes below an hour and whole hours above one — so its next change is
+    /// its own next such boundary measured from when it left. Folded, no age is
+    /// drawn at all and the only thing that moves is the seam's own count, so
+    /// the one instant worth waking for is the member's expiry. A folded queue
+    /// therefore wakes at most once per member however long it is held open.
+    ///
+    /// **The eviction needs no term of its own in the open case.** A member can
+    /// only reach five hours by passing four, so the hour boundary that would
+    /// have drawn `5h` is exactly the instant the row is dropped instead.
+    private func nextRecentReadingChange(at now: Date) -> Date? {
+        recentDepartures.map { departure in
+            guard isRecentExpanded else {
+                return departure.departedAt.addingTimeInterval(Self.recentWindow)
+            }
+            let age = max(departure.age(at: now), 0)
+            let step: TimeInterval = age < 3600 ? 60 : 3600
+            let elapsed = (age / step).rounded(.down) + 1
+            return departure.departedAt.addingTimeInterval(elapsed * step)
+        }.min()
     }
 
     /// Takes one row out of the queue, at the user's asking (§2.4 rule 09).

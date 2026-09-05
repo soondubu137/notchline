@@ -2837,6 +2837,145 @@ struct NotchlineTests {
         #expect(departure.spokenAgeText(at: left.addingTimeInterval(4 * 3600)) == "left 4 hours ago")
     }
 
+    /// **The tick runs only while somebody is looking, and sleeps to the
+    /// boundary a reading actually crosses.**
+    ///
+    /// A shut panel books nothing at all: eviction and the readings are both
+    /// correct without a timer, because the queue is filtered as of `now` and
+    /// opening the panel is a read. What the tick adds is the one case that
+    /// cannot cover — a panel held open while `29m` becomes `30m` under a
+    /// pointer that has not moved.
+    ///
+    /// The interval is asserted, not just the effect. A flat minute would drift
+    /// into crossing two boundaries in one wake-up and visibly skip a reading,
+    /// which is the fault `secondsUntilNextTick(after:now:)` exists to avoid one
+    /// rule up.
+    @Test @MainActor
+    func theQueuesAgesMoveOnlyWhileThePanelIsOpen() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let row = recentTestRow(thread: "thread-1")
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [row]))
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        store.isRecentExpanded = true
+        await clock.settle()
+
+        let departure = store.recentDepartures[0]
+        #expect(departure.ageText(at: store.recentReadAt) == "now")
+
+        // Shut: nothing is parked on the clock for the queue, and half an hour
+        // passes without this app doing any work for it.
+        let whileShut = clock.requestedSleepIntervals.count
+        await clock.advance(by: 29 * 60 + 45)
+        #expect(
+            clock.requestedSleepIntervals.count == whileShut,
+            "a shut panel books no wake-up for the queue"
+        )
+
+        // Opened at 29m45s. The read alone is enough to be right.
+        store.isExpanded = true
+        await clock.settle()
+        #expect(departure.ageText(at: store.recentReadAt) == "29m")
+
+        // And the first sleep it books is to *this member's* next boundary —
+        // fifteen seconds away, not a flat sixty.
+        #expect(clock.requestedSleepIntervals.count > whileShut)
+        #expect(clock.requestedSleepIntervals.last == 15)
+
+        // Crossing it moves the reading with nothing else happening at all, and
+        // the wake-up after it is a whole minute because that is where the next
+        // boundary now is.
+        await clock.advance(by: 15)
+        #expect(departure.ageText(at: store.recentReadAt) == "30m")
+        #expect(clock.requestedSleepIntervals.last == 60)
+
+        // Shutting it stops the tick rather than leaving it running.
+        store.isExpanded = false
+        await clock.settle()
+        let afterClosing = clock.requestedSleepIntervals.count
+        await clock.advance(by: 600)
+        #expect(clock.requestedSleepIntervals.count == afterClosing)
+    }
+
+    /// **A folded queue wakes for its expiries and for nothing else.**
+    ///
+    /// No age is drawn while it is folded, so a minute boundary changes nothing
+    /// on screen; the only thing that moves is the seam's own count. Waking a
+    /// hover surface once a minute to redraw a number that did not change is
+    /// exactly the cost `AGENTS.md` §7 is about.
+    @Test @MainActor
+    func aFoldedQueueWakesForItsExpiriesAndNothingElse() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let row = recentTestRow(thread: "thread-1")
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [row]))
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+
+        // Folded is the default, and opening the panel books one wake-up: the
+        // moment this member leaves, five hours out.
+        store.isExpanded = true
+        await clock.settle()
+        #expect(clock.requestedSleepIntervals.last == MonitorStore.recentWindow)
+
+        // Opening the queue re-plans it, because now every minute is drawn.
+        store.isRecentExpanded = true
+        await clock.settle()
+        #expect(clock.requestedSleepIntervals.last == 60)
+
+        // And folding it again goes back to the expiry.
+        store.isRecentExpanded = false
+        await clock.settle()
+        #expect(clock.requestedSleepIntervals.last == MonitorStore.recentWindow)
+    }
+
+    /// The five-hour eviction needs no term of its own in the tick.
+    ///
+    /// A member can only reach five hours by passing four, so the hour boundary
+    /// that would have drawn `5h` is the same instant the row is dropped
+    /// instead — and a panel held open across it watches the seam go.
+    @Test @MainActor
+    func theLastMemberAgeingOutTakesTheSeamWithItUnderAStillPointer() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let row = recentTestRow(thread: "thread-1")
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [row]))
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        store.isExpanded = true
+        store.isRecentExpanded = true
+        await clock.settle()
+
+        // Held open right up to the last hour boundary a member can cross.
+        await clock.advance(by: MonitorStore.recentWindow - 1)
+        #expect(store.recentDepartures.count == 1)
+        #expect(store.recentDepartures[0].ageText(at: store.recentReadAt) == "4h")
+
+        await clock.advance(by: 1)
+        #expect(
+            store.recentDepartures.isEmpty,
+            "the panel returns to its floor without anybody touching it"
+        )
+        #expect(
+            PanelMetrics.expandedContentHeight(
+                liveRowCount: store.sessions.count,
+                retiredRowCount: store.recentDepartures.count,
+                isRecentExpanded: store.isRecentExpanded
+            ) == PanelMetrics.thinExpandedContentHeight,
+            "and the apology comes back, because the list really is empty now"
+        )
+    }
+
     /// **The seam is what takes the panel's floor down**, and folding it never
     /// closes the panel.
     ///

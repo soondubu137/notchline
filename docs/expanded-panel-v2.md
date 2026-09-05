@@ -274,6 +274,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 - [ ] The seam's label and hairline redraw correctly at a two-digit count, with the hairline's trailing edge still at `508`.
 - [ ] At six or more in the window the panel is `370` and the last `8` points below the fifth row are empty — no partial line is drawn.
 - [ ] Folding the queue does not close the panel at any connected form.
+- [ ] Nothing is parked on the clock for the queue while the panel is shut, and a folded queue wakes only at a member's expiry.
 - [ ] The seam's hairline lands on the same `x` as the footer's rules and the band's matrix, in every attribution option.
 - [ ] Only `Approval needed` and `Input needed` rows draw `Answer` under the pointer; no other row becomes clickable.
 - [ ] An opened row is `134` at one request line, `170` at three and `118` for Input, and never exceeds the viewport.
@@ -291,7 +292,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 | ~~`PanelMetrics.sessionViewportHeight(forSessionCount:)`~~ **Built.** | Became a height rather than a row count: `sessionListContentHeight(liveRowCount:retiredRowCount:isRecentExpanded:)` capped at `sessionViewportCap`, which is the same `240`. `maximumVisibleSessionCount` retired with it, and `expandedContentHeight` now asks the *viewport* whether to draw the apology rather than the live count |
 | `PanelMetrics` | **Built:** `retiredRowHeight = sessionRowHeight / 2` and `recentSeamHeight`. Still owed: `openRowHeight(requestLines:)`, which belongs to §3 |
 | ~~`MonitorStore`~~ **Built.** | `departuresByThread` holding every row that left within `recentWindow` (`5 × 3600`) with the reason it left, fed from `apply` — the one funnel every row leaves through, a dismissal included. `isRecentExpanded` beside `isQuotaExpanded`, on the key `recentExpanded`. Two things the design did not say, both forced by the code and both in §10.1 |
-| `MonitorStore` (the clock) | **Eviction is a read-time filter, and that half is built** — the queue is filtered as of `now` wherever it is republished, and opening the panel is a read, so a queue nobody watched for six hours is empty before it could be drawn. Still owed: the one-minute tick that makes an age move under somebody already watching |
+| ~~`MonitorStore` (the clock)~~ **Built.** | **Eviction is a read-time filter, not a timer** — the queue is filtered as of `now` wherever it is republished, and opening the panel is a read, so a queue nobody watched for six hours is empty before it could be drawn. The tick covers only what that read cannot: a panel *held open* across a boundary. It runs while the panel is open and the queue has members, and sleeps to the next instant the panel is actually drawing — **which depends on the fold** (§10.2) |
 | ~~`NotchOverlayView`~~ **Built for §2.** | `RecentSeam` and `RetiredRow`, inside the list's **one** scroller rather than a second one, and `emptyListMessage` only when the queue is empty too. `SessionRow`'s open state belongs to §3 and is not built |
 | `OverlayPanelController` | Latching: key window on open, restore on close, and hover suspended for the duration (§8.3) |
 
@@ -308,6 +309,14 @@ What replaced it reads two facts, both already on the surface: **the row's last 
 **One case still gets through, and the Thread key repairs it.** Codex Desktop quitting empties its list *before* availability catches up — presence is a kernel fact and precedes any message about Turns — so its finished rows are archived a moment early. Their Thread coming back takes them straight out again. The two decisions are therefore one mechanism rather than two, and neither is safe without the other.
 
 **What is lost, stated:** a row read while its product was dark never enters the queue, because it had already dropped off the list. That is §2.4 rule 01 being honest rather than a defect — the queue vouches for what it watched leave, and it watched nothing during a blackout.
+
+### 10.2 The tick asks what is on screen, not what time it is
+
+The design said "one one-minute tick while the panel is open serves both eviction and the ages". Neither half survived contact, and both came out smaller.
+
+**Eviction needed no tick at all.** It is a filter as of `now` applied wherever the queue is republished, and opening the panel is a republish — so a queue nobody watched for six hours is empty before it can be drawn, with nothing having run while the panel was shut. The tick's whole job is the case that read cannot cover: a panel *held open* while `29m` becomes `30m` under a pointer that has not moved.
+
+**And a flat minute is wrong twice over.** It drifts into crossing two boundaries in one wake-up and visibly skipping a reading — the fault `secondsUntilNextTick(after:now:)` avoids one rule up — so the tick sleeps to the next boundary a member actually crosses. More usefully, **which instants matter depends on the fold**: folded, no age is drawn and the only thing that can move is the seam's own count, so the one instant worth waking for is a member's expiry. A folded queue wakes at most once per member however long the panel is held open, where a minute tick would have redrawn the whole overlay sixty times an hour to change nothing (`AGENTS.md` §7). Changing the fold re-plans the parked wake-up, because it was booked against the other question.
 
 **Question 08 is answered the way §8.5 recommends.** `recentCeiling = 50` stands behind the window purely so the store cannot grow without limit; when it binds it keeps the newest, and the rule anybody can see is still five hours.
 
