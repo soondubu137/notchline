@@ -323,6 +323,8 @@ A row is a navigable root Thread. Running, Input needed and Approval needed are 
 
 The list covers every Project and `Chats` under the current account, does not follow the sidebar selection, never shows subagents, and does not serve as a history browser.
 
+> **A removed row is no longer gone from the surface.** [`expanded-panel-v2.md`](expanded-panel-v2.md) §2 gives the list a floor it continues past: the last five rows to leave are held below a rule at half height, in the order they left. That is a record of departures from this list rather than a history browser, so the sentence above still holds — the queue holds nothing this list did not itself hold, cannot be searched or paged, and is empty at launch.
+
 ### 5.2 Sorting
 
 ```text
@@ -342,6 +344,8 @@ Ties sort by most recent trustworthy update, descending. Sorting updates live, b
 | Approval needed | The fixed `Approval requested` |
 | Running | The latest public progress, falling back to this Turn's input |
 | Completed | The start of the final answer; failing that, the last public progress |
+
+> **The `Approval requested` row is superseded** by [`expanded-panel-v2.md`](expanded-panel-v2.md) §3.2: that line carries the request itself, which is what makes the row answerable at all. The other three are unchanged, and [`PRD.md`](PRD.md) §3's ban on tool arguments narrows to that one payload rather than lifting.
 
 All four take what the product has already shown the user. Raw reasoning, tool arguments, command output and diffs are absent not because they are forbidden but because this path never fetched them — showing them would mean adding a read, which is a new feature judged on its value ([`PRD.md`](PRD.md) §7).
 
