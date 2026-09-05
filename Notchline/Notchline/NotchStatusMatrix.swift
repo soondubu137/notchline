@@ -1650,9 +1650,10 @@ enum NotchMatrixState: Equatable {
     /// Loop length, or `nil` when the state is a still.
     ///
     /// Three lengths for four patterns, and the pairing is the design's:
-    /// the rain and the knock share `1.2`, so a bar showing one of each is
+    /// the loom and the knock share `1.2`, so a bar showing one of each is
     /// showing two things on one grid rather than two clocks. The four
-    /// patterns changed at 5×5; these four periods did not.
+    /// patterns changed at 5×5 and Running changed again after; these four
+    /// periods have not moved once.
     var period: TimeInterval? {
         switch self {
         case .running, .approvalNeeded: 1.2
@@ -1669,15 +1670,16 @@ enum NotchMatrixState: Equatable {
 /// waveform at its own offset, so that is how they are held here: the curve
 /// sampled once per state, plus the rule that says how far a given cell lags
 /// it. Writing out twenty-five tracks per state would be the same numbers
-/// twenty-five times over, and the rule — rain falling down five columns, a
-/// wedge crossing and wrapping, three bars breathing — is the half that has to
-/// survive being read.
+/// twenty-five times over, and the rule — two rings turning against each other,
+/// a wedge crossing and wrapping, three bars breathing — is the half that has
+/// to survive being read.
 ///
-/// **The offsets are whole frames.** A pattern's own phases are not: the bars
-/// want their tiers `10.8` frames apart. But each track is sampled at its
-/// state's frame rate and so lights a cell on a frame boundary anyway, and
-/// rounding to the frame the pattern itself lights costs at most `0.4` of a
-/// frame of phase and `0.015` of opacity, both of them on the bars.
+/// **The offsets are whole frames**, and a pattern is sampled at whatever rate
+/// makes that true: the loom runs 48 frames at 40fps rather than 36 at 30
+/// because `1.2s` over sixteen outer cells is otherwise `2.25` frames a step.
+/// One phase still does not land: the bars want their tiers `10.8` frames
+/// apart. Rounding to the frame the pattern itself lights costs `0.4` of a
+/// frame and `0.015` of opacity, and only there.
 ///
 /// **Three of the four share one scale, and the knock does not.** Each pattern
 /// was drawn against a floor and a ceiling that suited it alone; shipping four
@@ -1721,44 +1723,53 @@ private enum MatrixTrack {
         return tracks.map { $0.map { floor + ($0 - low) * scale } }
     }
 
-    // MARK: Running — rain
+    // MARK: Running — loom
 
-    /// **Rain**, 36 frames over `1.2s`, one curve per row.
+    /// **Loom**, 48 frames over `1.2s`.
     ///
-    /// A drop enters above the grid, falls through it trailing a tail about
-    /// four cells long, and leaves below. Each column runs one drop across
-    /// `0.72` of the loop, so for the rest of it that column is empty — and
-    /// the emptiness is the whole difference between rain and a conveyor belt.
-    /// Without it every column always holds a head and the mark reads as
-    /// machinery rather than as something falling.
+    /// The outer sixteen cells turn clockwise and the inner eight anticlockwise,
+    /// one lap each per loop, about a centre cell that holds still. Two gears
+    /// meshing: plainly driven, plainly going nowhere, which is the pair of
+    /// things Running has to say at once. The centre is 5×5's own affordance —
+    /// an even grid has no cell for the two rings to turn about.
     ///
-    /// A row's curve is not a delayed copy of the row above: the drop's tail
-    /// is cut when the column's window closes, so the lower a row is the more
-    /// of its tail is still lit when the cut comes. The bottom row loses the
-    /// most, dropping from `0.40` to the floor in a frame as the drop clears
-    /// the grid.
-    static let rain: [[Double]] = {
-        let frames = 36, fall = Double(frames) * 0.72
-        let travel = Double(MatrixGrid.side + 4)   // enters two above, leaves two below
-        let tail = 2.1                              // cells, as a decay constant
-        let tracks = (0 ..< MatrixGrid.side).map { row -> [Double] in
-            (0 ..< frames).map { frame in
-                let t = Double(frame)
-                guard t <= fall else { return 0 }
-                let head = t / fall * travel - 2
-                let behind = head - Double(row)
-                return behind < 0 ? 0 : exp(-behind / tail)
+    /// **48 frames rather than 36.** A `1.2s` loop at 30fps is `2.25` frames to
+    /// an outer step, and this file's offsets are whole frames. 40fps is the
+    /// same `1.2s` and divides both rings exactly: `3` frames a step outside,
+    /// `6` inside.
+    ///
+    /// A ring's cell is brightest as the head passes and falls away either side
+    /// of it, so the lit arc is symmetric rather than a comet — a tooth on a
+    /// gear rather than something thrown.
+    static let loom: (outer: [Double], inner: [Double], centre: Double) = {
+        let frames = 48
+        func ring(_ n: Int) -> [Double] {
+            let step = Double(frames) / Double(n)
+            return (0 ..< frames).map { frame in
+                let moved = Double(frame) / step            // steps the head has taken
+                let gap = min(moved, Double(n) - moved)     // the nearer way round
+                return 0.12 + 0.88 * exp(-gap / 1.5)
             }
         }
-        return stretched(tracks, floor: floor)
+        // The pivot is stretched with the rings rather than after them, so it
+        // keeps its place between the arc's floor and its crest.
+        let all = stretched([ring(16), ring(8), [0.42]], floor: floor)
+        return (all[0], all[1], all[2][0])
     }()
 
-    /// The frame each column's drop begins on.
-    ///
-    /// Uneven on purpose. Evenly spaced starts put the five heads on a
-    /// diagonal, and a diagonal is a thing the eye follows — which is a
-    /// different mark from rain, where there is nothing to follow.
-    static let rainStart = [0, 21, 8, 29, 14]
+    /// The 16 perimeter cells, clockwise from the top-left corner.
+    static let outerRing = [0, 1, 2, 3, 4, 9, 14, 19, 24, 23, 22, 21, 20, 15, 10, 5]
+    /// The 8 cells around the centre, clockwise from the top-left of them.
+    static let innerRing = [6, 7, 8, 13, 18, 17, 16, 11]
+
+    /// One cell's loom track: which ring it is on, and how far behind that
+    /// ring's head it sits. The inner offset is negative because that ring
+    /// turns the other way.
+    static func loomTrack(forCell index: Int) -> [Double] {
+        if let i = outerRing.firstIndex(of: index) { return loom.outer.delayed(by: i * 3) }
+        if let i = innerRing.firstIndex(of: index) { return loom.inner.delayed(by: -i * 6) }
+        return [loom.centre]
+    }
 
     // MARK: Input needed — wedge
 
@@ -1887,9 +1898,7 @@ extension NotchMatrixState {
         let column = index % MatrixGrid.side
         switch self {
         case .running:
-            // A row's own curve, started when this column's drop starts.
-            return MatrixTrack.rain[row]
-                .delayed(by: MatrixTrack.rainStart[column])
+            return MatrixTrack.loomTrack(forCell: index)
         case .inputNeeded:
             return MatrixTrack.wedge
                 .delayed(by: MatrixTrack.wedgeOffset(row: row, column: column))
@@ -2253,7 +2262,7 @@ final class MatrixIndicatorView: NSView {
     /// **Only the changes with the still on one side of them.** Those are the
     /// ones where the mark starts or stops having something to say, and cut
     /// they read as a light being thrown: a mark that was a dark square is
-    /// suddenly raining, or a finished turn the user has just read is
+    /// suddenly turning, or a finished turn the user has just read is
     /// suddenly gone.
     /// Neither is a lie about the product, but both are louder than the news
     /// they carry — a turn beginning and a turn being read are quiet events,
@@ -2384,8 +2393,8 @@ final class MatrixIndicatorView: NSView {
     /// cut straight to the first. Repeating the opening frame at the end makes
     /// it N+1 values across N intervals -- the cadence the design file's
     /// frames are drawn at, and a wrap that interpolates like every other
-    /// step. It matters most to the rain and the knock, whose tracks end far
-    /// from where they begin.
+    /// step. It matters most to the knock, whose track ends far from where it
+    /// begins.
     ///
     /// **`anchorsPhase` is what a specimen gives up.** There is nothing beside
     /// it to be in step with, and it runs for a counted number of loops, so the

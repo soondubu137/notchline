@@ -626,11 +626,11 @@ struct NotchlineTests {
 
     /// Each state draws the pattern the sheet draws.
     ///
-    /// Every one of the four writes one waveform twenty-five times at
-    /// twenty-five offsets. The code holds the waveform once and computes the
-    /// offsets, so the offsets are the half that can drift silently — an even
-    /// spacing on the rain's column starts puts all five heads on a diagonal
-    /// and still looks like rain. They are transcribed here.
+    /// Every one of the four writes one waveform at twenty-five offsets. The
+    /// code holds the waveform once and computes the offsets, so the offsets
+    /// are the half that can drift silently — a sign flipped on the loom's
+    /// inner ring turns both gears the same way and still looks like a loom.
+    /// They are transcribed here.
     ///
     /// Read off the layers rather than off ``NotchMatrixState/track(forCell:)``
     /// so that what is asserted is what the render server is actually given,
@@ -654,37 +654,48 @@ struct NotchlineTests {
         // `CALayer.opacity` is a Float, so a level read back off a layer is
         // only good to about 6e-8. Every difference this test cares about is
         // larger than a thousandth.
-        func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-6 }
-
-        // Rain: 36 frames. A row's own curve — the lower the row, the later its
-        // head and the more of its tail is still lit when the column's window
-        // closes — started on the frame that column's drop begins.
-        let rain = try cells(.running)
-        #expect(rain.count == MatrixGrid.cellCount)
-        // Head at frame `3 × row + 6`, plus the column's own start. The starts
-        // are 0, 21, 8, 29, 14: uneven, so the five heads never line up.
-        let rainPeaks = [
-             6, 27, 14, 35, 20,
-             9, 30, 17,  2, 23,
-            12, 33, 20,  5, 26,
-            15,  0, 23,  8, 29,
-            18,  3, 26, 11, 32
-        ]
-        for (index, cell) in rain.enumerated() {
-            let track = try values(cell)
-            // 36 frames plus the repeat of frame 0 that closes the loop.
-            #expect(track.count == 37)
-            #expect(track.first == track.last)
-            let brightest = try #require(track.max())
-            #expect(track.firstIndex(of: brightest) == rainPeaks[index])
-            // Every drop falls back to the shared floor and no further.
-            #expect(close(try #require(track.min()), 0.15))
+        func close(_ a: Double, _ b: Double, _ tolerance: Double = 1e-6) -> Bool {
+            abs(a - b) < tolerance
         }
-        // Only the top row's head reaches full: it is the least decayed, and
-        // the stretch is taken over all five rows at once so that the
-        // difference between a drop at the top and one at the bottom survives.
-        #expect(close(try #require(values(rain[0]).max()), 1))
-        #expect(try #require(values(rain[MatrixGrid.cellCount - 1]).max()) < 0.95)
+
+        // Loom: 48 frames. Two rings turning against each other about a still
+        // centre — three frames an outer step clockwise, six an inner step the
+        // other way, so both land on whole frames.
+        let loom = try cells(.running)
+        #expect(loom.count == MatrixGrid.cellCount)
+        // The frame each cell's ring head reaches it on. Outer counts up
+        // clockwise from the top-left corner; inner counts *down*, which is the
+        // whole of what makes the two rings turn against each other.
+        let loomPeaks: [Int?] = [
+             0,  3,  6,  9, 12,
+            45,  0, 42, 36, 15,
+            42,  6, nil, 30, 18,
+            39, 12, 18, 24, 21,
+            36, 33, 30, 27, 24
+        ]
+        for (index, cell) in loom.enumerated() {
+            guard let peak = loomPeaks[index] else {
+                // The centre is the pivot: it holds, so it has no animation.
+                #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
+                // Quoted to three decimals; the pivot is what the stretch puts
+                // 0.42 at, not a number chosen here.
+                #expect(close(Double(cell.opacity), 0.437, 5e-4))
+                continue
+            }
+            let track = try values(cell)
+            // 48 frames plus the repeat of frame 0 that closes the loop.
+            #expect(track.count == 49)
+            #expect(track.first == track.last)
+            #expect(track.firstIndex(of: try #require(track.max())) == peak)
+            // Every cell on a ring takes its head, so every one reaches full.
+            #expect(close(try #require(track.max()), 1))
+        }
+        // The outer ring gets twice as far from its head as the inner one can,
+        // so it alone reaches the shared floor and the inner ring's darkest sits
+        // well above it. That is the two rings reading as different gears rather
+        // than as one texture.
+        #expect(close(try #require(values(loom[0]).min()), 0.15))
+        #expect(try #require(values(loom[6]).min()) > 0.18)
 
         // Wedge: 40 frames, every cell on one curve. Eight frames a column, and
         // six more for every row away from the middle — the three quarters of a
@@ -767,7 +778,7 @@ struct NotchlineTests {
                 }
                 .min() ?? 0
         }
-        #expect(try dimmestMark(rain) > resting)
+        #expect(try dimmestMark(loom) > resting)
         #expect(try dimmestMark(wedge) > resting)
         #expect(try dimmestMark(bars) > resting)
         // And the one ordering that still has to hold on the level alone: a
@@ -960,7 +971,12 @@ struct NotchlineTests {
         // Every lit cell in a mark is anchored together, as it always was.
         // The phase each cell then shows is baked into its own track, not into
         // its `beginTime`, so the anchor stays one number per mark.
-        #expect(codex.count == MatrixGrid.cellCount * 4)
+        //
+        // Twenty-four of the twenty-five, across four lit passes: the loom's
+        // centre is the pivot the two rings turn about and holds still, so it
+        // carries no animation to anchor. A cell that does not move is the one
+        // kind of cell this claim has nothing to say about.
+        #expect(codex.count == (MatrixGrid.cellCount - 1) * 4)
         #expect(claudeCode.count == codex.count)
         let codexPhase = try #require(codex.first)
         let claudePhase = try #require(claudeCode.first)
@@ -4131,7 +4147,7 @@ struct NotchlineTests {
 
     /// **The reference mark sweeps twice, and the sweep is why it is legible.**
     ///
-    /// `Mark colour` answers a change of selection by running the rain for two
+    /// `Mark colour` answers a change of selection by running the loom for two
     /// whole turns, so the hue is seen lit, mid-decay and nearly out at once,
     /// on the surface it will actually be drawn on. It used to run the double
     /// knock, and that is the choice this pins: both patterns loop in `1.2s`,
@@ -4139,17 +4155,17 @@ struct NotchlineTests {
     /// The knock is four flashes and then the darkest this surface ever goes —
     /// every cell together, under the resting level for twenty of its
     /// thirty-six frames — which is a hue shown for a tenth of the time it is
-    /// on screen. The rain is under it on none of them.
+    /// on screen. The loom is under it on none of them.
     @Test @MainActor
     func theMarkColourSpecimenSweepsTwiceAndStaysLitThroughout() throws {
-        let rain = NotchMatrixState.running
-        let period = try #require(rain.period)
+        let loom = NotchMatrixState.running
+        let period = try #require(loom.period)
         #expect(AggregateInkSpecimen.sweepDuration == period * 2)
 
-        let cells = (0 ..< MatrixGrid.cellCount).map { rain.track(forCell: $0) }
+        let cells = (0 ..< MatrixGrid.cellCount).map { loom.track(forCell: $0) }
         let frames = cells.map(\.count).max() ?? 1
-        // Five drops on five different clocks, so no two frames of the loop
-        // draw the same mark and every frame draws a range.
+        // Two rings on two clocks and a still centre, so no two frames of the
+        // loop draw the same mark and every frame draws a range.
         func mark(at frame: Int) -> [Double] { cells.map { $0[frame % $0.count] } }
         #expect(Set((0 ..< frames).map { mark(at: $0) }).count == frames)
 
@@ -4158,12 +4174,13 @@ struct NotchlineTests {
             mark(at: $0).reduce(0, +) / Double(MatrixGrid.cellCount)
         }
         // Continuously legible: on every frame of the loop some cell is at
-        // least three quarters lit, and the mark as a whole never sinks to a
-        // flat dark. The rain spends less light than the radar it replaced —
-        // it has gaps, which is what makes it fall — so these are lower than
-        // they were, and the claim they carry is the comparison below.
-        #expect((brightest.min() ?? 0) > 0.7)
-        #expect((average.min() ?? 0) > 0.25)
+        // least four fifths lit, and the mark as a whole never sinks to a flat
+        // dark. Two heads are always somewhere on the grid, so the loom holds
+        // its output almost flat — the mean moves only between 0.353 and 0.362
+        // across the whole loop, which is a mark that never pulses in the
+        // corner of the eye while still having to be looked at to be read.
+        #expect((brightest.min() ?? 0) > 0.8)
+        #expect((average.min() ?? 0) > 0.34)
         // And the pattern it replaced, measured the same way: for most of its
         // loop the whole grid is darker than the still it is drawn against.
         let resting = try #require(NotchMatrixState.inactive.track(forCell: 0).first)

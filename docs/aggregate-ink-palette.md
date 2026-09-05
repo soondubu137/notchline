@@ -140,7 +140,7 @@ but never the default.
 ## 6. The picker
 
 The swatches were chosen against a live page that draws all 36 in the real Running state — the
-36-frame rain track from `MatrixTrack.rain`, each column delayed by the frame its own drop begins on —
+48-frame loom track from `MatrixTrack.loom`, each cell delayed by its own place on the ring it sits on —
 with controls for both lightnesses, a chroma multiplier and the unlit ratio, at sizes down to the
 true `16.6`. It generates the `MatrixInk` for whatever is selected.
 
@@ -167,20 +167,20 @@ ink.
 
 - **At rest it is `inactive`** — dim, still, and the honest answer to what the mark looks like on a
   bar with nothing waiting on anybody.
-- **A change of selection runs `running` twice round**, `2.4 s`, two whole turns of the rain. The
+- **A change of selection runs `running` twice round**, `2.4 s`, two whole turns of the loom. The
   hue is then seen lit, mid-decay and nearly out *at the same instant*, which is the range the eye
   wants drawn side by side rather than one reading after another.
 - **It starts at its first frame** (`NotchStatusMatrix.startsAtItsFirstFrame`). A mark on the bar is
   anchored to a per-period grid so two of them saying the same thing say it in step; a specimen has
   nothing beside it to be in step with and runs for a counted two loops, so the grid would only
-  start the drops wherever the clock happened to have them and stop them the same distance short.
+  start the rings at whatever bearing the clock was at and stop them the same distance short.
   Changing hue mid-sweep restarts it in the new colour rather than queueing behind the old one.
 - **It cuts in and dissolves out**, both from the rule the mark already has
   (`MatrixIndicatorView.dissolves(from:to:)`) rather than from anything this row asks for: a hue
   change is a different drawing, so the sweep lands on the press; the return is the same ink
-  changing state, so the rain sinks back into the still instead of snapping to it.
+  changing state, so the loom sinks back into the still instead of snapping to it.
 
-### Why the rain and not the double knock
+### Why the loom and not the double knock
 
 The first build of this ran `approvalNeeded`. Both patterns loop in `1.2 s`, so the only thing
 separating them is how much of that loop has colour in it — and the knock is mostly dark by design.
@@ -188,24 +188,24 @@ It is two beats `300 ms` apart and then `900 ms` at `0.05`, the darkest this sur
 **20 of its 36 frames every cell together sits at or under `0.142`**, below even the `0.150` the
 resting mark holds. Judging `Rose` against `Clay` from that means judging it from four flashes.
 
-The rain always has a drop somewhere, so it is never off everywhere:
+The loom always has two ring heads on the grid and a lit pivot between them, so it is never off
+anywhere:
 
-| Measured over one loop | Rain (`running`) | Double knock (`approvalNeeded`) |
+| Measured over one loop | Loom (`running`) | Double knock (`approvalNeeded`) |
 | --- | --- | --- |
-| Brightest cell, worst frame | `0.749` | `0.050` |
-| Mean cell level, range across frames | `0.253` – `0.309` | `0.050` – `1.000` |
+| Brightest cell, worst frame | `0.830` | `0.050` |
+| Mean cell level, range across frames | `0.353` – `0.362` | `0.050` – `1.000` |
 | Frames at or below the resting `0.150` | none | 20 of 36 |
 
-Two `1.2 s` loops of the rain therefore show the hue continuously; two of the knock showed it for
+Two `1.2 s` loops of the loom therefore show the hue continuously; two of the knock showed it for
 about a tenth of the time it was on screen. The knock's other supposed advantage — that it has no
 spatial reading to compete with the colour — turns out to be the same fact stated kindly: what it
 has instead of a reading is silence.
 
-> **The rain spends less light than the radar it replaced**, which is the cost of having gaps at
-> all — gaps are what make it fall rather than turn. Worst-frame brightest cell went `0.853` →
-> `0.749` and the mean band `0.330`–`0.417` → `0.253`–`0.309`. The claim the row rests on is the
-> comparison above rather than those absolutes, and it is unchanged: none of the rain's frames are
-> under the resting level and more than half the knock's are.
+> **The loom is the steadiest thing this row has ever run.** Its mean moves only between `0.353`
+> and `0.362` across the whole loop — the radar's band was `0.330`–`0.417` and the rain's
+> `0.253`–`0.309` — so the hue is held at very nearly one level while the shape underneath it
+> keeps moving. That is what a swatch wants and what neither of the other two could give.
 
-> The previous figure here was `22 of 36`; the knock's track has 20 samples at or under `0.150`,
-> and 20 is also the count at or under `0.142`. Corrected in passing.
+> The knock figure here was once `22 of 36`; its track has 20 samples at or under `0.150`, and 20
+> is also the count at or under `0.142`. Corrected in passing.
