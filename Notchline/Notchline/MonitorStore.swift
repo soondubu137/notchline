@@ -278,9 +278,31 @@ enum PanelMetrics {
     static let surfaceOutlineWidth: CGFloat = 0.8
     static let expandedBaselineWidth: CGFloat = 520
     static let sessionRowHeight: CGFloat = 80
-    static let maximumVisibleSessionCount = 3
-    static let expandedSessionViewportHeight = sessionRowHeight
-        * CGFloat(maximumVisibleSessionCount)
+    /// A row that has left the list, drawn under the seam.
+    ///
+    /// **Half a live row, exactly** (`expanded-panel-v2.md` §2.1) — the
+    /// plainest statement of "less than a live row" this surface can make. It
+    /// was measured from the half-row it has to equal rather than from the one
+    /// line it carries, so nothing about that line's contents moves it.
+    static let retiredRowHeight: CGFloat = sessionRowHeight / 2
+    /// The rule between the list and what has left it.
+    ///
+    /// `9` + a `14` pt caption line + `9`.
+    static let recentSeamHeight: CGFloat = 32
+    /// The tallest the session viewport is ever drawn.
+    ///
+    /// **A height rather than a row count, and that restatement is the whole
+    /// of what changed here** (`expanded-panel-v2.md` §2.1). `240` is what
+    /// `sessionRowHeight × 3` already was; saying it in points is what lets
+    /// rows of two heights share one viewport, and `maximumVisibleSessionCount`
+    /// retired with it because "how many rows fit" stopped being one number.
+    ///
+    /// **The queue's arithmetic rests on this value rather than on the `3`.**
+    /// A seam and five retired rows is `32 + 5 × 40 = 232`, inside it; a sixth
+    /// is `272`, outside. So five is what the viewport draws before the panel's
+    /// own scroller takes over, and the queue needs no scroller, no second
+    /// metric and nothing to snap (§2.4 rule 02).
+    static let sessionViewportCap: CGFloat = sessionRowHeight * 3
     /// The panel's horizontal inset, collapsed and expanded alike.
     ///
     /// `12`, not the `24` this started at. The name says `expanded` because
@@ -480,9 +502,14 @@ enum PanelMetrics {
         )
     }
     static let thinExpandedBodyHeight: CGFloat = 48
-    /// Three live rows over a footer at rest, which is the panel's cap: `308`
+    /// A full viewport over a footer at rest, which is the panel's cap: `308`
     /// at every connected form, every working-agent count and every share.
-    static let expandedContentHeight: CGFloat = expandedSessionViewportHeight
+    ///
+    /// **The cap did not move when the viewport stopped counting rows.** This
+    /// used to read "three live rows"; it now reads "as much list as the
+    /// viewport draws", which is the same `240` whether that is three live
+    /// rows, a seam and five retired ones, or a mix of the two.
+    static let expandedContentHeight: CGFloat = sessionViewportCap
         + restingFooterHeight
     static let thinExpandedContentHeight: CGFloat = thinExpandedBodyHeight
         + restingFooterHeight
@@ -1080,18 +1107,65 @@ enum PanelMetrics {
         compactHeight + expandedContentHeight
     }
 
-    static func sessionViewportHeight(forSessionCount sessionCount: Int) -> CGFloat {
-        sessionRowHeight * CGFloat(min(max(sessionCount, 0), maximumVisibleSessionCount))
+    /// What the list asks for, before the viewport caps it.
+    ///
+    /// Live rows, then the seam if anything has left, then the rows below it
+    /// while somebody has them open (`expanded-panel-v2.md` §2.1). **A folded
+    /// queue still costs its seam**, because the seam is the thing that says
+    /// there is one; a queue with no members costs nothing at all, because a
+    /// zero is never drawn anywhere on this surface.
+    static func sessionListContentHeight(
+        liveRowCount: Int,
+        retiredRowCount: Int = 0,
+        isRecentExpanded: Bool = false
+    ) -> CGFloat {
+        let live = sessionRowHeight * CGFloat(max(liveRowCount, 0))
+        let retired = max(retiredRowCount, 0)
+        guard retired > 0 else { return live }
+        return live
+            + recentSeamHeight
+            + (isRecentExpanded ? retiredRowHeight * CGFloat(retired) : 0)
+    }
+
+    /// That content, capped at what the viewport draws.
+    ///
+    /// **Everything past the cap scrolls, and that is not a new mechanic** — a
+    /// fourth live row already scrolled here. It is what gives the queue
+    /// "five, then scroll" for nothing (§2.4 rule 02).
+    static func sessionViewportHeight(
+        liveRowCount: Int,
+        retiredRowCount: Int = 0,
+        isRecentExpanded: Bool = false
+    ) -> CGFloat {
+        min(
+            sessionListContentHeight(
+                liveRowCount: liveRowCount,
+                retiredRowCount: retiredRowCount,
+                isRecentExpanded: isRecentExpanded
+            ),
+            sessionViewportCap
+        )
     }
 
     static func expandedContentHeight(
-        forSessionCount sessionCount: Int,
+        liveRowCount: Int,
+        retiredRowCount: Int = 0,
+        isRecentExpanded: Bool = false,
         footerHeight: CGFloat = restingFooterHeight
     ) -> CGFloat {
-        guard sessionCount > 0 else {
+        let viewport = sessionViewportHeight(
+            liveRowCount: liveRowCount,
+            retiredRowCount: retiredRowCount,
+            isRecentExpanded: isRecentExpanded
+        )
+        // **The viewport decides this, not the live count.** Nothing live and
+        // nothing retired is the one state that draws an apology instead of a
+        // list; a seam with nothing above it is still a list, and `32` is what
+        // it costs (§4).
+        guard viewport > 0 else {
             return thinExpandedBodyHeight + footerHeight
         }
-        return sessionViewportHeight(forSessionCount: sessionCount) + footerHeight
+        return viewport + footerHeight
     }
 
     /// The expanded panel's width, which answers to a **count of working
@@ -2369,7 +2443,7 @@ final class MonitorStore: ObservableObject {
 
     var expandedContentHeight: CGFloat {
         PanelMetrics.expandedContentHeight(
-            forSessionCount: sessions.count,
+            liveRowCount: sessions.count,
             footerHeight: expandedFooterHeight
         )
     }

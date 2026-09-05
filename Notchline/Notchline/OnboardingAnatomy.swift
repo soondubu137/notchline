@@ -730,7 +730,7 @@ struct ExpandedPanelAnatomy: View {
         // it draws at rest: today's spend, with the control on its trailing
         // end.
         let footer = header + PanelMetrics.sessionViewportHeight(
-            forSessionCount: store.sessions.count
+            liveRowCount: store.sessions.count
         )
         let spend = footer + PanelMetrics.quotaFoldControlSize / 2
 

@@ -665,7 +665,7 @@ private struct ExpandedPanelContent: View {
                     width: store.currentPanelSize.width
                         - PanelMetrics.sessionRowGutter * 2,
                     height: PanelMetrics.sessionViewportHeight(
-                        forSessionCount: store.sessions.count
+                        liveRowCount: store.sessions.count
                     )
                 )
                 .scrollIndicators(.hidden)

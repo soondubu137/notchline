@@ -2031,7 +2031,7 @@ struct NotchlineTests {
         func panelHeight(_ shape: [FooterRule], expanded: Bool) -> CGFloat {
             PanelMetrics.referenceCompactHeight
                 + PanelMetrics.expandedContentHeight(
-                    forSessionCount: 3,
+                    liveRowCount: 3,
                     footerHeight: PanelMetrics.footerHeight(
                         rules: shape, isExpanded: expanded
                     )
@@ -2549,13 +2549,13 @@ struct NotchlineTests {
     func thePanelIsThreeHundredAndEightOnEveryConnectedForm() {
         for shape in Self.everyFooterShape {
             let closed = PanelMetrics.expandedContentHeight(
-                forSessionCount: 3,
+                liveRowCount: 3,
                 footerHeight: PanelMetrics.footerHeight(rules: shape)
             )
             #expect(PanelMetrics.referenceCompactHeight + closed == 308)
 
             let opened = PanelMetrics.expandedContentHeight(
-                forSessionCount: 3,
+                liveRowCount: 3,
                 footerHeight: PanelMetrics.footerHeight(rules: shape, isExpanded: true)
             )
             #expect(PanelMetrics.referenceCompactHeight + opened > 308)
@@ -2566,12 +2566,127 @@ struct NotchlineTests {
         #expect(
             PanelMetrics.referenceCompactHeight
                 + PanelMetrics.expandedContentHeight(
-                    forSessionCount: 3,
+                    liveRowCount: 3,
                     footerHeight: PanelMetrics.footerHeight(
                         rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                         isExpanded: true
                     )
                 ) == 420
+        )
+    }
+
+    /// **The viewport is its content, capped at `240`** — at every mix of live
+    /// rows and rows that have left (`expanded-panel-v2.md` §2.1, §4).
+    ///
+    /// It used to be `80 × min(rows, 3)`, which is the same figure said as a
+    /// count. Saying it as a height is what lets rows of two sizes share one
+    /// viewport, and it is why the queue needs no metric of its own: five
+    /// retired rows fit because `32 + 5 × 40 = 232` is inside `240` and a
+    /// sixth is `272`, which is outside. **That is the whole implementation of
+    /// "five, then scroll"** (§2.4 rule 02) — a twelve-deep queue is `512` of
+    /// content in a `240` viewport, carried by the scroller a fourth live row
+    /// already used, rather than by a second one.
+    @Test @MainActor
+    func theViewportIsItsContentCappedAtTwoHundredAndForty() {
+        // The arithmetic the fold rests on, asserted before anything derived
+        // from it: a retired row is exactly half a live one, and the two
+        // figures either side of the cap are what decide five.
+        #expect(PanelMetrics.retiredRowHeight == PanelMetrics.sessionRowHeight / 2)
+        #expect(PanelMetrics.retiredRowHeight == 40)
+        #expect(PanelMetrics.recentSeamHeight == 32)
+        #expect(PanelMetrics.sessionViewportCap == 240)
+        #expect(
+            PanelMetrics.recentSeamHeight + PanelMetrics.retiredRowHeight * 5
+                <= PanelMetrics.sessionViewportCap
+        )
+        #expect(
+            PanelMetrics.recentSeamHeight + PanelMetrics.retiredRowHeight * 6
+                > PanelMetrics.sessionViewportCap
+        )
+
+        let cases: [(
+            live: Int, retired: Int, open: Bool,
+            content: CGFloat, viewport: CGFloat, what: String
+        )] = [
+            (0, 0, false, 0, 0, "nothing at all"),
+            // A queue costs its seam whether or not it is open, and costs
+            // nothing at all while it is empty: a zero is never drawn here.
+            (0, 0, true, 0, 0, "an empty queue, open"),
+            (0, 3, false, 32, 32, "nothing live, the queue folded"),
+            (0, 1, true, 72, 72, "one in the window, open"),
+            (0, 5, true, 232, 232, "five in the window, open"),
+            (0, 6, true, 272, 240, "six in the window, open"),
+            (0, 12, true, 512, 240, "twelve in the window, open"),
+            (1, 0, false, 80, 80, "one live row, nothing retired"),
+            (1, 4, false, 112, 112, "one live row, the queue folded"),
+            (2, 4, false, 192, 192, "two live rows, the queue folded"),
+            (3, 4, false, 272, 240, "three live rows, the seam below the fold"),
+            (4, 0, false, 320, 240, "four live rows, nothing retired"),
+            // §4 tabulates this one at `352`, which is the four rows *and* a
+            // folded seam — the table is written for a panel that has a queue.
+            (4, 4, false, 352, 240, "four live rows, as it already scrolled"),
+            (2, 5, true, 392, 240, "two live rows over an open queue"),
+        ]
+
+        for row in cases {
+            #expect(
+                PanelMetrics.sessionListContentHeight(
+                    liveRowCount: row.live,
+                    retiredRowCount: row.retired,
+                    isRecentExpanded: row.open
+                ) == row.content,
+                "content at \(row.what)"
+            )
+            #expect(
+                PanelMetrics.sessionViewportHeight(
+                    liveRowCount: row.live,
+                    retiredRowCount: row.retired,
+                    isRecentExpanded: row.open
+                ) == row.viewport,
+                "viewport at \(row.what)"
+            )
+        }
+    }
+
+    /// **A seam with nothing above it is still a list**, and that is what takes
+    /// the panel's floor down rather than up.
+    ///
+    /// The apology is drawn for an empty *viewport*, not an empty live list
+    /// (`expanded-panel-v2.md` §4). An empty list stops spending `48` points
+    /// saying it is empty and spends `32` offering what the last five hours let
+    /// go of, so the floor moves from `178` to `162` — the one place in this
+    /// change where the panel gets smaller.
+    @Test @MainActor
+    func aSeamWithNothingAboveItIsStillAList() {
+        // Both products with the quota expanded, which is the form §4 tabulates.
+        let footer: CGFloat = 84
+
+        #expect(
+            PanelMetrics.expandedContentHeight(liveRowCount: 0, footerHeight: footer)
+                == PanelMetrics.thinExpandedBodyHeight + footer
+        )
+        #expect(
+            PanelMetrics.expandedContentHeight(
+                liveRowCount: 0,
+                retiredRowCount: 3,
+                footerHeight: footer
+            ) == PanelMetrics.recentSeamHeight + footer
+        )
+
+        #expect(
+            PanelMetrics.referenceCompactHeight
+                + PanelMetrics.expandedContentHeight(
+                    liveRowCount: 0,
+                    footerHeight: footer
+                ) == 178
+        )
+        #expect(
+            PanelMetrics.referenceCompactHeight
+                + PanelMetrics.expandedContentHeight(
+                    liveRowCount: 0,
+                    retiredRowCount: 3,
+                    footerHeight: footer
+                ) == 162
         )
     }
 
@@ -8572,10 +8687,13 @@ struct NotchlineTests {
                 )
             )
 
-            let visibleSessionCount = min(
-                sessionCount,
-                PanelMetrics.maximumVisibleSessionCount
-            )
+            // **The `3` is written here rather than read from
+            // `PanelMetrics`**, and that is the point of the assertion: three
+            // live rows is no longer a constant the code owns but a
+            // consequence of a `240` viewport over `80` pt rows
+            // (`expanded-panel-v2.md` §2.1). A test that asked the metric for
+            // the number would agree with any answer it gave.
+            let visibleSessionCount = min(sessionCount, 3)
             let expectedContentHeight = CGFloat(visibleSessionCount)
                 * PanelMetrics.sessionRowHeight
                 + store.expandedFooterHeight
@@ -30333,8 +30451,16 @@ extension NotchlineTests {
         // In the running band, and ordered inside it by recency like every
         // other row there. The genuinely finished row is still last.
         #expect(order == ["working", "recent", "old", "read"])
+        // Rewritten rather than dropped when the viewport stopped counting
+        // rows (`AGENTS.md` §5.2). The claim was never about a count: it is
+        // that this row is *drawn*, and with nothing retired the viewport
+        // holds `sessionViewportCap / sessionRowHeight` of them.
+        let drawnRowCount = Int(
+            PanelMetrics.sessionViewportHeight(liveRowCount: order.count)
+                / PanelMetrics.sessionRowHeight
+        )
         #expect(
-            order.prefix(PanelMetrics.maximumVisibleSessionCount).contains("working"),
+            order.prefix(drawnRowCount).contains("working"),
             "the one row that knows work is still running stays in the viewport"
         )
     }

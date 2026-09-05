@@ -150,6 +150,8 @@ The panel is `panelHeight + viewport + footer`, with the viewport its content ca
 | One live row, opened at three lines | `202` | `202` | **332** | 210 |
 | Three live rows, one of them opened | `362` | `240` | **370** | 370 |
 
+**Every row from the fourth down carries a folded queue**, and that is what its `32` is doing in the content column: `272` is three live rows *and a seam*, `352` is four and a seam, and `202` is one opened row and a seam. Read without it the column looks like it disagrees with §2.1 — which it does not, and a first attempt at pinning this table in a test failed on exactly that reading.
+
 **Each connected form gets a new floor**, because an empty list stops spending `48` points saying it is empty and spends `32` offering the five things you last did:
 
 | Connected | Footer | Floor today | Floor now |
@@ -262,12 +264,12 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 
 ## 10. Implementation mapping
 
-Nothing here is implemented. The work lands in six places:
+**The first row has landed**; the rest is ahead. The work lands in six places:
 
 | Symbol | Change |
 | --- | --- |
-| `PanelMetrics.sessionViewportHeight(forSessionCount:)` | Becomes a height rather than a row count: the list's own composed height, capped at `sessionViewportHeight`'s existing `240`. `maximumVisibleSessionCount` retires with it |
-| `PanelMetrics` | New: `retiredRowHeight = sessionRowHeight / 2`, `recentSeamHeight`, `openRowHeight(requestLines:)` |
+| ~~`PanelMetrics.sessionViewportHeight(forSessionCount:)`~~ **Built.** | Became a height rather than a row count: `sessionListContentHeight(liveRowCount:retiredRowCount:isRecentExpanded:)` capped at `sessionViewportCap`, which is the same `240`. `maximumVisibleSessionCount` retired with it, and `expandedContentHeight` now asks the *viewport* whether to draw the apology rather than the live count |
+| `PanelMetrics` | **Built:** `retiredRowHeight = sessionRowHeight / 2` and `recentSeamHeight`. Still owed: `openRowHeight(requestLines:)`, which belongs to §3 |
 | `MonitorStore` | A departure queue keyed on the departure instant, holding every row that left within `recentWindow` (`5 × 3600`) together with the reason it left, fed wherever a row leaves today; `recentFolded` beside `quotaFolded` |
 | `MonitorStore` (the clock) | **Eviction is a read-time filter, not a timer** — a queue nobody watched for six hours is empty the moment it is read, with no background work while the panel is shut. The timer exists only to make the change visible to somebody watching, and one one-minute tick while the panel is open serves both eviction and the ages, which already have to move `2m` → `3m` |
 | `NotchOverlayView` | `RecentSeam`, `RetiredRow`, and `SessionRow`'s open state; `emptyListMessage` draws only when the queue is empty too |
