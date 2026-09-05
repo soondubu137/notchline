@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | Status | **Designed, not implemented.** Nothing here needs a capability the app lacks: the data model is already a list of products each holding a list of windows (`MonitorStore.footerRules`), and only the layout is written for two. |
-| Version | 3.0 |
+| Version | 3.1 |
 | Date | 2026-09-04 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `08 — The footer without a gauge`. `07 — The quota footer (superseded)` is kept as the record of the direction this one leaves (§9). |
 | Scope | The expanded panel's footer only: the quota rules and today's tokens. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the session list is [`expanded-panel-v2.md`](expanded-panel-v2.md), both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None is touched, and the panel's width does not move. |
@@ -27,27 +27,31 @@ Width is split per window: Codex takes the full `496` because it has one, Claude
 
 ## 2. Composition
 
-**At rest — `22`, every connected form, every product count.**
+**Collapsed — `22`, every connected form, every product count.**
 
 ```
-12 →  518.7M today · 310.1M · 208.6M                    59% left    ⌄  ← 508
+12 →  518.7M today                                                  ⌄  ← 508
       ─ 6 ─
 ```
+
+Today's tokens and the control. Nothing else.
 
 **Speaking — `22 + 23k`.**
 
 ```
-      518.7M today · 310.1M · 208.6M                                ⌄
-      Claude Code · 5 h · 8% left · Resets in 47 minutes
+      518.7M today                                                  ⌄
+      Claude Code · 5 h · 8% left · 47m
 ```
 
-**The table — `22n + 23`.**
+**Opened — `19W + 28P + 17`**, a two-level table: the product outside, its windows inside.
 
 ```
-      518.7M today · 310.1M · 208.6M                                ⌃
-      Claude Code · 5 h                8% left        Resets in 47 minutes
-      Codex · weekly                  72% left        Resets in 3 days 12 hours
-      Claude Code · 7 d               85% left        Resets Friday
+      518.7M today                                                  ⌃
+      Codex                                              310.1M today
+          weekly                     72% left                 3d 12h
+      Claude Code                                        208.6M today
+          5 h                        59% left                     2h
+          7 d                        85% left                  4d 6h
 ```
 
 | Term | Value | Constant it already is |
@@ -55,69 +59,83 @@ Width is split per window: Codex takes the full `496` because it has one, Claude
 | The spend line, carrying the control | `16` | `quotaFoldControlSize` |
 | Before whatever follows it | `9` | `footerRuleSpacing` |
 | A spoken line, and the gap after it | `14 + 9` | `footerCaptionHeight` + `footerRuleSpacing` |
-| A table row, and the gap after it | `14 + 8` | `footerCaptionHeight` + `footerWindowSpacing` |
+| A table line, and the gap after it | `14 + 5` | `footerCaptionHeight` + `footerCaptionSpacing` |
+| Between one product and the next | `14` | `footerCaptionHeight` — one line of air |
+| The window column's indent | `12` | `expandedHorizontalPadding`, a second step |
 | Below the last line | `6` | `footerBottomMargin` |
 
-`footerRuleHeight` (`3`) and `footerCaptionSpacing` (`5`) retire with the rule; the other five do the same jobs in a different shape. **No new measurement is introduced**, and `footerWindowSpacing` — the `8` between two half-width rules — becomes the `8` between two table rows.
+A product group is `14 + 19w`, so the table is `31 + Σ(14 + 19w) + 14(P − 1)` = **`19W + 28P + 17`**.
 
-## 3. At rest
+`footerRuleHeight` (`3`) and `footerWindowSpacing` (`8`) retire; the other five do the same jobs in a different shape. **No new measurement is introduced**, and `FooterRule` — one per connected product, holding its windows — survives unchanged, because it *is* the two-level table.
 
-**One figure stands for every limit there is**: the tightest remaining share across every window of every connected product, at the trailing end where this panel already puts its readings. A minimum is ordinal, so it folds and has exactly one member — the same reason the band draws one mark for the most urgent status anywhere. The word `left` is what makes a bare percentage parseable beside a token count.
+## 3. Collapsed
 
-**It is never silent.** A window with no share cannot be a minimum, so it is skipped; and if no window anywhere has one, the figure reads `-- left`. So the resting footer tells *nothing is close* apart from *nothing is known* — the distinction a footer that simply drew no quota when all was well would have lost, and the reason this design draws a figure rather than nothing.
+**One number, and it is the one that is always worth a glance.** Tokens spent today, as a whole, in `#C7C7CC` with `today` in `#7C7C80`. [`dual-agent-design.md`](dual-agent-design.md) §5.4 already picked this figure as the one a folded footer keeps; here it is simply what the footer *is*.
 
-**The spend is the only per-product thing left, and it is numerals.** The whole in `#C7C7CC`, `today` in `#7C7C80`, one part per product that has spent something today in that product's lit ink, and **no product ever named in words at any count**. That removes §5.4's *name the products only when there are two*, and with it the last per-product prose on the panel. It is about `160` wide at two products and `246` at four — the half of the line with room to grow, while the figure beside it never grows at all.
+**It is not broken into products on this line.** The word that says whose a number is costs width here and costs nothing in the table, where every figure sits beside its own product's name. So the coloured parts that used to trail this line move to §5's outer rows, and the collapsed footer carries no hue at all.
 
-Rules 01–03 of [`expanded-header-v2.md`](expanded-header-v2.md) §4.3 carry over unchanged: the whole is always drawn, parts arrive beside it, a product with nothing today has no part, and a decomposition into one term is the whole said twice — so a single-product footer reads `310.1M today` in grey and colour arrives with the second product.
+**Nothing about a limit is drawn while nothing is close.** A wing with nothing to say is removed rather than left blank; a column with no sessions is not drawn; a zero is never drawn anywhere.
+
+**What this gives up, stated plainly.** Version 3.0 kept a `59% left` figure at the trailing end, which told *nothing is close* apart from *nothing is known*. Without it the collapsed footer says nothing about limits at all, and a window whose share cannot be read never speaks — so an hour of unreadable quota looks exactly like an hour of healthy quota. §8.5 question 01 records the cheapest way back.
 
 ## 4. When a limit speaks
 
 | | Rule | |
 | --- | --- | --- |
 | 01 | **A window speaks when less than a sixth of it is left and more than a sixth of its time is.** `15%` is [`figma-design.md`](figma-design.md) §4.3's own critical threshold, used twice — below `15%` of the share, above `15%` of the time. The second half stops a window nagging in its last minutes, when running out costs nothing because the reset is arriving anyway. Both are fractions of things already known (`remainingPercent`, and `resetsAt` against the window's nominal length), so **nothing is estimated and no burn rate is inferred** | §8.3 |
-| 02 | **The quiet figure gives way to the line; the footer never draws both.** They are the same fact at two volumes, and a decomposition into one term is the whole said twice. The trailing end of the spend line empties as the line arrives beneath it, which makes the escalation something you see happen rather than something you have to notice | |
-| 03 | **The line is words, not a gauge.** Once presence carries the alarm, the content should be precise rather than graphic: which product, which window, how much, when it comes back. There is exactly one of these to read and it was chosen for you | |
+| 02 | **It is the only thing the collapsed footer says about a limit.** The line above carries the spend and nothing else, so a window crossing the threshold is not competing for a slot: it arrives as a line that was not there a moment ago, which is the plainest change this surface can make. It is also the whole of the collapsed footer’s coverage — a window whose share cannot be read never speaks (§3) | §8.5 q01 |
+| 03 | **The line is words, not a gauge.** Once presence carries the alarm, the content should be precise rather than graphic: which product, which window, how much, and how long. There is exactly one of these to read and it was chosen for you | |
 | 04 | **It is drawn one step brighter, and nothing changes hue.** `#C7C7CC` against the caption grey, with the product's name in its **lit** ink rather than its caption ink. Brightness is this surface's attention channel and hue stays identity. No ground: white means a Turn is waiting on a person, and a limit running low is not that | |
 | 05 | **More than one speaks, more than one line**, tightest first, each carrying its own figure. No cap — the number of windows that can sit below `15%` with time still to run is small, and capping it would hide the one that matters | |
 | 06 | **Opened, the table replaces the spoken lines entirely.** A window that is speaking is the table's first row, so repeating it above would be the same sentence twice | |
 
 ## 5. The table
 
-Three columns: **the subject** at the panel's own `12`; **the share** right-aligned at `300`, so the figures read down a column and their shared `% left` suffix lines up; **the reset** right-aligned at `508`, where every other trailing thing on this panel already is. One line per window at `14`, `8` apart.
+**Two levels, because the windows belong to products.** Outside, the product and its own spend today. Inside, each of its windows on a line. The outer row is what makes the spend attributable without colour: on the collapsed line those parts had to be coloured numerals, and here each one sits beside its product's own name.
 
-- **A table compares better than a stack of bars, in the one place comparison matters.** Right-aligned figures in a column read against each other digit by digit. Full-width bars on separate rows share an origin but sit on different baselines, and each costs `22` points of height to say what six characters say exactly.
-- **Sorted tightest first, unanswerable last** — the order the resting figure already implies, so the first row is always the window that figure came from.
-- **The subject is the caption this panel already writes**: `Claude Code · 5 h`, the product in its caption ink. Same string the spoken line leads with, same shape a session row's caption has. A product with one window drops the window; nothing else is ever abbreviated.
-- **It grows by `22` per window and by nothing else.** Six windows is `155`; four products with one each is `111`. No column widens, no caption shortens, and **nothing is dropped for want of room** — so §5.2's per-model cap comes back as one more row.
-- **The control never moves and folding cannot close the panel.** The chevron rides the spend line, which is the footer's first line and is always drawn, so the table opens beneath it. Folding removes rows below a pointer sitting `6` to `22` above the folded bottom edge — inside it — which reverses the trap §5.4 records.
+**Three columns inside, one figure outside, and one trailing edge for both.** The window at `24` — one step in from the panel's own `12` — the share right-aligned at `300`, and the timer right-aligned at `508`, which is where the product's spend is right-aligned too. **Indentation alone carries the level**: no rule, box or divider is drawn between them.
+
+**`Resets in` is gone, and the column is a timer.** Repeated once a window it was noise, and what the column holds is a countdown — so it is written like every other countdown on this panel: `47m`, `2h`, `3d 12h`, two units at most. The absolute day survives in the accessible name, for anyone who wants Friday rather than four days (§8.5 question 04).
+
+**The levels are three steps of brightness, and hue names the group.** The product in its own lit ink (`#6CB4FF` / `#D97757`), its spend in `#C7C7CC`, everything inside it in `#7C7C80`. A share below `15%` is the one thing inside a group that steps back up to `#C7C7CC`.
+
+**Products in Settings' order; windows tightest first inside each.** Which restores [`expanded-header-v2.md`](expanded-header-v2.md) §4.3 rule 02 at the level where it belongs — nothing re-sorts between products — and keeps ordering by tightness where it is the only order that means anything. **The grouping is what lets both be true at once**, and it is the one thing version 3.0 could not do.
+
+**A product with no limits still gets its row** — an outer row and no inner ones. Its spend is attributed and the absence of lines says there is nothing to report. That is also how a connected product this app does not yet read quota for appears: present and counted, with nothing claimed about it. The current footer has no form for this at all.
+
+**It grows by `19` a window and `28` a product, and by nothing else.** No column widens, no caption shortens, and nothing is dropped for want of room — which is what §5.2 had to do when Claude Code's third window would not fit in a half. That window is now simply a line.
+
+**The control never moves and folding cannot close the panel.** The chevron rides the spend line, which is the footer's first line and is always drawn, so the table opens beneath it. Folding removes rows below a pointer sitting `6` to `22` above the folded bottom edge — inside it — which reverses the trap §5.4 records.
 
 ## 6. Heights
 
-| Connected | Windows | Footer today | Footer now | Panel today | Panel now |
-| --- | --- | --- | --- | --- | --- |
-| Codex alone | 1 | `30` | **22** | 316 | **308** |
-| Claude Code alone | 2 | `53` | **22** | 339 | **308** |
-| Both products | 3 | `84` | **22** | 370 | **308** |
-| Three products | 4 | `115` | **22** | 401 | **308** |
-| Four products | 5 | `146` | **22** | 432 | **308** |
+| Connected | P | W | Footer today | Collapsed | Opened | Panel today | Panel now |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Codex alone | 1 | 1 | `30` | **22** | `64` | 316 | **308** |
+| Claude Code alone | 1 | 2 | `53` | **22** | `83` | 339 | **308** |
+| Both products | 2 | 3 | `84` | **22** | `130` | 370 | **308** |
+| Three products | 3 | 4 | `115` | **22** | `177` | 401 | **308** |
+| Three, six windows | 3 | 6 | `115` | **22** | `215` | 401 | **308** |
 
-Panel figures are `46 + 240 + footer` — three live rows at the reference menu bar. **Every connected form gets smaller**, the single-product case included.
+Panel figures are `46 + 240 + footer` — three live rows at the reference menu bar, with the footer collapsed. **Every connected form gets smaller**, the single-product case included.
 
 | Form | Footer | Panel | Caused by |
 | --- | --- | --- | --- |
-| At rest | `22` | 308 | nothing — every connected form |
+| Collapsed | `22` | 308 | nothing — every connected form |
 | One window speaking | `45` | 331 | a share crossing `15%` |
 | Two speaking | `68` | 354 | `+23` each, no cap |
-| The table, 3 windows | `89` | 375 | the control |
-| The table, 6 windows | `155` | 441 | the control |
+| Opened, two products | `130` | 416 | the control |
+| Opened, three and six | `215` | 501 | the control |
+
+The table is the only thing here that grows, and it grows because somebody opened it.
 
 ## 7. Accessibility
 
-- The resting figure's accessible name spells out what it stands for: `Tightest limit anywhere: 59% remaining`, and `Usage unavailable` when it reads `--`.
-- A spoken line reads as written; the table's rows read subject, share, reset, in the order drawn.
-- Today's line spells the colour out: `518.7 million tokens today; Codex 310.1 million, Claude Code 208.6 million` — the answer §9 already gives for the band's colour-coded columns, with the same permanently fixed order behind it.
-- The `--` is spoken as `unavailable`, never as zero.
-- The control is `Show all 3 limits` / `Show fewer`.
+- The collapsed line reads `518.7 million tokens today`, and the control is `Show limits` / `Hide limits`.
+- A spoken line reads as written, with the timer expanded: `Claude Code, 5 hour window, 8% left, 47 minutes to reset`.
+- The table is announced as a two-level list: each product with its spend, then its windows. `Codex, 310.1 million tokens today. Weekly, 72% left, resets in 3 days 12 hours.`
+- **The absolute reset survives here**: where the column draws `4d 6h`, the accessible name says `resets Friday at 09:00`.
+- A window with no share reads `unavailable`, never zero.
 
 ## 8. What this reaches outside the footer
 
@@ -127,7 +145,7 @@ Panel figures are `46 + 240 + footer` — three live rows at the reference menu 
 
 ### 8.2 A recorded risk is fixed for free
 
-§5.2's per-model weekly cap. Its argument — *letting one half report different windows at different times turns a rule meant for a glance into one that must be read first* — was about a **half**, and there are no halves any more. Where the cap sits permanently at 100% for someone who never uses that model, it is never the tightest and never surfaces.
+§5.2's per-model weekly cap. Its argument — *letting one half report different windows at different times turns a rule meant for a glance into one that must be read first* — was about a **half**, and there are no halves any more. Where the cap sits permanently at 100% for someone who never uses that model, it never crosses §4's threshold and never speaks — it is simply one more line inside its product, which is where it belongs.
 
 ### 8.3 One new rule, and its number is not new
 
@@ -141,13 +159,24 @@ The `15%` threshold, used on both the share and the time. Everything else on thi
 
 | | Question | Where it stands |
 | --- | --- | --- |
-| 01 | Is a bare `59% left` parseable next to a token count? | **Standing recommendation: yes**, and `left` is what makes it so — `59%` alone reads as a share of the spend beside it. If it proves ambiguous the cheapest fix is the accessible name and a tooltip, not a label; a label would put a word back on the line this page has just cleared |
-| 02 | Should the resting figure take the tightest window's product hue? | **Answered — no.** The hue would change as the worst window moved between products, which is a change nobody caused, and it would put a third coloured numeral on a line whose other colours already mean something specific |
-| 03 | Is `15%` right on both sides? | **Open — the one number here worth measuring.** It is §4.3's own value used twice for symmetry rather than because both sides were tested. A 7-day window at 14% with five days to run is a genuine emergency; a 5-hour window at 14% with four hours left is merely tight; one threshold says the same about both. If it misfires the next step is a **pace** test — remaining share against time-remaining share — which needs no new data, only each window's nominal length |
-| 04 | Should the table be reachable when nothing is close? | **Answered — always.** The control is drawn whenever there is at least one window. A control that appeared only in trouble would be one nobody had used at the moment they first needed it |
-| 05 | What is drawn with nothing connected at all? | **Answered — no footer.** No windows and no tokens is nothing to say, and a wing with nothing to say is removed rather than left blank |
+| 01 | How does a user learn that quota is unreadable? | **Open, and the thing version 3.1 gives up.** Version 3.0 kept a `-- left` figure before the chevron, which told *nothing is close* apart from *nothing is known*; the collapsed line no longer carries it, and a window whose share cannot be read never speaks. Cheapest way back if it bites: a single dimmed `--` before the chevron, drawn only while **no** window anywhere has a share — silent in every normal state, and about `20` points of width in the one state it is for |
+| 02 | Is `15%` right on both sides? | **Open — the one number here worth measuring.** It is §4.3's own value used twice for symmetry rather than because both sides were tested. A 7-day window at 14% with five days to run is a genuine emergency; a 5-hour window at 14% with four hours left is merely tight; one threshold says the same about both. If it misfires the next step is a **pace** test — remaining share against time-remaining share — which needs no new data, only each window's nominal length |
+| 03 | With one product, the outer row's figure repeats the collapsed total. Acceptable? | **Answered — it stands.** They are in different registers: a summary line, and a labelled group header inside a table somebody opened. The alternative is a table whose shape changes with the product count, which is the thing this page exists to undo |
+| 04 | The timer column drops `Friday` for `4d 6h`. Is the anchor worth keeping? | **Answered — durations throughout.** A column mixing `2h` with `Friday` reads as two different kinds of thing, and what the column holds is a countdown. The absolute day is kept in the accessible name (§7) |
+| 05 | Should the table be reachable when nothing is close? | **Answered — always.** The control is drawn whenever there is at least one connected product. A control that appeared only in trouble would be one nobody had used at the moment they first needed it |
+| 06 | What is drawn with nothing connected at all? | **Answered — no footer.** No products, no windows and no tokens is nothing to say, and a wing with nothing to say is removed rather than left blank |
 
-## 9. The direction this replaces
+### 8.6 The data model was already right
+
+`MonitorStore.footerRules` returns one `FooterRule` per connected product, each holding its `FooterWindow`s — which is exactly §5's outer and inner levels. Version 3.0 flattened it into a single sorted list of windows; grouping is both truer to the data and what lets products keep Settings' order while windows sort by tightness.
+
+## 9. What this replaces
+
+### 9.1 Version 3.0, on this same page
+
+The first draft of the gaugeless footer kept a `59% left` figure at the trailing end of the collapsed line and drew its per-product spend as coloured numerals beside the total, and its table was a **flat** list of windows sorted tightest-first across products. Both were folded into the two-level table: the outer row labels each product's spend so colour is not needed to attribute it, and grouping lets products hold Settings' order while windows sort by tightness — which the flat list could not do without contradicting [`expanded-header-v2.md`](expanded-header-v2.md) §4.3 rule 02. The collapsed line lost its quota figure with it; §8.5 question 01 records what that costs. `Resets in` went too, repeated once a window.
+
+### 9.2 Version 2.0, on page 07
 
 Version 2.0 of this document kept the rule and folded it to the tightest window: one `496 × 3` gauge, its caption, and the spend, at `53` for every connected form, with every window stacked behind the control. It is drawn on `07 — The quota footer (superseded)` and is kept because two of its arguments survive into this version — **windows are a list rather than a layout**, and **a minimum is ordinal and folds to one member** — while its central object does not.
 
@@ -155,30 +184,31 @@ Two things were wrong with it. It answered §1.3 and left §1.1 and §1.2 standi
 
 ## 10. Verification
 
-- [ ] The footer is `22` with one product connected, two, three and four, and at one window or six.
-- [ ] The resting figure is the tightest share across every connected product's windows, and reads `--` when no window has one.
-- [ ] No window is drawn at rest, whatever its share, unless it crosses the threshold.
+- [ ] The collapsed footer is `22` with one product connected, two, three and four, and draws the whole spend and the control and nothing else.
+- [ ] No window is drawn collapsed, whatever its share, unless it crosses the threshold.
 - [ ] A window below `15%` with more than `15%` of its time left draws a line; one below `15%` with less does not.
-- [ ] The resting figure is not drawn while any window is speaking, and returns when none is.
 - [ ] A spoken line draws `#C7C7CC` with the product's name in its lit ink, and no ground.
-- [ ] The table is sorted tightest first with unanswerable windows last, and its first row is the window that spoke.
-- [ ] Every window the product reports appears in the table, the per-model weekly cap included.
-- [ ] Folding the table from any window count leaves the pointer inside the panel.
-- [ ] Today's line draws the whole always, one part per product that spent something, no parts with one such product, and no product name at any count.
+- [ ] Opened, there is one outer row per connected product and one inner row per window it reports, the per-model weekly cap included.
+- [ ] A connected product with no windows draws its outer row and no inner ones.
+- [ ] Products are in Settings' order; windows inside a product are tightest first, unanswerable last.
+- [ ] The window column is indented `12` from the product's; the share is right-aligned at `300` and the timer at `508`, where the product's spend is right-aligned too.
+- [ ] No reset draws the words `Resets in`, and no timer draws more than two units.
+- [ ] Folding the table from any product and window count leaves the pointer inside the panel.
 - [ ] The footer draws identically under a `46` pt menu bar and a `22` pt one.
 - [ ] The panel is `308` at three live rows on every connected form.
 
 ## 11. Implementation mapping
 
-Nothing here is implemented. The data model needs no change — `footerRules` already returns one `FooterRule` per connected product, each holding its `FooterWindow`s.
+Nothing here is implemented. **The data model needs no change** — `footerRules` already returns one `FooterRule` per connected product, each holding its `FooterWindow`s (§8.6).
 
 | Symbol | Change |
 | --- | --- |
-| `PanelMetrics.footerHeight(rules:isFolded:)` | Becomes `footerHeight(spokenCount:tableCount:)`: `22`, `22 + 23k`, or `22n + 23`. The four constants behind it go, with `footerRuleHeight` and `footerCaptionSpacing` |
-| `MonitorStore.footerRules` | Flattens to `footerWindows: [FooterWindow]` carrying its agent, sorted by remaining share ascending with unanswerable last; `tightestShare` is the first answerable member and `spokenWindows` the ones past the threshold |
-| `MonitorStore.footerTodayText` | Loses its `rules.count > 1` guard and its product names; returns a whole plus zero or more coloured parts |
+| `PanelMetrics.footerHeight(rules:isFolded:)` | Becomes `footerHeight(rules:spokenCount:isExpanded:)`: `22`, `22 + 23k`, or `19W + 28P + 17`. The four constants behind it go, with `footerRuleHeight` and `footerWindowSpacing` |
+| `MonitorStore.footerRules` | Unchanged in shape. Gains `spokenWindows` — the windows past §4's threshold, tightest first — and sorts each rule's windows by remaining share ascending, unanswerable last |
+| `MonitorStore.footerTodayText` | Loses its `rules.count > 1` guard, its product names and its parts: it returns the whole alone. Each product's own figure moves onto its `FooterRule` |
+| `UsageSummaryFormatter.resetText` | Gains a compact countdown form — `47m`, `2h`, `3d 12h`, two units at most — and keeps the absolute form for the accessible name (§7) |
 | `MonitorStore.quotaFolded` | Renamed `quotaExpanded`, default `false` (§8.1) |
-| `ExpandedPanelFooter` | Three row types — the spend line with its control, a spoken line, a table row — and no rule view at all. `FooterRuleRow` and the half-width split go |
-| `aFoldedFooterIsTheSameHeightForEveryShape` | Becomes `theFooterIsTwentyTwoForEveryConnectedForm`; `foldingLiftsThePanelsBottomEdgePastTheChevronThatWasClicked` inverts into `foldingCannotStrandThePointer`; and `aQuietWindowIsNotDrawn` is new |
+| `ExpandedPanelFooter` | Four line types — the spend line with its control, a spoken line, a product row, a window row — and no rule view at all. `FooterRuleRow` and the half-width split go |
+| `aFoldedFooterIsTheSameHeightForEveryShape` | Becomes `theFooterIsTwentyTwoForEveryConnectedForm`; `foldingLiftsThePanelsBottomEdgePastTheChevronThatWasClicked` inverts into `foldingCannotStrandThePointer`; `aQuietWindowIsNotDrawn` and `aProductWithNoLimitsKeepsItsRow` are new |
 
 [`dual-agent-design.md`](dual-agent-design.md) §5.1, §5.2 and §5.4 need amending before any of it is built.
