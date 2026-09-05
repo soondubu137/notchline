@@ -279,6 +279,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 - [ ] The seam's label and hairline redraw correctly at a two-digit count, with the hairline's trailing edge still at `508`.
 - [ ] At five or more in the window with nothing live the panel is `370`, the fold lands on `240` exactly, and no partial line is drawn.
 - [ ] Folding the queue does not close the panel at any connected form.
+- [ ] Opening the queue and folding it each move the panel itself, on the click — neither needs a second hover to be drawn at the right height.
 - [ ] Nothing is parked on the clock for the queue while the panel is shut, and a folded queue wakes only at a member's expiry.
 - [ ] The seam's hairline lands on the same `x` as the footer's rules and the band's matrix, in every attribution option.
 - [ ] Only `Approval needed` and `Input needed` rows draw `Answer` under the pointer; no other row becomes clickable.
@@ -299,7 +300,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 | ~~`MonitorStore`~~ **Built.** | `departuresByThread` holding every row that left within `recentWindow` (`5 × 3600`) with the reason it left, fed from `apply` — the one funnel every row leaves through, a dismissal included. `isRecentExpanded` beside `isQuotaExpanded`, on the key `recentExpanded`. Two things the design did not say, both forced by the code and both in §10.1 |
 | ~~`MonitorStore` (the clock)~~ **Built.** | **Eviction is a read-time filter, not a timer** — the queue is filtered as of `now` wherever it is republished, and opening the panel is a read, so a queue nobody watched for six hours is empty before it could be drawn. The tick covers only what that read cannot: a panel *held open* across a boundary. It runs while the panel is open and the queue has members, and sleeps to the next instant the panel is actually drawing — **which depends on the fold** (§10.2) |
 | ~~`NotchOverlayView`~~ **Built for §2.** | `RecentSeam` and `RetiredRow`, inside the list's **one** scroller rather than a second one, and `emptyListMessage` ~~only when the queue is empty too~~ **whenever the live list is empty** — the seam's own scroller carries it, so it scrolls with what is under it rather than pinning a sentence over a queue somebody is reading. `SessionRow`'s open state belongs to §3 and is not built |
-| `OverlayPanelController` | Latching: key window on open, restore on close, and hover suspended for the duration (§8.3). **§3 only — not built** |
+| `OverlayPanelController` | **Built for the fold.** `frameChangingPublishers(of:)` is what actually moves the window, and the seam is a control nothing else republishes behind: without `isRecentExpanded` and `recentDepartures` on that list the rows opened below the panel's bottom edge and folding left their space behind, at the sizes §2.4 rule 02 gives and `PanelMetrics` was computing correctly throughout (`system-architecture.md` §6). Still owed: latching — key window on open, restore on close, and hover suspended for the duration (§8.3), which is **§3 only and not built** |
 
 **Nothing in `PanelMetrics` changes for either amendment.** The fold is `240` doing what it already did — four rows with nothing live rather than five, because the apology's `48` is inside the sum now — and the only new constant lives in the store.
 

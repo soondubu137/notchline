@@ -3100,6 +3100,106 @@ struct NotchlineTests {
         #expect(store.isExpanded, "folding the queue never closes the panel")
     }
 
+    /// **A size the store computes and the window never asks for is a bug the
+    /// store's own tests cannot see.**
+    ///
+    /// `OverlayPanelController` recomputes its frame from an enumerated list of
+    /// publishes rather than from `objectWillChange`, so the measurement stays
+    /// off the path of every state no edge answers to (`AGENTS.md` §7). What
+    /// that costs is a list somebody has to keep, and four controls have now
+    /// been left off it: the wings, the marks, the quota table and the Recent
+    /// queue. The failure looks the same every time — the contents redraw at
+    /// their new size inside a window still sized for the state before, so the
+    /// queue somebody has just opened is drawn under the panel's bottom edge
+    /// and folding it leaves the emptiness it was occupying behind. The only
+    /// way back was to close the panel and open it again.
+    ///
+    /// The sibling assertions were all true throughout, because the store was
+    /// never the half that was broken:
+    /// ``foldingTheQueueMovesThePanelWithoutClosingIt`` and
+    /// ``openingTheTableGrowsThePanelItself`` both ask
+    /// ``MonitorStore/currentPanelSize`` what it says. So this asks the other
+    /// half — it drives the states rather than reading the list, and every
+    /// control that moves the size has to publish something the controller is
+    /// subscribed to.
+    @Test @MainActor
+    func everyChangeThatMovesThePanelReachesTheWindow() {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: PanelMetrics.referenceCompactHeight,
+            hasNotch: true
+        )
+        let clock = TestClock()
+        let store = MonitorStore(
+            displays: [display],
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        // Four rows read and then let go of, and a product carrying quota, so
+        // that every control below has something of its own to move.
+        let quota = QuotaSnapshot(
+            windows: [
+                QuotaWindow(label: "5 h", remainingPercent: 40, resetsAt: nil),
+                QuotaWindow(label: "7 d", remainingPercent: 87, resetsAt: nil)
+            ],
+            todayTokens: 208_600_000
+        )
+        func snapshot(sessions: [MonitoredSession]) -> AgentSnapshot {
+            AgentSnapshot(
+                agent: .codex,
+                availability: .ready,
+                sessions: sessions,
+                quota: quota,
+                diagnostic: nil
+            )
+        }
+        store.applyForTesting(
+            snapshot(sessions: (0..<4).map { recentTestRow(thread: "thread-\($0)") })
+        )
+        store.applyForTesting(snapshot(sessions: []))
+        #expect(store.recentDepartures.count == 4)
+        #expect(store.showsQuotaFoldControl)
+
+        let publishers = OverlayPanelController.frameChangingPublishers(of: store)
+        var updates = 0
+        // Dropped exactly as `bindStore` drops them: each `@Published` replays
+        // its current value the moment `MergeMany` subscribes, and none of
+        // those is a change.
+        let subscription = Publishers.MergeMany(publishers)
+            .dropFirst(publishers.count)
+            .sink { updates += 1 }
+
+        let mutations: [(String, () -> Void)] = [
+            ("opening the panel", { store.isExpanded = true }),
+            ("opening the queue", { store.toggleRecent() }),
+            ("taking a row out of the queue", {
+                store.removeFromRecent(store.recentDepartures[0])
+            }),
+            ("opening the quota table", { store.toggleQuotaTable() }),
+            ("folding the queue", { store.toggleRecent() }),
+            ("closing the panel", { store.isExpanded = false }),
+            ("giving up the wings", { store.hidesCompactWings.toggle() })
+        ]
+
+        for (name, mutate) in mutations {
+            let before = store.currentPanelSize
+            let seen = updates
+            mutate()
+            #expect(
+                store.currentPanelSize != before,
+                "\(name) has to move the panel, or this case pins nothing"
+            )
+            #expect(
+                updates > seen,
+                "\(name) moves the panel and must reach the window"
+            )
+        }
+
+        subscription.cancel()
+    }
+
     /// **Leaving the list is the timing; finishing is the reason.**
     ///
     /// The arrow into the queue is `Completed ─read→ archived`, and a row this

@@ -489,6 +489,14 @@ The readout now subscribes to a tick SwiftUI does not observe (`MonitorStore.ela
 
 The full form of the rule is therefore: **overlay re-render count should be driven by whether the layout changed, not by whether the content changed.** Content changes go to a layer, and only layout changes are worth disturbing SwiftUI. Continuous motion is merely the most extreme violation of it.
 
+### What that rule costs: the window's list of publishes
+
+Keeping the measurement off the path of every state is why the window cannot simply follow `objectWillChange`. `OverlayPanelController.frameChangingPublishers(of:)` enumerates the publishes that can move `MonitorStore.currentPanelSize`; everything else on the store re-renders the view without the window being asked for a frame at all.
+
+**The enumeration is the failure mode, and it has been incomplete four times** — giving up the wings, a second product's marks, the quota table, and the Recent queue. Each is a control that nothing else republishes behind, so each redrew itself at its new size inside a window still sized for the state before. The queue is the clearest case: opening it drew its rows below the panel's bottom edge, folding it left the space they had occupied behind, and the only way to see either at the right height was to close the panel and open it again.
+
+The symptom always looks like a view bug and never is. `MonitorStore` computes the right size throughout, and the store's own assertions — `openingTheTableGrowsThePanelItself`, `foldingTheQueueMovesThePanelWithoutClosingIt` — pass the whole time, because they ask `currentPanelSize` what it says rather than whether anyone was told. So the list is driven rather than reviewed: `everyChangeThatMovesThePanelReachesTheWindow` walks the controls that move the panel and fails on the first one that does not reach the window. A new control belongs in that table and in the list, in the same change.
+
 ### How to measure: `ps %cpu` will lie to you
 
 All the numbers above were measured on a Release build with the status pinned, toggling one variable at a time. But **the method itself has a trap worth remembering separately: `ps %cpu` flattens brief bursts away.**

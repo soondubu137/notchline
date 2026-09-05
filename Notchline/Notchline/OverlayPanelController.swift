@@ -96,34 +96,7 @@ final class OverlayPanelController {
     }
 
     private func bindStore() {
-        let animatedChanges: [AnyPublisher<Void, Never>] = [
-            store.$status.map { _ in () }.eraseToAnyPublisher(),
-            store.$quota.map { _ in () }.eraseToAnyPublisher(),
-            store.$sessions.map { _ in () }.eraseToAnyPublisher(),
-            store.$isExpanded.map { _ in () }.eraseToAnyPublisher(),
-            // Opening the quota table is a height change like any other: the
-            // footer redraws itself, but only the panel can find the height the
-            // table needs and give it back afterwards.
-            store.$isQuotaExpanded.map { _ in () }.eraseToAnyPublisher(),
-            // Giving up the wings collapses the compact body to the cut-out and
-            // takes them back again. Nothing else republishes when it is
-            // toggled -- no status, no session, no quota moves -- so without
-            // this the panel keeps whatever width it had until the next
-            // unrelated change happened to resize it.
-            store.$hidesCompactWings.map { _ in () }.eraseToAnyPublisher(),
-            // The compact width is measured from the elapsed string, so the
-            // panel has to re-measure when it gains a digit -- but only then.
-            // The readouts advance themselves off a tick no SwiftUI view
-            // observes; this fires when one of them changes width.
-            store.$elapsedLayoutRevision.map { _ in () }.eraseToAnyPublisher(),
-            // Both collapsed forms are measured from the marks -- the pill from
-            // how many there are, the notched bar from how many are drawing a
-            // session column -- and a product opening or closing with no rows
-            // moves neither the status nor the session list. Without this the
-            // second matrix is drawn into a window still sized for one, until
-            // some unrelated publish happens to resize it.
-            store.$presenceMarks.map { _ in () }.eraseToAnyPublisher()
-        ]
+        let animatedChanges = Self.frameChangingPublishers(of: store)
 
         Publishers.MergeMany(animatedChanges)
             .dropFirst(animatedChanges.count)
@@ -164,6 +137,72 @@ final class OverlayPanelController {
             }
         }
         .store(in: &cancellables)
+    }
+
+    /// Every publish that can move ``MonitorStore/currentPanelSize``.
+    ///
+    /// **Enumerated rather than taken from `store.objectWillChange`**, because
+    /// the window is recomputed when the *layout* changed and not when the
+    /// content did (`AGENTS.md` §7): the size is measured from the elapsed
+    /// string and the mark count, and asking for it on every publish would put
+    /// that measurement on the path of every state this store holds, most of
+    /// which no edge answers to.
+    ///
+    /// **The enumeration is what goes wrong, and it has four times now** — the
+    /// wings, the marks, the quota table and the Recent queue each drew
+    /// themselves into a window still sized for the state before, because each
+    /// is a control nothing else republishes behind. It is not a list anybody
+    /// can be trusted to keep, so the suite drives it instead: every state that
+    /// moves the size has to arrive here, and
+    /// `everyChangeThatMovesThePanelReachesTheWindow` fails on the first one
+    /// that does not.
+    ///
+    /// Internal rather than private for that test alone.
+    static func frameChangingPublishers(
+        of store: MonitorStore
+    ) -> [AnyPublisher<Void, Never>] {
+        [
+            store.$status.map { _ in () }.eraseToAnyPublisher(),
+            store.$quota.map { _ in () }.eraseToAnyPublisher(),
+            store.$sessions.map { _ in () }.eraseToAnyPublisher(),
+            store.$isExpanded.map { _ in () }.eraseToAnyPublisher(),
+            // Opening the quota table is a height change like any other: the
+            // footer redraws itself, but only the panel can find the height the
+            // table needs and give it back afterwards.
+            store.$isQuotaExpanded.map { _ in () }.eraseToAnyPublisher(),
+            // Opening what the list has let go of is the same kind of height
+            // change, and it was the one publish this list forgot. The seam is
+            // the only control on the surface that moves the panel's bottom
+            // edge without moving anything else -- no status, no session, no
+            // quota -- so the rows were drawn into a window still sized for the
+            // folded queue, and the only way to see them was to close the panel
+            // and open it again. Folding it left the same emptiness behind.
+            store.$isRecentExpanded.map { _ in () }.eraseToAnyPublisher(),
+            // And the queue's membership, which decides whether a seam is drawn
+            // at all and how tall the open list is. It moves on its own twice:
+            // a member ages out of the window under the store's tick, and a row
+            // is taken out of the queue by its own click. Neither republishes
+            // the session list, so neither would resize without this.
+            store.$recentDepartures.map { _ in () }.eraseToAnyPublisher(),
+            // Giving up the wings collapses the compact body to the cut-out and
+            // takes them back again. Nothing else republishes when it is
+            // toggled -- no status, no session, no quota moves -- so without
+            // this the panel keeps whatever width it had until the next
+            // unrelated change happened to resize it.
+            store.$hidesCompactWings.map { _ in () }.eraseToAnyPublisher(),
+            // The compact width is measured from the elapsed string, so the
+            // panel has to re-measure when it gains a digit -- but only then.
+            // The readouts advance themselves off a tick no SwiftUI view
+            // observes; this fires when one of them changes width.
+            store.$elapsedLayoutRevision.map { _ in () }.eraseToAnyPublisher(),
+            // Both collapsed forms are measured from the marks -- the pill from
+            // how many there are, the notched bar from how many are drawing a
+            // session column -- and a product opening or closing with no rows
+            // moves neither the status nor the session list. Without this the
+            // second matrix is drawn into a window still sized for one, until
+            // some unrelated publish happens to resize it.
+            store.$presenceMarks.map { _ in () }.eraseToAnyPublisher()
+        ]
     }
 
     private func schedulePanelFrameUpdate(animated: Bool) {
