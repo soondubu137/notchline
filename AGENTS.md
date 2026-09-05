@@ -8,7 +8,7 @@ A macOS overlay at the top of the screen. It summarises, with minimal interrupti
 
 **Terminology comes before code.** *Thread*, *Turn*, *monitoring lifecycle*, *current activity projection*, *unread terminal state*, *presence* and *integration availability* have precise definitions here. Read [`CONTEXT.md`](CONTEXT.md) before writing code, docs or a commit message, and honour its banned alternatives.
 
-Language: every user-readable string — accessibility labels, diagnostics, Info.plist usage descriptions — is British English. `CONTEXT.md`, this file, the README and commit messages are English; the documents under `docs/` are Chinese. Match whatever you are editing.
+Language: every user-readable string — accessibility labels, diagnostics, Info.plist usage descriptions — is British English. `CONTEXT.md`, this file, the README, commit messages and every tracked document under `docs/` are English; the untracked `docs/development-guideline.md` is Chinese. Match whatever you are editing.
 
 ## 2. Project and commands
 
@@ -41,6 +41,7 @@ Each document owns a scope. A change landing in one of these scopes updates that
 | [`docs/PRD.md`](docs/PRD.md) | Product contract: monitoring scope, state model, previews, navigation, release gates |
 | [`docs/dual-agent-design.md`](docs/dual-agent-design.md) | How the two products share one surface: attribution, quota, subagent counts |
 | [`docs/colour-v2.md`](docs/colour-v2.md) | Colour: there is one hue, the user picks it, and no product owns one. The badge that names a product, and what the band stopped decomposing |
+| [`docs/answer-in-notch.md`](docs/answer-in-notch.md) | Answering a request on the notch: every shape the two products ask in, what an opened row draws for each, the selection rule, and the reading-only form that ships before a write path exists |
 | [`docs/figma-design.md`](docs/figma-design.md) | Visual and interaction spec, Figma file structure, legal component variants |
 | [`docs/system-architecture.md`](docs/system-architecture.md) | The implementation **as it actually is**: refresh timing, responsibilities, rendering and performance boundaries, the architectural invariants |
 | [`docs/tech-design.md`](docs/tech-design.md) | Interfaces, protocols, data flow, failure recovery |

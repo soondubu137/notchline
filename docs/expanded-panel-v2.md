@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, not implemented.** §3 depends on a product capability that does not exist yet (§8.4); §2 does not, and can be built on its own. |
+| Status | **Designed, not implemented.** §2 can be built on its own. **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)**, which designs the whole answering experience and corrects four of its clauses; read that file instead, and keep this one for §2. |
 | Version | 2.0 |
 | Date | 2026-09-04 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `06 — The expanded panel` |
@@ -70,6 +70,8 @@ The trailing reading is an **age** — `now`, `2m`, `9m`, `1h` — bare, `13` pt
 **That is also where the discoverability cost sits**, and it is paid deliberately. With three things waiting on you, what you finished twenty minutes ago is not the question. What makes it affordable is that the seam returns exactly when it gains a member: three live rows becoming two puts it at `192`, inside the viewport, at the moment something retires into it. Pinning the seam to the foot of the viewport was evaluated and declined — §8.5 question 01.
 
 ## 3. Answering in the notch
+
+> **Superseded entire by [`answer-in-notch.md`](answer-in-notch.md).** That document keeps this section's idea — the bright ground is the control — and corrects four clauses of it: §3.1's opening gesture, §3.2's fade and its three-line cap, §3.4's forces on the affirmative, and §3.5's close-on-send. It also designs the six request shapes this section never saw. What follows is kept as the reasoning that led there.
 
 ### 3.1 The ground becomes the control
 
