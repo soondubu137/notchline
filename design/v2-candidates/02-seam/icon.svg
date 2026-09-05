@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect x="100" y="100" width="824" height="824" rx="185.4" fill="#0A0A0B"/>
+  <rect x="256.00" y="256.00" width="89.19" height="89.19" rx="6.61" fill="#6CB4FF"/>
+  <rect x="361.70" y="256.00" width="89.19" height="89.19" rx="6.61" fill="#62A3E7"/>
+  <rect x="467.41" y="256.00" width="89.19" height="89.19" rx="6.61" fill="#5792CE"/>
+  <rect x="573.11" y="256.00" width="89.19" height="89.19" rx="6.61" fill="#4D80B6"/>
+  <clipPath id="c67881_25600"><rect x="678.81" y="256.00" width="89.19" height="89.19" rx="6.61"/></clipPath>
+  <g clip-path="url(#c67881_25600)">
+  <polygon points="678.81,256.00 768.00,256.00 678.81,345.19" fill="#436F9D"/>
+  <polygon points="768.00,256.00 768.00,345.19 678.81,345.19" fill="#864A36"/>
+  </g>
+  <rect x="256.00" y="361.70" width="89.19" height="89.19" rx="6.61" fill="#62A3E7"/>
+  <rect x="361.70" y="361.70" width="89.19" height="89.19" rx="6.61" fill="#5792CE"/>
+  <rect x="467.41" y="361.70" width="89.19" height="89.19" rx="6.61" fill="#4D80B6"/>
+  <clipPath id="c57310_36170"><rect x="573.11" y="361.70" width="89.19" height="89.19" rx="6.61"/></clipPath>
+  <g clip-path="url(#c57310_36170)">
+  <polygon points="573.11,361.70 662.30,361.70 573.11,450.89" fill="#436F9D"/>
+  <polygon points="662.30,361.70 662.30,450.89 573.11,450.89" fill="#864A36"/>
+  </g>
+  <rect x="678.81" y="361.70" width="89.19" height="89.19" rx="6.61" fill="#9B553E"/>
+  <rect x="256.00" y="467.41" width="89.19" height="89.19" rx="6.61" fill="#5792CE"/>
+  <rect x="361.70" y="467.41" width="89.19" height="89.19" rx="6.61" fill="#4D80B6"/>
+  <clipPath id="c46740_46740"><rect x="467.41" y="467.41" width="89.19" height="89.19" rx="6.61"/></clipPath>
+  <g clip-path="url(#c46740_46740)">
+  <polygon points="467.41,467.41 556.59,467.41 467.41,556.59" fill="#436F9D"/>
+  <polygon points="556.59,467.41 556.59,556.59 467.41,556.59" fill="#864A36"/>
+  </g>
+  <rect x="573.11" y="467.41" width="89.19" height="89.19" rx="6.61" fill="#9B553E"/>
+  <rect x="678.81" y="467.41" width="89.19" height="89.19" rx="6.61" fill="#B06046"/>
+  <rect x="256.00" y="573.11" width="89.19" height="89.19" rx="6.61" fill="#4D80B6"/>
+  <clipPath id="c36170_57310"><rect x="361.70" y="573.11" width="89.19" height="89.19" rx="6.61"/></clipPath>
+  <g clip-path="url(#c36170_57310)">
+  <polygon points="361.70,573.11 450.89,573.11 361.70,662.30" fill="#436F9D"/>
+  <polygon points="450.89,573.11 450.89,662.30 361.70,662.30" fill="#864A36"/>
+  </g>
+  <rect x="467.41" y="573.11" width="89.19" height="89.19" rx="6.61" fill="#9B553E"/>
+  <rect x="573.11" y="573.11" width="89.19" height="89.19" rx="6.61" fill="#B06046"/>
+  <rect x="678.81" y="573.11" width="89.19" height="89.19" rx="6.61" fill="#C46C4F"/>
+  <clipPath id="c25600_67881"><rect x="256.00" y="678.81" width="89.19" height="89.19" rx="6.61"/></clipPath>
+  <g clip-path="url(#c25600_67881)">
+  <polygon points="256.00,678.81 345.19,678.81 256.00,768.00" fill="#436F9D"/>
+  <polygon points="345.19,678.81 345.19,768.00 256.00,768.00" fill="#864A36"/>
+  </g>
+  <rect x="361.70" y="678.81" width="89.19" height="89.19" rx="6.61" fill="#9B553E"/>
+  <rect x="467.41" y="678.81" width="89.19" height="89.19" rx="6.61" fill="#B06046"/>
+  <rect x="573.11" y="678.81" width="89.19" height="89.19" rx="6.61" fill="#C46C4F"/>
+  <rect x="678.81" y="678.81" width="89.19" height="89.19" rx="6.61" fill="#D97757"/>
+</svg>
