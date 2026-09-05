@@ -1,5 +1,12 @@
 # The aggregate mark's ink — a palette, and the preference it became
 
+> **Nothing here is void, and the palette's reach has grown.** [`colour-v2.md`](colour-v2.md)
+> makes this the app's *only* hue: no product owns one any more, and the same twelve pairs now
+> tint the badge that names a product on a row and in the footer — ground from the unlit value,
+> text from the lit one. The picker is `Theme colour` rather than `Mark colour` for that reason.
+> Two things below are affected and neither changes a value: §1's constraint is retired, and §7's
+> reference mark now stands for more than the mark.
+
 **Status: implemented.** The twelve `hint` inks are `AggregateInk`, the picker is
 the Display group's `Mark colour`, §5's five questions are answered below in the
 order they were asked, and §7 is what the row draws beside the names. What stays recorded rather than built is the other
@@ -20,8 +27,12 @@ Codex blue and Claude terracotta split on a diagonal and nothing else, so "Notch
 the two products' hues. The aggregate mark cannot be either of them without claiming to be one
 of them.
 
-What is left is a constraint rather than an answer: **the aggregate mark must never read as a dim
-version of a product mark.** Codex sits at `258°` in OKLCH and Claude Code at `42°`. The two hues
+What is left is a constraint rather than an answer: ~~**the aggregate mark must never read as a dim
+version of a product mark.**~~ **Retired by [`colour-v2.md`](colour-v2.md)** — there is no product
+mark, and no product ink, for it to be a dim version of. Every entry below is now unconstrained by
+anything except the two fixed lightnesses in §2, and the two `⚠` marks in §3 (within `20°` of a
+product hue) mean nothing any more. They are left in place because the ordering they belong to is
+shipped, and because this section is the argument that produced the default. Codex sits at `258°` in OKLCH and Claude Code at `42°`. The two hues
 equidistant from both are `150°` (108° from each, the maximum any hue can be) and `330°` (72° from
 each). Everything else is closer to one product than the other, and everything else is taste.
 

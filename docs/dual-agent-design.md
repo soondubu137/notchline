@@ -2,9 +2,9 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Visuals and data measures settled; domain and merge layers landed; the subagent numeral badge (§10) is implemented. The session column now **breathes when the mark beside it is burying a finished, unread Turn** (§12), which supersedes "steady always" in §11 and costs no width anywhere |
-| Version | 1.4 |
-| Date | 2026-08-28 |
+| Status | Visuals and data measures settled; domain and merge layers landed; the subagent numeral badge (§10) is implemented. The session column now **breathes when the mark beside it is burying a finished, unread Turn** (§12), which supersedes "steady always" in §11 and costs no width anywhere. **§2 and §4 are superseded by [`colour-v2.md`](colour-v2.md)**: no product owns a hue, and one badge replaces the four attribution presentations |
+| Version | 1.5 |
+| Date | 2026-09-04 |
 | Figma | [`10 — Double Apps`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=540-2); settings in [`09 — Settings`](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1?node-id=609-2) |
 | Related ADRs | [0007](adr/0007-read-claude-code-quota-from-the-cli.md), [0008](adr/0008-count-today-tokens-cache-inclusive.md), [0009](adr/0009-resolve-project-per-product.md) |
 
@@ -22,13 +22,15 @@ This is the first time existing constraint 2 ("an area with nothing to say is re
 
 The existing constraints used to judge each option, all taken from the shipped interface:
 
-1. Hue means product, brightness means whether the user is needed. The two channels are never swapped.
+1. ~~Hue means product,~~ brightness means whether the user is needed. ~~The two channels are never swapped.~~ **Half of this is void** ([`colour-v2.md`](colour-v2.md)): hue means nothing about which product, because no product has one. Brightness is unchanged and is now the only channel this constraint governs.
 2. An area with nothing to say is removed, not dimmed.
 3. An unfinished row carries one marker.
 4. Widths are measured from real rendered text, never hard-coded.
 5. Data that cannot be obtained degrades explicitly and is never filled in with an approximation.
 
 ## 2. Colour
+
+> **Superseded by [`colour-v2.md`](colour-v2.md).** Colour is no longer an element of this app: no product owns a hue, and the four values below have no reader left once the counts columns and the attribution inks go. What replaces "the pattern says the state, the hue says the product" is that **the pattern says the state and the name says the product** — written out, inside a badge tinted by the one ink the user picks. Kept as the record of what a hue per product cost and why it stopped being affordable at the third one.
 
 | Use | Codex | Claude Code |
 | --- | --- | --- |
@@ -75,6 +77,10 @@ The notch-less form still carries one status name, **kept grey**, taking the mos
 The name is not coloured, for two independent reasons. First, each matrix runs its own animation curve, so the state has already been expressed graphically before the name is read, and colouring the text encodes the same thing a third time. Second, the rejected colouring scheme actually encoded the product, not the state — and even read that way it is redundant, since the matrix that is animating is the one needing attention — while pressing hue and brightness onto one short run of text, where brightness is this interface's attention channel and the more important of the two. The coloured variant is drawn and rejected in Figma §04 and is not kept as an alternative.
 
 ## 4. Expanded: row attribution
+
+> **Superseded by [`colour-v2.md`](colour-v2.md) §4, except for the presence rule.** The four presentations are one: a **badge**, ground and text taken from the theme ink the user picks, replacing the caption's product prefix. `Name and colour` and `Colour bar` are gone because they were the two that could not survive a third agent; `Name only` is gone because the badge is what a request for less colour now gets; `Badge` survives with its geometry intact and its two product inks replaced by the one theme pair. The `Distinguish products` setting retires with them — a one-value picker is not a control.
+>
+> **What survives whole is the first paragraph below**, and it is load-bearing: the badge is drawn on presence, not on who has threads right now. Everything after it is kept as the record of four options judged against each other, and of why the two purely-hue ones ranked last on their own reasoning before this decision reached them.
 
 Turn ordering is unchanged, so the two products' rows interleave and each row must say whose it is. **The marker is drawn whenever both products are connected, regardless of who currently has threads.**
 
@@ -276,7 +282,7 @@ Degraded navigation is confirmed, accepted and implemented: a Claude Code row ca
 
 [`figma-design.md`](figma-design.md) describes the single-product contract, and this file supersedes two parts of it: the settings gear's position (§4.5, now the top-right of the top bar) and the composition of the footer quota lines (§4.3, two rule lines plus a daily-usage line with two products). The rest is unaffected.
 
-The exception is the settings window: `figma-design.md` §8 has been rewritten for macOS 26, with the `Products` group holding both products directly and the `Session list` group coming from §6 here. The settings window's structure, geometry and colour are governed by §8, and this file keeps only the semantics of `Distinguish products`.
+The exception is the settings window: `figma-design.md` §8 has been rewritten for macOS 26, with the `Products` group holding both products directly and the `Session list` group coming from §6 here. The settings window's structure, geometry and colour are governed by §8, and this file keeps only the semantics of ~~`Distinguish products`~~ — **which retires** ([`colour-v2.md`](colour-v2.md) §6), leaving this file no settings semantics at all.
 
 ## 10. The subagent badge (decided; in-row implemented, collapsed superseded)
 

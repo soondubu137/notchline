@@ -42,7 +42,9 @@ A label, a hairline and a chevron, on one `32` pt line at the foot of the live l
 
 ### 2.3 A retired row
 
-One line: **product · project · subject**, `13` pt Regular. The product name takes that product's caption ink (`#4D81B7` / `#9C553E`), `· project ·` takes `#7C7C80`, and the subject takes `#C7C7CC` — one step below a live title's white-at-98% and one step above a caption. It ends in a fade like every other line here.
+One line: **product · project · subject**, `13` pt Regular. ~~The product name takes that product's caption ink (`#4D81B7` / `#9C553E`)~~ — **the product is a badge** ([`colour-v2.md`](colour-v2.md) §5), ground and text from the `Theme colour` pair, drawn only while more than one product is connected. `· project ·` takes `#7C7C80`, and the subject takes `#C7C7CC` — one step below a live title's white-at-98% and one step above a caption. It ends in a fade like every other line here.
+
+**The badge is `16` on a `13` pt line**, which is the same two points a live row's caption pays (§2.1). The line's own `40` is unchanged: it was measured from the half-row it has to equal, not from its text, and `16` still clears it.
 
 The trailing reading is an **age** — `now`, `2m`, `9m`, `1h` — bare, `13` pt Light `#7C7C80`, tabular. The ground family does not travel below the rule: bare / white / dim answers *which of these wants me*, and nothing down here wants anybody. A bare age cannot be confused with a bare Running reading, being one line tall, under a rule, and counting the other way.
 
@@ -213,7 +215,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 ### 8.6 Two smaller reaches
 
 - **Membership gains a second question, answered in memory.** The store holds the last five departures in order, with what took each of them out, and answers navigation for them from what the product last vouched for. Nothing is persisted and nothing is re-read at launch.
-- **The row-attribution setting reaches below the seam.** All four presentations apply: `Name and colour` and `Name only` land on the breadcrumb's prefix, `Badge` replaces that prefix, and `Colour bar` becomes a `2` pt bar the height of the one line ([`dual-agent-design.md`](dual-agent-design.md) §4).
+- **Product attribution reaches below the seam.** ~~All four presentations apply: `Name and colour` and `Name only` land on the breadcrumb's prefix, `Badge` replaces that prefix, and `Colour bar` becomes a `2` pt bar the height of the one line.~~ **There is one presentation** ([`colour-v2.md`](colour-v2.md) §5): the badge replaces the breadcrumb's prefix, on the same presence rule as a live row's, and the setting that chose between four is retired ([`dual-agent-design.md`](dual-agent-design.md) §4).
 
 ## 9. Verification
 

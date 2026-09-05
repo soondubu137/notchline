@@ -39,7 +39,8 @@ Each document owns a scope. A change landing in one of these scopes updates that
 | --- | --- |
 | [`CONTEXT.md`](CONTEXT.md) | Terminology; any naming disagreement is settled there |
 | [`docs/PRD.md`](docs/PRD.md) | Product contract: monitoring scope, state model, previews, navigation, release gates |
-| [`docs/dual-agent-design.md`](docs/dual-agent-design.md) | How the two products share one surface: hue, attribution, quota, subagent counts |
+| [`docs/dual-agent-design.md`](docs/dual-agent-design.md) | How the two products share one surface: attribution, quota, subagent counts |
+| [`docs/colour-v2.md`](docs/colour-v2.md) | Colour: there is one hue, the user picks it, and no product owns one. The badge that names a product, and what the band stopped decomposing |
 | [`docs/figma-design.md`](docs/figma-design.md) | Visual and interaction spec, Figma file structure, legal component variants |
 | [`docs/system-architecture.md`](docs/system-architecture.md) | The implementation **as it actually is**: refresh timing, responsibilities, rendering and performance boundaries, the architectural invariants |
 | [`docs/tech-design.md`](docs/tech-design.md) | Interfaces, protocols, data flow, failure recovery |

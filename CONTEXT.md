@@ -6,7 +6,7 @@ Words are settled here. Any naming disagreement in code, docs or commit messages
 
 ## Products and adapters
 
-**Product** — A monitored agent product; today Codex and Claude Code. A product is user-visible: matrix hue, row attribution and the footer's quota rules are all per product.
+**Product** — A monitored agent product; today Codex and Claude Code. A product is user-visible: row attribution and the footer's quota rules are per product. **A hue is not** — no product owns a colour anywhere in this app, and a product is named by a badge in the user's own theme ink ([`docs/colour-v2.md`](docs/colour-v2.md)). *Matrix hue* was on this list until that decision and is banned wording now, along with *product colour* and *product ink*.
 *Avoid:* backend, data source, integration, agent.
 
 **Provider** — The in-app adapter that translates one product's boundary signals into an `AgentSnapshot`, one per product. An implementation concept that never appears in user-visible copy.
@@ -92,7 +92,7 @@ Only the rules already asking that second question read it: summary status, prod
 **Summary status** — The single status shown at the top, merged from all live monitored Threads across products. With Threads present in any product, it takes the value by Thread priority; with no Threads anywhere, the collapsed state has just two values — `Connected` if any product is connected, `Disconnected` if none is. Integration availability no longer speaks in the collapsed state; it explains itself in the expanded panel and in settings.
 *Avoid:* global thread, connection state, Idle.
 
-**Disconnected** — As a **summary status** it means "no coding agent is connected", not "no coding agent is open" — something open but out of reach is genuinely disconnected. As a fact about **one product** it means that product's live monitoring integration is no longer reliable and so cannot produce its Thread set trustworthily; its matrix then disappears along with its rows, indistinguishable from "that product has no Threads", because for the user the conclusion is the same. Losing observation is a transition, not a state: each matrix falls to its own extinguished colour first (keeping its hue, so it stays visible which product went dark), the rows drain after it, and only then does the whole fall to `Disconnected`.
+**Disconnected** — As a **summary status** it means "no coding agent is connected", not "no coding agent is open" — something open but out of reach is genuinely disconnected. As a fact about **one product** it means that product's live monitoring integration is no longer reliable and so cannot produce its Thread set trustworthily; its rows then disappear, indistinguishable from "that product has no Threads", because for the user the conclusion is the same. Losing observation is a transition, not a state: the rows drain first and only then does the whole fall to `Disconnected`. ~~Each matrix falls to its own extinguished colour first, keeping its hue, so it stays visible which product went dark.~~ Void twice over: there has been **one** aggregate mark for every product at once since [`docs/compact-view-v2.md`](docs/compact-view-v2.md) §2, and it has no product hue to keep since [`docs/colour-v2.md`](docs/colour-v2.md). One product going dark is now visible in its rows leaving and in nothing else.
 *Avoid:* single-thread unknown, quota unavailable, preview unavailable, global disconnect, no agent open.
 
 ## Content

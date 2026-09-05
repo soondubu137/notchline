@@ -2,9 +2,9 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, settled and implemented.** The band folds the marks, drops the name, keeps the totals and decomposes the counts, and the panel is `520` at every cut-out this product meets. The one thing recorded and not drawn is §10 question 05's fallback — a tooltip naming the columns — which is not needed unless the accessible name and the fixed order prove insufficient. |
-| Version | 2.0 |
-| Date | 2026-09-03 |
+| Status | **Superseded in part by [`colour-v2.md`](colour-v2.md), which is the current contract for §4.** The band folds the marks, drops the name and keeps the totals — and **no longer decomposes the counts**. §4 entire, §4.4's inks, §5's per-agent state rows, §6.2's sizing by agent count, §7's last row, §9's first bullet and §10 questions 02, 03 and 05 are void with the columns; §4.1 survives whole and is now the whole of the decomposition section. What is left is a band drawing one mark and two totals, `53.8` of leading side at every agent count. |
+| Version | 2.1 |
+| Date | 2026-09-04 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `05 — The expanded header` |
 | Scope | The expanded panel's top band only: the two shoulders either side of the physical cut-out. The session list, the quota footer, the settings window and both collapsed forms are untouched. |
 | Supersedes | [`figma-design.md`](figma-design.md) §3.3's expanded widening rule and the fold behind it, and §4.2's expanded half. [`compact-view-v2.md`](compact-view-v2.md) §8's two parked questions and the `70.51` arithmetic that assumed per-product marks. [`compact-view-v2.md`](compact-view-v2.md) §3.2 rule 01 in this form only — see §4.3. |
@@ -80,6 +80,10 @@ The panel is `520` by baseline and the cut-out is hardware, so the room beside i
 So the name could never have stayed, and the answer is not another word. Naming the agents costs `110.34` and fails the same test twice as hard as the word it would replace.
 
 ## 4. The decomposition
+
+> **Superseded by [`colour-v2.md`](colour-v2.md) §3. There is no decomposition.** The band draws the aggregate mark and the totals and stops. §4.1 below stands whole and is the whole of what this section now specifies; **§4.2, §4.3 and §4.4 are void**, and the leading side is `53.8` at one agent and at eight.
+>
+> The reason is not that the columns were badly drawn — rule 03 was right that brightness could carry the hierarchy inside each column, and the geometry asked for no height the mark did not already have. It is that **the parts are a second copy of what the list below draws in words**, one row per session, each naming its own agent, `46` pt lower, on the only surface here with room for a name. The columns said it in the one channel that cannot hold one. What is given up with them is recorded at [`colour-v2.md`](colour-v2.md) §3.1, alongside the thing this band already could not say (§8.3).
 
 ### 4.1 The totals stay
 
@@ -207,7 +211,7 @@ A side asks `98.2` with two agents against a trailing side wanting `52`, so the 
 
 ## 9. Accessibility
 
-- **Colour is the only thing saying whose number a number is**, and it is the one channel §3 shows the band can afford. Two answers that cost no width: the accessible name spells each column out — `Codex, 2 sessions, 1 subagent` — and the order is permanently Settings' order, so position is a second channel for anyone who learns it. §10, question 05.
+- ~~**Colour is the only thing saying whose number a number is**, and it is the one channel §3 shows the band can afford. Two answers that cost no width: the accessible name spells each column out — `Codex, 2 sessions, 1 subagent` — and the order is permanently Settings' order.~~ **Void with the columns** ([`colour-v2.md`](colour-v2.md) §8). There is no channel to compensate for: the band announces its two figures and the aggregate status, exactly as the collapsed bar does. This bullet is worth keeping struck rather than deleted, because it is the sentence that made the case for this change — a surface whose only identity channel is colour is a surface one preference away from saying nothing.
 - **The dash is spoken as `none`**, not as a hyphen, and never as zero-sessions: it appears only in the subagent row.
 - The status name **stops being drawn and does not stop being said**: it remains the accessibility label of the aggregate, exactly as [`compact-view-v2.md`](compact-view-v2.md) §10 has it for the collapsed forms.
 
@@ -219,7 +223,7 @@ None are open. Three were answered by the board's owner, one is closed as out of
 | --- | --- | --- |
 | 01 | Do the parts replace the totals? | **Answered — they do not.** §4.1 |
 | 02 | Do the columns pack, or hold a slot per configured agent? | **Standing recommendation: packing, as drawn.** The movement is real and lands where it does least harm — the totals are anchored to the mark and never move. Worth watching on a machine that runs both agents in earnest |
-| 03 | What colour is a third agent, and a fourth? | **Closed as out of scope.** The product monitors Codex and Claude Code; §4.4's third and fourth pairs are struck. The rule to settle when a third product arrives, unchanged: each new product takes the hue farthest in OKLCH from every product already configured, at the products' own chroma and their two lightnesses — the construction [`aggregate-ink-palette.md`](aggregate-ink-palette.md) used for its starred entries. Two collisions to judge on screen then: Completed is green in a row's status control, and the aggregate mark's default ink is a near-neutral at `150°`. Neither is fatal — hue means agent in this band and status in the row, which is already true of Codex blue standing beside Running blue |
+| 03 | What colour is a third agent, and a fourth? | **Closed for good: none.** ~~The rule to settle when a third product arrives: each new product takes the hue farthest in OKLCH from every product already configured.~~ [`colour-v2.md`](colour-v2.md) is the answer, and §2 there is why that rule could not be the answer: **run it and the third agent lands on `150°`**, which is Sage — the aggregate mark's own default, chosen on the palette page for being equidistant from both products. The rule and the default were derived from the same geometry, so the first agent it places is guaranteed to collide with the mark it stands beside; after that the minimum separation falls `144° → 108° → 72° → 54° → 36°` on a numeral `6.6` pt wide. **One factual correction to what stood here**: "Completed is green in a row's status control" has not been true since the mark gained its three silhouettes — `SessionStatusControl` draws no hue at all ("one mark per row at most, and no hue"), and status green and blocked purple survive only in the native Settings window. It made the circle emptier than this row assumed, not fuller |
 | 04 | Where does the collapsed reading go when the panel opens? | **Answered — nowhere. It gives way to the gear.** The trailing slot holds one thing at a time: collapsed it is the reading, expanded it is the gear, and opening the panel cross-fades one into the other in place, on the slot curve the wings' contents already use. Nothing travels and nothing descends — the turn the reading was timing draws its own timer in the list below, from its own start, so the figure is not lost by being let go. It is also the cheaper answer: the reading re-rasters once a second, and a travelling raster would have to keep doing it in flight. The counts are the other half of the same rule, already drawn: the totals hold still and the parts fade in beside them |
 | 05 | Is colour enough? | **Standing recommendation.** §9. If the accessible name and the fixed order are not enough, the panel is already a hover surface and a tooltip on the block can name the columns without drawing a word. What is not available is the word itself |
 | 06 | Is `520` still the right baseline, now that nothing widens it? | **Standing recommendation: leave it.** That width was bought by a status name on a panel that changed size when a second agent connected, and a row that ends in a fade rather than an ellipsis loses characters, not meaning. The lever moves down — two agents need `196.4` plus the cut-out — and up costs a panel that is a different size on different machines again |

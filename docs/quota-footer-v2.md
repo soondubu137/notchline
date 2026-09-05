@@ -8,6 +8,7 @@
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `08 — The footer without a gauge`. `07 — The quota footer (superseded)` is kept as the record of the direction this one leaves (§9). |
 | Scope | The expanded panel's footer only: the quota rules and today's tokens. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the session list is [`expanded-panel-v2.md`](expanded-panel-v2.md), both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None is touched, and the panel's width does not move. |
 | Supersedes | [`dual-agent-design.md`](dual-agent-design.md) §5.1 (structure and the four heights), §5.2 (which windows are drawn), §5.4 (the fold, its default and its trap). |
+| Superseded in | §2's two heights, by [`colour-v2.md`](colour-v2.md) §5 — the product name is a badge, so the spoken line is `47` and the table `19W + 30P + 17`. Nothing else here moves. |
 
 ## 1. What V2 changes here, and why
 
@@ -26,6 +27,15 @@ Width is split per window: Codex takes the full `496` because it has one, Claude
 **V2 takes the gauge out.** One figure while nothing is wrong, a sentence when something is, and a table for anyone who wants to look rather than be told.
 
 ## 2. Composition
+
+> **The product names below become badges** ([`colour-v2.md`](colour-v2.md) §5). This footer is the one surface that already named products in words rather than in colour, so the decision costs it almost nothing — the name moves inside a `16` pt chip in the user's theme ink, and only two heights follow it. The spoken line's `Claude Code ·` and the table's outer-row `Codex` are the two places affected; the window rows, the spend figures, the leader and the control are untouched.
+>
+> | | Written here | With the badge |
+> | --- | --- | --- |
+> | Speaking | `45` | **`47`** |
+> | Opened table | `19W + 28P + 17` | **`19W + 30P + 17`** |
+>
+> One term moves and no constant is introduced: a caption line carrying a badge is the badge's own `16` rather than `footerCaptionHeight`'s `14`, so a product group is `16 + 19w`. Collapsed is unchanged at `22` — it names no product.
 
 **Collapsed — `22`, every connected form, every product count.**
 
@@ -102,7 +112,9 @@ A product group is `14 + 19w`, so the table is `31 + Σ(14 + 19w) + 14(P − 1)`
 
 **`Resets in` is gone, and the column is a timer.** Repeated once a window it was noise, and what the column holds is a countdown — so it is written like every other countdown on this panel: `47m`, `2h`, `3d 12h`, two units at most. The absolute day survives in the accessible name, for anyone who wants Friday rather than four days (§8.5 question 04).
 
-**The levels are three steps of brightness, and hue names the group.** The product in its own lit ink (`#6CB4FF` / `#D97757`), its spend in `#C7C7CC`, everything inside it in `#7C7C80`. A share past the threshold is the one thing inside a group that steps back up to `#C7C7CC` — so **every** window that could have spoken is visible here, not only the one that did.
+**The levels are three steps of brightness, and ~~hue~~ a badge names the group.** ~~The product in its own lit ink (`#6CB4FF` / `#D97757`)~~ — **the product is a badge** in the `Theme colour` pair ([`colour-v2.md`](colour-v2.md) §5) — its spend in `#C7C7CC`, everything inside it in `#7C7C80`. A share past the threshold is the one thing inside a group that steps back up to `#C7C7CC` — so **every** window that could have spoken is visible here, not only the one that did.
+
+**Brightness was always doing this work, and now it is doing all of it.** Three steps already separated the product, its spend and its windows; the lit ink only said *which* product, which the name inside the badge says outright. The badge's own ground is darker than the panel, so it adds a step downwards rather than a fourth step up, and the group's brightest thing is still its spend.
 
 **Products in Settings' order; windows tightest first inside each.** This is deliberately *not* the speaking line's order — that one picks by spend, because it is a selection rather than a list, and a reference that re-sorted itself every minute would be unreadable.  Which restores [`expanded-header-v2.md`](expanded-header-v2.md) §4.3 rule 02 at the level where it belongs — nothing re-sorts between products — and keeps ordering by tightness where it is the only order that means anything. **The grouping is what lets both be true at once**, and it is the one thing version 3.0 could not do.
 
