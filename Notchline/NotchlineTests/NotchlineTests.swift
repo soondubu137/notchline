@@ -2784,6 +2784,123 @@ struct NotchlineTests {
         #expect(store.recentDepartures.isEmpty)
     }
 
+    /// The trailing reading, and the ceiling the window puts on it.
+    ///
+    /// `now`, `2m`, `9m`, `1h`, `4h` — **two characters for the whole of a
+    /// member's life**, because nothing can reach `5h`: at five hours the row
+    /// is gone. The column therefore never has to widen, which is the window
+    /// agreeing with the reading rather than a coincidence (§2.3).
+    @Test
+    func theAgeBelowTheRuleIsNeverMoreThanTwoCharacters() {
+        let left = Date(timeIntervalSince1970: 1_000_000)
+        let departure = RecentDeparture(
+            session: MonitoredSession(
+                threadID: "t", turnID: "u", projectName: "p",
+                title: "s", preview: nil, status: .completed, startedAt: nil
+            ),
+            departedAt: left,
+            reason: .read
+        )
+        func text(after seconds: TimeInterval) -> String {
+            departure.ageText(at: left.addingTimeInterval(seconds))
+        }
+
+        #expect(text(after: 0) == "now")
+        #expect(text(after: 59) == "now")
+        #expect(text(after: 60) == "1m")
+        #expect(text(after: 9 * 60 + 30) == "9m")
+        #expect(text(after: 59 * 60) == "59m")
+        #expect(text(after: 3600) == "1h")
+        #expect(text(after: MonitorStore.recentWindow - 1) == "4h")
+
+        // Every reading a member can ever draw, at one-minute resolution.
+        let readings = stride(
+            from: 0.0,
+            to: MonitorStore.recentWindow,
+            by: 60
+        ).map { text(after: $0) }
+        #expect(readings.allSatisfy { $0.count <= 3 })
+        #expect(readings.contains("5h") == false)
+        // **The hours are what the window bounds**, and they are always one
+        // digit. Minutes reach three characters at `10m` and that is fine —
+        // the figures are tabular, so the column is steady at its widest
+        // rather than steady at every value. Without the window this would
+        // eventually have to hold `12h`, and then `3d`.
+        #expect(
+            readings.filter { $0.hasSuffix("h") }.allSatisfy { $0.count == 2 }
+        )
+        #expect(readings.filter { $0.hasSuffix("m") }.allSatisfy { $0.count <= 3 })
+
+        #expect(departure.spokenAgeText(at: left) == "left just now")
+        #expect(departure.spokenAgeText(at: left.addingTimeInterval(60)) == "left 1 minute ago")
+        #expect(departure.spokenAgeText(at: left.addingTimeInterval(120)) == "left 2 minutes ago")
+        #expect(departure.spokenAgeText(at: left.addingTimeInterval(4 * 3600)) == "left 4 hours ago")
+    }
+
+    /// **The seam is what takes the panel's floor down**, and folding it never
+    /// closes the panel.
+    ///
+    /// §2.4 rule 07: the footer stands between the control and the bottom edge,
+    /// so folding cannot take that edge past a pointer resting on the seam —
+    /// which is exactly what `panelResized(to:pointerAt:)` refuses to collapse
+    /// for. Asserted through the real geometry rather than by inspection.
+    @Test @MainActor
+    func foldingTheQueueMovesThePanelWithoutClosingIt() async {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: PanelMetrics.referenceCompactHeight,
+            hasNotch: true
+        )
+        let clock = TestClock()
+        let store = MonitorStore(
+            displays: [display],
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let rows = (0..<5).map { recentTestRow(thread: "thread-\($0)") }
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: rows))
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        store.isExpanded = true
+        #expect(store.recentDepartures.count == 5)
+
+        // Folded: a seam and nothing else, which is 32 of viewport where an
+        // empty list used to spend 48 saying it was empty.
+        #expect(!store.isRecentExpanded)
+        let folded = store.currentPanelSize.height
+        store.toggleRecent()
+        let opened = store.currentPanelSize.height
+        #expect(
+            opened - folded
+                == PanelMetrics.retiredRowHeight * 5,
+            "five rows is what opening it costs"
+        )
+
+        // Folding again, with the pointer where the seam was. The panel shrinks
+        // from the middle and the footer keeps the bottom edge below the
+        // pointer, so nothing closes.
+        let window = OverlayPanelLayout.frame(
+            on: display.frame,
+            panelSize: store.currentPanelSize,
+            surfaceShoulder: store.surfaceShoulderRadius,
+            trailingAnchor: store.currentPanelTrailingAnchor
+        )
+        store.toggleRecent()
+        let shrunk = OverlayPanelLayout.frame(
+            on: display.frame,
+            panelSize: store.currentPanelSize,
+            surfaceShoulder: store.surfaceShoulderRadius,
+            trailingAnchor: store.currentPanelTrailingAnchor
+        )
+        store.panelResized(
+            to: shrunk,
+            pointerAt: NSPoint(x: window.midX, y: window.maxY - PanelMetrics.referenceCompactHeight - 16)
+        )
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay * 2)
+        #expect(store.isExpanded, "folding the queue never closes the panel")
+    }
+
     /// **Leaving the list is the timing; finishing is the reason.**
     ///
     /// The arrow into the queue is `Completed ─read→ archived`, and a row this

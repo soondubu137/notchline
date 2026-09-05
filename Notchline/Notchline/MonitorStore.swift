@@ -289,6 +289,14 @@ enum PanelMetrics {
     ///
     /// `9` + a `14` pt caption line + `9`.
     static let recentSeamHeight: CGFloat = 32
+    /// How far a row's last glyphs take to fade out.
+    ///
+    /// One declaration, because two lines draw it by different means: the live
+    /// row's title and body fade inside ``SessionRowTextView``'s own layer
+    /// mask, and a retired row — one static line with no sweep to run — fades
+    /// under a plain SwiftUI gradient. Written apart they would drift, and the
+    /// two are three points from each other on the same panel.
+    static let rowTrailingFadeWidth: CGFloat = 48
     /// The tallest the session viewport is ever drawn.
     ///
     /// **A height rather than a row count, and that restatement is the whole
@@ -1433,6 +1441,20 @@ final class MonitorStore: ObservableObject {
     /// computed one because SwiftUI has to be told: a computed property reading
     /// the clock would go stale on screen with nothing to invalidate it.
     @Published private(set) var recentDepartures: [RecentDeparture] = []
+    /// The instant the queue's ages are drawn against.
+    ///
+    /// **Not ``timerNow``**, which advances only while a Turn is being timed —
+    /// on a panel with nothing running it is frozen at whatever the last turn
+    /// left, and every age below the rule would be drawn against it. This moves
+    /// whenever the queue is republished, which includes the panel being
+    /// opened, so the ages are right at the moment somebody looks at them.
+    ///
+    /// It is published **only when a reading would actually move**, for the
+    /// reason ``publishTick`` compares widths: one publish on this store
+    /// re-evaluates the whole overlay (`AGENTS.md` §7), and the clock advances
+    /// on every refresh whether or not anything down here changes because of
+    /// it.
+    @Published private(set) var recentReadAt: Date
     /// Whether somebody has opened the quota table.
     ///
     /// **A rename rather than a flipped boolean**, and the change is meant to
@@ -1688,6 +1710,7 @@ final class MonitorStore: ObservableObject {
         self.preferences = preferences
         self.clock = clock
         self.elapsedTick = CurrentValueSubject(clock.now())
+        self.recentReadAt = clock.now()
         self.timing = timing
         self.stuckDeadlines = [:]
         self.preferredDisplayID = persistedDisplayID
@@ -2528,6 +2551,8 @@ final class MonitorStore: ObservableObject {
     var expandedContentHeight: CGFloat {
         PanelMetrics.expandedContentHeight(
             liveRowCount: sessions.count,
+            retiredRowCount: recentDepartures.count,
+            isRecentExpanded: isRecentExpanded,
             footerHeight: expandedFooterHeight
         )
     }
@@ -3343,6 +3368,14 @@ final class MonitorStore: ObservableObject {
         }
         if kept.count != departuresByThread.count {
             departuresByThread = kept
+        }
+        // Ordered before the readings are compared against it, so a member
+        // added in this pass is measured against its own arrival rather than
+        // against whenever the clock was last consulted.
+        if ordered.contains(where: {
+            $0.ageText(at: now) != $0.ageText(at: recentReadAt)
+        }) {
+            recentReadAt = now
         }
         if recentDepartures != ordered {
             recentDepartures = ordered

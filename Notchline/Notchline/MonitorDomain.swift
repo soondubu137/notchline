@@ -649,6 +649,37 @@ nonisolated struct RecentDeparture: Equatable, Sendable, Identifiable {
     nonisolated func age(at now: Date) -> TimeInterval {
         now.timeIntervalSince(departedAt)
     }
+
+    /// The trailing reading: `now`, `2m`, `9m`, `1h`, `4h`.
+    ///
+    /// **Never more than three characters, and never more than one digit of
+    /// hours**, which is the window agreeing with the reading rather than a
+    /// coincidence: nothing can read `5h`, because at five hours the row is
+    /// gone (`expanded-panel-v2.md` §2.3). Without it the column would have to
+    /// hold `12h` and eventually `3d`. The figures are tabular, so it is steady
+    /// at its widest rather than steady at every value.
+    ///
+    /// A bare age cannot be confused with a bare Running reading: it is one
+    /// line tall, under a rule, and counting the other way.
+    nonisolated func ageText(at now: Date) -> String {
+        let seconds = max(age(at: now), 0)
+        if seconds < 60 { return "now" }
+        if seconds < 3600 { return "\(Int(seconds / 60))m" }
+        return "\(Int(seconds / 3600))h"
+    }
+
+    /// The same reading as words, because a screen reader cannot be shown a
+    /// column (`expanded-panel-v2.md` §6).
+    nonisolated func spokenAgeText(at now: Date) -> String {
+        let seconds = max(age(at: now), 0)
+        if seconds < 60 { return "left just now" }
+        if seconds < 3600 {
+            let minutes = Int(seconds / 60)
+            return "left \(minutes) minute\(minutes == 1 ? "" : "s") ago"
+        }
+        let hours = Int(seconds / 3600)
+        return "left \(hours) hour\(hours == 1 ? "" : "s") ago"
+    }
 }
 
 /// What one subagent badge draws, wherever it is drawn.

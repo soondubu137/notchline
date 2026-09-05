@@ -2420,7 +2420,10 @@ final class SessionRowTextView: NSView {
     static let sweepPeriod: TimeInterval = 2
     /// Distance over which the last glyphs fade out, matching the gradient the
     /// caller used to apply as a separate SwiftUI mask.
-    private static let trailingFadeWidth: CGFloat = 48
+    ///
+    /// Shared with the retired row, which draws the same fade by a different
+    /// means — see ``PanelMetrics/rowTrailingFadeWidth``.
+    private static let trailingFadeWidth: CGFloat = PanelMetrics.rowTrailingFadeWidth
 
     private let baseLayer = CALayer()
     private let highlightLayer = CALayer()

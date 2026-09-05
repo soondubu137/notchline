@@ -647,17 +647,37 @@ private struct ExpandedPanelContent: View {
     @ViewBuilder
     private var sessionRegion: some View {
         Group {
-            if store.sessions.isEmpty {
+            // **The apology is drawn for an empty list, not an empty live
+            // list.** A seam with nothing above it is a list, and one that
+            // offers what the last five hours let go of is a better answer than
+            // one that says there is nothing (`expanded-panel-v2.md` §4).
+            if store.sessions.isEmpty, store.recentDepartures.isEmpty {
                 Text(store.emptyListMessage)
                     .font(.system(size: 13, weight: .light))
                     .foregroundStyle(NotchPalette.label)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .frame(height: PanelMetrics.thinExpandedBodyHeight)
             } else {
+                // **One scroller over both halves**, which is the whole of how
+                // the queue draws five and scrolls past them: a seam and five
+                // retired rows is 232 inside the viewport's 240 and a sixth is
+                // 272, so the scroller a fourth live row already used carries
+                // the rest (§2.4 rule 02). A scroll view of its own here would
+                // chain against this one for nothing.
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 0) {
                         ForEach(store.sessions) { session in
                             SessionRow(session: session)
+                        }
+
+                        if !store.recentDepartures.isEmpty {
+                            RecentSeam(count: store.recentDepartures.count)
+
+                            if store.isRecentExpanded {
+                                ForEach(store.recentDepartures) { departure in
+                                    RetiredRow(departure: departure)
+                                }
+                            }
                         }
                     }
                 }
@@ -665,7 +685,9 @@ private struct ExpandedPanelContent: View {
                     width: store.currentPanelSize.width
                         - PanelMetrics.sessionRowGutter * 2,
                     height: PanelMetrics.sessionViewportHeight(
-                        liveRowCount: store.sessions.count
+                        liveRowCount: store.sessions.count,
+                        retiredRowCount: store.recentDepartures.count,
+                        isRecentExpanded: store.isRecentExpanded
                     )
                 )
                 .scrollIndicators(.hidden)
@@ -993,6 +1015,233 @@ private struct SessionRow: View {
             : ""
         return "\(session.projectName), \(session.title), "
             + "\(session.status.displayName)\(elapsed)\(took)\(subagents)\(blocked)\(preview)"
+    }
+}
+
+/// The rule between the list and what it has let go of.
+///
+/// A label, a hairline and a chevron on one `32` pt line at the foot of the
+/// live list (`expanded-panel-v2.md` §2.2). **The whole line is the target**,
+/// and that is a departure from the quota's control: §5.4 gave that chevron a
+/// `16 × 16` hit area because the rest of its line is a reading somebody might
+/// want to select, and this line carries only its own name — so it takes the
+/// row's own hover fill and the row's own click (§2.4 rule 08).
+///
+/// The count is live and is the one thing here that says there is more below
+/// than is drawn: the eight points the viewport has left over at six or more
+/// fall inside the sixth row's top padding and carry no ink at all, so an
+/// over-full queue is drawn exactly like a full one.
+private struct RecentSeam: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    @State private var isHovered = false
+
+    let count: Int
+
+    var body: some View {
+        Button {
+            store.toggleRecent()
+        } label: {
+            SeamContent(count: count, isHovered: isHovered)
+        }
+        .buttonStyle(SessionRowButtonStyle())
+        .frame(maxWidth: .infinity)
+        .frame(height: PanelMetrics.recentSeamHeight)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel("Recent, \(count) session\(count == 1 ? "" : "s")")
+        .accessibilityValue(store.isRecentExpanded ? "Expanded" : "Collapsed")
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+private struct SeamContent: View {
+    @Environment(\.sessionRowIsPressed) private var isPressed
+
+    @EnvironmentObject private var store: MonitorStore
+
+    let count: Int
+    let isHovered: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(ground.color)
+
+            HStack(spacing: 8) {
+                // The caption idiom exactly, separator included.
+                Text("Recent · \(count)")
+                    .font(.system(size: 11, weight: .light))
+                    .foregroundStyle(NotchPalette.label)
+                    .fixedSize()
+
+                // **The list's own top rule drawn again**, and it stops short
+                // of the control rather than running under it: a 1 pt line
+                // through a chevron reads as a strike, not as a rule.
+                Rectangle()
+                    .fill(Color.white.opacity(0.15))
+                    .frame(height: 1)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(
+                        isHovered ? NotchPalette.sessionTitle : NotchPalette.label
+                    )
+                    .rotationEffect(.degrees(store.isRecentExpanded ? 180 : 0))
+                    .frame(
+                        width: PanelMetrics.quotaFoldControlSize,
+                        height: PanelMetrics.quotaFoldControlSize
+                    )
+            }
+            .padding(.horizontal, PanelMetrics.sessionRowPadding)
+        }
+        .contentShape(Rectangle())
+        .frame(
+            maxWidth: .infinity,
+            minHeight: PanelMetrics.recentSeamHeight,
+            maxHeight: PanelMetrics.recentSeamHeight
+        )
+        .animation(.easeOut(duration: 0.16), value: store.isRecentExpanded)
+    }
+
+    private var ground: NotchPalette.SurfaceGround {
+        if isPressed { return .rowPressed }
+        if isHovered { return .rowHovered }
+        return .black
+    }
+}
+
+/// A row that has left the list, under the rule.
+///
+/// One line — **product · project · subject** — and an age, at half a live
+/// row's height (`expanded-panel-v2.md` §2.3). **Nothing here claims a
+/// status**, because the rule's meaning is that the list stops there: the
+/// ground family does not travel below it, and a bare age counts the other way
+/// from a bare Running reading besides.
+///
+/// Its click is the live row's click, unchanged, which is also the answer to
+/// §8.5 question 06: a product that has gone dark is re-asked at the moment
+/// somebody wants it, and `openAndWait` already reports what it could not do.
+/// Its secondary click is the live row's too, meaning the same thing one rule
+/// down — take this away (§2.4 rule 09).
+private struct RetiredRow: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    @State private var isHovered = false
+
+    let departure: RecentDeparture
+
+    var body: some View {
+        Button {
+            store.open(departure.session)
+        } label: {
+            RetiredRowContent(departure: departure, isHovered: isHovered)
+        }
+        .buttonStyle(SessionRowButtonStyle())
+        .frame(maxWidth: .infinity)
+        .frame(height: PanelMetrics.retiredRowHeight)
+        .overlay {
+            SecondaryClickCatcher { store.removeFromRecent(departure) }
+        }
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(accessibilityText)
+        .accessibilityActions {
+            Button("Remove this row") { store.removeFromRecent(departure) }
+        }
+    }
+
+    /// The line spelled out, with the age as words.
+    ///
+    /// **The product is named here whether or not a badge is drawn**, and that
+    /// is not the live row's rule. A badge is dropped when there is nothing to
+    /// disambiguate *on the surface*; a reader arriving at a line under a rule
+    /// has no surface to compare it against, and the product is the first thing
+    /// that says where clicking would go.
+    private var accessibilityText: String {
+        let session = departure.session
+        return "\(session.agent.displayName), \(session.projectName), "
+            + "\(session.title), \(departure.spokenAgeText(at: store.recentReadAt))"
+    }
+}
+
+private struct RetiredRowContent: View {
+    @Environment(\.sessionRowIsPressed) private var isPressed
+
+    @EnvironmentObject private var store: MonitorStore
+
+    let departure: RecentDeparture
+    let isHovered: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(ground.color)
+
+            HStack(spacing: 12) {
+                breadcrumb
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Bare, tabular, and never wider than two characters — the
+                // window and the reading agree (§2.3).
+                Text(departure.ageText(at: store.recentReadAt))
+                    .font(.system(size: 13, weight: .light).monospacedDigit())
+                    .foregroundStyle(NotchPalette.label)
+                    .fixedSize()
+            }
+            .padding(.horizontal, PanelMetrics.sessionRowPadding)
+        }
+        .contentShape(Rectangle())
+        .frame(
+            maxWidth: .infinity,
+            minHeight: PanelMetrics.retiredRowHeight,
+            maxHeight: PanelMetrics.retiredRowHeight
+        )
+    }
+
+    /// **product · project · subject**, in the three inks the panel already has.
+    ///
+    /// It overflows and fades rather than truncating, like every other line
+    /// here. The badge follows the live row's presence rule exactly (§8.6): the
+    /// surface names products while more than one is on it, and stops when
+    /// there is nothing to tell apart.
+    private var breadcrumb: some View {
+        HStack(spacing: 6) {
+            if store.showsProductAttribution {
+                ProductBadge(
+                    name: departure.session.agent.displayName,
+                    hue: store.aggregateInk
+                )
+            }
+
+            (
+                Text("\(departure.session.projectName) · ")
+                    .foregroundStyle(NotchPalette.label)
+                    + Text(departure.session.title)
+                    .foregroundStyle(NotchPalette.reading)
+            )
+            .font(.system(size: 13))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+        .mask(
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(
+                    colors: [.black, .black.opacity(0)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: PanelMetrics.rowTrailingFadeWidth)
+            }
+        )
+    }
+
+    private var ground: NotchPalette.SurfaceGround {
+        if isPressed { return .rowPressed }
+        if isHovered { return .rowHovered }
+        return .black
     }
 }
 

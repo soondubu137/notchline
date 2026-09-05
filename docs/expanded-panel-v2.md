@@ -47,7 +47,7 @@ One line: **product · project · subject**, `13` pt Regular. ~~The product name
 
 **The badge is `16` on a `13` pt line**, which is the same two points a live row's caption pays (§2.1). The line's own `40` is unchanged: it was measured from the half-row it has to equal, not from its text, and `16` still clears it.
 
-The trailing reading is an **age** — `now`, `2m`, `9m`, `1h`, `4h` — bare, `13` pt Light `#7C7C80`, tabular. **Its ceiling is `4h`, and that is the window agreeing with the reading rather than a coincidence:** nothing here can read `5h`, because at five hours the row is gone (§2.4 rule 11). The age therefore stays two characters for the whole of a member's life and the column never has to widen.
+The trailing reading is an **age** — `now`, `2m`, `9m`, `1h`, `4h` — bare, `13` pt Light `#7C7C80`, tabular. **Its ceiling is `4h`, and that is the window agreeing with the reading rather than a coincidence:** nothing here can read `5h`, because at five hours the row is gone (§2.4 rule 11). ~~The age therefore stays two characters for the whole of a member's life.~~ **It stays within three characters, and its hours within one digit** — `10m` through `59m` are three, which the tabular figures hold steady. What the window buys is the digit: unbounded, this column would have to hold `12h`, and then `3d`, and a reading that grows a unit is a column that moves.
 
 The ground family does not travel below the rule: bare / white / dim answers *which of these wants me*, and nothing down here wants anybody. A bare age cannot be confused with a bare Running reading, being one line tall, under a rule, and counting the other way.
 
@@ -249,7 +249,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 | 03 | Does the queue survive a quit? | **Answered — no**, and the window makes the answer cheaper rather than harder: a queue that empties itself after five hours was never going to be worth the launch-time promise §2.4 rule 03 refuses to make. §2.4 rules 03 and 11 |
 | 04 | Should approving be possible without opening the row? | **Answered — no.** §3.1 |
 | 05 | Is `Always` ever offered? | **Standing recommendation: not from here.** §3.3. If it is ever added it belongs beside `Approve` in the recessed ink and never on the white ground, because the white ground is the Enter key and a policy about every future request must not be what Enter does |
-| 06 | What happens to a retired row whose product has gone dark? | **Open — the only genuinely unanswered question here.** A row below the seam still claims a destination, and the queue has no equivalent of the live list's hand-over check because it never re-asks. Two candidates: re-ask on click and say so when the answer is no, or drop the row when its product disconnects. The first keeps the queue stable and costs one local read at the click, which is what the live list already pays per row. Recommended, not decided — and the window raises the stakes slightly, since a row can now sit below the seam for hours rather than until the fifth departure after it |
+| 06 | What happens to a retired row whose product has gone dark? | **Answered by building it, and it cost nothing.** The recommendation was to re-ask on click and say so when the answer is no — which is what the live row's click already does: `open(_:)` hands the row to the navigator, and `openAndWait` reports what it could not do. A retired row keeps the whole `MonitoredSession`, both navigators read only its `agent` and `threadID`, and neither the queue nor the row needed a second path. The reasoning that follows is kept because it is what settled the choice. ~~**Open — the only genuinely unanswered question here.**~~ A row below the seam still claims a destination, and the queue has no equivalent of the live list's hand-over check because it never re-asks. Two candidates: re-ask on click and say so when the answer is no, or drop the row when its product disconnects. The first keeps the queue stable and costs one local read at the click, which is what the live list already pays per row. Recommended, not decided — and the window raises the stakes slightly, since a row can now sit below the seam for hours rather than until the fifth departure after it |
 | 07 | Does the seam draw with the quota folded and nothing else on the panel? | **Answered — yes**, and that is the `100` pt form |
 | 08 | Does the window need a ceiling behind it? | **Answered as recommended, and built** (§10.1): `recentCeiling = 50`, invisible, keeping the newest when it binds. The reasoning stands as written. **A guard rather than a design.** Membership is unbounded in count: a heavy five hours might retire fifty rows at a couple of hundred bytes each — nothing to hold, and unusable to scroll. **Recommendation: the window stays the only rule anyone can see, with a generous ceiling of `50` behind it purely so the store cannot grow without limit.** If it ever binds, that is a fact about the machine rather than a defect, and the seam's count will have said so long before. What must not happen is the ceiling becoming the visible rule again — that is the "last N" §8.1 just finished banning |
 
@@ -266,6 +266,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 - [ ] Three live rows draw no seam and cost the queue nothing; the third retiring puts the seam back inside the viewport.
 - [ ] A retiring row halves in place and the seam rises over it; nothing travels the length of the panel.
 - [ ] Nothing below the seam draws a status ground, and every age reads as an age.
+- [ ] **Not yet seen on the real panel:** the seam and a retired row are unit-tested but have never been drawn on screen — a row can only be archived after one has been vouched for, which the end-to-end harness is for. The blank `8` points at six or more, the hairline stopping short of the chevron, and the breadcrumb's fade are all visual claims resting on the code alone.
 - [ ] The queue is empty at launch, admits every departure, and drops each one five hours after it left — with the panel open, folded, and never opened at all.
 - [ ] Six retirements draw five rows and a seam reading `Recent · 6`; the sixth is reached by the panel's own viewport scroller, and no second scroller appears anywhere.
 - [ ] Five quiet hours empty the queue, take the seam with them, and return the panel to its `178` floor with nothing left to fold.
@@ -283,7 +284,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 
 ## 10. Implementation mapping
 
-**The first three rows have landed**; the rest is ahead. The work lands in six places:
+**Everything but the tick and §3 has landed.** The work lands in six places:
 
 | Symbol | Change |
 | --- | --- |
@@ -291,7 +292,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 | `PanelMetrics` | **Built:** `retiredRowHeight = sessionRowHeight / 2` and `recentSeamHeight`. Still owed: `openRowHeight(requestLines:)`, which belongs to §3 |
 | ~~`MonitorStore`~~ **Built.** | `departuresByThread` holding every row that left within `recentWindow` (`5 × 3600`) with the reason it left, fed from `apply` — the one funnel every row leaves through, a dismissal included. `isRecentExpanded` beside `isQuotaExpanded`, on the key `recentExpanded`. Two things the design did not say, both forced by the code and both in §10.1 |
 | `MonitorStore` (the clock) | **Eviction is a read-time filter, and that half is built** — the queue is filtered as of `now` wherever it is republished, and opening the panel is a read, so a queue nobody watched for six hours is empty before it could be drawn. Still owed: the one-minute tick that makes an age move under somebody already watching |
-| `NotchOverlayView` | `RecentSeam`, `RetiredRow`, and `SessionRow`'s open state; `emptyListMessage` draws only when the queue is empty too |
+| ~~`NotchOverlayView`~~ **Built for §2.** | `RecentSeam` and `RetiredRow`, inside the list's **one** scroller rather than a second one, and `emptyListMessage` only when the queue is empty too. `SessionRow`'s open state belongs to §3 and is not built |
 | `OverlayPanelController` | Latching: key window on open, restore on close, and hover suspended for the duration (§8.3) |
 
 **Nothing in `PanelMetrics` changes for this amendment.** The five-row fold is `240` doing what it already did, and the only new constant lives in the store.
