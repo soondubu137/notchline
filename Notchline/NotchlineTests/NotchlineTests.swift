@@ -2580,27 +2580,39 @@ struct NotchlineTests {
     ///
     /// It used to be `80 × min(rows, 3)`, which is the same figure said as a
     /// count. Saying it as a height is what lets rows of two sizes share one
-    /// viewport, and it is why the queue needs no metric of its own: five
-    /// retired rows fit because `32 + 5 × 40 = 232` is inside `240` and a
-    /// sixth is `272`, which is outside. **That is the whole implementation of
-    /// "five, then scroll"** (§2.4 rule 02) — a twelve-deep queue is `512` of
-    /// content in a `240` viewport, carried by the scroller a fourth live row
-    /// already used, rather than by a second one.
+    /// viewport, and it is why the queue needs no metric of its own: with
+    /// nothing live, the apology's `48` and the seam's `32` leave `160`, so
+    /// `48 + 32 + 4 × 40 = 240` is the cap exactly and a fifth retired row is
+    /// `280`, which is outside. **That is the whole implementation of the
+    /// fold** (§2.4 rule 02) — a twelve-deep queue is `560` of content in a
+    /// `240` viewport, carried by the scroller a fourth live row already used,
+    /// rather than by a second one.
+    ///
+    /// ~~Five retired rows fit because `32 + 5 × 40 = 232` is inside `240`.~~
+    /// That arithmetic was for a viewport where an empty live list drew
+    /// nothing at all. It draws its apology again — `No active sessions` is
+    /// owed whenever nothing is running, queue or no queue (§4) — so the fold
+    /// with nothing live is four.
     @Test @MainActor
     func theViewportIsItsContentCappedAtTwoHundredAndForty() {
         // The arithmetic the fold rests on, asserted before anything derived
         // from it: a retired row is exactly half a live one, and the two
-        // figures either side of the cap are what decide five.
+        // figures either side of the cap are what decide four.
         #expect(PanelMetrics.retiredRowHeight == PanelMetrics.sessionRowHeight / 2)
         #expect(PanelMetrics.retiredRowHeight == 40)
         #expect(PanelMetrics.recentSeamHeight == 32)
+        #expect(PanelMetrics.thinExpandedBodyHeight == 48)
         #expect(PanelMetrics.sessionViewportCap == 240)
         #expect(
-            PanelMetrics.recentSeamHeight + PanelMetrics.retiredRowHeight * 5
-                <= PanelMetrics.sessionViewportCap
+            PanelMetrics.thinExpandedBodyHeight
+                + PanelMetrics.recentSeamHeight
+                + PanelMetrics.retiredRowHeight * 4
+                == PanelMetrics.sessionViewportCap
         )
         #expect(
-            PanelMetrics.recentSeamHeight + PanelMetrics.retiredRowHeight * 6
+            PanelMetrics.thinExpandedBodyHeight
+                + PanelMetrics.recentSeamHeight
+                + PanelMetrics.retiredRowHeight * 5
                 > PanelMetrics.sessionViewportCap
         )
 
@@ -2608,15 +2620,18 @@ struct NotchlineTests {
             live: Int, retired: Int, open: Bool,
             content: CGFloat, viewport: CGFloat, what: String
         )] = [
-            (0, 0, false, 0, 0, "nothing at all"),
+            // An empty live list asks for its own line, and it is the same `48`
+            // whether or not a seam follows it.
+            (0, 0, false, 48, 48, "nothing at all"),
             // A queue costs its seam whether or not it is open, and costs
             // nothing at all while it is empty: a zero is never drawn here.
-            (0, 0, true, 0, 0, "an empty queue, open"),
-            (0, 3, false, 32, 32, "nothing live, the queue folded"),
-            (0, 1, true, 72, 72, "one in the window, open"),
-            (0, 5, true, 232, 232, "five in the window, open"),
-            (0, 6, true, 272, 240, "six in the window, open"),
-            (0, 12, true, 512, 240, "twelve in the window, open"),
+            (0, 0, true, 48, 48, "an empty queue, open"),
+            (0, 3, false, 80, 80, "nothing live, the queue folded"),
+            (0, 1, true, 120, 120, "one in the window, open"),
+            (0, 4, true, 240, 240, "four in the window, open — the cap exactly"),
+            (0, 5, true, 280, 240, "five in the window, open"),
+            (0, 6, true, 320, 240, "six in the window, open"),
+            (0, 12, true, 560, 240, "twelve in the window, open"),
             (1, 0, false, 80, 80, "one live row, nothing retired"),
             (1, 4, false, 112, 112, "one live row, the queue folded"),
             (2, 4, false, 192, 192, "two live rows, the queue folded"),
@@ -2648,16 +2663,18 @@ struct NotchlineTests {
         }
     }
 
-    /// **A seam with nothing above it is still a list**, and that is what takes
-    /// the panel's floor down rather than up.
+    /// **The apology stands above the seam**, so the panel's floor is the same
+    /// `178` it has always been and a queue is `32` on top of it.
     ///
-    /// The apology is drawn for an empty *viewport*, not an empty live list
-    /// (`expanded-panel-v2.md` §4). An empty list stops spending `48` points
-    /// saying it is empty and spends `32` offering what the last five hours let
-    /// go of, so the floor moves from `178` to `162` — the one place in this
-    /// change where the panel gets smaller.
+    /// ~~A seam with nothing above it is still a list, and the apology is drawn
+    /// for an empty *viewport* rather than an empty live list, so the floor
+    /// moves from `178` to `162`.~~ That traded the one sentence this panel
+    /// exists to be able to say for `16` points: what has left is not what is
+    /// running, and `No active sessions` is owed whenever nothing is
+    /// (`expanded-panel-v2.md` §4). The floor comes back up, and the only thing
+    /// that ever grows it is a queue that has members.
     @Test @MainActor
-    func aSeamWithNothingAboveItIsStillAList() {
+    func theApologyStandsAboveTheSeam() {
         // Both products with the quota expanded, which is the form §4 tabulates.
         let footer: CGFloat = 84
 
@@ -2670,7 +2687,9 @@ struct NotchlineTests {
                 liveRowCount: 0,
                 retiredRowCount: 3,
                 footerHeight: footer
-            ) == PanelMetrics.recentSeamHeight + footer
+            ) == PanelMetrics.thinExpandedBodyHeight
+                + PanelMetrics.recentSeamHeight
+                + footer
         )
 
         #expect(
@@ -2686,7 +2705,7 @@ struct NotchlineTests {
                     liveRowCount: 0,
                     retiredRowCount: 3,
                     footerHeight: footer
-                ) == 162
+                ) == 210
         )
     }
 
@@ -3014,8 +3033,8 @@ struct NotchlineTests {
         )
     }
 
-    /// **The seam is what takes the panel's floor down**, and folding it never
-    /// closes the panel.
+    /// **The seam is what grows the panel above its floor**, and folding it
+    /// never closes the panel.
     ///
     /// §2.4 rule 07: the footer stands between the control and the bottom edge,
     /// so folding cannot take that edge past a pointer resting on the seam —
@@ -3036,22 +3055,25 @@ struct NotchlineTests {
             initialSnapshot: .connecting,
             clock: clock
         )
-        let rows = (0..<5).map { recentTestRow(thread: "thread-\($0)") }
+        // Four, which is what the viewport draws over an apology and a seam:
+        // `48 + 32 + 4 × 40` is the `240` cap exactly, so opening this queue
+        // costs every one of its rows and nothing is behind the fold.
+        let rows = (0..<4).map { recentTestRow(thread: "thread-\($0)") }
         store.applyForTesting(makeAgentSnapshot(.codex, sessions: rows))
         store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
         store.isExpanded = true
-        #expect(store.recentDepartures.count == 5)
+        #expect(store.recentDepartures.count == 4)
 
-        // Folded: a seam and nothing else, which is 32 of viewport where an
-        // empty list used to spend 48 saying it was empty.
+        // Folded: the apology and a seam under it, which is the panel's floor
+        // plus 32.
         #expect(!store.isRecentExpanded)
         let folded = store.currentPanelSize.height
         store.toggleRecent()
         let opened = store.currentPanelSize.height
         #expect(
             opened - folded
-                == PanelMetrics.retiredRowHeight * 5,
-            "five rows is what opening it costs"
+                == PanelMetrics.retiredRowHeight * 4,
+            "four rows is what opening it costs"
         )
 
         // Folding again, with the pointer where the seam was. The panel shrinks

@@ -647,25 +647,31 @@ private struct ExpandedPanelContent: View {
     @ViewBuilder
     private var sessionRegion: some View {
         Group {
-            // **The apology is drawn for an empty list, not an empty live
-            // list.** A seam with nothing above it is a list, and one that
-            // offers what the last five hours let go of is a better answer than
-            // one that says there is nothing (`expanded-panel-v2.md` §4).
+            // **The apology is drawn for an empty live list, and the queue is
+            // drawn under it.** It used to give way to a seam — a list that
+            // continues past its own end being a better answer than a sentence
+            // saying there is nothing — and that traded away the one line this
+            // panel exists to be able to say. What has left is not what is
+            // running, so `No active sessions` stands whenever nothing is
+            // (`expanded-panel-v2.md` §4).
             if store.sessions.isEmpty, store.recentDepartures.isEmpty {
-                Text(store.emptyListMessage)
-                    .font(.system(size: 13, weight: .light))
-                    .foregroundStyle(NotchPalette.label)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .frame(height: PanelMetrics.thinExpandedBodyHeight)
+                emptyListLabel
             } else {
                 // **One scroller over both halves**, which is the whole of how
-                // the queue draws five and scrolls past them: a seam and five
-                // retired rows is 232 inside the viewport's 240 and a sixth is
-                // 272, so the scroller a fourth live row already used carries
-                // the rest (§2.4 rule 02). A scroll view of its own here would
-                // chain against this one for nothing.
+                // the queue draws its fold and scrolls past it: the apology
+                // and a seam over four retired rows is 240 exactly, and a
+                // fifth is 280, so the scroller a fourth live row already used
+                // carries the rest (§2.4 rule 02). A scroll view of its own
+                // here would chain against this one for nothing.
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 0) {
+                        // The apology is one of the list's own lines, so it
+                        // scrolls with what is under it rather than pinning a
+                        // sentence over a queue somebody is reading.
+                        if store.sessions.isEmpty {
+                            emptyListLabel
+                        }
+
                         ForEach(store.sessions) { session in
                             SessionRow(session: session)
                         }
@@ -700,6 +706,16 @@ private struct ExpandedPanelContent: View {
                 .frame(height: 1)
                 .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
         }
+    }
+
+    /// The one line an empty live list draws, at the height it has always been
+    /// drawn at — `48`, whether or not a queue follows it.
+    private var emptyListLabel: some View {
+        Text(store.emptyListMessage)
+            .font(.system(size: 13, weight: .light))
+            .foregroundStyle(NotchPalette.label)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(height: PanelMetrics.thinExpandedBodyHeight)
     }
 }
 

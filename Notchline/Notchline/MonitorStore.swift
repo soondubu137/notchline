@@ -1122,12 +1122,23 @@ enum PanelMetrics {
     /// queue still costs its seam**, because the seam is the thing that says
     /// there is one; a queue with no members costs nothing at all, because a
     /// zero is never drawn anywhere on this surface.
+    ///
+    /// **With nothing live the list leads with its own apology, queue or no
+    /// queue**, and that is the `48` in place of the rows. The queue was read
+    /// for a while as the answer to an empty list — a seam and five things you
+    /// last did instead of a sentence saying there is nothing — and it is not:
+    /// what has left is not what is running, and the one line that says nothing
+    /// is running has to be sayable while the memory of the morning is still on
+    /// screen. So the apology is drawn for an empty *live list* again, and the
+    /// queue is drawn under it.
     static func sessionListContentHeight(
         liveRowCount: Int,
         retiredRowCount: Int = 0,
         isRecentExpanded: Bool = false
     ) -> CGFloat {
-        let live = sessionRowHeight * CGFloat(max(liveRowCount, 0))
+        let live = liveRowCount > 0
+            ? sessionRowHeight * CGFloat(liveRowCount)
+            : thinExpandedBodyHeight
         let retired = max(retiredRowCount, 0)
         guard retired > 0 else { return live }
         return live
@@ -1138,8 +1149,9 @@ enum PanelMetrics {
     /// That content, capped at what the viewport draws.
     ///
     /// **Everything past the cap scrolls, and that is not a new mechanic** — a
-    /// fourth live row already scrolled here. It is what gives the queue
-    /// "five, then scroll" for nothing (§2.4 rule 02).
+    /// fourth live row already scrolled here. It is what gives the queue its
+    /// fold for nothing (§2.4 rule 02): with nothing live, `48 + 32 + 4 × 40`
+    /// is the cap exactly and a fifth retired row scrolls.
     static func sessionViewportHeight(
         liveRowCount: Int,
         retiredRowCount: Int = 0,
@@ -1161,19 +1173,17 @@ enum PanelMetrics {
         isRecentExpanded: Bool = false,
         footerHeight: CGFloat = restingFooterHeight
     ) -> CGFloat {
-        let viewport = sessionViewportHeight(
+        // **The viewport is the whole of it, and there is no empty case left to
+        // special-case.** This used to fall back to ``thinExpandedBodyHeight``
+        // whenever the list asked for nothing, because the apology was drawn
+        // outside the list; the apology is the list's first line now, so an
+        // empty list already asks for its `48` and the two states differ only
+        // by whether a seam follows it (§4).
+        return sessionViewportHeight(
             liveRowCount: liveRowCount,
             retiredRowCount: retiredRowCount,
             isRecentExpanded: isRecentExpanded
-        )
-        // **The viewport decides this, not the live count.** Nothing live and
-        // nothing retired is the one state that draws an apology instead of a
-        // list; a seam with nothing above it is still a list, and `32` is what
-        // it costs (§4).
-        guard viewport > 0 else {
-            return thinExpandedBodyHeight + footerHeight
-        }
-        return viewport + footerHeight
+        ) + footerHeight
     }
 
     /// The expanded panel's width, which answers to a **count of working

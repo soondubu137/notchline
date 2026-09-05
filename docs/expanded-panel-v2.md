@@ -2,10 +2,11 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **§2 is built** (2026-09-05, five commits from `1f2f581` to this one) — the window, the seam, the rows under it and the clock, with `docs/PRD.md` amended for it. What is not built is any of it being *seen*: §9's last item stands. **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)** and is not built here.  ~~**Designed, not implemented.** §2 can be built on its own.~~ **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)**, which designs the whole answering experience and corrects four of its clauses; read that file instead, and keep this one for §2. |
-| Version | 2.1 |
+| Status | **§2 is built** (2026-09-05, five commits from `1f2f581` to this one) — the window, the seam, the rows under it and the clock, with `docs/PRD.md` amended for it. ~~What is not built is any of it being *seen*: §9's last item stands.~~ **Seen on the real panel** (2026-09-05, the amendment below), and §9's item says what was checked. **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)** and is not built here.  ~~**Designed, not implemented.** §2 can be built on its own.~~ **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)**, which designs the whole answering experience and corrects four of its clauses; read that file instead, and keep this one for §2. |
+| Version | 2.2 |
 | Date | 2026-09-04, amended 2026-09-05 |
 | Amended | **§2's queue is a five-hour window, not a five-row queue.** Membership is every row that left within the past five hours; five is now the number the viewport *draws* rather than the number the store *holds*. Touched: §2.2, §2.3, §2.4 (rules 01, 02, 05, 09 and a new 11), §2.5 (new), §2.6, §4, §5, §6, §7, §8.1, §8.5, §8.6, §9, §10. **No metric moves** — `32 + 5 × 40 = 232 ≤ 240 < 272` already said "five, then scroll", and it now says it about the fold instead of the store. One thing gets worse and is stated rather than finessed: the queue is now literally the "fixed time window" [`PRD.md`](PRD.md) §3 bans, and §8.1 rewrites that sentence instead of arguing with it. |
+| Amended | **`No active sessions` is drawn whenever nothing is live, queue or no queue** (2026-09-05). §2 let the seam take the sentence's place, on the reading that a list continuing past its own end is a better answer than an apology. It is a better answer to a different question: what has left is not what is running, and the panel was left unable to say the one thing it exists to say for as long as anything sat under the rule. The apology becomes the empty list's own first line, above the seam and inside the same scroller. Touched: §2.4 rule 02, §2.6, §4, §9, §10. **No metric moves, and the floor comes back up** — `178` again rather than `162`, with a folded queue `32` above it; the fold with nothing live is four rows rather than five, because `48 + 32 + 4 × 40` is the `240` cap exactly. |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `06 — The expanded panel` |
 | Scope | The expanded panel's session viewport only: the region between the band and the quota footer. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the footer is [`dual-agent-design.md`](dual-agent-design.md) §5, and both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None of the three is touched. |
 | Supersedes | [`figma-design.md`](figma-design.md) §5.1's "removed automatically" as the end of a row's life, and §5.3's fixed `Approval requested` string. Narrows two [`PRD.md`](PRD.md) §3 non-goals and moves a third — §8.1, §8.2. |
@@ -56,7 +57,7 @@ The ground family does not travel below the rule: bare / white / dim answers *wh
 | | Rule | |
 | --- | --- | --- |
 | 01 | **It is every row that left within the past five hours, not the last five threads.** Membership is a window, not a count: a row enters when it leaves the live list and stays until that departure is five hours old. Every member was still on the list a moment ago and was handed over by its product before it was ever given a row, so the queue remains unsearchable, unpageable, holds nothing the list did not itself hold, and can never contain a Thread this run has not watched. **Five hours is a constant, not a setting** — a window the user can widen is the history browser this app is not | §8.1 |
-| 02 | **Five is what the viewport draws, and it needs no rule of its own.** A retired row is half a live one and the seam is `32`, so a seam and five rows is `232` against the viewport's own `240`, and a sixth is `272`. The arithmetic that used to justify a five-element store now describes a five-row fold exactly: **the queue draws five and scrolls past them in the panel's own viewport** — no second scroller, no nested scroll chaining, no new metric, and nothing to snap. And the `8` points the viewport has left over fall in the sixth row's own top padding — a retired row is `12 + 16 + 12` — so **they carry no ink at all**. There is no partial line, no sliver of a subject, nothing to notice: an over-full queue is drawn exactly like a full one, `8` points taller. That is why §2.2 makes the count live. It is not a redundant hint; it is the only one | |
+| 02 | **What the viewport draws needs no rule of its own — and with nothing live it draws four.** ~~Five: a seam and five rows is `232` against the viewport's own `240`, and a sixth is `272`.~~ An empty live list still draws its own line, so the sum with nothing live is `48 + 32 + 4 × 40 = 240` — the cap exactly — and a fifth row is `280` (§4). **The queue draws its fold and scrolls past it in the panel's own viewport** — no second scroller, no nested scroll chaining, no new metric, and nothing to snap. ~~And the `8` points the viewport has left over fall in the sixth row's own top padding, so they carry no ink at all.~~ There is no slack left to fall anywhere: the fold lands on `240` exactly, so an over-full queue is drawn exactly like a full one and the row past the fold is simply not drawn. There is no partial line, no sliver of a subject, nothing to notice. That is why §2.2 makes the count live. It is not a redundant hint; it is the only one | §4 |
 | 03 | **It is empty at launch.** Nothing has departed yet. A stored queue would be the one thing on this surface promising navigation to a Thread nobody vouched for this run, which is exactly what [ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md) forbids the live list. Memory, not history | |
 | 04 | **A row that retires halves; it does not vanish.** Completed sorts last, so a retiring row is already at the foot of the live list and the seam is directly beneath it: it drops from `80` to `40`, gives up two of its three lines and its ground, and passes under the rule. One local exchange, nothing travelling. A row dismissed by hand from the middle of the list is the exception — removed and re-inserted, with only the halving drawn | |
 | 05 | ~~**Everything that left is in it, whatever took it out.**~~ **The three ways in are the rule, and "everything" was one word too many.** Read, dismissed, or dismissed while still running — and nothing else. A row can leave the live list without ending: a killed session is retired by App Server membership correction with its Turn still open, and a product going dark takes every row with it. Those vanished, they did not finish, and **vanishing is not archiving** (§2.5). The reading is an age rather than a duration, so it stays honest in all three; and nothing below the rule claims a status, because the rule's meaning is that the list stops there. **The window is measured from the departure instant, not from the Turn's end** — that is the moment this list stopped reporting the row, it is the only moment of the three the app itself observed, and it is what the age already counts | |
@@ -88,9 +89,11 @@ Three things follow, and each closes something the earlier draft left loose.
 
 ### 2.6 The cost, and when it is paid
 
-`32` whenever the queue is non-empty and the seam is on screen; `40 × min(N, 5)` more while unfolded — never more than the `208` the viewport has left once the seam has taken its `32`, however long the window's list has grown; **nothing at all at three live rows**, where the seam is below the fold and the viewport was already full.
+`32` whenever the queue is non-empty and the seam is on screen; `40 × N` more while unfolded — never more than what the viewport has left once the live list and the seam have taken theirs (`160` with nothing live), however long the window's list has grown; **nothing at all at three live rows**, where the seam is below the fold and the viewport was already full.
 
 **And the cost now ends by itself.** Five quiet hours take the seam away and return the panel to its `178` floor, with nothing to fold and nothing to dismiss. It is the only thing on this panel that tidies up after itself, and it is the reason an unbounded membership is affordable: the queue is long exactly while the last five hours were busy, which is exactly when a long one is worth having.
+
+**The floor it returns to is the floor it left**, and that is the whole of what the queue costs an empty panel: `32`, and the rows under it while somebody has them open. It never buys the apology's `48` back (§4).
 
 **That is also where the discoverability cost sits**, and it is paid deliberately. With three things waiting on you, what you finished twenty minutes ago is not the question. What makes it affordable is that the seam returns exactly when it gains a member: three live rows becoming two puts it at `192`, inside the viewport, at the moment something retires into it. Pinning the seam to the foot of the viewport was evaluated and declined — §8.5 question 01.
 
@@ -156,12 +159,14 @@ Empty, the white ground sits on `Approve`. The moment there is text in the field
 
 The panel is `panelHeight + viewport + footer`, with the viewport its content capped at `240`. At the `46` reference with both products and the quota expanded:
 
+**The apology stands above the seam, and every figure with nothing live carries its `48`.** ~~An empty list stops spending `48` points saying it is empty and spends `32` offering the five things you last did, so each connected form gets a new, lower floor.~~ That read the queue as an answer to the question `No active sessions` answers, and it is not one: **what has left is not what is running.** A panel that says nothing while a row from an hour ago sits under a rule is a panel with no way to state the one fact it exists to state, and the fact is wanted most in exactly that case — the queue's members are what make an empty live list look like a mistake. So the sentence is drawn whenever nothing is live, queue or no queue, and it is the list's own first line rather than a substitute for the list (§2.4 rule 02, amended 2026-09-05).
+
 | What is in the list | Content | Viewport | Panel | Today |
 | --- | --- | --- | --- | --- |
-| Nothing live, nothing retired | — | `48` | **178** | 178 |
-| Nothing live, the queue folded | `32` | `32` | **162** | 178 |
-| Nothing live, five in the window, open | `232` | `232` | **362** | 178 |
-| Nothing live, twelve in the window, open | `512` | `240` | **370** | 178 |
+| Nothing live, nothing retired | `48` | `48` | **178** | 178 |
+| Nothing live, the queue folded | `48 + 32` | `80` | **210** | 178 |
+| Nothing live, four in the window, open | `48 + 32 + 160` | `240` | **370** | 178 |
+| Nothing live, twelve in the window, open | `560` | `240` | **370** | 178 |
 | One live row, the queue folded | `112` | `112` | **242** | 210 |
 | Two live rows, the queue folded | `192` | `192` | **322** | 290 |
 | Three live rows — the seam is below the fold | `272` | `240` | **370** | 370 |
@@ -171,14 +176,14 @@ The panel is `panelHeight + viewport + footer`, with the viewport its content ca
 
 **Every row from the fourth down carries a folded queue**, and that is what its `32` is doing in the content column: `272` is three live rows *and a seam*, `352` is four and a seam, and `202` is one opened row and a seam. Read without it the column looks like it disagrees with §2.1 — which it does not, and a first attempt at pinning this table in a test failed on exactly that reading.
 
-**Each connected form gets a new floor**, because an empty list stops spending `48` points saying it is empty and spends `32` offering the five things you last did:
+**The floor does not move**, and the only thing that ever takes the panel above it is a queue with members in it:
 
-| Connected | Footer | Floor today | Floor now |
+| Connected | Footer | Floor | With a folded queue |
 | --- | --- | --- | --- |
-| Both products | `84` | 178 | **162** |
-| Claude Code alone | `53` | 147 | **131** |
-| Codex alone | `30` | 124 | **108** |
-| Either, quota folded | `22` | 116 | **100** |
+| Both products | `84` | **178** | 210 |
+| Claude Code alone | `53` | **147** | 179 |
+| Codex alone | `30` | **124** | 156 |
+| Either, quota folded | `22` | **116** | 148 |
 
 Width is [`expanded-header-v2.md`](expanded-header-v2.md)'s `520` in every state above.
 
@@ -262,17 +267,17 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 
 - [ ] A live row is `80`, the seam `32`, a retired row `40`, at every menu bar height.
 - [ ] The viewport is its content capped at `240`, and is `80 × min(rows, 3)` when nothing has retired.
-- [ ] The panel is `162` with nothing live and the queue folded, and `100` with the quota folded too.
+- [ ] The panel is `178` with nothing live and nothing retired, `210` with nothing live and the queue folded, and `148` with the quota folded too — and `No active sessions` is drawn in all three.
 - [ ] Three live rows draw no seam and cost the queue nothing; the third retiring puts the seam back inside the viewport.
 - [ ] A retiring row halves in place and the seam rises over it; nothing travels the length of the panel.
 - [ ] Nothing below the seam draws a status ground, and every age reads as an age.
-- [ ] **Not yet seen on the real panel:** the seam and a retired row are unit-tested but have never been drawn on screen — a row can only be archived after one has been vouched for, which the end-to-end harness is for. The blank `8` points at six or more, the hairline stopping short of the chevron, and the breadcrumb's fade are all visual claims resting on the code alone.
+- [x] ~~**Not yet seen on the real panel:** the seam and a retired row are unit-tested but have never been drawn on screen.~~ **Seen** (2026-09-05): a row staged through the Claude Code hook socket and dismissed by a secondary click draws the apology, `Recent · 1`, its hairline and chevron, and one retired row with its badge, breadcrumb and `now` — the panel `180` at one product with the quota folded. The blank `8` points went with the fold's arithmetic (§2.4 rule 02); a two-digit count and the breadcrumb's fade are still visual claims resting on the code alone.
 - [ ] The queue is empty at launch, admits every departure, and drops each one five hours after it left — with the panel open, folded, and never opened at all.
-- [ ] Six retirements draw five rows and a seam reading `Recent · 6`; the sixth is reached by the panel's own viewport scroller, and no second scroller appears anywhere.
+- [ ] With nothing live, five retirements draw the apology, four rows and a seam reading `Recent · 5`; the fifth is reached by the panel's own viewport scroller, and no second scroller appears anywhere.
 - [ ] Five quiet hours empty the queue, take the seam with them, and return the panel to its `178` floor with nothing left to fold.
 - [ ] No age reads `5h` or longer, and the age column never widens.
 - [ ] The seam's label and hairline redraw correctly at a two-digit count, with the hairline's trailing edge still at `508`.
-- [ ] At six or more in the window the panel is `370` and the last `8` points below the fifth row are empty — no partial line is drawn.
+- [ ] At five or more in the window with nothing live the panel is `370`, the fold lands on `240` exactly, and no partial line is drawn.
 - [ ] Folding the queue does not close the panel at any connected form.
 - [ ] Nothing is parked on the clock for the queue while the panel is shut, and a folded queue wakes only at a member's expiry.
 - [ ] The seam's hairline lands on the same `x` as the footer's rules and the band's matrix, in every attribution option.
@@ -289,14 +294,14 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 
 | Symbol | Change |
 | --- | --- |
-| ~~`PanelMetrics.sessionViewportHeight(forSessionCount:)`~~ **Built.** | Became a height rather than a row count: `sessionListContentHeight(liveRowCount:retiredRowCount:isRecentExpanded:)` capped at `sessionViewportCap`, which is the same `240`. `maximumVisibleSessionCount` retired with it, and `expandedContentHeight` now asks the *viewport* whether to draw the apology rather than the live count |
+| ~~`PanelMetrics.sessionViewportHeight(forSessionCount:)`~~ **Built.** | Became a height rather than a row count: `sessionListContentHeight(liveRowCount:retiredRowCount:isRecentExpanded:)` capped at `sessionViewportCap`, which is the same `240`. `maximumVisibleSessionCount` retired with it. ~~`expandedContentHeight` now asks the *viewport* whether to draw the apology rather than the live count.~~ **The apology is the empty list's own first line**, so `sessionListContentHeight` answers `48` for a live count of zero and `expandedContentHeight` has no empty case left to ask about (§4) |
 | `PanelMetrics` | **Built:** `retiredRowHeight = sessionRowHeight / 2` and `recentSeamHeight`. Still owed: `openRowHeight(requestLines:)`, which belongs to §3 |
 | ~~`MonitorStore`~~ **Built.** | `departuresByThread` holding every row that left within `recentWindow` (`5 × 3600`) with the reason it left, fed from `apply` — the one funnel every row leaves through, a dismissal included. `isRecentExpanded` beside `isQuotaExpanded`, on the key `recentExpanded`. Two things the design did not say, both forced by the code and both in §10.1 |
 | ~~`MonitorStore` (the clock)~~ **Built.** | **Eviction is a read-time filter, not a timer** — the queue is filtered as of `now` wherever it is republished, and opening the panel is a read, so a queue nobody watched for six hours is empty before it could be drawn. The tick covers only what that read cannot: a panel *held open* across a boundary. It runs while the panel is open and the queue has members, and sleeps to the next instant the panel is actually drawing — **which depends on the fold** (§10.2) |
-| ~~`NotchOverlayView`~~ **Built for §2.** | `RecentSeam` and `RetiredRow`, inside the list's **one** scroller rather than a second one, and `emptyListMessage` only when the queue is empty too. `SessionRow`'s open state belongs to §3 and is not built |
+| ~~`NotchOverlayView`~~ **Built for §2.** | `RecentSeam` and `RetiredRow`, inside the list's **one** scroller rather than a second one, and `emptyListMessage` ~~only when the queue is empty too~~ **whenever the live list is empty** — the seam's own scroller carries it, so it scrolls with what is under it rather than pinning a sentence over a queue somebody is reading. `SessionRow`'s open state belongs to §3 and is not built |
 | `OverlayPanelController` | Latching: key window on open, restore on close, and hover suspended for the duration (§8.3). **§3 only — not built** |
 
-**Nothing in `PanelMetrics` changes for this amendment.** The five-row fold is `240` doing what it already did, and the only new constant lives in the store.
+**Nothing in `PanelMetrics` changes for either amendment.** The fold is `240` doing what it already did — four rows with nothing live rather than five, because the apology's `48` is inside the sum now — and the only new constant lives in the store.
 
 ### 10.1 Two things the code settled that this document had not
 
