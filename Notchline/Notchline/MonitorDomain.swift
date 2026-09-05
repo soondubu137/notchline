@@ -751,34 +751,6 @@ nonisolated enum AggregateInk: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// One agent's share of the two totals, which is what the expanded band
-/// decomposes them into.
-///
-/// The counts are already on ``PresenceMark``; this is the pair of them read as
-/// one column, so the band and the bar cannot disagree about the same list.
-nonisolated struct AgentCounts: Equatable, Sendable, Identifiable {
-    let agent: AgentKind
-    let sessionCount: Int
-    let subagentCount: Int
-
-    nonisolated var id: AgentKind { agent }
-
-    /// What this column says out loud, since colour is the only thing on the
-    /// band saying whose a number is (`expanded-header-v2.md` §9).
-    ///
-    /// The dash is spoken as `none` rather than as a hyphen, and never as
-    /// zero sessions: it appears only in the subagent row.
-    nonisolated var spokenSummary: String {
-        let sessions = sessionCount == 1 ? "1 session" : "\(sessionCount) sessions"
-        let subagents = switch subagentCount {
-        case 0: "no subagents"
-        case 1: "1 subagent"
-        default: "\(subagentCount) subagents"
-        }
-        return "\(agent.displayName), \(sessions), \(subagents)"
-    }
-}
-
 /// One rate-limit window, and what is left of it.
 ///
 /// A window has a label because a product can have more than one. Codex has a
@@ -896,81 +868,40 @@ struct AgentSnapshot: Equatable, Sendable {
     )
 }
 
-/// How a row says which product it came from.
+/// One quota window as the footer's table draws it: a line of three columns.
 ///
-/// The first three live on the row's existing 11pt caption line, so none of them
-/// adds a stroke to the panel. ``colourBar`` does add one, and was left out for
-/// exactly that reason until the footer could fold its rules away — see
-/// `dual-agent-design.md` §4. A per-row matrix is still not offered: it puts a
-/// second mark on a row that is meant to carry one.
-enum ProductAttributionStyle: String, CaseIterable, Codable, Sendable, Identifiable {
-    /// The caption is prefixed `Codex ·` in that product's lit colour. The
-    /// prefix alone takes the colour; the Project after it stays the ordinary
-    /// caption grey, because the prefix is the whole of what the colour is
-    /// about. Default: the only option that adds nothing, and the only one
-    /// where hue reinforces the signal rather than being all of it — remove the
-    /// colour and the words still say it.
-    case nameAndColour
-    /// The same words in the ordinary caption grey. Geometry is identical, so
-    /// switching moves nothing, and it depends on colour not at all.
-    case nameOnly
-    /// A small badge: the matrix's unlit colour as the ground, its lit colour as
-    /// the text.
-    case badge
-    /// A rail down the row block's leading edge, in the product's lit colour,
-    /// and nothing on the caption at all.
-    ///
-    /// The only option that costs no caption room, and the only one that groups
-    /// — consecutive rows of one product read as a run rather than as three
-    /// separate rows. It is last rather than default because it is the only one
-    /// that is purely hue: nothing is left when the colour cannot be seen.
-    case colourBar
-
-    nonisolated var id: Self { self }
-
-    var displayName: String {
-        switch self {
-        case .nameAndColour: "Name and colour"
-        case .nameOnly: "Name only"
-        case .badge: "Badge"
-        case .colourBar: "Colour bar"
-        }
-    }
-
-    /// Whether the caption carries the product name.
-    ///
-    /// ``badge`` moves it into its own block and ``colourBar`` off the caption
-    /// entirely, so both leave the caption as the bare project name.
-    var namesProductInCaption: Bool {
-        self == .nameAndColour || self == .nameOnly
-    }
-
-    /// Whether the product name on the caption is drawn in that product's
-    /// colour.
-    ///
-    /// The name and nothing else: the Project beside it keeps the ordinary
-    /// caption grey under every style. The colour answers "which product", and
-    /// the Project is this row's own subject rather than a second saying of
-    /// that — colouring it too made the whole line read as the mark.
-    var tintsProductName: Bool {
-        self == .nameAndColour
-    }
-}
-
-/// One quota window as the footer draws it: a rule and the caption under it.
+/// **Three strings and no fill.** It carried a `0–1` share for the `496 × 3`
+/// rule that used to stand above the caption; the rule is gone
+/// (`quota-footer-v2.md` §1.1) — it drew as a length exactly what the caption
+/// two points to its right printed as a figure — and what is left is the three
+/// things that were in the caption, each now with a column of its own.
 nonisolated struct FooterWindow: Equatable, Sendable {
-    /// 0–1 remaining, or nil when the reading is unavailable.
-    let fill: Double?
-    let caption: String
+    /// What the product calls this window: `5 h`, `7 d`, or empty where the
+    /// product reports a single unlabelled one.
+    let label: String
+    /// `72% left`, or `-- left` where the reading could not be made.
+    let share: String
+    /// The countdown to the reset — `47m`, `2h`, `3d 12h` — or `--`.
+    let timer: String
+    /// What a screen reader hears in place of ``timer``, which keeps the
+    /// absolute day the column trades away (§7).
+    let spokenTimer: String
 }
 
-/// One product's row of quota rules.
+/// One product's group in the footer's table: the product outside, its windows
+/// inside.
 ///
-/// Codex spans the full width because it has one window; Claude Code is halved
-/// because it genuinely has two, a 5-hour session window and a 7-day one. The
-/// halving is not to make them fit — it is what having two windows looks like.
+/// **The two levels were always in this type.** Version 3.0 of the footer
+/// flattened them into one sorted list of windows; grouping is both truer to
+/// the data and what lets products keep Settings' order while windows keep the
+/// reader's (`quota-footer-v2.md` §8.6). Neither level sorts.
+///
+/// A product with no limits keeps its group and draws no inner lines — its
+/// spend is attributed, and the absence says there is nothing to report.
 nonisolated struct FooterRule: Identifiable, Equatable, Sendable {
     let agent: AgentKind
+    /// This product's own tokens for today: `310.1M today`, or `-- today`.
+    let today: SpendReading
     let windows: [FooterWindow]
 
     nonisolated var id: AgentKind { agent }
@@ -1459,20 +1390,35 @@ enum UsageSummaryFormatter {
         Double(max(0, tokenCount)).formatted(compactNumberStyle)
     }
 
-    /// Time remaining until the quota resets, as days and hours.
+    /// Time remaining until the quota resets, written as a countdown.
+    ///
+    /// **`47m`, `2h`, `3d 12h` — two units at most** (`quota-footer-v2.md` §5).
+    /// It used to read `Resets in 3 days 12 hours`, and the words were repeated
+    /// once a window down a column where every single line is a countdown. Days
+    /// pair with hours and nothing else does: an hour with minutes beside it
+    /// would be a precision this reading has not got, and the column is read to
+    /// find out roughly when, not exactly when.
     ///
     /// This reads the remaining *duration*, not calendar days: "Resets today"
-    /// was true at both 00:30 and 23:30 and told you nothing about which.
+    /// was true at both 00:30 and 23:30 and told you nothing about which. The
+    /// absolute day survives in ``spokenResetText(resetsAt:remainingPercent:now:)``
+    /// for anyone who wants Friday rather than four days (§7).
     ///
     /// A missing reset has two meanings and this tells them apart by what else
     /// the window knows. Claude Code's 5-hour window starts on the first
-    /// request, so until one is made there is no instant to count down to and
-    /// the line simply omits it -- an untouched window, not a failed reading.
-    /// Reported as "Reset unavailable" it read as the quota display being
-    /// broken, which is the one thing it was not. A window with nothing spent
-    /// and no reset has not started; any other missing reset is still a reading
-    /// this app could not make, and keeps saying so -- a *partly spent* window
-    /// with no reset is the documented signal that the output's wording moved.
+    /// request, so until one is made there is no instant to count down to --
+    /// an untouched window, not a failed reading, and it says `Not started`.
+    /// **Any other missing reset draws `--`**, which is the general rule for a
+    /// field this app could not read: replace the figure in its own place and
+    /// mark it in no other way (§8.3). It said `Reset unavailable`, which read
+    /// as the quota display being broken -- the one thing it was not.
+    ///
+    /// **The signal that rode the old wording survives the change.**
+    /// `non-public-codex-integration-features.md` lists a *consumed* window
+    /// showing a percentage but no reset among the signs that Claude Code's
+    /// `/usage` output has moved. What distinguishes it was never the words: it
+    /// is a spent window with no reset, against an unspent one at `100% left`
+    /// that reads `Not started`. After this it is a percentage beside a `--`.
     nonisolated static func resetText(
         resetsAt: Date?,
         remainingPercent: Int? = nil,
@@ -1480,51 +1426,107 @@ enum UsageSummaryFormatter {
         calendar: Calendar = .current
     ) -> String {
         guard let resetsAt else {
-            return remainingPercent == 100 ? "Not started" : "Reset unavailable"
+            return remainingPercent == 100 ? "Not started" : unreadable
         }
 
         let remaining = resetsAt.timeIntervalSince(now)
-        guard remaining > 0 else { return "Resets now" }
+        guard remaining > 0 else { return "Now" }
 
-        let totalHours = Int(remaining / 3600)
-        let days = totalHours / 24
-        let hours = totalHours % 24
+        let totalMinutes = max(1, Int(remaining / 60))
+        let days = totalMinutes / 1440
+        let hours = (totalMinutes % 1440) / 60
 
         switch (days, hours) {
-        case (0, 0):
-            return "Resets in under an hour"
-        case (0, _):
-            return "Resets in \(hours) \(plural(hours, "hour"))"
-        case (_, 0):
-            return "Resets in \(days) \(plural(days, "day"))"
-        default:
-            return "Resets in \(days) \(plural(days, "day")) "
-                + "\(hours) \(plural(hours, "hour"))"
+        case (0, 0): return "\(totalMinutes)m"
+        case (0, _): return "\(hours)h"
+        case (_, 0): return "\(days)d"
+        default: return "\(days)d \(hours)h"
         }
     }
 
-    nonisolated private static func plural(_ count: Int, _ noun: String) -> String {
-        count == 1 ? noun : noun + "s"
-    }
-
-    /// The footer line: everything about quota now lives here, so it carries the
-    /// remaining share as well as today's spend and the reset window.
-    nonisolated static func summary(
-        remainingPercent: Int?,
-        todayTokens: Int64?,
+    /// The same reset, spoken.
+    ///
+    /// `--` is a reading for the eye; a screen reader gets the word
+    /// `unavailable`, and gets the absolute instant where the column shows a
+    /// duration — `resets Friday at 09:00` beside a drawn `4d 6h` (§7).
+    nonisolated static func spokenResetText(
         resetsAt: Date?,
+        remainingPercent: Int? = nil,
         now: Date,
         calendar: Calendar = .current
     ) -> String {
-        let remainingText = remainingPercent.map { "\($0)% left" } ?? "-- left"
-        let usageText = todayTokens.map { "\(compactTokenCount($0)) today" }
-            ?? "-- today"
-        let reset = resetText(
-            resetsAt: resetsAt,
-            remainingPercent: remainingPercent,
-            now: now,
-            calendar: calendar
-        )
-        return "\(remainingText) · \(usageText) · \(reset)"
+        guard let resetsAt else {
+            return remainingPercent == 100 ? "not started" : "unavailable"
+        }
+        guard resetsAt.timeIntervalSince(now) > 0 else { return "resets now" }
+
+        return "resets \(resetsAt.formatted(weekday(calendar))) "
+            + "at \(resetsAt.formatted(clock(calendar)))"
+    }
+
+    /// `Friday`, and `09:00`, in the app's own language.
+    ///
+    /// Pinned to `en_GB` rather than left to the system locale for the same
+    /// reason every other user-readable string in this app is (`AGENTS.md` §1):
+    /// the sentence around it is British English, and half a sentence in
+    /// another language is worse than either.
+    nonisolated private static let spokenLocale = Locale(identifier: "en_GB")
+
+    nonisolated private static func weekday(_ calendar: Calendar) -> Date.FormatStyle {
+        var style = Date.FormatStyle.dateTime.weekday(.wide)
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
+        style.locale = spokenLocale
+        return style
+    }
+
+    nonisolated private static func clock(_ calendar: Calendar) -> Date.FormatStyle {
+        var style = Date.FormatStyle.dateTime.hour().minute()
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
+        style.locale = spokenLocale
+        return style
+    }
+
+    /// What every field this app could not read draws in its own place.
+    ///
+    /// Two characters, with the field's unit beside them where it has one:
+    /// `-- today`, `-- left`, and the timer's bare `--` because a countdown has
+    /// no unit to keep. Nothing is dimmed, no icon is drawn, and nothing
+    /// appears anywhere else on the panel to announce it (§8.3).
+    nonisolated static let unreadable = "--"
+
+    /// A window's share of what is left: `72% left`, or `-- left`.
+    nonisolated static func shareText(remainingPercent: Int?) -> String {
+        "\(remainingPercent.map { "\($0)%" } ?? unreadable) left"
+    }
+
+    /// A day's spend: `518.7M today`, or `-- today`.
+    nonisolated static func today(tokens: Int64?) -> SpendReading {
+        SpendReading(figure: tokens.map(compactTokenCount) ?? unreadable)
+    }
+}
+
+/// A day's spend, in the two parts it is drawn in.
+///
+/// **The unit is not the part that could not be read**, which is why they are
+/// held apart: an unreadable total draws `-- today`, keeping the word and
+/// replacing only the figure (`quota-footer-v2.md` §8.3). It is also how the
+/// line is drawn — the figure in `#C7C7CC` and `today` in `#7C7C80` — so the
+/// split the fallback needs and the split the drawing needs are one split.
+nonisolated struct SpendReading: Equatable, Sendable {
+    /// `518.7M`, or `--`.
+    let figure: String
+    /// `today`, always: this reading has one unit and it never changes.
+    let unit = "today"
+
+    /// The whole line, which is what a test and a screen reader read.
+    nonisolated var text: String { "\(figure) \(unit)" }
+
+    /// What the line says out loud — never the two characters, and never zero.
+    nonisolated var spokenText: String {
+        figure == UsageSummaryFormatter.unreadable
+            ? "Tokens today unavailable"
+            : "\(figure) tokens today"
     }
 }

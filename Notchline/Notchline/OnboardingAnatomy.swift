@@ -666,8 +666,10 @@ struct CollapsedBarAnatomy: View {
 /// with the rest faded away, because the panel and the bar and the legend were
 /// competing for one window's height; splitting the flow in two gave this block
 /// a page of its own, and the first thing that room bought back was the quota
-/// footer — three rate-limit rules and the day's tokens, which is a third of
-/// what the panel is *for* and was being taught by a fade.
+/// footer. That footer was then three rate-limit rules and the day's tokens;
+/// since `quota-footer-v2.md` §3 it is the day's tokens and the control that
+/// opens the rest, so the room the split bought is now spent on drawing the
+/// panel at rest rather than on a third of it.
 ///
 /// The scale is for the card rather than for the height: at `520` in a `532`
 /// card the panel meets both edges and its shoulders overhang the card's own
@@ -695,8 +697,8 @@ struct ExpandedPanelAnatomy: View {
                 + "what the agent is doing now, and ends in a reading that says "
                 + "whether it is running or waiting on you — or in a badge, "
                 + "where the turn has finished and a subagent has not. Under "
-                + "the list, each product's rate-limit windows and what both "
-                + "have spent today."
+                + "the list, what both have spent today, and a control that "
+                + "opens each product's rate-limit windows."
         )
     }
 
@@ -725,13 +727,13 @@ struct ExpandedPanelAnatomy: View {
         let caption = firstRow + 22
         let title = firstRow + 40
         let progress = firstRow + 59
-        // The footer, under the last row it leaves room for.
+        // The footer, under the last row it leaves room for, and the one line
+        // it draws at rest: today's spend, with the control on its trailing
+        // end.
         let footer = header + PanelMetrics.sessionViewportHeight(
             forSessionCount: store.sessions.count
         )
-        // The first rule's caption, and the totals line under both rules.
-        let rules = footer + 10
-        let today = size.height - 18
+        let spend = footer + PanelMetrics.quotaFoldControlSize / 2
 
         let placed: [(Int, CGFloat, CGFloat, AnatomyPin.Leader, String)] = [
             (1, leftMargin, header / 2, .right(gutter), "Same as above"),
@@ -745,11 +747,13 @@ struct ExpandedPanelAnatomy: View {
                 "Product · project · title"
             ),
             (4, leftMargin, progress, .right(gutter), "Live progress"),
-            (7, leftMargin, rules, .right(gutter), "Rate-limit windows"),
-            (8, leftMargin, today, .right(gutter), "Today’s tokens"),
+            (7, leftMargin, spend, .right(gutter), "Today’s tokens"),
             (2, rightMargin(of: size), header / 2, .left(gutter), "Settings"),
             (5, rightMargin(of: size), title, .left(gutter), "Waiting on you"),
-            (6, rightMargin(of: size), secondRow + 40, .left(gutter), "Subagents")
+            (6, rightMargin(of: size), secondRow + 40, .left(gutter), "Subagents"),
+            // The footer's other half, and the only control on it: the
+            // rate-limit windows are behind this rather than drawn at rest.
+            (8, rightMargin(of: size), spend, .left(gutter), "Rate limits")
         ]
 
         return placed

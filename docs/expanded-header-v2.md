@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Superseded in part by [`colour-v2.md`](colour-v2.md), which is the current contract for §4.** The band folds the marks, drops the name and keeps the totals — and **no longer decomposes the counts**. §4 entire, §4.4's inks, §5's per-agent state rows, §6.2's sizing by agent count, §7's last row, §9's first bullet and §10 questions 02, 03 and 05 are void with the columns; §4.1 survives whole and is now the whole of the decomposition section. What is left is a band drawing one mark and two totals, `53.8` of leading side at every agent count. |
+| Status | **Superseded in part by [`colour-v2.md`](colour-v2.md), which is the current contract for §4 and was built on 2026-09-05.** The band folds the marks, drops the name and keeps the totals — and **no longer decomposes the counts**. §4 entire, §4.4's inks, §5's per-agent state rows, §6.2's sizing by agent count, §7's last row, §9's first bullet and §10 questions 02, 03 and 05 are void with the columns; §4.1 survives whole and is now the whole of the decomposition section. What is left is a band drawing one mark and two totals, `53.8` of leading side at every agent count. |
 | Version | 2.1 |
 | Date | 2026-09-04 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `05 — The expanded header` |
@@ -207,7 +207,7 @@ A side asks `98.2` with two agents against a trailing side wanting `52`, so the 
 
 1. **Nothing, by construction.** The list, the footer, the collapsed forms and the settings window are untouched. The panel's baseline is unchanged and its height is unchanged.
 2. **One open hand-over.** The collapsed reading has nowhere to stand in the band, because the gear is there and the reading belongs to the row the panel puts first. §10, question 04.
-3. **One thing the band can no longer say: which agents are connected.** An agent with nothing running has no column, and an agent that has gone dark drains its rows and then has none either, so the two look alike up here. That is the cost of drawing what is running rather than what is installed. The footer names each connected product beside its quota rules, and Settings has the whole list. Recorded rather than solved — it is the one thing a colour-coded row of numbers cannot do.
+3. ~~**One thing the band can no longer say: which agents are connected.** An agent with nothing running has no column, and an agent that has gone dark drains its rows and then has none either, so the two look alike up here. That is the cost of drawing what is running rather than what is installed.~~ **Moot, and it is what [`colour-v2.md`](colour-v2.md) §3.1 turns into an argument for removing the columns entirely**: they were already answering a narrower question than they appeared to. The band says nothing per agent now. Each connected product is named in the footer's table beside its own windows, and Settings has the whole list.
 
 ## 9. Accessibility
 

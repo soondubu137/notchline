@@ -8,7 +8,7 @@
 > reference mark now stands for more than the mark.
 
 **Status: implemented.** The twelve `hint` inks are `AggregateInk`, the picker is
-the Display group's `Mark colour`, §5's five questions are answered below in the
+the Display group's `Theme colour` (`Mark colour` until [`colour-v2.md`](colour-v2.md) §6, built 2026-09-05), §5's five questions are answered below in the
 order they were asked, and §7 is what the row draws beside the names. What stays recorded rather than built is the other
 twenty-four entries — `whisper` and `tint` — which wait on an intensity control
 earning its place.

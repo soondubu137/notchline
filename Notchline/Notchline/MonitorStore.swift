@@ -296,85 +296,55 @@ enum PanelMetrics {
     /// The row's padding makes that gutter back up again, which is why the two
     /// are written against each other instead of both being spelled `6`: a row's
     /// text lands on `expandedHorizontalPadding` — the same margin as the matrix
-    /// above it and the quota rules below it — whatever that value becomes.
+    /// above it and the footer below it — whatever that value becomes.
     ///
-    /// The `Colour bar` attribution is the one exception, and it moves the
-    /// gutter rather than the padding — see ``sessionRowRailGutter``.
+    /// **Both are constants again.** The `Colour bar` attribution moved the
+    /// gutter to the panel's full inset so its rail would line up with the
+    /// matrix above; with the four presentations reduced to the badge
+    /// (`colour-v2.md` §6) there is no rail, and no form of the row gives up
+    /// its `6 + 6`.
     static let sessionRowGutter: CGFloat = 6
     static let sessionRowPadding: CGFloat = expandedHorizontalPadding
         - sessionRowGutter
-    /// The row block's margin while the `Colour bar` rail is drawn.
-    ///
-    /// The rail is flush with the block's leading edge, so the block's margin
-    /// is where the rail lands — and at the shared `6` it landed half the
-    /// panel's inset short of everything it is read against, the status matrix
-    /// above and the quota rules below. Widening the margin to the full
-    /// `expandedHorizontalPadding` puts the stroke on that same line. The two
-    /// stop being one margin split in two: the padding behind the stroke is the
-    /// rail's own (``sessionRowRailPadding``), and the row's text steps in
-    /// behind the rail rather than sitting on top of it. This applies only
-    /// while the rail is drawn — with one product connected there is no rail,
-    /// and the row keeps the `6 + 6` that lands its text on the panel's own
-    /// margin.
-    static let sessionRowRailGutter: CGFloat = expandedHorizontalPadding
-    /// The gap between the rail and the text it marks.
-    ///
-    /// Wider than the row's ordinary `6`, because this one is doing different
-    /// work: the ordinary padding is the row's inset from a panel edge, and
-    /// this is the clearance between a `2pt` stroke and the words beside it.
-    /// At `6` the two read as one object.
-    static let sessionRowRailPadding: CGFloat = 8
-    /// The `Colour bar` attribution rail, flush with the row block's leading
-    /// edge. It is narrower than the margin it sits on, so it marks the row
-    /// without crowding the block's own corner.
-    static let sessionRowRailWidth: CGFloat = 2
-    static let sessionRowRailRadius: CGFloat = 1
     /// The row's three text lines, as the row lays them out.
     ///
-    /// They live here rather than as literals in the view because the rail is
-    /// measured against them: it spans the row's text exactly, so a line height
-    /// that changed in the view and not here would leave the stroke running
-    /// past the words or stopping short of them.
-    static let sessionRowCaptionHeight: CGFloat = 14
-    /// The `Badge` caption is a point taller than the text line it replaces.
-    /// The rail never meets it — one style or the other — but the row does.
-    static let sessionRowBadgeCaptionHeight: CGFloat = 16
+    /// They live here rather than as literals in the view because the row's
+    /// content block is composed from them, so a line height that changed in
+    /// the view and not here would leave the wrong black under it.
+    ///
+    /// **The caption is `16` whether or not it carries a badge**
+    /// (`panel-v2.md` §2). The badge is a point taller than the `11 pt` line it
+    /// stands on, and holding the line at the badge's own height is what stops
+    /// every row moving at the moment a second product connects. The row is
+    /// still `80`: the content block absorbs it at `55`.
+    static let sessionRowCaptionHeight: CGFloat = 16
     static let sessionRowTitleHeight: CGFloat = 17
     static let sessionRowPreviewHeight: CGFloat = 18
     static let sessionRowLineSpacing: CGFloat = 2
 
-    /// The rail spans the row's text: the top of the Project caption to the
-    /// bottom of the last line, and nothing beyond it.
+    /// The chip that names a product, wherever the notch surface names one:
+    /// the row's caption line and the quota table's outer row
+    /// (`colour-v2.md` §4).
     ///
-    /// Half the row tall was a shape rather than a measurement — it marked the
-    /// row's middle and stopped short of both the caption above and the preview
-    /// below, so it read as a tick beside the row instead of as the row's own
-    /// edge. It takes the row's actual content because a row without a preview
-    /// is genuinely shorter: a fixed three-line stroke would overhang a
-    /// two-line row by `10` at each end, which is the same not-quite-aligned
-    /// mistake the gutter change just fixed.
-    static func sessionRowRailHeight(hasPreview: Bool) -> CGFloat {
-        let head = sessionRowCaptionHeight
-            + sessionRowLineSpacing
-            + sessionRowTitleHeight
-        guard hasPreview else { return head }
-        return head + sessionRowLineSpacing + sessionRowPreviewHeight
-    }
+    /// Its width is `6 + measured text + 6` and is never tabulated — the text
+    /// is real rendered text, so the chip is measured by drawing it rather than
+    /// by a table this file would have to keep in step with the font.
+    static let productBadgeHeight: CGFloat = 16
+    static let productBadgeRadius: CGFloat = 5
+    static let productBadgePadding: CGFloat = 6
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
-    static let footerRuleHeight: CGFloat = 3
-    /// A rule to its own caption.
+    /// A table line to the next one.
     static let footerCaptionSpacing: CGFloat = 5
-    /// One product's block to the next product's.
+    /// The spend line to whatever the control opened beneath it.
     static let footerRuleSpacing: CGFloat = 9
-    /// Between two half-width rules of the same product.
-    static let footerWindowSpacing: CGFloat = 8
     /// One line of the footer's `11pt` caption.
     ///
     /// Measured rather than derived, for the same reason
     /// ``sessionRowCaptionHeight`` is: every footer height below is composed
     /// from it, so a caption that changed size in the view and not here would
-    /// leave the wrong black under it.
+    /// leave the wrong black under it. It is also the air between one product
+    /// group and the next — one line of it.
     static let footerCaptionHeight: CGFloat = 14
 
     /// The black between the footer's last line and the panel's bottom edge.
@@ -392,37 +362,26 @@ enum PanelMetrics {
     /// a gap left by something that was taken away.
     static let footerBottomMargin: CGFloat = 6
 
-    /// One product's rule and the captions beneath it.
-    static let footerRuleBlockHeight: CGFloat = footerRuleHeight
+    /// One window's line in the table, and the gap after it.
+    static let footerWindowRowHeight: CGFloat = footerCaptionHeight
         + footerCaptionSpacing
-        + footerCaptionHeight
-    /// The same block where the disclosure rides the caption line rather than a
-    /// line of its own — the Codex-only form, §5.4. The control is a couple of
-    /// points taller than the caption it shares the line with, and the block
-    /// grows by exactly that.
-    static let footerInlineRuleBlockHeight: CGFloat = footerRuleHeight
-        + footerCaptionSpacing
-        + quotaFoldControlSize
-
-    /// Single-Codex footer: one rule, with today's tokens and the disclosure
-    /// on its caption line.
-    static let expandedFooterHeight: CGFloat = footerInlineRuleBlockHeight
-        + footerBottomMargin
-    /// Claude Code alone: two windows fill the caption line, so today's usage
-    /// needs a line of its own. This asymmetry between the two single-product
-    /// forms is known and accepted — it follows from one product having two
-    /// windows and the other having one.
-    static let claudeCodeOnlyFooterHeight: CGFloat = footerRuleBlockHeight
-        + footerRuleSpacing
-        + quotaFoldControlSize
-        + footerBottomMargin
-    /// Both products: two rule blocks and a shared usage line.
-    static let dualFooterHeight: CGFloat = footerRuleBlockHeight
-        + footerRuleSpacing
-        + footerRuleBlockHeight
-        + footerRuleSpacing
-        + quotaFoldControlSize
-        + footerBottomMargin
+    /// The window column's indent inside the footer's own content box.
+    ///
+    /// One more step of ``expandedHorizontalPadding``, which puts a window's
+    /// label at `24` on the panel — one step in from the `12` its product's
+    /// badge stands on. Indentation and the leader carry the level between
+    /// them, so no box, rule or divider is drawn (`quota-footer-v2.md` §5).
+    static let footerWindowIndent: CGFloat = expandedHorizontalPadding
+    /// Where the share column's trailing edge lands, measured inside the
+    /// footer's content box: `300` on the panel.
+    static let footerShareTrailingEdge: CGFloat = 300 - expandedHorizontalPadding
+    /// The clear space at each end of an outer row's leader.
+    ///
+    /// It starts `8` after the product's badge and stops `8` before that
+    /// product's spend (`quota-footer-v2.md` §5). Wider than the badge's own
+    /// `6` of padding because this is clearance between a hairline and two
+    /// things it joins, not an inset inside a chip.
+    static let footerLeaderClearance: CGFloat = 8
 
     /// The gear scales with the menu bar: `32` under a `46pt` bar, `20` under a
     /// `24pt` one. It is trailing-aligned inside the footer's content box, which
@@ -472,29 +431,61 @@ enum PanelMetrics {
         return ceil(centerOcclusionWidth + trailing * 2)
     }
 
-    /// Folded, the footer keeps today's line and nothing else.
+    /// The footer at rest: today's spend, the control, and nothing else.
     ///
-    /// One height for every shape, which is the point: folded, the expanded
-    /// panel is the same whether one product is connected or both, and its
-    /// height stops depending on what happens to be running. See §5.4.
-    static let foldedFooterHeight: CGFloat = quotaFoldControlSize
+    /// **`22`, at every connected form** — every product count, every window
+    /// count, and every share. It is the only closed height the footer has:
+    /// no window speaks, because there is no threshold for one to cross
+    /// (`quota-footer-v2.md` §4), so nothing the machine observes changes this
+    /// figure at all.
+    static let restingFooterHeight: CGFloat = quotaFoldControlSize
         + footerBottomMargin
-    /// The disclosure at the trailing end of the footer's last line.
+    /// The disclosure at the trailing end of the footer's spend line.
     static let quotaFoldControlSize: CGFloat = 16
 
-    /// Footer height by shape. See `dual-agent-design.md` §5.1 and §5.4.
-    static func footerHeight(rules: [FooterRule], isFolded: Bool = false) -> CGFloat {
-        // With no rules there is nothing to fold, so folding cannot shrink it.
-        if isFolded, !rules.isEmpty { return foldedFooterHeight }
-        if rules.count > 1 { return dualFooterHeight }
-        if rules.first?.windows.count ?? 0 > 1 { return claudeCodeOnlyFooterHeight }
-        return expandedFooterHeight
+    /// Footer height: the resting line, or the table somebody opened.
+    ///
+    /// **`22`, or `19W + 30P + 17`** (`quota-footer-v2.md` §2). The opened form
+    /// composes as the spend line and its gap (`16 + 9`), then one group per
+    /// product — a caption line carrying a badge at `16`, and `19` for each of
+    /// its windows — with `14` of air between groups and `6` below the last
+    /// line. Multiplied out that is `31 + Σ(16 + 19w) + 14(P − 1) + …`, which
+    /// is `19W + 30P + 17`.
+    ///
+    /// **Nothing connected is no footer at all**: no products, no windows and
+    /// no tokens is nothing to say, and a wing with nothing to say is removed
+    /// rather than left blank (§8.5 question 07).
+    static func footerHeight(
+        productCount: Int,
+        windowCount: Int,
+        isExpanded: Bool = false
+    ) -> CGFloat {
+        guard productCount > 0 else { return 0 }
+        guard isExpanded else { return restingFooterHeight }
+
+        return quotaFoldControlSize
+            + footerRuleSpacing
+            + CGFloat(productCount) * productBadgeHeight
+            + CGFloat(windowCount) * footerWindowRowHeight
+            + CGFloat(productCount - 1) * footerCaptionHeight
+            + footerBottomMargin
+    }
+
+    /// The same height, asked of the rules themselves.
+    static func footerHeight(rules: [FooterRule], isExpanded: Bool = false) -> CGFloat {
+        footerHeight(
+            productCount: rules.count,
+            windowCount: rules.reduce(0) { $0 + $1.windows.count },
+            isExpanded: isExpanded
+        )
     }
     static let thinExpandedBodyHeight: CGFloat = 48
+    /// Three live rows over a footer at rest, which is the panel's cap: `308`
+    /// at every connected form, every working-agent count and every share.
     static let expandedContentHeight: CGFloat = expandedSessionViewportHeight
-        + expandedFooterHeight
+        + restingFooterHeight
     static let thinExpandedContentHeight: CGFloat = thinExpandedBodyHeight
-        + expandedFooterHeight
+        + restingFooterHeight
     /// The status matrix is a fixed size, not a share of the menu bar.
     ///
     /// Taken from the indicator-to-text ratio at loaders.wtf — a 92pt indicator
@@ -616,62 +607,25 @@ enum PanelMetrics {
     /// Where the subagents numeral stands: on the matrix's bottom edge.
     static let countsSubagentBaseline: CGFloat = 0
 
-    /// What an agent with sessions and no subagents reads in the lower row.
-    ///
-    /// An en dash, and only ever in that row: the totals cannot show one,
-    /// because that row is drawn at all only when the total is at least one
-    /// (`expanded-header-v2.md` §4.3 rule 06).
-    static let countsDashText = "\u{2013}"
-
     // MARK: - The expanded band
 
-    /// Between the totals and the parts they decompose into.
+    /// The band's leading side: the collapsed bar's own group, and nothing
+    /// after it.
     ///
-    /// ``expandedReadoutSpacing`` -- the panel's own spacing, and the gap the
-    /// status name used to take.
-    static var totalsToPartsSpacing: CGFloat { expandedReadoutSpacing }
-
-    /// Between two agents' columns.
+    /// **`53.8` at every agent count** (`colour-v2.md` §3). It used to grow
+    /// `19.2` an agent, for one column of numbers per working agent in that
+    /// agent's own inks; the decomposition is gone with the product hues that
+    /// were the only thing on it saying whose a number was, so the band draws
+    /// the aggregate mark and the accumulated totals and stops.
     ///
-    /// ``compactMatrixSpacing``, which is where the pair of matrices used to
-    /// stand off each other: this row of columns is that pair, read as numbers.
-    static var agentColumnSpacing: CGFloat { compactMatrixSpacing }
-
-    /// One agent's column, at the room it holds: two digits, whatever it draws.
-    ///
-    /// **The band reserves where the bar hugs**, and that is the panel being a
-    /// panel: it is sized from a baseline rather than from its contents, so a
-    /// column gaining a digit inside it cannot widen anything and the room has
-    /// to be there already. The price is visible at one digit -- two single
-    /// digits stand `12.6` apart with `6.6` of held room between them -- and it
-    /// is paid in black rather than in width.
-    static var agentColumnWidth: CGFloat { reservedCountsColumnWidth }
-
-    /// Every working agent's column, packed, with the gaps between them.
-    ///
-    /// Zero and one are both nothing: with one working agent there is nothing
-    /// to decompose, because that column would repeat the totals digit for
-    /// digit in a second ink (§4.3 rule 07).
-    static func agentColumnsWidth(workingAgentCount: Int) -> CGFloat {
-        guard workingAgentCount > 1 else { return 0 }
-        return CGFloat(workingAgentCount) * agentColumnWidth
-            + CGFloat(workingAgentCount - 1) * agentColumnSpacing
-    }
-
-    /// The band's leading side: the collapsed bar's own group, then the parts.
-    ///
-    /// `53.8` with nothing to decompose, `98.2` at two working agents, and
-    /// `19.2` for each one after that. All of it is the numbers -- the identity
-    /// is the ink they are already drawn in, which asks for no width at all.
-    static func expandedLeadingSideWidth(workingAgentCount: Int) -> CGFloat {
-        let columns = agentColumnsWidth(workingAgentCount: workingAgentCount)
-        return expandedHorizontalPadding
-            + statusMatrixSize
-            + aggregateCountsGap
-            + reservedCountsColumnWidth
-            + (columns > 0 ? totalsToPartsSpacing + columns : 0)
-            + expandedNotchClearance
-    }
+    /// The consequence is that **the leading group is now identical collapsed
+    /// and expanded** — mark at `12`, totals at `32.6`, nothing appearing on
+    /// hover and nothing moving.
+    static let expandedLeadingSideWidth: CGFloat = expandedHorizontalPadding
+        + statusMatrixSize
+        + aggregateCountsGap
+        + reservedCountsColumnWidth
+        + expandedNotchClearance
 
     /// The band's trailing side: the one control this surface has.
     static func expandedTrailingSideWidth(compactHeight: CGFloat) -> CGFloat {
@@ -954,11 +908,6 @@ enum PanelMetrics {
         compactHeight: CGFloat,
         status: MonitorStatus = .connected,
         matrixCount: Int = 1,
-        // How many agents have anything at all on the list, which is the one
-        // thing the expanded panel's width answers to. Not how many are
-        // configured and not how many are connected: what the band shows is
-        // what is running (`expanded-header-v2.md` §4.3 rule 04).
-        workingAgentCount: Int = 1,
         // Rows on the monitored list. The collapsed leading wing is billed for
         // the numerals that counts them (`countsColumnWidth(sessionCount:)`),
         // and for nothing per product: one mark stands for every product at
@@ -984,10 +933,7 @@ enum PanelMetrics {
                 )
             }
             return CGSize(
-                width: expandedWidth(
-                    centerOcclusionWidth: centerOcclusionWidth,
-                    workingAgentCount: workingAgentCount
-                ),
+                width: expandedWidth(centerOcclusionWidth: centerOcclusionWidth),
                 height: compactHeight + expandedContentHeight
             )
         }
@@ -1140,7 +1086,7 @@ enum PanelMetrics {
 
     static func expandedContentHeight(
         forSessionCount sessionCount: Int,
-        footerHeight: CGFloat = expandedFooterHeight
+        footerHeight: CGFloat = restingFooterHeight
     ) -> CGFloat {
         guard sessionCount > 0 else {
             return thinExpandedBodyHeight + footerHeight
@@ -1166,27 +1112,21 @@ enum PanelMetrics {
     /// nil while expanded), so the leading side can only be widened by widening
     /// both. The trailing side wants a gear and no more, and never binds here.
     ///
-    /// The branch is `520` at every cut-out this product meets up to **four**
-    /// working agents: a side asks `98.2` with two, so the baseline is passed
-    /// only where the cut-out is wider than `520 − 196.4 = 323.6`, half again
-    /// the widest cut-out on any Mac. `expandedNotchClearance` therefore stays
-    /// as the guard that this band clears the hardware and stops being the rule
+    /// The branch is `520` at every cut-out this product meets, and now at
+    /// every agent count too: a side asks `53.8`, so the baseline is passed
+    /// only where the cut-out is wider than `520 − 107.6 = 412.4`, twice the
+    /// widest cut-out on any Mac. `expandedNotchClearance` therefore stays as
+    /// the guard that this band clears the hardware and stops being the rule
     /// that decides a width.
     ///
-    /// - Parameter workingAgentCount: How many agents have anything at all on
-    ///   the list. Not how many are configured, and not how many are connected:
-    ///   what the band shows is what is running (§4.3 rule 04).
-    static func expandedWidth(
-        centerOcclusionWidth: CGFloat,
-        workingAgentCount: Int = 1
-    ) -> CGFloat {
+    /// **It answers to nothing but the cut-out.** The working-agent count left
+    /// with the decomposition (`colour-v2.md` §3), which was the only term on
+    /// either side that read one — so the width series is one number.
+    static func expandedWidth(centerOcclusionWidth: CGFloat) -> CGFloat {
         guard centerOcclusionWidth >= 1 else {
             return expandedBaselineWidth
         }
-        let requiredSideWidth = expandedLeadingSideWidth(
-            workingAgentCount: workingAgentCount
-        )
-        let notchSafeWidth = centerOcclusionWidth + requiredSideWidth * 2
+        let notchSafeWidth = centerOcclusionWidth + expandedLeadingSideWidth * 2
 
         return ceil(max(expandedBaselineWidth, notchSafeWidth))
     }
@@ -1383,26 +1323,23 @@ final class MonitorStore: ObservableObject {
     /// The products whose hooks are being written or removed right now.
     @Published private(set) var integrationBusyAgents: Set<AgentKind> = []
     @Published var isExpanded = false
-    /// How a row says which product it came from. Only drawn while both
-    /// products are connected; see ``showsProductAttribution``.
-    @Published var productAttribution: ProductAttributionStyle {
-        didSet {
-            preferences?.set(
-                productAttribution.rawValue,
-                forKey: Self.productAttributionDefaultsKey
-            )
-        }
-    }
-    /// Whether the footer is showing today's line alone.
+    /// Whether somebody has opened the quota table.
+    ///
+    /// **A rename rather than a flipped boolean**, and the change is meant to
+    /// be visible in review: it was `isQuotaFolded`, defaulting to `false`,
+    /// because the footer *was* four quota rules and folding was the escape
+    /// from them. Since `quota-footer-v2.md` §8.1 the small form is what the
+    /// footer **is** — one number and a control, `22` at every product count,
+    /// every window count and every share — and the table is a thing somebody
+    /// asks for. So the default inverts with the name.
     ///
     /// One state for the whole footer, not one per product: the two share a
-    /// footer, and folding one product's rules while the other's stayed would
-    /// be a shape nothing in §5.1 describes. Remembered across openings so a
-    /// user who wants the quiet footer does not re-fold it every time, and it
-    /// defaults to unfolded so the rules are what a first open shows.
-    @Published var isQuotaFolded: Bool {
+    /// footer, and opening one product's windows while the other's stayed shut
+    /// would be a shape nothing describes. Remembered across openings, so a
+    /// user who wants the table does not re-open it every time.
+    @Published var isQuotaExpanded: Bool {
         didSet {
-            preferences?.set(isQuotaFolded, forKey: Self.quotaFoldedDefaultsKey)
+            preferences?.set(isQuotaExpanded, forKey: Self.quotaExpandedDefaultsKey)
         }
     }
     /// Whether the collapsed surface gives up its wings and leaves the cut-out
@@ -1516,8 +1453,7 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var lastIntegrationMessage: String
     @Published private(set) var hasCompletedOnboarding: Bool
 
-    private static let productAttributionDefaultsKey = "productAttribution"
-    private static let quotaFoldedDefaultsKey = "quotaFolded"
+    private static let quotaExpandedDefaultsKey = "quotaExpanded"
     private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
     private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
     private static let namesWorkOnPillDefaultsKey = "namesWorkOnPill"
@@ -1633,15 +1569,16 @@ final class MonitorStore: ObservableObject {
         // Through the injected store, not `.standard`. These used to read
         // `.standard` directly while only the display preference was injected,
         // so a `MonitorStore` built in a test inherited whoever was running it:
-        // `rowsAreAttributedForAsLongAsBothProductsAreConnected` failed on any
-        // machine whose owner had chosen `Badge` in Settings, and passed on
+        // an attribution test failed on any machine whose owner had chosen
+        // `Badge` in the picker that used to be in Settings, and passed on
         // every other, which is a test reporting on the developer rather than
         // on the code.
-        self.productAttribution = preferences?.string(
-            forKey: Self.productAttributionDefaultsKey
-        ).flatMap(ProductAttributionStyle.init(rawValue:)) ?? .nameAndColour
-        self.isQuotaFolded = preferences?.object(
-            forKey: Self.quotaFoldedDefaultsKey
+        //
+        // `object(forKey:)` rather than `bool(forKey:)` so an install that has
+        // never opened the table is told apart from one that opened and shut
+        // it — the two agree today, and would not if this default ever moved.
+        self.isQuotaExpanded = preferences?.object(
+            forKey: Self.quotaExpandedDefaultsKey
         ) as? Bool ?? false
         self.hidesCompactWings = preferences?.bool(
             forKey: Self.hidesCompactWingsDefaultsKey
@@ -1797,10 +1734,6 @@ final class MonitorStore: ObservableObject {
     /// the menu bar band on every other one.
     var compactHeight: CGFloat {
         selectedDisplay?.panelBandHeight ?? PanelMetrics.referenceCompactHeight
-    }
-
-    var tokenRemainingPercent: Int? {
-        quota.remainingPercent
     }
 
 
@@ -2091,46 +2024,6 @@ final class MonitorStore: ObservableObject {
         return sessions.map(\.projectName).filter { seen.insert($0).inserted }
     }
 
-    /// The parts the band decomposes the totals into: one column per
-    /// **working** agent, in Settings' order, packed.
-    ///
-    /// **Working, not configured and not connected.** An agent with nothing at
-    /// all leaves the band, because the sum is still on the surface beside it
-    /// (`expanded-header-v2.md` §4.3 rule 04): what the band shows is what is
-    /// running rather than what is installed. Nothing re-sorts — not by count,
-    /// not by urgency, not by which agent moved last — so an agent that empties
-    /// gives its room back and the columns after it close up.
-    ///
-    /// **Empty at one working agent**, where there is nothing to decompose: a
-    /// lone column would repeat the totals digit for digit in a second ink, so
-    /// the band draws the totals alone in grey and colour arrives with the
-    /// second working agent (rule 07).
-    var expandedAgentColumns: [AgentCounts] {
-        let working = presenceMarks.compactMap { mark -> AgentCounts? in
-            guard let agent = mark.agent, mark.sessionCount > 0 else { return nil }
-            return AgentCounts(
-                agent: agent,
-                sessionCount: mark.sessionCount,
-                subagentCount: mark.subagents.count
-            )
-        }
-        return working.count > 1 ? working : []
-    }
-
-    /// How many agents have anything at all on the list, which is what the
-    /// expanded panel's width answers to.
-    var workingAgentCount: Int {
-        presenceMarks.filter { $0.agent != nil && $0.sessionCount > 0 }.count
-    }
-
-    /// Whether the band draws its subagent row at all.
-    ///
-    /// **Anywhere, not per column.** The row is drawn when there are subagents
-    /// on any agent, and then every column fills it — with a dash where an
-    /// agent has none — so the band keeps one baseline at a time rather than
-    /// one per agent (§4.3 rule 05).
-    var expandedDrawsSubagentRow: Bool { aggregateSubagentCount > 0 }
-
     /// The aggregate mark's ink: the user's hue once a product is behind it,
     /// the resting grey until then.
     var aggregateMatrixInk: NotchPalette.MatrixInk {
@@ -2350,139 +2243,124 @@ final class MonitorStore: ObservableObject {
         connectedAgents.count > 1 || Set(sessions.map(\.agent)).count > 1
     }
 
-    /// Whether rows draw the leading attribution rail.
+    /// One group per connected product, in Settings' order, each holding its
+    /// own windows in the order the product published them.
     ///
-    /// The style is a preference, but the rail is only ever drawn on the same
-    /// terms as every other attribution: while there are two products to tell
-    /// apart. One product connected and the rows are unmarked whatever the
-    /// picker says, which is why the geometry below is asked of the store
-    /// rather than read off the style.
-    var showsSessionRowRail: Bool {
-        showsProductAttribution && productAttribution == .colourBar
-    }
-
-    /// The row block's leading and trailing margin, which the rail widens.
+    /// Exactly as many groups as the notch has marks: the footer reports on the
+    /// products that are there. **A product with no limits keeps its group**
+    /// and draws no inner lines — its spend is attributed, and the absence says
+    /// there is nothing to report. That is also how a connected product this
+    /// app does not yet read quota for appears: present and counted, with
+    /// nothing claimed about it (`quota-footer-v2.md` §5).
     ///
-    /// Unmarked rows keep the `6` that puts their text on the panel's own
-    /// margin; a marked row gives the rail that margin instead, so the stroke
-    /// lines up with the matrix above and the quota rules below. See
-    /// ``PanelMetrics/sessionRowRailGutter``.
-    var sessionRowGutter: CGFloat {
-        showsSessionRowRail
-            ? PanelMetrics.sessionRowRailGutter
-            : PanelMetrics.sessionRowGutter
-    }
-
-    /// The row's own horizontal padding, which the rail widens to clear itself.
-    ///
-    /// Unmarked, it is the other half of the panel's margin. Marked, it stops
-    /// being a margin at all and becomes the gap between the stroke and the
-    /// words — see ``PanelMetrics/sessionRowRailPadding``.
-    var sessionRowPadding: CGFloat {
-        showsSessionRowRail
-            ? PanelMetrics.sessionRowRailPadding
-            : PanelMetrics.sessionRowPadding
-    }
-
-    /// One rule block per connected product, in display order.
-    ///
-    /// Exactly as many rules as the notch has marks: the footer reports on the
-    /// products that are there, and a product that is not connected has no rows
-    /// and no quota worth drawing.
+    /// **Nothing on this list is sorted, at either level.** Products keep
+    /// Settings' order and windows keep the reader's — `Current session:` as
+    /// `5 h` before `Current week (all models):` as `7 d` — so this accessor
+    /// maps `snapshot.quota.windows` straight through. A sort by share was
+    /// written and then overruled: the objection is not that an order indicates
+    /// something, it is that it **moves**, and a share crossing another share
+    /// would have re-ordered two rows for a reason nobody asked about. It also
+    /// keeps one list to one order — `Quota.remainingPercent` reads
+    /// `windows.first`, so a sort here would have made the table's first inner
+    /// row a different window from the one every single-rule surface calls
+    /// first.
     var footerRules: [FooterRule] {
         let now = clock.now()
-        return connectedAgents.compactMap { agent in
-            guard let snapshot = latestByAgent[agent] else { return nil }
-            let windows = snapshot.quota.windows.map { window in
-                FooterWindow(
-                    fill: window.remainingPercent.map { Double($0) / 100 },
-                    caption: Self.caption(for: window, now: now)
-                )
-            }
-            guard !windows.isEmpty else { return nil }
-            return FooterRule(agent: agent, windows: windows)
+        return quotaProducts.map { agent, quota in
+            FooterRule(
+                agent: agent,
+                today: UsageSummaryFormatter.today(tokens: quota.todayTokens),
+                windows: quota.windows.map { Self.footerWindow(for: $0, now: now) }
+            )
         }
     }
 
-    /// One window's caption: its label when it has one, then what is left and
-    /// when it resets.
-    private static func caption(for window: QuotaWindow, now: Date) -> String {
-        let remaining = window.remainingPercent.map { "\($0)% left" } ?? "-- left"
-        let reset = UsageSummaryFormatter.resetText(
-            resetsAt: window.resetsAt,
-            remainingPercent: window.remainingPercent,
-            now: now
+    /// Every connected product this app has a reading for, in Settings' order.
+    ///
+    /// **The footer's shape without the footer's strings.** Building a
+    /// `FooterRule` formats a countdown and a spoken date per window, and the
+    /// panel asks the footer three questions on every render that only need the
+    /// *shape*: is there a control, how tall is the box, and what has been spent
+    /// today. Those read this instead, so the formatting is paid once, by the
+    /// table, and only while somebody has it open (`AGENTS.md` §7 — a re-render
+    /// costs what the whole overlay costs, so what a render does at rest is the
+    /// number that matters).
+    private var quotaProducts: [(agent: AgentKind, quota: QuotaSnapshot)] {
+        connectedAgents.compactMap { agent in
+            latestByAgent[agent].map { (agent, $0.quota) }
+        }
+    }
+
+    /// One window's line: its label, its share, and the countdown to its reset.
+    ///
+    /// Three columns where there was one caption. `Resets in` is gone with the
+    /// prose — repeated once a window it was noise, and what the column holds
+    /// is a countdown, so it is written like every other countdown on this
+    /// panel (§5).
+    private static func footerWindow(
+        for window: QuotaWindow,
+        now: Date
+    ) -> FooterWindow {
+        FooterWindow(
+            label: window.label,
+            share: UsageSummaryFormatter.shareText(
+                remainingPercent: window.remainingPercent
+            ),
+            timer: UsageSummaryFormatter.resetText(
+                resetsAt: window.resetsAt,
+                remainingPercent: window.remainingPercent,
+                now: now
+            ),
+            spokenTimer: UsageSummaryFormatter.spokenResetText(
+                resetsAt: window.resetsAt,
+                remainingPercent: window.remainingPercent,
+                now: now
+            )
         )
-        let body = "\(remaining) · \(reset)"
-        return window.label.isEmpty ? body : "\(window.label) · \(body)"
     }
 
-    /// The bottom line: every product's tokens for today, on one line.
+    /// The footer's one line at rest: every connected product's tokens for
+    /// today, as a whole.
     ///
-    /// Nil for the single-Codex footer, which keeps today's inline form — one
-    /// window leaves room in the caption, so a second line would be a line of
-    /// whitespace with three words in it.
-    var footerTodayText: String? {
-        let rules = footerRules
-        guard rules.count > 1 || (rules.first?.windows.count ?? 0) > 1 else {
-            return nil
+    /// **It is not broken into products here.** The word that says whose a
+    /// number is costs width on this line and costs nothing in the table, where
+    /// every figure sits beside its own product's name — so the parts that used
+    /// to trail this line moved to the table's outer rows, and the collapsed
+    /// footer names nobody (§3).
+    ///
+    /// Unreadable, it draws `-- today` in the place `518.7M today` would have
+    /// had, and nothing else on the panel changes (§8.3).
+    var footerToday: SpendReading {
+        let totals = quotaProducts.compactMap(\.quota.todayTokens)
+        guard !totals.isEmpty else {
+            return UsageSummaryFormatter.today(tokens: nil)
         }
-        return Self.todayLine(for: rules, tokensBy: todayTokens)
+        return UsageSummaryFormatter.today(tokens: totals.reduce(0, +))
     }
 
-    /// Today's tokens as the folded footer prints them.
+    /// The control is drawn whenever there is at least one connected product.
     ///
-    /// Folded there is no rule caption left to ride, so every shape needs this
-    /// line — including single-Codex, which does without one while its rule is
-    /// showing because the tokens are inline in that caption.
-    var foldedTodayText: String {
-        Self.todayLine(for: footerRules, tokensBy: todayTokens)
-    }
+    /// It does not wait for anything to be close: a control that appeared only
+    /// in trouble would be one nobody had used at the moment they first needed
+    /// it (§8.5 question 06). With nothing connected there is no footer at all.
+    var showsQuotaFoldControl: Bool { !quotaProducts.isEmpty }
 
-    /// Nothing to fold when quota is unavailable and no rule is drawn.
-    var showsQuotaFoldControl: Bool { !footerRules.isEmpty }
-
-    func toggleQuotaFold() { isQuotaFolded.toggle() }
-
-    private func todayTokens(for agent: AgentKind) -> Int64? {
-        latestByAgent[agent]?.quota.todayTokens
-    }
-
-    /// Every connected product's tokens for today, on one line.
+    /// Open the table, or shut it.
     ///
-    /// The product is named only when there are two of them. With one connected
-    /// there is nothing to tell apart, so naming it is the same redundancy the
-    /// rows already avoid — see ``showsProductAttribution``.
-    private static func todayLine(
-        for rules: [FooterRule],
-        tokensBy tokens: (AgentKind) -> Int64?
-    ) -> String {
-        let names = rules.count > 1
-        let parts = rules.compactMap { rule -> String? in
-            guard let count = tokens(rule.agent) else { return nil }
-            let compact = UsageSummaryFormatter.compactTokenCount(count)
-            return names ? "\(rule.agent.displayName) \(compact)" : compact
-        }
-        guard !parts.isEmpty else { return "-- today" }
-        return parts.joined(separator: " · ") + " today"
-    }
+    /// **Shutting it cannot strand the pointer.** The control rides the spend
+    /// line, which is the footer's first line and is always drawn, so the table
+    /// opens *beneath* it and closing removes rows below a pointer sitting `6`
+    /// to `22` above the folded bottom edge — inside it. The old footer folded
+    /// the rules away *above* the line the chevron was on, which lifted the
+    /// panel's bottom edge past the pointer that had just clicked.
+    func toggleQuotaTable() { isQuotaExpanded.toggle() }
 
     var expandedFooterHeight: CGFloat {
-        PanelMetrics.footerHeight(rules: footerRules, isFolded: isQuotaFolded)
-    }
-
-    var expandedFooterText: String {
-        UsageSummaryFormatter.summary(
-            remainingPercent: quota.remainingPercent,
-            todayTokens: quota.todayTokens,
-            resetsAt: quota.resetsAt,
-            now: clock.now()
+        PanelMetrics.footerHeight(
+            productCount: quotaProducts.count,
+            windowCount: quotaProducts.reduce(0) { $0 + $1.quota.windows.count },
+            isExpanded: isQuotaExpanded
         )
-    }
-
-    /// 0–1 fill for the footer meter, or nil when quota is unavailable.
-    var usageMeterFill: Double? {
-        quota.remainingPercent.map { Double($0) / 100 }
     }
 
     var emptyListMessage: String {
@@ -2511,7 +2389,6 @@ final class MonitorStore: ObservableObject {
             // `drawnMarkCount` below -- the two differ only where the wings
             // have been given up.
             matrixCount: presenceMarks.count,
-            workingAgentCount: workingAgentCount,
             sessionCount: aggregateSessionCount,
             drawsMark: drawsCompactMarks,
             expandsToPillOnly: expandsToPillOnly,
@@ -2621,11 +2498,14 @@ final class MonitorStore: ObservableObject {
     /// `OverlayPanelController.orderPanelToMatchConcealment` avoids by
     /// collapsing on the way out.
     ///
-    /// Folding the quota block does this every time rather than by accident:
-    /// it is a click, so the pointer is still by definition, and the rules it
-    /// takes away are taller than the gap between the chevron and the panel's
-    /// bottom edge — 56pt against 14 with both products connected, measured on
-    /// a 40pt menu bar.
+    /// **Shutting the quota table no longer reaches this**, and that is a
+    /// property of the new footer rather than a case removed: the control rides
+    /// the spend line, which is the footer's first line, so the table opens
+    /// *beneath* the chevron and closing leaves the pointer `6` to `22` above
+    /// the panel's new bottom edge — inside it (`quota-footer-v2.md` §5). The
+    /// old footer folded the rules away *above* the line the chevron was on and
+    /// took 56pt out from under a pointer that was still by definition, which
+    /// is the trap this correction was written for.
     ///
     /// Only the leaving direction is corrected. A pointer that the panel has
     /// *grown* under has not asked for anything, and re-expanding on it would

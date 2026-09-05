@@ -224,7 +224,7 @@ private struct OnboardingView: View {
     }
 }
 
-/// The five appearances, live, in both products' ink.
+/// The five appearances, live, in the ink the user has chosen.
 ///
 /// They animate here for the same reason they animate in the notch: the
 /// pattern *is* the motion, and a still grid says far less than a moving one.
@@ -232,14 +232,16 @@ private struct OnboardingView: View {
 /// server, and `Connected` holds by itself because its state has no period at
 /// all.
 ///
-/// **Two marks per specimen, stacked, rather than one cut on the diagonal.**
-/// The split matrix taught the pattern by drawing something the product never
-/// draws: on the notch a mark belongs to one product, since hue is exactly what
-/// tells two marks apart. A stacked pair — Codex above Claude Code, in the
-/// order the bar puts them — teaches the same five patterns and both hues at
-/// once, which is what let the colour-key row go: `Reading the notch` names the
-/// two products on the bar above, where the user meets them first.
+/// **One mark per specimen, which is how many the notch draws.** It taught two
+/// for as long as hue said which product: first as a single matrix cut on its
+/// own diagonal, then as a stacked pair in the two brand colours. Both are
+/// gone with the colours (`colour-v2.md` §1) — the surface has one aggregate
+/// mark standing for every product at once, in the ink chosen under
+/// `Theme colour`, and a legend showing anything else would be teaching a
+/// drawing the product never makes.
 private struct MatrixLegend: View {
+    @EnvironmentObject private var store: MonitorStore
+
     private static let states: [(NotchMatrixState, String)] = [
         (.running, "Working..."),
         (.approvalNeeded, "Approval"),
@@ -253,19 +255,11 @@ private struct MatrixLegend: View {
             ForEach(Array(Self.states.enumerated()), id: \.offset) { _, entry in
                 VStack(alignment: .leading, spacing: 8) {
                     NotchChip {
-                        VStack(spacing: PanelMetrics.compactMatrixSpacing) {
-                            NotchStatusMatrix(
-                                state: entry.0,
-                                size: MarkSpecimenMetrics.matrixSize,
-                                agent: .codex
-                            )
-
-                            NotchStatusMatrix(
-                                state: entry.0,
-                                size: MarkSpecimenMetrics.matrixSize,
-                                agent: .claudeCode
-                            )
-                        }
+                        NotchStatusMatrix(
+                            state: entry.0,
+                            size: MarkSpecimenMetrics.matrixSize,
+                            ink: store.aggregateInk.ink
+                        )
                     }
 
                     Text(entry.1)
@@ -279,7 +273,7 @@ private struct MatrixLegend: View {
         .padding(14)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            "The five marks, each drawn in both products' colours: running, "
+            "The five marks, one for every product at once: running, "
                 + "approval, input, completed, and connected with nothing running."
         )
     }
@@ -295,7 +289,7 @@ private struct MatrixLegend: View {
 /// here.
 ///
 /// Shared by the two windows that stand a mark on a light card — this one's
-/// legend and Settings' `Mark colour` row — rather than each cutting its own
+/// legend and Settings' `Theme colour` row — rather than each cutting its own
 /// scrap. A mark shown off the notch should look the same wherever it is shown.
 struct NotchChip<Content: View>: View {
     @ViewBuilder let content: () -> Content

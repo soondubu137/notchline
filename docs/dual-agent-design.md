@@ -113,7 +113,7 @@ Two options evaluated and still not offered: a small matrix per row (a second ma
 
 ### 5.1 Structure
 
-> **Superseded by [`quota-footer-v2.md`](quota-footer-v2.md).** This section, §5.2 and §5.4 describe a footer whose width is split per window and whose height grows per product — two products' window counts written down as a layout, which fails at three windows (the captions collide at `160`) and at one product (the two single-product forms are different shapes). V2 takes the gauge out altogether: a `496 × 3` rule draws as a length a figure its own caption prints exactly, two points to the right, and the footer is the last surface on this panel drawing its subject whether or not it has anything to say. What replaces it is one figure — today's spend — and a table behind the control. ~~a line in words when a window is genuinely close~~ is void: there is no critical threshold, and nothing on the footer is drawn differently for being low ([`quota-footer-v2.md`](quota-footer-v2.md) §4). `22` at every product count and every share, so every form here gets smaller and none of them grows back.
+> **Superseded by [`quota-footer-v2.md`](quota-footer-v2.md), built on 2026-09-05.** This section, §5.2 and §5.4 describe a footer whose width is split per window and whose height grows per product — two products' window counts written down as a layout, which fails at three windows (the captions collide at `160`) and at one product (the two single-product forms are different shapes). V2 takes the gauge out altogether: a `496 × 3` rule draws as a length a figure its own caption prints exactly, two points to the right, and the footer is the last surface on this panel drawing its subject whether or not it has anything to say. What replaces it is one figure — today's spend — and a table behind the control. ~~a line in words when a window is genuinely close~~ is void: there is no critical threshold, and nothing on the footer is drawn differently for being low ([`quota-footer-v2.md`](quota-footer-v2.md) §4). `22` at every product count and every share, so every form here gets smaller and none of them grows back.
 
 One rule per product with its own caption beneath it, and the two daily-usage figures merged into a single bottom line.
 
@@ -143,6 +143,8 @@ Single-product footers differ: Codex alone keeps today's inline form (footer `30
 
 ### 5.2 Which windows are shown
 
+> **Superseded by [`quota-footer-v2.md`](quota-footer-v2.md) §5, built on 2026-09-05.** The recorded risk below is fixed for free rather than argued with: its whole force was that a **half** could not report a third window without becoming something that must be read first, and there are no halves any more. Every window a product publishes is one line inside its own group, the per-model weekly cap included, and a cap sitting permanently at `100%` for someone who never uses that model is simply one more line. Nothing on the table is drawn differently for being low, so it cannot mislead by being healthy either.
+
 `/usage` reports three windows: `Current session` (5 hours), `Current week (all models)` and `Current week (<model>)`. **Only the first two are drawn, and fixed**: the left half is always the 5-hour all-models window and the right half always the 7-day all-models window.
 
 The per-model weekly cap is ignored for now. It is permanently zero for users who do not use that model, and letting one half report different windows at different times turns a rule meant for a glance into one that must be read first. Known risk, recorded: a user who exhausts the per-model cap sees two healthy rules and is still refused. If that happens, the right fix is a third window, not making the second one change meaning.
@@ -158,6 +160,8 @@ The four footer captions fill the content width, so the gear moves to the panel'
 **This applies to single-product too**, and has been applied to the `Expanded Footer` component and `Panel`'s three Expanded variants, so every expanded panel in Figma follows. The position is identical in both modes, so the gear does not jump when a second product appears.
 
 ### 5.4 Folding the quota block
+
+> **Superseded by [`quota-footer-v2.md`](quota-footer-v2.md) §8.1, built on 2026-09-05, and two of its behaviours reverse.** The small form is what the footer **is** rather than what it collapses to, so `quotaFolded` became `quotaExpanded` and its default inverted with the name — a rename rather than a flipped boolean, so the change is visible in review. And **folding no longer strands the pointer**: the control rides the spend line, which is the footer's *first* line, so the table opens beneath it and closing removes rows below a pointer that is between `6` and `22` above the new bottom edge. The trap this section records — a click that lifts the panel's edge past the chevron that did it — cannot arise in the new shape.
 
 Drawings and full reasoning in Figma §09.
 

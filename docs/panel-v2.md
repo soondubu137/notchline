@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **A composition, not a new decision.** Every rule here is already taken in [`colour-v2.md`](colour-v2.md), [`quota-footer-v2.md`](quota-footer-v2.md) and [`answer-in-notch.md`](answer-in-notch.md). What this file adds is the arithmetic of the three together and the five places where their drafts contradict one another — four of which are figures taken before a neighbouring decision landed, and one of which is a genuine disagreement neither document could settle alone. |
+| Status | **A composition, not a new decision — and two of the three are built.** The badge and the band ([`colour-v2.md`](colour-v2.md)) and the footer ([`quota-footer-v2.md`](quota-footer-v2.md)) were implemented on 2026-09-05, in the order §5 says they can be built in. The answer row ([`answer-in-notch.md`](answer-in-notch.md)) is the one that still waits on the two investigations §5 marks ★. Every rule here is already taken in those three files; what this file adds is the arithmetic of the three together and the five places where their drafts contradict one another — four of which are figures taken before a neighbouring decision landed, and one of which is a genuine disagreement neither document could settle alone. |
 | Version | 1.1 |
 | Date | 2026-09-05 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2?node-id=272-2) — `11 — The panel, whole` |
@@ -119,13 +119,13 @@ So the three can still be built in the order they were argued: the badge and the
 
 ## 6. Verification
 
-These are the checks that span more than one of the three; each document keeps its own.
+These are the checks that span more than one of the three; each document keeps its own. Everything not naming the open row was checked on 2026-09-05, on the running app and in `NotchlineTests.swift`. The two left unchecked describe the open row, which is not built: its `multiSelect` tick box is the theme ink's third reader, and its white ground is the one sized for a word rather than a duration.
 
-- [ ] The panel is `520 × 308` with three live rows, at every cut-out, every working-agent count and every connected-product count, and no width or height term reads either count.
-- [ ] **Opening the quota table is the only thing that takes the panel past `308`**, full stop: sweep every window's share across its whole range, make every reading unavailable, and the panel does not move. ~~other than a window crossing the threshold, which takes it to `333`~~ is void (§5 q02).
-- [ ] A row's caption draws the badge and then the Project, with no separator between them, and the caption line measures `16` with a badge and without one.
+- [x] The panel is `520 × 308` with three live rows, at every cut-out, every working-agent count and every connected-product count, and no width or height term reads either count.
+- [x] **Opening the quota table is the only thing that takes the panel past `308`**, full stop: sweep every window's share across its whole range, make every reading unavailable, and the panel does not move. ~~other than a window crossing the threshold, which takes it to `333`~~ is void (§5 q02).
+- [x] A row's caption draws the badge and then the Project, with no separator between them, and the caption line measures `16` with a badge and without one.
 - [ ] The theme ink reaches the mark, the badge and the `multiSelect` tick box, and those three change together when the `Theme colour` selection changes.
 - [ ] A waiting row's white ground is sized for `Approval needed` / `Input needed` and does not resize when the word inside it becomes `Answer` or `Read`.
-- [ ] A finished row's dark ground is the only place on the panel that reports how long a Turn took.
-- [ ] With every colour rendered as flat grey, no figure, name or state on the expanded panel becomes ambiguous.
-- [ ] An unreadable quota field draws `--` and nothing anywhere else on the panel — band, mark, rows or footer control — reports it.
+- [x] A finished row's dark ground is the only place on the panel that reports how long a Turn took.
+- [x] With every colour rendered as flat grey, no figure, name or state on the expanded panel becomes ambiguous.
+- [x] An unreadable quota field draws `--` and nothing anywhere else on the panel — band, mark, rows or footer control — reports it.

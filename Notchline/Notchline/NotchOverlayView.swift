@@ -61,8 +61,13 @@ struct NotchOverlayView: View {
     }
 
     private var panelAccessibilityLabel: String {
-        let usage = store.tokenRemainingPercent.map { "\($0)% usage remaining" }
-            ?? "usage remaining unavailable"
+        // **Today's spend, not a share.** It used to end `72% usage remaining`,
+        // read off `windows.first` — which is one window selected over the
+        // others, on a surface where no share is drawn at all until somebody
+        // opens the table (`quota-footer-v2.md` §4). Speaking one here handed a
+        // screen-reader user a figure nobody else could see, and picked which
+        // window it was. What the footer draws at rest is this.
+        let usage = store.footerToday.spokenText.lowercased()
         // Spoken, not the "12:34" the notch draws: VoiceOver reads that as a
         // time of day. The label names it as the longest of the running turns,
         // because a bare duration beside a summary status is unattributable.
@@ -353,21 +358,15 @@ private struct OverlayHeader: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // **One leading group, drawn the same on both forms.** The mark
-            // stands at `12` and the totals at `32.6` whether the panel is open
-            // or shut, so expanding *adds* rather than replaces: the figure the
-            // eye was on when it hovered does not move, change colour or go
-            // away (`expanded-header-v2.md` §4.1).
+            // **One leading group, and it is the whole of the band's leading
+            // side.** The mark stands at `12` and the totals at `32.6` whether
+            // the panel is open or shut, so expanding neither replaces nor adds
+            // anything here: the figure the eye was on when it hovered does not
+            // move, change colour or go away. The columns that used to fade in
+            // beside it — one per working agent, in that agent's own inks —
+            // went with the product hues that were the only thing on them
+            // saying whose a number was (`colour-v2.md` §3).
             CompactLeadingGroup()
-
-            // The parts, `12` after the totals. One column per working agent,
-            // in Settings' order, packed — and none at all with one, where a
-            // column would repeat the totals digit for digit in a second ink.
-            if store.isExpanded, !store.expandedAgentColumns.isEmpty {
-                AgentCountsColumns()
-                    .padding(.leading, PanelMetrics.totalsToPartsSpacing)
-                    .transition(Self.partsFade)
-            }
 
             // **The pill's middle, and only the pill's.** The notched bar has
             // no middle to give: the cut-out is where one would stand, and the
@@ -405,17 +404,6 @@ private struct OverlayHeader: View {
         .contentShape(Rectangle())
         .animation(headerAnimation, value: store.isExpanded)
     }
-
-    /// The parts fading in beside the totals, which hold still.
-    ///
-    /// **The decomposition performed rather than stated.** It is also the
-    /// answer to where the collapsed reading goes when the panel opens: the
-    /// trailing slot holds one thing at a time, so the reading gives way to the
-    /// gear in place and nothing travels (§10, question 04).
-    private static let partsFade = AnyTransition.asymmetric(
-        insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),
-        removal: .opacity.animation(PanelMotion.fade(isArriving: false))
-    )
 
     private var horizontalPadding: CGFloat {
         PanelMetrics.expandedHorizontalPadding
@@ -608,47 +596,6 @@ private struct CompactTrailingSlot: View {
     )
 }
 
-/// The band's parts: one column of numbers per working agent, in that agent's
-/// own two inks.
-///
-/// **The counts are the one fold that is a sum.** Status is ordinal — the
-/// aggregate is the most urgent status any agent is in — and a fold like that
-/// has no parts to show: its decomposition is one animated mark per agent,
-/// which is what the collapsed surface removed and what four moving marks on a
-/// `46` pt band would be. The clock is a maximum and has no parts either. So
-/// this is the one thing the band can say that the bar has no room for
-/// (`expanded-header-v2.md` §2).
-private struct AgentCountsColumns: View {
-    @EnvironmentObject private var store: MonitorStore
-
-    var body: some View {
-        HStack(spacing: PanelMetrics.agentColumnSpacing) {
-            ForEach(store.expandedAgentColumns) { column in
-                let ink = NotchPalette.countsInk(for: column.agent)
-                CountsColumn(
-                    sessionCount: column.sessionCount,
-                    // Drawn when there are subagents anywhere, and then filled
-                    // by every column -- with a dash where this agent has none.
-                    subagentCount: store.expandedDrawsSubagentRow
-                        ? column.subagentCount
-                        : nil,
-                    sessionInk: ink.sessions,
-                    subagentInk: ink.subagents,
-                    matrixSize: PanelMetrics.statusMatrixSize,
-                    reservesTwoDigits: true
-                )
-                // Colour is the only thing saying whose a number is, and it is
-                // the one channel this band can afford. Two answers that cost
-                // no width: this name, and an order that is permanently
-                // Settings' own (§9).
-                .accessibilityElement()
-                .accessibilityLabel(column.spokenSummary)
-            }
-        }
-        .frame(height: PanelMetrics.statusMatrixSize)
-    }
-}
-
 /// The gear, shared by the expanded top bar and the resting pill.
 private struct SettingsButton: View {
     @Environment(\.openSettings) private var openSettings
@@ -716,7 +663,7 @@ private struct ExpandedPanelContent: View {
                 }
                 .frame(
                     width: store.currentPanelSize.width
-                        - store.sessionRowGutter * 2,
+                        - PanelMetrics.sessionRowGutter * 2,
                     height: PanelMetrics.sessionViewportHeight(
                         forSessionCount: store.sessions.count
                     )
@@ -734,28 +681,29 @@ private struct ExpandedPanelContent: View {
     }
 }
 
-/// The quota footer: one rule per product, and a shared usage line.
+/// The quota footer: one number, a control, and the table behind it.
 ///
-/// One product draws a single full-width rule, exactly as before. Two draw
-/// Codex's full-width rule above a split row of Claude Code's two windows —
-/// the halving is not to make them fit but because that product genuinely has
-/// two windows to report, a 5-hour session one and a 7-day one.
+/// **At rest it is `22`, and that is the only closed height it has**
+/// (`quota-footer-v2.md` §2). It used to be a `496 × 3` rule per quota window
+/// with a caption under each — four numbers drawn every time the panel opened,
+/// on nearly all of which not one of them needed anything, spending between a
+/// fifth and a third of the panel's height saying so. The rule went first: it
+/// drew as a length exactly what its own caption printed as a figure two points
+/// to its right (§1.1). What is left is today's spend and the disclosure.
+///
+/// **Nothing here is drawn differently for being low.** There is no threshold,
+/// no window speaks, and no share reaches this line at any value (§4). The one
+/// thing that can change the footer's height is somebody opening the table.
 private struct ExpandedPanelFooter: View {
     @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.footerRuleSpacing) {
-            if isFolded {
-                // Today's line rises to where a caption always starts, at the
-                // top of the footer box, and the rules are simply not drawn.
-                QuotaFoldLine { FooterCaption(store.foldedTodayText) }
-            } else {
-                ForEach(store.footerRules) { rule in
-                    FooterRuleRow(rule: rule, inlineTodayText: inlineTodayText)
-                }
+            if store.showsQuotaFoldControl {
+                spendLine
 
-                if let today = store.footerTodayText {
-                    QuotaFoldLine { FooterCaption(today) }
+                if store.isQuotaExpanded {
+                    table
                 }
             }
 
@@ -766,66 +714,156 @@ private struct ExpandedPanelFooter: View {
         .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
     }
 
-    private var isFolded: Bool {
-        store.isQuotaFolded && store.showsQuotaFoldControl
-    }
+    /// The footer's first line, always drawn, carrying the control.
+    private var spendLine: some View {
+        HStack(spacing: 0) {
+            FooterSpend(store.footerToday)
 
-    /// The single-Codex footer keeps today's tokens in the one caption it has,
-    /// rather than spending a second line on three words.
-    private var inlineTodayText: String? {
-        store.footerTodayText == nil ? store.expandedFooterText : nil
-    }
-}
+            Spacer(minLength: 0)
 
-/// The footer's last line, and the disclosure that folds the rules away.
-///
-/// The chevron is the whole hit target. The rest of the line is a reading —
-/// today's tokens — and a number that resizes the panel when clicked is a trap
-/// for anyone reaching in to select or simply read it; the affordance and the
-/// target are the same `16pt` square instead.
-private struct QuotaFoldLine<Content: View>: View {
-    @EnvironmentObject private var store: MonitorStore
-
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        HStack(spacing: PanelMetrics.footerWindowSpacing) {
-            content()
-
-            if store.showsQuotaFoldControl {
-                QuotaFoldChevron(isFolded: store.isQuotaFolded)
-            }
+            QuotaFoldChevron(isExpanded: store.isQuotaExpanded)
         }
         // The control is a point taller than the caption it rides. The footer's
         // own height does not move: the trailing `Spacer` absorbs it.
         .frame(height: PanelMetrics.quotaFoldControlSize)
     }
+
+    /// Two levels, because the windows belong to products.
+    ///
+    /// Outside, the product and its own spend today. Inside, each of its
+    /// windows on a line. **Indentation and the leader carry the level between
+    /// them** — no box, rule or divider is drawn (§5).
+    private var table: some View {
+        VStack(alignment: .leading, spacing: PanelMetrics.footerCaptionHeight) {
+            ForEach(store.footerRules) { rule in
+                FooterProductGroup(rule: rule, hue: store.aggregateInk)
+            }
+        }
+    }
 }
 
-/// One glyph, turned 180° between the two states rather than swapped for a
-/// second drawing.
+/// One product's group: its badge and spend, then a line per window.
+private struct FooterProductGroup: View {
+    let rule: FooterRule
+    let hue: AggregateInk
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PanelMetrics.footerCaptionSpacing) {
+            outerRow
+
+            // By position, not by content. Nothing on this table sorts, so a
+            // window's index *is* its identity: two windows a product happened
+            // to publish with the same label, share and timer would collide
+            // under any identity derived from what they say.
+            ForEach(rule.windows.indices, id: \.self) { index in
+                FooterWindowRow(window: rule.windows[index])
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// The product, a faint leader, and what it has spent today.
+    ///
+    /// **The leader is what makes the spend attributable without colour.** On
+    /// the collapsed line those parts had to be coloured numerals; here each
+    /// one sits beside its product's own name, joined to it by `1` pt of white
+    /// at `10%` — one step below the white-at-`15%` the panel's structural
+    /// hairlines use, because it is joining two things rather than dividing
+    /// anything. It is drawn on outer rows only, so **having a leader is itself
+    /// part of what says which level a line is on**.
+    private var outerRow: some View {
+        HStack(spacing: PanelMetrics.footerLeaderClearance) {
+            ProductBadge(name: rule.agent.displayName, hue: hue)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.10))
+                .frame(height: 1)
+                .accessibilityHidden(true)
+
+            FooterSpend(rule.today)
+        }
+        .frame(height: PanelMetrics.productBadgeHeight)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(rule.agent.displayName), \(rule.today.spokenText)")
+    }
+}
+
+/// One window's line: the label, the share, and the countdown.
 ///
-/// It points down while folded because the panel hangs from the notch and can
-/// only grow downward — the chevron points the way the panel will move, which is
-/// also the "show more" every list uses. Being the only hit target, it carries
-/// the gear's whole hover treatment — the wash behind it and the brighter
-/// glyph — so the square it answers to is visible before the click, not
-/// guessed at.
+/// Three columns and one trailing edge shared with the outer row above: the
+/// window at `24` — one step in from the panel's own `12` — the share
+/// right-aligned at `300`, and the timer right-aligned at `508`, which is where
+/// the product's spend is right-aligned too.
+///
+/// **Every one of them is `#7C7C80`, whatever the share.** Brightness on this
+/// footer separates the table's three levels and separates nothing by value
+/// (§5).
+private struct FooterWindowRow: View {
+    let window: FooterWindow
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // The label at `24` and the share ending at `300`, which is one
+            // box: what is between them is whitespace either way, and giving
+            // it a boundary of its own would be a column nothing is in.
+            HStack(spacing: 0) {
+                FooterCaption(window.label)
+                Spacer(minLength: 0)
+                FooterCaption(window.share)
+            }
+            .frame(
+                width: PanelMetrics.footerShareTrailingEdge
+                    - PanelMetrics.footerWindowIndent
+            )
+
+            // The timer, right-aligned on the footer's own trailing edge,
+            // which is where the spend above it is right-aligned too.
+            Spacer(minLength: 0)
+            FooterCaption(window.timer)
+        }
+        .padding(.leading, PanelMetrics.footerWindowIndent)
+        .frame(height: PanelMetrics.footerCaptionHeight)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenLine)
+    }
+
+    /// What the line says out loud, with the absolute reset the column trades
+    /// away for a duration (§7).
+    private var spokenLine: String {
+        let head = window.label.isEmpty ? "" : "\(window.label), "
+        return "\(head)\(window.share), \(window.spokenTimer)"
+    }
+}
+
+/// The disclosure that opens the quota table.
+///
+/// One glyph, turned 180° between the two states rather than swapped for a
+/// second drawing. It points down while the table is shut because the panel
+/// hangs from the notch and can only grow downward — the chevron points the way
+/// the panel will move, which is also the "show more" every list uses.
+///
+/// The chevron is the whole hit target. The rest of the line is a reading —
+/// today's tokens — and a number that resizes the panel when clicked is a trap
+/// for anyone reaching in to select or simply read it; the affordance and the
+/// target are the same `16pt` square instead. Being the only hit target, it
+/// carries the gear's whole hover treatment — the wash behind it and the
+/// brighter glyph — so the square it answers to is visible before the click,
+/// not guessed at.
 private struct QuotaFoldChevron: View {
     @EnvironmentObject private var store: MonitorStore
 
     @State private var isHovered = false
 
-    let isFolded: Bool
+    let isExpanded: Bool
 
     var body: some View {
         Button {
-            store.toggleQuotaFold()
+            store.toggleQuotaTable()
         } label: {
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(isHovered ? NotchPalette.sessionTitle : NotchPalette.label)
-                .rotationEffect(.degrees(isFolded ? 0 : 180))
+                .rotationEffect(.degrees(isExpanded ? 180 : 0))
                 .frame(
                     width: PanelMetrics.quotaFoldControlSize,
                     height: PanelMetrics.quotaFoldControlSize
@@ -838,58 +876,61 @@ private struct QuotaFoldChevron: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.16), value: isFolded)
+        .animation(.easeOut(duration: 0.16), value: isExpanded)
         .animation(.easeOut(duration: 0.12), value: isHovered)
-        .accessibilityLabel(isFolded ? "Show quota rules" : "Hide quota rules")
-    }
-}
-
-/// One product's rules, and the captions under them.
-private struct FooterRuleRow: View {
-    let rule: FooterRule
-    let inlineTodayText: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: PanelMetrics.footerCaptionSpacing) {
-            HStack(spacing: PanelMetrics.footerWindowSpacing) {
-                ForEach(rule.windows.indices, id: \.self) { index in
-                    UsageMeter(
-                        fill: rule.windows[index].fill,
-                        ink: NotchPalette.ink(for: rule.agent)
-                    )
-                }
-            }
-            .frame(height: PanelMetrics.footerRuleHeight)
-
-            if let inlineTodayText {
-                // Today's tokens are already on this caption, so there is no
-                // totals line below to carry the disclosure — and adding one
-                // would spend exactly the height folding is meant to save. It
-                // rides this line instead.
-                QuotaFoldLine { FooterCaption(inlineTodayText) }
-            } else {
-                HStack(spacing: PanelMetrics.footerWindowSpacing) {
-                    ForEach(rule.windows.indices, id: \.self) { index in
-                        FooterCaption(rule.windows[index].caption)
-                    }
-                }
-            }
-        }
+        .accessibilityLabel(isExpanded ? "Hide limits" : "Show limits")
     }
 }
 
 /// The footer's 11pt caption, which every line down here uses.
+///
+/// It hugs its text rather than filling: this footer is a table, and every
+/// column's edge is placed by the line that holds it.
 private struct FooterCaption: View {
     let text: String
+    let ink: Color
 
-    init(_ text: String) { self.text = text }
+    init(_ text: String, ink: Color = NotchPalette.label) {
+        self.text = text
+        self.ink = ink
+    }
 
     var body: some View {
         Text(text)
             .font(.system(size: 11, weight: .light))
-            .foregroundStyle(NotchPalette.label)
+            .foregroundStyle(ink)
             .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize()
+    }
+}
+
+/// A day's spend, in the two brightnesses it is drawn in.
+///
+/// The figure in `#C7C7CC` and `today` in `#7C7C80` — one reading, with the
+/// part that is a number set apart from the part that is a unit. It is the same
+/// on the resting line and on a product's outer row, because they are the same
+/// reading at two scopes.
+private struct FooterSpend: View {
+    let reading: SpendReading
+
+    init(_ reading: SpendReading) { self.reading = reading }
+
+    var body: some View {
+        Text(runs)
+            .font(.system(size: 11, weight: .light))
+            .lineLimit(1)
+            .fixedSize()
+            .accessibilityLabel(reading.spokenText)
+    }
+
+    /// One string, two runs — rather than two `Text`s side by side, so the
+    /// figure and its unit are still typeset as one line.
+    private var runs: AttributedString {
+        var figure = AttributedString(reading.figure)
+        figure.foregroundColor = NotchPalette.reading
+        var unit = AttributedString(" " + reading.unit)
+        unit.foregroundColor = NotchPalette.label
+        return figure + unit
     }
 }
 
@@ -972,7 +1013,7 @@ private struct SessionRowContent: View {
                 VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                     SessionRowCaption(
                         session: session,
-                        style: store.productAttribution,
+                        hue: store.aggregateInk,
                         showsAttribution: store.showsProductAttribution
                     )
 
@@ -998,29 +1039,7 @@ private struct SessionRowContent: View {
                 SessionStatusControl(session: session, ground: ground)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, store.sessionRowPadding)
-        }
-        // Flush with the block's leading edge, so it reads as a mark beside the
-        // row rather than as a fifth thing inside it. The block's margin widens
-        // to `12` while the rail is drawn (`MonitorStore.sessionRowGutter`), so
-        // the stroke lands on the same line as the matrix and the quota rules;
-        // the row's text steps in behind it rather than moving with it. It runs
-        // the height of that text — caption to last line — so it reads as the
-        // row's own edge rather than as a tick beside its middle.
-        .overlay(alignment: .leading) {
-            if drawsRail {
-                RoundedRectangle(
-                    cornerRadius: PanelMetrics.sessionRowRailRadius,
-                    style: .continuous
-                )
-                .fill(NotchPalette.ink(for: session.agent).on)
-                .frame(
-                    width: PanelMetrics.sessionRowRailWidth,
-                    height: PanelMetrics.sessionRowRailHeight(
-                        hasPreview: session.preview != nil
-                    )
-                )
-            }
+            .padding(.horizontal, PanelMetrics.sessionRowPadding)
         }
         .contentShape(Rectangle())
         .frame(
@@ -1029,10 +1048,6 @@ private struct SessionRowContent: View {
             maxHeight: PanelMetrics.sessionRowHeight
         )
     }
-
-    /// The rail is drawn on the same terms as every other attribution: only
-    /// while two products are connected and there is something to tell apart.
-    private var drawsRail: Bool { store.showsSessionRowRail }
 
     private var sweepsBody: Bool { store.sweepsBody(for: session) }
 
@@ -1083,11 +1098,13 @@ private struct SessionStatusControl: View {
         if let startedAt = store.elapsedStart(for: session) {
             reading(startedAt: startedAt, stoppedAt: nil)
         } else if session.showsSubagentBadge {
-            // `dual-agent-design.md` §10: an expanded row's badge is always
-            // neutral, whatever else is connected -- the row already names its
-            // product on the caption above. One badge carrying the whole
-            // count, with the ground saying whether any of them is stopped.
-            SubagentBadgeView(badge: session.subagentBadge, tint: .neutral, ground: ground)
+            // `dual-agent-design.md` §10: an expanded row's badge is neutral,
+            // whatever else is connected -- the row already names its product
+            // on the caption above, and since `colour-v2.md` §1 there is no
+            // product hue for it to be neutral *against*. One badge carrying
+            // the whole count, with the ground saying whether any of them is
+            // stopped.
+            SubagentBadgeView(badge: session.subagentBadge, ground: ground)
         } else if let span = store.finishedElapsed(for: session) {
             // What the turn took, which the slot used to throw away. No other
             // part of this surface reports it, and it is what turns the mark
@@ -1164,74 +1181,84 @@ private struct SessionStatusControl: View {
     }
 }
 
-/// The row's leading 11pt line: the Project, and — while two products are
-/// connected — which product this one is.
+/// The row's leading `11 pt` line: the Project, and — while more than one
+/// product is connected — a badge naming which product this one is.
+///
+/// **One presentation, and it is the only one** (`colour-v2.md` §5). The four
+/// the picker used to offer all answered *which product* in a channel other
+/// than the name: two tinted the name, one struck a rail down the block's
+/// leading edge, and the fourth was this chip. Three of them are gone with the
+/// product hues, so the chip is what is left — drawn in the ink the user chose
+/// rather than in one that says whose it is, which is the whole of the
+/// decision.
+///
+/// **The badge, then the Project, with no separator between them**
+/// (`panel-v2.md` §3.4). The `Codex ·` prefix the chip replaces had a dot
+/// dividing two words inside one grey run; beside a chip that dot is a boundary
+/// after a boundary. The `6` between them is the badge's own padding, so
+/// nothing is measured here that was not measured before.
 ///
 /// The attribution costs horizontal space and what it costs comes out of the
-/// Project text: `Claude Code ·` takes about 73 of the caption's 394. That is
-/// accepted rather than overlooked. The caption is the least important line in
-/// the row and it ends in a fade rather than an ellipsis, so losing its tail is
-/// the cheapest thing on this surface to lose.
+/// Project text. That is accepted rather than overlooked: the caption is the
+/// least important line in the row and it ends in a fade rather than an
+/// ellipsis, so losing its tail is the cheapest thing on this surface to lose.
 private struct SessionRowCaption: View {
     let session: MonitoredSession
-    let style: ProductAttributionStyle
+    let hue: AggregateInk
     let showsAttribution: Bool
 
     var body: some View {
         HStack(spacing: 6) {
-            if showsAttribution, style == .badge {
-                Text(session.agent.displayName)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(NotchPalette.ink(for: session.agent).on)
-                    .padding(.horizontal, 6)
-                    .frame(height: 16)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(NotchPalette.ink(for: session.agent).off)
-                    )
-                    .fixedSize()
+            if showsAttribution {
+                ProductBadge(name: session.agent.displayName, hue: hue)
             }
 
-            caption
+            Text(session.projectName)
+                .foregroundStyle(NotchPalette.label)
                 .font(.system(size: 11, weight: .light))
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        // The badge is a point taller than the text line, so the caption's own
-        // height moves 14 -> 16 with it. The row height does not: the content
-        // block absorbs it.
-        .frame(
-            height: showsAttribution && style == .badge
-                ? PanelMetrics.sessionRowBadgeCaptionHeight
-                : PanelMetrics.sessionRowCaptionHeight
-        )
+        // The line is the badge's own height whether or not a badge is in it,
+        // so nothing on a row moves at the moment a second product connects.
+        .frame(height: PanelMetrics.sessionRowCaptionHeight)
     }
+}
 
-    /// One `Text`, two runs: the product prefix and the Project.
-    ///
-    /// Concatenated rather than laid out side by side so the line still
-    /// truncates as one string — the tail that goes is the Project's, which is
-    /// what the attribution was always spending.
-    private var caption: Text {
-        let project = Text(session.projectName)
-            .foregroundStyle(NotchPalette.label)
-        guard showsAttribution, style.namesProductInCaption else {
-            return project
-        }
-        return Text("\(session.agent.displayName) · ")
-            .foregroundStyle(prefixColor) + project
-    }
+/// A product's name, in the one presentation this surface has for it.
+///
+/// Ground from the theme ink's unlit value and text from its lit one, so the
+/// chip and the mark on the bar can never drift: both read
+/// ``NotchPalette/badgeInk(_:)``, which is ``AggregateInk/ink`` under another
+/// name.
+///
+/// **The hue lives in the text, not in the ground, and that is by
+/// construction.** Every unlit value in the palette runs at `0.55 ×` the lit
+/// chroma at `L 0.235` — what makes a `5 × 5` dark grid carry any hue at all —
+/// and at badge size that reads as near-black whichever entry is chosen. So
+/// switching theme visibly changes the chip's text and barely touches its
+/// ground, which is the right way round: the ground's job is to be a boundary
+/// and the text's is to be the colour. It also means the chip's contrast is one
+/// check rather than twelve.
+private struct ProductBadge: View {
+    let name: String
+    let hue: AggregateInk
 
-    /// Only `nameAndColour` tints, and it tints the product name alone.
-    ///
-    /// The prefix is the whole of what the colour is about: it says which
-    /// product, and the Project beside it is the row's own subject rather than
-    /// a second statement of that. Tinting the line entire made the Project
-    /// read as part of the mark and cost the caption its ordinary grey.
-    private var prefixColor: Color {
-        style.tintsProductName
-            ? NotchPalette.ink(for: session.agent).on
-            : NotchPalette.label
+    var body: some View {
+        let ink = NotchPalette.badgeInk(hue)
+        Text(name)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(ink.on)
+            .padding(.horizontal, PanelMetrics.productBadgePadding)
+            .frame(height: PanelMetrics.productBadgeHeight)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: PanelMetrics.productBadgeRadius,
+                    style: .continuous
+                )
+                .fill(ink.off)
+            )
+            .fixedSize()
     }
 }
 

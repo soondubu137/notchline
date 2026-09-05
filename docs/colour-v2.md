@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Decided by the board's owner, not implemented.** The decision is §1; everything after it is the consequence worked out. |
+| Status | **Decided by the board's owner, and implemented on 2026-09-05.** The decision is §1; everything after it is the consequence worked out. §11 records what each symbol became, and §12 is the checklist it was signed off against. |
 | Version | 1.1 |
 | Date | 2026-09-05 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `09 — Identity without a palette` records the argument that led here. **It draws a weaker proposal than this document**: it kept `Name and colour` as the default and made the badge grey. The decision went further on both counts, so that page is the reasoning and this file is the contract. `11 — The panel, whole` is where the decision is drawn as decided, composed with the other two V2 decisions — see [`panel-v2.md`](panel-v2.md). |
@@ -161,34 +161,42 @@ The two footer figures move for one reason: a caption line carrying a badge is `
 
 ## 11. Implementation mapping
 
-Nothing here is implemented.
+**Implemented on 2026-09-05.** Every row below is done; the notes say what the build found that the design did not say.
 
 | Symbol | Change |
 | --- | --- |
-| `NotchPalette.codex` / `.claudeCode` | **Retire.** With no per-product mark, no attribution ink and no counts column, the four values have no reader left |
-| `NotchPalette.countsInk(for:)` | **Retire** with the columns it fed |
-| `AgentCountsColumns` | **Retire.** `OverlayHeader` draws `CompactLeadingGroup` and stops |
-| `PanelMetrics.expandedWidth(centerOcclusionWidth:workingAgentCount:)` | Loses its second parameter; `expandedLeadingSideWidth(workingAgentCount:)` becomes a constant `53.8` |
-| `ProductAttributionStyle` | **Retire**, with `MonitorStore.productAttribution` and its defaults read. `showsProductAttribution` stays — it is what gates the badge |
-| `MonitorStore.drawsColourBar` (`showsProductAttribution && productAttribution == .colourBar`) | **Retire** with the option |
-| `MonitorStore.sessionRowGutter` / `sessionRowPadding` | Become constants at `6` + `6`. No form of the row gives up its gutter once the rail is gone ([`figma-design.md`](figma-design.md) §4.1) |
-| `NotchPalette.aggregateInk(_:isConnected:)` | Unchanged. A second accessor returns the same pair for a badge, so the two can never drift |
+| `NotchPalette.codex` / `.claudeCode` | **Retired.** With no per-product mark, no attribution ink and no counts column, the four values had no reader left — and four more went with them, which the design had not counted: `ink(for:)`, `MatrixSplit` and the diagonal-cut cell renderer behind it, `MatrixInk.spent` (the quota rule's own unlit end), and `SubagentBadgeTint`, whose second case was the collapsed bar's per-product badge |
+| `NotchPalette.countsInk(for:)` | **Retired** with the columns it fed, along with `CountsColumn`'s two ink parameters and `countsDashText`: the dash was what one agent's column drew where another's had subagents, and with one column there is nothing to fill in beside |
+| `AgentCountsColumns` | **Retired.** `OverlayHeader` draws `CompactLeadingGroup` and stops, and `MonitorStore` loses `expandedAgentColumns`, `workingAgentCount`, `expandedDrawsSubagentRow` and the `AgentCounts` type |
+| `PanelMetrics.expandedWidth(centerOcclusionWidth:workingAgentCount:)` | Lost its second parameter, and `PanelMetrics.size` lost the same one; `expandedLeadingSideWidth` is a stored constant at `53.8` |
+| `ProductAttributionStyle` | **Retired**, with `MonitorStore.productAttribution` and its defaults read. `showsProductAttribution` stays — it is what gates the badge. The stored `productAttribution` key is left in place unread, which is what "ignored rather than migrated" means in practice |
+| `MonitorStore.drawsColourBar` (`showsProductAttribution && productAttribution == .colourBar`) | **Retired** with the option, along with `showsSessionRowRail` and the four `sessionRowRail*` metrics |
+| `MonitorStore.sessionRowGutter` / `sessionRowPadding` | Became `PanelMetrics` constants at `6` + `6`. No form of the row gives up its gutter once the rail is gone ([`figma-design.md`](figma-design.md) §4.1) |
+| `NotchPalette.aggregateInk(_:isConnected:)` | Unchanged. `badgeInk(_:)` returns the same pair, so the two cannot drift; it takes no `isConnected`, because a badge is drawn only while more than one product is connected and the resting grey is a state it cannot be in |
 | `AggregateInk` | Unchanged in values. Its documentation stops calling itself the mark's ink |
-| `SettingsWindow` Display group | `Mark colour` → `Theme colour`, new caption; the `Distinguish products` row and its `ForEach(ProductAttributionStyle.allCases)` go |
-| `MacOSWindowColor` | `product/codex` and `product/claude` retire |
-| `theDisplayPreferencesReachTheSurfaceTheyDescribe` | Extend: the theme ink must reach the badge as well as the mark |
-| `onlyTheTwoNamingStylesPutTheProductOnTheCaption` | **Retire** — there is one style and it puts a badge there |
-| `theAttributionRailLandsOnThePanelsOwnMargin`, `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn` | **Retire** with the rail they pin |
-| `theExpandedWidthAnswersToWorkingAgentsAndNotToWords` | **Replace** with a test that the expanded width answers to neither: `520` at every cut-out and every agent count |
+| `SettingsWindow` Display group | `Mark colour` → `Theme colour`, new caption; the `Distinguish products` row went and took the whole `Session list` group with it — it was that group's only control |
+| `MacOSWindowColor` | `product/codex` and `product/claude` **were never in the code**; they exist only in [`figma-design.md`](figma-design.md) §3.2 and retire there |
+| `MatrixLegend` (first-run) | **Not in the design and found by the build.** It drew two marks per state, one in each product's ink; it draws one, in the theme ink, because that is how many the notch has |
+| `theDisplayPreferencesReachTheSurfaceTheyDescribe` | Kept as it was; `theBadgeTakesTheThemeInksOwnPair` is what pins the second reader |
+| `onlyTheTwoNamingStylesPutTheProductOnTheCaption` | **Retired** — there is one style and it puts a badge there |
+| `theAttributionRailLandsOnThePanelsOwnMargin`, `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn` | **Retired** with the rail they pin, replaced by `theRowsMarginIsOneSplitInEveryForm` |
+| `theExpandedWidthAnswersToWorkingAgentsAndNotToWords` | **Replaced** by `theExpandedWidthIsOneNumber`: `520` at every cut-out, with no parameter left to vary an agent count with |
+| `theSplitMatrixCutsOnTheSameDiagonalAsTheMark` | **Retired** with the seam. Its one surviving claim — row `0` is the top row — is `theMarkIsDrawnWithRowZeroAtTheTop`, and the three asymmetric patterns are its other witnesses |
+| `theBandDrawsOneColumnPerWorkingAgentAndNoneForOne`, `theBandsSubagentRowIsDrawnEverywhereOrNowhere` | **Retired** with the decomposition, replaced by `theBandsTotalsCountEveryAgentAtOnce` |
 
 ## 12. Verification
 
-- [ ] No view reads a per-product colour. `NotchPalette` exposes no product ink and the two Figma tokens are gone.
-- [ ] The band draws the mark and the totals at every agent count, and its leading side measures `53.8` at one, two, four and eight.
-- [ ] The expanded panel is `520` at every cut-out this product meets, at every agent count, with no width term reading an agent count.
-- [ ] A badge appears on a row's caption only while more than one product is connected, and disappears when the second disconnects — not when it merely runs out of threads.
-- [ ] The badge's ground and text follow the `Theme colour` selection immediately, on every surface that draws one, and match the mark's two values exactly.
-- [ ] Row height stays `80` with the badge, and the content block is `55`.
-- [ ] The footer's spoken line is `47` and its opened table is `19W + 30P + 17`.
-- [ ] With every colour rendered as flat grey, no figure, name or state on the collapsed bar or the expanded panel becomes ambiguous.
-- [ ] Settings has `Theme colour` and no `Distinguish products`, and an install carrying a stored `Colour bar` opens on the badge without a migration step.
+Checked on 2026-09-05. The widths and heights are pinned by tests in
+`NotchlineTests.swift`; the drawing was read off the running app against Figma
+page `11`. The last item is an argument rather than a measurement — nothing on
+either surface is *drawn* differently by value, which is what makes it hold.
+
+- [x] No view reads a per-product colour. `NotchPalette` exposes no product ink and the two Figma tokens are gone.
+- [x] The band draws the mark and the totals at every agent count, and its leading side measures `53.8` at one, two, four and eight.
+- [x] The expanded panel is `520` at every cut-out this product meets, at every agent count, with no width term reading an agent count.
+- [x] A badge appears on a row's caption only while more than one product is connected, and disappears when the second disconnects — not when it merely runs out of threads.
+- [x] The badge's ground and text follow the `Theme colour` selection immediately, on every surface that draws one, and match the mark's two values exactly.
+- [x] Row height stays `80` with the badge, and the content block is `55`.
+- [x] The footer's spoken line is `47` and its opened table is `19W + 30P + 17`.
+- [x] With every colour rendered as flat grey, no figure, name or state on the collapsed bar or the expanded panel becomes ambiguous.
+- [x] Settings has `Theme colour` and no `Distinguish products`, and an install carrying a stored `Colour bar` opens on the badge without a migration step.

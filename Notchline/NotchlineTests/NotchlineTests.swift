@@ -360,14 +360,19 @@ struct NotchlineTests {
     }
 
 
-    /// Grey is not a fourth product colour, and it must be the darkest thing here.
+    /// The resting grey must be the darkest thing on the surface.
     ///
     /// The ordering is the whole reason `#151515` was picked: "an agent is
     /// connected" must never look dimmer than "nothing is connected", or the
     /// presence channel reads backwards. Asserted as relative luminance rather
     /// than as a hex string, because that is the property that has to hold.
+    ///
+    /// **It used to be checked against the two product inks and is now checked
+    /// against all twelve theme inks**, which is a stronger claim on a larger
+    /// set: the products' pairs retired with hue (`colour-v2.md` §11), and what
+    /// a connected mark can be drawn in is now whatever the user picked.
     @Test @MainActor
-    func theRestingGreyIsDarkerThanEitherProductsUnlitColour() {
+    func theRestingGreyIsDarkerThanEveryThemeInk() {
         func luminance(_ ink: NotchPalette.MatrixInk) -> Double {
             func channel(_ value: Double) -> Double {
                 value <= 0.03928
@@ -380,70 +385,34 @@ struct NotchlineTests {
         }
 
         let resting = luminance(NotchPalette.restingInk)
-        #expect(resting <= luminance(NotchPalette.codexInk))
-        #expect(resting <= luminance(NotchPalette.claudeCodeInk))
-
-        // The resting mark cannot light: with nothing connected there is
-        // nothing that could be running.
-        #expect(NotchPalette.restingInk.on == NotchPalette.restingInk.off)
-        // Each product's does.
-        for agent in AgentKind.allCases {
-            #expect(NotchPalette.ink(for: agent).on != NotchPalette.ink(for: agent).off)
+        for hue in AggregateInk.allCases {
+            #expect(resting <= luminance(hue.ink))
+            // Every theme ink can light. The resting mark cannot: with nothing
+            // connected there is nothing that could be running.
+            #expect(hue.ink.on != hue.ink.off)
         }
-        // And the two products are told apart by hue, not by brightness.
-        #expect(NotchPalette.ink(for: .codex) != NotchPalette.ink(for: .claudeCode))
+        #expect(NotchPalette.restingInk.on == NotchPalette.restingInk.off)
     }
 
-    /// The legend's seam runs the way the app's own mark does.
+    /// The mark is drawn with row 0 at the top.
     ///
-    /// The seam was once the only asymmetric thing the matrix drew: the four
-    /// old patterns were all symmetric top to bottom — a checkerboard, a
-    /// centre cell, and two uniform fields — so the view's `isFlipped` was
-    /// never observable and nothing would have caught it being wrong. Three of
-    /// the four patterns are asymmetric now (the radar would sweep the wrong
-    /// way, the advance's baseline row would sit on top, the lull would cross
-    /// the wrong diagonal), so `isFlipped` has other witnesses. The seam is
-    /// still the sharpest of them: mirrored, it runs upper-left to lower-right
-    /// and the legend stops looking like the icon.
+    /// **What this used to be, and why the claim outlived it.** The seam of the
+    /// first-run legend's split matrix — Codex above, Claude Code below — was
+    /// once the only asymmetric thing the matrix drew, so it was the only
+    /// witness that the view's `isFlipped` was right. The four old patterns
+    /// were all symmetric top to bottom (a checkerboard, a centre cell, and two
+    /// uniform fields), and nothing would have caught the flip being wrong.
     ///
-    /// Asserted on the path rather than on rendered pixels because the path is
-    /// what the code decides; the row and column arithmetic beside it is the
-    /// other half of the same claim.
+    /// The seam is gone with the two product inks it was cut from
+    /// (`colour-v2.md` §11), and the legend now draws one mark in the theme
+    /// ink — but three of the four patterns are asymmetric, so they are the
+    /// witnesses instead: mirrored, the radar sweeps the wrong way, the
+    /// advance's baseline row sits on top, and the lull crosses the wrong
+    /// diagonal. This pins the property those three depend on, directly, so a
+    /// flip that broke all three fails here first and says what it was.
     @Test @MainActor
-    func theSplitMatrixCutsOnTheSameDiagonalAsTheMark() {
-        // Codex above the seam, Claude Code below — the mark's own order.
-        #expect(NotchPalette.MatrixSplit.products.above == NotchPalette.codexInk)
-        #expect(NotchPalette.MatrixSplit.products.below == NotchPalette.claudeCodeInk)
-
-        // Row 0 is the top row, which is what makes "above" mean above.
+    func theMarkIsDrawnWithRowZeroAtTheTop() {
         #expect(MatrixIndicatorView(frame: .zero).isFlipped)
-
-        // Ten cells a side, five on the seam itself.
-        let sides = (0 ..< MatrixGrid.cellCount)
-            .map { MatrixIndicatorView.DiagonalSide.of(cell: $0) }
-        #expect(sides == [
-            .above, .above, .above, .above, .onSeam,
-            .above, .above, .above, .onSeam, .below,
-            .above, .above, .onSeam, .below, .below,
-            .above, .onSeam, .below, .below, .below,
-            .onSeam, .below, .below, .below, .below
-        ])
-
-        // The trailing half is the lower-right one: y grows downwards, so the
-        // corner it must cover is the bottom-right and the one it must leave
-        // alone is the top-left.
-        let edge: CGFloat = 27
-        let half = MatrixIndicatorView.trailingHalf(edge: edge, radius: 2)
-        #expect(half.contains(CGPoint(x: edge * 0.8, y: edge * 0.8)))
-        #expect(!half.contains(CGPoint(x: edge * 0.2, y: edge * 0.2)))
-        // And it is a half, not a quadrant: it reaches both ends of the seam,
-        // and neither of the two cells the seam separates is on it. Every
-        // point here is clear of the line x + y = edge, which `contains` is
-        // entitled to answer either way.
-        #expect(half.contains(CGPoint(x: edge * 0.9, y: edge * 0.5)))
-        #expect(half.contains(CGPoint(x: edge * 0.5, y: edge * 0.9)))
-        #expect(!half.contains(CGPoint(x: edge * 0.5, y: edge * 0.1)))
-        #expect(!half.contains(CGPoint(x: edge * 0.1, y: edge * 0.5)))
     }
 
     /// The first-run specimens are the product, and they watch nothing.
@@ -481,7 +450,7 @@ struct NotchlineTests {
 
         // A subagent stopped on a question is what the whole drawing is of.
         #expect(shut.status == .approvalNeeded)
-        #expect(shut.expandedAgentColumns.count == 2)
+        #expect(shut.aggregateSessionCount == shut.sessions.count)
         #expect(shut.compactTimerText != nil)
 
         // The pill the pins are measured against.
@@ -533,12 +502,15 @@ struct NotchlineTests {
         #expect(hovered.sessions.dropFirst().first?.agent == .claudeCode)
 
         // The panel's own footer, which the second page has the room to draw:
-        // one rule per product -- Codex publishes one window, Claude Code two
-        // -- and the day's tokens under them. Pins 7 and 8 name rows that only
-        // exist if this fixture carries real quota.
+        // today's spend, and the control that opens one group per product --
+        // Codex publishes one window, Claude Code two. Pins 7 and 8 name a line
+        // and a control that only exist if this fixture carries real quota.
         #expect(hovered.footerRules.count == 2)
         #expect(hovered.footerRules.first { $0.agent == .claudeCode }?.windows.count == 2)
-        #expect(hovered.footerTodayText != nil)
+        #expect(hovered.showsQuotaFoldControl)
+        #expect(hovered.footerToday.text == "519M today")
+        // And the table starts shut, which is what the pins are placed against.
+        #expect(!hovered.isQuotaExpanded)
     }
 
     /// The first-run clock starts again rather than running all afternoon.
@@ -640,7 +612,7 @@ struct NotchlineTests {
         /// The lit cells of one mark, in row-major order.
         func cells(_ state: NotchMatrixState) throws -> [CALayer] {
             let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-            view.apply(state: state, size: 16, isAnimated: true, ink: NotchPalette.codexInk)
+            view.apply(state: state, size: 16, isAnimated: true, ink: AggregateInk.sage.ink)
             // The unlit bed is first and never animates; any lit pass will do.
             let passes = try #require(view.layer?.sublayers)
             return try #require(passes.last?.sublayers)
@@ -806,7 +778,7 @@ struct NotchlineTests {
                 state: state,
                 size: 16,
                 isAnimated: true,
-                ink: NotchPalette.codexInk
+                ink: AggregateInk.sage.ink
             )
         }
         func passes() throws -> [CALayer] { try #require(view.layer?.sublayers) }
@@ -963,10 +935,10 @@ struct NotchlineTests {
         // One mark first, then the other a beat later — the sequence that used
         // to desynchronise them.
         let builtCodexAt = CACurrentMediaTime()
-        let codex = try beginTimes(of: .running, ink: NotchPalette.codexInk)
+        let codex = try beginTimes(of: .running, ink: AggregateInk.sage.ink)
         try await Task.sleep(for: .milliseconds(120))
         let builtClaudeAt = CACurrentMediaTime()
-        let claudeCode = try beginTimes(of: .running, ink: NotchPalette.claudeCodeInk)
+        let claudeCode = try beginTimes(of: .running, ink: AggregateInk.rose.ink)
 
         // Every lit cell in a mark is anchored together, as it always was.
         // The phase each cell then shows is baked into its own track, not into
@@ -1440,7 +1412,7 @@ struct NotchlineTests {
         // is where both products are listed whatever they are doing.
         store.isExpanded = true
         #expect(store.drawsCompactMarks)
-        #expect(store.expandedAgentColumns.count == 2)
+        #expect(store.aggregateSessionCount == 2)
     }
 
     /// A Turn that finished under a running one still brings its product's
@@ -1878,9 +1850,45 @@ struct NotchlineTests {
         )
     }
 
-    /// The footer has exactly as many rules as the notch has marks.
+    /// A footer of the given shape, with every field filled in — what is
+    /// being measured is the geometry, not the readings.
+    static func footerShape(_ shape: [(AgentKind, Int)]) -> [FooterRule] {
+        shape.map { agent, windowCount in
+            FooterRule(
+                agent: agent,
+                today: UsageSummaryFormatter.today(tokens: 310_100_000),
+                windows: (0 ..< windowCount).map { index in
+                    FooterWindow(
+                        label: "w\(index)",
+                        share: "72% left",
+                        timer: "3d 12h",
+                        spokenTimer: "resets Friday at 09:00"
+                    )
+                }
+            )
+        }
+    }
+
+    /// Every connected form the footer can take, from one product with one
+    /// window to three with six — which is one past anything that ships.
+    static let everyFooterShape: [[FooterRule]] = [
+        footerShape([(.codex, 1)]),
+        footerShape([(.claudeCode, 2)]),
+        footerShape([(.codex, 0)]),
+        footerShape([(.codex, 1), (.claudeCode, 2)]),
+        footerShape([(.codex, 1), (.claudeCode, 0)])
+    ]
+
+    /// The footer has exactly as many groups as the notch has marks, and it
+    /// sorts neither level.
+    ///
+    /// Products keep Settings' order and windows keep the reader's — Claude
+    /// Code publishes `5 h` before `7 d` and the table draws them that way,
+    /// whatever their shares are. **Nothing on this footer is sorted by any
+    /// value it draws** (`quota-footer-v2.md` §5): the objection to sorting by
+    /// share is not that an order indicates something, it is that it *moves*.
     @Test @MainActor
-    func theFooterDrawsOneRuleBlockPerConnectedProduct() throws {
+    func theFooterDrawsOneGroupPerConnectedProductAndSortsNothing() throws {
         let store = MonitorStore(services: [])
         store.applyForTesting(
             AgentSnapshot(
@@ -1892,11 +1900,7 @@ struct NotchlineTests {
             )
         )
         #expect(store.footerRules.map(\.agent) == [.codex])
-        // Codex spans the full width because it has one window.
         #expect(try #require(store.footerRules[checked: 0]).windows.count == 1)
-        // One window leaves room in the caption, so today's tokens stay inline.
-        #expect(store.footerTodayText == nil)
-        #expect(store.expandedFooterHeight == PanelMetrics.expandedFooterHeight)
 
         store.applyForTesting(
             AgentSnapshot(
@@ -1905,8 +1909,10 @@ struct NotchlineTests {
                 sessions: [],
                 quota: QuotaSnapshot(
                     windows: [
-                        QuotaWindow(label: "5 h", remainingPercent: 59, resetsAt: nil),
-                        QuotaWindow(label: "7 d", remainingPercent: 85, resetsAt: nil)
+                        // The tighter window second, so a sort by share would
+                        // be visible here.
+                        QuotaWindow(label: "5 h", remainingPercent: 85, resetsAt: nil),
+                        QuotaWindow(label: "7 d", remainingPercent: 12, resetsAt: nil)
                     ],
                     todayTokens: 2000
                 ),
@@ -1914,21 +1920,70 @@ struct NotchlineTests {
             )
         )
         #expect(store.footerRules.map(\.agent) == [.codex, .claudeCode])
-        // Claude Code is halved because it genuinely has two windows.
-        #expect(try #require(store.footerRules[checked: 1]).windows.count == 2)
-        // Four captions fill the line, so today's usage needs one of its own.
-        let today = try? #require(store.footerTodayText)
-        #expect(today?.contains("Codex") == true)
-        #expect(today?.contains("Claude Code") == true)
-        #expect(store.expandedFooterHeight == PanelMetrics.dualFooterHeight)
+        let claudeCode = try #require(store.footerRules[checked: 1])
+        #expect(claudeCode.windows.map(\.label) == ["5 h", "7 d"])
+        #expect(claudeCode.windows.map(\.share) == ["85% left", "12% left"])
+
+        // Each product's own spend is on its own group, and it is the only
+        // place the footer names one: the resting line is the whole.
+        #expect(try #require(store.footerRules[checked: 0]).today.text == "1K today")
+        #expect(claudeCode.today.text == "2K today")
+        #expect(store.footerToday.text == "3K today")
+        #expect(!store.footerToday.text.contains("Codex"))
+        #expect(!store.footerToday.text.contains("Claude Code"))
     }
 
-    /// The footer says a fresh 5-hour window has not started, not that its
-    /// reset is unavailable.
+    /// **A product with no limits still gets its group.**
     ///
-    /// The window's clock begins at the first request of the day, so a user who
-    /// has not made one yet is looking at a full rule with nothing to count
-    /// down to. The old caption blamed the app for that.
+    /// An outer row and no inner ones: its spend is attributed, and the absence
+    /// of lines says there is nothing to report. That is also how a connected
+    /// product this app does not yet read quota for appears — present and
+    /// counted, with nothing claimed about it (`quota-footer-v2.md` §5). The
+    /// old footer had no form for this at all and dropped the product.
+    @Test @MainActor
+    func aProductWithNoLimitsKeepsItsRow() throws {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .codex,
+                availability: .ready,
+                sessions: [],
+                quota: QuotaSnapshot(windows: [], todayTokens: 16_100_000),
+                diagnostic: nil
+            )
+        )
+
+        #expect(store.footerRules.map(\.agent) == [.codex])
+        #expect(try #require(store.footerRules[checked: 0]).windows.isEmpty)
+        #expect(try #require(store.footerRules[checked: 0]).today.text == "16.1M today")
+        // And the control is drawn: it answers to a connected product, not to
+        // there being windows behind it.
+        #expect(store.showsQuotaFoldControl)
+
+        // Nothing connected at all is no footer — no products, no windows and
+        // no tokens is nothing to say (§8.5 question 07).
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .codex,
+                availability: .ready,
+                sessions: [],
+                quota: .unavailable,
+                diagnostic: nil,
+                presence: .closed
+            )
+        )
+        #expect(store.connectedAgents.isEmpty)
+        #expect(store.footerRules.isEmpty)
+        #expect(!store.showsQuotaFoldControl)
+        #expect(store.expandedFooterHeight == 0)
+    }
+
+    /// A window's line, whole: the label, the share and the countdown.
+    ///
+    /// `Resets in` is gone with the prose — repeated once a window it was
+    /// noise. A fresh 5-hour window still says `Not started` rather than
+    /// claiming its reading failed, and a spent window with no reset draws the
+    /// `--` that the general fallback gives it.
     @Test @MainActor
     func theFooterCallsAnUntouchedWindowNotStarted() throws {
         let store = MonitorStore(
@@ -1948,134 +2003,164 @@ struct NotchlineTests {
             )
         )
         let windows = try #require(store.footerRules[checked: 0]).windows
-        #expect(
-            try #require(windows[checked: 0]).caption
-                == "5 h · 100% left · Not started"
-        )
+        let fresh = try #require(windows[checked: 0])
+        #expect(fresh.label == "5 h")
+        #expect(fresh.share == "100% left")
+        #expect(fresh.timer == "Not started")
+        #expect(fresh.spokenTimer == "not started")
+
         // The spent window is untouched by this: a percentage with no reset is
-        // still how a wording change announces itself.
-        #expect(
-            try #require(windows[checked: 1]).caption
-                == "7 d · 85% left · Reset unavailable"
-        )
+        // still how a wording change announces itself, and it now announces
+        // itself as a share beside a `--`.
+        let spent = try #require(windows[checked: 1])
+        #expect(spent.share == "85% left")
+        #expect(spent.timer == "--")
+        #expect(spent.spokenTimer == "unavailable")
     }
 
-    /// Folded, the panel is one height whatever is connected.
+    /// **The footer is `22` for every connected form**, and there is no second
+    /// closed height.
     ///
-    /// That is the whole point of §5.4: unfolded the expanded panel is `316`,
-    /// `339` or `370` depending on which products happen to be running, and
-    /// folded it stops depending on that at all.
+    /// This replaces `aFoldedFooterIsTheSameHeightForEveryShape`, which pinned
+    /// something weaker: that *folding* made the four footers one height. The
+    /// small form is now what the footer **is** (`quota-footer-v2.md` §8.1), so
+    /// the claim is unconditional — every product count, every window count,
+    /// and, by `noShareReachesTheClosedFooter`, every share.
     @Test @MainActor
-    func aFoldedFooterIsTheSameHeightForEveryShape() {
-        func rules(_ shape: [(AgentKind, Int)]) -> [FooterRule] {
-            shape.map { agent, windowCount in
-                FooterRule(
-                    agent: agent,
-                    windows: (0..<windowCount).map { _ in
-                        FooterWindow(fill: 0.5, caption: "c")
-                    }
-                )
-            }
-        }
-        let codexAlone = rules([(.codex, 1)])
-        let claudeAlone = rules([(.claudeCode, 2)])
-        let both = rules([(.codex, 1), (.claudeCode, 2)])
-
-        func panelHeight(_ shape: [FooterRule], folded: Bool) -> CGFloat {
+    func theFooterIsTwentyTwoForEveryConnectedForm() {
+        func panelHeight(_ shape: [FooterRule], expanded: Bool) -> CGFloat {
             PanelMetrics.referenceCompactHeight
                 + PanelMetrics.expandedContentHeight(
                     forSessionCount: 3,
                     footerHeight: PanelMetrics.footerHeight(
-                        rules: shape, isFolded: folded
+                        rules: shape, isExpanded: expanded
                     )
                 )
         }
 
-        // Unfolded: three shapes, three heights. 46 + 240 + footer.
-        #expect(panelHeight(codexAlone, folded: false) == 316)
-        #expect(panelHeight(claudeAlone, folded: false) == 339)
-        #expect(panelHeight(both, folded: false) == 370)
+        for shape in Self.everyFooterShape {
+            #expect(PanelMetrics.footerHeight(rules: shape) == 22)
+            #expect(panelHeight(shape, expanded: false) == 308)
+        }
 
-        // Folded: one footer height, and the same panel every time.
-        #expect(panelHeight(codexAlone, folded: true) == 308)
-        #expect(panelHeight(claudeAlone, folded: true) == 308)
-        #expect(panelHeight(both, folded: true) == 308)
-        #expect(
-            PanelMetrics.footerHeight(rules: both, isFolded: true)
-                == PanelMetrics.foldedFooterHeight
-        )
-
-        // Nothing drawn is nothing to fold, so folding must not shrink it.
-        #expect(
-            PanelMetrics.footerHeight(rules: [], isFolded: true)
-                == PanelMetrics.footerHeight(rules: [], isFolded: false)
-        )
+        // Nothing connected is no footer, so there is nothing for the control
+        // to open either.
+        #expect(PanelMetrics.footerHeight(rules: [], isExpanded: true) == 0)
+        #expect(PanelMetrics.footerHeight(rules: [], isExpanded: false) == 0)
     }
 
-    /// The footer's last line stands the same height above the edge, always.
+    /// **No share reaches the closed footer, whatever it is.**
     ///
-    /// It did not. Each of the four footers was a constant, and the black
-    /// under the last line was whatever that constant had left once the
-    /// content was laid out — `6` with both products, `7` with Claude Code
-    /// alone, `16` with Codex alone, `12` folded. So the panel's bottom edge
-    /// sat at a different distance from the same reading depending on what
-    /// happened to be connected, and folding the rules away, which does not
-    /// touch that reading, moved the edge under it.
-    ///
-    /// The contents are written longhand here, as the view lays each shape
-    /// out, so that this is a claim about what is drawn rather than the
-    /// composition in `PanelMetrics` restated.
+    /// This replaces `aQuietWindowIsNotDrawn`, which checked one healthy window
+    /// against one that was nearly spent. Sweeping the share across its whole
+    /// range and asserting the closed footer is identical at every point is a
+    /// stronger pin, and it is what `quota-footer-v2.md` §4 actually claims:
+    /// there is no critical threshold, no window speaks, and no figure anywhere
+    /// on this footer changes ink, weight or size with its value.
     @Test @MainActor
-    func theFootersLastLineStandsTheSameHeightAboveTheEdgeInEveryShape() {
-        func rules(_ shape: [(AgentKind, Int)]) -> [FooterRule] {
-            shape.map { agent, windowCount in
-                FooterRule(
-                    agent: agent,
-                    windows: (0..<windowCount).map { _ in
-                        FooterWindow(fill: 0.5, caption: "c")
-                    }
+    func noShareReachesTheClosedFooter() throws {
+        let display = makeDisplay(
+            id: "notched",
+            ordinal: 1,
+            menuBarHeight: 46,
+            hasNotch: true
+        )
+        func store(share: Int?) -> MonitorStore {
+            let store = MonitorStore(
+                displays: [display],
+                services: [],
+                initialSnapshot: AgentSnapshot(
+                    agent: .claudeCode,
+                    availability: .ready,
+                    sessions: [],
+                    quota: QuotaSnapshot(
+                        windows: [
+                            QuotaWindow(
+                                label: "5 h",
+                                remainingPercent: share,
+                                resetsAt: Date().addingTimeInterval(4 * 86_400)
+                            )
+                        ],
+                        todayTokens: 518_700_000
+                    ),
+                    diagnostic: nil
                 )
-            }
-        }
-        let codexAlone = rules([(.codex, 1)])
-        let claudeAlone = rules([(.claudeCode, 2)])
-        let both = rules([(.codex, 1), (.claudeCode, 2)])
-
-        // A rule, the gap under it, and the line it labels — which is the
-        // disclosure's own line where the two share it (the Codex-only form).
-        let line = PanelMetrics.quotaFoldControlSize
-        let block = PanelMetrics.footerRuleHeight
-            + PanelMetrics.footerCaptionSpacing
-            + PanelMetrics.footerCaptionHeight
-        let inlineBlock = PanelMetrics.footerRuleHeight
-            + PanelMetrics.footerCaptionSpacing
-            + line
-        let gap = PanelMetrics.footerRuleSpacing
-
-        let shapes: [(rules: [FooterRule], isFolded: Bool, drawn: CGFloat)] = [
-            (codexAlone, false, inlineBlock),
-            (claudeAlone, false, block + gap + line),
-            (both, false, block + gap + block + gap + line),
-            (codexAlone, true, line),
-            (claudeAlone, true, line),
-            (both, true, line)
-        ]
-        for shape in shapes {
-            let footer = PanelMetrics.footerHeight(
-                rules: shape.rules,
-                isFolded: shape.isFolded
             )
-            #expect(footer - shape.drawn == PanelMetrics.footerBottomMargin)
+            store.isExpanded = true
+            return store
         }
+
+        let reference = store(share: 100)
+        for share in stride(from: 0, through: 100, by: 1) {
+            let low = store(share: share)
+            #expect(low.expandedFooterHeight == reference.expandedFooterHeight)
+            #expect(low.currentPanelSize == reference.currentPanelSize)
+            #expect(low.footerToday.text == reference.footerToday.text)
+        }
+        // An unreadable share does not move it either -- it changes a field,
+        // and nothing else on the panel.
+        let unreadable = store(share: nil)
+        #expect(unreadable.currentPanelSize == reference.currentPanelSize)
+        #expect(
+            try #require(unreadable.footerRules[checked: 0]).windows.first?.share
+                == "-- left"
+        )
     }
 
-    /// Today's line is the one thing folding never takes away.
+    /// The opened table is `19W + 30P + 17`, composed as the view lays it out.
     ///
-    /// Codex alone is the trap: its tokens live inline in the rule's caption, so
-    /// unfolded there is no totals line at all — and folded, that line has to
-    /// come back or the number disappears with the rule.
+    /// Written longhand here rather than restating the closed form in
+    /// `PanelMetrics`, so this is a claim about what is drawn: the spend line
+    /// and its gap, then a caption line carrying a badge and `19` for each of
+    /// that product's windows, with a line of air between groups and the
+    /// panel's own margin below the last line.
     @Test @MainActor
-    func foldingKeepsTodaysTokensInEveryShape() {
+    func theOpenedTableIsNineteenAWindowAndThirtyAProduct() {
+        for shape in Self.everyFooterShape {
+            let windows = shape.reduce(0) { $0 + $1.windows.count }
+            let products = shape.count
+            let drawn = PanelMetrics.quotaFoldControlSize
+                + PanelMetrics.footerRuleSpacing
+                + CGFloat(products) * PanelMetrics.productBadgeHeight
+                + CGFloat(windows)
+                    * (PanelMetrics.footerCaptionHeight
+                        + PanelMetrics.footerCaptionSpacing)
+                + CGFloat(products - 1) * PanelMetrics.footerCaptionHeight
+            let opened = PanelMetrics.footerHeight(rules: shape, isExpanded: true)
+
+            #expect(opened == 19 * CGFloat(windows) + 30 * CGFloat(products) + 17)
+            // And the last line stands the panel's own margin above the edge,
+            // in the opened form and the closed one alike.
+            #expect(opened - drawn == PanelMetrics.footerBottomMargin)
+            #expect(
+                PanelMetrics.footerHeight(rules: shape)
+                    - PanelMetrics.quotaFoldControlSize
+                    == PanelMetrics.footerBottomMargin
+            )
+        }
+
+        // The five forms `quota-footer-v2.md` §6 tabulates.
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 66)
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 85)
+        #expect(
+            PanelMetrics.footerHeight(
+                rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
+                isExpanded: true
+            ) == 134
+        )
+    }
+
+    /// The resting footer is the whole spend, and it names nobody.
+    ///
+    /// This replaces `foldingKeepsTodaysTokensInEveryShape`. The old footer put
+    /// today's tokens inline in a rule's caption with one product and on a line
+    /// of their own with two, so folding had a trap: the number could disappear
+    /// with the rule it was riding. There is one line now and it is always
+    /// drawn, so what is left to pin is the other half of §3 — the figure is
+    /// the sum, not a list of products, because the word that says whose a
+    /// number is costs width here and costs nothing in the table.
+    @Test @MainActor
+    func theRestingFooterIsTheWholeSpendAndNamesNobody() {
         let store = MonitorStore(services: [])
         store.applyForTesting(
             AgentSnapshot(
@@ -2088,11 +2173,7 @@ struct NotchlineTests {
                 diagnostic: nil
             )
         )
-        // Unfolded there is no totals line; the tokens ride the rule's caption.
-        #expect(store.footerTodayText == nil)
-        // Folded there has to be one, and with one product it does not name it.
-        #expect(store.foldedTodayText == "310M today")
-        #expect(!store.foldedTodayText.contains("Codex"))
+        #expect(store.footerToday.text == "310M today")
 
         store.applyForTesting(
             AgentSnapshot(
@@ -2109,19 +2190,22 @@ struct NotchlineTests {
                 diagnostic: nil
             )
         )
-        // Two products, so both are named, folded or not — the line is the same.
-        #expect(store.foldedTodayText == store.footerTodayText)
-        #expect(store.foldedTodayText.contains("Codex"))
-        #expect(store.foldedTodayText.contains("Claude Code"))
+        // The two products' spend, added rather than listed.
+        #expect(store.footerToday.text == "519M today")
+        #expect(!store.footerToday.text.contains("Codex"))
+        #expect(!store.footerToday.text.contains("Claude Code"))
+        // And each one's own figure is on its own group instead.
+        #expect(store.footerRules.map(\.today.text) == ["310M today", "209M today"])
     }
 
-    /// Folding has to move the panel, not just the footer inside it.
+    /// Opening the table has to move the panel, not just the footer inside it.
     ///
-    /// The footer redraws itself from `isQuotaFolded`, but the height it gives
-    /// up belongs to the window: without this the rules vanish and their space
-    /// stays behind as an empty band under the last row.
+    /// The footer redraws itself from `isQuotaExpanded`, but the height the
+    /// table needs belongs to the window: without this the rows are drawn into
+    /// a footer box that never grew and the last of them falls off the panel's
+    /// bottom edge.
     @Test @MainActor
-    func foldingShrinksThePanelItself() {
+    func openingTheTableGrowsThePanelItself() {
         let display = makeDisplay(
             id: "notched",
             ordinal: 1,
@@ -2157,17 +2241,18 @@ struct NotchlineTests {
         )
         store.isExpanded = true
         #expect(store.footerRules.map(\.agent) == [.claudeCode])
+        #expect(!store.isQuotaExpanded, "the table is a thing somebody asks for")
 
-        let unfolded = store.currentPanelSize.height
-        store.toggleQuotaFold()
-        let folded = store.currentPanelSize.height
+        let closed = store.currentPanelSize.height
+        store.toggleQuotaTable()
+        let opened = store.currentPanelSize.height
 
+        #expect(opened > closed)
         #expect(
-            unfolded - folded
-                == PanelMetrics.claudeCodeOnlyFooterHeight
-                    - PanelMetrics.foldedFooterHeight
+            opened - closed
+                == PanelMetrics.footerHeight(rules: store.footerRules, isExpanded: true)
+                    - PanelMetrics.restingFooterHeight
         )
-        #expect(folded < unfolded)
     }
 
     /// Only the panel body answers to the pointer, and its edges count as in.
@@ -2205,17 +2290,24 @@ struct NotchlineTests {
         #expect(!contains(200, window.minY - 1))
     }
 
-    /// Folding takes the panel's bottom edge up past the chevron that did it.
+    /// **Shutting the quota table cannot strand the pointer**, and the
+    /// stranding machinery still catches a shrink that would.
     ///
-    /// This is why the fold is the one gesture that strands the panel open. The
-    /// chevron rides the footer's last line, which ends a control's height above
-    /// the panel's bottom edge; the rules folding removes are far taller than
-    /// that. So the click lands, the window shrinks, and the pointer that has
-    /// not moved an inch is now outside a panel that never heard it leave —
-    /// which is both halves of the failure, the exit that never comes and the
-    /// entry that will be swallowed next time.
+    /// This inverts `foldingLiftsThePanelsBottomEdgePastTheChevronThatWasClicked`.
+    /// The old footer put the chevron on its *last* line and folded the rules
+    /// away above it, so the click landed, the window shrank by `56` pt, and a
+    /// pointer that had not moved an inch was outside a panel that never heard
+    /// it leave — the exit that never comes and the entry that gets swallowed
+    /// next time. The control now rides the spend line, which is the footer's
+    /// *first* line, so the table opens beneath it and closing leaves the
+    /// pointer between `6` and `22` above the new bottom edge — inside it
+    /// (`quota-footer-v2.md` §5).
+    ///
+    /// The second half keeps the guard honest: a resize that really does leave
+    /// a still pointer outside is still reported, so this is a claim about the
+    /// footer's shape rather than about the check having been switched off.
     @Test @MainActor
-    func foldingLiftsThePanelsBottomEdgePastTheChevronThatWasClicked() {
+    func foldingCannotStrandThePointer() {
         let display = makeDisplay(
             id: "notched",
             ordinal: 1,
@@ -2253,58 +2345,75 @@ struct NotchlineTests {
             )
         }
 
-        // The chevron's own square, sitting on the footer's last line: its top
-        // is one control height above the panel's bottom edge. Anywhere in it
-        // is a place the pointer can legitimately be when the click lands.
-        let unfolded = window()
-        let chevron = unfolded.minY + PanelMetrics.quotaFoldControlSize / 2
-        let pointer = NSPoint(x: unfolded.midX, y: chevron)
+        // Open the table, then put the pointer on the chevron that did it. The
+        // control sits on the footer's first line, so its square is the whole
+        // opened table plus the bottom margin above the panel's edge.
+        store.toggleQuotaTable()
+        let opened = window()
+        let table = PanelMetrics.footerHeight(
+            rules: store.footerRules,
+            isExpanded: true
+        )
+        let chevron = opened.minY
+            + table
+            - PanelMetrics.quotaFoldControlSize / 2
+        let pointer = NSPoint(x: opened.midX, y: chevron)
         #expect(
             OverlayPanelLayout.bodyContainsPointer(
                 pointer,
-                windowFrame: unfolded,
+                windowFrame: opened,
                 surfaceShoulder: store.surfaceShoulderRadius
             )
         )
 
-        store.toggleQuotaFold()
-        let folded = window()
+        store.toggleQuotaTable()
+        let closed = window()
+        #expect(closed.height < opened.height, "the table really did close")
+        // And the pointer is still on the panel, which is the whole claim.
         #expect(
-            !OverlayPanelLayout.bodyContainsPointer(
+            OverlayPanelLayout.bodyContainsPointer(
                 pointer,
-                windowFrame: folded,
+                windowFrame: closed,
                 surfaceShoulder: store.surfaceShoulderRadius
             )
         )
-
-        // Which is exactly the shape that owes an entry: the pointer was in,
-        // the pointer is out, and the pointer never moved.
-        #expect(
-            OverlayPanelLayout.resizeStrandedPointer(
-                pointer,
-                from: unfolded,
-                to: folded,
-                surfaceShoulder: store.surfaceShoulderRadius
-            )
-        )
-        // Unfolding again is the same resize backwards and owes nothing: the
-        // panel grows back over a pointer the tracking area still has inside.
         #expect(
             !OverlayPanelLayout.resizeStrandedPointer(
                 pointer,
-                from: folded,
-                to: unfolded,
+                from: opened,
+                to: closed,
                 surfaceShoulder: store.surfaceShoulderRadius
             )
         )
-        // Nor does a resize the pointer was already clear of -- it walked out
-        // of the tracking area itself, so it will be let back in the same way.
-        let away = NSPoint(x: unfolded.midX, y: unfolded.minY - 200)
+
+        // The guard is not switched off: a pointer the shrink really does
+        // leave behind is still reported, and one that had already walked out
+        // of the tracking area is not.
+        let low = NSPoint(x: opened.midX, y: opened.minY + 1)
+        #expect(
+            OverlayPanelLayout.resizeStrandedPointer(
+                low,
+                from: opened,
+                to: closed,
+                surfaceShoulder: store.surfaceShoulderRadius
+            )
+        )
+        let away = NSPoint(x: opened.midX, y: opened.minY - 200)
         #expect(
             !OverlayPanelLayout.resizeStrandedPointer(
                 away,
-                from: unfolded,
-                to: folded,
+                from: opened,
+                to: closed,
+                surfaceShoulder: store.surfaceShoulderRadius
+            )
+        )
+        // Opening again is the same resize backwards and owes nothing: the
+        // panel grows back over a pointer the tracking area still has inside.
+        #expect(
+            !OverlayPanelLayout.resizeStrandedPointer(
+                low,
+                from: closed,
+                to: opened,
                 surfaceShoulder: store.surfaceShoulderRadius
             )
         )
@@ -2392,46 +2501,78 @@ struct NotchlineTests {
         #expect(!store.isExpanded)
     }
 
-    /// The fold is remembered, and starts showing the rules.
+    /// The table is one remembered state for the whole footer, and it starts
+    /// shut.
+    ///
+    /// **The default inverts with the name.** `isQuotaFolded` defaulted to
+    /// `false` because the footer *was* the rules and folding was the escape
+    /// from them; the small form is what the footer is now, so the table is a
+    /// thing somebody asks for (`quota-footer-v2.md` §8.1). One state for both
+    /// products, because opening one product's windows while the other's stayed
+    /// shut is a shape nothing describes.
     @Test @MainActor
-    func theFoldIsOneRememberedStateForTheWholeFooter() {
-        let defaults = UserDefaults(suiteName: "fold-\(UUID().uuidString)")!
+    func theQuotaTableIsOneRememberedStateForTheWholeFooter() {
+        let defaults = UserDefaults(suiteName: "quota-\(UUID().uuidString)")!
         let store = MonitorStore(services: [], preferences: defaults)
-        #expect(!store.isQuotaFolded)
+        #expect(!store.isQuotaExpanded)
 
-        store.toggleQuotaFold()
-        #expect(store.isQuotaFolded)
-        #expect(MonitorStore(services: [], preferences: defaults).isQuotaFolded)
+        store.toggleQuotaTable()
+        #expect(store.isQuotaExpanded)
+        #expect(MonitorStore(services: [], preferences: defaults).isQuotaExpanded)
 
-        store.toggleQuotaFold()
-        #expect(!MonitorStore(services: [], preferences: defaults).isQuotaFolded)
+        store.toggleQuotaTable()
+        #expect(!MonitorStore(services: [], preferences: defaults).isQuotaExpanded)
 
-        // The control follows the rules, not the reading: an unavailable quota
-        // still draws its track greyed, and that track is one a user may well
-        // want folded away. It is only withheld when no rule is drawn at all,
-        // which `aFoldedFooterIsTheSameHeightForEveryShape` covers by height.
+        // The control answers to a connected product and not to what can be
+        // read of it: a product whose quota is unavailable still gets its
+        // group, so there is still something to open. It is withheld only when
+        // nothing is connected at all, which `aProductWithNoLimitsKeepsItsRow`
+        // covers.
         store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
         #expect(store.showsQuotaFoldControl)
     }
 
-    /// The panel grows for the second product's rules, and by exactly that much.
+    /// **The panel is `308` on every connected form**, and only the user can
+    /// take it past that.
+    ///
+    /// This replaces `theDualProductPanelIsTallerByTheExtraFooterRules`, which
+    /// pinned the opposite: the panel was `316` with Codex alone, `339` with
+    /// Claude Code alone and `370` with both, because the footer grew a rule
+    /// block per product. Every connected form gets *smaller* now, the
+    /// single-product case included, and they all get the same
+    /// (`quota-footer-v2.md` §6).
+    ///
+    /// Two states can exceed it and both are somebody opening the table. It is
+    /// not reached by owning a second product, by a window running low, or by
+    /// a reading failing.
     @Test @MainActor
-    func theDualProductPanelIsTallerByTheExtraFooterRules() {
-        let single = PanelMetrics.expandedContentHeight(
-            forSessionCount: 3,
-            footerHeight: PanelMetrics.expandedFooterHeight
+    func thePanelIsThreeHundredAndEightOnEveryConnectedForm() {
+        for shape in Self.everyFooterShape {
+            let closed = PanelMetrics.expandedContentHeight(
+                forSessionCount: 3,
+                footerHeight: PanelMetrics.footerHeight(rules: shape)
+            )
+            #expect(PanelMetrics.referenceCompactHeight + closed == 308)
+
+            let opened = PanelMetrics.expandedContentHeight(
+                forSessionCount: 3,
+                footerHeight: PanelMetrics.footerHeight(rules: shape, isExpanded: true)
+            )
+            #expect(PanelMetrics.referenceCompactHeight + opened > 308)
+        }
+
+        // The two figures `quota-footer-v2.md` §6 tabulates for an opened
+        // table: two products with three windows, and three with six.
+        #expect(
+            PanelMetrics.referenceCompactHeight
+                + PanelMetrics.expandedContentHeight(
+                    forSessionCount: 3,
+                    footerHeight: PanelMetrics.footerHeight(
+                        rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
+                        isExpanded: true
+                    )
+                ) == 420
         )
-        let dual = PanelMetrics.expandedContentHeight(
-            forSessionCount: 3,
-            footerHeight: PanelMetrics.dualFooterHeight
-        )
-        // 46 + 240 + 30 and 46 + 240 + 84, from dual-agent-design 5.1.
-        #expect(PanelMetrics.referenceCompactHeight + single == 316)
-        #expect(PanelMetrics.referenceCompactHeight + dual == 370)
-        // Claude Code alone sits between them: two windows fill its caption
-        // line, so today's usage still needs a line of its own.
-        #expect(PanelMetrics.claudeCodeOnlyFooterHeight > PanelMetrics.expandedFooterHeight)
-        #expect(PanelMetrics.claudeCodeOnlyFooterHeight < PanelMetrics.dualFooterHeight)
     }
 
     /// A row's gutter and its padding are one margin split in two.
@@ -2505,11 +2646,6 @@ struct NotchlineTests {
         )
         #expect(!store.showsProductAttribution)
 
-        // The default is the only option that adds nothing to the panel.
-        #expect(store.productAttribution == .nameAndColour)
-        // And every option is reachable, because a preference the user cannot
-        // find until a second product happens to be running is one they never find.
-        #expect(ProductAttributionStyle.allCases.count == 4)
     }
 
     /// A closed product's rows still identify themselves while they are listed.
@@ -2544,134 +2680,91 @@ struct NotchlineTests {
         #expect(store.showsProductAttribution)
     }
 
-    /// `Colour bar` takes the product off the caption entirely.
+    /// **The badge is the row's one attribution, and its ink is the user's.**
     ///
-    /// The other three all spend caption room — that is the cost the rail was
-    /// added to avoid — so the split is: `nameAndColour` and `nameOnly` prefix
-    /// the words, `badge` moves them into a block of their own, and `colourBar`
-    /// leaves the caption as the bare project name. Getting this wrong prints
-    /// the product twice, once as a word and once as a rail.
-    @Test @MainActor
-    func onlyTheTwoNamingStylesPutTheProductOnTheCaption() {
-        #expect(ProductAttributionStyle.nameAndColour.namesProductInCaption)
-        #expect(ProductAttributionStyle.nameOnly.namesProductInCaption)
-        #expect(!ProductAttributionStyle.badge.namesProductInCaption)
-        #expect(!ProductAttributionStyle.colourBar.namesProductInCaption)
-
-        // Every option is offered by name, and the rail is last: it is the one
-        // that is purely hue, so it is a choice rather than the default.
-        #expect(
-            ProductAttributionStyle.allCases.map(\.displayName)
-                == ["Name and colour", "Name only", "Badge", "Colour bar"]
-        )
-    }
-
-    /// The colour goes on the product name, and stops there.
+    /// This replaces four tests at once —
+    /// `onlyTheTwoNamingStylesPutTheProductOnTheCaption`,
+    /// `onlyTheProductNameTakesTheProductColour`,
+    /// `theAttributionRailLandsOnThePanelsOwnMargin` and
+    /// `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn`. They pinned the
+    /// four presentations `Distinguish products` offered, three of which
+    /// answered *which product* in a channel other than the name and went with
+    /// the product hues (`colour-v2.md` §6). A one-value picker is not a
+    /// control, so the setting retires with them and the stored value is
+    /// ignored rather than migrated.
     ///
-    /// `Name and colour` is the only style that tints at all, and what it tints
-    /// is the two words that say which product — not the Project after them.
-    /// The Project is the row's own subject; painting it the product's colour
-    /// said the same thing twice and left the caption without an ordinary grey
-    /// to read as ordinary.
+    /// What replaces the four claims is the one the badge has to keep: it is
+    /// drawn from the **theme** ink, and it is the same pair the mark takes, so
+    /// the chip and the mark cannot drift.
     @Test @MainActor
-    func onlyTheProductNameTakesTheProductColour() {
-        #expect(ProductAttributionStyle.nameAndColour.tintsProductName)
-        #expect(!ProductAttributionStyle.nameOnly.tintsProductName)
-
-        // The two that put nothing on the caption cannot tint it either — a
-        // style that both hid the name and coloured it would colour the
-        // Project alone, which is the mistake this pair of flags exists to
-        // keep apart.
-        for style in ProductAttributionStyle.allCases
-        where !style.namesProductInCaption {
-            #expect(!style.tintsProductName)
+    func theBadgeTakesTheThemeInksOwnPair() {
+        for hue in AggregateInk.allCases {
+            #expect(NotchPalette.badgeInk(hue) == hue.ink)
+            #expect(
+                NotchPalette.badgeInk(hue)
+                    == NotchPalette.aggregateInk(hue, isConnected: true)
+            )
         }
+        // Ground from the unlit value, text from the lit one -- and at the
+        // default that is `#1B1F1C` under `#DEE8E0`.
+        let sage = NotchPalette.badgeInk(.sage)
+        #expect(abs(sage.offRed - 0x1B / 255.0) < 0.001)
+        #expect(abs(sage.onRed - 0xDE / 255.0) < 0.001)
+
+        // **The chip's contrast is one check rather than twelve.** Every unlit
+        // value in the palette sits at the same lightness, so the grounds are
+        // indistinguishable from each other and only the ink moves.
+        let grounds = AggregateInk.allCases.map { NotchPalette.badgeInk($0).offRed }
+        let spread = (grounds.max() ?? 0) - (grounds.min() ?? 0)
+        #expect(spread < 0.04, "the grounds are one value, whichever entry is chosen")
     }
 
-    /// The rail lands on the panel's own margin, not half of it.
+    /// **A row is `80` with a badge on it and `80` without one.**
     ///
-    /// The stroke sits on the row block's leading edge, so the block's margin
-    /// is the rail's position. At the row's ordinary `6` it stood half an inset
-    /// inboard of everything it is read against — the status matrix above it
-    /// and the quota rules below it, both on `12` — and a mark that is nearly
-    /// but not quite on a line reads as a mistake. Drawn, the block takes the
-    /// full `12`, and the padding behind the stroke is the rail's own `8`
-    /// rather than the row's `6`: that gap is clearance between a `2pt` line
-    /// and the words, not an inset from a panel edge.
+    /// The chip is a point taller than the `11 pt` line it stands on, so the
+    /// caption line is `16` — and it is `16` whether or not a badge is in it,
+    /// which is what stops every row moving at the moment a second product
+    /// connects (`panel-v2.md` §2). The content block absorbs the point at
+    /// `55`, where it was `53`.
+    ///
+    /// This also replaces `theAttributionRailSpansTheRowsTextExactly`: the rail
+    /// was measured against these three lines, and with it gone what the three
+    /// still have to do is add up to a row that has not changed height.
     @Test @MainActor
-    func theAttributionRailLandsOnThePanelsOwnMargin() {
-        #expect(
-            PanelMetrics.sessionRowRailGutter
-                == PanelMetrics.expandedHorizontalPadding
-        )
-        #expect(PanelMetrics.sessionRowRailGutter == 12)
-        #expect(PanelMetrics.sessionRowRailPadding == 8)
-        #expect(PanelMetrics.sessionRowPadding == 6)
-        #expect(PanelMetrics.sessionRowRailWidth < PanelMetrics.sessionRowRailGutter)
-        #expect(PanelMetrics.sessionRowRailWidth == 2)
-    }
+    func theBadgeCostsTheRowNoHeight() {
+        #expect(PanelMetrics.sessionRowCaptionHeight == PanelMetrics.productBadgeHeight)
+        #expect(PanelMetrics.productBadgeHeight == 16)
 
-    /// The rail is as tall as the text it marks, and no taller.
-    ///
-    /// From the top of the Project caption to the bottom of the last line —
-    /// so it reads as that block's own leading edge. Half the row (`40`) was a
-    /// shape rather than a measurement: it stopped short of the caption above
-    /// and the preview below and marked the row's middle instead. A row with no
-    /// preview is genuinely shorter, and the rail shortens with it rather than
-    /// overhanging by `10` at each end.
-    @Test @MainActor
-    func theAttributionRailSpansTheRowsTextExactly() {
-        let threeLines = PanelMetrics.sessionRowCaptionHeight
+        let block = PanelMetrics.sessionRowCaptionHeight
             + PanelMetrics.sessionRowLineSpacing
             + PanelMetrics.sessionRowTitleHeight
             + PanelMetrics.sessionRowLineSpacing
             + PanelMetrics.sessionRowPreviewHeight
-        #expect(threeLines == 53)
-        #expect(PanelMetrics.sessionRowRailHeight(hasPreview: true) == threeLines)
-        #expect(PanelMetrics.sessionRowRailHeight(hasPreview: false) == 33)
-        #expect(
-            PanelMetrics.sessionRowRailHeight(hasPreview: true)
-                < PanelMetrics.sessionRowHeight
-        )
-        // It is the row's text it spans, not the row: the block's own 12pt
-        // corners stay clear at either end.
-        #expect(
-            PanelMetrics.sessionRowHeight - threeLines
-                > PanelMetrics.sessionRowRailRadius * 2
-        )
+        #expect(block == 55)
+        #expect(block < PanelMetrics.sessionRowHeight)
+        #expect(PanelMetrics.sessionRowHeight == 80)
     }
 
-    /// Only a drawn rail moves the row block; the picker alone does not.
+    /// A row's gutter and its padding are one margin split in two, in every
+    /// form the row can take.
     ///
-    /// The wider margin is the rail's own room. Choosing `Colour bar` with one
-    /// product connected draws no rail — attribution is keyed to there being
-    /// two products to tell apart — so a row that took the wider margin then
-    /// would have indented every row for a stroke that is not there.
+    /// The block is inset `6` so the hover fill does not run into the panel
+    /// edge, and the row pads the other `6` back, which puts its text on the
+    /// same margin as the matrix in the header and the footer below it.
+    ///
+    /// **Both are constants again.** `Colour bar` moved the gutter to the
+    /// panel's full inset so its rail would land on that same line, which made
+    /// the split answer to a preference *and* to how many products were
+    /// connected; with the rail gone no form of the row gives up its `6 + 6`
+    /// (`colour-v2.md` §11).
     @Test @MainActor
-    func theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn() {
-        let store = MonitorStore(services: [])
-        store.productAttribution = .colourBar
-
-        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
-        #expect(!store.showsSessionRowRail)
-        #expect(store.sessionRowGutter == PanelMetrics.sessionRowGutter)
-        #expect(store.sessionRowPadding == PanelMetrics.sessionRowPadding)
-        // Unmarked, the two are still one margin split in two.
+    func theRowsMarginIsOneSplitInEveryForm() {
+        #expect(PanelMetrics.sessionRowGutter == 6)
+        #expect(PanelMetrics.sessionRowPadding == 6)
         #expect(
-            store.sessionRowGutter + store.sessionRowPadding
+            PanelMetrics.sessionRowGutter + PanelMetrics.sessionRowPadding
                 == PanelMetrics.expandedHorizontalPadding
         )
-
-        store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
-        #expect(store.showsSessionRowRail)
-        #expect(store.sessionRowGutter == PanelMetrics.sessionRowRailGutter)
-        #expect(store.sessionRowPadding == PanelMetrics.sessionRowRailPadding)
-
-        // Two products and any other style: no rail, so no wider margin either.
-        store.productAttribution = .nameAndColour
-        #expect(!store.showsSessionRowRail)
-        #expect(store.sessionRowGutter == PanelMetrics.sessionRowGutter)
-        #expect(store.sessionRowPadding == PanelMetrics.sessionRowPadding)
     }
 
     /// Settings goes to the display the component is on, so the store has to be
@@ -2778,17 +2871,29 @@ struct NotchlineTests {
         )
     }
 
-    /// A preference written before the rail existed still reads back.
+    /// **A stored `Distinguish products` is ignored, not migrated.**
+    ///
+    /// This replaces `anUnknownAttributionStyleFallsBackToTheDefault`, which
+    /// pinned the picker's own fallback. Every install lands on the badge
+    /// whichever of the four it had, and the stale key stays where it is: it
+    /// costs nothing, and reading it back would be the migration
+    /// `colour-v2.md` §6 says there is not (`Theme colour` keeps its own value
+    /// under its own key, which is what actually had to survive).
     @Test @MainActor
-    func anUnknownAttributionStyleFallsBackToTheDefault() {
+    func aStoredAttributionStyleIsIgnoredRatherThanMigrated() {
         let defaults = UserDefaults(suiteName: "rail-\(UUID().uuidString)")!
         defaults.set("colourBar", forKey: "productAttribution")
-        #expect(MonitorStore(services: [], preferences: defaults)
-            .productAttribution == .colourBar)
+        defaults.set("steel", forKey: "aggregateInk")
 
-        defaults.set("somethingWeRemoved", forKey: "productAttribution")
-        #expect(MonitorStore(services: [], preferences: defaults)
-            .productAttribution == .nameAndColour)
+        let store = MonitorStore(services: [], preferences: defaults)
+        // The theme survives, which is the one preference the badge reads.
+        #expect(store.aggregateInk == .steel)
+        // And nothing on the store answers to the retired key any more, so a
+        // row's badge is drawn on presence alone.
+        #expect(!store.showsProductAttribution)
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
+        store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
+        #expect(store.showsProductAttribution)
     }
 
     /// Every surface says the whole name, the notch included.
@@ -3564,7 +3669,7 @@ struct NotchlineTests {
     /// and a breathing column never reads as a mark going out.
     @Test @MainActor
     func theBreathsFloorStaysAboveTheMarkItStandsBeside() {
-        for ink in [NotchPalette.codexInk, NotchPalette.claudeCodeInk] {
+        for ink in [AggregateInk.sage.ink, AggregateInk.rose.ink] {
             let channels = [
                 (ink.onRed, ink.offRed),
                 (ink.onGreen, ink.offGreen),
@@ -3655,38 +3760,25 @@ struct NotchlineTests {
         // anything and the room has to be there already; the bar is pinned to
         // the cut-out and its leading edge is free to travel.
         #expect(
-            PanelMetrics.expandedLeadingSideWidth(workingAgentCount: 1)
+            PanelMetrics.expandedLeadingSideWidth
                 == PanelMetrics.expandedHorizontalPadding
                     + matrix
                     + PanelMetrics.aggregateCountsGap
                     + PanelMetrics.reservedCountsColumnWidth
                     + PanelMetrics.expandedNotchClearance
         )
-        // **The second working agent costs `25.2` and every one after it
-        // `19.2`.** The first costs nothing at all: with one there is nothing
-        // to decompose, so the second brings the gap after the totals *and*
-        // both columns with it.
-        func side(_ agents: Int) -> CGFloat {
-            PanelMetrics.expandedLeadingSideWidth(workingAgentCount: agents)
-        }
+        // **The two leading groups are otherwise the same group.** The band
+        // used to add `25.2` at the second working agent and `19.2` at every
+        // one after it, for a column of numerals per agent; the decomposition
+        // is gone (`colour-v2.md` §3), so the band's leading side differs from
+        // the pill's reserved group by the panel's own inset and the cut-out's
+        // clearance and by nothing else.
         #expect(
-            abs(
-                (side(2) - side(1))
-                    - (PanelMetrics.totalsToPartsSpacing
-                        + 2 * PanelMetrics.agentColumnWidth
-                        + PanelMetrics.agentColumnSpacing)
-            ) < 0.001
+            PanelMetrics.expandedLeadingSideWidth
+                == PanelMetrics.reservedLeadingGroupWidth
+                    + PanelMetrics.expandedHorizontalPadding
+                    + PanelMetrics.expandedNotchClearance
         )
-        for agents in 3 ... 5 {
-            #expect(
-                abs(
-                    (side(agents) - side(agents - 1))
-                        - (PanelMetrics.agentColumnWidth
-                            + PanelMetrics.agentColumnSpacing)
-                ) < 0.001
-            )
-        }
-        #expect(PanelMetrics.agentColumnSpacing == gap)
 
         // **The trailing wing is the reading it draws**, at every length the
         // formatter can produce -- including one past the `00:00:00` template
@@ -5007,25 +5099,24 @@ struct NotchlineTests {
             centerOcclusionWidth: 0,
             compactHeight: 24
         )
-        // Two working agents, which used to be what pushed a notched panel
-        // past the baseline: it was `570` at a `200` cut-out because of a
-        // sentence. **The panel is one size now** — the same object whatever
-        // is open, on a notched screen and a flat one alike.
+        // A notched panel used to be `570` at a `200` cut-out because of a
+        // sentence, and then `532` at five working agents because of the
+        // columns. **The panel is one size now** — the same object whatever is
+        // open, on a notched screen and a flat one alike.
         let notchedSize = PanelMetrics.size(
             geometry: .notched,
             isExpanded: true,
             statusReadoutText: "Working...",
             trailing: .empty,
             centerOcclusionWidth: 200,
-            compactHeight: 38,
-            workingAgentCount: 2
+            compactHeight: 38
         )
         let notchedSingle = PanelMetrics.size(
             geometry: .notched,
             isExpanded: true,
             statusReadoutText: "Working...",
             trailing: .empty,
-            centerOcclusionWidth: 200,
+            centerOcclusionWidth: 220,
             compactHeight: 38
         )
 
@@ -5036,17 +5127,29 @@ struct NotchlineTests {
         #expect(notchedSize.height == 38 + PanelMetrics.expandedContentHeight)
     }
 
-    /// **The band decomposes the totals, and only where there is something to
-    /// decompose.**
+    /// **The band draws the totals, and nothing under them, at every agent
+    /// count.**
     ///
-    /// One column per *working* agent, in Settings' order, packed — and none at
-    /// all with one, where a column would repeat the totals digit for digit in
-    /// a second ink. What the band shows is what is running rather than what is
-    /// installed (`expanded-header-v2.md` §4.3 rules 02, 04 and 07).
+    /// This replaces `theBandDrawsOneColumnPerWorkingAgentAndNoneForOne` and
+    /// `theBandsSubagentRowIsDrawnEverywhereOrNowhere`, which pinned the
+    /// decomposition: one column of numerals per working agent, in that agent's
+    /// own two inks, with a dash where an agent had none. Colour was the only
+    /// thing on those columns saying whose a number was, and no rule can make
+    /// eight agents distinguishable on a `6.6` pt digit stem — so the
+    /// decomposition went with the hues (`colour-v2.md` §3).
+    ///
+    /// What is pinned instead is what the totals have to keep doing. They are a
+    /// sum over every agent on the list, they answer to what is *running*
+    /// rather than to what is installed, and an agent that empties gives its
+    /// rows back without the figures moving anywhere else.
     @Test @MainActor
-    func theBandDrawsOneColumnPerWorkingAgentAndNoneForOne() {
+    func theBandsTotalsCountEveryAgentAtOnce() {
         let store = MonitorStore(services: [], initialSnapshot: makeSessionSnapshot([]))
-        func session(_ agent: AgentKind, _ id: String, subagents: Int = 0) -> MonitoredSession {
+        func session(
+            _ agent: AgentKind,
+            _ id: String,
+            subagents: Int = 0
+        ) -> MonitoredSession {
             MonitoredSession(
                 agent: agent,
                 threadID: id,
@@ -5060,212 +5163,109 @@ struct NotchlineTests {
             )
         }
 
-        // Two agents connected, one of them working. There is nothing to
-        // decompose: the band draws the totals alone, in grey, and colour
-        // arrives with the second working agent.
+        // Two agents connected, one of them working.
         store.applyForTesting(
             makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex, "a")])
         )
         store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
         #expect(store.presenceMarks.count == 2)
-        #expect(store.workingAgentCount == 1)
-        #expect(store.expandedAgentColumns.isEmpty)
+        #expect(store.aggregateSessionCount == 1)
+        #expect(store.aggregateSubagentCount == 0)
 
-        // The second starts working. Both columns appear, in `AgentKind` order
-        // and never in urgency's.
+        // The second starts working, one of its turns with subagents in
+        // flight. Both figures are sums and neither gains a part.
         store.applyForTesting(
             makeAgentSnapshot(
                 .claudeCode,
                 availability: .ready,
-                sessions: [session(.claudeCode, "b"), session(.claudeCode, "c")]
+                sessions: [
+                    session(.claudeCode, "b", subagents: 3),
+                    session(.claudeCode, "c")
+                ]
             )
         )
-        #expect(store.workingAgentCount == 2)
-        #expect(store.expandedAgentColumns.map(\.agent) == [.codex, .claudeCode])
-        #expect(store.expandedAgentColumns.map(\.sessionCount) == [1, 2])
-        // The parts add up to the totals, which is the whole claim a
-        // decomposition makes.
-        #expect(
-            store.expandedAgentColumns.reduce(0) { $0 + $1.sessionCount }
-                == store.aggregateSessionCount
-        )
+        #expect(store.aggregateSessionCount == 3)
+        #expect(store.aggregateSubagentCount == 3)
 
-        // Codex empties. It leaves the band — the sum is still on the surface
-        // beside it — and the column after it closes up rather than holding a
-        // slot.
+        // Codex empties. Its rows leave the totals; nothing else moves.
         store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
-        #expect(store.workingAgentCount == 1)
-        #expect(store.expandedAgentColumns.isEmpty, "nothing left to decompose")
-        #expect(store.aggregateSessionCount == 2, "the totals still count them")
-    }
+        #expect(store.aggregateSessionCount == 2)
+        #expect(store.aggregateSubagentCount == 3)
 
-    /// **One row or two, and a dash where an agent has none.**
-    ///
-    /// The subagent row is drawn when there are subagents *anywhere*, and then
-    /// every column fills it — so the band keeps one baseline at a time rather
-    /// than one per agent. A zero inside a drawn row is a dash: a blank would
-    /// leave the reader deciding whether the number was absent or the agent
-    /// was, and a `0` would be a figure that adds nothing in a row of figures
-    /// that add (§4.3 rules 05 and 06).
-    @Test @MainActor
-    func theBandsSubagentRowIsDrawnEverywhereOrNowhere() {
-        let store = MonitorStore(services: [], initialSnapshot: makeSessionSnapshot([]))
-        func session(_ agent: AgentKind, subagents: Int) -> MonitoredSession {
-            MonitoredSession(
-                agent: agent,
-                threadID: "\(agent)",
-                turnID: "turn-\(agent)",
-                projectName: "notchline",
-                title: "Turn",
-                preview: nil,
-                status: .running,
-                startedAt: Date(),
-                runningSubagentCount: subagents
-            )
-        }
-        store.applyForTesting(
-            makeAgentSnapshot(
-                .codex,
-                availability: .ready,
-                sessions: [session(.codex, subagents: 0)]
-            )
-        )
-        store.applyForTesting(
-            makeAgentSnapshot(
-                .claudeCode,
-                availability: .ready,
-                sessions: [session(.claudeCode, subagents: 0)]
-            )
-        )
-        // No subagents anywhere: one row, and every numeral centres on the
-        // mark's own middle.
-        #expect(!store.expandedDrawsSubagentRow)
+        // The subagent numeral is a second row under the sessions one, so the
+        // sessions numeral rises to make room for it. That is the one thing
+        // the counts column still answers to.
         #expect(
             PanelMetrics.countsSessionBaseline(hasSubagents: false)
                 < PanelMetrics.countsSessionBaseline(hasSubagents: true)
         )
-
-        // One subagent, on one agent. The row is drawn for both, and the agent
-        // without any reads a dash rather than a `0` or a blank.
-        store.applyForTesting(
-            makeAgentSnapshot(
-                .claudeCode,
-                availability: .ready,
-                sessions: [session(.claudeCode, subagents: 3)]
-            )
-        )
-        #expect(store.expandedDrawsSubagentRow)
-        #expect(store.expandedAgentColumns.map(\.subagentCount) == [0, 3])
-        #expect(PanelMetrics.countsDashText == "\u{2013}", "an en dash, not a hyphen")
-
-        // **And the dash is spoken as `none`**, never as zero sessions: colour
-        // is the only thing on this band saying whose a number is, so the
-        // accessible name is what spells each column out (§9).
-        let codex = store.expandedAgentColumns[0]
-        #expect(codex.spokenSummary == "Codex, 1 session, no subagents")
-        let claudeCode = store.expandedAgentColumns[1]
-        #expect(claudeCode.spokenSummary == "Claude Code, 1 session, 3 subagents")
-        // The totals can never show a dash: that row is drawn only when the
-        // total is at least one.
-        #expect(store.aggregateSubagentCount == 3)
     }
 
-    /// **The band clears the cut-out at every working-agent count it can
-    /// reach**, measured the way the header draws it.
+    /// **The band clears the cut-out**, measured the way the header draws it.
     ///
     /// This replaces `everySentenceTheExpandedHeaderCanSayClearsTheCutOut`,
     /// which measured a sentence: the band draws no word now
-    /// (`expanded-header-v2.md` §3), so what has to clear the hardware is the
-    /// collapsed bar's own group plus one column of numbers per working agent.
-    /// The sentence it checked is gone; the thing it was really protecting —
-    /// that the leading side fits the shoulder on every Mac — is what stands.
+    /// (`expanded-header-v2.md` §3). It then measured a leading side that grew
+    /// with the working-agent count; since `colour-v2.md` §3 that side is one
+    /// number. The thing both versions were really protecting — that the
+    /// leading side fits the shoulder on every Mac — is what stands, and it is
+    /// now a stronger claim because there is no count that could break it.
     @Test
-    func theBandClearsTheCutOutAtEveryWorkingAgentCount() {
-        for workingAgents in 1 ... AgentKind.allCases.count {
-            for occlusion in [127, 152, 168, 185, 200, 220] as [CGFloat] {
-                let width = PanelMetrics.expandedWidth(
-                    centerOcclusionWidth: occlusion,
-                    workingAgentCount: workingAgents
-                )
-                // The panel is centred on the display rather than pinned to the
-                // cut-out, so each side gets half of what the cut-out leaves.
-                let availableSideWidth = (width - occlusion) / 2
-                let drawn = PanelMetrics.expandedLeadingSideWidth(
-                    workingAgentCount: workingAgents
-                )
-                #expect(drawn <= availableSideWidth, "\(workingAgents) at \(occlusion)")
-                // And the trailing side, which is the one that binds when
-                // nothing is connected.
-                #expect(
-                    PanelMetrics.expandedTrailingSideWidth(compactHeight: 46)
-                        <= availableSideWidth
-                )
-            }
+    func theBandClearsTheCutOutAtEveryCutOutThisProductMeets() {
+        for occlusion in [127, 152, 168, 185, 200, 220] as [CGFloat] {
+            let width = PanelMetrics.expandedWidth(centerOcclusionWidth: occlusion)
+            // The panel is centred on the display rather than pinned to the
+            // cut-out, so each side gets half of what the cut-out leaves.
+            let availableSideWidth = (width - occlusion) / 2
+            #expect(
+                PanelMetrics.expandedLeadingSideWidth <= availableSideWidth,
+                "leading at \(occlusion)"
+            )
+            // And the trailing side, which is the one that binds when nothing
+            // is connected.
+            #expect(
+                PanelMetrics.expandedTrailingSideWidth(compactHeight: 46)
+                    <= availableSideWidth
+            )
         }
     }
 
-    /// **The width answers to a count of working agents, and to nothing that
-    /// can be said in words.**
+    /// **The expanded width answers to neither an agent count nor a word.**
     ///
-    /// This replaces `theExpandedWidthAnswersToTheMarksAndNotToUnreachableNames`
-    /// — the width answers to neither now. A two-agent panel was `570` because
-    /// of a sentence while a one-agent panel was `520` because of a baseline,
-    /// so the same object was two sizes depending on what happened to be open
-    /// and changed size the first time a second agent connected. It is `520` at
-    /// every cut-out this product meets, at every agent count a machine is
-    /// likely to run.
+    /// This replaces `theExpandedWidthAnswersToWorkingAgentsAndNotToWords`,
+    /// which replaced `…AnswersToTheMarksAndNotToUnreachableNames`. Each
+    /// removed one term from the sum: first the longest status name the band
+    /// could reach, then the columns the totals decomposed into
+    /// (`colour-v2.md` §3). The band was the only term on either side that read
+    /// an agent count, so **the width series is one number** — `520` at every
+    /// cut-out this product meets, whatever is connected and whatever is
+    /// running.
+    ///
+    /// The panel used to be `532` at five working agents and `571` at six; both
+    /// are unreachable, and there is no longer a parameter to reach them with.
     @Test
-    func theExpandedWidthAnswersToWorkingAgentsAndNotToWords() {
+    func theExpandedWidthIsOneNumber() {
         // The four cut-outs this app has measured, and no cut-out at all.
         for occlusion in [0, 127, 185, 200, 220] as [CGFloat] {
-            for workingAgents in 1 ... 4 {
-                #expect(
-                    PanelMetrics.expandedWidth(
-                        centerOcclusionWidth: occlusion,
-                        workingAgentCount: workingAgents
-                    ) == 520,
-                    "\(workingAgents) agents at \(occlusion)"
-                )
-            }
+            #expect(
+                PanelMetrics.expandedWidth(centerOcclusionWidth: occlusion) == 520,
+                "at \(occlusion)"
+            )
         }
-        // V1 was past the baseline at the second product on three of those.
-        // The lever now sits four agents out, and moves at five on the widest
-        // cut-out this product meets.
-        #expect(
-            PanelMetrics.expandedWidth(centerOcclusionWidth: 220, workingAgentCount: 5)
-                == 532
-        )
-        #expect(
-            PanelMetrics.expandedWidth(centerOcclusionWidth: 200, workingAgentCount: 5)
-                == 520
-        )
-        // Six is `571` rather than the doc's `570`, and by the same hundredth
-        // the pill absorbs in its middle: a drawn digit is `6.616` against the
-        // board's nominal `6.6`, so six reserved columns run `0.19` over and
-        // the ceil takes the point. Two agents past anything that ships.
-        #expect(
-            PanelMetrics.expandedWidth(centerOcclusionWidth: 220, workingAgentCount: 6)
-                == 571
-        )
 
-        // The first working agent costs the totals and the gap after them; each
-        // one after it costs a column and its `6`.
-        let one = PanelMetrics.expandedLeadingSideWidth(workingAgentCount: 1)
-        let two = PanelMetrics.expandedLeadingSideWidth(workingAgentCount: 2)
-        let three = PanelMetrics.expandedLeadingSideWidth(workingAgentCount: 3)
-        // The board's `53.8` and `98.2`, plus the drawn digit's hundredth per
-        // reserved numeral.
-        #expect(abs(one - 53.8) < 0.05)
-        #expect(abs(two - 98.2) < 0.1)
+        // The board's `53.8`: the panel's inset, the mark, the gap, two
+        // reserved digits and the cut-out's clearance, plus the hundredth a
+        // drawn digit runs over the board's nominal `6.6`.
+        #expect(abs(PanelMetrics.expandedLeadingSideWidth - 53.8) < 0.05)
+
+        // A side asking `53.8` puts the cut-out branch past `412.4`, which is
+        // twice the widest cut-out on any Mac -- so `expandedNotchClearance`
+        // is the guard that the band clears the hardware and has stopped being
+        // the rule that decides a width.
         #expect(
-            abs(
-                (three - two)
-                    - (PanelMetrics.agentColumnWidth + PanelMetrics.agentColumnSpacing)
-            ) < 0.001
+            520 - PanelMetrics.expandedLeadingSideWidth * 2 > 412,
+            "the baseline binds at every cut-out that exists"
         )
-        // Two working agents ask `196.4` between them, so the cut-out branch
-        // fires only past `323.6` — half again the widest cut-out on any Mac.
-        #expect(abs(two * 2 - 196.4) < 0.2)
     }
 
     @Test
@@ -5277,10 +5277,20 @@ struct NotchlineTests {
         #expect(UsageSummaryFormatter.compactTokenCount(999) == "999")
     }
 
-    /// The reset window now reads as a remaining *duration* rather than a count
-    /// of calendar days: "Resets today" was equally true at 00:30 and 23:30.
+    /// The reset column is a countdown, two units at most.
+    ///
+    /// **This replaces `resetTextReadsRemainingDaysAndHours`**, which pinned
+    /// `Resets in 3 days 4 hours`. The words were repeated once a window down a
+    /// column where every single line is a countdown, so they went with the
+    /// `Resets in` label (`quota-footer-v2.md` §5). What survives from that
+    /// test is the claim underneath it: this reads the remaining *duration*
+    /// rather than a count of calendar days, because "Resets today" was equally
+    /// true at 00:30 and at 23:30.
+    ///
+    /// Days pair with hours and nothing else does — an hour with minutes beside
+    /// it would be a precision this reading has not got.
     @Test
-    func resetTextReadsRemainingDaysAndHours() throws {
+    func theResetColumnCountsDownInTwoUnitsAtMost() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
         let now = try #require(calendar.date(from: DateComponents(
@@ -5289,9 +5299,9 @@ struct NotchlineTests {
             day: 13,
             hour: 10
         )))
-        func text(afterHours hours: Int) throws -> String {
+        func text(afterMinutes minutes: Int) throws -> String {
             let resetsAt = try #require(
-                calendar.date(byAdding: .hour, value: hours, to: now)
+                calendar.date(byAdding: .minute, value: minutes, to: now)
             )
             return UsageSummaryFormatter.resetText(
                 resetsAt: resetsAt,
@@ -5300,29 +5310,66 @@ struct NotchlineTests {
             )
         }
 
-        #expect(try text(afterHours: 8) == "Resets in 8 hours")
-        #expect(try text(afterHours: 1) == "Resets in 1 hour")
-        #expect(try text(afterHours: 24) == "Resets in 1 day")
-        #expect(try text(afterHours: 24 * 3) == "Resets in 3 days")
-        #expect(try text(afterHours: 24 * 3 + 4) == "Resets in 3 days 4 hours")
-        #expect(try text(afterHours: 25) == "Resets in 1 day 1 hour")
+        #expect(try text(afterMinutes: 47) == "47m")
+        #expect(try text(afterMinutes: 60 * 2) == "2h")
+        #expect(try text(afterMinutes: 60 * 8) == "8h")
+        // Minutes are dropped once there is an hour to say: the column holds a
+        // countdown, not a stopwatch.
+        #expect(try text(afterMinutes: 60 * 2 + 30) == "2h")
+        #expect(try text(afterMinutes: 60 * 24) == "1d")
+        #expect(try text(afterMinutes: 60 * 24 * 3) == "3d")
+        #expect(try text(afterMinutes: 60 * (24 * 3 + 12)) == "3d 12h")
+        #expect(try text(afterMinutes: 60 * 25) == "1d 1h")
+        #expect(UsageSummaryFormatter.resetText(resetsAt: now, now: now) == "Now")
+    }
+
+    /// **An unreadable field draws `--` in its own place, and nothing else.**
+    ///
+    /// This is the one rule the removed critical threshold leaves behind
+    /// (`quota-footer-v2.md` §8.3): the field this app could not read is
+    /// replaced where the figure would have been, with its unit if it has one,
+    /// and marked in no other way — no dimming, no icon, no word, no extra
+    /// line, and nothing anywhere else on the panel.
+    ///
+    /// `Reset unavailable` is the one that moves. It read as the quota display
+    /// being broken, which is the one thing it was not.
+    @Test
+    func anUnreadableFieldDrawsTwoDashes() {
+        let now = Date(timeIntervalSinceReferenceDate: 0)
+
+        #expect(UsageSummaryFormatter.today(tokens: 518_700_000).text == "519M today")
+        #expect(UsageSummaryFormatter.today(tokens: nil).text == "-- today")
+        #expect(UsageSummaryFormatter.shareText(remainingPercent: 72) == "72% left")
+        #expect(UsageSummaryFormatter.shareText(remainingPercent: nil) == "-- left")
+        // The timer has no unit to keep, so its unreadable form is the two
+        // characters alone -- the general rule stated without an exception.
         #expect(
-            UsageSummaryFormatter.resetText(resetsAt: now, now: now) == "Resets now"
+            UsageSummaryFormatter.resetText(
+                resetsAt: nil,
+                remainingPercent: 60,
+                now: now
+            ) == "--"
         )
-        #expect(
-            UsageSummaryFormatter.resetText(resetsAt: nil, now: now)
-                == "Reset unavailable"
-        )
+        // The unit is not the part that could not be read, which is why the
+        // two are held apart.
+        #expect(UsageSummaryFormatter.today(tokens: nil).unit == "today")
     }
 
     /// An untouched window says so instead of claiming the reading failed.
     ///
     /// Claude Code's 5-hour window has no reset time until the first request
-    /// starts it, so its line prints a percentage and no `resets ...` clause.
-    /// That is the ordinary idle state and it read as `Reset unavailable` --
-    /// the wording reserved for a reading this app could not make.
+    /// starts it, so its line prints a percentage and no countdown at all. That
+    /// is the ordinary idle state, and it is **not** covered by the `--` rule:
+    /// a window that has not begun is a window this app read successfully, and
+    /// saying `--` for it would be exactly the failure report this wording was
+    /// written to stop making (`quota-footer-v2.md` §8.3).
+    ///
+    /// **The wording moved and the signal did not.** A *spent* window with no
+    /// reset is the documented sign that Claude Code's `/usage` output has
+    /// changed; what distinguishes it was never the words but the percentage
+    /// beside it, so after this change it is a share beside a `--`.
     @Test
-    func aWindowWithNothingSpentAndNoResetReadsAsNotStarted() throws {
+    func aWindowWithNothingSpentAndNoResetReadsAsNotStarted() {
         let now = Date(timeIntervalSinceReferenceDate: 0)
 
         #expect(
@@ -5332,21 +5379,77 @@ struct NotchlineTests {
                 now: now
             ) == "Not started"
         )
-        // Spent but reset-less is the documented signal that Claude Code's
-        // wording moved, so it keeps saying the reading is unavailable.
         #expect(
             UsageSummaryFormatter.resetText(
                 resetsAt: nil,
                 remainingPercent: 60,
                 now: now
-            ) == "Reset unavailable"
+            ) == "--"
         )
         #expect(
             UsageSummaryFormatter.resetText(
                 resetsAt: nil,
                 remainingPercent: nil,
                 now: now
-            ) == "Reset unavailable"
+            ) == "--"
+        )
+    }
+
+    /// **`--` is a reading for the eye; a screen reader gets the word.**
+    ///
+    /// And where the column trades an absolute day for a duration, the spoken
+    /// form keeps the day: `4d 6h` is drawn and `resets Friday at 09:00` is
+    /// heard (`quota-footer-v2.md` §7). Nothing here ever announces as zero.
+    @Test
+    func everyDashAnnouncesAsUnavailable() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        // A Tuesday, so the reset four days later is a Saturday.
+        let now = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 9,
+            day: 1,
+            hour: 10
+        )))
+        let resetsAt = try #require(
+            calendar.date(byAdding: .hour, value: 24 * 4 + 6, to: now)
+        )
+
+        #expect(
+            UsageSummaryFormatter.resetText(
+                resetsAt: resetsAt,
+                now: now,
+                calendar: calendar
+            ) == "4d 6h"
+        )
+        #expect(
+            UsageSummaryFormatter.spokenResetText(
+                resetsAt: resetsAt,
+                now: now,
+                calendar: calendar
+            ) == "resets Saturday at 16:00"
+        )
+        #expect(
+            UsageSummaryFormatter.spokenResetText(
+                resetsAt: nil,
+                remainingPercent: 60,
+                now: now
+            ) == "unavailable"
+        )
+        #expect(
+            UsageSummaryFormatter.spokenResetText(
+                resetsAt: nil,
+                remainingPercent: 100,
+                now: now
+            ) == "not started"
+        )
+        #expect(
+            UsageSummaryFormatter.today(tokens: nil).spokenText
+                == "Tokens today unavailable"
+        )
+        #expect(
+            UsageSummaryFormatter.today(tokens: 518_700_000).spokenText
+                == "519M tokens today"
         )
     }
 
@@ -5576,7 +5679,13 @@ struct NotchlineTests {
 
         #expect(store.sessions.count == 1)
         #expect(store.statusDisplayName == "Working...")
-        #expect(store.tokenRemainingPercent == 72)
+        // The share is still read and still reaches the table; what changed is
+        // that no surface outside it draws or speaks one (`quota-footer-v2.md`
+        // §4), so what is checked here is the reading arriving rather than a
+        // figure on the bar.
+        #expect(
+            store.footerRules.first?.windows.first?.share == "72% left"
+        )
 
         store.applyForTesting(
             AgentSnapshot(
@@ -5600,7 +5709,9 @@ struct NotchlineTests {
         #expect(store.sessions.count == 1)
         // The notch and the panel say the same thing.
         #expect(store.statusDisplayName == "Input needed")
-        #expect(store.tokenRemainingPercent == 72)
+        #expect(
+            store.footerRules.first?.windows.first?.share == "72% left"
+        )
     }
 
     /// A secondary click on a finished row takes that row off the list, and
@@ -8467,7 +8578,7 @@ struct NotchlineTests {
             )
             let expectedContentHeight = CGFloat(visibleSessionCount)
                 * PanelMetrics.sessionRowHeight
-                + PanelMetrics.expandedFooterHeight
+                + store.expandedFooterHeight
             #expect(store.expandedContentHeight == expectedContentHeight)
             #expect(
                 store.currentPanelSize.height

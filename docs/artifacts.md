@@ -18,7 +18,9 @@ Two more kinds of file are written **outside** the app's own directory — the u
 | `~/.codex/hooks.json`, `~/.claude/settings.json` | Edited in place, touching only this app's own keys. Written atomically at mode `0600`, with a byte comparison before and a read-back after |
 | `~/.codex/hooks.json.notchline-backup`, `~/.claude/settings.json.notchline-backup` | The user's file as it was immediately before this app last changed it — **refreshed on every write**, not kept from the first ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md), `ManagedHooksFileEditor.preserveRecoveryCopy(of:)`) |
 
-Preferences live in `~/Library/Preferences/com.yinfenglu.Notchline.plist`, with four keys: `productAttribution`, `quotaFolded`, `hasCompletedOnboarding`, `selectedDisplayID`.
+Preferences live in `~/Library/Preferences/com.yinfenglu.Notchline.plist`, with seven keys: `selectedDisplayID`, `aggregateInk`, `hidesCompactWings`, `namesWorkOnPill`, `drawsSurfaceOutline`, `quotaExpanded` and `hasCompletedOnboarding`.
+
+**An eighth key may be there and is never read.** `productAttribution` retired with the `Distinguish products` picker ([`colour-v2.md`](colour-v2.md) §6) and `quotaFolded` with the footer's inverted default ([`quota-footer-v2.md`](quota-footer-v2.md) §8.1); neither is deleted from an install that has one. That is what "ignored rather than migrated" means on disk: reading a stale key back would be the migration the decision says there is not, and a plist key nothing reads costs nothing.
 
 Hook payloads are never written to disk at all — they go straight into the in-memory reducer, so there is no preview cache, event queue or session state file ([ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)).
 

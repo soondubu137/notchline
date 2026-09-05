@@ -8,39 +8,21 @@ enum NotchPalette {
     // The matrix draws through Core Animation, which needs CGColor, while the
     // rest of the surface is SwiftUI. Both come from these components so the two
     // representations cannot drift apart.
-    private static let matrixOffRGB = (red: 0.063, green: 0.106, blue: 0.149)
-    private static let matrixOnRGB = (red: 0.424, green: 0.706, blue: 1.0)
     private static let labelRGB = (red: 0.486, green: 0.486, blue: 0.502)
 
-    /// One matrix's two colours.
+    /// One mark's two colours.
     ///
-    /// Hue says which product, brightness says whether it wants the user, and
-    /// the two channels never swap jobs. Presence is the third channel and it
-    /// is carried by the mark's *existence* rather than by any colour here.
+    /// **Hue says nothing at all**, and that is the decision rather than an
+    /// omission (`colour-v2.md` §1): it used to say which product, and no
+    /// product owns one now. What is left is brightness, which says whether
+    /// something wants the user; presence is carried by the mark's *existence*
+    /// rather than by any colour here.
     nonisolated struct MatrixInk: Equatable, Sendable {
         let offRed, offGreen, offBlue: Double
         let onRed, onGreen, onBlue: Double
 
         var off: Color { Color(red: offRed, green: offGreen, blue: offBlue) }
         var on: Color { Color(red: onRed, green: onGreen, blue: onBlue) }
-        /// The spent end of a quota rule.
-        ///
-        /// A rule is 3pt tall where a matrix cell is a whole dot, and at that
-        /// thickness the unlit colour all but vanishes against the panel --
-        /// the spent share stops being readable as a share at all. So it sits
-        /// one step up the same ramp, a quarter of the lit colour rather than
-        /// the matrix's 15%: still plainly the dim end, still the product's
-        /// hue, but visible. Nothing else on the surface uses it, so the
-        /// matrix keeps the darkness it wants.
-        var spent: Color {
-            Color(
-                red: offRed + Self.spentLift * (onRed - offRed),
-                green: offGreen + Self.spentLift * (onGreen - offGreen),
-                blue: offBlue + Self.spentLift * (onBlue - offBlue)
-            )
-        }
-        /// How far ``spent`` travels from unlit towards lit.
-        private static let spentLift = 0.12
         /// A subagent badge's dim ground, which is the one it has while
         /// everything it counts is running.
         ///
@@ -85,26 +67,6 @@ enum NotchPalette {
             CGColor(srgbRed: onRed, green: onGreen, blue: onBlue, alpha: 1)
         }
     }
-
-    /// Codex blue. `#101B26` unlit, `#6CB4FF` lit.
-    static let codexInk = MatrixInk(
-        offRed: matrixOffRGB.red,
-        offGreen: matrixOffRGB.green,
-        offBlue: matrixOffRGB.blue,
-        onRed: matrixOnRGB.red,
-        onGreen: matrixOnRGB.green,
-        onBlue: matrixOnRGB.blue
-    )
-
-    /// Claude Code terracotta. `#21120D` unlit, `#D97757` lit.
-    ///
-    /// The unlit colour keeps the same 15% relationship to the lit one that
-    /// Codex's pair has, so "dim" reads identically across products and only
-    /// the hue tells them apart.
-    static let claudeCodeInk = MatrixInk(
-        offRed: 0x21 / 255, offGreen: 0x12 / 255, offBlue: 0x0D / 255,
-        onRed: 0xD9 / 255, onGreen: 0x77 / 255, onBlue: 0x57 / 255
-    )
 
     /// The resting mark, for when no product is there to own one.
     ///
@@ -160,26 +122,6 @@ enum NotchPalette {
         isConnected ? hue.ink : restingInk
     }
 
-    /// Two inks in one matrix, cut on the mark's diagonal.
-    ///
-    /// The surface never draws this. Every mark on the notch belongs to exactly
-    /// one product, because hue is how the user tells two marks apart, and a
-    /// mark carrying both hues would answer that question with "both". It
-    /// exists for the first-run legend, where one specimen per state has to
-    /// stand for both products at once and drawing eight specimens would say
-    /// that the pattern differs by product, which it does not.
-    ///
-    /// The cut runs from the lower-left corner to the upper-right one, Codex
-    /// above and Claude Code below — the same seam the app's own mark has, so
-    /// the legend reads as the icon rather than as a fifth state.
-    nonisolated struct MatrixSplit: Equatable, Sendable {
-        let above: MatrixInk
-        let below: MatrixInk
-
-        /// The pairing the icon uses: Codex leading, Claude Code trailing.
-        static let products = MatrixSplit(above: codexInk, below: claudeCodeInk)
-    }
-
     /// A surface a tile can be drawn on, so the tile can be told what it has
     /// to stay above.
     ///
@@ -199,13 +141,18 @@ enum NotchPalette {
         static let rowPressed = SurfaceGround(red: 0.23, green: 0.23, blue: 0.24)
     }
 
-    /// The ink for one product, or the resting grey when no product owns the mark.
-    nonisolated static func ink(for agent: AgentKind?) -> MatrixInk {
-        switch agent {
-        case .codex: codexInk
-        case .claudeCode: claudeCodeInk
-        case nil: restingInk
-        }
+    /// A product badge's two colours, which are the mark's own.
+    ///
+    /// The same pair ``aggregateInk(_:isConnected:)`` returns, reached through
+    /// a second name so the chip and the mark can never drift apart: ground
+    /// from the unlit value, text from the lit one (`colour-v2.md` §4).
+    ///
+    /// It takes no `isConnected`, unlike the mark's accessor. A badge is drawn
+    /// only while more than one product is connected, so the resting grey — the
+    /// value that means *nothing is connected* — is a state this object cannot
+    /// be in.
+    nonisolated static func badgeInk(_ hue: AggregateInk = .sage) -> MatrixInk {
+        hue.ink
     }
 
     /// `text/notch-label` — the dim base every notch label sits at.
@@ -237,20 +184,16 @@ enum NotchPalette {
     private static let edgeDimming = 0.75
     /// `text/notch-spotlight` — the searchlight highlight.
     static let spotlight = Color.white
-    /// Unlit matrix cell.
-    static let matrixOff = Color(
-        red: matrixOffRGB.red,
-        green: matrixOffRGB.green,
-        blue: matrixOffRGB.blue
-    )
-    /// Lit matrix cell.
-    static let matrixOn = Color(
-        red: matrixOnRGB.red,
-        green: matrixOnRGB.green,
-        blue: matrixOnRGB.blue
-    )
     /// Session title — the one element that stays bright.
     static let sessionTitle = Color.white.opacity(0.98)
+    /// `#C7C7CC` — the step between the title's white and ``label``'s
+    /// `#7C7C80`.
+    ///
+    /// The same value ``countsSessionDrawingColor`` draws the sessions numeral
+    /// in, in SwiftUI's representation: on the footer it is the figure in every
+    /// spend, which is the brightest thing in the table's three levels
+    /// (`quota-footer-v2.md` §5).
+    static let reading = Color(red: 0xC7 / 255, green: 0xC7 / 255, blue: 0xCC / 255)
     /// A neutral subagent badge's numeral once its ground has flipped, drawn
     /// on ``spotlight`` white.
     ///
@@ -260,19 +203,6 @@ enum NotchPalette {
     /// product-tinted badge inverts within its own ink instead and never
     /// reaches this value.
     static let chipOnLight = Color(red: 0.05, green: 0.05, blue: 0.06)
-
-    static let matrixOffLayerColor = CGColor(
-        srgbRed: matrixOffRGB.red,
-        green: matrixOffRGB.green,
-        blue: matrixOffRGB.blue,
-        alpha: 1
-    )
-    static let matrixOnLayerColor = CGColor(
-        srgbRed: matrixOnRGB.red,
-        green: matrixOnRGB.green,
-        blue: matrixOnRGB.blue,
-        alpha: 1
-    )
 
     /// Drawing colours for the layer-backed notch label.
     static let labelDrawingColor = NSColor(
@@ -295,41 +225,6 @@ enum NotchPalette {
         green: 0xC7 / 255,
         blue: 0xCC / 255,
         alpha: 1
-    )
-    /// The two inks one agent's column is drawn in, where the band decomposes
-    /// the totals.
-    ///
-    /// **Hue says which agent; brightness says which number.** Nothing here is
-    /// a new value: it is the agent's own lit matrix colour over its
-    /// row-caption colour (`dual-agent-design.md` §2), standing in the same
-    /// relation as the grey pair the totals keep. So the band's colour
-    /// vocabulary is the one the panel already has, and nothing on it is
-    /// brighter than what the bar already draws.
-    ///
-    /// [`compact-view-v2.md`](compact-view-v2.md) §3.2 rule 01 says hierarchy
-    /// is size and brightness and never hue, and it was right about a single
-    /// column: there was nothing to tell apart. There is here, and brightness
-    /// still carries the hierarchy *inside* each column.
-    nonisolated static func countsInk(
-        for agent: AgentKind
-    ) -> (sessions: NSColor, subagents: NSColor) {
-        switch agent {
-        case .codex: (codexNumeral, codexCaptionNumeral)
-        case .claudeCode: (claudeCodeNumeral, claudeCodeCaptionNumeral)
-        }
-    }
-
-    private static let codexNumeral = NSColor(
-        srgbRed: 0x6C / 255, green: 0xB4 / 255, blue: 0xFF / 255, alpha: 1
-    )
-    private static let codexCaptionNumeral = NSColor(
-        srgbRed: 0x4D / 255, green: 0x81 / 255, blue: 0xB7 / 255, alpha: 1
-    )
-    private static let claudeCodeNumeral = NSColor(
-        srgbRed: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255, alpha: 1
-    )
-    private static let claudeCodeCaptionNumeral = NSColor(
-        srgbRed: 0x9C / 255, green: 0x55 / 255, blue: 0x3E / 255, alpha: 1
     )
     static let spotlightDrawingColor = NSColor.white
     static let sessionTitleDrawingColor = NSColor.white.withAlphaComponent(0.98)
@@ -554,95 +449,6 @@ final class ElapsedReadoutView: NSView {
     }
 }
 
-/// The footer's separator, doubling as the quota meter.
-///
-/// It reuses the matrix palette so the two readouts on this surface read as one
-/// system, and costs no vertical space — the rule was already there.
-struct UsageMeter: View {
-    /// 0–1 remaining, or nil when quota is unavailable.
-    let fill: Double?
-    var height: CGFloat = 3
-    /// Whose rule this is. The footer carries one rule per product, so the rule
-    /// takes the same hue as that product's matrix — the two readouts on this
-    /// surface stay one system, and a rule is attributable at a glance.
-    var ink: NotchPalette.MatrixInk = NotchPalette.codexInk
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(ink.spent)
-
-                if let fill {
-                    Capsule()
-                        .fill(ink.on)
-                        .frame(width: proxy.size.width * min(max(fill, 0), 1))
-                        .shadow(color: ink.on.opacity(0.35), radius: 2)
-                }
-            }
-        }
-        .frame(height: height)
-        .accessibilityHidden(true)
-    }
-}
-
-/// Which ink a subagent badge draws in.
-///
-/// `dual-agent-design.md` §10: hue on this badge only ever answers "whose is
-/// this" — never "what state is this". State is the ground's brightness, and
-/// it flips within whichever ink the badge already has.
-enum SubagentBadgeTint: Equatable {
-    /// A session row's badge, always. The row names its product on the caption
-    /// line above, so hue here would spend a channel saying the same thing
-    /// twice.
-    case neutral
-    /// The collapsed surface's badge, one per product. A bar has no caption
-    /// line, so ink is the only thing on it that can say whose.
-    case product(AgentKind)
-
-    private var ink: NotchPalette.MatrixInk {
-        switch self {
-        case .neutral: NotchPalette.restingInk
-        case .product(let agent): NotchPalette.ink(for: agent)
-        }
-    }
-
-    /// The ground. Dim while everything is running, bright the moment one of
-    /// them is stopped on a question.
-    ///
-    /// The bright end is the ink's own lit colour for a product badge and the
-    /// surface's white for a neutral one — the resting grey has no lit colour
-    /// of its own (it cannot light, because nothing is connected to light it),
-    /// so brightness there is the same white every other attention signal on
-    /// this surface uses.
-    ///
-    /// `over` is the surface the badge is drawn on, which is black everywhere
-    /// but a session row under the pointer. Only the dim end reads it: the
-    /// bright end is a signal and has to be the same white, or the same lit
-    /// hue, wherever it appears.
-    func fill(wantsAttention: Bool, over ground: NotchPalette.SurfaceGround = .black) -> Color {
-        guard wantsAttention else { return ink.chipFill(over: ground) }
-        switch self {
-        case .neutral: return NotchPalette.spotlight
-        case .product: return ink.on
-        }
-    }
-
-    /// The numeral, which is always whichever end of the pair the ground is
-    /// not.
-    func text(wantsAttention: Bool) -> Color {
-        guard wantsAttention else {
-            switch self {
-            case .neutral: return NotchPalette.label
-            case .product: return ink.on
-            }
-        }
-        switch self {
-        case .neutral: return NotchPalette.chipOnLight
-        case .product: return ink.off
-        }
-    }
-}
-
 /// One subagent badge: a filled, rounded tile holding a bare count.
 ///
 /// `dual-agent-design.md` §10. Sized to `PanelMetrics.subagentBadgeWidth`
@@ -658,14 +464,17 @@ enum SubagentBadgeTint: Equatable {
 /// reading.
 struct SubagentBadgeView: View {
     let badge: SubagentBadge
-    let tint: SubagentBadgeTint
     /// What the badge is drawn on, so its dim ground can stay above it.
     var ground: NotchPalette.SurfaceGround = .black
 
     var body: some View {
         Text("\(badge.count)")
             .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(tint.text(wantsAttention: badge.wantsAttention))
+            .foregroundStyle(
+                badge.wantsAttention
+                    ? NotchPalette.chipOnLight
+                    : NotchPalette.label
+            )
             .frame(
                 width: PanelMetrics.subagentBadgeWidth(badge.count),
                 height: PanelMetrics.subagentBadgeMinSize
@@ -675,12 +484,27 @@ struct SubagentBadgeView: View {
                     cornerRadius: PanelMetrics.subagentBadgeCornerRadius,
                     style: .continuous
                 )
-                .fill(tint.fill(wantsAttention: badge.wantsAttention, over: ground))
+                .fill(groundFill)
             )
             // Spoken by the row or the panel header, which say what the figure
             // counts and whose it is -- this mark alone is a bare number with
-            // colour as its only label, which VoiceOver cannot read.
+            // no label VoiceOver can read.
             .accessibilityHidden(true)
+    }
+
+    /// Dim while everything it counts is running, bright the moment one of them
+    /// is stopped on a question.
+    ///
+    /// The bright end is the surface's own white, and the dim end lifts off
+    /// whatever the badge is drawn on — black everywhere but a session row
+    /// under the pointer, which is the one moment a tile must not turn into a
+    /// hole. Only the dim end reads the ground: the bright end is a signal and
+    /// has to be the same white wherever it appears.
+    private var groundFill: Color {
+        guard badge.wantsAttention else {
+            return NotchPalette.restingInk.chipFill(over: ground)
+        }
+        return NotchPalette.spotlight
     }
 }
 
@@ -1250,23 +1074,18 @@ final class ProjectNameView: NSView {
 /// width. Hierarchy is size and brightness and never hue, because there is no
 /// product left for a colour to name (§3.2).
 struct CountsColumn: View {
-    /// Rows this column counts: the whole list on the collapsed bar and on the
-    /// band's totals, one agent's own where the band decomposes them.
+    /// Rows this column counts, which is the whole monitored list: the bar's
+    /// totals and the band's are one figure, drawn once.
     let sessionCount: Int
-    /// Subagents in flight, or the two states that are not a number.
+    /// Subagents in flight, or `nil` for no lower row at all — the column is
+    /// one numeral, centred on the mark.
     ///
-    /// `nil` draws no lower row at all — the column is one numeral, centred on
-    /// the mark. `0` draws a **dash**, which is what an agent with sessions and
-    /// no subagents reads while another agent's column has some: the row is
-    /// drawn when there are subagents *anywhere*, and then every column fills
-    /// it (`expanded-header-v2.md` §4.3 rules 05 and 06). A blank would leave
-    /// the reader deciding whether the number was absent or the agent was; a
-    /// `0` would be a figure that adds nothing in a row of figures that add.
+    /// **Zero is never a value here.** It used to draw a dash, for an agent
+    /// with sessions and no subagents standing beside an agent that had some;
+    /// with the decomposition gone (`colour-v2.md` §3) there is one column and
+    /// nothing to fill in beside, so a total of none is a row that is not
+    /// drawn.
     let subagentCount: Int?
-    /// The pair this column is drawn in: the greys on the collapsed bar and on
-    /// the totals, the agent's own where the band decomposes them.
-    var sessionInk: NSColor = NotchPalette.countsSessionDrawingColor
-    var subagentInk: NSColor = NotchPalette.labelDrawingColor
     let matrixSize: CGFloat
     /// Whether this form holds the column open at two digits rather than
     /// hugging the digits it draws.
@@ -1281,8 +1100,6 @@ struct CountsColumn: View {
         CountsNumerals(
             sessionCount: sessionCount,
             subagentCount: subagentCount,
-            sessionInk: sessionInk,
-            subagentInk: subagentInk,
             matrixSize: matrixSize
         )
         .frame(width: digitsWidth, height: matrixSize, alignment: .leading)
@@ -1318,8 +1135,6 @@ struct CountsColumn: View {
 private struct CountsNumerals: NSViewRepresentable {
     let sessionCount: Int
     let subagentCount: Int?
-    let sessionInk: NSColor
-    let subagentInk: NSColor
     let matrixSize: CGFloat
 
     func makeNSView(context: Context) -> CountsNumeralsView {
@@ -1336,8 +1151,6 @@ private struct CountsNumerals: NSViewRepresentable {
         view.apply(
             sessionCount: sessionCount,
             subagentCount: subagentCount,
-            sessionInk: sessionInk,
-            subagentInk: subagentInk,
             matrixSize: matrixSize
         )
     }
@@ -1362,8 +1175,6 @@ final class CountsNumeralsView: NSView {
 
     private var sessionCount = 0
     private var subagentCount: Int?
-    private var sessionInk = NotchPalette.countsSessionDrawingColor
-    private var subagentInk = NotchPalette.labelDrawingColor
     private var matrixSize: CGFloat = 0
     private var hasApplied = false
 
@@ -1387,8 +1198,6 @@ final class CountsNumeralsView: NSView {
     func apply(
         sessionCount: Int,
         subagentCount: Int?,
-        sessionInk: NSColor,
-        subagentInk: NSColor,
         matrixSize: CGFloat
     ) {
         // The lower row's *presence* is what moves the numeral above it; what
@@ -1396,8 +1205,6 @@ final class CountsNumeralsView: NSView {
         let rises = (self.subagentCount != nil) != (subagentCount != nil)
         self.sessionCount = sessionCount
         self.subagentCount = subagentCount
-        self.sessionInk = sessionInk
-        self.subagentInk = subagentInk
         self.matrixSize = matrixSize
         // The first application places the column rather than animating into
         // it: a panel opening on a turn already running has nothing to move
@@ -1418,7 +1225,7 @@ final class CountsNumeralsView: NSView {
             sessions,
             text: sessionCount > 0 ? "\(sessionCount)" : nil,
             font: PanelMetrics.countsSessionFont,
-            colour: sessionInk,
+            colour: NotchPalette.countsSessionDrawingColor,
             baseline: PanelMetrics.countsSessionBaseline(
                 hasSubagents: subagentCount != nil,
                 matrixSize: matrixSize
@@ -1429,11 +1236,11 @@ final class CountsNumeralsView: NSView {
         )
         place(
             subagents,
-            // A number, a dash, or no row at all -- and never a second numeral
-            // with no sessions above it to belong to.
-            text: sessionCount > 0 ? subagentCount.map(Self.lowerRowText) : nil,
+            // A number, or no row at all -- and never a second numeral with no
+            // sessions above it to belong to.
+            text: sessionCount > 0 ? subagentCount.map(String.init) : nil,
             font: PanelMetrics.countsSubagentFont,
-            colour: subagentInk,
+            colour: NotchPalette.labelDrawingColor,
             baseline: PanelMetrics.countsSubagentBaseline,
             scale: scale,
             animatingPosition: false,
@@ -1491,11 +1298,6 @@ final class CountsNumeralsView: NSView {
             CATransaction.commit()
         }
         fade(numeral, to: 1, animated: animatingFade)
-    }
-
-    /// A count, or the dash that stands for none of them.
-    private static func lowerRowText(_ count: Int) -> String {
-        count > 0 ? "\(count)" : PanelMetrics.countsDashText
     }
 
     private func fade(_ numeral: CALayer, to opacity: Float, animated: Bool) {
@@ -1930,19 +1732,13 @@ struct NotchStatusMatrix: View {
     let state: NotchMatrixState
     let size: CGFloat
     var isAnimated = true
-    /// Which product this mark belongs to, or nil for the resting grey.
+    /// The pair this mark is drawn in.
     ///
-    /// Read only when ``ink`` is absent: the collapsed surface draws one mark
-    /// for every product at once and passes the aggregate ink directly, and
-    /// there is no `AgentKind` that could stand for it.
-    var agent: AgentKind?
-    /// The ink to draw in, in place of the one ``agent`` would choose.
-    var ink: NotchPalette.MatrixInk?
-    /// Draw one specimen for both products instead, cut on the mark's diagonal.
-    ///
-    /// Only the first-run legend passes this; on the surface a mark always
-    /// belongs to one product. When set it replaces `agent`'s ink entirely.
-    var split: NotchPalette.MatrixSplit?
+    /// **Always passed, and never chosen from a product.** There is one mark on
+    /// the surface, standing for every product at once, so there is no
+    /// `AgentKind` that could pick an ink for it — and since `colour-v2.md` §1
+    /// no product has one to pick.
+    var ink: NotchPalette.MatrixInk = NotchPalette.restingInk
     /// Play the pattern from its first frame, rather than joining the phase
     /// the rest of the bar's marks share.
     ///
@@ -1961,8 +1757,7 @@ struct NotchStatusMatrix: View {
             state: state,
             size: size,
             isAnimated: isAnimated,
-            ink: ink ?? NotchPalette.ink(for: agent),
-            split: split,
+            ink: ink,
             startsAtItsFirstFrame: startsAtItsFirstFrame
         )
         .frame(width: size, height: size)
@@ -1975,7 +1770,6 @@ private struct MatrixIndicator: NSViewRepresentable {
     let size: CGFloat
     let isAnimated: Bool
     let ink: NotchPalette.MatrixInk
-    let split: NotchPalette.MatrixSplit?
     let startsAtItsFirstFrame: Bool
 
     func makeNSView(context: Context) -> MatrixIndicatorView {
@@ -1988,7 +1782,6 @@ private struct MatrixIndicator: NSViewRepresentable {
             size: size,
             isAnimated: isAnimated,
             ink: ink,
-            split: split,
             startsAtItsFirstFrame: startsAtItsFirstFrame
         )
     }
@@ -2001,35 +1794,10 @@ final class MatrixIndicatorView: NSView {
         let opacity: Float
     }
 
-    /// One cell's colours: the product's, or both where the seam crosses it.
-    private enum CellInk {
-        case single(CGColor)
-        case split(above: CGColor, below: CGColor)
-    }
-
-    /// Which side of the mark's diagonal a cell falls on.
-    ///
-    /// The seam runs from the lower-left corner to the upper-right one, so with
-    /// row 0 at the top the sum of a cell's row and column is below `side - 1`
-    /// above the seam, above it below the seam, and exactly `side - 1` on the
-    /// four cells the seam itself passes through.
-    enum DiagonalSide: Equatable {
-        case above, below, onSeam
-
-        static func of(cell index: Int) -> DiagonalSide {
-            switch index / MatrixGrid.side + index % MatrixGrid.side {
-            case ..<(MatrixGrid.side - 1): .above
-            case MatrixGrid.side - 1: .onSeam
-            default: .below
-            }
-        }
-    }
-
     private var appliedState: NotchMatrixState?
     private var appliedSize: CGFloat = 0
     private var appliedIsAnimated = true
-    private var appliedInk = NotchPalette.codexInk
-    private var appliedSplit: NotchPalette.MatrixSplit?
+    private var appliedInk = NotchPalette.restingInk
     private var appliedStartsAtItsFirstFrame = false
     /// What the mark is currently drawing, which the next `apply` compares
     /// against to decide whether the change is one to fade across.
@@ -2056,32 +1824,27 @@ final class MatrixIndicatorView: NSView {
         size: CGFloat,
         isAnimated: Bool,
         ink: NotchPalette.MatrixInk,
-        split: NotchPalette.MatrixSplit? = nil,
         startsAtItsFirstFrame: Bool = false
     ) {
         guard state != appliedState
             || size != appliedSize
             || isAnimated != appliedIsAnimated
             || ink != appliedInk
-            || split != appliedSplit
             || startsAtItsFirstFrame != appliedStartsAtItsFirstFrame else {
             return
         }
         // A dissolve crosses one pattern over another on the same mark. If the
-        // mark itself is a different drawing — resized, a different product's
-        // ink, the legend's split — there is nothing to cross: the two are not
-        // two readings of one thing, and fading between them would say they
-        // were.
-        let sameMark = size == appliedSize
-            && ink == appliedInk
-            && split == appliedSplit
+        // mark itself is a different drawing — resized, or in a different ink
+        // because the user changed the theme — there is nothing to cross: the
+        // two are not two readings of one thing, and fading between them would
+        // say they were.
+        let sameMark = size == appliedSize && ink == appliedInk
         let wasDrawing = appliedDrawing
 
         appliedState = state
         appliedSize = size
         appliedIsAnimated = isAnimated
         appliedInk = ink
-        appliedSplit = split
         appliedStartsAtItsFirstFrame = startsAtItsFirstFrame
         rebuild(dissolvingFrom: sameMark ? wasDrawing : nil)
     }
@@ -2137,39 +1900,17 @@ final class MatrixIndicatorView: NSView {
         // grid the rest of the bar's are already on.
         let anchorsPhase = !appliedStartsAtItsFirstFrame
 
-        /// One cell, in one colour or cut into two on the mark's diagonal.
-        ///
-        /// The split cell is a full rounded rect in the leading colour with the
-        /// trailing colour laid over its lower-right half. The mask is a plain
-        /// triangle rather than a gradient stop: it is drawn in the same
-        /// flipped space the cell frames are laid out in, so the seam cannot
-        /// come out mirrored the way a unit-space gradient can.
-        func makeCell(_ ink: CellInk, side: DiagonalSide, edge: CGFloat) -> CALayer {
+        /// One cell of the mark.
+        func makeCell(_ colour: CGColor) -> CALayer {
             let layer = CALayer()
             layer.cornerRadius = radius
             layer.cornerCurve = .continuous
             layer.contentsScale = scale
-
-            switch (ink, side) {
-            case let (.single(color), _):
-                layer.backgroundColor = color
-            case let (.split(above, _), .above):
-                layer.backgroundColor = above
-            case let (.split(_, below), .below):
-                layer.backgroundColor = below
-            case let (.split(above, below), .onSeam):
-                layer.backgroundColor = above
-                let trailing = CAShapeLayer()
-                trailing.frame = CGRect(x: 0, y: 0, width: edge, height: edge)
-                trailing.path = Self.trailingHalf(edge: edge, radius: radius)
-                trailing.fillColor = below
-                trailing.contentsScale = scale
-                layer.addSublayer(trailing)
-            }
+            layer.backgroundColor = colour
             return layer
         }
 
-        func pass(_ pass: GlowPass, ink: CellInk, animated: Bool) -> CALayer {
+        func pass(_ pass: GlowPass, ink: CGColor, animated: Bool) -> CALayer {
             let container = CALayer()
             container.frame = CGRect(
                 x: -bleed,
@@ -2189,11 +1930,7 @@ final class MatrixIndicatorView: NSView {
             }
 
             for index in 0 ..< MatrixGrid.cellCount {
-                let cellLayer = makeCell(
-                    ink,
-                    side: DiagonalSide.of(cell: index),
-                    edge: cell
-                )
+                let cellLayer = makeCell(ink)
                 cellLayer.frame = CGRect(
                     x: bleed + CGFloat(index % MatrixGrid.side) * pitch,
                     y: bleed + CGFloat(index / MatrixGrid.side) * pitch,
@@ -2220,12 +1957,8 @@ final class MatrixIndicatorView: NSView {
             return container
         }
 
-        let unlit: CellInk = appliedSplit.map {
-            .split(above: $0.above.offLayerColor, below: $0.below.offLayerColor)
-        } ?? .single(appliedInk.offLayerColor)
-        let lit: CellInk = appliedSplit.map {
-            .split(above: $0.above.onLayerColor, below: $0.below.onLayerColor)
-        } ?? .single(appliedInk.onLayerColor)
+        let unlit = appliedInk.offLayerColor
+        let lit = appliedInk.onLayerColor
 
         // The unlit bed never animates; only the lit copies above it do. It
         // goes in underneath whatever is on its way out, which is drawing the
@@ -2338,30 +2071,6 @@ final class MatrixIndicatorView: NSView {
     }
 
     static let dissolveAnimationKey = "notch.matrix.dissolve"
-
-    /// The part of one cell that lies past the seam, corners and all.
-    ///
-    /// The seam runs from the cell's lower-left corner to its upper-right one,
-    /// so the half beyond it is the triangle through the top-right, bottom-right
-    /// and bottom-left corners — in this view's flipped space, where y grows
-    /// downwards. Intersecting with the cell's own rounded rect rather than
-    /// masking it keeps the two halves inside the same rounded outline and
-    /// leaves the result a plain path, which is a thing a test can ask about.
-    static func trailingHalf(edge: CGFloat, radius: CGFloat) -> CGPath {
-        let triangle = CGMutablePath()
-        triangle.move(to: CGPoint(x: edge, y: 0))
-        triangle.addLine(to: CGPoint(x: edge, y: edge))
-        triangle.addLine(to: CGPoint(x: 0, y: edge))
-        triangle.closeSubpath()
-
-        let cell = CGPath(
-            roundedRect: CGRect(x: 0, y: 0, width: edge, height: edge),
-            cornerWidth: radius,
-            cornerHeight: radius,
-            transform: nil
-        )
-        return triangle.intersection(cell)
-    }
 
     /// Phase comes from the clock, not from the moment of installation.
     ///

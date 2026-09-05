@@ -18,7 +18,6 @@ struct AppSettingsView: View {
         VStack(alignment: .leading, spacing: 22) {
             productsGroup
             displayGroup
-            sessionListGroup
 
             // The closing note, the version, and the one action that ends the
             // app.
@@ -185,7 +184,13 @@ struct AppSettingsView: View {
         }
     }
 
-    /// The colour of the one mark this surface draws.
+    /// The one colour this surface has, and the user picks it.
+    ///
+    /// **Named for the mark until it stopped being only the mark's.** Since
+    /// `colour-v2.md` §6 the same twelve entries also tint every badge that
+    /// names a product, so a label saying `Mark colour` understated what the
+    /// control reaches. Nothing else about it moved: same entries at `hint`,
+    /// same ordering, same default, same stored value, and no migration.
     ///
     /// **It is taste, and it cannot become anything else.** Every hue offered
     /// shares the greyscale's two lightnesses, so choosing one changes no
@@ -211,14 +216,16 @@ struct AppSettingsView: View {
     /// moving the way it will move.
     private var aggregateInkRow: some View {
         SettingsRow(
-            title: "Mark colour",
-            caption: "The one mark on the collapsed component. Brightness is "
-                + "unaffected — it is how Notchline says a turn wants you."
+            title: "Theme colour",
+            caption: "Tints the mark on the bar, and the badge that names each "
+                + "product when more than one is connected. Every colour is the "
+                + "same brightness, so the choice never changes what the mark "
+                + "is saying."
         ) {
             HStack(spacing: 10) {
                 AggregateInkSpecimen(hue: store.aggregateInk)
 
-                Picker("Mark colour", selection: $store.aggregateInk) {
+                Picker("Theme colour", selection: $store.aggregateInk) {
                     ForEach(AggregateInk.ordered) { hue in
                         Text(hue.displayName).tag(hue)
                     }
@@ -227,10 +234,10 @@ struct AppSettingsView: View {
                 .pickerStyle(.menu)
                 .fixedSize()
                 .help(
-                    "Tints the aggregate mark once a product is connected. The "
-                        + "resting grey is left alone: it means nothing is "
-                        + "connected, and a colour there would apply to a state "
-                        + "with no agent in it."
+                    "Tints the aggregate mark once a product is connected, and "
+                        + "every product badge. The resting grey is left alone: "
+                        + "it means nothing is connected, and a colour there "
+                        + "would apply to a state with no agent in it."
                 )
             }
         }
@@ -356,33 +363,6 @@ struct AppSettingsView: View {
             + "Hovering still opens the panel."
     }
 
-    // MARK: - Session list
-
-    private var sessionListGroup: some View {
-        SettingsGroup(header: "Session list") {
-            SettingsRow(
-                title: "Distinguish products",
-                caption: "How a row shows which product it came from."
-            ) {
-                Picker("Distinguish products", selection: $store.productAttribution) {
-                    ForEach(ProductAttributionStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
-            }
-        } footnote: {
-            // Visible with one product too. A preference you cannot find until a
-            // second product happens to be open is one you never find.
-            SettingsFootnote(
-                "Only applies while both products are connected — with one product there "
-                    + "is nothing to tell apart."
-            )
-        }
-    }
-
     private var selectedDisplayDescription: String {
         guard let display = store.selectedDisplay else {
             return "Connect a display to choose where the component appears."
@@ -408,7 +388,7 @@ struct AppSettingsView: View {
 
 /// The chosen colour, on a scrap of the notch, swept twice when it changes.
 ///
-/// **A reference rather than a swatch.** What the `Mark colour` row hands over
+/// **A reference rather than a swatch.** What the `Theme colour` row hands over
 /// is not a colour in the abstract — it is the ink of the one mark the
 /// collapsed component draws, on black, at `16.6 pt`, lighting and falling away
 /// on a pattern. A disc of the lit value said one twelfth of that, and said it

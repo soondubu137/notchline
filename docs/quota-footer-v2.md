@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, not implemented.** Nothing here needs a capability the app lacks: the data model is already a list of products each holding a list of windows (`MonitorStore.footerRules`), and only the layout is written for two. |
+| Status | **Designed, and implemented on 2026-09-05.** Nothing here needed a capability the app lacked: the data model was already a list of products each holding a list of windows (`MonitorStore.footerRules`), and only the layout was written for two. §11 records what each symbol became. |
 | Version | 3.4 |
 | Date | 2026-09-05 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `08 — The footer without a gauge`. `07 — The quota footer (superseded)` is kept as the record of the direction this one leaves (§9). `11 — The panel, whole` draws this footer composed with the other two V2 decisions — see [`panel-v2.md`](panel-v2.md). |
@@ -211,11 +211,11 @@ The table is the only thing here that grows, and it grows because somebody opene
 
 **The timer has no unit to keep**, so its unreadable form is the two characters alone — which is the general rule stated without an exception: replace the field, add nothing.
 
-**Two of the four are already how this app behaves.** `UsageSummaryFormatter.summary` writes `-- left` and `-- today` today. The timer is the one that moves: `resetText` returns `Reset unavailable`, and under this rule it returns `--`. **`Not started` is not covered and stays** — a window that has not begun is a window this app read successfully, and saying `--` for it would be the failure report the current code was written to stop making.
+**Two of the four were already how this app behaved.** `UsageSummaryFormatter` wrote `-- left` and `-- today`. The timer was the one that moved: `resetText` returned `Reset unavailable`, and under this rule it returns `--`. **`Not started` is not covered and stays** — a window that has not begun is a window this app read successfully, and saying `--` for it would be the failure report the current code was written to stop making.
 
 The accessible name says `unavailable` in every one of these cases (§7). `--` is a reading for the eye; a screen reader gets the word.
 
-**`Reset unavailable` is carrying a second job, and it has to keep it.** [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) lists *a rule with consumed usage showing a percentage but saying `Reset unavailable`* among the signals that Claude Code's `/usage` wording has moved, and [`tech-design.md`](tech-design.md) §13 says that line must go on saying the reading is unavailable. **The signal survives the rename intact**, because it never rested on the words: what distinguishes it is a *consumed* window with no reset, against an unconsumed one at `100% left`, which reads `Not started`. After this change the signal is a percentage beside a `--` timer. Both documents are amended when the footer is built, not before — nothing is implemented here, and the shipped V1 footer keeps `Reset unavailable` until the surface that replaces it exists.
+**`Reset unavailable` is carrying a second job, and it has to keep it.** [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) lists *a rule with consumed usage showing a percentage but saying `Reset unavailable`* among the signals that Claude Code's `/usage` wording has moved, and [`tech-design.md`](tech-design.md) §13 says that line must go on saying the reading is unavailable. **The signal survives the rename intact**, because it never rested on the words: what distinguishes it is a *consumed* window with no reset, against an unconsumed one at `100% left`, which reads `Not started`. After this change the signal is a percentage beside a `--` timer. **Both documents were amended on 2026-09-05**, in the change that built the footer, exactly as this paragraph said they would be.
 
 **Version 3.1's fallback is rejected, not deferred.** It proposed a single dimmed `--` before the chevron, drawn only while no window anywhere had a share — a marker standing away from the thing it described, in a place no figure had been, and legible only to somebody who knew what its absence meant. It also cost `20` points of width in the state it was for. The rule that landed puts the `--` where the figure was, which needs no width and no explanation.
 
@@ -259,33 +259,37 @@ Two things were wrong with it. It answered §1.3 and left §1.1 and §1.2 standi
 
 ## 10. Verification
 
-- [ ] The collapsed footer is `22` with one product connected, two, three and four, and draws the whole spend and the control and nothing else.
-- [ ] **No window is drawn collapsed, whatever its share.** A window at `2%` with four days to run changes nothing above the control, and the panel stays `308`.
-- [ ] **No figure anywhere on the footer changes ink, weight or size with its value.** Every inner row is `#7C7C80` at `2%` and at `98%`; every outer spend is `#C7C7CC`; brightness separates the table's levels and nothing else.
-- [ ] **An unreadable field draws `--` in its own place and nothing else changes**: `-- today` on the collapsed line and on an outer row, `-- left` in the share column, `--` in the timer column. No marker is drawn beside the chevron, on the band, or on the mark.
-- [ ] A window that has not started still reads `Not started`, and is never drawn as `--`.
-- [ ] Every `--` announces as `unavailable`, and no figure announces as zero.
-- [ ] Opened, there is one outer row per connected product and one inner row per window it reports, the per-model weekly cap included.
-- [ ] A connected product with no windows draws its outer row and no inner ones.
-- [ ] Products are in Settings' order; windows inside a product are in the order the reader published them — `5 h` before `7 d` for Claude Code — and **no list on this footer is sorted by any value it draws**. A window whose share changes, or stops being readable, keeps its row.
-- [ ] The window column is indented `12` from the product's; the share is right-aligned at `300` and the timer at `508`, where the product's spend is right-aligned too.
-- [ ] No reset draws the words `Resets in`, and no timer draws more than two units.
-- [ ] Folding the table from any product and window count leaves the pointer inside the panel.
-- [ ] The footer draws identically under a `46` pt menu bar and a `22` pt one.
-- [ ] The panel is `308` at three live rows on every connected form.
+Checked on 2026-09-05. The heights, orders and readings are pinned by tests in
+`NotchlineTests.swift`; the drawing was read off the running app against Figma
+page `08` and page `11` §03.
+
+- [x] The collapsed footer is `22` with one product connected, two, three and four, and draws the whole spend and the control and nothing else.
+- [x] **No window is drawn collapsed, whatever its share.** A window at `2%` with four days to run changes nothing above the control, and the panel stays `308`.
+- [x] **No figure anywhere on the footer changes ink, weight or size with its value.** Every inner row is `#7C7C80` at `2%` and at `98%`; every outer spend is `#C7C7CC`; brightness separates the table's levels and nothing else.
+- [x] **An unreadable field draws `--` in its own place and nothing else changes**: `-- today` on the collapsed line and on an outer row, `-- left` in the share column, `--` in the timer column. No marker is drawn beside the chevron, on the band, or on the mark.
+- [x] A window that has not started still reads `Not started`, and is never drawn as `--`.
+- [x] Every `--` announces as `unavailable`, and no figure announces as zero.
+- [x] Opened, there is one outer row per connected product and one inner row per window it reports, the per-model weekly cap included.
+- [x] A connected product with no windows draws its outer row and no inner ones.
+- [x] Products are in Settings' order; windows inside a product are in the order the reader published them — `5 h` before `7 d` for Claude Code — and **no list on this footer is sorted by any value it draws**. A window whose share changes, or stops being readable, keeps its row.
+- [x] The window column is indented `12` from the product's; the share is right-aligned at `300` and the timer at `508`, where the product's spend is right-aligned too.
+- [x] No reset draws the words `Resets in`, and no timer draws more than two units.
+- [x] Folding the table from any product and window count leaves the pointer inside the panel.
+- [x] The footer draws identically under a `46` pt menu bar and a `22` pt one.
+- [x] The panel is `308` at three live rows on every connected form.
 
 ## 11. Implementation mapping
 
-Nothing here is implemented. **The data model needs no change** — `footerRules` already returns one `FooterRule` per connected product, each holding its `FooterWindow`s (§8.6).
+**Implemented on 2026-09-05.** The two levels needed no change — `footerRules` already returned one `FooterRule` per connected product, each holding its `FooterWindow`s (§8.6) — but what those two types *carry* did: a `FooterWindow` was a `0–1` fill and one caption string, and it is now the three columns the table draws plus the spoken form of its timer. `FooterRule` gains the product's own spend.
 
 | Symbol | Change |
 | --- | --- |
-| `PanelMetrics.footerHeight(rules:isFolded:)` | Becomes `footerHeight(rules:isExpanded:)`: `22` or `19W + 30P + 17` (§2's badge-carrying form — `19W + 28P + 17` is the pre-badge figure). ~~`isSpeaking`, and a `47` between them~~ — void (§4): the closed footer has one height. The four constants behind it go, with `footerRuleHeight` and `footerWindowSpacing` |
+| `PanelMetrics.footerHeight(rules:isFolded:)` | Became `footerHeight(rules:isExpanded:)`: `22` or `19W + 30P + 17` (§2's badge-carrying form — `19W + 28P + 17` is the pre-badge figure), and **`0` with nothing connected** (§8.5 question 07), which is the one shape the old function had no answer for. The four constants behind it went, with `footerRuleHeight` and `footerWindowSpacing`; `footerWindowRowHeight`, `footerWindowIndent`, `footerShareTrailingEdge` and `footerLeaderClearance` replace them, and all four are compositions of measurements this file already had |
 | `MonitorStore.footerRules` | **Unchanged, entirely.** It already maps `snapshot.quota.windows` straight through in the reader's order, which is what §5 now asks for. ~~Sorts each rule's windows by remaining share ascending, unanswerable last~~ — void (§5), and the only line of this table that retires without being replaced. ~~Gains `spokenWindows`~~ — void (§4); no window is selected, and nothing reads a share against a threshold |
-| `MonitorStore.footerTodayText` | Loses its `rules.count > 1` guard, its product names and its parts: it returns the whole alone. Each product's own figure moves onto its `FooterRule` |
-| `UsageSummaryFormatter.resetText` | Gains a compact countdown form — `47m`, `2h`, `3d 12h`, two units at most — and keeps the absolute form for the accessible name (§7). **Returns `--` where it now returns `Reset unavailable`** (§8.3); `Not started` is unchanged, and so is the reasoning above it in `MonitorDomain.swift` that tells the two apart |
-| `MonitorStore.quotaFolded` | Renamed `quotaExpanded`, default `false` (§8.1) |
-| `ExpandedPanelFooter` | Three line types — the spend line with its control, a product row, a window row — and no rule view at all. ~~a spoken line~~ is void (§4). `FooterRuleRow` and the half-width split go |
-| `aFoldedFooterIsTheSameHeightForEveryShape` | Becomes `theFooterIsTwentyTwoForEveryConnectedForm`; `foldingLiftsThePanelsBottomEdgePastTheChevronThatWasClicked` inverts into `foldingCannotStrandThePointer`; `aProductWithNoLimitsKeepsItsRow` is new. ~~`aQuietWindowIsNotDrawn`~~ becomes `noShareReachesTheClosedFooter` — sweeping the share across its whole range and asserting the closed footer is byte-identical is a stronger pin than one quiet window, and it is what §4 actually claims. `anUnreadableFieldDrawsTwoDashes` is new (§8.3) |
+| `MonitorStore.footerTodayText` | Became `footerToday`, a `SpendReading`: it lost its `rules.count > 1` guard, its product names and its parts, and returns the whole alone. Each product's own figure moved onto its `FooterRule`. **The reading is two parts rather than one string**, which the design did not say and the drawing needs — the figure is `#C7C7CC` and `today` is `#7C7C80`, and that is the same split §8.3's fallback needs, so there is one split rather than two |
+| `UsageSummaryFormatter.resetText` | Gained the compact countdown — `47m`, `2h`, `3d 12h`, two units at most — and `spokenResetText` keeps the absolute form for the accessible name (§7). **Returns `--` where it returned `Reset unavailable`** (§8.3); `Not started` is unchanged, and so is the reasoning above it in `MonitorDomain.swift` that tells the two apart. A reset already past reads `Now` rather than `Resets now`, which the design did not specify: it is the one instant the column holds no duration, and a word there keeps it a countdown rather than inventing a `0m` that is not true. `summary(...)` and `UsageMeter` retire with the rules they wrote |
+| `MonitorStore.quotaFolded` | Renamed `quotaExpanded`, default `false` (§8.1). `toggleQuotaFold()` became `toggleQuotaTable()` |
+| `ExpandedPanelFooter` | Three line types — the spend line with its control, a product row, a window row — and no rule view at all. ~~a spoken line~~ is void (§4). `FooterRuleRow` and the half-width split went, and `FooterCaption` now hugs its text rather than filling: this footer is a table, and every column's edge is placed by the line that holds it |
+| `aFoldedFooterIsTheSameHeightForEveryShape` | Became `theFooterIsTwentyTwoForEveryConnectedForm`; `foldingLiftsThePanelsBottomEdgePastTheChevronThatWasClicked` inverted into `foldingCannotStrandThePointer`, which also keeps the stranding guard honest by checking a shrink that *would* strand; `aProductWithNoLimitsKeepsItsRow` is new. ~~`aQuietWindowIsNotDrawn`~~ became `noShareReachesTheClosedFooter` — sweeping the share across its whole range and asserting the closed footer is identical is a stronger pin than one quiet window, and it is what §4 actually claims. `anUnreadableFieldDrawsTwoDashes`, `everyDashAnnouncesAsUnavailable`, `theResetColumnCountsDownInTwoUnitsAtMost` and `theOpenedTableIsNineteenAWindowAndThirtyAProduct` are new (§8.3, §7, §5, §2) |
 
-[`dual-agent-design.md`](dual-agent-design.md) §5.1, §5.2 and §5.4 need amending before any of it is built.
+[`dual-agent-design.md`](dual-agent-design.md) §5.1, §5.2 and §5.4 were amended in the same change, as was [`tech-design.md`](tech-design.md) §13's `Reset unavailable` wording and the matching signal row in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) — §8.3 said both would be amended when the footer was built, and the footer is built.

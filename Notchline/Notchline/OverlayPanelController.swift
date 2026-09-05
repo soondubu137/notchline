@@ -101,10 +101,10 @@ final class OverlayPanelController {
             store.$quota.map { _ in () }.eraseToAnyPublisher(),
             store.$sessions.map { _ in () }.eraseToAnyPublisher(),
             store.$isExpanded.map { _ in () }.eraseToAnyPublisher(),
-            // Folding the quota block is a height change like any other: the
-            // footer redraws itself, but only the panel can give back the
-            // height the rules were occupying.
-            store.$isQuotaFolded.map { _ in () }.eraseToAnyPublisher(),
+            // Opening the quota table is a height change like any other: the
+            // footer redraws itself, but only the panel can find the height the
+            // table needs and give it back afterwards.
+            store.$isQuotaExpanded.map { _ in () }.eraseToAnyPublisher(),
             // Giving up the wings collapses the compact body to the cut-out and
             // takes them back again. Nothing else republishes when it is
             // toggled -- no status, no session, no quota moves -- so without

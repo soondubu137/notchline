@@ -762,19 +762,17 @@ The gate lands in two places, and skipping either saves nothing: `scheduleQuotaR
 
 ### 13.1 Footer format
 
-The expanded footer is a fixed `40 pt` tall, following the session/empty-state body with no additional bottom padding; its top hairline uses the same visual token as the header and body separators. The outer view follows the panel's `12 pt` horizontal inset, so a `520 pt` panel gives `496 pt` of footer content width.
+> **Superseded by [`quota-footer-v2.md`](quota-footer-v2.md), implemented 2026-09-05.** The footer is `22` at rest — today's spend and the disclosure — and `19W + 30P + 17` with the table open. The `40 pt` box, the `•` between the two readings, and the gauge above them are all gone. What survives here is the two formatters, and one of them changed wording; both are below, corrected.
 
-The left copy is:
+The outer view follows the panel's `12 pt` horizontal inset, so a `520 pt` panel gives `496 pt` of footer content width.
 
-```text
-<today token compact value> • <reset text>
-```
+The token total uses fixed `en_US` compact notation with `1 ... 3` significant digits, keeping necessary decimals and dropping trailing zeros — `13.4K`, `323K`, `2.8M`, `1.03B` — while `0 ... 999` shows the integer. Unavailable data shows `--`, in the figure's own place and with the unit kept: `-- today`, `-- left`.
 
-The token total uses fixed `en_US` compact notation with `1 ... 3` significant digits, keeping necessary decimals and dropping trailing zeros — `13.4K`, `323K`, `2.8M`, `1.03B` — while `0 ... 999` shows the integer. Unavailable data shows `--`.
+The reset is computed from **remaining duration** rather than the local calendar day — `Resets today` is equally true at 00:30 and 23:30 and therefore says nothing. It is written as a countdown of at most two units, because it stands in a column where every line is one: `47m` under the hour, `2h` under the day, `3d` and `3d 12h` above it; a stale time already in the past reads `Now` and is corrected at the next refresh. The absolute instant survives in the accessible name — `resets Friday at 09:00` beside a drawn `4d 6h`.
 
-The reset is computed from **remaining duration** rather than the local calendar day — `Resets today` is equally true at 00:30 and 23:30 and therefore says nothing: under an hour is `Resets in under an hour`, under a day `Resets in x hours`, whole days `Resets in x days`, and both `Resets in x days y hours`; a stale time already in the past is clamped to `Resets now` and corrected at the next refresh.
+No reset time has two meanings, distinguished by **what else is known about the window**: Claude Code's 5-hour window only starts at the first request, and before that its line has a percentage and no `resets …` clause — a window that has not started rather than a failed read, written `Not started` (unconsumed, i.e. `100% left`). Everything else is **`--`**, which is the general rule for a field this app could not read: replace the figure in its own place and mark it in no other way. It read `Reset unavailable`, which sounded like the quota display being broken — the one thing it was not.
 
-No reset time has two meanings, distinguished by **what else is known about the window**: Claude Code's 5-hour window only starts at the first request, and before that its line has a percentage and no `resets …` clause — a window that has not started rather than a failed read, written `Not started` (unconsumed, i.e. `100% left`). Everything else remains `Reset unavailable`: a window that is **consumed** but whose reset cannot be read is exactly the signal that the output wording changed, and that line must go on saying the reading is unavailable.
+**The signal that rode the old wording survives the change intact**, because it never rested on the words. A window that is **consumed** but whose reset cannot be read is exactly the sign that Claude Code's output wording moved; what distinguishes it is the percentage beside it, against an unconsumed window at `100% left` that reads `Not started`. After this change the signal is a share beside a `--`.
 
 The left side's production font is SF Pro Regular `11/14` in secondary text; the Inter in Figma is only a rendering substitute for MCP font unavailability. The right side uses a `32 × 32` native `Button` hit target with a `16 pt` `gearshape`, the VoiceOver name `Open Settings`, and SwiftUI's `openSettings` to open the existing `Settings` scene rather than duplicating the settings UI inside the overlay.
 
