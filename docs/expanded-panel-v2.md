@@ -232,7 +232,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 | 05 | Is `Always` ever offered? | **Standing recommendation: not from here.** §3.3. If it is ever added it belongs beside `Approve` in the recessed ink and never on the white ground, because the white ground is the Enter key and a policy about every future request must not be what Enter does |
 | 06 | What happens to a retired row whose product has gone dark? | **Open — the only genuinely unanswered question here.** A row below the seam still claims a destination, and the queue has no equivalent of the live list's hand-over check because it never re-asks. Two candidates: re-ask on click and say so when the answer is no, or drop the row when its product disconnects. The first keeps the queue stable and costs one local read at the click, which is what the live list already pays per row. Recommended, not decided — and the window raises the stakes slightly, since a row can now sit below the seam for hours rather than until the fifth departure after it |
 | 07 | Does the seam draw with the quota folded and nothing else on the panel? | **Answered — yes**, and that is the `100` pt form |
-| 08 | Does the window need a ceiling behind it? | **Open, and it is a guard rather than a design.** Membership is unbounded in count: a heavy five hours might retire fifty rows at a couple of hundred bytes each — nothing to hold, and unusable to scroll. **Recommendation: the window stays the only rule anyone can see, with a generous ceiling of `50` behind it purely so the store cannot grow without limit.** If it ever binds, that is a fact about the machine rather than a defect, and the seam's count will have said so long before. What must not happen is the ceiling becoming the visible rule again — that is the "last N" §8.1 just finished banning |
+| 08 | Does the window need a ceiling behind it? | **Answered as recommended, and built** (§10.1): `recentCeiling = 50`, invisible, keeping the newest when it binds. The reasoning stands as written. **A guard rather than a design.** Membership is unbounded in count: a heavy five hours might retire fifty rows at a couple of hundred bytes each — nothing to hold, and unusable to scroll. **Recommendation: the window stays the only rule anyone can see, with a generous ceiling of `50` behind it purely so the store cannot grow without limit.** If it ever binds, that is a fact about the machine rather than a defect, and the seam's count will have said so long before. What must not happen is the ceiling becoming the visible rule again — that is the "last N" §8.1 just finished banning |
 
 ### 8.6 Two smaller reaches
 
@@ -264,17 +264,29 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 
 ## 10. Implementation mapping
 
-**The first row has landed**; the rest is ahead. The work lands in six places:
+**The first three rows have landed**; the rest is ahead. The work lands in six places:
 
 | Symbol | Change |
 | --- | --- |
 | ~~`PanelMetrics.sessionViewportHeight(forSessionCount:)`~~ **Built.** | Became a height rather than a row count: `sessionListContentHeight(liveRowCount:retiredRowCount:isRecentExpanded:)` capped at `sessionViewportCap`, which is the same `240`. `maximumVisibleSessionCount` retired with it, and `expandedContentHeight` now asks the *viewport* whether to draw the apology rather than the live count |
 | `PanelMetrics` | **Built:** `retiredRowHeight = sessionRowHeight / 2` and `recentSeamHeight`. Still owed: `openRowHeight(requestLines:)`, which belongs to §3 |
-| `MonitorStore` | A departure queue keyed on the departure instant, holding every row that left within `recentWindow` (`5 × 3600`) together with the reason it left, fed wherever a row leaves today; `recentFolded` beside `quotaFolded` |
-| `MonitorStore` (the clock) | **Eviction is a read-time filter, not a timer** — a queue nobody watched for six hours is empty the moment it is read, with no background work while the panel is shut. The timer exists only to make the change visible to somebody watching, and one one-minute tick while the panel is open serves both eviction and the ages, which already have to move `2m` → `3m` |
+| ~~`MonitorStore`~~ **Built.** | `departuresByThread` holding every row that left within `recentWindow` (`5 × 3600`) with the reason it left, fed from `apply` — the one funnel every row leaves through, a dismissal included. `isRecentExpanded` beside `isQuotaExpanded`, on the key `recentExpanded`. Two things the design did not say, both forced by the code and both in §10.1 |
+| `MonitorStore` (the clock) | **Eviction is a read-time filter, and that half is built** — the queue is filtered as of `now` wherever it is republished, and opening the panel is a read, so a queue nobody watched for six hours is empty before it could be drawn. Still owed: the one-minute tick that makes an age move under somebody already watching |
 | `NotchOverlayView` | `RecentSeam`, `RetiredRow`, and `SessionRow`'s open state; `emptyListMessage` draws only when the queue is empty too |
 | `OverlayPanelController` | Latching: key window on open, restore on close, and hover suspended for the duration (§8.3) |
 
 **Nothing in `PanelMetrics` changes for this amendment.** The five-row fold is `240` doing what it already did, and the only new constant lives in the store.
+
+### 10.1 Two things the code settled that this document had not
+
+**The queue is keyed on the Thread, not the Turn — §5's membrane requires it.** `MonitoredSession.id` names a *Turn* (`agent:threadID:turnID`), and a Thread that submits again gets a new one. Keyed on the Turn, a returning Thread would draw twice: once above the seam as its new Turn and once below as its old, where §5 says it crosses the rule as the same row. Keyed on the Thread, the live row's arrival takes the queue's entry out by itself.
+
+**Absence is not departure, and the queue needs the evidence gate the dismissed set already uses.** A product stops reporting its rows for entirely ordinary reasons that leave every Turn alive — Codex Desktop quitting, an App Server flapping past its stability window, Claude Code holding rows back with no window open ([`tech-design.md`](tech-design.md) §15.1). Read as departures, any of those fills the queue with rows that never left, which is exactly the mistake `forgetDismissalsProvenGone` exists to undo one rule up (CR-Fable-004). So a row is retired only when **its own product is connected in that snapshot and is no longer listing the Turn**; a dismissal is the other branch and is answered by the dismissed set, because the product goes on listing a dismissed Turn and it is this app that stopped drawing it.
+
+**One case defeats the gate, and the Thread key repairs it.** Codex Desktop quitting empties the list *before* availability catches up — presence is a kernel fact and precedes any message about Turns — so those rows are booked as departed. Their return takes them straight out again. The two decisions are therefore one mechanism rather than two, and neither is safe without the other.
+
+**What is lost, stated:** a row read while its product was dark never enters the queue, because it had already dropped off the list. That is §2.4 rule 01 being honest rather than a defect — the queue vouches for what it watched leave, and it watched nothing during a blackout.
+
+**Question 08 is answered the way §8.5 recommends.** `recentCeiling = 50` stands behind the window purely so the store cannot grow without limit; when it binds it keeps the newest, and the rule anybody can see is still five hours.
 
 `docs/PRD.md` **is amended for §2** — `0.13`, goal 9 and the rewritten §3 sentence — so nothing in this section is blocked on it. §8.1's first amendment and §8.2's narrowing are still owed, and both belong to §3's work rather than this one's.

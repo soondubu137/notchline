@@ -584,6 +584,73 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     }
 }
 
+/// One row that has left the list, and when it left.
+///
+/// **Memory rather than history** (`expanded-panel-v2.md` §2, `PRD.md` §2 goal
+/// 9). It holds the row exactly as the list last drew it, which is what lets it
+/// be navigated with no second lookup — both navigators read only ``agent`` and
+/// ``threadID`` — plus the instant it left and what took it out. Nothing here
+/// is persisted and nothing is ever re-read: a departure this run did not watch
+/// cannot become one of these.
+nonisolated struct RecentDeparture: Equatable, Sendable, Identifiable {
+    /// What took the row off the list.
+    ///
+    /// **Not drawn.** Nothing below the seam claims a status, because the
+    /// rule's meaning is that the list stops there (§2.4 rule 05). This is
+    /// kept because it is the one fact about a departure that cannot be
+    /// recovered afterwards, and because deciding it is how the detector tells
+    /// a departure from a product that merely went quiet.
+    enum Reason: Equatable, Sendable {
+        /// Its product recorded the Turn as read, so the list stopped
+        /// reporting it.
+        case read
+        /// The user waved it away with a secondary click.
+        case dismissed
+        /// The same, on a Turn that had not finished.
+        case dismissedWhileRunning
+    }
+
+    let session: MonitoredSession
+    /// The instant this list stopped reporting the row.
+    ///
+    /// **Not the Turn's end**, which is ``MonitoredSession/finishedAt`` and is
+    /// a different fact: a row dismissed while running never has one, and a row
+    /// read an hour after it finished left an hour after that. This is the only
+    /// one of the three moments the app itself observed, and it is the one the
+    /// age counts (§2.4 rule 05).
+    let departedAt: Date
+    let reason: Reason
+
+    nonisolated init(
+        session: MonitoredSession,
+        departedAt: Date,
+        reason: Reason
+    ) {
+        self.session = session
+        self.departedAt = departedAt
+        self.reason = reason
+    }
+
+    nonisolated var id: String { Self.key(for: session) }
+
+    /// The queue's key: the **Thread**, not the Turn.
+    ///
+    /// ``MonitoredSession/id`` names a Turn, and a Thread that submits again
+    /// gets a new one. Keyed on the Turn, a Thread that came back would draw
+    /// twice — once above the seam as its new Turn and once below it as its old
+    /// — where §5 says it crosses the rule as the same row. Keyed on the
+    /// Thread, the live row's arrival takes the queue's entry out by itself,
+    /// which is also what repairs a departure booked in error.
+    nonisolated static func key(for session: MonitoredSession) -> String {
+        "\(session.agent.rawValue):\(session.threadID)"
+    }
+
+    /// How long ago this left, at `now`.
+    nonisolated func age(at now: Date) -> TimeInterval {
+        now.timeIntervalSince(departedAt)
+    }
+}
+
 /// What one subagent badge draws, wherever it is drawn.
 ///
 /// One badge, one number, one flip (`dual-agent-design.md` §10). ``count`` is

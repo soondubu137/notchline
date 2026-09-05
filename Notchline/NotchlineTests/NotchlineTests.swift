@@ -2690,6 +2690,381 @@ struct NotchlineTests {
         )
     }
 
+    private func recentTestRow(
+        _ agent: AgentKind = .codex,
+        thread: String,
+        turn: String = "turn-1",
+        status: SessionStatus = .completed
+    ) -> MonitoredSession {
+        MonitoredSession(
+            agent: agent,
+            threadID: thread,
+            turnID: turn,
+            projectName: "notchline",
+            title: "Redraw the mark at five rows",
+            preview: nil,
+            status: status,
+            startedAt: nil
+        )
+    }
+
+    /// **A row retires because its own product stopped listing it, and for no
+    /// other reason.**
+    ///
+    /// The queue is empty at launch — nothing has departed yet — and gains a
+    /// member the moment the Turn behind a drawn row is gone from what its
+    /// product just reported (`expanded-panel-v2.md` §2.4 rules 01 and 03).
+    @Test @MainActor
+    func aRowItsProductStopsListingIsWhatRetires() {
+        let clock = TestClock()
+        // `.connecting`, exactly as `makeShared()` seeds the shipped store.
+        // The bare initialiser falls back to a SwiftUI *preview* fixture whose
+        // rows are `.ready` — and those would be booked as departures by the
+        // first real snapshot, which is a store nothing in the product builds.
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let row = recentTestRow(thread: "read-me")
+
+        #expect(store.recentDepartures.isEmpty, "empty at launch")
+
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [row]))
+        #expect(store.sessions.count == 1)
+        #expect(store.recentDepartures.isEmpty, "a drawn row has not departed")
+
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        #expect(store.sessions.isEmpty)
+        #expect(store.recentDepartures.map(\.session.threadID) == ["read-me"])
+        #expect(store.recentDepartures.first?.reason == .read)
+        // The instant the *list* stopped reporting it, which is the only one of
+        // the three moments this app observed (§2.4 rule 05).
+        #expect(store.recentDepartures.first?.departedAt == clock.now())
+    }
+
+    /// **A product we cannot see is not a witness to its own rows being over.**
+    ///
+    /// Absence is not departure. A product stops reporting its rows for
+    /// entirely ordinary reasons that leave every Turn alive — Codex Desktop
+    /// quitting, an App Server flapping past the stability window, Claude Code
+    /// holding rows back with no window open (`tech-design.md` §15.1) — and
+    /// reading any of those as departures would fill the queue with rows that
+    /// never left. It is the same mistake `forgetDismissalsProvenGone` exists
+    /// to undo one rule up (CR-Fable-004), answered by the same evidence.
+    @Test @MainActor
+    func aProductThatGoesDarkRetiresNothing() {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let start = clock.now()
+        let row = recentTestRow(thread: "still-alive", status: .running)
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, sessions: [row]),
+            observedAt: start
+        )
+        // Twice, a grace period apart: `ConnectionStabilityGate` refuses to
+        // publish a first `.disconnected` at all, which is the blip protection
+        // this row is standing behind.
+        for offset in [60.0, 60.0 + MonitorTiming.standard.disconnectGracePeriod * 2] {
+            store.applyForTesting(
+                makeAgentSnapshot(.codex, availability: .disconnected, sessions: []),
+                observedAt: start.addingTimeInterval(offset)
+            )
+        }
+
+        #expect(store.sessions.isEmpty, "the rows go dark with the product")
+        #expect(store.recentDepartures.isEmpty)
+    }
+
+    /// **A dismissal is the other branch, and cannot use absence as evidence
+    /// at all** — the product goes on listing a dismissed Turn, and it is this
+    /// app that stopped drawing it.
+    ///
+    /// Read, dismissed, or dismissed while still running: all three are in the
+    /// queue, and the reading below the rule is an age rather than a duration
+    /// so it stays honest in every one (§2.4 rule 05).
+    @Test @MainActor
+    func aDismissedRowRetiresWhateverItWasDoing() {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let finished = recentTestRow(thread: "finished", status: .completed)
+        let working = recentTestRow(
+            thread: "working",
+            turn: "turn-2",
+            status: .running
+        )
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, sessions: [finished, working])
+        )
+        #expect(store.dismiss(finished))
+        #expect(store.dismiss(working))
+
+        let reasons = Dictionary(
+            uniqueKeysWithValues: store.recentDepartures.map {
+                ($0.session.threadID, $0.reason)
+            }
+        )
+        #expect(reasons["finished"] == .dismissed)
+        #expect(reasons["working"] == .dismissedWhileRunning)
+    }
+
+    /// **A Thread cannot be live and retired at once**, and that one rule does
+    /// two jobs.
+    ///
+    /// It is §5's membrane: a Thread that submits again leaves the queue and
+    /// reappears above the seam as the same row, rather than drawing twice —
+    /// once below as its old Turn and once above as its new one, which is what
+    /// a queue keyed on the Turn would do.
+    ///
+    /// And it is the repair for the one case the departure gate cannot refuse.
+    /// Codex Desktop quitting empties the list before availability catches up
+    /// (presence is a kernel fact and precedes any message about Turns), so
+    /// those rows *are* booked as departed — and their return takes them out
+    /// again by itself.
+    @Test @MainActor
+    func aThreadCannotBeLiveAndRetiredAtOnce() {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let first = recentTestRow(thread: "thread-1", turn: "turn-1")
+
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [first]))
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        #expect(store.recentDepartures.count == 1)
+
+        // The same row back: a departure booked while the product was quietly
+        // lying about being connected, undone without anybody noticing.
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [first]))
+        #expect(store.recentDepartures.isEmpty)
+
+        // And the membrane proper: the same Thread, a new Turn.
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        #expect(store.recentDepartures.count == 1)
+        let next = recentTestRow(
+            thread: "thread-1",
+            turn: "turn-2",
+            status: .running
+        )
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [next]))
+        #expect(store.sessions.count == 1)
+        #expect(store.recentDepartures.isEmpty)
+    }
+
+    /// **Eviction is a filter, not a timer.**
+    ///
+    /// A queue nobody watched for six hours is empty the moment it is read, and
+    /// nothing ran while the panel was shut to make that true (§10). Opening
+    /// the panel is the read, which is why `isExpanded` is what this drives.
+    @Test @MainActor
+    func aDepartureOlderThanTheWindowIsGoneWhenTheQueueIsRead() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let row = recentTestRow(thread: "this-morning")
+
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [row]))
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        #expect(store.recentDepartures.count == 1)
+
+        // One minute inside the window, and still there.
+        await clock.advance(by: MonitorStore.recentWindow - 60)
+        store.isExpanded = true
+        #expect(store.recentDepartures.count == 1)
+
+        // Two minutes later it is past five hours, and the next look finds
+        // nothing — the seam goes with it, and the panel returns to its floor.
+        store.isExpanded = false
+        await clock.advance(by: 120)
+        store.isExpanded = true
+        #expect(store.recentDepartures.isEmpty)
+    }
+
+    /// **The queue holds what the window holds; the viewport draws five.**
+    ///
+    /// Membership is unbounded in count inside its five hours, and the fold is
+    /// what the `240` viewport does to it — a twelve-deep queue is `512` of
+    /// content drawn `240` at a time by the scroller a fourth live row already
+    /// used (§2.4 rules 01 and 02).
+    @Test @MainActor
+    func theQueueHoldsMoreThanTheViewportDraws() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let rows = (0..<12).map { recentTestRow(thread: "thread-\($0)") }
+
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: rows))
+        // Retired one at a time, a minute apart, so the order is a real one.
+        for index in 0..<12 {
+            await clock.advance(by: 60)
+            store.applyForTesting(
+                makeAgentSnapshot(.codex, sessions: Array(rows.dropFirst(index + 1)))
+            )
+        }
+
+        #expect(store.recentDepartures.count == 12)
+        // Most recently departed first.
+        #expect(
+            store.recentDepartures.map(\.session.threadID)
+                == (0..<12).reversed().map { "thread-\($0)" }
+        )
+        #expect(
+            PanelMetrics.sessionViewportHeight(
+                liveRowCount: 0,
+                retiredRowCount: store.recentDepartures.count,
+                isRecentExpanded: true
+            ) == PanelMetrics.sessionViewportCap
+        )
+    }
+
+    /// **The ceiling stands behind the window, not in front of it.**
+    ///
+    /// The rule anybody can see is still five hours (§8.5 question 08). This
+    /// only stops an unbounded store, and what it keeps when it binds is the
+    /// newest — never the oldest, which would make the queue lie about what
+    /// just happened.
+    @Test @MainActor
+    func theCeilingStandsBehindTheWindow() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let total = MonitorStore.recentCeiling + 10
+        let rows = (0..<total).map { recentTestRow(thread: "thread-\($0)") }
+
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: rows))
+        for index in 0..<total {
+            await clock.advance(by: 60)
+            store.applyForTesting(
+                makeAgentSnapshot(.codex, sessions: Array(rows.dropFirst(index + 1)))
+            )
+        }
+
+        #expect(store.recentDepartures.count == MonitorStore.recentCeiling)
+        #expect(store.recentDepartures.first?.session.threadID == "thread-\(total - 1)")
+        #expect(
+            store.recentDepartures.contains { $0.session.threadID == "thread-0" }
+                == false,
+            "the oldest are what a ceiling drops"
+        )
+    }
+
+    /// **Attribution reaches below the seam.**
+    ///
+    /// A retired row names its product on the same presence rule as a live one
+    /// (§8.6), so a queue holding both products under one connected product is
+    /// exactly the visibly mixed list that still has to identify itself.
+    @Test @MainActor
+    func aMixedQueueUnderOneConnectedProductStillNamesItsProducts() {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let start = clock.now()
+        let codexRow = recentTestRow(.codex, thread: "codex-1", status: .running)
+        let claudeRow = recentTestRow(.claudeCode, thread: "claude-1")
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, sessions: [codexRow]),
+            observedAt: start
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, sessions: [claudeRow]),
+            observedAt: start
+        )
+        // Claude Code's row is read while it can still speak for itself, so it
+        // retires properly.
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, sessions: []),
+            observedAt: start
+        )
+        #expect(store.recentDepartures.count == 1)
+
+        // And then Claude Code closes. One product connected, one live row, and
+        // a queue that still names two.
+        for offset in [60.0, 60.0 + MonitorTiming.standard.disconnectGracePeriod * 2] {
+            store.applyForTesting(
+                makeAgentSnapshot(.claudeCode, availability: .disconnected),
+                observedAt: start.addingTimeInterval(offset)
+            )
+        }
+        #expect(store.connectedAgents == [.codex])
+        #expect(store.sessions.map(\.agent) == [.codex])
+        #expect(store.recentDepartures.map(\.session.agent) == [.claudeCode])
+        #expect(store.showsProductAttribution)
+    }
+
+    /// A secondary click takes a row out of the queue, and that is the only way
+    /// out anybody performs (§2.4 rule 09).
+    @Test @MainActor
+    func aRetiredRowCanBeTakenOutOfTheQueueByHand() throws {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let row = recentTestRow(thread: "thread-1")
+
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [row]))
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        let departure = try #require(store.recentDepartures.first)
+
+        #expect(store.removeFromRecent(departure))
+        #expect(store.recentDepartures.isEmpty)
+        // Nothing is remembered about the removal, so asking twice is simply
+        // a no-op rather than a second state to keep.
+        #expect(store.removeFromRecent(departure) == false)
+    }
+
+    /// The drawing stores retire nothing.
+    ///
+    /// `restageSpecimen` hands both onboarding stores **the same rows** again
+    /// with a fresh start, so no id ever leaves the list and no seam can appear
+    /// under a specimen. This is a real invariant rather than a guard: it holds
+    /// because of what restaging does, and it would break silently if that ever
+    /// staged a different set.
+    @Test @MainActor
+    func restagingASpecimenRetiresNothing() {
+        let clock = TestClock()
+        let row = recentTestRow(thread: "thread-1")
+        // Seeded with its rows and given the same ones back, which is what
+        // `OnboardingAnatomy.restage()` does every ten minutes.
+        let store = MonitorStore(
+            services: [],
+            initialSnapshots: [makeAgentSnapshot(.codex, sessions: [row])],
+            clock: clock
+        )
+
+        store.restageSpecimen([makeAgentSnapshot(.codex, sessions: [row])])
+        store.restageSpecimen([makeAgentSnapshot(.codex, sessions: [row])])
+
+        #expect(store.sessions.count == 1)
+        #expect(store.recentDepartures.isEmpty)
+    }
+
     /// A row's gutter and its padding are one margin split in two.
     ///
     /// The block is inset `6` so the hover fill does not run into the panel

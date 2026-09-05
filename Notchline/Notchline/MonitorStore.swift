@@ -1396,7 +1396,43 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var integrationSwitchIsOnByAgent: [AgentKind: Bool] = [:]
     /// The products whose hooks are being written or removed right now.
     @Published private(set) var integrationBusyAgents: Set<AgentKind> = []
-    @Published var isExpanded = false
+    @Published var isExpanded = false {
+        didSet {
+            // **Opening the panel is a read of the queue**, and eviction is a
+            // read-time filter rather than a timer (§2.4 rule 11): a queue
+            // nobody watched for six hours is empty by the time it could be
+            // drawn, with no background work having run while the panel was
+            // shut.
+            guard isExpanded, isExpanded != oldValue else { return }
+            refreshRecentDepartures(at: clock.now())
+        }
+    }
+    /// Whether somebody has opened what the list has let go of.
+    ///
+    /// **Named for the open state rather than the folded one**, which is the
+    /// spelling ``isQuotaExpanded`` arrived at for the same reason: folded is
+    /// what this *is*, and opening it is the thing somebody asks for. The
+    /// design calls the setting `recentFolded` (`expanded-panel-v2.md` §2.4
+    /// rule 07); the default it names — folded — is what this stores, inverted.
+    ///
+    /// Remembered across openings, and **folding it never closes the panel**:
+    /// the footer stands between this control and the bottom edge, so that edge
+    /// cannot travel past a still pointer.
+    @Published var isRecentExpanded: Bool {
+        didSet {
+            preferences?.set(
+                isRecentExpanded,
+                forKey: Self.recentExpandedDefaultsKey
+            )
+        }
+    }
+    /// What the queue holds right now, most recently departed first.
+    ///
+    /// A projection of ``departuresByThread`` past ``recentWindow``, republished
+    /// wherever that can have changed. It is a stored value rather than a
+    /// computed one because SwiftUI has to be told: a computed property reading
+    /// the clock would go stale on screen with nothing to invalidate it.
+    @Published private(set) var recentDepartures: [RecentDeparture] = []
     /// Whether somebody has opened the quota table.
     ///
     /// **A rename rather than a flipped boolean**, and the change is meant to
@@ -1528,6 +1564,7 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var hasCompletedOnboarding: Bool
 
     private static let quotaExpandedDefaultsKey = "quotaExpanded"
+    private static let recentExpandedDefaultsKey = "recentExpanded"
     private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
     private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
     private static let namesWorkOnPillDefaultsKey = "namesWorkOnPill"
@@ -1571,6 +1608,35 @@ final class MonitorStore: ObservableObject {
     /// hold the other side's switch.
     private var integrationTasks: [AgentKind: Task<Void, Never>] = [:]
     private var isNavigationInFlight = false
+    /// How long a row stays reachable after it leaves the list.
+    ///
+    /// **Five hours, and a constant rather than a setting** (§2.4 rule 01): a
+    /// window the user can widen is the history browser this app is not. It is
+    /// also what holds the age to two characters — nothing can ever read `5h`,
+    /// because at five hours the row is gone (§2.3).
+    ///
+    /// Not in ``MonitorTiming``, deliberately. Every window there is a
+    /// mechanism's — how stale an answer may get, how long a connection is
+    /// given to come back — and they compose into user-visible latencies. This
+    /// one composes into nothing and is answerable only from the product side.
+    static let recentWindow: TimeInterval = 5 * 60 * 60
+    /// A ceiling on the queue's size, behind the window rather than in front
+    /// of it.
+    ///
+    /// **The rule anybody can see is still five hours** (§8.5 question 08).
+    /// This exists only so an unbounded store cannot grow without limit: fifty
+    /// is far past what the viewport can draw and far past a plausible five
+    /// hours, and if it ever binds, the count on the seam said so long before.
+    /// What it must never become is the visible rule — that is the "last N"
+    /// this design has just finished banning.
+    static let recentCeiling = 50
+    /// Every row that has left the list, keyed by Thread.
+    ///
+    /// Keyed by Thread rather than by Turn for the reason on
+    /// ``RecentDeparture/key(for:)``, and unbounded in count within its window:
+    /// membership is the window, and ``recentCeiling`` stands behind it rather
+    /// than beside it.
+    private var departuresByThread: [String: RecentDeparture] = [:]
     /// The Turns the user has taken off the list, kept per product.
     ///
     /// Per product because forgetting one is decided against that product's own
@@ -1653,6 +1719,12 @@ final class MonitorStore: ObservableObject {
         // it — the two agree today, and would not if this default ever moved.
         self.isQuotaExpanded = preferences?.object(
             forKey: Self.quotaExpandedDefaultsKey
+        ) as? Bool ?? false
+        // `object(forKey:)` for the reason the quota's uses it: this defaults
+        // to folded, and `bool` cannot tell an install that has never opened
+        // the queue from one that opened and shut it.
+        self.isRecentExpanded = preferences?.object(
+            forKey: Self.recentExpandedDefaultsKey
         ) as? Bool ?? false
         self.hidesCompactWings = preferences?.bool(
             forKey: Self.hidesCompactWingsDefaultsKey
@@ -2313,8 +2385,20 @@ final class MonitorStore: ObservableObject {
     /// The second clause covers the reverse case: a product that closed while
     /// its rows are still listed. The list is visibly mixed, so it still has to
     /// identify itself, whatever presence now says.
+    ///
+    /// **The second clause reaches below the seam**, and for the reason it was
+    /// written: a retired row names its product on the same presence rule
+    /// (`expanded-panel-v2.md` §8.6), so a queue holding both products under
+    /// one connected product is exactly the "visibly mixed list that still has
+    /// to identify itself" the paragraph above describes.
     var showsProductAttribution: Bool {
-        connectedAgents.count > 1 || Set(sessions.map(\.agent)).count > 1
+        connectedAgents.count > 1 || attributedAgents.count > 1
+    }
+
+    /// Every product named anywhere on the list, above the rule and below it.
+    private var attributedAgents: Set<AgentKind> {
+        Set(sessions.map(\.agent))
+            .union(recentDepartures.map(\.session.agent))
     }
 
     /// One group per connected product, in Settings' order, each holding its
@@ -3099,9 +3183,19 @@ final class MonitorStore: ObservableObject {
     }
 
     private func apply(_ snapshot: MonitorSnapshot) {
+        let now = clock.now()
         forgetDismissalsProvenGone(in: snapshot)
         let undismissedSessions = snapshot.sessions.filter { !isDismissed($0) }
         let visibleSessions = undismissedSessions
+        // Before `sessions` moves, because what left is the difference between
+        // the two. This is the one funnel every row leaves through -- a
+        // dismissal republishes through here as well -- so it is the only place
+        // the queue has to be fed from.
+        recordDepartures(
+            leaving: visibleSessions,
+            reportedBy: snapshot,
+            at: now
+        )
         // Re-aggregated rather than taken from the snapshot: a dismissed row
         // must stop counting towards the summary the moment it stops showing.
         let aggregateStatus = MonitorAggregation.status(
@@ -3138,7 +3232,132 @@ final class MonitorStore: ObservableObject {
         if lastIntegrationMessage != integrationMessage {
             lastIntegrationMessage = integrationMessage
         }
+        refreshRecentDepartures(at: now)
     }
+
+    /// Books what has left the list, and takes out what has come back.
+    ///
+    /// **Absence is not departure, and this is where that distinction is paid
+    /// for.** A product stops reporting its rows for entirely ordinary reasons
+    /// that leave every Turn alive: Codex Desktop quitting sends an empty list
+    /// immediately, an App Server flapping past the stability window sends
+    /// `.disconnected` with one, and Claude Code with no window open holds its
+    /// rows back rather than discarding them (`tech-design.md` §15.1). Read as
+    /// departures, any of those would fill the queue with rows that never left
+    /// -- the same mistake ``forgetDismissalsProvenGone`` exists to undo one
+    /// rule up (CR-Fable-004), and the same evidence answers it: a row is gone
+    /// only when **its own product is connected in this snapshot and is no
+    /// longer listing the Turn**.
+    ///
+    /// A dismissal is the other branch and cannot use that evidence at all: the
+    /// product goes on listing a dismissed Turn, and it is this app that
+    /// stopped drawing it. So the dismissed set is what answers there.
+    ///
+    /// **Where the gate is still fooled, the last loop repairs it.** A product
+    /// that empties its list while still claiming to be connected books its
+    /// rows as departed; their Thread coming back takes them straight out
+    /// again, because a Thread cannot be live and retired at once (§5).
+    private func recordDepartures(
+        leaving visibleSessions: [MonitoredSession],
+        reportedBy snapshot: MonitorSnapshot,
+        at now: Date
+    ) {
+        let surviving = Set(visibleSessions.map(\.id))
+        // What each product just listed, for the products that can speak for
+        // themselves right now. A product we cannot see is not a witness.
+        var listedByConnectedAgent: [AgentKind: Set<String>] = [:]
+        for agentSnapshot in snapshot.agents where agentSnapshot.isConnected {
+            listedByConnectedAgent[agentSnapshot.agent] = Set(
+                agentSnapshot.sessions.map(\.id)
+            )
+        }
+
+        for row in sessions where !surviving.contains(row.id) {
+            guard let reason = departureReason(
+                for: row,
+                listedByConnectedAgent: listedByConnectedAgent
+            ) else { continue }
+            departuresByThread[RecentDeparture.key(for: row)] = RecentDeparture(
+                session: row,
+                departedAt: now,
+                reason: reason
+            )
+        }
+
+        // The membrane, in both directions: a Thread that submits again leaves
+        // the queue and reappears above the seam as the same row.
+        for row in visibleSessions {
+            departuresByThread.removeValue(forKey: RecentDeparture.key(for: row))
+        }
+    }
+
+    /// Why a row that is no longer drawn is no longer drawn, or `nil` if it is
+    /// still there and only this app has lost sight of it.
+    private func departureReason(
+        for row: MonitoredSession,
+        listedByConnectedAgent: [AgentKind: Set<String>]
+    ) -> RecentDeparture.Reason? {
+        if isDismissed(row) {
+            // The reading below the rule is an age either way, so it stays
+            // honest on a Turn that never finished (§2.4 rule 05).
+            return row.status.keepsTiming ? .dismissedWhileRunning : .dismissed
+        }
+        guard let listed = listedByConnectedAgent[row.agent] else { return nil }
+        return listed.contains(row.id) ? nil : .read
+    }
+
+    /// Republishes the queue as of `now`, dropping whatever has aged out.
+    ///
+    /// **Eviction is a filter, not a timer** (§10). A queue nobody watched for
+    /// six hours is empty the moment it is read, and nothing had to run while
+    /// the panel was shut to make that true; a tick only makes the change
+    /// visible to somebody already watching.
+    private func refreshRecentDepartures(at now: Date) {
+        var kept = departuresByThread.filter {
+            $0.value.age(at: now) < Self.recentWindow
+        }
+        // Most recently departed first, with the key breaking a tie: several
+        // rows can leave in one pass and share an instant exactly, and an order
+        // that depends on dictionary iteration would flap between publishes.
+        var ordered = kept.values.sorted {
+            $0.departedAt == $1.departedAt
+                ? $0.id < $1.id
+                : $0.departedAt > $1.departedAt
+        }
+        if ordered.count > Self.recentCeiling {
+            ordered = Array(ordered.prefix(Self.recentCeiling))
+            kept = Dictionary(uniqueKeysWithValues: ordered.map { ($0.id, $0) })
+        }
+        if kept.count != departuresByThread.count {
+            departuresByThread = kept
+        }
+        if recentDepartures != ordered {
+            recentDepartures = ordered
+        }
+    }
+
+    /// Takes one row out of the queue, at the user's asking (§2.4 rule 09).
+    ///
+    /// The live row's own secondary click, meaning the same thing one rule
+    /// down, and the only way out that anybody performs -- the other is the
+    /// window closing behind the row.
+    ///
+    /// **Nothing is remembered about the removal**, and it needs no equivalent
+    /// of ``dismissedSessionIDsByAgent``. A row taken out here can only come
+    /// back by its Thread departing again, which means it was on the live list
+    /// in between -- so there is no re-entry to suppress and nothing to forget
+    /// later.
+    @discardableResult
+    func removeFromRecent(_ departure: RecentDeparture) -> Bool {
+        guard departuresByThread.removeValue(forKey: departure.id) != nil else {
+            return false
+        }
+        refreshRecentDepartures(at: clock.now())
+        return true
+    }
+
+    /// Opens or folds what the list has let go of.
+    func toggleRecent() { isRecentExpanded.toggle() }
 
     private func isDismissed(_ session: MonitoredSession) -> Bool {
         dismissedSessionIDsByAgent[session.agent]?.contains(session.id) ?? false
