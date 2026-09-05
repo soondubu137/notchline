@@ -40,7 +40,7 @@
 
 This file describes the single-product contract. The design for monitoring Codex and Claude Code together is in [`dual-agent-design.md`](dual-agent-design.md), which supersedes two things here: the settings gear's position (§4.5, now the expanded top bar's top-right, applying to single-product too) and the two-product footer's quota composition (§4.3). Everything else is unaffected.
 
-The current SwiftUI and this document recognise four session status variants only: Running, Input needed, Approval needed, Completed. Historical session-status variants beyond those four in the external Figma are no longer part of the product contract and should be deleted at the next sync; until then this document and the code govern. `Usage Ring`'s 7 legal variants, `Usage Indicator`'s 4, and `Panel`'s 8 (with `808:527` added 2026-08-23, §4.6) are unaffected by that narrowing.
+The current SwiftUI and this document recognise four session status variants only: Running, Input needed, Approval needed, Completed. Historical session-status variants beyond those four in the external Figma are no longer part of the product contract and should be deleted at the next sync; until then this document and the code govern. `Usage Ring`'s 7 legal variants, ~~`Usage Indicator`'s 4~~ and `Panel`'s 8 (with `808:527` added 2026-08-23, §4.6) are unaffected by that narrowing. `Usage Indicator` is narrowed by a **separate** decision — its Healthy, Warning and Critical variants are the critical threshold, which was removed on 2026-09-05 (§4.3).
 
 ## 3. Foundations
 
@@ -224,11 +224,11 @@ Both the Compact and Expanded contexts carry full status text. In Expanded the d
 - At `100%` it is a fully lit ring; as the remainder falls, a dark arc grows anticlockwise from twelve o'clock while the lit arc shortens to match, and a partial ring has round caps.
 - The lit full ring and the dark arc share a `9 pt` centreline radius and a `2 pt` centred stroke; the dark arc must never shrink inwards.
 - `0%` is a fully dark ring. Unavailable also shows only the full track colour, but its value reads `--` and must never be confused with a real `0%`.
-- `> 50%` white, `15%–50%` amber, `< 15%` red.
-- Unavailable is a grey ring and never shows a fabricated percentage.
+- ~~`> 50%` white, `15%–50%` amber, `< 15%` red.~~ **Void, and the concept with it** (2026-09-05, the board's owner, Figma page `11` §07 question 02). **There is no critical threshold in this product and nothing is drawn differently for being low.** [`quota-footer-v2.md`](quota-footer-v2.md) §4 is the decision and what it costs; this bullet is where the `15%` it borrowed came from, so it is voided here rather than only there. The ring draws one ink at every value it can read.
+- Unavailable is a grey ring and never shows a fabricated percentage. **`--` is the general form**: any field this app cannot read draws `--` in its own place, with its unit if it has one and no other marking ([`quota-footer-v2.md`](quota-footer-v2.md) §8.3).
 - The expanded leading value is always the remaining percentage; Running does not replace the quota text.
 
-The Figma `Usage Ring` set (`108:18`) has seven variants — `100`, `72`, `50`, `32`, `10`, `0` and `Unavailable` — and `Usage Indicator` (`153:202`) has four: Healthy, Warning, Critical, Unavailable.
+The Figma `Usage Ring` set (`108:18`) has seven variants — `100`, `72`, `50`, `32`, `10`, `0` and `Unavailable` — and `Usage Indicator` (`153:202`) has four: ~~Healthy, Warning, Critical~~, Unavailable. **Three of those four are the voided threshold expressed as variants** and have no legal value to take; the set is Unavailable and one readable state. Neither component is implemented — no view reads a ring or an indicator — so this narrowing costs nothing but the Figma sync.
 
 ### 4.4 Session Row
 

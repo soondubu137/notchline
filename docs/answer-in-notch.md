@@ -3,8 +3,8 @@
 | Field | Value |
 | --- | --- |
 | Status | **Designed, not implemented.** Two dependencies gate it and they are not the same size: §14.1 is one field this app already receives and discards, and §14.2 is a capability neither product offers. The reading half needs only the first. |
-| Version | 1.0 |
-| Date | 2026-09-04 |
+| Version | 1.1 |
+| Date | 2026-09-05 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `10 — The answer`. `11 — The panel, whole` redraws the open row on the composed surface and corrects §12's panel column — see [`panel-v2.md`](panel-v2.md). |
 | Scope | What happens between a request arriving and a person answering it: how the request reaches somebody who is not looking at the notch, every shape the two products ask in, what an opened row draws for each of them, which key does what, and what the row becomes once the answer has gone. The band, the quota footer and both collapsed forms are untouched, and nothing here reaches the collapsed surface. |
 | Supersedes | [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 entire. Four of its clauses are corrected rather than extended, each marked below: §3.1's opening gesture (§3), §3.2's fade and its three-line cap (§4), §3.4's forces on the affirmative (§6), §3.5's close-on-send (§8). §2 — the Recent queue — is untouched and independent. |
@@ -381,9 +381,9 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 
 | | Question | Where it stands |
 | --- | --- | --- |
-| 01 | Will either product accept an answer from outside it? | **Not a design question**, and it gates §3 to §8. §11 is what happens meanwhile |
-| 02 | Will this app keep the request it is already sent? | **Also not a design question, and this one is ours.** §14.1. The first thing to build |
-| 03 | Which chord, and what happens when it is taken? | **Standing recommendation: `⌥Space`**, settable, registered so a clash fails loudly. Worth testing against a machine already running a launcher on that chord |
+| 01 | Will either product accept an answer from outside it? | **Not a design question, and under investigation** (the board's owner, 2026-09-05). It gates §3 to §8 and nothing else, so it is answered by measuring the two products rather than by drawing. §11 is what ships meanwhile, and §11 is not blocked on it |
+| 02 | Will this app keep the request it is already sent? | **Also not a design question, and this one is ours. Under investigation** (the board's owner, 2026-09-05). §14.1, and the first thing to build. The bytes already arrive on the socket; what is being established is what carrying them costs, against the `PostToolUse` result that took a lifecycle event down with it (CR-030) |
+| 03 | Which chord, and what happens when it is taken? | **Answered by the board's owner on 2026-09-05 — the recommendation, as it stands.** `⌥Space`, user-settable, registered through the ordinary system path so a clash **fails at registration rather than silently at use**, and the settings row shows the chord the app actually holds rather than the one it asked for (§9.1). Still worth testing against a machine already running a launcher on that chord — that is a check on the failure path, not a reopening of the choice |
 | 04 | Does the count say lines, or bytes? | **Standing recommendation: lines.** A byte count is precise and unreadable; a line count matches what the reader is looking at and is the unit in which a hidden clause hides. Where a request arrives as one enormous unbroken line, the count is of wrapped lines |
 | 05 | Should `⏎` ever take an answer the reader has not seen? | **Answered — no**, and §6.3 is how. The rejected alternative was a fixed delay before the control becomes live |
 | 06 | Is `Always` ever offered from here? | **Answered — no.** §6.5, and [`expanded-panel-v2.md`](expanded-panel-v2.md) §8.5 question 05 |

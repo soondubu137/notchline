@@ -3,10 +3,11 @@
 | Field | Value |
 | --- | --- |
 | Status | **A composition, not a new decision.** Every rule here is already taken in [`colour-v2.md`](colour-v2.md), [`quota-footer-v2.md`](quota-footer-v2.md) and [`answer-in-notch.md`](answer-in-notch.md). What this file adds is the arithmetic of the three together and the five places where their drafts contradict one another — four of which are figures taken before a neighbouring decision landed, and one of which is a genuine disagreement neither document could settle alone. |
-| Version | 1.0 |
+| Version | 1.1 |
 | Date | 2026-09-05 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2?node-id=272-2) — `11 — The panel, whole` |
 | Scope | The expanded panel in every state it can reach, and nothing else. Neither collapsed form is touched: none of the three decisions reaches the bar or the pill, and [`compact-view-v2.md`](compact-view-v2.md) stands whole. |
+| Answered since | All six of §5, by the board's owner on 2026-09-05 from Figma page `11` §07. One of them changes what is drawn: **there is no critical threshold**, so the footer has no speaking form and the panel's `333` row is void ([`quota-footer-v2.md`](quota-footer-v2.md) §4). The other five settle without moving a figure — §5 carries each. |
 | Supersedes | Nothing outright. It **corrects** [`quota-footer-v2.md`](quota-footer-v2.md) §6's two height tables, [`answer-in-notch.md`](answer-in-notch.md) §12's panel column, and [`figma-design.md`](figma-design.md) §4.7's treatment of the waiting reading; and it settles the separator that Figma pages 09 and 10 draw differently. All five are §3. |
 
 ## 1. The three decisions are one decision
@@ -34,7 +35,7 @@ Three rules follow, and they are the whole of what the composed surface is:
 - **A row's caption is the badge and then the Project** — no separator (§3.4). The caption line is `16` whether or not a badge is in it, so nothing on a row moves at the moment a second product connects. The badge itself is drawn on `showsProductAttribution`: presence, not "who has threads right now".
 - **The reading is one slot in three outlines**: white ground on a waiting row, bare on a running one, the dark chip on a finished one holding how long the Turn took. The badge is that same chip in the theme ink.
 - **The theme ink has three readers**: the mark, the badge, and — since [`answer-in-notch.md`](answer-in-notch.md) §5.5 — the `12 × 12` tick box on a question that accepts more than one answer. That box is the only coloured object anywhere inside an open row; everything else in there is white, `#C7C7CC`, `#7C7C80` or `#242424`.
-- **The footer draws one number at rest**, grows one line when a window crosses `15%` with more than `15%` of its time left, and becomes the two-level table when somebody opens it.
+- **The footer draws one number, and then only what somebody opened.** ~~grows one line when a window crosses `15%` with more than `15%` of its time left~~ is void ([`quota-footer-v2.md`](quota-footer-v2.md) §4): there is no threshold, nothing is drawn differently for being low, and the two-level table is reached by the control alone. A field this app cannot read draws `--` in its own place and is marked in no other way.
 
 ## 3. The five corrections
 
@@ -48,7 +49,9 @@ Three rules follow, and they are the whole of what the composed surface is:
 
 [`quota-footer-v2.md`](quota-footer-v2.md) §2 says a caption line carrying a badge is the badge's own `16` rather than `footerCaptionHeight`'s `14`, and gives `19W + 30P + 17` with a spoken line of `47`. Its §6 tables, and Figma page 08's §05, still carry `19W + 28P + 17` and `45`.
 
-**The note is right and the tables are stale.** `45 → 47`, `64 → 66`, `83 → 85`, `130 → 134`, `177 → 183`, `215 → 221`, with the panel figures following. No constant is introduced: the `16` is the badge height the `Badge` option already defined.
+**The note is right and the tables are stale.** ~~`45 → 47`~~, `64 → 66`, `83 → 85`, `130 → 134`, `177 → 183`, `215 → 221`, with the panel figures following. No constant is introduced: the `16` is the badge height the `Badge` option already defined.
+
+**The first of those corrections was overtaken before it was applied.** The spoken line was removed entirely on 2026-09-05 ([`quota-footer-v2.md`](quota-footer-v2.md) §4), so `45` and `47` are both void and this correction now covers the table's five figures alone. It is recorded rather than dropped because it is what settled the disagreement, and because the same `16` is what makes the table's `30P` right.
 
 ### 3.3 Figma page 09 draws a grey chip and keeps `Name and colour` as the default
 
@@ -82,7 +85,7 @@ Two of the three terms cannot move at all, and the third moves only between `0` 
 | At rest — Claude Code alone, two windows | 46 | 240 | 22 | **308** | `339` — the footer grew with the windows |
 | At rest — both products, four working agents | 46 | 240 | 22 | **308** | `370`, and `536` wide |
 | At rest — three products, eight working agents | 46 | 240 | 22 | **308** | `401`, and `649` wide |
-| A window past the threshold speaks | 46 | 240 | 47 | **333** | `331` — §3.2 |
+| ~~A window past the threshold speaks~~ | ~~46~~ | ~~240~~ | ~~47~~ | ~~**333**~~ | void — [`quota-footer-v2.md`](quota-footer-v2.md) §4 |
 | One waiting row, opened at one prose line | 46 | 149 | 22 | **217** | `279` — §3.1 |
 | One waiting row, opened at three lines | 46 | 202 | 22 | **270** | `332` — §3.1 |
 | One waiting row, opened at the body's cap | 46 | 240 | 22 | **308** | `370` — §3.1 |
@@ -93,33 +96,36 @@ Two of the three terms cannot move at all, and the third moves only between `0` 
 
 Three consequences:
 
-- **Two of those ten figures are the user's own doing and the other eight are not.** Opening the quota table takes the panel to `420` or `507`, on a control that is always drawn. Everything else is `308` or below, whatever is connected, whatever is running, and whatever the machine's cut-out measures.
+- **Two of those nine figures are the user's own doing and the other seven are not.** Opening the quota table takes the panel to `420` or `507`, on a control that is always drawn. Everything else is `308` or below, whatever is connected, whatever is running, and whatever the machine's cut-out measures.
 - **The cap has not moved; the floor under it has.** `308` is still reached by three live rows or by one request opened at the body's cap — not by owning a second product.
-- **A limit speaking is the one state neither the user nor the machine chose.** It costs `25`, once, at any product and window count, and it arrives as a line that was not there a moment ago.
+- ~~**A limit speaking is the one state neither the user nor the machine chose.** It costs `25`, once, at any product and window count, and it arrives as a line that was not there a moment ago.~~ **Void, and it makes the bullet above absolute.** With the threshold removed, the *only* thing that takes this panel past `308` is the user opening the quota table. Nothing the machine observes — no share, no reset, no unreadable reading — changes its height at all.
 
 ## 5. What still gates this
 
-Nothing new. Six questions survive the composition, and only the two marked **★** gate anything drawn.
+Nothing new, and as of 2026-09-05 nothing undecided either. All six were put to the board's owner from Figma page `11` §07 and came back settled; the two marked **★** are settled *as investigations*, which is what they always were — neither is a drawing question, and both are answered by measuring something rather than by choosing something.
 
-| | Question | Recorded in |
-| --- | --- | --- |
-| 01 | Is the badge's lit text too loud on a real list? | [`colour-v2.md`](colour-v2.md) §10 q01 |
-| 02 | Is `15%` right on both sides of the speaking rule? | [`quota-footer-v2.md`](quota-footer-v2.md) §8.5 q03 |
-| 03 | How does a user learn that quota is unreadable? | [`quota-footer-v2.md`](quota-footer-v2.md) §8.5 q01 |
-| 04 ★ | Will this app keep the `tool_input` it is already sent? | [`answer-in-notch.md`](answer-in-notch.md) §15 q02 — ours, and the first thing to build |
-| 05 ★ | Will either product accept an answer from outside it? | [`answer-in-notch.md`](answer-in-notch.md) §15 q01 — gates the answering half alone |
-| 06 | Which chord, and what happens when it is taken? | [`answer-in-notch.md`](answer-in-notch.md) §15 q03 |
+| | Question | Recorded in | Where it stands |
+| --- | --- | --- | --- |
+| 01 | Is the badge's lit text too loud on a real list? | [`colour-v2.md`](colour-v2.md) §10 q01 | **Build it as designed.** The lit value ships and is judged on the running app; the caption-lightness fallback stays recorded and untaken |
+| 02 | Is `15%` right on both sides of the speaking rule? | [`quota-footer-v2.md`](quota-footer-v2.md) §8.5 q03 | **Void with its subject — there is no critical threshold.** The concept is removed rather than re-tuned, and this is the one answer that changes what is drawn: §2, §4 and §6 all move |
+| 03 | How does a user learn that quota is unreadable? | [`quota-footer-v2.md`](quota-footer-v2.md) §8.5 q01 | **The field says so itself.** `-- today`, `-- left`, `--` — the unreadable field is replaced in its own place, with its unit if it has one, and marked in no other way |
+| 04 ★ | Will this app keep the `tool_input` it is already sent? | [`answer-in-notch.md`](answer-in-notch.md) §15 q02 | **Under investigation.** Ours, and still the first thing to build |
+| 05 ★ | Will either product accept an answer from outside it? | [`answer-in-notch.md`](answer-in-notch.md) §15 q01 | **Under investigation.** Gates the answering half alone; §11's reading form ships without it |
+| 06 | Which chord, and what happens when it is taken? | [`answer-in-notch.md`](answer-in-notch.md) §15 q03 | **`⌥Space`, as recommended** — user-settable, registered so a clash fails at registration, with the settings row showing the chord actually held |
 
-So the three can be built in the order they were argued: the badge and the band, then the footer, then the field this app already receives and throws away.
+**Five of the six close without moving a figure on this page.** Question 02 is the exception, and it takes something off rather than adding it: the footer loses its second closed height, so the composed panel is `308` in every state the user did not open.
+
+So the three can still be built in the order they were argued: the badge and the band, then the footer, then the field this app already receives and throws away — and the first two are now free of open questions entirely.
 
 ## 6. Verification
 
 These are the checks that span more than one of the three; each document keeps its own.
 
 - [ ] The panel is `520 × 308` with three live rows, at every cut-out, every working-agent count and every connected-product count, and no width or height term reads either count.
-- [ ] Opening the quota table is the only act that takes the panel past `308` other than a window crossing the threshold, which takes it to `333`.
+- [ ] **Opening the quota table is the only thing that takes the panel past `308`**, full stop: sweep every window's share across its whole range, make every reading unavailable, and the panel does not move. ~~other than a window crossing the threshold, which takes it to `333`~~ is void (§5 q02).
 - [ ] A row's caption draws the badge and then the Project, with no separator between them, and the caption line measures `16` with a badge and without one.
 - [ ] The theme ink reaches the mark, the badge and the `multiSelect` tick box, and those three change together when the `Theme colour` selection changes.
 - [ ] A waiting row's white ground is sized for `Approval needed` / `Input needed` and does not resize when the word inside it becomes `Answer` or `Read`.
 - [ ] A finished row's dark ground is the only place on the panel that reports how long a Turn took.
 - [ ] With every colour rendered as flat grey, no figure, name or state on the expanded panel becomes ambiguous.
+- [ ] An unreadable quota field draws `--` and nothing anywhere else on the panel — band, mark, rows or footer control — reports it.
