@@ -88,6 +88,8 @@ That used to be judged on "both products have threads", and this is the correcti
 
 The reverse case is kept: while a product is closed but its rows are still listed, the marker keeps being drawn. The list is still visually mixed, so it still has to say whose each row is.
 
+**And that clause now reaches below the rule too.** A row that has left the live list keeps its badge on this same presence rule ([`expanded-panel-v2.md`](expanded-panel-v2.md) §8.6), so `showsProductAttribution` answers on every product named anywhere on the panel rather than on the live rows alone. Without it, one connected product with a mixed queue below the seam would be the visibly mixed list this paragraph is about, drawing no marker on either half. The spoken form is deliberately not on the rule at all: a screen reader has no surface to compare against, so a retired row names its product whether or not a badge is drawn.
+
 Four presentations, chosen by a setting. The first three land on the row's leading `11 pt` caption and add no strokes to the panel; the fourth trades a vertical bar for the whole caption:
 
 | Option | Presentation | Notes |

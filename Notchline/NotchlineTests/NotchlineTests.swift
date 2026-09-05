@@ -2901,6 +2901,44 @@ struct NotchlineTests {
         #expect(clock.requestedSleepIntervals.count == afterClosing)
     }
 
+    /// **A reading nobody is drawing is never published.**
+    ///
+    /// One publish on this store re-renders the whole overlay (`AGENTS.md` §7),
+    /// and the age is drawn only with the panel open *and* the queue unfolded.
+    /// A queue held across a boundary in either other state would otherwise buy
+    /// a full re-render a minute for a string nothing reads — and the collapsed
+    /// bar, which is what is actually on screen then, would pay it.
+    @Test @MainActor
+    func anAgeNobodyIsDrawingIsNeverPublished() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let row = recentTestRow(thread: "thread-1")
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: [row]))
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        let departed = store.recentReadAt
+
+        // Shut. Refreshes keep arriving — this is a live store — and none of
+        // them moves the instant the ages would be drawn against.
+        await clock.advance(by: 600)
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        #expect(store.recentReadAt == departed)
+
+        // Open, but folded: still nothing drawn, still nothing published.
+        store.isExpanded = true
+        await clock.settle()
+        #expect(store.recentReadAt == departed)
+
+        // Unfolded, and it catches up in one step.
+        store.isRecentExpanded = true
+        await clock.settle()
+        #expect(store.recentReadAt == clock.now())
+        #expect(store.recentDepartures[0].ageText(at: store.recentReadAt) == "10m")
+    }
+
     /// **A folded queue wakes for its expiries and for nothing else.**
     ///
     /// No age is drawn while it is folded, so a minute boundary changes nothing

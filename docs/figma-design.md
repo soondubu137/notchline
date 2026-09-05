@@ -324,7 +324,7 @@ One fixed value can be checked directly: the notched form's **idle** leading win
 
 ### 5.1 Membership semantics
 
-A row is a navigable root Thread. Running, Input needed and Approval needed are always shown; Completed shows only while that product's desktop app still believes the user has not seen it, and is removed automatically once it is read, archived, deleted or no longer navigable. **A Claude Code session in a terminal is answered by its terminal** (ADR 0012's fifth path); only a session with neither a Desktop record nor a controlling terminal keeps its Completed row until that session's next submission, the session disappearing, or manual removal (right-click on the row; ~~clear the list~~ — clear-all was removed, §8.2). The annotation cards must state that difference, or the board looks as though every row disappears by itself.
+A row is a navigable root Thread. Running, Input needed and Approval needed are always shown; Completed shows only while that product's desktop app still believes the user has not seen it, and is removed automatically once it is read, archived, deleted or no longer navigable. ~~That removal is the end of the row's life.~~ **It is no longer the end** ([`expanded-panel-v2.md`](expanded-panel-v2.md) §2.5): a row removed because it was read, or because the user waved it away, passes under a rule at the foot of the list and stays reachable there for five hours. Only expiry and a second right-click take it off the surface, and a Thread that submits again crosses back up as the same row. **A Claude Code session in a terminal is answered by its terminal** (ADR 0012's fifth path); only a session with neither a Desktop record nor a controlling terminal keeps its Completed row until that session's next submission, the session disappearing, or manual removal (right-click on the row; ~~clear the list~~ — clear-all was removed, §8.2). The annotation cards must state that difference, or the board looks as though every row disappears by itself.
 
 The list covers every Project and `Chats` under the current account, does not follow the sidebar selection, never shows subagents, and does not serve as a history browser.
 
@@ -368,7 +368,7 @@ The quota ring is a grey unavailable while the thread list, statuses and click b
 
 ### 6.3 Monitoring lifecycle
 
-The annotation card states: a Turn enters on submission; an active Turn is always kept; a terminal Turn is kept only while the desktop app still shows it unread; it is removed automatically on read, archive, delete or loss of navigability; the notch never marks anything read; and **a terminal row whose read state cannot be answered does not take part in automatic removal**.
+The annotation card states: a Turn enters on submission; an active Turn is always kept; a terminal Turn is kept only while the desktop app still shows it unread; it is removed automatically on read, archive, delete or loss of navigability; the notch never marks anything read; and **a terminal row whose read state cannot be answered does not take part in automatic removal**. The card now needs one more line: **removal from the live list is not the end of the row** — see [`expanded-panel-v2.md`](expanded-panel-v2.md) §2.5 for the lifecycle it continues into.
 
 ### 6.4 Presence: two system states
 

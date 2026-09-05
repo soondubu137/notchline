@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, not implemented.** §2 can be built on its own. **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)**, which designs the whole answering experience and corrects four of its clauses; read that file instead, and keep this one for §2. |
+| Status | **§2 is built** (2026-09-05, five commits from `1f2f581` to this one) — the window, the seam, the rows under it and the clock, with `docs/PRD.md` amended for it. What is not built is any of it being *seen*: §9's last item stands. **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)** and is not built here.  ~~**Designed, not implemented.** §2 can be built on its own.~~ **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)**, which designs the whole answering experience and corrects four of its clauses; read that file instead, and keep this one for §2. |
 | Version | 2.1 |
 | Date | 2026-09-04, amended 2026-09-05 |
 | Amended | **§2's queue is a five-hour window, not a five-row queue.** Membership is every row that left within the past five hours; five is now the number the viewport *draws* rather than the number the store *holds*. Touched: §2.2, §2.3, §2.4 (rules 01, 02, 05, 09 and a new 11), §2.5 (new), §2.6, §4, §5, §6, §7, §8.1, §8.5, §8.6, §9, §10. **No metric moves** — `32 + 5 × 40 = 232 ≤ 240 < 272` already said "five, then scroll", and it now says it about the fold instead of the store. One thing gets worse and is stated rather than finessed: the queue is now literally the "fixed time window" [`PRD.md`](PRD.md) §3 bans, and §8.1 rewrites that sentence instead of arguing with it. |
@@ -285,7 +285,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 
 ## 10. Implementation mapping
 
-**Everything but the tick and §3 has landed.** The work lands in six places:
+**Everything but §3 has landed.** The work landed in six places:
 
 | Symbol | Change |
 | --- | --- |
@@ -294,7 +294,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 | ~~`MonitorStore`~~ **Built.** | `departuresByThread` holding every row that left within `recentWindow` (`5 × 3600`) with the reason it left, fed from `apply` — the one funnel every row leaves through, a dismissal included. `isRecentExpanded` beside `isQuotaExpanded`, on the key `recentExpanded`. Two things the design did not say, both forced by the code and both in §10.1 |
 | ~~`MonitorStore` (the clock)~~ **Built.** | **Eviction is a read-time filter, not a timer** — the queue is filtered as of `now` wherever it is republished, and opening the panel is a read, so a queue nobody watched for six hours is empty before it could be drawn. The tick covers only what that read cannot: a panel *held open* across a boundary. It runs while the panel is open and the queue has members, and sleeps to the next instant the panel is actually drawing — **which depends on the fold** (§10.2) |
 | ~~`NotchOverlayView`~~ **Built for §2.** | `RecentSeam` and `RetiredRow`, inside the list's **one** scroller rather than a second one, and `emptyListMessage` only when the queue is empty too. `SessionRow`'s open state belongs to §3 and is not built |
-| `OverlayPanelController` | Latching: key window on open, restore on close, and hover suspended for the duration (§8.3) |
+| `OverlayPanelController` | Latching: key window on open, restore on close, and hover suspended for the duration (§8.3). **§3 only — not built** |
 
 **Nothing in `PanelMetrics` changes for this amendment.** The five-row fold is `240` doing what it already did, and the only new constant lives in the store.
 

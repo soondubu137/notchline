@@ -1438,10 +1438,11 @@ final class MonitorStore: ObservableObject {
             // before it moved is parked on the wrong one — see
             // ``nextRecentReadingChange(at:)``. Cancelled rather than left to
             // fire, because the tick is otherwise free to be wrong all the way
-            // to the next boundary.
+            // to the next boundary. The refresh re-plans it, and also reads the
+            // ages, which are not kept up to date while nothing draws them.
             recentTickTask?.cancel()
             recentTickTask = nil
-            updateRecentTicking()
+            refreshRecentDepartures(at: clock.now())
         }
     }
     /// What the queue holds right now, most recently departed first.
@@ -3381,10 +3382,16 @@ final class MonitorStore: ObservableObject {
         if kept.count != departuresByThread.count {
             departuresByThread = kept
         }
-        // Ordered before the readings are compared against it, so a member
-        // added in this pass is measured against its own arrival rather than
-        // against whenever the clock was last consulted.
-        if ordered.contains(where: {
+        // **Only while the ages are on screen.** This is published, and one
+        // publish re-renders the whole overlay (`AGENTS.md` §7) — so a queue
+        // held across a boundary with the panel shut, or with the queue folded,
+        // would buy a re-render a minute for a reading nobody is drawing. Both
+        // states re-read on the way back in: opening either calls this.
+        //
+        // Ordered before the readings are compared, so a member added in this
+        // pass is measured against its own arrival rather than against whenever
+        // the clock was last consulted.
+        if isExpanded, isRecentExpanded, ordered.contains(where: {
             $0.ageText(at: now) != $0.ageText(at: recentReadAt)
         }) {
             recentReadAt = now
