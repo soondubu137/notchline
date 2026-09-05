@@ -2761,7 +2761,10 @@ struct NotchlineTests {
             clock: clock
         )
         let start = clock.now()
-        let row = recentTestRow(thread: "still-alive", status: .running)
+        // A finished row deliberately: a *working* one is refused by the
+        // lifecycle rule before presence is ever asked, so it would pass this
+        // test without presence being consulted at all.
+        let row = recentTestRow(thread: "read-me-later", status: .completed)
 
         store.applyForTesting(
             makeAgentSnapshot(.codex, sessions: [row]),
@@ -2779,6 +2782,48 @@ struct NotchlineTests {
 
         #expect(store.sessions.isEmpty, "the rows go dark with the product")
         #expect(store.recentDepartures.isEmpty)
+    }
+
+    /// **Leaving the list is the timing; finishing is the reason.**
+    ///
+    /// The arrow into the queue is `Completed ─read→ archived`, and a row this
+    /// app last saw *working* did not take it. App Server membership
+    /// correction retires a killed session's row with its Turn still open, and
+    /// under a perfectly healthy product: that row vanished, and vanishing is
+    /// not archiving. Nothing is asked of the product here beyond its being
+    /// there — the state is this app's own last observation of the row.
+    @Test @MainActor
+    func aRowThatVanishesWithoutFinishingIsNotArchived() {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        let working = recentTestRow(thread: "killed", status: .running)
+        let waiting = recentTestRow(
+            thread: "abandoned",
+            turn: "turn-2",
+            status: .approvalNeeded
+        )
+        let finished = recentTestRow(
+            thread: "finished",
+            turn: "turn-3",
+            status: .completed
+        )
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, sessions: [working, waiting, finished])
+        )
+        // The product is connected throughout and simply stops listing all
+        // three, which is the one shape that used to archive everything.
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+
+        #expect(store.sessions.isEmpty)
+        #expect(
+            store.recentDepartures.map(\.session.threadID) == ["finished"],
+            "only the row that reached a terminal Turn was let go of"
+        )
     }
 
     /// **A dismissal is the other branch, and cannot use absence as evidence

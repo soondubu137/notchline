@@ -3193,7 +3193,7 @@ final class MonitorStore: ObservableObject {
         // the queue has to be fed from.
         recordDepartures(
             leaving: visibleSessions,
-            reportedBy: snapshot,
+            connectedAgents: Set(snapshot.connectedAgents),
             at: now
         )
         // Re-aggregated rather than taken from the snapshot: a dismissed row
@@ -3235,47 +3235,52 @@ final class MonitorStore: ObservableObject {
         refreshRecentDepartures(at: now)
     }
 
-    /// Books what has left the list, and takes out what has come back.
+    /// Archives what this app watched finish, and takes out what has come back.
     ///
-    /// **Absence is not departure, and this is where that distinction is paid
-    /// for.** A product stops reporting its rows for entirely ordinary reasons
-    /// that leave every Turn alive: Codex Desktop quitting sends an empty list
-    /// immediately, an App Server flapping past the stability window sends
-    /// `.disconnected` with one, and Claude Code with no window open holds its
-    /// rows back rather than discarding them (`tech-design.md` §15.1). Read as
-    /// departures, any of those would fill the queue with rows that never left
-    /// -- the same mistake ``forgetDismissalsProvenGone`` exists to undo one
-    /// rule up (CR-Fable-004), and the same evidence answers it: a row is gone
-    /// only when **its own product is connected in this snapshot and is no
-    /// longer listing the Turn**.
+    /// **The whole of this is Notchline's own lifecycle.** Nothing here asks a
+    /// product what threads it has, or has had: the queue is a record of what
+    /// *this list* drew and then let go of, which is what makes it memory
+    /// rather than history (`PRD.md` §2 goal 9). The only two facts it reads
+    /// are the row's last state as this app observed it and whether its product
+    /// is present -- both already on the surface.
     ///
-    /// A dismissal is the other branch and cannot use that evidence at all: the
-    /// product goes on listing a dismissed Turn, and it is this app that
-    /// stopped drawing it. So the dismissed set is what answers there.
+    /// ```text
+    /// nothing → Running → Completed ─read→ archived ─┐
+    ///                        ▲                       │
+    ///                        └───────────────────────┘   submits again
+    ///                                 archived ─expire/dismiss→ nothing
+    /// ```
     ///
-    /// **Where the gate is still fooled, the last loop repairs it.** A product
-    /// that empties its list while still claiming to be connected books its
-    /// rows as departed; their Thread coming back takes them straight out
-    /// again, because a Thread cannot be live and retired at once (§5).
+    /// **Leaving the list is the timing; finishing is the reason.** A row that
+    /// disappears while this app last saw it working did not complete -- it
+    /// vanished -- and vanishing is not archiving. That is what keeps the queue
+    /// out of every ordinary way a product stops reporting rows that are very
+    /// much alive (`tech-design.md` §15.1), and it is also the honest answer
+    /// for a session killed under a connected product, which App Server
+    /// membership correction retires with its Turn still open.
+    ///
+    /// A dismissal is the other way in, and it is the user's own gesture rather
+    /// than a transition: the product goes on listing a dismissed Turn, so the
+    /// dismissed set is what answers there and the row's state only decides
+    /// which of the two dismissals it was.
+    ///
+    /// **The last loop is the return arrow**, and it doubles as the repair for
+    /// the one case presence cannot refuse: Codex Desktop quitting empties its
+    /// list *before* availability catches up, because presence is a kernel fact
+    /// and precedes any message about Turns, so its finished rows are archived
+    /// a moment early. Their Thread coming back takes them straight out again,
+    /// because a Thread cannot be live and archived at once (§5).
     private func recordDepartures(
         leaving visibleSessions: [MonitoredSession],
-        reportedBy snapshot: MonitorSnapshot,
+        connectedAgents: Set<AgentKind>,
         at now: Date
     ) {
         let surviving = Set(visibleSessions.map(\.id))
-        // What each product just listed, for the products that can speak for
-        // themselves right now. A product we cannot see is not a witness.
-        var listedByConnectedAgent: [AgentKind: Set<String>] = [:]
-        for agentSnapshot in snapshot.agents where agentSnapshot.isConnected {
-            listedByConnectedAgent[agentSnapshot.agent] = Set(
-                agentSnapshot.sessions.map(\.id)
-            )
-        }
 
         for row in sessions where !surviving.contains(row.id) {
             guard let reason = departureReason(
                 for: row,
-                listedByConnectedAgent: listedByConnectedAgent
+                connectedAgents: connectedAgents
             ) else { continue }
             departuresByThread[RecentDeparture.key(for: row)] = RecentDeparture(
                 session: row,
@@ -3291,19 +3296,27 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Why a row that is no longer drawn is no longer drawn, or `nil` if it is
-    /// still there and only this app has lost sight of it.
+    /// Which arrow into the queue this row just took, or `nil` for a row that
+    /// left the list without ending -- which is not an arrow at all.
     private func departureReason(
         for row: MonitoredSession,
-        listedByConnectedAgent: [AgentKind: Set<String>]
+        connectedAgents: Set<AgentKind>
     ) -> RecentDeparture.Reason? {
         if isDismissed(row) {
             // The reading below the rule is an age either way, so it stays
             // honest on a Turn that never finished (§2.4 rule 05).
             return row.status.keepsTiming ? .dismissedWhileRunning : .dismissed
         }
-        guard let listed = listedByConnectedAgent[row.agent] else { return nil }
-        return listed.contains(row.id) ? nil : .read
+        // The lifecycle's own arrow, and this app's own observation of it: the
+        // Turn was terminal when it was last drawn, and then the list stopped
+        // reporting it -- which is the membership gate saying its product has
+        // recorded the Thread as read (`tech-design.md` §12).
+        guard !row.status.keepsTiming else { return nil }
+        // And a product going dark takes its rows off the surface without
+        // ending anything. Presence, not its list: what this asks is whether
+        // the product was there to have read it.
+        guard connectedAgents.contains(row.agent) else { return nil }
+        return .read
     }
 
     /// Republishes the queue as of `now`, dropping whatever has aged out.
