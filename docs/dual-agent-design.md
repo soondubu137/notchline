@@ -107,6 +107,8 @@ Two options evaluated and still not offered: a small matrix per row (a second ma
 
 ### 5.1 Structure
 
+> **Superseded by [`quota-footer-v2.md`](quota-footer-v2.md).** This section, §5.2 and §5.4 describe a footer whose width is split per window and whose height grows per product — two products' window counts written down as a layout, which fails at three windows (the captions collide at `160`) and at one product (the two single-product forms are different shapes). V2 folds it: one full-width rule for the tightest window anywhere, one line for the spend with its parts beside it, and every window behind the same control. `53` at every product count, and `31n + 22` opened. Every measurement below survives — only what is laid out with them changes.
+
 One rule per product with its own caption beneath it, and the two daily-usage figures merged into a single bottom line.
 
 ```
