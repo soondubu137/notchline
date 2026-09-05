@@ -3,8 +3,8 @@
 | Field | Value |
 | --- | --- |
 | Status | Desktop Project identity and automatic removal of read terminal Turns implemented (Codex and Claude Code desktop-hosted sessions); the real version matrix still awaits Phase 0 verification |
-| Version | 0.12 |
-| Date | 2026-08-28 |
+| Version | 0.13 |
+| Date | 2026-09-05 |
 | Target | V1 MVP |
 | Platform | macOS; displays with and without a physical notch |
 
@@ -30,6 +30,7 @@ V1 must:
 6. Show no cached threads after an app restart, a product restart, an account switch or missed events; the list starts empty and re-accumulates.
 7. Provide a useful current-content preview by default.
 8. Stay local-first, low-interruption and low-cost, requesting neither Accessibility nor Screen Recording permission.
+9. **Remember what the list let go of, for five hours.** A row that leaves — read, dismissed, or dismissed while still running — stays reachable below a seam in the expanded panel until its departure is five hours old, then goes on its own. This is **memory rather than history**: empty at launch, never persisted, never re-read, holding nothing this run did not itself draw, and unsearchable and unpageable by construction ([`expanded-panel-v2.md`](expanded-panel-v2.md) §2). It is deliberately a fixed time window — a shape §3 used to ban outright, and now bans only where it reaches past what this run watched.
 
 ## 3. Non-goals
 
@@ -38,7 +39,7 @@ V1 does not include:
 - Sending input, granting permission, answering questions, cancelling, archiving or deleting threads.
 - Treating the CLI, an IDE or a subagent as an independent list source. They qualify only once they are the same root thread, exactly navigable in the desktop app. (Claude Code subagents likewise never get their own row: their events carry the parent's `session_id` and `prompt_id` and merge naturally into the parent Turn.)
 - **Codex side chats, and any Thread the App Server will not hand over.** A side chat is a temporary branch Codex Desktop opens inside a thread — by Codex's own words it vanishes when the app closes, and closing deletes it irrecoverably. It is an ephemeral thread: never persisted, absent from `thread/list`, refused by `thread/read`, and opened by no deep link. It does have its own thread id and fires Turn hooks as usual, but **what connects it to the thread it belongs to exists only in Desktop's process memory**, out of this app's reach. So it can neither be its own row (no Project, no title, nowhere to go) nor be folded into the parent's row (the parent cannot be asked for). This is a capability boundary, not a deferral: the day Codex states the parentage, the right answer is to fold it into the parent's row like a subagent, not to add a new kind of row ([ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)).
-- History search, "the last N", or a fixed time window.
+- **Searching or paging past threads, and any window that reaches back beyond what this run watched.** ~~History search, "the last N", or a fixed time window.~~ The shape is no longer what is banned, because a bounded memory of this list's own departures is now goal 9. What stays banned is **retrieval**: no query against history, no second page, and no window that can surface a Thread this run never drew. Note the direction of the change — "the last N" was the earlier design of that memory ([`expanded-panel-v2.md`](expanded-panel-v2.md) §8.1), and this wording bans it in a place the old sentence did not.
 - **Any form of cold-start sync — one rule for both products.** Every thread state predating launch — running, finished-unread, awaiting approval — is ignored until it produces its next lifecycle event. The reasons differ per side:
   - **On the Codex side it is a capability boundary, not a trade-off.** Measured against Codex CLI `0.148.0-alpha.9` on a genuinely in-flight Turn, a standalone App Server's `thread/loaded/list` is empty, every Thread is permanently `notLoaded`, no `inProgress` Turn ever appears, and a running Turn is even recorded as `interrupted` in persisted data. No supported read answers "what is Codex Desktop doing right now", so any startup list could only be a guess.
   - **On the Claude Code side the answer is untrustworthy.** Here it genuinely can be read: the official session list gives which sessions exist and transcripts give which are mid-Turn, and the product did rebuild this way (removed 2026-08-19). The problem is that **while waiting on a user, a transcript writes nothing**, so a rebuilt Turn can only ever be *Running* — a session parked on a permission request at launch would be drawn as working, and "who is waiting for me" is the one question this product must get right. The files cannot separate waiting from working, so there is no narrower version to keep and the whole rebuild was removed — which also collapsed both products' startup rules back into one sentence.
