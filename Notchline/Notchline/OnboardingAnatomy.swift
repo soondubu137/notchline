@@ -719,7 +719,6 @@ struct ExpandedPanelAnatomy: View {
     private var pins: [AnatomyPin] {
         let scale = Self.scale
         let size = NotchSpecimen.windowSize(of: store)
-        let shoulder = store.surfaceShoulderRadius
         let header = store.compactHeight
         // A row's three lines, and the rows themselves.
         let firstRow = header
