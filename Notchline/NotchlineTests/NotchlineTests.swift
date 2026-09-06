@@ -26393,6 +26393,53 @@ for line in sys.stdin:
         #expect(store.answerDraft == "")
     }
 
+    /// A row whose Thread has gone closes too, and stops holding the keyboard.
+    ///
+    /// §8 state 04's other half. ``MonitorStore/openSession`` reads through the
+    /// list, so a departed row draws nothing and this looked like it needed no
+    /// handling — but ``MonitorStore/isLatched`` reads `openRowID` itself, and
+    /// the panel holds the keyboard and refuses to close on pointer exit for as
+    /// long as that is set. Left unclosed, the app went on taking every
+    /// keystroke with nothing on screen to explain it: measured on Release, an
+    /// open row whose Thread stopped being listed kept the panel expanded over
+    /// an empty list with the pointer well away from it, and the same row with
+    /// the product quit collapsed the panel to the pill and still held the
+    /// keyboard.
+    @Test @MainActor
+    func aRowWhoseThreadHasGoneClosesAndUnlatches() async {
+        let waiting = answerableSession(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let service = AnsweringMonitoringStub(agent: .claudeCode, sessions: [waiting])
+        let store = MonitorStore(
+            displays: [],
+            services: [service],
+            initialSnapshot: AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [waiting],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        store.toggleOpenRow(waiting)
+        store.answerDraftChanged(to: "half a sentence")
+        #expect(store.isLatched)
+
+        // The Thread itself is gone -- deleted, archived, or the product shut.
+        await service.publish([])
+        store.refreshNow()
+        #expect(await eventually { store.openRowID == nil })
+        // Which is the whole point: the panel stops holding the keyboard.
+        #expect(!store.isLatched)
+        #expect(store.answerDraft == "")
+    }
+
     /// An answer cannot be taken until it has finished arriving.
     ///
     /// §6.3: answering one request opens the next row, which puts something the

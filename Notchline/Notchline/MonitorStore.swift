@@ -3182,13 +3182,21 @@ final class MonitorStore: ObservableObject {
     /// rather than a message about a row — and what was typed goes with it,
     /// because there is nothing left to send it to.
     ///
-    /// A row that has left the list needs nothing here: ``openSession`` reads
-    /// through the list, so it is already gone. What this catches is the row
-    /// that stayed and stopped asking.
+    /// The row that stayed and stopped asking, **and the row that left the list
+    /// altogether**.
+    ///
+    /// The second used to be skipped, on the reasoning that ``openSession``
+    /// reads through the list so a departed row already draws nothing. That is
+    /// true of the drawing and false of the latch: ``isLatched`` reads
+    /// ``openRowID`` itself, and a row that left without being closed keeps the
+    /// panel holding the keyboard over nothing at all -- measured on Release,
+    /// with the pointer well off the panel and the row's Thread gone, the panel
+    /// stayed expanded over an empty list; and with the product quit, it
+    /// collapsed to the pill and *still* held the keyboard, so keystrokes went
+    /// on reaching this app with nothing on screen to say why (§8 state 04).
     private func closeARowWhoseRequestHasGone() {
         guard let openRowID, !isAnswerInFlight else { return }
-        guard let session = sessions.first(where: { $0.id == openRowID }) else { return }
-        guard session.request == nil else { return }
+        guard sessions.first(where: { $0.id == openRowID })?.request == nil else { return }
         answerProgress[openRowID] = nil
         answerDraftGeneration &+= 1
         closeOpenRow()
