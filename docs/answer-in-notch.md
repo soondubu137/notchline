@@ -7,7 +7,7 @@
 | Date | 2026-09-06 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `10 — The answer`. `11 — The panel, whole` redraws the open row on the composed surface and corrects §12's panel column — see [`panel-v2.md`](panel-v2.md). |
 | Scope | What happens between a request arriving and a person answering it: how the request reaches somebody who is not looking at the notch, every shape the two products ask in, what an opened row draws for each of them, what a click takes, which keys the panel answers to and which wait for the keyboard half, and what the row becomes once the answer has gone. The band, the quota footer and both collapsed forms are untouched, and nothing here reaches the collapsed surface. |
-| Supersedes | [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 entire. Three of its clauses are corrected rather than extended, each marked below: §3.1's opening gesture (§3), §3.2's fade and its three-line cap (§4), §3.5's close-on-send (§8). A fourth — §3.4's forces on the affirmative — **is not corrected in the initial version**: it is right for a surface answered with the pointer, and the correction arrives with the keys that make it necessary (§6, §9.3). §2 — the Recent queue — is untouched and independent. |
+| Supersedes | [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 entire. Three of its clauses are corrected rather than extended, each marked below: §3.1's opening gesture (§3), §3.2's fade and its three-line cap (§4), §3.5's close-on-send (§8). A fourth — §3.4's forces on the affirmative — **was not corrected while the pointer half stood alone**, because it is right for a surface answered with the pointer; **it is corrected now**, with the keys that made it necessary (§6, §9.3). §2 — the Recent queue — is untouched and independent. |
 
 ## 1. What this designs, what it waits on, and what it ships first
 
@@ -33,7 +33,7 @@
 
 Eleven to eight removes four steps, **three of which belonged to another application** — the screen surrendered, the dialogue found, the journey back — and turns the single act of answering into two, which is what doing it here costs. Eight to five removes four more, **three of which are the pointer's**. Both are worth having, and the first is at once the larger removal and the cheaper one to build: it needs a write path and no new mechanic, where the chord is the only genuinely new mechanic on this page — a global hotkey that can fail at registration, a settings row to report what it actually holds, and a keyboard model that has to be complete before it is honest. **Shipping them together would hold the larger saving behind the smaller one.**
 
-Nothing is thrown away by taking them in this order. Every object stage 03 touches is one stage 02 already draws; it adds keys, and the only thing it draws is a word this surface already draws under the pointer (§3.3). What waiting for it costs is stated where it is felt — §13.3, and it is not merely a delay: **the initial version cannot be operated from the keyboard alone.**
+Nothing was thrown away by taking them in this order. Every object stage 03 touches is one stage 02 already draws; it adds keys, and the only thing it draws is a word this surface already draws under the pointer (§3.3). What waiting for it cost is stated where it was felt — §13.3, and it was not merely a delay: **for one day the surface could not be operated from the keyboard alone.**
 
 ## 2. The forms a request arrives in
 
@@ -177,7 +177,7 @@ Claude Code will sometimes put back what it understood and ask whether that is r
 
 **The brightest object on the row is always the thing the return key will do.**
 
-It begins on the affirmative, or on the first option a question offers. **One force moves it in the initial version, and it is the person's own act: typing**, which moves it to the answer that carries text — `Deny` on an approval, `Send` on a question — because a note cannot travel with a yes. The answer it left is still clickable and still discards what was typed; it is simply no longer the key.
+It begins on the affirmative, or on the first option a question offers. **Two forces move it, and both are the person's own act.** The first is typing, which moves it to the answer that carries text — `Deny` on an approval, `Send` on a question — because a note cannot travel with a yes. The second is an arrow (§9.3), and where the two disagree the more recent one wins. The answer the ground left is still clickable and still discards what was typed; it is simply no longer the key.
 
 ~~**§3.4 therefore stands as written**, and the second force it needs is deferred with the keys that need it.~~ **The second force landed on 2026-09-06, and §3.4 is corrected.** The arrows move the ground along whatever answers this row has — two on an approval, up to four options and the field's own `Send` on a question, one on a question with nothing to pick — and the rule is now *two forces, and both are the person's own act*, which is what a keyboard user makes necessary: a rule where only typing moved the ground would leave the non-default answer reachable by pointer alone. Hover still moves nothing (§6.6), and where the two forces disagree the more recent act wins — an arrow holds the ground until a keystroke moves it to the answer that carries text, and deleting that text puts it back where the form says it begins.
 
@@ -211,7 +211,7 @@ Both products' second answer is *yes, and do not ask again*. It is a policy abou
 
 ### 6.6 What a click takes, and what hover never does
 
-The initial version is answered with the pointer, so the pointer's rules are the ones that have to be exact.
+The pointer answered this surface before anything else did, and its rules are the ones that have to be exact — none of them was relaxed by the keys arriving.
 
 - **A click takes the answer it lands on**, whether or not the ground is on it: `Approve`, `Deny`, `Send`, `Accept`, an option, or — where several answers are allowed — the tick beside one (§5.5). An option is a button. There is no select-then-confirm on this surface, because the confirm would be a second control saying what the first already said.
 - **Hover moves nothing.** An answer under the pointer takes the list's own hover fill and the white ground stays where the person's own typing left it. The ground is a statement about `⏎`, and a pointer crossing an answer is not an act.
@@ -269,10 +269,10 @@ Two at once is the ordinary case, not the edge one: a Turn asks while a subagent
 
 ## 9. Arrival, the pointer, and the keys the field keeps
 
-### 9.1 Two doors, and a third that is drawn and not built
+### 9.1 Three doors, and the third is a chord
 
 - **The knock is unchanged**, and it is still the notification. The collapsed bar draws the double-knock curve the moment a request arrives ([`compact-view-v2.md`](compact-view-v2.md)). Nothing on this page reaches the collapsed surface: it says a person is wanted, and it never says what for.
-- **The pointer keeps every door it had, and in the initial version it is the only one.** Hover browses, a click on the mark engages, a click answers (§6.6). None of that is new machinery and none of it can fail at registration, which is most of the argument in §1.1.
+- **The pointer keeps every door it had**, and it was the only one for a day. Hover browses, a click on the mark engages, a click answers (§6.6). None of that is new machinery and none of it can fail at registration, which is most of the argument in §1.1 — and it is why the chord is the *third* door rather than the first.
 - **The chord is the third door**, and it is §9.3.
 
 ### 9.2 The bindings, and they are the field's
@@ -465,6 +465,16 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 
 **Neither amendment is made in this change**, on the same footing as [`expanded-panel-v2.md`](expanded-panel-v2.md) §8.1: nothing here is implemented, and the PRD is the product contract rather than a design record. They are made in the change that builds §14.1.
 
+### 14.5 A key taken from every other application
+
+The chord is the one thing on this page that reaches past this app's own windows: a global hotkey is **exclusive**, so while Notchline holds `⌥Space` no other application on the machine sees it. Three rules follow, and all three are built.
+
+- **It asks through the ordinary system path**, `RegisterEventHotKey`, which returns a status. A key monitor would have been simpler and would have failed the way §9.3 exists to prevent — silently, at use, on a machine where something else already had the chord.
+- **A chord must carry a modifier.** The recorder refuses a bare key rather than registering one: taking `Space` from every application is not a preference anybody means to set.
+- **What is stored is a position on the keyboard**, `keyCode:modifiers`, and the settings row draws it in the letters of the layout in front ([`artifacts.md`](artifacts.md)). A stored character would be right on the layout it was recorded on and wrong on the next.
+
+The registration is asked for once at launch and again whenever the preference changes, and it is given back when the app goes. Nothing else about the system is touched: no login item, no Accessibility permission, no event tap.
+
 ## 15. Open questions
 
 | | Question | Where it stands |
@@ -476,9 +486,9 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 | 05 | Should `⏎` ever take an answer the reader has not seen? | **Answered — no**, and §6.3 is how. It now answers the sharper version of the same question — should a *click* — because a pointer already resting on the answer does not have to move to press twice. The rejected alternative was a fixed delay before the control becomes live |
 | 06 | Is `Always` ever offered from here? | **Answered — no.** §6.5, and [`expanded-panel-v2.md`](expanded-panel-v2.md) §8.5 question 05 |
 | 07 | Does the notch choose how a plan's edits will be approved? | **Answered — no**, and for the same reason. §4.3 |
-| 08 | Do the digits stay bound once a question has been typed into? | **Answered — no**, and deferred with the digits themselves (§9.3). Reserving them permanently would silently eat the first character of an answer beginning with a number |
+| 08 | Do the digits stay bound once a question has been typed into? | **Answered — no, and built that way** (§9.3). Reserving them permanently would silently eat the first character of an answer beginning with a number. The same rule took `Space` with it when it landed: with anything in the field a space is a space, or a multi-word answer loses its gaps |
 | 09 | Does an MCP elicitation ever get drawn here? | **Answered — no.** §2.2. Reopen only on a measurement of what servers actually send |
-| 10 | Is `⇥` ever bound? | **Answered — no, and moot until the arrows exist.** §9.3. Every journey it would serve has a key *in the stage that has keys*; in the initial version it would be the only key that navigates, which is a keyboard model of one binding. What would justify it later is a list long enough that the arrows are tedious, and the viewport caps at three rows |
+| 10 | Is `⇥` ever bound? | **Answered — no, and it stays no now that the arrows exist.** §9.3: every journey it would serve has a key, and its only effect on this surface is the tab it types — measured on Release. What would justify it is a list long enough that the arrows are tedious, and the viewport caps at three rows |
 | 11 | Does a row that cannot be answered still knock? | **Answered — yes, unchanged.** The collapsed bar reports that a person is wanted, which is true whether the answer will be given here or in the product |
 | 12 | Does a click on an option answer with it, or only select it? | **Answered — it answers**, and where several answers are allowed it ticks instead and `Send` answers. §6.6, §5.5. A select-then-confirm pair would put a second control on the row saying what the first already said |
 | 13 | Does a row that can only be read still take the keyboard? | **Answered — yes.** §10. It has nothing to type into, but it is the state a person reads longest, and a row closing because a pointer drifted is exactly the failure that rule exists to prevent |
@@ -533,7 +543,7 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 | `NotchOverlayView` | **Built.** `SessionStatusControl` draws the status name on a ground sized once for every word it can hold, with its own hover so `Answer` / `Read` answers for the mark rather than for the row — and the layer-backed readout it replaced took a redraw a second with it. The mark is the second target, and `OpenRow` draws the head unmoved, the chevron where the mark was, the body in both settings, `OptionRow`, and §11 rule 04's single control with no white ground anywhere. The body scrolls on the wheel, draws the rail and the count, and fades at the fold. `AnswerRow` draws §7's three objects, `AnswerControl` is one answer with its own hit region and the ground drawn on it, `OptionRow` takes a click and a tick, and `AnswerField` is the `NSViewRepresentable` over `AnswerFieldView` §13.2 requires — which owns its own text and its own placeholder, because a keystroke must not reach `@Published` |
 | `PanelMetrics` | **Built.** `waitingMarkWidth`, `waitingMarkFont` and the two words; `requestBodyMaximumHeight = 140`, `openRowFixedHeight = 100`, `openRowHeight(bodyHeight:)`, `optionRowHeight = 24`, `answerRowHeight = 28`, and the two settings' fonts and insets |
 | `RequestBodyLayout` | **Built**, and not in the original plan. One request's body laid out once, at the width it will be drawn at — **the panel's height and the row's drawing come from the same value**, which is what makes §4.4's count of what is below the fold true rather than approximately true. §4.5's wrapping is done here rather than by the text system for the same reason: measuring and drawing the same array of lines makes disagreement impossible rather than unlikely |
-| `OverlayPanelController` | **Built, and corrected by measurement.** `OverlayPanel.latches` gates `canBecomeKey`, so the panel takes the keyboard when a row opens and gives it back on `⎋`, on a click outside and when the row closes. ~~`.nonactivatingPanel` is what lets it hold a key without bringing an `LSUIElement` app to the foreground~~ is struck: it holds key status without activating and the keyboard still goes elsewhere, so the app activates for the row's lifetime and hands the previous application back — §9.4 and [ADR 0020](adr/0020-the-panel-takes-the-keyboard-by-activating.md). `becomesKeyOnlyIfNeeded` went with it, because it makes AppKit refuse `makeKeyAndOrderFront` outright and the gate on `canBecomeKey` already does its job. Hover is suspended for the duration in the store rather than the controller, because that is where the dwell lives. The chord's registration and its failure reporting are stage 03 and are not in the initial version (§9.3) |
+| `OverlayPanelController` | **Built, and corrected by measurement.** `OverlayPanel.latches` gates `canBecomeKey`, so the panel takes the keyboard when a row opens and gives it back on `⎋`, on a click outside and when the row closes. ~~`.nonactivatingPanel` is what lets it hold a key without bringing an `LSUIElement` app to the foreground~~ is struck: it holds key status without activating and the keyboard still goes elsewhere, so the app activates for the row's lifetime and hands the previous application back — §9.4 and [ADR 0020](adr/0020-the-panel-takes-the-keyboard-by-activating.md). `becomesKeyOnlyIfNeeded` went with it, because it makes AppKit refuse `makeKeyAndOrderFront` outright and the gate on `canBecomeKey` already does its job. Hover is suspended for the duration in the store rather than the controller, because that is where the dwell lives. ~~The chord's registration and its failure reporting are stage 03 and are not in the initial version~~ — both landed on 2026-09-06 and have rows of their own below |
 | `AgentHookHelper` | **Built.** One literal argument selects the wait — bare keeps `nc -w 1` with stdout discarded at the call, `wait` opens the reply channel on a window the definition registers. `exec >/dev/null 2>&1` became `exec 2>/dev/null`, and never `exec /usr/bin/nc`: that would hand the product `nc`'s status, measured **1** on both shapes of "nothing is listening". `NOTCHLINE_HOOKS_OFF` is read before the payload, so a nested agent costs one `sh` and no connection |
 | `ManagedHookDefinition`, `ManagedHooksConfiguration` | **Built.** The timeout and the argument moved onto the *definition*, and `handler(for:)` builds one handler per definition — so a definition that varies nothing produces the bytes it always produced, which is the whole of ADR 0014's blast radius. `isCurrentManagedHandler` is asked per definition for the same reason |
 | `HookInstallRecord.eventsAwaitingTrust` | **Built**, and not in the original plan. The app's own memory of a definition it rewrote, recorded at the install that changed the bytes and cleared one event at a time as those events arrive. It is the second trigger for `restoreDefinitionAdvice`, and it exists because the first cannot reach this definition: the silence probe may never watch `PermissionRequest` |
