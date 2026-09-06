@@ -25092,6 +25092,11 @@ for line in sys.stdin:
     /// for a reason that has nothing to do with what it pins.
     private var admitsNoRequest: (String, String?) -> Bool { { _, _ in false } }
 
+    /// One JSON literal as the payload would have carried it.
+    private func json(_ text: String) throws -> JSONValue {
+        try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
+    }
+
     /// The distiller decides which bytes `JSONDecoder` sees and nothing else,
     /// so the property that matters is that it never changes the answer. The
     /// cases are the ones a hand-written scan gets wrong: a brace inside a
@@ -25118,6 +25123,7 @@ for line in sys.stdin:
             #"{"index":-1.5e10,"final":true,"cancelled":false,"reason":null,"session_id":"s-5"}"#,
             #"{"session_id":"first","session_id":"second"}"#,
             #"{"cwd":"/tmp/a b/c","tool_use_id":"call-1","permission_mode":"acceptEdits"}"#,
+            #"{"hook_event_name":"PermissionRequest","tool_name":"WebFetch","tool_input":{"url":"https://example.com"},"permission_suggestions":[{"type":"addRules","rules":[{"toolName":"WebFetch","ruleContent":"domain:example.com"}],"behavior":"allow","destination":"localSettings"}],"session_id":"s-6"}"#,
             #"{}"#,
             // Not objects, or not finished ones: refused by both readings.
             #"[{"session_id":"s"}]"#,
@@ -25396,6 +25402,208 @@ for line in sys.stdin:
         #expect(payload.toolInput == (try? JSONDecoder().decode(HookPayload.self, from: body))?.toolInput)
     }
 
+    /// The two gated keys do not collide, and neither is emitted as the other.
+    ///
+    /// While `tool_input` was the only `.request` key the distiller held it in
+    /// one slot and re-emitted it under that name, hard-coded. A second gated
+    /// key added to that arrangement is not merely dropped: it wins the slot
+    /// where it arrives first — and Claude Code's keys arrive alphabetically,
+    /// so `permission_suggestions` always does — and is then emitted as
+    /// `tool_input`, which is a rule list drawn as the command a person is
+    /// being asked to approve. This is the test that would have caught it.
+    @Test @MainActor
+    func theTwoGatedKeysDoNotCollideAndNeitherIsEmittedAsTheOther() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let suggestions = #"[{"type":"addRules","rules":[{"toolName":"WebFetch","ruleContent":"domain:example.com"}],"behavior":"allow","destination":"localSettings"}]"#
+        // Both orders, because the fix must not depend on which arrives first.
+        let orders = [
+            #"{"hook_event_name":"PermissionRequest","permission_suggestions":\#(suggestions),"tool_input":{"url":"https://example.com"},"tool_name":"WebFetch"}"#,
+            #"{"hook_event_name":"PermissionRequest","tool_input":{"url":"https://example.com"},"permission_suggestions":\#(suggestions),"tool_name":"WebFetch"}"#
+        ]
+        for text in orders {
+            let payload = try #require(
+                HookPayload.distilled(from: Data(text.utf8), admittingRequestWhere: admits),
+                "\(text)"
+            )
+            #expect(payload.toolInput == .object(["url": .string("https://example.com")]), "\(text)")
+            #expect(
+                payload.permissionSuggestions == .array([
+                    .object([
+                        "type": .string("addRules"),
+                        "rules": .array([
+                            .object([
+                                "toolName": .string("WebFetch"),
+                                "ruleContent": .string("domain:example.com")
+                            ])
+                        ]),
+                        "behavior": .string("allow"),
+                        "destination": .string("localSettings")
+                    ])
+                ]),
+                "\(text)"
+            )
+        }
+    }
+
+    /// The rule a product offers to write reaches the row, and is drawn and
+    /// written nowhere.
+    ///
+    /// This is the whole of what landed on 2026-09-06, and both halves are the
+    /// subject. Claude Code's own dialogue offers three answers where this app
+    /// offers two, and the missing one is `answer-in-notch.md` §6.5's decision
+    /// rather than a defect — but until now the field that decides it was
+    /// stepped over one layer before the decode, so the decision could not have
+    /// been reversed without re-opening the transport. Now the fact arrives and
+    /// the decision still holds.
+    ///
+    /// The suggestion below is the real shape, read from Claude Code 2.1.263's
+    /// own zod definitions on 2026-09-06: `permission_suggestions` on the hook
+    /// input is `PermissionUpdate[]`, the same type the product accepts back as
+    /// `updatedPermissions` on an `allow`.
+    @Test @MainActor
+    func theRuleAProductOffersToWriteReachesTheRowAndIsDrawnNowhere() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let text = #"{"hook_event_name":"PermissionRequest","tool_name":"WebFetch","tool_input":{"url":"https://example.com","prompt":"say the title"},"permission_suggestions":[{"type":"addRules","rules":[{"toolName":"WebFetch","ruleContent":"domain:example.com"}],"behavior":"allow","destination":"localSettings"}]}"#
+        let payload = try #require(
+            HookPayload.distilled(from: Data(text.utf8), admittingRequestWhere: admits)
+        )
+        let request = try #require(
+            ClaudeCodeHookVocabulary().request(
+                forEvent: "PermissionRequest",
+                toolName: payload.toolName,
+                toolInput: payload.toolInput,
+                permissionSuggestions: payload.permissionSuggestions,
+                openedBy: "call-1"
+            )
+        )
+
+        // It arrived, parsed, with the product's own words for the destination.
+        #expect(request.offersPersistentRule)
+        #expect(
+            request.offeredRules == [
+                PermissionRuleOffer(
+                    destination: "localSettings",
+                    update: .addRules(
+                        behavior: "allow",
+                        [
+                            PermissionRuleOffer.Rule(
+                                toolName: "WebFetch",
+                                ruleContent: "domain:example.com"
+                            )
+                        ]
+                    )
+                )
+            ]
+        )
+
+        // And nothing draws it: the row still names two answers, and the shape
+        // has no third field for one to go in.
+        let answerable = request.answerable(on: nil)
+        #expect(answerable.answerRow == nil)
+        #expect(request.setting == .machineText)
+
+        // And nothing writes it: a grant is still a bare `allow`, so accepting
+        // in the notch changes no setting on disk.
+        let granted = try #require(
+            ClaudeCodeRequestAnswering().hookOutput(for: .grant, updating: payload.toolInput)
+        )
+        #expect(
+            String(decoding: granted, as: UTF8.self)
+                == #"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#
+        )
+    }
+
+    /// Where the product withheld the offer, this app has nothing to withhold.
+    ///
+    /// **Absence is the signal, and there is no second field to consult.** An
+    /// ask carries either `suggestions` or `suppressAlwaysAllowRule`, never
+    /// both, so a `PermissionRequest` with no `permission_suggestions` is one
+    /// whose own dialogue draws no persistent-rule row either. The hook payload
+    /// carries neither `suppress_always_allow_rule` nor `default_to_no` — those
+    /// are on the SDK's `can_use_tool` request — so a reading that needed them
+    /// would be a reading this app could never make.
+    @Test @MainActor
+    func whereTheProductWithheldTheOfferThisAppHasNothingToWithhold() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let text = #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#
+        let payload = try #require(
+            HookPayload.distilled(from: Data(text.utf8), admittingRequestWhere: admits)
+        )
+        #expect(payload.permissionSuggestions == nil)
+        let request = try #require(
+            ClaudeCodeHookVocabulary().request(
+                forEvent: "PermissionRequest",
+                toolName: payload.toolName,
+                toolInput: payload.toolInput,
+                permissionSuggestions: payload.permissionSuggestions,
+                openedBy: "call-1"
+            )
+        )
+        #expect(request.offeredRules.isEmpty)
+        #expect(!request.offersPersistentRule)
+    }
+
+    /// One unreadable member empties the whole offer.
+    ///
+    /// The members of `permission_suggestions` are alternatives within a single
+    /// grant, so keeping the ones that parsed would describe a narrower grant
+    /// than the one on offer *while looking complete* — and a label composed
+    /// from it would name a rule that is not the rule. Knowing nothing was
+    /// offered is the fail-closed answer (`AGENTS.md` §6.2); knowing part of it
+    /// is not. The union has six members, and a product free to add a seventh
+    /// is exactly why this cannot be a `compactMap`.
+    @Test @MainActor
+    func oneUnreadableSuggestionEmptiesTheWholeOffer() throws {
+        let readable = #"{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"ls:*"}],"behavior":"allow","destination":"localSettings"}"#
+        let cases = [
+            // A member from a later version of that product.
+            #"{"type":"addSomethingNew","destination":"session"}"#,
+            // A member of the union with its own field missing.
+            #"{"type":"setMode","destination":"session"}"#,
+            #"{"type":"addRules","rules":[],"destination":"localSettings"}"#,
+            // No destination at all: nothing can say where it would land.
+            #"{"type":"addDirectories","directories":["/tmp"]}"#
+        ]
+        for unreadable in cases {
+            #expect(
+                try AgentRequestReading
+                    .offeredRules(in: json(#"[\#(readable),\#(unreadable)]"#))
+                    .isEmpty,
+                "\(unreadable)"
+            )
+        }
+        // The readable one alone still reads, so the emptiness above is the
+        // unreadable member's doing and not the pair's.
+        #expect(
+            try AgentRequestReading.offeredRules(in: json("[\(readable)]")).count == 1
+        )
+    }
+
+    /// Codex offers none of this, and taking the argument is not reading it.
+    ///
+    /// Its `permission-request.command.output` documents `updatedPermissions`
+    /// *reserved* and fails the hook **closed** if it is present, so there is
+    /// nothing for it to suggest and nothing this app could do with a
+    /// suggestion. A row of its own would therefore be offering an answer that
+    /// breaks the request it is answering — §11 rule 06 in its sharpest form.
+    @Test @MainActor
+    func codexOffersNoPersistentRuleEvenWhenOneIsPutInFrontOfIt() throws {
+        let suggestions = try json(
+            #"[{"type":"addRules","rules":[{"toolName":"shell","ruleContent":"ls:*"}],"behavior":"allow","destination":"localSettings"}]"#
+        )
+        let request = try #require(
+            CodexHookVocabulary().request(
+                forEvent: "PermissionRequest",
+                toolName: "shell",
+                toolInput: .object(["command": .string("ls")]),
+                permissionSuggestions: suggestions,
+                openedBy: "call-1"
+            )
+        )
+        #expect(request.offeredRules.isEmpty)
+        #expect(!request.offersPersistentRule)
+    }
+
     /// A command to grant is machine text and a plan is prose.
     ///
     /// `answer-in-notch.md` §4.2: the setting is decided by which payload the
@@ -25413,6 +25621,7 @@ for line in sys.stdin:
                 forEvent: "PermissionRequest",
                 toolName: "Bash",
                 toolInput: .object(["command": .string(long)]),
+                permissionSuggestions: nil,
                 openedBy: "call-1"
             )
         )
@@ -25424,6 +25633,7 @@ for line in sys.stdin:
                 forEvent: "PermissionRequest",
                 toolName: "ExitPlanMode",
                 toolInput: .object(["plan": .string("Rename one thing.")]),
+                permissionSuggestions: nil,
                 openedBy: "call-2"
             )
         )
@@ -25445,6 +25655,7 @@ for line in sys.stdin:
                 forEvent: "PermissionRequest",
                 toolName: "ExitPlanMode",
                 toolInput: .object(["proposal": .string("the plan, under another name")]),
+                permissionSuggestions: nil,
                 openedBy: "call-1"
             )
         )
@@ -25486,6 +25697,7 @@ for line in sys.stdin:
                 forEvent: "PreToolUse",
                 toolName: "AskUserQuestion",
                 toolInput: payload,
+                permissionSuggestions: nil,
                 openedBy: "call-1"
             )
         )
@@ -25524,6 +25736,7 @@ for line in sys.stdin:
                         ])
                     ])
                 ]),
+                permissionSuggestions: nil,
                 openedBy: "call-1"
             )
         )
@@ -25546,6 +25759,7 @@ for line in sys.stdin:
                 forEvent: "PreToolUse",
                 toolName: "request_user_input",
                 toolInput: .object(["question": .string("Which branch?")]),
+                permissionSuggestions: nil,
                 openedBy: "call-1"
             )
         )
@@ -25567,6 +25781,7 @@ for line in sys.stdin:
                 forEvent: "Elicitation",
                 toolName: "mcp__weather__configure",
                 toolInput: nil,
+                permissionSuggestions: nil,
                 openedBy: "call-1"
             )
         )
@@ -25831,6 +26046,7 @@ for line in sys.stdin:
                     forEvent: event,
                     toolName: tool,
                     toolInput: input,
+                    permissionSuggestions: nil,
                     openedBy: "call-1"
                 ),
                 "\(event) \(tool ?? "-")"

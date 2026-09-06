@@ -545,10 +545,17 @@ protocol AgentHookVocabulary: Sendable {
     /// `nil` where nothing readable arrived, which is an ordinary answer and
     /// never an empty request: a wait with nothing to show still opens, and the
     /// row still says a person is wanted (`AGENTS.md` §6, failures fail closed).
+    ///
+    /// - Parameter permissionSuggestions: the persistent rules this product
+    ///   offered to write if the request were granted, where it offers any.
+    ///   Read here for the same reason the form is -- it is one product's
+    ///   schema, and the surface receives a value rather than a payload -- and
+    ///   drawn nowhere yet (`answer-in-notch.md` §6.5).
     nonisolated func request(
         forEvent name: String,
         toolName: String?,
         toolInput: JSONValue?,
+        permissionSuggestions: JSONValue?,
         openedBy toolUseID: String
     ) -> AgentRequest?
 }
@@ -725,10 +732,15 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     /// `multiSelect` — so it is form 04, answered in a person's own words.
     /// Everything else Codex stops on is a command to grant, and its arguments
     /// are drawn verbatim on the recessed ground.
+    /// - Parameter permissionSuggestions: never anything on this product, which
+    ///   documents `updatedPermissions` *reserved* and fails the hook closed on
+    ///   it. There is nothing for it to suggest, so the argument is taken and
+    ///   not read rather than absent from the protocol.
     nonisolated func request(
         forEvent name: String,
         toolName: String?,
         toolInput: JSONValue?,
+        permissionSuggestions _: JSONValue?,
         openedBy toolUseID: String
     ) -> AgentRequest? {
         guard let toolInput else { return nil }
@@ -1022,6 +1034,7 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
         forEvent name: String,
         toolName: String?,
         toolInput: JSONValue?,
+        permissionSuggestions: JSONValue?,
         openedBy toolUseID: String
     ) -> AgentRequest? {
         // The one form that needs no arguments to be worth drawing: the row
@@ -1030,6 +1043,7 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
         if name == "Elicitation" {
             return AgentRequest(id: toolUseID, toolName: toolName, form: .unsupported)
         }
+        let offeredRules = AgentRequestReading.offeredRules(in: permissionSuggestions)
         guard let toolInput else { return nil }
         let form: AgentRequest.Form? = switch toolName {
         case Self.inputToolName:
@@ -1046,7 +1060,12 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             AgentRequestReading.arguments(of: toolInput).map { .command($0) }
         }
         return form.map {
-            AgentRequest(id: toolUseID, toolName: toolName, form: $0)
+            AgentRequest(
+                id: toolUseID,
+                toolName: toolName,
+                form: $0,
+                offeredRules: offeredRules
+            )
         }
     }
 }
@@ -2053,6 +2072,29 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     /// payload stays `Sendable` and `Equatable`.
     let toolInput: JSONValue?
 
+    /// The persistent rules the product offered to write alongside a grant.
+    ///
+    /// Claude Code's `PermissionRequest` schema names it
+    /// `permission_suggestions: PermissionUpdate[]` (read from 2.1.263's own
+    /// zod definitions on 2026-09-06), and it is the *same type* the product
+    /// accepts back on an `allow` as `updatedPermissions` -- so what arrives
+    /// here is both what its own dialogue's second answer would write and what
+    /// this app would have to send to write it.
+    ///
+    /// **Absent means do not offer it, and no second field says so.** An ask
+    /// carries either `suggestions` or `suppressAlwaysAllowRule`, never both,
+    /// so the product withholds the suggestion exactly when a host must
+    /// withhold the row. Nothing has to be inferred from a flag the hook
+    /// payload does not carry -- and it does not: `suppress_always_allow_rule`
+    /// and `default_to_no` are on the SDK's `can_use_tool` request only.
+    ///
+    /// Codex never sends this. Its `permission-request.command.output`
+    /// documents `updatedPermissions` *reserved* and fails the hook closed on
+    /// it, so there is nothing for it to suggest.
+    ///
+    /// Carried, and **not yet drawn or written**: `answer-in-notch.md` §6.5.
+    let permissionSuggestions: JSONValue?
+
     enum CodingKeys: String, CodingKey, CaseIterable {
         case hookEventName = "hook_event_name"
         case sessionID = "session_id"
@@ -2069,6 +2111,7 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         case delta
         case backgroundTasks = "background_tasks"
         case toolInput = "tool_input"
+        case permissionSuggestions = "permission_suggestions"
 
         /// What kind of value this field is, which is what decides what
         /// happens to it when it arrives too big (see ``HookPayloadDistiller``).
@@ -2076,7 +2119,7 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
             switch self {
             case .prompt, .lastAssistantMessage, .delta: return .text
             case .backgroundTasks: return .list
-            case .toolInput: return .request
+            case .toolInput, .permissionSuggestions: return .request
             default: return .identity
             }
         }
@@ -2103,12 +2146,18 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         /// different command, which is a worse failure than none.
         ///
         /// The second half is the one no other case has. `PostToolUse` carries
-        /// this key too, holding the arguments of a call that has already run,
-        /// and carrying it there would put the highest-frequency event's
+        /// `tool_input` too, holding the arguments of a call that has already
+        /// run, and carrying it there would put the highest-frequency event's
         /// variable size back on the read queue this type exists to keep cheap
         /// (CR-030). So the gate is a fact about the *event* rather than about
         /// the key, and it lives on the vocabulary:
         /// ``AgentHookVocabulary/carriesRequest(forEvent:toolName:)``.
+        ///
+        /// **Two keys share it**, and `permission_suggestions` is inside the
+        /// gate rather than beside it: it arrives only on a `PermissionRequest`,
+        /// which the gate already admits, so admitting it under the same rule
+        /// costs a subset of what is already paid and cannot widen what any
+        /// other event carries.
         case request
     }
 
@@ -2136,6 +2185,10 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
             forKey: .backgroundTasks
         )
         toolInput = try container.decodeIfPresent(JSONValue.self, forKey: .toolInput)
+        permissionSuggestions = try container.decodeIfPresent(
+            JSONValue.self,
+            forKey: .permissionSuggestions
+        )
     }
 
     /// Whether this terminal event says the session is pausing rather than
@@ -2276,6 +2329,15 @@ nonisolated enum HookPayloadDistiller {
         }
     )
 
+    /// The gated keys, in the one order they are ever emitted in.
+    ///
+    /// Read off ``HookPayload/CodingKeys`` for the same reason
+    /// ``selectedKeys`` is: a `.request` field added to the payload cannot
+    /// become one this silently stops carrying.
+    fileprivate static let deferredKeyOrder: [String] = HookPayload.CodingKeys.allCases
+        .filter { if case .request = $0.carried { true } else { false } }
+        .map(\.rawValue)
+
     /// One pass over one payload's top level.
     ///
     /// A hand-written scan rather than a JSON library because the point is to
@@ -2316,16 +2378,24 @@ nonisolated enum HookPayloadDistiller {
             var selected = Data([Self.openBrace])
             var isFirstCarried = true
             var isFirstMember = true
-            // The request seen so far, held rather than emitted.
+            // The request's keys seen so far, held rather than emitted.
             //
-            // **Held because the two names that decide it may arrive after it**,
-            // and on Claude Code they always do -- its keys arrive
-            // alphabetically, so `tool_name` is later than `tool_input` every
-            // time. Held as a range into bytes this scan is already holding, so
-            // a `PostToolUse` whose request is refused pays *nothing* for the
-            // refusal: no copy, no decode, and no second pass over a payload
-            // whose tail may be 16 MiB of tool result (CR-030).
-            var deferredRequest: ScannedValue?
+            // **Held because the two names that decide them may arrive after
+            // them**, and on Claude Code they always do -- its keys arrive
+            // alphabetically, so `tool_name` is later than both `tool_input`
+            // and `permission_suggestions` every time. Held as ranges into
+            // bytes this scan is already holding, so a `PostToolUse` whose
+            // request is refused pays *nothing* for the refusal: no copy, no
+            // decode, and no second pass over a payload whose tail may be
+            // 16 MiB of tool result (CR-030).
+            //
+            // **Keyed, because there is more than one of them.** Held in a
+            // single slot and re-emitted under a hard-coded name -- which is
+            // what this was while `tool_input` was the only `.request` key --
+            // `permission_suggestions` would either be dropped by the
+            // first-wins rule below or emitted under `tool_input`'s name, and
+            // the second is a request drawn out of a rule list.
+            var deferredRequests: [String: ScannedValue] = [:]
             var eventName: String?
             var toolName: String?
             while true {
@@ -2363,11 +2433,11 @@ nonisolated enum HookPayloadDistiller {
                         // `JSONDecoder` does with a repeated key -- measured,
                         // not assumed. The streamed keys below get this for
                         // free by emitting every copy and letting the decoder
-                        // choose; this one is emitted once, so the choice is
+                        // choose; these are emitted once, so the choice is
                         // made here and it has to be the same choice. The
                         // distiller decides which bytes the decoder sees and
                         // must never decide what they say.
-                        if deferredRequest == nil { deferredRequest = value }
+                        if deferredRequests[key] == nil { deferredRequests[key] = value }
                     } else if let carried = carry(value, kind: kind) {
                         if !isFirstCarried { selected.append(Self.comma) }
                         isFirstCarried = false
@@ -2394,17 +2464,21 @@ nonisolated enum HookPayloadDistiller {
             // left to vouch for it. That is the fail-closed direction: an
             // unvouched request would be one drawn for an event this app never
             // established was asking anybody anything.
-            if let deferredRequest,
-               let eventName,
-               admitsRequest(eventName, toolName),
-               let carried = carry(deferredRequest, kind: .request) {
-                if !isFirstCarried { selected.append(Self.comma) }
-                selected.append(
-                    contentsOf: Array(
-                        "\"\(HookPayload.CodingKeys.toolInput.rawValue)\":".utf8
-                    )
-                )
-                selected.append(carried)
+            if let eventName, admitsRequest(eventName, toolName) {
+                // Emitted in ``HookPayload/CodingKeys`` order rather than the
+                // dictionary's, for the same reason
+                // ``AgentRequestReading/arguments(of:)`` sorts: a `Dictionary`
+                // iterates differently between instances holding equal values,
+                // so an order taken from one would make the same payload
+                // distil to different bytes on a later read.
+                for name in HookPayloadDistiller.deferredKeyOrder {
+                    guard let deferred = deferredRequests[name],
+                          let carried = carry(deferred, kind: .request) else { continue }
+                    if !isFirstCarried { selected.append(Self.comma) }
+                    isFirstCarried = false
+                    selected.append(contentsOf: Array("\"\(name)\":".utf8))
+                    selected.append(carried)
+                }
             }
             selected.append(Self.closeBrace)
             return selected
@@ -3888,6 +3962,7 @@ actor HookEventRepository {
                 forEvent: eventName,
                 toolName: event.toolName,
                 toolInput: event.toolInput,
+                permissionSuggestions: event.permissionSuggestions,
                 openedBy: toolUseID
             )?.answerable(on: replyTicket)
         }
@@ -4368,6 +4443,7 @@ actor HookEventRepository {
                         forEvent: eventName,
                         toolName: event.toolName,
                         toolInput: event.toolInput,
+                        permissionSuggestions: event.permissionSuggestions,
                         openedBy: toolUseID
                     )?.answerable(on: replyTicket)
                 )
@@ -4380,6 +4456,7 @@ actor HookEventRepository {
                         forEvent: eventName,
                         toolName: event.toolName,
                         toolInput: event.toolInput,
+                        permissionSuggestions: event.permissionSuggestions,
                         openedBy: toolUseID
                     )?.answerable(on: replyTicket)
                 )
@@ -4408,6 +4485,7 @@ actor HookEventRepository {
                     forEvent: eventName,
                     toolName: event.toolName,
                     toolInput: event.toolInput,
+                    permissionSuggestions: event.permissionSuggestions,
                     openedBy: openToolUse.id
                 )?.answerable(on: replyTicket) ?? (
                     slots.pendingApproval?.toolUseID == openToolUse.id

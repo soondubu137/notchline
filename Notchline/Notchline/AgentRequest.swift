@@ -30,6 +30,26 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// §4.6 is that this app does not annotate what it was handed.
     let toolName: String?
     let form: Form
+    /// The persistent rules the product offered to write alongside a grant.
+    ///
+    /// Empty on every request that was offered none -- which is the product's
+    /// own signal to withhold the row, not a gap: an ask carries either
+    /// `suggestions` or `suppressAlwaysAllowRule` and never both, so a
+    /// suggestion this app cannot see is one its own dialogue does not draw
+    /// either. Empty on Codex always, which reserves the field.
+    ///
+    /// **Read here and drawn nowhere**, on purpose. `answer-in-notch.md` §6.5
+    /// declines to offer *Always* from this surface, and that decision stands;
+    /// what changed on 2026-09-06 is only that the fact reaches the row instead
+    /// of being stepped over one layer before the decode. Whoever draws it will
+    /// find the rule already parsed and the connection already held.
+    let offeredRules: [PermissionRuleOffer]
+    /// Whether the product offered to stop asking this in future.
+    ///
+    /// The one reading this surface takes from ``offeredRules`` today. It is
+    /// deliberately not on ``answerRow``: a row that named a third answer it
+    /// cannot send would be §11 rule 03's promise made quietly.
+    nonisolated var offersPersistentRule: Bool { !offeredRules.isEmpty }
     /// Whether this request can be answered **here**, or only read here.
     ///
     /// `answer-in-notch.md` §11 rule 06: the two halves are per product and per
@@ -62,11 +82,13 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         id: String,
         toolName: String?,
         form: Form,
+        offeredRules: [PermissionRuleOffer] = [],
         replyTicket: HookReplyRegistry.Ticket? = nil
     ) {
         self.id = id
         self.toolName = toolName
         self.form = form
+        self.offeredRules = offeredRules
         self.replyTicket = replyTicket
     }
 
@@ -82,6 +104,7 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
             id: id,
             toolName: toolName,
             form: form,
+            offeredRules: offeredRules,
             replyTicket: replyTicket
         )
     }
@@ -286,6 +309,62 @@ nonisolated struct AgentQuestionOption: Identifiable, Sendable, Equatable {
     let description: String?
 }
 
+/// One persistent rule the product offered to write if this were granted.
+///
+/// A transcription of Claude Code's `PermissionUpdate`, read from 2.1.263's own
+/// zod definitions on 2026-09-06. The same type appears twice in that product:
+/// as `permission_suggestions` on the `PermissionRequest` a hook receives, and
+/// as `updatedPermissions` on the `allow` decision a hook may write back — so
+/// what arrives is exactly what would have to be sent.
+///
+/// **Parsed, and drawn nowhere.** `answer-in-notch.md` §6.5 declines to offer
+/// *Always* from this surface. This is here so that the fact reaches the row
+/// rather than being stepped over one layer before the decode, and so that
+/// whoever draws it composes a label rather than re-opening the transport.
+///
+/// **Not what would be sent.** A drawn half writes the suggestion back
+/// **verbatim from ``HookPayload/permissionSuggestions``**, never re-encoded
+/// from this: a union member added to that product and not to this type would
+/// round-trip into a rule that is not the one it offered. This is for reading;
+/// those bytes are for answering.
+nonisolated struct PermissionRuleOffer: Sendable, Equatable {
+    /// Where the product would put it: `userSettings`, `projectSettings`,
+    /// `localSettings`, `session` or `cliArg`.
+    ///
+    /// Kept as the product's own word rather than mapped onto a case of this
+    /// app's own. Only the first three are persisted to a file; `session` lasts
+    /// as long as the session does. A label that says where a rule lands is
+    /// saying something about the user's disk, so it says the product's word
+    /// for it (§2.3).
+    let destination: String
+    let update: Update
+
+    /// The six shapes the union takes.
+    ///
+    /// A member this app does not recognise makes the whole offer `nil` rather
+    /// than a partial one: half a permission update is a different permission
+    /// update, and the fail-closed direction here is to know nothing was
+    /// offered rather than to know the wrong thing (`AGENTS.md` §6.2).
+    nonisolated enum Update: Sendable, Equatable {
+        case addRules(behavior: String, [Rule])
+        case replaceRules(behavior: String, [Rule])
+        case removeRules(behavior: String, [Rule])
+        case setMode(String)
+        case addDirectories([String])
+        case removeDirectories([String])
+    }
+
+    /// One rule, in the product's two fields.
+    ///
+    /// `ruleContent` is absent on a whole-tool rule, which is the case the
+    /// product's own `suppressAlwaysAllowRule` exists to keep out of a dialogue
+    /// — so an offer carrying one is a thing to notice rather than to draw.
+    nonisolated struct Rule: Sendable, Equatable {
+        let toolName: String
+        let ruleContent: String?
+    }
+}
+
 /// Reads one product's `tool_input` into the shapes a row can draw.
 ///
 /// Product-free on purpose: *which* payload becomes which form is a fact about
@@ -368,6 +447,79 @@ nonisolated enum AgentRequestReading {
                 .compactMap { key in scalar(fields[key]).map { "\(key)  \($0)" } }
                 .joined(separator: "\n")
         case nil: nil
+        }
+    }
+
+    /// The persistent rules a `PermissionRequest` offered, where it offered any.
+    ///
+    /// Empty rather than `nil` on absence, because absence is a *statement*
+    /// here: the product sends either `suggestions` or `suppressAlwaysAllowRule`
+    /// and never both, so nothing arriving means the product's own dialogue
+    /// withholds the row too. There is no flag to consult — the hook payload
+    /// carries neither `suppress_always_allow_rule` nor `default_to_no`, which
+    /// are on the SDK's `can_use_tool` request only.
+    ///
+    /// **One unreadable member empties the whole list.** The members are
+    /// alternatives within one offer, and a list of the ones that happened to
+    /// parse would describe a grant narrower than the one on offer while
+    /// looking complete. Knowing nothing was offered is the fail-closed answer;
+    /// knowing part of it is not.
+    nonisolated static func offeredRules(in suggestions: JSONValue?) -> [PermissionRuleOffer] {
+        guard case let .array(raw)? = suggestions, !raw.isEmpty else { return [] }
+        var offers: [PermissionRuleOffer] = []
+        for entry in raw {
+            guard case let .object(fields) = entry,
+                  case let .string(type)? = fields["type"],
+                  case let .string(destination)? = fields["destination"],
+                  !destination.isEmpty else { return [] }
+            let behavior: String? = if case let .string(value)? = fields["behavior"] {
+                value
+            } else {
+                nil
+            }
+            let update: PermissionRuleOffer.Update? = switch type {
+            case "addRules":
+                behavior.map { .addRules(behavior: $0, rules(in: fields["rules"])) }
+            case "replaceRules":
+                behavior.map { .replaceRules(behavior: $0, rules(in: fields["rules"])) }
+            case "removeRules":
+                behavior.map { .removeRules(behavior: $0, rules(in: fields["rules"])) }
+            case "setMode":
+                if case let .string(mode)? = fields["mode"] { .setMode(mode) } else { nil }
+            case "addDirectories":
+                .addDirectories(strings(in: fields["directories"]))
+            case "removeDirectories":
+                .removeDirectories(strings(in: fields["directories"]))
+            default:
+                nil
+            }
+            guard let update else { return [] }
+            offers.append(
+                PermissionRuleOffer(destination: destination, update: update)
+            )
+        }
+        return offers
+    }
+
+    private nonisolated static func rules(in value: JSONValue?) -> [PermissionRuleOffer.Rule] {
+        guard case let .array(raw)? = value else { return [] }
+        return raw.compactMap { entry in
+            guard case let .object(fields) = entry,
+                  case let .string(toolName)? = fields["toolName"],
+                  !toolName.isEmpty else { return nil }
+            var content: String?
+            if case let .string(value)? = fields["ruleContent"], !value.isEmpty {
+                content = value
+            }
+            return PermissionRuleOffer.Rule(toolName: toolName, ruleContent: content)
+        }
+    }
+
+    private nonisolated static func strings(in value: JSONValue?) -> [String] {
+        guard case let .array(raw)? = value else { return [] }
+        return raw.compactMap { entry in
+            guard case let .string(text) = entry, !text.isEmpty else { return nil }
+            return text
         }
     }
 
