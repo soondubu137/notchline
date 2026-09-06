@@ -623,10 +623,33 @@ So the honest figure is **`1.7` ms an event, not `4.7`** — and the `0.77` ms t
 
 - **The `@State` does not invalidate up to the `NSHostingView`.** `NotchOverlayView.body` is evaluated **3** times over a whole `600`-event run, in every configuration. `PanelContour.path(in:)` is built about **673** times in every configuration *including the ones where nothing scrolls at all*, so it is not on this path either. The invalidation is exactly one view deep: `ScrollingRequestBody.body` runs once when the offset is never written and `600` times when it is.
 - **`RequestBodyView.body` runs once or twice a run, never `600` times.** SwiftUI already skips it, which is why `.equatable()` bought nothing before and buys nothing now (`0.90`–`1.05` s against `0.99`–`1.02` s). The inference drawn from that was the wrong one: not re-evaluating the sixty lines is not the same as not re-doing them.
-- **It is nevertheless the lines.** With the body moving, `600` events cost `0.51` s at `10` lines, `0.88` s at `30`, `1.06` s at `60` and `1.35` s at `120`. What scales is SwiftUI's layout and display-list pass over the leaves under a changed offset — not their `body`. The delivery half scales the same way for the same reason: a *declining* catcher costs `0.34` s at `10` lines and `0.61` s at `120`, because the hit test walks the same leaves on the way in.
+- **Something scales with the lines, and it is a minority of the cost.** With the body moving, `600` events cost `0.51` s at `10` lines, `0.88` s at `30`, `1.06` s at `60` and `1.35` s at `120`; a *declining* catcher scales the same way, `0.34` s at `10` lines against `0.61` s at `120`, because the hit test walks the same leaves on the way in. ~~What scales is SwiftUI's layout and display-list pass over the leaves under a changed offset.~~ **How much of the total that is was not measured until the fix below was attempted, and it is about a third** — see the floor in the next section.
 - **The mask, the rail and the count are free.** Measured on one build at `300` delivered events: whole `1.014` s, no fade `1.073`, no rail or count `0.945`, neither `0.937`, `.drawingGroup()` `1.006` — every one inside the others' noise. The `LinearGradient` rebuilt per offset costs nothing measurable, and flattening the body into one raster before translating it buys nothing.
 
-**What would actually buy it back** is §7's own answer, and it is not applied here: drawing the lines into a `CALayer` and translating that, as `SessionRowTextView` already does for the row's title, takes the leaves out of both the render pass and the hit test. It is recorded rather than built, because it is a change to a drawing surface with its own design rules (`answer-in-notch.md` §4.2's two settings and the machine-text ground), and because `1.7` ms an event, paid only while a finger is moving, is a real cost and a small one. **What is built is the delivery fix**, because a scroller that never scrolls is not a quality issue.
+~~**What would actually buy it back** is §7's own answer, and it is not applied here: drawing the lines into a `CALayer` and translating that, as `SessionRowTextView` already does for the row's title, takes the leaves out of both the render pass and the hit test.~~ **It was built, and it is three times worse.** That paragraph is left struck rather than deleted because it was the obvious answer and it is wrong; what follows is the measurement that settles it.
+
+### The layer-backed body was built, measured, and abandoned (2026-09-05)
+
+The lines were moved onto `CALayer`s — one glyph raster per line, only the lines the viewport can reach ever rastered, translated rather than rebuilt. It draws **pixel-identically**: masking out the pixels that move on their own (the header's matrix indicator, the field's blinking caret) leaves **zero** changed pixels across eight staged forms — a command short and long, a document, a question with options, a multi-select, an option-less question, a read-only row and a wrapped indent. It is also **three times slower**.
+
+Release, `600` wheel events at `8` ms over a staged `60`-line command, medians of three, every run confirming all `600` reached the catcher:
+
+| The body under the offset | Per wheel event |
+| --- | --- |
+| `Color.clear` at the same height — no text at all | `1.19` ms |
+| Sixty `Text` views, which is what ships | `1.74` ms |
+| Sixty glyph layers | `5.20` ms |
+
+**The floor is the finding.** A body with no text in it, scrolled the same way, costs `1.19` of the `1.74` — so the sixty `Text` views are **`0.55` ms**, and the other `1.19` is the scroll machinery itself: the `@State` write, `ScrollingRequestBody.body`, the clip, and the event's own delivery. The most a perfect text implementation could ever return here is about half a millisecond, and this one spends `3.46` ms to chase it.
+
+Four candidate causes were each measured and each ruled out, which is what makes the verdict a property of the shape rather than of this attempt:
+
+- **Not the rasterising.** Drawing every line up front, so no raster happens during a scroll at all, costs `4.86` ms against `5.19`.
+- **Not SwiftUI diffing the `[String]`.** Behind a reference compared by identity it is unchanged.
+- **Not the fade.** Dropping the `mask` entirely changes neither version — `1.76` both ways for `Text`, `5.12` against `5.19` for layers — so a SwiftUI mask over an AppKit-backed view is not the trap here that it was for `SessionRowText`.
+- **Not the content.** The layer version plateaus at `5.16`–`5.20` from sixty lines to a hundred and twenty, where the `Text` version goes on climbing (`1.80` → `2.17`). What is left is the fixed cost of updating an `NSViewRepresentable` inside a subtree that moves on every event, and no raster strategy touches it.
+
+**What would be left to try, and why it is not being tried.** The remaining `1.19` ms floor is SwiftUI being told about the scroll at all. Removing it means the wheel writing straight to the layers and `@State` never moving — which means the fade, the rail and §4.4's count all become layer-drawn too, and the options, which take clicks, need a path of their own. That is a rewrite of a surface with its own design rules for about `1.4` ms during a gesture a person holds for a second or two. The measurement is recorded so nobody has to take this route twice; the `Text` views stay.
 
 ### `proc_pid_rusage` reports mach ticks, not nanoseconds
 
