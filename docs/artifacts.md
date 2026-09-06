@@ -6,9 +6,9 @@ All under `~/Library/Application Support/Notchline/`, namespaced per product (`a
 
 | File | Purpose | Written by |
 | --- | --- | --- |
-| `agents/<agent>/hook.sh` | The four-line helper the product runs once per event, writing to the socket via `nc -U`. Mode `0700`; rewritten whenever its bytes differ from this build's version | `ClaudeCodeHookSetup.install()`, `CodexHookRegistrar` |
+| `agents/<agent>/hook.sh` | The helper the product runs once per event, writing to the socket via `nc -U`. Mode `0700`; rewritten whenever its bytes differ from this build's version. It takes **one literal argument**: bare on a lifecycle event (`nc -w 1`, stdout thrown away), `wait` on the one event that asks a person (`nc -w` the product's own window, stdout carrying the app's answer back). `NOTCHLINE_HOOKS_OFF` in the agent's environment exits before either | `ClaudeCodeHookSetup.install()`, `CodexHookRegistrar` |
 | `agents/<agent>/hook.sock` | The Unix domain socket the listener binds. The path is kept deliberately short — `sun_path` caps at 104 bytes | `AgentHookListener.start()` |
-| `agents/<agent>/install.json` | Two dates (`installedAt`, `lastEventAt`), mode `0600`. `lastEventAt` is written once per launch and is the only field ever read back | `HookIntegration` |
+| `agents/<agent>/install.json` | Two dates (`installedAt`, `lastEventAt`) and a list (`eventsAwaitingTrust`), mode `0600`. `lastEventAt` is written once per launch; `eventsAwaitingTrust` names the definitions this app rewrote and has not seen fire since, and shrinks by one as each of them arrives. `installedAt` is still written and still never read | `HookIntegration` |
 | `agents/claudeCode/usage/` | An empty directory. It is only the fixed working directory for the app's own `claude -p /usage` runs, so the session registry and the hook store can tell those sessions from the user's | `ClaudeCodeUsageReader` |
 
 Two more kinds of file are written **outside** the app's own directory — the user's product configuration:

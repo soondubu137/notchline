@@ -16284,7 +16284,8 @@ for line in sys.stdin:
         #expect(adoptedRoot["description"] == nil)
     }
 
-    /// The definition never changes, and this is the pin that says so.
+    /// Six definitions never change, one changed once, and this is the pin
+    /// that says so.
     ///
     /// Codex stores trust in `config.toml` under
     /// `[hooks.state."<hooks.json path>:<event>:<group>:<handler>"]`, keyed by
@@ -16294,12 +16295,19 @@ for line in sys.stdin:
     /// the app can see it. Measured on 2026-08-15 with `PreToolUse` dead for
     /// two consecutive turns and no indication anywhere.
     ///
-    /// So the handler names a stable path and carries nothing else: no version,
-    /// no port, no token, no argument that could ever need to change.
-    /// Versioning lives in the script, which is not hashed. This test fails the
+    /// **The invariant this pins is not "nothing ever changes"** — that one was
+    /// broken deliberately, and saying so is the point (`AGENTS.md` §5.2). The
+    /// trust key is *per event*, so what protects the user is that a change
+    /// reaches **one** definition and leaves the other six byte-identical: a
+    /// user who never re-trusts loses Codex `Approval needed` rows and keeps
+    /// every other row. What the definitions still carry is nothing that could
+    /// need to change *again* — no version, no port, no token, and a timeout
+    /// chosen to be permanent. Versioning lives in the script, which is not
+    /// hashed, and the argument selecting the helper's wait is a word rather
+    /// than a number of seconds for exactly that reason. This test fails the
     /// build rather than the user's trust when somebody edits either.
     @Test @MainActor
-    func theRegisteredDefinitionCarriesNothingThatCouldEverNeedToChange() async throws {
+    func onlyTheAnsweringDefinitionEverChangedAndTheRestAreByteIdentical() async throws {
         let paths = makeTemporaryHookPaths()
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
 
@@ -16312,12 +16320,22 @@ for line in sys.stdin:
             ) as? [String: Any]
         )
         let hooks = try #require(root["hooks"] as? [String: Any])
-        let expected: [String: Any] = [
+        let command = "/bin/sh '\(paths.hookHelper.path)'"
+        // The bytes every lifecycle definition has carried since ADR 0013, and
+        // the only thing standing between a Codex user and seven re-trusts.
+        let lifecycle: [String: Any] = [
             "type": "command",
-            "command": "/bin/sh '\(paths.hookHelper.path)'",
+            "command": command,
             "timeout": 3
         ]
+        // The one that changed, and the shape it is frozen in now.
+        let answering: [String: Any] = [
+            "type": "command",
+            "command": "\(command) wait",
+            "timeout": 3600
+        ]
 
+        var definitionsCarryingAnArgument = 0
         for definition in CodexHookVocabulary().managedDefinitions {
             let groups = try #require(hooks[definition.event] as? [[String: Any]])
             let group = try #require(groups.last)
@@ -16327,8 +16345,14 @@ for line in sys.stdin:
             #expect(group["matcher"] == nil)
             let handlers = try #require(group["hooks"] as? [[String: Any]])
             #expect(handlers.count == 1)
+            let expected = definition.argument == nil ? lifecycle : answering
             #expect((handlers[0] as NSDictionary) == (expected as NSDictionary))
+            if definition.argument != nil { definitionsCarryingAnArgument += 1 }
         }
+        // One event opens a wait a person answers on, and `PreToolUse` is
+        // deliberately not a second: it fires for every tool call, so a window a
+        // person could answer inside would be a window every tool call waits in.
+        #expect(definitionsCarryingAnArgument == 1)
 
         // Rewriting the helper -- the whole of how this app ships a change --
         // leaves the registration byte-identical, which is the property the
@@ -16338,6 +16362,162 @@ for line in sys.stdin:
             .write(to: paths.hookHelper)
         #expect(await registrar.prepareHelper())
         #expect(try Data(contentsOf: paths.hooksConfiguration) == before)
+    }
+
+    /// A definition this app rewrote is remembered until it fires again.
+    ///
+    /// The second trigger for `restoreDefinitionAdvice`, and the whole reason
+    /// it needs one: Codex hashes a definition's content and silently stops
+    /// executing a changed one until `/hooks` trusts it again, the app cannot
+    /// read whether that happened, and the silence probe may never watch
+    /// `PermissionRequest` — an event whose silence means only that nobody has
+    /// been asked. What is left is the app's own memory of having written it,
+    /// and one arriving event as the only obtainable proof of trust.
+    ///
+    /// It also pins the blast radius, which is the reason this design is
+    /// affordable at all: the trust key names the event, so rewriting one
+    /// definition leaves the other six firing and only that one to re-trust.
+    @Test @MainActor
+    func aRewrittenDefinitionIsRememberedUntilItFiresAgain() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
+
+        // The registration a previous version of this app wrote: every
+        // definition in the lifecycle shape, `PermissionRequest` included.
+        let helper = "/bin/sh '\(paths.hookHelper.path)'"
+        let previous: [String: Any] = [
+            "hooks": Dictionary(
+                uniqueKeysWithValues: CodexHookVocabulary().managedDefinitions.map {
+                    (
+                        $0.event,
+                        [["hooks": [[
+                            "type": "command", "command": helper, "timeout": 3
+                        ]]]]
+                    )
+                }
+            )
+        ]
+        try FileManager.default.createDirectory(
+            at: paths.hooksConfiguration.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try JSONSerialization.data(withJSONObject: previous)
+            .write(to: paths.hooksConfiguration)
+
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+
+        // One event, and only one. Six definitions carry the bytes they always
+        // carried, so their hashes stand and they keep firing.
+        #expect(
+            HookInstallStateFile.read(at: paths.installState).eventsAwaitingTrust
+                == ["PermissionRequest"]
+        )
+
+        // A launch after that install reads it back, and says so only once this
+        // product's hooks are demonstrably firing — a Codex that has not run
+        // since the upgrade is not a fault and is not fixed by /hooks.
+        let repository = HookEventRepository(paths: paths)
+        #expect(await repository.observedState().diagnostic == nil)
+
+        try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-1",
+            "prompt_id": "turn-1"
+        ]).deliver(to: repository)
+        let whileUntrusted = await repository.drainDeliveredEvents()
+        let sentence = try #require(whileUntrusted.diagnostic)
+        #expect(sentence.contains("PermissionRequest"))
+        #expect(sentence.contains(CodexHookVocabulary().restoreDefinitionAdvice))
+        // And an event on another definition is not evidence about this one.
+        #expect(
+            HookInstallStateFile.read(at: paths.installState).eventsAwaitingTrust
+                == ["PermissionRequest"]
+        )
+
+        // The one event that proves the user went to /hooks, and there is no
+        // sooner honest moment than the first approval after they did.
+        try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "PermissionRequest",
+            "session_id": "thread-1",
+            "prompt_id": "turn-1",
+            "tool_name": "shell"
+        ]).deliver(to: repository)
+        #expect(await repository.drainDeliveredEvents().diagnostic == nil)
+        #expect(
+            HookInstallStateFile.read(at: paths.installState).eventsAwaitingTrust == nil
+        )
+    }
+
+    /// The helper gives up before the product loses patience with it.
+    ///
+    /// Two bounds on one wait, and the order between them is the whole of it. A
+    /// helper that reaches its own `-w` exits 0 and says nothing; a helper the
+    /// product kills at its registered `timeout` is a hook error printed in the
+    /// user's session, which is the noise this transport exists to remove
+    /// (ADR 0013). The gap only has to cover the microseconds between `nc`
+    /// giving up and the shell exiting, so it is a minute rather than a second
+    /// purely because the cost of it being too wide is nil.
+    @Test @MainActor
+    func theHelperGivesUpInsideTheWindowTheDefinitionRegisters() throws {
+        let vocabularies: [any AgentHookVocabulary] = [
+            CodexHookVocabulary(), ClaudeCodeHookVocabulary()
+        ]
+        for vocabulary in vocabularies {
+            let answering = vocabulary.managedDefinitions
+                .filter { $0.argument != nil }
+            // Exactly one on each product, and it is the event that carries an
+            // answer back rather than the one that opens the wait: on Claude
+            // Code an `AskUserQuestion` raises a `PreToolUse` *and* a
+            // `PermissionRequest`, and it is the second that this app holds.
+            #expect(answering.count == 1)
+            #expect(answering.first?.event == "PermissionRequest")
+            #expect(answering.first?.argument == AgentHookHelper.answeringArgument)
+            #expect(vocabulary.answerWindowSeconds < vocabulary.answeringTimeoutSeconds)
+            #expect(
+                answering.first?.timeoutSeconds == vocabulary.answeringTimeoutSeconds
+            )
+            // And every other definition keeps the bound it always had, so a
+            // wedged app still costs one second on the 99.8% of events nobody
+            // is being asked about.
+            for definition in vocabulary.managedDefinitions
+            where definition.argument == nil {
+                #expect(definition.timeoutSeconds == 3)
+            }
+        }
+    }
+
+    /// The script says nothing unless it was asked to, on either branch.
+    ///
+    /// The reply channel is stdout, and opening it is the one thing ADR 0013
+    /// closed. What keeps that decision intact is that it is opened *per call*:
+    /// the bare form still sends `nc`'s stdout to `/dev/null`, so the events
+    /// nobody is being asked about are as silent as they were by construction
+    /// rather than because the app remembers not to write. Stderr stays
+    /// discarded on both branches — it is what carried the shell's own "not
+    /// found" — and `exit 0` is unconditional, because `nc` was measured to
+    /// exit 1 on both shapes of "nothing is listening".
+    @Test @MainActor
+    func theHelperOpensTheReplyChannelOnlyOnTheEventThatAsks() throws {
+        let script = AgentHookHelper.script(
+            socketPath: "/tmp/x/hook.sock",
+            answerWindowSeconds: 3540
+        )
+        // The long wait writes to stdout; the bare one throws it away.
+        #expect(script.contains("/usr/bin/nc -U -w 3540 '/tmp/x/hook.sock'\n"))
+        #expect(script.contains("/usr/bin/nc -U -w 1 '/tmp/x/hook.sock' >/dev/null"))
+        #expect(script.contains("exec 2>/dev/null"))
+        #expect(!script.contains("exec >/dev/null 2>&1"))
+        // One variable, read before the payload is, so a nested agent costs one
+        // `sh` and no connection.
+        #expect(
+            script.contains("if [ -n \"${\(AgentHookHelper.suppressionEnvironmentKey):-}\" ]; then")
+        )
+        #expect(script.contains("if [ \"${1:-}\" = \(AgentHookHelper.answeringArgument) ]; then"))
+        // Never `exec`: that would hand the product `nc`'s exit status, which
+        // is 1 whenever this app is closed.
+        #expect(!script.contains("exec /usr/bin/nc"))
+        #expect(script.hasSuffix("exit 0\n"))
     }
 
     /// Two facts with two sources, and the four cards they make.
@@ -16804,7 +16984,10 @@ for line in sys.stdin:
         #expect(await registrar.prepareHelper())
         #expect(
             try String(contentsOf: paths.hookHelper, encoding: .utf8)
-                == AgentHookHelper.script(socketPath: paths.hookSocket.path)
+                == AgentHookHelper.script(
+                    socketPath: paths.hookSocket.path,
+                    answerWindowSeconds: CodexHookVocabulary().answerWindowSeconds
+                )
         )
         // And it did not touch the registration to do it, which is the whole
         // point of putting the version in the script rather than the definition.
@@ -24570,7 +24753,7 @@ for line in sys.stdin:
 
         // Ours by any shape we ever wrote, but not the shape we write now.
         #expect(configuration.isManagedHandler(legacyHandler))
-        #expect(!configuration.isCurrentManagedHandler(legacyHandler))
+        #expect(!configuration.isCurrentManagedHandler(legacyHandler, for: definitions[0]))
         #expect(!configuration.isFullyInstalled(in: original))
 
         let installed = try configuration.installing(into: original, isNewFile: false)
@@ -26377,6 +26560,44 @@ for line in sys.stdin:
         #expect(recorder.count == 1)
         #expect(delivered["session_id"] as? String == "session-1")
         #expect(delivered["tool_use_id"] as? String == "call-1")
+
+        // 3. The form that waits for an answer. Registered only on the event
+        //    that asks a person, and it has to keep both properties the other
+        //    form has when there is no answer to give: exit 0, and say nothing.
+        //    What it does *not* keep is the silenced stdout — that is the whole
+        //    change, and the listener closing this connection is what makes the
+        //    empty reply arrive immediately rather than in an hour.
+        let waiting = try runHelper(
+            at: paths.hookHelper,
+            stdin: payload,
+            arguments: [AgentHookHelper.answeringArgument]
+        )
+        #expect(waiting.status == 0)
+        #expect(waiting.stdout.isEmpty)
+        #expect(waiting.stderr.isEmpty)
+        #expect(recorder.count == 2)
+
+        // 4. And with nothing listening, the long form is still silent and
+        //    still succeeds — a person waiting on an answer from a closed app
+        //    would otherwise be a hook error in their session.
+        listener.stop()
+        let waitingWithNobodyHome = try runHelper(
+            at: paths.hookHelper,
+            stdin: payload,
+            arguments: [AgentHookHelper.answeringArgument]
+        )
+        #expect(waitingWithNobodyHome.status == 0)
+        #expect(waitingWithNobodyHome.stdout.isEmpty)
+        #expect(waitingWithNobodyHome.stderr.isEmpty)
+
+        // 5. One variable keeps an agent out of the notch entirely, on either
+        //    form, without a connection being attempted at all.
+        #expect(listener.start(socketURL: paths.hookSocket))
+        let suppressed = try runHelperSuppressed(at: paths.hookHelper, stdin: payload)
+        #expect(suppressed.status == 0)
+        #expect(suppressed.stdout.isEmpty)
+        #expect(suppressed.stderr.isEmpty)
+        #expect(recorder.count == 2)
     }
 
     /// Hosting the test bundle is not running the product.
@@ -26552,7 +26773,7 @@ for line in sys.stdin:
     @Test @MainActor
     func theHelperQuotesASocketPathThatCarriesAQuote() throws {
         let awkward = "/tmp/cin O'Brien/hook.sock"
-        let script = AgentHookHelper.script(socketPath: awkward)
+        let script = AgentHookHelper.script(socketPath: awkward, answerWindowSeconds: 60)
         #expect(script.contains("'/tmp/cin O'\\''Brien/hook.sock'"))
         #expect(AgentHookHelper.singleQuoted("plain") == "'plain'")
     }
@@ -26902,10 +27123,35 @@ for line in sys.stdin:
     /// Runs the installed helper exactly as Claude Code's exec form does.
     private func runHelper(
         at url: URL,
+        stdin: Data,
+        arguments: [String] = []
+    ) throws -> (status: Int32, stdout: Data, stderr: Data) {
+        let process = Process()
+        process.executableURL = url
+        process.arguments = arguments
+        let input = Pipe(), output = Pipe(), errors = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        input.fileHandleForWriting.write(stdin)
+        try input.fileHandleForWriting.close()
+        let out = output.fileHandleForReading.readDataToEndOfFile()
+        let err = errors.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, out, err)
+    }
+
+    /// The same helper, run by an agent that has been told to stay out.
+    private func runHelperSuppressed(
+        at url: URL,
         stdin: Data
     ) throws -> (status: Int32, stdout: Data, stderr: Data) {
         let process = Process()
         process.executableURL = url
+        var environment = ProcessInfo.processInfo.environment
+        environment[AgentHookHelper.suppressionEnvironmentKey] = "1"
+        process.environment = environment
         let input = Pipe(), output = Pipe(), errors = Pipe()
         process.standardInput = input
         process.standardOutput = output
@@ -29666,16 +29912,18 @@ private final class ClaudeCodeHarness {
     }
 
     /// Writes the block the app would have told the user to paste.
+    /// The registration this build writes, written the way this build writes it.
+    ///
+    /// Asked of the product rather than restated here. It used to be one
+    /// hand-written handler repeated for every definition, which was accurate
+    /// only while every definition carried the same bytes: the day one of them
+    /// gained a window a person can answer inside, this fixture went on writing
+    /// the old shape and every harness test lost its rows to `repairRequired`.
     func registerHooks() throws {
+        let configuration = ClaudeCodeHookSetup(paths: paths).configuration
         var hooks: [String: Any] = [:]
-        let handler: [String: Any] = [
-            "type": "command",
-            "command": paths.hookHelper.path,
-            "args": [],
-            "timeout": 3
-        ]
-        for definition in ClaudeCodeHookVocabulary().managedDefinitions {
-            hooks[definition.event] = [["hooks": [handler]]]
+        for definition in configuration.definitions {
+            hooks[definition.event] = [["hooks": [configuration.handler(for: definition)]]]
         }
         try JSONSerialization
             .data(withJSONObject: ["theme": "auto", "hooks": hooks])

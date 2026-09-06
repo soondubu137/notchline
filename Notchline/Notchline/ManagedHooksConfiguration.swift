@@ -1,13 +1,48 @@
 import Foundation
 
 /// One hook definition this app manages.
+///
+/// **The timeout and the argument are per definition, not per configuration**,
+/// and that is the whole shape of the write path in the registration. One event
+/// on each product opens a wait for a person and carries their answer back, so
+/// that one definition registers a window a person can answer inside and passes
+/// the helper the literal that selects the long wait. Every other definition
+/// keeps the bytes it has always had — which on Codex is not tidiness but the
+/// difference between one re-trust and seven (ADR 0014).
 nonisolated struct ManagedHookDefinition: Sendable, Equatable {
+    /// The default a lifecycle definition registers, in seconds.
+    ///
+    /// Three, and the helper's own `-w 1` is inside it: three bounds, innermost
+    /// first, so the one that fires is always the one closest to the problem.
+    static let lifecycleTimeoutSeconds = 3
+
     let event: String
     let matcher: String?
+    /// How long this product may wait for the hook before killing it.
+    ///
+    /// The helper's own window has to be *inside* this: a helper that gives up
+    /// on its own exits 0 and says nothing, and one the product kills is a hook
+    /// error printed in the user's session — the noise this transport exists to
+    /// remove (ADR 0013).
+    let timeoutSeconds: Int
+    /// The literal `$1` handed to the helper, where this definition wants one.
+    ///
+    /// ``AgentHookHelper/answeringArgument`` on the event that opens a wait,
+    /// and `nil` everywhere else. Selecting the wait from the registration
+    /// rather than from the payload is what keeps the shell from having to
+    /// parse anything.
+    let argument: String?
 
-    nonisolated init(event: String, matcher: String?) {
+    nonisolated init(
+        event: String,
+        matcher: String?,
+        timeoutSeconds: Int = ManagedHookDefinition.lifecycleTimeoutSeconds,
+        argument: String? = nil
+    ) {
         self.event = event
         self.matcher = matcher
+        self.timeoutSeconds = timeoutSeconds
+        self.argument = argument
     }
 }
 
@@ -60,8 +95,16 @@ nonisolated enum ManagedHooksConfigurationError: LocalizedError, Equatable {
 /// carries far more than hooks, so "coerce anything unexpected to empty" is a
 /// data-loss bug waiting for a bigger file to happen to.
 nonisolated struct ManagedHooksConfiguration: Sendable {
-    /// The handler entry this build installs.
-    let managedHandler: [String: Any]
+    /// What every handler this build installs runs.
+    let command: String
+    /// The arguments the helper is launched with, before this definition's own.
+    ///
+    /// Present selects Claude Code's exec form — with an `args` key the CLI
+    /// resolves `command` as an executable and spawns it directly rather than
+    /// through a shell. `nil` is Codex, whose schema has no such key and which
+    /// parses `command` with a shell, so an argument there goes on the command
+    /// line instead.
+    let baseArguments: [String]?
     /// The string that identifies this app's handler anywhere in the document.
     ///
     /// Codex's handler is a shell command, so the command line itself is the
@@ -93,13 +136,15 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     let descriptionForNewFiles: String?
 
     nonisolated init(
-        managedHandler: [String: Any],
+        command: String,
+        baseArguments: [String]? = nil,
         identityMarker: String,
         legacyIdentityMarkers: [String] = [],
         definitions: [ManagedHookDefinition],
         descriptionForNewFiles: String? = "User-level agent lifecycle hooks."
     ) {
-        self.managedHandler = managedHandler
+        self.command = command
+        self.baseArguments = baseArguments
         self.identityMarker = identityMarker
         self.legacyIdentityMarkers = legacyIdentityMarkers
         self.definitions = definitions
@@ -127,21 +172,38 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         definitions: [ManagedHookDefinition],
         descriptionForNewFiles: String? = "User-level Codex lifecycle hooks."
     ) -> ManagedHooksConfiguration {
-        var handler: [String: Any] = [
-            "type": "command",
-            "command": command,
-            "timeout": 3
-        ]
-        if let arguments {
-            handler["args"] = arguments
-        }
-        return ManagedHooksConfiguration(
-            managedHandler: handler,
+        ManagedHooksConfiguration(
+            command: command,
+            baseArguments: arguments,
             identityMarker: command,
             legacyIdentityMarkers: legacyCommands,
             definitions: definitions,
             descriptionForNewFiles: descriptionForNewFiles
         )
+    }
+
+    /// The handler entry this build installs for one definition.
+    ///
+    /// Everything a definition can vary is here and nowhere else, so a
+    /// definition that varies nothing produces the bytes it always produced —
+    /// which is what keeps the other six or eleven definitions' Codex trust
+    /// hashes untouched when the answering one changes (ADR 0014).
+    nonisolated func handler(for definition: ManagedHookDefinition) -> [String: Any] {
+        var handler: [String: Any] = [
+            "type": "command",
+            "timeout": definition.timeoutSeconds
+        ]
+        if let baseArguments {
+            handler["command"] = command
+            handler["args"] = baseArguments + (definition.argument.map { [$0] } ?? [])
+        } else {
+            // Codex has no `args` key and parses `command` with a shell, so the
+            // literal goes on the command line — where it is also the thing a
+            // person reviewing `/hooks` reads.
+            handler["command"] = definition.argument.map { "\(command) \($0)" }
+                ?? command
+        }
+        return handler
     }
 
     // MARK: - Install
@@ -168,7 +230,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
 
         for definition in definitions {
             var groups = try validatedGroups(for: definition.event, in: hooks)
-            var group: [String: Any] = ["hooks": [managedHandler]]
+            var group: [String: Any] = ["hooks": [handler(for: definition)]]
             if let matcher = definition.matcher {
                 group["matcher"] = matcher
             }
@@ -269,8 +331,48 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
                 managed.append(contentsOf: handlers.filter(isManagedHandler))
             }
             guard managed.count == 1 else { return false }
-            return isCurrentManagedHandler(managed[0])
+            return isCurrentManagedHandler(managed[0], for: definition)
         }
+    }
+
+    /// The managed events whose registered handler this build would **change**.
+    ///
+    /// Asked *before* an install writes, and the answer is what a Codex user
+    /// then has to trust a second time: that product hashes a definition's
+    /// content under a key that names the event, so a definition whose bytes
+    /// did not move keeps its hash and keeps firing while a changed one
+    /// silently stops (ADR 0014).
+    ///
+    /// **A definition that was not there does not count**, and the distinction
+    /// is the whole usefulness of this. A first install needs trusting too, and
+    /// says so twice already — the settings card reads `reviewRequired` until
+    /// an event arrives, and the install message names `/hooks`. The state
+    /// nothing announces is the other one: an upgrade rewrites a definition on
+    /// a machine that has been delivering events for weeks, so the card reads
+    /// `Connected` off a `lastEventAt` from before the rewrite and one
+    /// definition is quietly dead behind it.
+    ///
+    /// This is the app's own knowledge of a state it **cannot verify**: whether
+    /// the user then went to `/hooks` is not readable from here, and the
+    /// alternative that would make it readable — parsing `[hooks.state]` out of
+    /// `config.toml` — is a private-schema dependency ADR 0014 weighed and
+    /// declined.
+    nonisolated func eventsWhoseDefinitionChanges(
+        comparedTo root: [String: Any]?
+    ) -> [String] {
+        guard let hooks = root?["hooks"] as? [String: Any] else { return [] }
+        return definitions.filter { definition in
+            let groups = hooks[definition.event] as? [[String: Any]] ?? []
+            let registered = groups
+                .filter { matcher(in: $0, matches: definition.matcher) }
+                .flatMap { ($0["hooks"] as? [[String: Any]] ?? []).filter(isManagedHandler) }
+            // Nothing of ours registered for this event is a first install of
+            // it, not a change to it.
+            guard let existing = registered.first, registered.count == 1 else {
+                return false
+            }
+            return !isCurrentManagedHandler(existing, for: definition)
+        }.map(\.event)
     }
 
     /// Whether any trace of this app's command remains anywhere in `root`.
@@ -310,7 +412,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
 
     /// Whether this handler is ours *and* the one this build installs.
     ///
-    /// Whole-value equality against ``managedHandler`` rather than a list of
+    /// Whole-value equality against ``handler(for:)`` rather than a list of
     /// fields to check, so a field added to the handler later is covered the
     /// day it is added instead of the day somebody remembers this method. It
     /// subsumes what the Codex installer used to spell out by hand — a key
@@ -319,11 +421,20 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// still carries a key this app has stopped writing, report as needing
     /// repair rather than as active.
     ///
+    /// **Asked per definition**, because the answer differs per definition now:
+    /// the one event that carries an answer back registers a window and an
+    /// argument the other definitions do not have. Asking it against a single
+    /// handler would report every install as needing repair the moment one
+    /// definition stopped matching the rest.
+    ///
     /// Equality is `NSDictionary`'s, which is what both sides already are once
     /// `JSONSerialization` has been through them: nested objects compare by
     /// value, and `true` compares equal to `1` the way JSON means it.
-    nonisolated func isCurrentManagedHandler(_ handler: [String: Any]) -> Bool {
-        (handler as NSDictionary) == (managedHandler as NSDictionary)
+    nonisolated func isCurrentManagedHandler(
+        _ candidate: [String: Any],
+        for definition: ManagedHookDefinition
+    ) -> Bool {
+        (candidate as NSDictionary) == (handler(for: definition) as NSDictionary)
     }
 
     nonisolated var allIdentityMarkers: [String] {

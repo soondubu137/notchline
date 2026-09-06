@@ -238,26 +238,60 @@ nonisolated struct HookIntegrationPaths: Sendable {
     }
 }
 
-/// The four lines both products run once per event.
+/// The few lines both products run once per event, and the channel one
+/// answer comes back on.
 ///
 /// Deliberately the smallest thing that can carry one payload:
 ///
-/// - **It never speaks.** `exec >/dev/null 2>&1` covers the whole script,
-///   including the shell's own "not found" if `nc` is ever absent. Both
-///   products parse a hook's stdout for directives and print its stderr, so
-///   silence on both streams is not tidiness — a helper that reported "the app
-///   is not running" would be exactly the noise this transport removes
-///   (ADR 0013).
+/// - **It speaks on one stream, and only when it was asked to.** `exec
+///   2>/dev/null` covers the whole script, including the shell's own "not
+///   found" if `nc` is ever absent, because both products *print* a hook's
+///   stderr — a helper that reported "the app is not running" would be exactly
+///   the noise this transport removes (ADR 0013). Stdout is the other half of
+///   that rule and is no longer silenced unconditionally: both products *parse*
+///   it for a decision, and on the events that ask a person that is precisely
+///   what this app now has to say. On every other event stdout is still sent to
+///   `/dev/null` at the call, so the 99.8% of events nobody is being asked
+///   about keep the older, stricter silence by construction rather than by the
+///   app remembering not to write.
 /// - **It always succeeds.** A non-zero exit is rendered as `<event> hook
 ///   error` in an interactive session, so the `exit 0` is load-bearing on every
 ///   path: no socket (the app is closed), a stale socket file, a refused
-///   connection, a missing `nc`.
-/// - **It cannot hang.** `-w 1` bounds the case where this app has accepted the
+///   connection, a missing `nc`. `nc` itself is measured to exit **1** on both
+///   shapes of "nothing is listening" (2026-09-05, no socket file and a socket
+///   file whose owner has gone), which is why this cannot be an `exec` — that
+///   would hand the product `nc`'s status instead of ours.
+/// - **It cannot hang.** `-w` bounds the case where this app has accepted the
 ///   connection but wedged before reading it. Measured: 6.3 ms when the app is
-///   listening, 17 ms when it is not, 1 s in the wedged case.
+///   listening, 17 ms when it is not, and the window in the wedged case.
 /// - **It forwards the payload unfiltered.** Field selection, truncation and
 ///   event naming are Swift, where they are testable, rather than a string
 ///   literal only one integration test ever executes.
+///
+/// **One literal argument selects the wait**, and the registration is what
+/// passes it: bare on a lifecycle event, ``answeringArgument`` on the events
+/// that open a wait for a person. That keeps the tight bound where it belongs —
+/// a wedged app still costs one second on every event nobody is being asked
+/// about — while the answering event gets a window a person can actually answer
+/// inside. Reading the payload to decide, which is what a compiled helper would
+/// do, was rejected: the registration already knows which event it is
+/// registering, so the shell never has to parse anything.
+///
+/// **`nc -U` holds the connection open after its stdin reaches EOF**, which is
+/// the whole of why decision 4 stands and no compiled helper is needed
+/// (measured 2026-09-05 against a Unix-domain server on this machine): Apple's
+/// `nc` shuts down only its *write* half on EOF — the server sees end-of-payload
+/// immediately — and goes on reading until the peer closes or `-w` expires.
+/// `-w` is an idle deadline rather than a total one, so a long window costs
+/// nothing when the answer comes early: `-w 3600` against a server that replied
+/// after 3 s returned in 3.04 s. A 128 KiB payload made the round trip in 60 ms,
+/// and the app closing the connection — or dying — released the client at once.
+///
+/// **One variable keeps an agent out of the notch entirely.**
+/// ``suppressionEnvironmentKey`` is read before anything else, so a wrapper can
+/// set it on a nested agent's child process and that agent raises no row, no
+/// request and no held connection. It is cheap here and awkward to retrofit
+/// once people rely on the rows.
 ///
 /// `nc -U` rather than a compiled helper of our own because it is already on
 /// every macOS and needs no target, no signing and no upgrade path. The cost of
@@ -266,16 +300,56 @@ nonisolated struct HookIntegrationPaths: Sendable {
 /// helper it replaces on the Codex side it is 6.3 ms against 30 ms, which at
 /// ~17 events per turn is 107 ms against 510 ms of CPU per turn (ADR 0013).
 nonisolated enum AgentHookHelper {
-    nonisolated static func script(socketPath: String) -> String {
+    /// The literal `$1` that selects the long wait.
+    ///
+    /// A word rather than the number of seconds, so that changing the window
+    /// changes the *script* and not the registered definition — which on Codex
+    /// is a hash the user has trusted (ADR 0014).
+    nonisolated static let answeringArgument = "wait"
+
+    /// How far inside the registered timeout the helper's own window sits.
+    ///
+    /// A minute, and the gap only has to cover the microseconds between `nc`
+    /// giving up and the shell exiting — it is this wide because the cost of
+    /// widening it is a person who waited 59 minutes getting nothing either
+    /// way, and the cost of narrowing it is the product killing a hook and
+    /// printing that in the user's session.
+    nonisolated static let answeringSlackSeconds = 60
+
+    /// Set on an agent's process, this keeps it out of the notch.
+    ///
+    /// Checked before the payload is even read, so the cost of opting out is
+    /// one `sh` and no connection.
+    nonisolated static let suppressionEnvironmentKey = "NOTCHLINE_HOOKS_OFF"
+
+    /// - Parameter answerWindowSeconds: how long `nc` waits for this app's
+    ///   answer on the events that ask. It has to be *inside* the timeout the
+    ///   definition registers: a helper that gives up on its own exits 0, and
+    ///   one the product kills is a hook error in the user's session.
+    nonisolated static func script(
+        socketPath: String,
+        answerWindowSeconds: Int
+    ) -> String {
         """
         #!/bin/sh
-        # Notchline — hands one hook payload to the running app.
+        # Notchline — hands one hook payload to the running app, and on the
+        # events that ask a person, carries the app's answer back.
         #
-        # Says nothing on any stream and always exits 0. Both are required: the
-        # agent prints a line in the user's session for every hook that fails or
-        # writes to stderr, and no setting suppresses it.
-        exec >/dev/null 2>&1
-        /usr/bin/nc -U -w 1 \(singleQuoted(socketPath))
+        # Says nothing it was not asked to say, and always exits 0. Both are
+        # required: the agent prints a line in the user's session for every hook
+        # that fails or writes to stderr, and no setting suppresses it.
+        if [ -n "${\(suppressionEnvironmentKey):-}" ]; then
+            exit 0
+        fi
+        exec 2>/dev/null
+        if [ "${1:-}" = \(answeringArgument) ]; then
+            # Stdout is the reply channel. Whatever the app writes back is this
+            # product's own hook-output JSON; when the app is closed, nc writes
+            # nothing and the agent carries on unchanged.
+            /usr/bin/nc -U -w \(answerWindowSeconds) \(singleQuoted(socketPath))
+            exit 0
+        fi
+        /usr/bin/nc -U -w 1 \(singleQuoted(socketPath)) >/dev/null
         exit 0
 
         """
@@ -436,6 +510,20 @@ protocol AgentHookVocabulary: Sendable {
     /// sentence used to name Codex from inside the shared reducer, which made
     /// it wrong for half the events it described (CR-029).
     nonisolated var restoreDefinitionAdvice: String { get }
+    /// How long this product may be kept waiting on the one definition that
+    /// carries an answer back.
+    ///
+    /// The value is per product because the products' own numbers are: a
+    /// released notch app registers **1 hour** on Codex and **24 hours** on
+    /// Claude Code for `PermissionRequest`, and that its users answer from its
+    /// UI is the evidence that both products honour a window this long. Every
+    /// other definition keeps ``ManagedHookDefinition/lifecycleTimeoutSeconds``.
+    ///
+    /// Chosen to be **final**. On Codex the registered definition is a hash the
+    /// user has trusted, and changing it silently stops that definition firing
+    /// until they trust it again (ADR 0014) — so this is the second and last
+    /// re-trust that definition is worth.
+    nonisolated var answeringTimeoutSeconds: Int { get }
     /// `nil` means "not recognised": drop it and say so.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
 
@@ -460,6 +548,19 @@ protocol AgentHookVocabulary: Sendable {
 }
 
 extension AgentHookVocabulary {
+    /// How long the helper waits for an answer, which is inside
+    /// ``answeringTimeoutSeconds`` by construction.
+    ///
+    /// Derived rather than declared beside it, because the ordering between the
+    /// two is the load-bearing part and a pair of literals is a pair that can
+    /// drift. The helper has to give up **first**: one that does exits 0 and
+    /// says nothing, and one the product kills is a hook error printed in the
+    /// user's session, which is the noise this transport exists to remove
+    /// (ADR 0013).
+    nonisolated var answerWindowSeconds: Int {
+        answeringTimeoutSeconds - AgentHookHelper.answeringSlackSeconds
+    }
+
     /// Whether this event's `tool_input` is a request a person is being asked
     /// about, rather than a call's arguments nobody reads.
     ///
@@ -489,6 +590,13 @@ extension AgentHookVocabulary {
 }
 
 nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
+    /// One hour, and the same hour a released notch app registers here.
+    ///
+    /// Declared as a `static` as well as satisfying the protocol so that
+    /// ``managedDefinitions`` — which is where the number has to appear — can
+    /// name it without an instance.
+    nonisolated static let answeringTimeout = 60 * 60
+    nonisolated let answeringTimeoutSeconds = CodexHookVocabulary.answeringTimeout
     nonisolated let agent: AgentKind = .codex
     nonisolated let restoreDefinitionAdvice =
         "Run /hooks in Codex and trust the definition again."
@@ -525,7 +633,16 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated var managedDefinitions: [ManagedHookDefinition] {
         [
             ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
-            ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
+            // The one definition that changes, and the one a person answers on.
+            // `PreToolUse` is deliberately *not* the second: it fires for every
+            // tool call, so a window a person can answer inside would be a
+            // window every tool call waits in.
+            ManagedHookDefinition(
+                event: "PermissionRequest",
+                matcher: nil,
+                timeoutSeconds: Self.answeringTimeout,
+                argument: AgentHookHelper.answeringArgument
+            ),
             ManagedHookDefinition(event: "SubagentStart", matcher: nil),
             ManagedHookDefinition(event: "SubagentStop", matcher: nil),
             // Deliberately unmatched. Registering an exact tool-name regex here
@@ -622,6 +739,13 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
 /// Measured against CLI 2.1.233 on 2026-08-16; every claim below is an
 /// observation, not a reading of the documentation.
 nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
+    /// Twenty-four hours, and the same day a released notch app registers here.
+    ///
+    /// Longer than Codex's hour because this product's own number is longer,
+    /// and because there is no trust hash on this side: a value that turns out
+    /// to be wrong is one settings write away from being right (ADR 0016).
+    nonisolated static let answeringTimeout = 24 * 60 * 60
+    nonisolated let answeringTimeoutSeconds = ClaudeCodeHookVocabulary.answeringTimeout
     nonisolated let agent: AgentKind = .claudeCode
     /// ADR 0016: this app writes that file now, so the repair is a switch
     /// rather than an edit, and the sentence says which one.
@@ -694,7 +818,16 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             ManagedHookDefinition(event: "PreToolUse", matcher: nil),
             ManagedHookDefinition(event: "PostToolUse", matcher: nil),
             ManagedHookDefinition(event: "PostToolUseFailure", matcher: nil),
-            ManagedHookDefinition(event: "PermissionRequest", matcher: nil),
+            // The one definition that carries an answer back, on this product
+            // as on the other — and here it carries a question's answers as
+            // well as an approval, because this is the product whose `allow`
+            // accepts `updatedInput`.
+            ManagedHookDefinition(
+                event: "PermissionRequest",
+                matcher: nil,
+                timeoutSeconds: Self.answeringTimeout,
+                argument: AgentHookHelper.answeringArgument
+            ),
             ManagedHookDefinition(event: "PermissionDenied", matcher: nil),
             ManagedHookDefinition(event: "Elicitation", matcher: nil),
             ManagedHookDefinition(event: "ElicitationResult", matcher: nil),
@@ -921,6 +1054,23 @@ nonisolated struct HookInstallRecord: Codable, Sendable, Equatable {
     /// gives. Only its presence is read: it is what stops the card telling a
     /// user who trusted the hooks last week to go and trust them again.
     var lastEventAt: Date?
+    /// Definitions this app rewrote and has not seen fire since.
+    ///
+    /// **The one thing this app knows about a state it cannot verify.** Codex
+    /// hashes a definition's content and silently stops executing a changed one
+    /// until the user trusts it again in `/hooks` (ADR 0014); nothing readable
+    /// from here says whether they did. The silence probe cannot cover it —
+    /// `PermissionRequest` fires only when a person is asked, so its silence
+    /// proves nothing and must never be probed — so the evidence that is left
+    /// is the app's own memory of having written it.
+    ///
+    /// Recorded at the install that changed the bytes and removed one event at
+    /// a time as those events arrive, which is the only proof of trust that
+    /// exists without reading Codex's own private state. This is not a second
+    /// copy of anything `hooks.json` carries: that file says what is
+    /// *registered*, and this says what has not been seen *running* since it
+    /// was registered.
+    var eventsAwaitingTrust: [String]?
 }
 
 /// Reads and updates ``HookInstallRecord`` under one process-wide lock.
@@ -1120,7 +1270,10 @@ actor CodexHookRegistrar {
     /// watching for a row to change.
     @discardableResult
     func prepareHelper() -> Bool {
-        let desired = AgentHookHelper.script(socketPath: paths.hookSocket.path)
+        let desired = AgentHookHelper.script(
+            socketPath: paths.hookSocket.path,
+            answerWindowSeconds: CodexHookVocabulary().answerWindowSeconds
+        )
         if let installed = try? String(contentsOf: paths.hookHelper, encoding: .utf8),
            installed == desired,
            fileManager.isExecutableFile(atPath: paths.hookHelper.path) {
@@ -1159,10 +1312,15 @@ actor CodexHookRegistrar {
         guard prepareHelper() else {
             throw ManagedHooksConfigurationError.verificationFailed
         }
+        // Read before the write, because the question is what *changed*.
+        let rewritten = managedConfiguration.eventsWhoseDefinitionChanges(
+            comparedTo: readConfigurationRoot()
+        )
         try configurationEditor.install()
         removeRetiredArtifacts()
         HookInstallStateFile.update(at: paths.installState, fileManager: fileManager) {
             $0.installedAt = Date()
+            $0.eventsAwaitingTrust = rewritten.isEmpty ? nil : rewritten
         }
         cachedRegistration = nil
     }
@@ -2800,6 +2958,9 @@ actor HookEventRepository {
 
     private var hasObservedEvent: Bool
     private var hasObservedLiveEvent = false
+    /// Definitions this app rewrote and has not seen fire since; see
+    /// ``HookInstallRecord/eventsAwaitingTrust``.
+    private var eventsAwaitingTrust: Set<String>
     private var didRecordEventThisLaunch = false
     // Codex trusts each hook definition by content hash, so rewriting one stops
     // Codex executing it until the user re-trusts -- silently, while the other
@@ -2858,9 +3019,14 @@ actor HookEventRepository {
         // trusted at least once. It is configuration health evidence and never
         // current runtime evidence, which is why the turns it once accompanied
         // are not restored and never were.
-        self.hasObservedEvent = HookInstallStateFile.read(
-            at: paths.installState
-        ).lastEventAt != nil
+        let record = HookInstallStateFile.read(at: paths.installState)
+        self.hasObservedEvent = record.lastEventAt != nil
+        // Seeded here rather than watched, because the state it describes is
+        // written by an install and read on the launches after it: an install
+        // in this session says so through `lastIntegrationMessage`, and what
+        // this covers is the launch a week later where the card reads
+        // `Connected` off a `lastEventAt` from before the rewrite.
+        self.eventsAwaitingTrust = Set(record.eventsAwaitingTrust ?? [])
     }
 
     nonisolated func changeEvents() -> AsyncStream<Void> {
@@ -2981,6 +3147,7 @@ actor HookEventRepository {
 
         var didReduce = false
         for event in delivered.events {
+            noteDefinitionFired(event.payload.hookEventName)
             if reduce(event) {
                 didReduce = true
             } else {
@@ -3001,6 +3168,25 @@ actor HookEventRepository {
         guard !signalIfProjectionChanged() else { return }
         if didOpenToolCall, vocabulary.wakesOnToolCallOpened {
             changes.signal()
+        }
+    }
+
+    /// One event is the only proof of trust this app can obtain.
+    ///
+    /// Noted before the reduce rather than after it, because the question is
+    /// whether the *definition* executed and not whether its payload could be
+    /// placed: an event this vocabulary drops still proves Codex ran the hook.
+    ///
+    /// At most one write per definition ever, and none at all on the ordinary
+    /// path — the set is empty for everyone whose definitions this app has not
+    /// rewritten, so the cost per event is a `Set.isEmpty`.
+    private func noteDefinitionFired(_ eventName: String?) {
+        guard !eventsAwaitingTrust.isEmpty,
+              let eventName = stableIdentifier(eventName),
+              eventsAwaitingTrust.remove(eventName) != nil else { return }
+        let remaining = eventsAwaitingTrust.sorted()
+        HookInstallStateFile.update(at: paths.installState, fileManager: fileManager) {
+            $0.eventsAwaitingTrust = remaining.isEmpty ? nil : remaining
         }
     }
 
@@ -4222,12 +4408,40 @@ actor HookEventRepository {
             + vocabulary.restoreDefinitionAdvice
     }
 
+    /// Set when this app rewrote a definition and has no evidence it runs.
+    ///
+    /// The second trigger for a sentence that already existed, and the second
+    /// is needed because the first cannot reach the definition this design
+    /// changes: the silence probe above may never watch `PermissionRequest`,
+    /// whose silence means only that nobody has been asked anything.
+    ///
+    /// **Gated on a live event**, so it says the thing that is actually wrong —
+    /// this product's hooks are firing and *this* definition is not. Without
+    /// that gate it would nag a user whose Codex simply has not run since the
+    /// upgrade, which is not a fault and not something `/hooks` fixes.
+    ///
+    /// It says *may*, and that is not hedging: the app rewrote the definition
+    /// and cannot see whether the user then trusted it. If they have, the
+    /// sentence clears at their next approval — the first event that definition
+    /// produces — and there is no sooner honest moment, because that event is
+    /// the only proof of trust obtainable without reading Codex's private
+    /// state.
+    private var untrustedDefinitionDiagnostic: String? {
+        guard hasObservedLiveEvent, !eventsAwaitingTrust.isEmpty else { return nil }
+        let events = eventsAwaitingTrust.sorted().joined(separator: ", ")
+        return "\(vocabulary.agent.displayName) may not be running the "
+            + "\(events) hook: Notchline changed that definition and cannot "
+            + "confirm it was trusted again. "
+            + vocabulary.restoreDefinitionAdvice
+    }
+
     /// Everything this store currently has to say about its own health.
     ///
-    /// Three independent facts, joined rather than ranked: payloads that could
-    /// not be read, events that could not be placed, and a definition that has
-    /// stopped firing. They have different causes and can hold at once, so
-    /// picking one to report would hide the others behind it.
+    /// Four independent facts, joined rather than ranked: payloads that could
+    /// not be read, events that could not be placed, a definition that has
+    /// stopped firing, and a definition this app changed and has not seen fire.
+    /// They have different causes and can hold at once, so picking one to
+    /// report would hide the others behind it.
     private var reportedDiagnostic: String? {
         let sentences = [
             unreadablePayloadCount > 0
@@ -4236,7 +4450,8 @@ actor HookEventRepository {
             unplaceableEventCount > 0
                 ? "Ignored \(Self.payloadCount(unplaceableEventCount)) with no stable identity, or of an unsupported kind."
                 : nil,
-            undeliveredPreToolUseDiagnostic
+            undeliveredPreToolUseDiagnostic,
+            untrustedDefinitionDiagnostic
         ].compactMap { $0 }
         return sentences.isEmpty ? nil : sentences.joined(separator: " ")
     }

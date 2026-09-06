@@ -96,7 +96,10 @@ actor ClaudeCodeHookSetup {
     /// one thing this whole transport exists to avoid.
     @discardableResult
     func prepareHelper() -> Bool {
-        let desired = AgentHookHelper.script(socketPath: paths.hookSocket.path)
+        let desired = AgentHookHelper.script(
+            socketPath: paths.hookSocket.path,
+            answerWindowSeconds: vocabulary.answerWindowSeconds
+        )
         if let installed = try? String(contentsOf: paths.hookHelper, encoding: .utf8),
            installed == desired,
            fileManager.isExecutableFile(atPath: paths.hookHelper.path) {
@@ -173,7 +176,14 @@ actor ClaudeCodeHookSetup {
 
     // MARK: - Internals
 
-    private var configuration: ManagedHooksConfiguration {
+    /// The definitions and handlers this build writes.
+    ///
+    /// Not private, and the reason is a fixture: the test harness used to
+    /// hand-write "the same handler for every definition", which was true until
+    /// one definition stopped being the same as the rest and then quietly
+    /// registered a shape this build calls `mismatched`. A fixture that asks
+    /// the product what it writes cannot drift from it.
+    nonisolated var configuration: ManagedHooksConfiguration {
         .command(
             paths.hookHelper.path,
             arguments: [],

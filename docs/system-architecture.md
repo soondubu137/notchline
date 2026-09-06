@@ -143,7 +143,7 @@ Boundary classification:
 | Officially public | Hooks lifecycle; the App Server protocol and its **six** public read-only methods (`account/read`, `account/rateLimits/read`, `account/usage/read`, `thread/list`, `thread/loaded/list`, `thread/read` — the last always with `includeTurns: false`); `codex://threads/{threadId}` | Used as the primary integration contract |
 | Registered experimental App Server method | `thread/items/list` (scoped to this Turn, descending, `limit: 6`, taking only the newest `agentMessage.text`) — the seventh method the client speaks | Only for the current progress on a Running row; absent from the schema without `--experimental`, so registered as a non-public dependency. `-32601` (method absent, or that thread's `historyMode` is `legacy`) is **recorded per thread**, that row falls back to the prompt preview, and other rows are unaffected |
 | Registered non-public dependencies | Desktop Project/unread schema, the executable path inside the Desktop bundle, the Desktop bundle identifier | Read-only or discovery-only; fail closed on failure; keep the non-public feature registry in sync |
-| Internal to the app | The hook helper, socket, `install.json`, reducer, caches, snapshot and UI store | `install.json`'s `lastEventAt` answers only "has a hook ever executed successfully" and never proves anything about the current runtime; Turn state, thread identity, previews and caches exist **only** in memory — there is no event queue, so there are no events awaiting consumption ([ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)) |
+| Internal to the app | The hook helper, socket, `install.json`, reducer, caches, snapshot and UI store | `install.json`'s `lastEventAt` answers only "has a hook ever executed successfully" and never proves anything about the current runtime, and its `eventsAwaitingTrust` answers only "which definitions did this app rewrite and not see fire since"; Turn state, thread identity, previews and caches exist **only** in memory — there is no event queue, so there are no events awaiting consumption ([ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)) |
 
 ## 2. The core refresh sequence
 
@@ -264,6 +264,7 @@ flowchart LR
         notch["LiveCodexMonitorService"] <--> notchServer["App Server B\nstandalone read-only subprocess"]
         helper["hook.sh\nsh + nc -U"] --> socket(["hook.sock 0600"])
         socket --> listener["AgentHookListener\nserial read queue, stamps arrival"]
+        listener -.->|"PermissionRequest only:\nthe answer goes back up the same descriptor"| helper
         listener --> liveReducer["HookEventRepository\nin-process HookTurnState"]
         liveReducer --> notch
     end
@@ -606,6 +607,10 @@ Separately, `SearchlightLabel`'s font and `PanelMetrics.statusLabelFont` are two
 | The event directory after about 36,000 events | **0 files**; the whole support directory 24 KB |
 
 The three loads fall inside each other's noise, so the conclusion is unambiguous: **the per-event cost is entirely NWConnection setup and teardown plus HTTP parsing, and the preview path is not measurable.** That cost was already being paid for 11 other events before CC-015; this only raised how often it is paid. Reducing it further means changing the transport (reusing connections, say), and the connection is initiated by Claude Code's client rather than decided by this app.
+
+**The connection is the reply channel, on one event per product.** ADR 0013 made the helper silent on both streams; [ADR 0019](adr/0019-the-helper-answers-on-the-stream-adr-0013-silenced.md) opens stdout on the one definition that registers a window a person can answer inside, and leaves it discarded at the call on every other. What makes that possible without a second connection or any framing is that Apple's `nc` half-closes on stdin EOF: the listener still reads to end-of-payload, and the same descriptor is still writable afterwards (measured 2026-09-05, along with `-w` being an idle deadline rather than a total one — `-w 3600` returned in 3.04 s against a server that answered after 3 s).
+
+Measured against Claude Code 2.1.261 on the same day, this is not merely permitted by the schema but acted on: a decision written **6 s after** the product had already put its own dialogue on screen dismissed that dialogue and ran the tool, with nothing typed into the session; a `deny` carrying a `message` produced `Denied by PermissionRequest hook` and delivered the reason to the model as the tool's error. The product's dialogue appeared 0.32 s after the hook fired and did not wait for it, so **the notch is a second place to answer rather than the only one** — a person who walks to the product mid-decision finds the prompt there.
 
 **The selection step was measured again after CR-030** (Release, same machine, medians): a 1.4 KB `PostToolUse` decodes whole in 5.0 µs and select-then-decode in 8.0–9.7 µs — 3 µs more per event, inside the 2.06 ms noise above; at 976 KB it is 416 µs → 89 µs, 4.7× faster; at 8.8 MB it is 3.6 ms → 5.2 ms, 1.4× slower (a byte scan past L2 becoming memory-bandwidth bound), and that size previously produced a whole dropped payload. A 16 MiB payload takes 55–75 ms from the client's first write to handover, still inside the helper's own `nc -w 1`.
 
