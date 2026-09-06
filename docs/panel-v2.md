@@ -119,12 +119,12 @@ So the three can still be built in the order they were argued: the badge and the
 
 ## 6. Verification
 
-These are the checks that span more than one of the three; each document keeps its own. Everything not naming the open row was checked on 2026-09-05, on the running app and in `NotchlineTests.swift`. The two left unchecked describe the open row, which is not built: its `multiSelect` tick box is the theme ink's third reader, and its white ground is the one sized for a word rather than a duration.
+These are the checks that span more than one of the three; each document keeps its own. All of them were checked on 2026-09-05, on the running app and in `NotchlineTests.swift` — the last two with the open row, which is now built ([`answer-in-notch.md`](answer-in-notch.md) §17).
 
 - [x] The panel is `520 × 308` with three live rows, at every cut-out, every working-agent count and every connected-product count, and no width or height term reads either count.
 - [x] **Opening the quota table is the only thing that takes the panel past `308`**, full stop: sweep every window's share across its whole range, make every reading unavailable, and the panel does not move. ~~other than a window crossing the threshold, which takes it to `333`~~ is void (§5 q02).
 - [x] A row's caption draws the badge and then the Project, with no separator between them, and the caption line measures `16` with a badge and without one.
-- [ ] The theme ink reaches the mark, the badge and the `multiSelect` tick box, and those three change together when the `Theme colour` selection changes.
+- [x] The theme ink reaches the mark, the badge and the `multiSelect` tick box, and those three change together when the `Theme colour` selection changes. Built 2026-09-05: the box is `NotchPalette.badgeInk(store.aggregateInk).on`, which is the accessor the badge already reads and the same pair the mark reads, so the three cannot drift; a ticked box was seen in the theme ink on the running app.
 - [x] A waiting row's white ground is sized for `Approval needed` / `Input needed` and does not resize when the word inside it becomes `Answer` or `Read`. Built 2026-09-05: `PanelMetrics.waitingMarkWidth` is measured once against all four words, and the word says `Read` on every row until §14.2's write path exists.
 - [x] A finished row's dark ground is the only place on the panel that reports how long a Turn took.
 - [x] With every colour rendered as flat grey, no figure, name or state on the expanded panel becomes ambiguous.

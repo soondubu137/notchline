@@ -586,6 +586,26 @@ Three wake-ups were considered for the queue and two were removed before they ex
 
 **No Release measurement was taken, and none is claimed.** The bound is arithmetic rather than measured: at most one full overlay re-render per minute while the panel is *held open* with the queue unfolded, and zero in every other state. That is two orders of magnitude below the once-a-second readout this section moved to CALayer for costing 4.7%, on a surface that is open for seconds at a time — which is the reasoning for not paying the layer-backed price here, not evidence that it is free. Measuring it needs a queue with members on a live panel, which needs a row that has been vouched for and then archived; the same gap keeps the drawing itself unverified ([`expanded-panel-v2.md`](expanded-panel-v2.md) §9).
 
+### The caret is the one thing that ticks, and it is AppKit's (2026-09-05)
+
+The answer row has a text field in it, and a blinking caret is precisely the continuously running animation this section forbids: drawn from SwiftUI it would invalidate the panel — `PanelContour` and every text measurement — twice a second for as long as a row is open. So the field is an `NSTextView` (`AnswerFieldView`) hosted through `NSViewRepresentable`, with the caret drawn by the text system into its own layer, and **the text itself never reaches `@Published`**: `MonitorStore.answerProgress` is an ordinary stored property, and what SwiftUI is told is where the white ground is, which moves at most once a row. The placeholder is drawn by the text view too, for the same reason — a SwiftUI overlay would have to be told when the field stopped being empty, which is a publish per keystroke.
+
+Measured on Release by diffing cumulative CPU time, which is the only way to read a burst here:
+
+| State | CPU over the window |
+| --- | --- |
+| Collapsed, nothing open | `0.13` s in `20` s |
+| A row open, the caret blinking | `0.12` s in `20` s |
+| `600` wheel events over a `60`-line body | `3.3` s, against `0.5` s for the same `600` events with nothing to scroll |
+
+The first two are the same number, which is the finding: **the caret costs nothing**. The third is the body's own scroller (`expanded-panel-v2.md` §2.4 rule 02), it predates the answer row, and it is about `4.7` ms of work per wheel event — a whole panel's worth rather than a translation. It is transient and user-driven, paid only while a finger is moving; `.equatable()` on the body was tried and bought nothing, so what is being re-done is not the sixty `Text` lines. Recorded here rather than fixed: it is a measurement this section is the home of, and the mechanism belongs to the panel's list rather than to answering.
+
+### Taking the keyboard means taking the application (2026-09-05)
+
+`OverlayPanel` is a `.nonactivatingPanel`, and that was read as *this panel can hold the keyboard while the person's editor stays frontmost*. It cannot. With a row open the panel **is** `NSApp.keyWindow` and the field **is** its first responder — and every keystroke still went to whichever application was in front, while the global monitor watching for a click outside counted a click on the panel's own field as one and closed the row. An application that is not active does not receive keys, whatever its windows believe.
+
+So latching activates this app for as long as a row is open and activates the previous application again when the row closes ([ADR 0020](adr/0020-the-panel-takes-the-keyboard-by-activating.md)). Two flags were in the way and each produced a symptom that looked like the same bug: `becomesKeyOnlyIfNeeded`, which makes AppKit refuse `makeKeyAndOrderFront` outright, and an `NSTextView` built with a `nil` text container, which takes the caret, receives `keyDown` and inserts nothing.
+
 ### What the tests cannot protect
 
 `NotchStatusMatrix` and the two layer-backed labels have tests asserting they are still driven by `CAAnimation` and still have their masks, so reverting them to SwiftUI fails to compile. But **adding a new continuous animation elsewhere in the panel is caught by nothing** — that dimension is held only by this section and by the comments on the views.

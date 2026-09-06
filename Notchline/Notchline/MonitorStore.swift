@@ -2738,9 +2738,19 @@ final class MonitorStore: ObservableObject {
     }
 
     /// What the open row's body is, laid out at the width it draws in.
+    ///
+    /// One question of a set at a time (§5.3), which is why the count on the
+    /// caption line is a drawn element rather than an ornament: an answer that
+    /// appears to do nothing looks like a failure without it.
     var openRowBody: RequestBodyLayout? {
         guard let request = openSession?.request else { return nil }
-        return RequestBodyLayout.laidOut(request)
+        return RequestBodyLayout.laidOut(request, showing: openQuestionIndex)
+    }
+
+    /// Which question of a set the body is showing, from the top.
+    var openQuestionIndex: Int {
+        guard let openRowID else { return 0 }
+        return answerProgress[openRowID]?.questionIndex ?? 0
     }
 
     /// How tall the open row is, or nil where no row is open.
@@ -2759,7 +2769,11 @@ final class MonitorStore: ObservableObject {
     /// the product (`answer-in-notch.md` §3).
     func toggleOpenRow(_ session: MonitoredSession) {
         guard session.request != nil else { return }
-        openRowID = openRowID == session.id ? nil : session.id
+        if openRowID == session.id {
+            closeOpenRow()
+        } else {
+            openRow(session.id)
+        }
     }
 
     /// Whether the panel is holding the keyboard for a row.
@@ -2770,10 +2784,431 @@ final class MonitorStore: ObservableObject {
 
     /// Collapses the open row, sending nothing and keeping the row where it was.
     ///
-    /// The chevron's own action, and `⎋`'s once the panel can take a key.
+    /// The chevron's own action, and `⎋`'s. **What was typed is kept** — §10:
+    /// text and any part-answered set stay with their row for as long as that
+    /// row lives, so reopening resumes exactly where it stopped.
     func closeOpenRow() {
         guard openRowID != nil else { return }
         openRowID = nil
+        armingTask?.cancel()
+        armingTask = nil
+        isAffirmativeArmed = false
+        // ``isAnswerInFlight`` is deliberately left alone: it says an answer is
+        // still on its way to a product, which is a fact about this app rather
+        // than about the row it was typed into. Clearing it here would let the
+        // same ticket be answered twice by closing the row and opening it again
+        // mid-flight, and it is cleared where it becomes untrue — on landing.
+    }
+
+    // MARK: - Answering
+
+    /// What has been typed into one row's field, and what part of its set has
+    /// been answered.
+    ///
+    /// **Keyed by row and kept for the row's lifetime** (§10): closing sends
+    /// nothing and keeps what was typed, so reopening resumes rather than
+    /// starting again. It goes when the row goes, and it never reaches disk —
+    /// a note about a request is the request's (ADR 0015).
+    ///
+    /// **Not published, and that is a rendering decision rather than an
+    /// oversight.** The field is an AppKit text view drawing its own glyphs
+    /// (§13.2), so a keystroke is not a layout change and must not invalidate a
+    /// panel that measures text on every pass (`AGENTS.md` §7). What SwiftUI
+    /// needs to know about typing is only ``answerGround``, which is published
+    /// and changes at most once per row.
+    private var answerProgress: [String: AnswerProgress] = [:]
+
+    /// Which answer the white ground is on — and so what `⏎` will do.
+    ///
+    /// **Recomputed from what has been typed, never set from anywhere else.**
+    /// §6: it begins on the affirmative, and exactly one force moves it in this
+    /// version — the person's own typing, onto the answer that carries text,
+    /// because a note cannot travel with a yes. Deriving it is what makes the
+    /// drawing and the return key incapable of disagreeing: there is no second
+    /// state to keep in step, which is §6.1's *the ground is the state* taken
+    /// literally. The arrows are the second force (§9.3), and they are what will
+    /// make this a value somebody sets.
+    @Published private(set) var answerGround: AnswerGround = .affirmative
+
+    /// What has changed about the open row that its identity cannot say.
+    ///
+    /// **A revision rather than the state itself.** The state is
+    /// ``answerProgress``, which the field writes into on every keystroke —
+    /// publishing it would re-render the whole panel per character, which is
+    /// exactly the cost `AGENTS.md` §7 exists to keep off this surface. This is
+    /// bumped only when something *drawn* moves: the question of a set on
+    /// screen, which changes the row's height and so the window's, and a tick.
+    @Published private(set) var answerRevision = 0
+
+    /// How many times the store has replaced the field's text itself.
+    ///
+    /// **The field is an AppKit text view that owns its own string**, and it is
+    /// refilled only when this or the row changes — refilling it on every pass
+    /// would put the caret back to the start under somebody's hands. So the two
+    /// places where the *store* decides what the field holds have to say so:
+    /// an answer that landed clears it, and the next question of a set starts
+    /// empty. Measured before this existed: a row answered and then re-opened
+    /// by the advance came back holding the note that had already been sent.
+    @Published private(set) var answerDraftGeneration = 0
+
+    /// Whether an answer is on its way to the product (§8 state 01).
+    ///
+    /// The field and both controls drop to `45%` and stop taking keys while it
+    /// is true. Nothing resizes and nothing new is drawn: the wait is a few
+    /// hundred milliseconds, and anything drawn to fill it would outlive the
+    /// thing it described.
+    @Published private(set) var isAnswerInFlight = false
+
+    /// Whether the affirmative has finished arriving, and may be taken (§6.3).
+    ///
+    /// **A ground that has not finished arriving is not a key and not a
+    /// target.** Answering one request opens the next row (§8.2), which puts
+    /// something the reader has never seen under a pointer that is already
+    /// there — and the affirmative that arrives lands exactly where the
+    /// affirmative just clicked was, so a pointer has to do nothing at all to
+    /// answer twice. The ground is armed by the arrival it already animates
+    /// rather than by a delay of its own: nothing is drawn that was not being
+    /// drawn, and nothing is delayed that the eye was not already waiting for.
+    ///
+    /// It gates **every** answer rather than the affirmative alone, because the
+    /// row that arrives is what the pointer is over: on a question the control
+    /// under it is `Send`, and on an approval it may be either. Refusing is the
+    /// cheap direction (§6.4) and costs nothing by waiting `200` ms for a row
+    /// nobody has read yet.
+    @Published private(set) var isAffirmativeArmed = false
+    private var armingTask: Task<Void, Never>?
+
+    /// What a row's preview line says instead of its own preview, once an
+    /// answer has left it.
+    ///
+    /// **§8's states 02 and 03 are one mechanism.** Either way the row goes back
+    /// to `80` and says one thing on the line it already draws: what was sent,
+    /// or that it was not. In the preview's **own ink** — this app has no
+    /// failure ink, and inventing one for a transport error would make it louder
+    /// than a Turn that genuinely failed, which is drawn as ordinary preview
+    /// text under an unchanged marker.
+    ///
+    /// It stands only until the product says something newer, which is what
+    /// ``forgetNoticesTheProductHasOvertaken()`` is for.
+    @Published private(set) var answerNotices: [String: AnswerNotice] = [:]
+
+    /// What one row's preview line draws: the last thing this app said about
+    /// it, or the product's own preview.
+    func previewLine(for session: MonitoredSession) -> String? {
+        answerNotices[session.id]?.text ?? session.preview
+    }
+
+    /// What is in the open row's field, for the view that draws it.
+    var answerDraft: String {
+        guard let openRowID else { return "" }
+        return answerProgress[openRowID]?.draft ?? ""
+    }
+
+    /// The field reporting what it now holds.
+    ///
+    /// The text view owns the text; this owns what the text *means* for the
+    /// ground. Called on every edit, and cheap by construction — the published
+    /// value changes at most once per row, when the field stops or starts being
+    /// empty.
+    func answerDraftChanged(to text: String) {
+        guard let openRowID else { return }
+        answerProgress[openRowID, default: AnswerProgress()].draft = text
+        refreshAnswerGround()
+    }
+
+    /// Takes one answer, which is what a click on it and what `⏎` both do.
+    ///
+    /// §6.6: **a click takes the answer it lands on**, whether or not the ground
+    /// is there — there is no select-then-confirm on this surface, because the
+    /// confirm would be a second control saying what the first already said.
+    func takeAnswer(_ ground: AnswerGround) {
+        guard !isAnswerInFlight, isAffirmativeArmed,
+              let session = openSession,
+              let request = session.request,
+              let shape = request.answerRow,
+              let ticket = request.replyTicket else { return }
+
+        switch ground {
+        case .affirmative where shape.refusal == nil:
+            // A question's one control answers rather than grants: what it
+            // sends is what the person put in — the field's words, or the
+            // options they ticked.
+            answerTheQuestion(
+                choosing: nil,
+                of: session,
+                on: ticket,
+                saying: shape.affirmativeNotice
+            )
+        case .affirmative:
+            send(.grant, for: session, on: ticket, saying: shape.affirmativeNotice)
+        case .refusal:
+            let note = answerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            send(
+                .refuse(note.isEmpty ? nil : note),
+                for: session,
+                on: ticket,
+                saying: shape.refusalNotice
+            )
+        case let .option(index):
+            if openRowBody?.allowsSeveralAnswers == true {
+                // §5.5: with several allowed, a click on a box or its label
+                // ticks it and nothing else happens — the ground stays on
+                // `Send`, because the brightest object must not stop being what
+                // `⏎` does on the one form where a person is most likely to
+                // press it twice.
+                tickOption(index)
+            } else {
+                answerTheQuestion(
+                    choosing: index,
+                    of: session,
+                    on: ticket,
+                    saying: shape.affirmativeNotice
+                )
+            }
+        }
+    }
+
+    /// Whether one option of the question on screen is ticked (§5.5).
+    func isOptionTicked(_ index: Int) -> Bool {
+        guard let openRowID else { return false }
+        return answerProgress[openRowID]?.ticked.contains(index) ?? false
+    }
+
+    private func tickOption(_ index: Int) {
+        guard let openRowID else { return }
+        var progress = answerProgress[openRowID] ?? AnswerProgress()
+        if progress.ticked.contains(index) {
+            progress.ticked.remove(index)
+        } else {
+            progress.ticked.insert(index)
+        }
+        answerProgress[openRowID] = progress
+        answerRevision &+= 1
+    }
+
+    /// Answers the question on screen, and either draws the next or sends the
+    /// set.
+    ///
+    /// **Answering one question of a set sends nothing** (§5.3): the set goes
+    /// back as one `updatedInput`, so `⏎` on question two draws question three
+    /// — the body alone changes, the head and the answer row stand still — and
+    /// the count is what makes that legible.
+    ///
+    /// What is recorded depends on which answer was taken, and the rule is that
+    /// **nothing a person typed is thrown away**: an option taken with text in
+    /// the field carries that text as this question's note, which is the field
+    /// the product's own component writes per-question notes into. Text with no
+    /// option taken *is* the answer.
+    private func answerTheQuestion(
+        choosing index: Int?,
+        of session: MonitoredSession,
+        on ticket: HookReplyRegistry.Ticket,
+        saying notice: String
+    ) {
+        guard let request = session.request else { return }
+        let questions = request.askedQuestions
+        guard !questions.isEmpty else { return }
+        let position = min(max(openQuestionIndex, 0), questions.count - 1)
+        let asked = questions[position]
+        let typed = answerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let chosen: [String]
+        if let index, index < asked.options.count {
+            chosen = [asked.options[index].label]
+        } else if asked.allowsSeveralAnswers {
+            chosen = asked.options
+                .filter { isOptionTicked($0.id) }
+                .map(\.label)
+        } else {
+            chosen = []
+        }
+
+        let answered: AgentQuestionAnswer
+        if chosen.isEmpty {
+            // Nothing picked, so the field is the whole answer — and an empty
+            // field is not an answer at all. `Send` with nothing to send does
+            // nothing, which is the one honest thing it can do.
+            guard !typed.isEmpty else { return }
+            answered = AgentQuestionAnswer(question: asked.text, answer: typed)
+        } else {
+            answered = AgentQuestionAnswer(
+                question: asked.text,
+                answer: chosen.joined(separator: ", "),
+                note: typed.isEmpty ? nil : typed
+            )
+        }
+
+        guard let openRowID else { return }
+        var progress = answerProgress[openRowID] ?? AnswerProgress()
+        progress.answers[position] = answered
+        if position + 1 < questions.count {
+            progress.questionIndex = position + 1
+            progress.draft = ""
+            progress.ticked = []
+            answerProgress[openRowID] = progress
+            answerDraftGeneration &+= 1
+            refreshAnswerGround()
+            // The body is a question taller or shorter than the one it
+            // replaces, and the window has to be remeasured for it.
+            answerRevision &+= 1
+            // The next question arrives on the same curve a row does, and its
+            // affirmative is armed by that arrival rather than by a delay of its
+            // own (§6.3).
+            armTheAffirmativeOnArrival(of: openRowID)
+            return
+        }
+
+        answerProgress[openRowID] = progress
+        send(
+            .answers(questions.indices.compactMap { progress.answers[$0] }),
+            for: session,
+            on: ticket,
+            saying: notice
+        )
+    }
+
+    /// Sends one answer, and turns what comes back into a row (§8).
+    private func send(
+        _ answer: AgentAnswer,
+        for session: MonitoredSession,
+        on ticket: HookReplyRegistry.Ticket,
+        saying notice: String
+    ) {
+        isAnswerInFlight = true
+        let agent = session.agent
+        let rowID = session.id
+        let previewWhenWritten = session.preview
+        Task { [weak self] in
+            let delivered = await self?.integrationService(for: agent)?
+                .answer(answer, on: ticket) ?? false
+            // The store is `@MainActor` and this task body is not: under
+            // `SWIFT_APPROACHABLE_CONCURRENCY` the hop back is elided, and a
+            // panel property written off the main actor is drawn one publish
+            // stale (`AGENTS.md` §7).
+            await MainActor.run { [weak self] in
+                self?.answerLanded(
+                    delivered: delivered,
+                    rowID: rowID,
+                    previewWhenWritten: previewWhenWritten,
+                    notice: notice
+                )
+            }
+        }
+    }
+
+    /// What the row becomes once the answer has either arrived or not (§8).
+    ///
+    /// **The panel does not close** (§8.3): closing on send would shut it in
+    /// front of a second request nobody had seen. With nothing left waiting it
+    /// unlatches instead — hands the keyboard back and starts answering the
+    /// pointer again — and that release is how it says you are finished.
+    private func answerLanded(
+        delivered: Bool,
+        rowID: String,
+        previewWhenWritten: String?,
+        notice: String
+    ) {
+        isAnswerInFlight = false
+        if delivered {
+            answerProgress[rowID] = nil
+            answerDraftGeneration &+= 1
+        }
+        answerNotices[rowID] = AnswerNotice(
+            text: delivered
+                ? notice
+                : "Not sent — the product stopped waiting for this answer",
+            previewWhenWritten: previewWhenWritten
+        )
+        if openRowID == rowID { closeOpenRow() }
+        // **The next request opens itself** (§8.2), with its affirmative
+        // unarmed — which is what stops the click that answered this one from
+        // answering that one. The advance is the whole notification: there is
+        // another, and here it is, already open and already legible.
+        //
+        // Only on an answer that arrived. Advancing past a row that has just
+        // said `Not sent` would hide the one line explaining why, and there is
+        // nothing to advance *from*: nothing was answered.
+        if delivered,
+           let next = sessions.first(where: { $0.id != rowID && $0.request != nil }) {
+            openRow(next.id)
+        }
+        // The ticket has been spent either way, so what the mark says about this
+        // row is now out of date by one publish. Asking for the refresh is
+        // cheaper than teaching the projection to notice a connection closing.
+        requestRefresh()
+    }
+
+    /// Opens one row, and starts the arrival its affirmative is armed by.
+    private func openRow(_ id: String) {
+        openRowID = id
+        refreshAnswerGround()
+        armTheAffirmativeOnArrival(of: id)
+    }
+
+    /// Holds the affirmative unarmed for as long as it is still arriving (§6.3).
+    private func armTheAffirmativeOnArrival(of id: String) {
+        isAffirmativeArmed = false
+        armingTask?.cancel()
+        armingTask = Task { [weak self] in
+            // ``PanelMotion/duration`` rather than the injected clock, and
+            // `Task.sleep` rather than ``MonitorClock/sleep(seconds:)``: this
+            // is the length of a drawing, not a monitoring window, and it has
+            // to end when the animation the eye is following ends. A clock a
+            // test never advanced would leave an affirmative armed by nothing.
+            try? await Task.sleep(for: .seconds(PanelMotion.duration))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.openRowID == id else { return }
+                self.isAffirmativeArmed = true
+            }
+        }
+    }
+
+    /// Puts the ground where what has been typed says it is.
+    private func refreshAnswerGround() {
+        let ground = AnswerGround.where(
+            openSession?.request,
+            showing: openRowBody,
+            carriesText: !answerDraft.isEmpty
+        )
+        if answerGround != ground { answerGround = ground }
+    }
+
+    /// Closes a row whose request has been settled somewhere else (§8 state 04).
+    ///
+    /// Granted in the product, cancelled, or the Thread gone: the row closes
+    /// **within one publish** and becomes whatever it now is. This is the one
+    /// close the user did not ask for, which is why it is the row changing state
+    /// rather than a message about a row — and what was typed goes with it,
+    /// because there is nothing left to send it to.
+    ///
+    /// A row that has left the list needs nothing here: ``openSession`` reads
+    /// through the list, so it is already gone. What this catches is the row
+    /// that stayed and stopped asking.
+    private func closeARowWhoseRequestHasGone() {
+        guard let openRowID, !isAnswerInFlight else { return }
+        guard let session = sessions.first(where: { $0.id == openRowID }) else { return }
+        guard session.request == nil else { return }
+        answerProgress[openRowID] = nil
+        answerDraftGeneration &+= 1
+        closeOpenRow()
+    }
+
+    /// Drops every notice the product has since spoken over, and every notice
+    /// whose row has gone.
+    ///
+    /// A notice is the last thing *this app* said about a row; the product
+    /// saying anything at all is newer than that, and a row that has left takes
+    /// its notice with it.
+    private func forgetNoticesTheProductHasOvertaken() {
+        guard !answerNotices.isEmpty else { return }
+        var previews: [String: String?] = [:]
+        for session in sessions { previews[session.id] = session.preview }
+        answerNotices = answerNotices.filter { id, notice in
+            guard let preview = previews[id] else { return false }
+            return preview == notice.previewWhenWritten
+        }
+        answerProgress = answerProgress.filter { previews[$0.key] != nil }
     }
 
     var currentPanelSize: CGSize {
@@ -3469,6 +3904,8 @@ final class MonitorStore: ObservableObject {
         if sessions != visibleSessions {
             sessions = visibleSessions
         }
+        forgetNoticesTheProductHasOvertaken()
+        closeARowWhoseRequestHasGone()
         if status != aggregateStatus {
             status = aggregateStatus
         }

@@ -163,6 +163,8 @@ The set goes back as one answer, so `⏎` on question two draws question three �
 
 Both products accept an answer that is not on the list, and it is often the real answer. So a field sits beneath the options in every question form with its own placeholder, and **typing into it moves the white ground onto `Send`** and off whatever option was selected — the same one rule as everywhere else (§6).
 
+**Nothing a person typed is thrown away, and which of two things it becomes depends on what they then took.** Text with no option taken *is* the answer. Text with an option taken is a note against that one question — `annotations`, which is the field the product's own permission component writes per-question notes into, so it reaches the model rather than being dropped when the click lands somewhere else. `Send` with nothing typed and nothing ticked sends nothing at all: a control that needs an answer is not a control that does nothing, and recording a person's silence as their choice would be worse than waiting.
+
 ### 5.5 Several answers means no option can be the return key
 
 With `multiSelect` the ground **starts on `Send` and never leaves it**, the numerals become `12 × 12` boxes at corner `4` — `#242424` empty, the theme ink's lit value filled — and a click on a box or its label ticks it. (`Space` ticks the option the ground is on when §9.3 lands. Until it does, no option ever holds the ground — it never leaves `Send` — so a click is the only thing that could tick one.) The alternative, `⏎` toggling and something else sending, would make the brightest object on the row stop being what `⏎` does, on the one form where a person is most likely to press it twice.
@@ -230,7 +232,9 @@ At the content width of `496`, relative to the content's leading edge:
 | The refusal | `8` before the affirmative; the same padding when it holds the ground, bare `13` pt Medium `#C7C7CC` when it does not |
 | The field | From `0` to `8` before the refusal |
 
-Both grounds are corner `4` and `28` tall — the mark's own `16` grown by §3.1 — and **neither control moves when the ground crosses between them**. A form with one answer (`Send`) omits the refusal and the field takes the space.
+Both grounds are corner `4` and `28` tall — the mark's own `16` grown by §3.1 — and **neither control moves when the ground crosses between them**: each is its own text plus `12` a side whether it is holding the ground or not. A form with one answer (`Send`) omits the refusal and the field takes the space.
+
+**The field is drawn with no ground of its own**, decided while building it and worth stating because the drawing above implies one. The body directly over it is already on the recessed step where it is machine text, and a second recessed rectangle immediately below reads as more body rather than as a place to type. What says the field is a field is the caret, which is in it from the moment the row opens (§6.6) — and the placeholder, in the label's own ink, which is the only text on this row that is not something the product or the person said.
 
 ## 8. Sending, and what the row becomes
 
@@ -242,6 +246,8 @@ Every state below is one the panel already draws for another reason, so an answe
 | 02 | **Landed** | The body and the answer row leave, the row returns to `80`, the preview line says what was sent, and the status is whatever the Thread now is — after a grant, `Working...`. There is no confirmation to dismiss, because the row is the confirmation |
 | 03 | **Not delivered** | The row goes back to waiting with the text still in the field and the reason on the preview line, **in the preview's own ink**. The app has no failure ink, and inventing one for a transport error would make it louder than a Turn that genuinely failed, which is drawn as ordinary preview text under an unchanged marker |
 | 04 | **Settled elsewhere** | Granted in the product, cancelled, or the Thread gone: the row closes within one publish and becomes what it now is. What was typed is dropped, because there is nothing left to send it to. This is the one close the user did not ask for, which is why it is the row changing state rather than a message about a row |
+
+**Landed and not delivered are one mechanism**, decided while building: either way the row goes back to `80` and says one thing on the line it already draws — `Approved`, `Denied`, `Accepted`, `Sent back`, `Answered`, or `Not sent — the product stopped waiting for this answer`. *Not delivered* leaves the row closed rather than open, because the sentence goes on the preview line and an open row has no preview line; what was typed stays with the row (§10), so reopening finds it where it was left. The line stands until the product says something newer, which is the only clock this needs: the app's own sentence is the last word exactly until the Turn it answered produces one of its own.
 
 ### 8.1 Answering does not retire a row
 
@@ -280,6 +286,8 @@ The panel takes the keyboard so that a row can be read without being lost and a 
 | `⌘⏎` | **Unbound, and it stays that way** | A second way to approve would make the white ground advisory rather than definitive, and the whole safety of this surface rests on the ground being the literal truth about `⏎` |
 | everything else | **Unbound** | §9.3 holds the keys with a reason to exist later. Binding one of them early would be a keyboard model with a hole in it, which is worse than a panel that plainly does not navigate |
 
+*Unbound* means the panel binds nothing to them, not that they are swallowed: the caret is in a text field, so an arrow moves the caret and `Space` types a space, exactly as they would in any field. That is this table's own rule — the keys are the field's — and it is what stops the deferral in §9.3 from being felt as a surface that ignores the keyboard. What none of them does is move the ground, walk the list, or send anything: measured on Release for `⌘⏎`, `⇥`, all four arrows and `Space`.
+
 ### 9.3 The keyboard half, deferred and kept whole
 
 Stage 03 of §1.1. It adds no region, no ink, no control and no height; it adds keys, and one word this surface already draws under the pointer. It is recorded here so that landing it is a build rather than a second design.
@@ -299,6 +307,8 @@ Three clauses of this document arrive with those keys, and each is a correction 
 ### 9.4 The panel never takes the keyboard unasked
 
 Hover browses and cannot latch, however long it lasts. **Only a click on the mark makes the panel key** — an unambiguous act, and the chord will be the second one. This matters more than it looks: the panel sits over whatever the person is typing into, and a surface that took focus on proximity would eat a line of their code. Latching takes key status from the application underneath, so `⎋`, a send with nothing left waiting, and a click outside all give it back to the same window; if that window has gone, focus goes wherever the system would have sent it and the panel does not hold it open waiting.
+
+**What that costs was measured rather than assumed, and it is more than the panel** (2026-09-05, Release). `.nonactivatingPanel` promises a panel may hold key status without its application being brought forward, and as far as the panel is concerned it keeps that promise: with a row open the panel *is* `NSApp.keyWindow` and the field *is* its first responder. The keyboard is not the panel's to take on those terms — every keystroke went on to whichever application was in front, and the global monitor watching for a click outside counted a click on the panel's own field as one, so the row closed instead of answering. **An application that is not active does not receive keys, whatever its windows believe.** So the app activates for as long as a row is open and gives the application back on the same three exits, which is what the paragraph above always described — [ADR 0020](adr/0020-the-panel-takes-the-keyboard-by-activating.md). Two smaller things were in the way of it and are recorded there: `becomesKeyOnlyIfNeeded`, which makes AppKit refuse `makeKeyAndOrderFront` outright, and a text view built with no text container, which takes the caret and swallows everything typed into it.
 
 ## 10. Latching
 
@@ -366,6 +376,15 @@ Width is [`expanded-header-v2.md`](expanded-header-v2.md)'s `520` in every state
 A blinking caret is precisely the continuously running animation the overlay forbids ([`system-architecture.md`](system-architecture.md) §6): drawn from SwiftUI it would invalidate the whole panel, `PanelContour` and every text measurement, twice a second, for as long as a row is open. **The field is therefore an AppKit text view hosted in the panel**, with its caret drawn by the text system into its own layer — the same division that already sends persistent motion to Core Animation.
 
 The scrolling body is the second thing to watch: it must scroll its own layer rather than re-laying-out the row. Measure both under Release, and measure the burst by diffing cumulative CPU time rather than reading `ps %cpu`.
+
+**Both were measured on 2026-09-05, under Release, and they answer differently.**
+
+| State | CPU over the window | Read as |
+| --- | --- | --- |
+| A row open, the caret blinking, nothing else happening | `0.12` s in `20` s | Identical to the collapsed panel at rest (`0.13` s in `20` s). **The caret costs nothing**, which is the whole of §13.2 |
+| `600` wheel events over a body of `60` lines | `3.3` s | ~`4.7` ms an event over the `0.5` s the same `600` events cost with nothing to scroll |
+
+The second is the one to keep an eye on. It is transient and user-driven — it is paid only while a finger is actually moving, and a flick is a second or two — but it is a whole panel's worth of work per event rather than a translation, and `.equatable()` on the body was tried and bought nothing, so what it is re-doing is not the sixty `Text` lines. **It is `expanded-panel-v2.md`'s scroller rather than this document's**, it predates the answer row, and it is recorded here because §16 asks for the number rather than because this change caused it.
 
 ### 13.3 Accessibility follows the ground, and speaks the count
 
@@ -451,48 +470,49 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 
 ## 16. Verification
 
-- [ ] A closed waiting row is `80` at every menu bar height, badge caption included, and a row with no mark gains no second target.
-- [ ] A click on a row's text opens the Thread; a click on the mark opens the row; no other region does either.
-- [ ] Opening moves one bright ground from the caption line to the answer row — the surface never draws two at once — and a chevron pointing up stands where it was.
-- [ ] The chevron and `⎋` both collapse the row, send nothing, and preserve typed text and any part-answered set; reopening resumes at the same question.
-- [ ] The body is at most `140` and the open row at most `240`, in every form; a one-line question makes a `117` pt row.
-- [ ] Prose draws with no ground and machine text on `#242424`, chosen by payload and not by length, on all seven shapes in §2.
-- [ ] A body longer than its cap scrolls on the wheel, draws the rail, and shows a count that clears when the last line is on screen.
-- [ ] A wrapped line's continuation carries its own indent plus two spaces; no whitespace is collapsed and no token is dropped.
-- [ ] No command is ever marked, coloured or flagged by the app.
-- [ ] Every question draws `header · n/N`, including a one-question call; a Codex question draws the chevron alone.
-- [ ] `⏎` on any question but the last draws the next and sends nothing; the last sends the whole set.
-- [ ] Every question form draws the field; typing moves the white ground onto `Send`.
-- [ ] With `multiSelect` the ground never leaves `Send`, the numerals are boxes, and a click on a box or its label ticks it.
-- [ ] The white ground is on the affirmative with an empty field and on the refusal with a non-empty one; neither control moves as it crosses.
-- [ ] Nothing but typing moves the white ground: hover moves it nowhere, and a click takes whichever answer it lands on whether the ground is there or not.
-- [ ] The only keys the panel answers to are the field's — anything printable, `⇧⏎`, `⏎` — and `⎋`. `⌥Space`, `↑ ↓ ← →`, `1`–`4`, `Space`, `⌘⏎` and `⇥` are all unbound, and the app registers no global hotkey.
-- [ ] A row opened by an advance, and a question drawn by answering the one before it, take neither a click nor a return until the opening animation has ended.
-- [ ] While a row is open the panel does not close on pointer exit, holds the keyboard, and returns it on `⎋`, on send and on an outside click.
-- [ ] A request settled elsewhere closes the open row within one publish; a send that fails keeps the text and says why in the preview's ink.
-- [ ] An answered row returns to `80` and to the Thread's current status, and does not retire.
-- [ ] With no write path the mark says `Read`, no white ground is drawn anywhere on the open row, and one control stands where three would.
-- [ ] The panel's CPU cost while a row is open, and while its body is scrolled, is measured under Release by diffing cumulative CPU time.
+- [x] A closed waiting row is `80` at every menu bar height, badge caption included, and a row with no mark gains no second target.
+- [x] A click on a row's text opens the Thread; a click on the mark opens the row; no other region does either.
+- [x] Opening moves one bright ground from the caption line to the answer row — the surface never draws two at once — and a chevron pointing up stands where it was.
+- [x] The chevron and `⎋` both collapse the row, send nothing, and preserve typed text and any part-answered set; reopening resumes at the same question.
+- [x] The body is at most `140` and the open row at most `240`, in every form; a one-line question makes a `117` pt row.
+- [x] Prose draws with no ground and machine text on `#242424`, chosen by payload and not by length, on all seven shapes in §2.
+- [x] A body longer than its cap scrolls on the wheel, draws the rail, and shows a count that clears when the last line is on screen.
+- [x] A wrapped line's continuation carries its own indent plus two spaces; no whitespace is collapsed and no token is dropped.
+- [x] No command is ever marked, coloured or flagged by the app.
+- [x] Every question draws `header · n/N`, including a one-question call; a Codex question draws the chevron alone.
+- [x] `⏎` on any question but the last draws the next and sends nothing; the last sends the whole set.
+- [x] Every question form draws the field; typing moves the white ground onto `Send`.
+- [x] With `multiSelect` the ground never leaves `Send`, the numerals are boxes, and a click on a box or its label ticks it.
+- [x] The white ground is on the affirmative with an empty field and on the refusal with a non-empty one; neither control moves as it crosses.
+- [x] Nothing but typing moves the white ground: hover moves it nowhere, and a click takes whichever answer it lands on whether the ground is there or not.
+- [x] The only keys the panel answers to are the field's — anything printable, `⇧⏎`, `⏎` — and `⎋`. `⌥Space`, `↑ ↓ ← →`, `1`–`4`, `Space`, `⌘⏎` and `⇥` are all unbound, and the app registers no global hotkey. Measured on Release: `⌘⏎`, `⇥`, the arrows and `Space` send nothing and move nothing; inside the field they do what a field does, which is §9.2's rule rather than an exception to it.
+- [x] A row opened by an advance, and a question drawn by answering the one before it, take neither a click nor a return until the opening animation has ended.
+- [x] While a row is open the panel does not close on pointer exit, holds the keyboard, and returns it on `⎋`, on send and on an outside click.
+- [x] A request settled elsewhere closes the open row within one publish; a send that fails keeps the text and says why in the preview's ink.
+- [x] An answered row returns to `80` and to the Thread's current status, and does not retire.
+- [x] With no write path the mark says `Read`, no white ground is drawn anywhere on the open row, and one control stands where three would.
+- [x] The panel's CPU cost while a row is open, and while its body is scrolled, is measured under Release by diffing cumulative CPU time. §13.2 carries both numbers.
 - [ ] The band, both collapsed forms and the quota footer draw identically to pages 01 to 09 in every state above.
 
 ## 17. Implementation mapping
 
-**The reading half is built and the channel an answer travels on is open** (2026-09-05); the answer itself is not yet written. The work lands in a handful of places, and the first of them was the only one with no dependency outside this repository.
+**Built** (2026-09-05): a request is read in the notch and answered there, in every shape either product asks in. The work landed in a handful of places, and the first of them was the only one with no dependency outside this repository.
 
 | Symbol | Change |
 | --- | --- |
 | `HookPayload`, `HookPayloadDistiller` | **Built.** `tool_input` as a fifteenth `CodingKey`, carried as a new `.request` kind — whole or left out, bounded at `maximumRequestBytes = 128 KiB` — and admitted only on the events that open a wait, read off each vocabulary's own signal table through `carriesRequest(forEvent:toolName:)`. ~~carried as `.text`, kept on `PermissionRequest` and `PreToolUse`~~ is struck in §14.1 with the measurements that struck it |
 | `AgentRequest`, `AgentRequestReading` | **Built**, and not in the original plan. The typed request and its four drawn forms, read **in the reducer** at the moment the wait opens — the one place holding the signal, the event name, the tool name and the vocabulary at once. A form's setting (§4.2) is derived from its case rather than stored, so it cannot be set wrong; a command's body is the whole `tool_input` re-encoded with sorted keys, not a field picked out of it |
 | `HookEventRepository` | **Built.** The request is a field **of** `PendingApproval` and of a new `PendingInput`, ~~a `PendingRequest` on the Turn's wait slots, per `(agent_id, tool_use_id)`~~ — a table beside the waits would have to be cleared at all seven sites that clear one, and a rule that holds until one site forgets it is exactly CR-030. `HookTurnState.requestAwaitingAnAnswer` picks the one request a row can open, in the order `PRD.md` §6.2 already reads, oldest subagent first |
-| `MonitorSnapshot`, `MonitorStore` | **Half built.** `MonitoredSession.request` reaches the UI on the one data contract, and `renderedProjection()` carries the request's id and form — never its body, so a 54 KiB plan is not string-compared per event. Still owed: the store's draft text and part-answered set for the row's lifetime, and `openRowID` beside `quotaExpanded` and `recentExpanded` |
+| `MonitorSnapshot`, `MonitorStore` | **Built.** `MonitoredSession.request` reaches the UI on the one data contract, and `renderedProjection()` carries the request's id and form — never its body, so a 54 KiB plan is not string-compared per event. The answering half is `openRowID`, `answerGround`, `isAnswerInFlight`, `isAffirmativeArmed`, `answerNotices` and `answerRevision` — and `answerProgress`, which is **not published**: it holds the draft and the part-answered set, the field writes into it on every keystroke, and publishing it would re-render a panel that measures text on every pass (`AGENTS.md` §7). What SwiftUI is told is where the ground is, which moves at most once a row. ~~`openRowID` beside `quotaExpanded` and `recentExpanded`~~ is struck: §10 says text and part-answered sets live for the row's lifetime and `artifacts.md` says no hook payload reaches disk, so none of it is persisted |
 | `PanelMetrics` | New: `requestBodyMaximumHeight = 140`, `openRowHeight(bodyHeight:)`, `optionRowHeight = 24`, `answerRowHeight = 28`. `openRowHeight(requestLines:)` from [`expanded-panel-v2.md`](expanded-panel-v2.md) §10 is not introduced — it counted lines, and §4.1 does not |
-| `NotchOverlayView` | **Started.** `SessionStatusControl` draws the status name on a ground sized once for every word it can hold, with its own hover so `Answer` / `Read` answers for the mark rather than for the row — and the layer-backed readout it replaced took a redraw a second with it. The mark is the second target, and `OpenRow` draws the head unmoved, the chevron where the mark was, the body in both settings, `OptionRow`, and §11 rule 04's single control with no white ground anywhere. The body scrolls on the wheel, draws the rail and the count, and fades at the fold. Still owed: `AnswerRow` and a hit region on every answer (§6.6), and the field as an `NSViewRepresentable` over an AppKit text view (§13.2) |
+| `NotchOverlayView` | **Built.** `SessionStatusControl` draws the status name on a ground sized once for every word it can hold, with its own hover so `Answer` / `Read` answers for the mark rather than for the row — and the layer-backed readout it replaced took a redraw a second with it. The mark is the second target, and `OpenRow` draws the head unmoved, the chevron where the mark was, the body in both settings, `OptionRow`, and §11 rule 04's single control with no white ground anywhere. The body scrolls on the wheel, draws the rail and the count, and fades at the fold. `AnswerRow` draws §7's three objects, `AnswerControl` is one answer with its own hit region and the ground drawn on it, `OptionRow` takes a click and a tick, and `AnswerField` is the `NSViewRepresentable` over `AnswerFieldView` §13.2 requires — which owns its own text and its own placeholder, because a keystroke must not reach `@Published` |
 | `PanelMetrics` | **Built.** `waitingMarkWidth`, `waitingMarkFont` and the two words; `requestBodyMaximumHeight = 140`, `openRowFixedHeight = 100`, `openRowHeight(bodyHeight:)`, `optionRowHeight = 24`, `answerRowHeight = 28`, and the two settings' fonts and insets |
 | `RequestBodyLayout` | **Built**, and not in the original plan. One request's body laid out once, at the width it will be drawn at — **the panel's height and the row's drawing come from the same value**, which is what makes §4.4's count of what is below the fold true rather than approximately true. §4.5's wrapping is done here rather than by the text system for the same reason: measuring and drawing the same array of lines makes disagreement impossible rather than unlikely |
-| `OverlayPanelController` | **Built.** `OverlayPanel.latches` gates `canBecomeKey`, so the panel takes the keyboard when a row opens and gives it back on `⎋`, on a click outside and when the row closes; `.nonactivatingPanel` is what lets it hold a key without bringing an `LSUIElement` app to the foreground. Hover is suspended for the duration in the store rather than the controller, because that is where the dwell lives. The chord's registration and its failure reporting are stage 03 and are not in the initial version (§9.3) |
+| `OverlayPanelController` | **Built, and corrected by measurement.** `OverlayPanel.latches` gates `canBecomeKey`, so the panel takes the keyboard when a row opens and gives it back on `⎋`, on a click outside and when the row closes. ~~`.nonactivatingPanel` is what lets it hold a key without bringing an `LSUIElement` app to the foreground~~ is struck: it holds key status without activating and the keyboard still goes elsewhere, so the app activates for the row's lifetime and hands the previous application back — §9.4 and [ADR 0020](adr/0020-the-panel-takes-the-keyboard-by-activating.md). `becomesKeyOnlyIfNeeded` went with it, because it makes AppKit refuse `makeKeyAndOrderFront` outright and the gate on `canBecomeKey` already does its job. Hover is suspended for the duration in the store rather than the controller, because that is where the dwell lives. The chord's registration and its failure reporting are stage 03 and are not in the initial version (§9.3) |
 | `AgentHookHelper` | **Built.** One literal argument selects the wait — bare keeps `nc -w 1` with stdout discarded at the call, `wait` opens the reply channel on a window the definition registers. `exec >/dev/null 2>&1` became `exec 2>/dev/null`, and never `exec /usr/bin/nc`: that would hand the product `nc`'s status, measured **1** on both shapes of "nothing is listening". `NOTCHLINE_HOOKS_OFF` is read before the payload, so a nested agent costs one `sh` and no connection |
 | `ManagedHookDefinition`, `ManagedHooksConfiguration` | **Built.** The timeout and the argument moved onto the *definition*, and `handler(for:)` builds one handler per definition — so a definition that varies nothing produces the bytes it always produced, which is the whole of ADR 0014's blast radius. `isCurrentManagedHandler` is asked per definition for the same reason |
 | `HookInstallRecord.eventsAwaitingTrust` | **Built**, and not in the original plan. The app's own memory of a definition it rewrote, recorded at the install that changed the bytes and cleared one event at a time as those events arrive. It is the second trigger for `restoreDefinitionAdvice`, and it exists because the first cannot reach this definition: the silence probe may never watch `PermissionRequest` |
 | `AgentHookListener`, `HookReplyRegistry` | **Built**, and the shape changed from the plan. The listener hands the descriptor to ``deliver`` and closes it only if nobody took it, so the decision "is this a connection an answer travels on" is made where the payload is — and the *waiting* happens nowhere near the serial read queue whose serialness preserves arrival order. The registry is **reconciled** after every drain rather than released at each of the seven sites that clear a wait: a rule that holds until one site forgets it is exactly CR-030. It also holds the request's `tool_input`, so the bytes needed to answer a question live for exactly as long as the connection and never reach the snapshot |
 | `AgentRequest.canBeAnswered` | **Built**, and no longer a stored flag: it is `replyTicket != nil`. A request is answerable when a connection is being held for it and at no other time — not because its product could accept an answer in principle, and not because its status says `Approval needed` |
-| `RequestAnswering`, one provider per product | **Built.** `AgentAnswer` is `grant`, `refuse(String?)` and `answers([AgentQuestionAnswer])`; Codex returns `nil` for the third, because `updatedInput` there does not fail to answer but fails the hook **closed**. `interrupt` is never written by either. What is not built is the surface that calls it — §7's answer row is the next part, so nothing in the app writes an answer yet |
+| `RequestAnswering`, one provider per product | **Built.** `AgentAnswer` is `grant`, `refuse(String?)` and `answers([AgentQuestionAnswer])`; Codex returns `nil` for the third, because `updatedInput` there does not fail to answer but fails the hook **closed**. `interrupt` is never written by either. `AnswerGround`, `AnswerProgress` and `AnswerNotice` live beside them: the ground is *derived from what has been typed* rather than stored beside it, so the drawing and the return key cannot disagree — which is §6.1's *the ground is the state* taken literally, and the arrows (§9.3) are what will make it a value somebody sets |
+| `AgentMonitoring.answer(_:on:)` | **Built**, and not in the original plan. One method on the provider protocol, defaulting to *not delivered* — so a store with no services, a drawing specimen and a test double all answer truthfully rather than needing a stub. The store names the ticket and the product; which bytes that becomes is the vocabulary's business and which connection they travel down is the registry's, and neither is the surface's |

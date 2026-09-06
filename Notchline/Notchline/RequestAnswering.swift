@@ -37,6 +37,92 @@ nonisolated struct AgentQuestionAnswer: Sendable, Equatable {
     }
 }
 
+/// Which of a row's answers the white ground is on — and so which one `⏎`
+/// takes.
+///
+/// **One value names both**, because they are the same thing: `answer-in-notch.md`
+/// §6.1 is that the ground *is* the state, with no second selection model
+/// underneath and no default-button concept beside it. So a click reports which
+/// answer it landed on in the same words the ground reports where it is, and
+/// ``MonitorStore/takeAnswer(_:)`` cannot tell the two apart — which is §6.6:
+/// a click takes the answer it lands on whether or not the ground is there.
+nonisolated enum AnswerGround: Sendable, Equatable {
+    /// `Approve`, `Accept`, or a question's `Send`.
+    case affirmative
+    /// `Deny` or `Send it back` — the answer that carries the text.
+    case refusal
+    /// One option of a question, by its position in the list.
+    case option(Int)
+
+    /// Where the ground stands on this request, given whether anything has been
+    /// typed.
+    ///
+    /// §6: it begins on the affirmative — or on the first option a question
+    /// offers — and typing moves it to the answer that carries text, which is
+    /// the refusal where the form has one and `Send` where it does not. With
+    /// several answers allowed it starts on `Send` and never leaves, because the
+    /// brightest object must not stop being what `⏎` does on the one form where
+    /// a person is most likely to press it twice (§5.5).
+    nonisolated static func `where`(
+        _ request: AgentRequest?,
+        showing body: RequestBodyLayout? = nil,
+        carriesText: Bool
+    ) -> AnswerGround {
+        guard let shape = request?.answerRow else { return .affirmative }
+        if shape.refusal != nil {
+            return carriesText ? .refusal : .affirmative
+        }
+        // A question, whose one control carries the text — so typing moves the
+        // ground onto it rather than away, and with it there is nowhere else
+        // for the ground to be.
+        guard !carriesText, let body, !body.options.isEmpty,
+              !body.allowsSeveralAnswers else { return .affirmative }
+        return .option(body.options[0].id)
+    }
+}
+
+/// What a person has put into one row and not yet sent.
+///
+/// Kept for the row's lifetime and no longer (`answer-in-notch.md` §10):
+/// collapsing a row sends nothing and keeps what was typed, so reopening
+/// resumes rather than starting again — and when the row goes, this goes with
+/// it. It is never written to disk, like every other part of a request.
+nonisolated struct AnswerProgress: Sendable, Equatable {
+    /// The field's own text: a refusal's reason, or a question's answer.
+    var draft: String = ""
+    /// Which question of a set the body is showing, from the top (§5.3).
+    var questionIndex: Int = 0
+    /// What has been answered so far, by position in the set.
+    ///
+    /// **A set is answered one question at a time and sent once** — `⏎` on
+    /// question two draws question three and sends nothing — so this is what
+    /// makes the count on the caption line worth drawing: without it, an answer
+    /// that appears to do nothing looks like a failure.
+    var answers: [Int: AgentQuestionAnswer] = [:]
+    /// Which options are ticked on the question showing now (§5.5).
+    ///
+    /// Cleared with the field as the next question is drawn, because both
+    /// belong to the question that was on screen rather than to the row.
+    var ticked: Set<Int> = []
+}
+
+/// What one row's preview line says once an answer has left it.
+///
+/// §8's states 02 and 03 in one object: *landed* and *not delivered* are both a
+/// row that went back to `80` and said one thing on the line it already draws.
+/// The ink is the preview's own — this app has no failure ink, and inventing
+/// one for a transport error would make it louder than a Turn that genuinely
+/// failed.
+nonisolated struct AnswerNotice: Sendable, Equatable {
+    let text: String
+    /// What the row's preview said when this was written.
+    ///
+    /// The notice stands until the product says something newer, and this is how
+    /// *newer* is recognised without a clock: the app's own sentence is the last
+    /// word only until the Turn it answered produces one of its own.
+    let previewWhenWritten: String?
+}
+
 /// How one product spells an answer on the hook output it is waiting for.
 ///
 /// The write half of ``AgentHookVocabulary``, kept as a type of its own because

@@ -14,6 +14,13 @@ final class OverlayPanelController {
     /// ``animateFrame(to:delay:)``.
     private var pendingFrameAnimation: DispatchWorkItem?
     private var hasShownPanel = false
+    /// Whose keyboard this panel borrowed, while it is holding it.
+    ///
+    /// Held from the moment a row opens until the row closes, so the
+    /// application that was in front gets its keys back rather than the system
+    /// choosing for it (§9.4).
+    private var applicationToRestore: NSRunningApplication?
+
     /// Non-nil while one `mouseEntered` is owed — see ``armPointerReentry()``.
     private var pointerReentryMonitor: Any?
     /// Armed only while a row is open; see ``setLatched(_:)``.
@@ -78,7 +85,16 @@ final class OverlayPanelController {
         // Setting isFloatingPanel resets an NSPanel to the floating level (3).
         // Apply statusBar last so the compact UI stays above the menu bar (24).
         panel.level = .statusBar
-        panel.becomesKeyOnlyIfNeeded = true
+        // **`false`, and it has to be** (`answer-in-notch.md` §10). It was
+        // `true` while nothing here could take a key: it kept `orderFront` from
+        // making a panel key that had no use for one. What it also does is make
+        // AppKit *refuse* `makeKeyAndOrderFront` — measured 2026-09-05, the
+        // panel stayed unfocused with its field already first responder, and
+        // every keystroke went on to whichever application was in front. The
+        // job it was doing is now done exactly by ``OverlayPanel/canBecomeKey``,
+        // which is `false` until a row opens, so this is redundant as well as
+        // wrong.
+        panel.becomesKeyOnlyIfNeeded = false
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
@@ -213,6 +229,13 @@ final class OverlayPanelController {
             // whole viewport -- so without this the body would be drawn into a
             // window still sized for the closed row and clipped to nothing.
             store.$openRowID.map { _ in () }.eraseToAnyPublisher(),
+            // And the question of a set on screen, which is the same height
+            // change one step in: answering question two draws question three,
+            // and three options are `48` points more body than one. Nothing
+            // about the row's identity moves when it happens, so without this
+            // the next question is drawn into the window the last one asked
+            // for.
+            store.$answerRevision.map { _ in () }.eraseToAnyPublisher(),
             // Giving up the wings collapses the compact body to the cut-out and
             // takes them back again. Nothing else republishes when it is
             // toggled -- no status, no session, no quota moves -- so without
@@ -241,7 +264,36 @@ final class OverlayPanelController {
     /// It is armed only while latched, so nothing is watching the pointer in the
     /// state this app spends its life in.
     private func setLatched(_ isLatched: Bool) {
+        // **Taking the keyboard means taking the application with it, and that
+        // is measured rather than assumed.** `.nonactivatingPanel` says a panel
+        // may hold key status without its app being brought forward, and it is
+        // true as far as the panel is concerned: with a row open the panel *is*
+        // `NSApp.keyWindow` and the field *is* its first responder. It is not
+        // true of the keyboard — measured 2026-09-05 on Release, every
+        // keystroke went to whichever application was in front, and the global
+        // click monitor treated a click on the panel's own field as an outside
+        // click, so the row closed instead of answering. An app that is not
+        // active does not receive keys, whatever its windows believe.
+        //
+        // So the panel activates for as long as a row is open, and hands the
+        // application back on `⎋`, on send and on a click outside — which is
+        // `answer-in-notch.md` §9.4 exactly: *latching takes key status from the
+        // application underneath, and gives it back to the same window*. Hover
+        // still takes nothing, because hover never latches.
+        if isLatched, !NSApp.isActive {
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            applicationToRestore = frontmost?.processIdentifier
+                == ProcessInfo.processInfo.processIdentifier ? nil : frontmost
+            NSApp.activate()
+        }
         panel.latches = isLatched
+        if !isLatched {
+            // If that application has gone, focus goes wherever the system
+            // would have sent it: this panel does not hold it open waiting.
+            let restoring = applicationToRestore
+            applicationToRestore = nil
+            restoring?.activate()
+        }
         outsideClickMonitor.map(NSEvent.removeMonitor)
         outsideClickMonitor = nil
         guard isLatched else { return }

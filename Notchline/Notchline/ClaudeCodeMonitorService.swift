@@ -1543,6 +1543,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         await usage.transcriptFootprint()
     }
 
+    /// One answer, on the connection its request is still being held on.
+    ///
+    /// A pass-through, and deliberately nothing more: which bytes a product
+    /// will act on is its vocabulary's business (``RequestAnswering``), and
+    /// which connection they go down is the registry's. This is the boundary
+    /// the store reaches both through.
+    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool {
+        await hookEvents.answer(answer, on: ticket)
+    }
+
     func hookSetupStatus() async -> HookSetupStatus {
         await setup.status()
     }

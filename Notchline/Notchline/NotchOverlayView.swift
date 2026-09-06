@@ -663,45 +663,78 @@ private struct ExpandedPanelContent: View {
                 // fifth is 280, so the scroller a fourth live row already used
                 // carries the rest (§2.4 rule 02). A scroll view of its own
                 // here would chain against this one for nothing.
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: 0) {
-                        // The apology is one of the list's own lines, so it
-                        // scrolls with what is under it rather than pinning a
-                        // sentence over a queue somebody is reading.
-                        if store.sessions.isEmpty {
-                            emptyListLabel
-                        }
-
-                        ForEach(store.sessions) { session in
-                            if store.openRowID == session.id {
-                                OpenRow(session: session)
-                            } else {
-                                SessionRow(session: session)
+                // **The open row is the subject, and it is held at the top of
+                // the viewport** (§8.2): it is scrolled to when it opens and
+                // again whenever the list re-sorts under it, so the row a
+                // person is answering does not travel while they answer it.
+                // Its own body scrolls on the wheel and this does not fight
+                // that — the reader stays inside one region rather than moving
+                // between two.
+                ScrollViewReader { list in
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            // The apology is one of the list's own lines, so it
+                            // scrolls with what is under it rather than pinning a
+                            // sentence over a queue somebody is reading.
+                            if store.sessions.isEmpty {
+                                emptyListLabel
                             }
-                        }
 
-                        if !store.recentDepartures.isEmpty {
-                            RecentSeam(count: store.recentDepartures.count)
+                            ForEach(store.sessions) { session in
+                                if store.openRowID == session.id {
+                                    // **No `.id()` on either branch.** `ForEach`
+                                    // already gives each row the identity
+                                    // `scrollTo` needs, and tagging both branches
+                                    // with the same one made SwiftUI treat the
+                                    // closed row and the open row as the same view:
+                                    // the panel resized for a row that went on
+                                    // drawing itself shut.
+                                    OpenRow(session: session)
+                                } else {
+                                    // **One row is open at a time, and it is the
+                                    // subject** (§8.2): everything else on the list
+                                    // drops to `45%` for as long as it is, which is
+                                    // the same value an answer in flight takes and
+                                    // the same statement — this is not the thing
+                                    // you are looking at.
+                                    SessionRow(session: session)
+                                        .opacity(store.openRowID == nil ? 1 : 0.45)
+                                }
+                            }
 
-                            if store.isRecentExpanded {
-                                ForEach(store.recentDepartures) { departure in
-                                    RetiredRow(departure: departure)
+                            if !store.recentDepartures.isEmpty {
+                                RecentSeam(count: store.recentDepartures.count)
+
+                                if store.isRecentExpanded {
+                                    ForEach(store.recentDepartures) { departure in
+                                        RetiredRow(departure: departure)
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                .frame(
-                    width: store.currentPanelSize.width
-                        - PanelMetrics.sessionRowGutter * 2,
-                    height: PanelMetrics.sessionViewportHeight(
-                        liveRowCount: store.sessions.count,
-                        openRowHeight: store.openRowHeight,
-                        retiredRowCount: store.recentDepartures.count,
-                        isRecentExpanded: store.isRecentExpanded
+                    .frame(
+                        width: store.currentPanelSize.width
+                            - PanelMetrics.sessionRowGutter * 2,
+                        height: PanelMetrics.sessionViewportHeight(
+                            liveRowCount: store.sessions.count,
+                            openRowHeight: store.openRowHeight,
+                            retiredRowCount: store.recentDepartures.count,
+                            isRecentExpanded: store.isRecentExpanded
+                        )
                     )
-                )
-                .scrollIndicators(.hidden)
+                    .scrollIndicators(.hidden)
+                    .onChange(of: store.openRowID) { _, opened in
+                        guard let opened else { return }
+                        withAnimation(PanelMotion.slot(isOpening: true)) {
+                            list.scrollTo(opened, anchor: .top)
+                        }
+                    }
+                    .onChange(of: store.sessions.map(\.id)) { _, _ in
+                        guard let opened = store.openRowID else { return }
+                        list.scrollTo(opened, anchor: .top)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -1110,6 +1143,13 @@ private struct OpenRow: View {
                 color: NotchPalette.sessionTitleDrawingColor,
                 lineHeight: PanelMetrics.sessionRowTitleHeight
             )
+            // **The row's text is still the Thread** (§3, §6.6). Opening a row
+            // takes nothing away from it: the two targets are the two answers to
+            // *what do I want with this row*, and an open row still has both.
+            // The chevron sits inside this and keeps its own click, because a
+            // descendant's gesture takes precedence over an ancestor's.
+            .contentShape(Rectangle())
+            .onTapGesture { store.open(session) }
         }
     }
 
@@ -1133,8 +1173,26 @@ private struct OpenRow: View {
         }
     }
 
-    /// §11 rule 04: one control where three will stand.
+    /// The three answers, or §11 rule 04's one control where three would stand.
+    ///
+    /// **Which of the two is drawn is a fact about this request** rather than
+    /// about its product or its status: a row whose connection is still held
+    /// can be answered here, and one whose cannot says where to answer it
+    /// instead (§11 rule 06). No white ground is drawn anywhere on the second —
+    /// the affirmative ground is the return key made visible, and drawing it
+    /// where there is nothing for the return key to do is a promise made
+    /// quietly, which is why a greyed-out `Approve` is worse than none at all.
+    @ViewBuilder
     private var answerRow: some View {
+        if let shape = session.request?.answerRow {
+            AnswerRow(session: session, shape: shape)
+        } else {
+            readingControl
+        }
+    }
+
+    /// §11 rule 04: one control where three will stand.
+    private var readingControl: some View {
         HStack(spacing: 0) {
             Button {
                 store.open(session)
@@ -1199,6 +1257,363 @@ private struct OpenRowChevron: View {
             .onHover { isHovered = $0 }
             .accessibilityLabel("Collapse this request")
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// The three objects at the foot of an open row: the field, the refusal and
+/// the affirmative (`answer-in-notch.md` §7).
+///
+/// **The white ground is the return key made visible.** Whichever of the two
+/// controls holds it is what `⏎` will do, and exactly one force moves it —
+/// typing, onto the answer that carries text, because a note cannot travel with
+/// a yes (§6). Neither control moves as the ground crosses between them: both
+/// are their own text plus `12` a side, whether they are holding it or not.
+///
+/// A form with one answer omits the refusal and the field takes the space.
+private struct AnswerRow: View {
+    @EnvironmentObject private var store: MonitorStore
+    let session: MonitoredSession
+    let shape: AnswerRowShape
+
+    var body: some View {
+        HStack(spacing: 8) {
+            AnswerField(
+                identity: "\(session.id)#\(store.answerDraftGeneration)",
+                placeholder: shape.placeholder,
+                initialText: store.answerDraft,
+                // §8 state 01: an answer in flight stops taking keys as well as
+                // clicks. The caret goes with it, so nothing is typed into a
+                // row that has already been answered.
+                takesKeys: !store.isAnswerInFlight,
+                onEdit: { store.answerDraftChanged(to: $0) },
+                onReturn: { store.takeAnswer(store.answerGround) },
+                onEscape: { store.closeOpenRow() }
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: PanelMetrics.answerRowHeight)
+
+            if let refusal = shape.refusal {
+                AnswerControl(
+                    label: refusal,
+                    holdsGround: store.answerGround == .refusal
+                ) {
+                    store.takeAnswer(.refusal)
+                }
+            }
+
+            AnswerControl(
+                label: shape.affirmative,
+                holdsGround: store.answerGround == .affirmative
+            ) {
+                store.takeAnswer(.affirmative)
+            }
+        }
+        .frame(height: PanelMetrics.answerRowHeight)
+        // §8 state 01: in flight, the field and both controls drop to `45%` and
+        // stop taking anything. **Nothing resizes** — no spinner, no progress,
+        // no new mark: the wait is a few hundred milliseconds, and anything
+        // drawn to fill it would outlive the thing it described.
+        .opacity(store.isAnswerInFlight ? 0.45 : 1)
+        .allowsHitTesting(!store.isAnswerInFlight)
+        .padding(.top, 10 - PanelMetrics.sessionRowLineSpacing)
+    }
+}
+
+/// One answer: the ground when it holds it, its own text when it does not.
+///
+/// §6.6, in three clauses. **A click takes the answer it lands on**, whether or
+/// not the ground is there — there is no select-then-confirm here, because the
+/// confirm would be a second control saying what the first already said.
+/// **Hover moves nothing**: an answer under the pointer takes the list's own
+/// hover fill and the ground stays where the typing left it, because the ground
+/// is a statement about `⏎` and a pointer crossing an answer is not an act.
+/// And the width is the same either way, so nothing moves as the ground
+/// crosses.
+private struct AnswerControl: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    let label: String
+    let holdsGround: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(
+                holdsGround
+                    ? Color(NotchPalette.chipOnLightDrawingColor)
+                    : NotchPalette.reading
+            )
+            .fixedSize()
+            .padding(.horizontal, 12)
+            .frame(height: PanelMetrics.answerRowHeight)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: PanelMetrics.machineTextCornerRadius,
+                    style: .continuous
+                )
+                .fill(ground)
+            )
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .onTapGesture(perform: action)
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            // §13.3: what the ground says in ink, spoken. It is the one piece
+            // of state on this row that is drawn only as brightness, so a
+            // reader who cannot see it would otherwise not know what `⏎` does.
+            .accessibilityValue(holdsGround ? "Return takes this" : "")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { action() }
+    }
+
+    /// White while it is what `⏎` does; the list's own hover fill under the
+    /// pointer; nothing otherwise.
+    ///
+    /// A ground that has not finished arriving is drawn but is not yet a target
+    /// (§6.3) — it is dimmed rather than hidden, because the eye is already
+    /// following it down the row and something that appears late reads as a
+    /// second object.
+    private var ground: Color {
+        guard !holdsGround else {
+            return NotchPalette.spotlight.opacity(store.isAffirmativeArmed ? 1 : 0.45)
+        }
+        return Color.white.opacity(isHovered ? 0.12 : 0)
+    }
+}
+
+/// The field, which is an AppKit text view and has to be.
+///
+/// **The caret is the one thing on this surface that ticks, and it must not be
+/// ours** (§13.2). A blinking caret drawn from SwiftUI is precisely the
+/// continuously running animation the overlay forbids (`AGENTS.md` §7): it
+/// would invalidate the whole panel — `PanelContour` and every text measurement
+/// — twice a second for as long as a row is open. Hosted here, the text system
+/// draws it into its own layer, which is the same division that already sends
+/// persistent motion to Core Animation.
+///
+/// **The text never reaches `@Published` either**, for the same reason: a
+/// keystroke is not a layout change. What the store publishes is where the
+/// ground is, which changes at most once per row.
+private struct AnswerField: NSViewRepresentable {
+    /// Which row this field belongs to, and which text the store has put in
+    /// it — the only two things that refill it.
+    ///
+    /// §10: what was typed stays with its row for as long as that row lives, so
+    /// the text view is refilled when the row changes and left alone otherwise
+    /// — refilling it on every pass would put the caret back to the start under
+    /// somebody's hands. The second half of the identity is
+    /// ``MonitorStore/answerDraftGeneration``, which moves when the store itself
+    /// replaces the text: an answer that landed, or the next question of a set.
+    let identity: String
+    let placeholder: String
+    let initialText: String
+    let takesKeys: Bool
+    let onEdit: (String) -> Void
+    let onReturn: () -> Void
+    let onEscape: () -> Void
+
+    func makeNSView(context: Context) -> AnswerFieldView {
+        let view = AnswerFieldView()
+        view.delegate = context.coordinator
+        view.placeholder = placeholder
+        view.string = initialText
+        view.isEditable = takesKeys
+        context.coordinator.identity = identity
+        return view
+    }
+
+    func updateNSView(_ view: AnswerFieldView, context: Context) {
+        context.coordinator.onEdit = onEdit
+        context.coordinator.onReturn = onReturn
+        context.coordinator.onEscape = onEscape
+        view.placeholder = placeholder
+        view.isEditable = takesKeys
+        guard context.coordinator.identity != identity else { return }
+        context.coordinator.identity = identity
+        view.string = initialText
+        view.needsDisplay = true
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onEdit: onEdit, onReturn: onReturn, onEscape: onEscape)
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var identity: String?
+        var onEdit: (String) -> Void
+        var onReturn: () -> Void
+        var onEscape: () -> Void
+
+        init(
+            onEdit: @escaping (String) -> Void,
+            onReturn: @escaping () -> Void,
+            onEscape: @escaping () -> Void
+        ) {
+            self.onEdit = onEdit
+            self.onReturn = onReturn
+            self.onEscape = onEscape
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            view.needsDisplay = true
+            onEdit(view.string)
+        }
+
+        /// The three keys the panel answers to, and they are the field's own
+        /// (§9.2).
+        ///
+        /// `⌘⏎`, the arrows, the digits, `Space` and `⇥` are deliberately
+        /// unbound: a second way to approve would make the white ground
+        /// advisory rather than definitive, and the whole safety of this
+        /// surface rests on the ground being the literal truth about `⏎`.
+        func textView(
+            _ view: NSTextView,
+            doCommandBy selector: Selector
+        ) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                onReturn()
+                return true
+            case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+                // `⌥⏎`, which AppKit binds here as well. `⇧⏎` does **not**
+                // arrive as this and is handled in ``AnswerFieldView/keyDown``
+                // — measured on Release, it arrived as `insertNewline:` and
+                // sent the answer, because the standard binding only separates
+                // the two inside a field editor and this is a plain text view.
+                view.insertText("\n", replacementRange: view.selectedRange())
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                onEscape()
+                return true
+            default:
+                return false
+            }
+        }
+    }
+}
+
+/// The text view itself: one line of `13` pt on the panel's recessed step.
+///
+/// It takes the caret when the row opens (§6.6), so a refusal costs a sentence
+/// and a return and no travel at all — which is the whole of why denial is the
+/// cheap direction (§6.4).
+final class AnswerFieldView: NSTextView {
+    var placeholder: String = ""
+
+    /// `⇧⏎` puts a new line in the field, and only `⏎` sends (§9.2).
+    ///
+    /// **Read off the event rather than left to the binding table.** In a field
+    /// editor `⇧⏎` is `insertNewlineIgnoringFieldEditor:`; in a plain text view
+    /// it is `insertNewline:`, which is what `⏎` is — so the one key that must
+    /// not send was sending. A refusal that explains itself is often two
+    /// sentences and an alternative command is often two lines, and this is the
+    /// only way to get one, which is what lets `⏎` be unambiguous.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36, event.modifierFlags.contains(.shift) {
+            insertText("\n", replacementRange: selectedRange())
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    /// The panel's own recessed step, which is where a field belongs on it: the
+    /// one surface a person is meant to put something into, drawn as the one
+    /// surface that is set into the row.
+    override init(frame: NSRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        configure()
+    }
+
+    /// **Through `NSTextView`'s own `init(frame:)`, never the designated
+    /// initialiser with a `nil` container.** A text view built with no
+    /// container has no text system behind it: measured on Release, every
+    /// keystroke reached `keyDown` and then fell straight through to the
+    /// panel's, because there was nothing there to insert into — a field that
+    /// took the caret and swallowed everything typed into it.
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configure()
+    }
+
+    convenience init() {
+        self.init(frame: NSRect(x: 0, y: 0, width: 200, height: 28))
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configure()
+    }
+
+    private func configure() {
+        drawsBackground = false
+        isRichText = false
+        importsGraphics = false
+        allowsUndo = true
+        isVerticallyResizable = false
+        isHorizontallyResizable = false
+        font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        textColor = NotchPalette.countsSessionDrawingColor
+        insertionPointColor = .white
+        textContainerInset = NSSize(width: 8, height: 5)
+        textContainer?.lineFragmentPadding = 0
+        // A `13` pt line in a `28` pt box, so a second line scrolls rather than
+        // growing the row: every height in §12 is fixed before the first
+        // keystroke.
+        textContainer?.widthTracksTextView = true
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: PanelMetrics.answerRowHeight)
+    }
+
+    /// The placeholder, drawn here rather than by a view above.
+    ///
+    /// A SwiftUI overlay would have to be told when the field stopped being
+    /// empty, which means publishing every keystroke — the one thing this view
+    /// exists to avoid.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholder.isEmpty else { return }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.systemFont(ofSize: 13),
+            .foregroundColor: NotchPalette.labelDrawingColor
+        ]
+        (placeholder as NSString).draw(
+            at: NSPoint(x: textContainerInset.width, y: textContainerInset.height),
+            withAttributes: attributes
+        )
+    }
+
+    /// Takes the caret as soon as it has a window to take it in.
+    ///
+    /// The panel becomes key in the same publish that opens the row, so this and
+    /// ``OverlayPanel/latches`` are two halves of one movement — and if the
+    /// window is not key yet, ``windowDidBecomeKey`` finishes the job.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey),
+            name: NSWindow.didBecomeKeyNotification,
+            object: window
+        )
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.makeFirstResponder(self)
+        }
+    }
+
+    @objc private func windowDidBecomeKey() {
+        window?.makeFirstResponder(self)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }
 
@@ -1373,7 +1788,10 @@ private struct RequestBodyView: View {
             if !layout.options.isEmpty {
                 Spacer().frame(height: PanelMetrics.optionListSpacing)
                 ForEach(layout.options) { option in
-                    OptionRow(option: option)
+                    OptionRow(
+                        option: option,
+                        allowsSeveralAnswers: layout.allowsSeveralAnswers
+                    )
                 }
             }
         }
@@ -1423,28 +1841,41 @@ private struct RequestBodyView: View {
     }
 }
 
-/// One option a question offers, drawn but not yet selectable.
+/// One option a question offers.
 ///
-/// The numeral, the label and the description on one `24` pt line (§5.1). It
-/// takes no click in this form: with no way to send an answer, an option that
-/// looked selectable would be the same quiet promise the white ground would be.
+/// The numeral, the label and the description on one `24` pt line (§5.1). **The
+/// option the ground is on carries the white ground** across the full content
+/// width; one under the pointer takes the list's own hover fill instead, and
+/// the ground does not move to meet it (§6.6) — hover is not an act.
+///
+/// On a row that can only be read it takes no click: with no way to send an
+/// answer, an option that looked selectable would be the same quiet promise a
+/// white ground would be (§11 rule 03).
 private struct OptionRow: View {
+    @EnvironmentObject private var store: MonitorStore
+
     let option: AgentQuestionOption
+    let allowsSeveralAnswers: Bool
+
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 0) {
-            Text("\(option.id + 1)")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(NotchPalette.optionNumeral)
-                .frame(width: 19, alignment: .leading)
+            handle
             Text(option.label)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(NotchPalette.sessionTitle)
+                .foregroundStyle(
+                    holdsGround
+                        ? Color(NotchPalette.chipOnLightDrawingColor)
+                        : NotchPalette.sessionTitle
+                )
                 .fixedSize()
             if let description = option.description {
                 Text(description)
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(NotchPalette.label)
+                    .foregroundStyle(
+                        holdsGround ? NotchPalette.readingOnLight : NotchPalette.label
+                    )
                     .padding(.leading, 12)
                     .lineLimit(1)
             }
@@ -1452,6 +1883,78 @@ private struct OptionRow: View {
         }
         .padding(.leading, 9)
         .frame(height: PanelMetrics.optionRowHeight)
+        .background(
+            RoundedRectangle(
+                cornerRadius: PanelMetrics.machineTextCornerRadius,
+                style: .continuous
+            )
+            .fill(ground)
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture { if isAnswerable { store.takeAnswer(.option(option.id)) } }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(
+            allowsSeveralAnswers
+                ? (isTicked ? "Ticked" : "Not ticked")
+                : (holdsGround ? "Return takes this" : "")
+        )
+        .accessibilityAddTraits(isAnswerable ? .isButton : [])
+        .accessibilityAction { if isAnswerable { store.takeAnswer(.option(option.id)) } }
+    }
+
+    /// The numeral, or the box that replaces it where several may be taken.
+    ///
+    /// §5.5: with `multiSelect` the numerals become `12 × 12` boxes — the
+    /// recessed step empty, the theme ink's lit value filled. That is the third
+    /// reader of the user's own hue (`panel-v2.md` §2), and it is a box rather
+    /// than a digit because a digit would promise a key that does not tick.
+    @ViewBuilder
+    private var handle: some View {
+        if allowsSeveralAnswers {
+            RoundedRectangle(
+                cornerRadius: PanelMetrics.machineTextCornerRadius,
+                style: .continuous
+            )
+            .fill(
+                isTicked
+                    ? NotchPalette.badgeInk(store.aggregateInk).on
+                    : NotchPalette.recessedGround
+            )
+            .frame(width: 12, height: 12)
+            .frame(width: 19, alignment: .leading)
+        } else {
+            Text("\(option.id + 1)")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(
+                    holdsGround ? NotchPalette.readingOnLight : NotchPalette.optionNumeral
+                )
+                .frame(width: 19, alignment: .leading)
+        }
+    }
+
+    /// Whether this row's request can be answered here at all.
+    ///
+    /// Asked of the request rather than passed down: these views are drawn for
+    /// the one open row and for nothing else, so the store's own answer is the
+    /// exact one (§11 rule 06).
+    private var isAnswerable: Bool {
+        store.openSession?.request?.canBeAnswered == true
+    }
+
+    private var isTicked: Bool {
+        isAnswerable && store.isOptionTicked(option.id)
+    }
+
+    private var holdsGround: Bool {
+        isAnswerable && store.answerGround == .option(option.id)
+    }
+
+    private var ground: Color {
+        guard !holdsGround else {
+            return NotchPalette.spotlight.opacity(store.isAffirmativeArmed ? 1 : 0.45)
+        }
+        return Color.white.opacity(isHovered && isAnswerable ? 0.12 : 0)
     }
 }
 
@@ -1710,7 +2213,11 @@ private struct SessionRowContent: View {
                         lineHeight: PanelMetrics.sessionRowTitleHeight
                     )
 
-                    if let preview = session.preview {
+                    // **The last thing said about this row**, which is the
+                    // product's own preview until an answer leaves from here
+                    // and this app has something newer to say (§8 states 02
+                    // and 03). One line, in one ink, either way.
+                    if let preview = store.previewLine(for: session) {
                         SessionRowText(
                             text: preview,
                             font: .systemFont(ofSize: 13, weight: .light),

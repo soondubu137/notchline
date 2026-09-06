@@ -218,6 +218,19 @@ enum NotchPalette {
         green: 0x24 / 255,
         blue: 0x24 / 255
     )
+    /// A reading on the white ground: an option's numeral and its description
+    /// while that option holds the ground.
+    ///
+    /// `#5A5A5E` (§5.1). The dark end of the same inversion the badge and the
+    /// waiting mark already make — the label goes to ``chipOnLight`` and
+    /// everything beside it goes here, so the option keeps its two levels on
+    /// white exactly as it has them on black.
+    static let readingOnLight = Color(
+        red: 0x5A / 255,
+        green: 0x5A / 255,
+        blue: 0x5E / 255
+    )
+
     /// An option's numeral, one step below its own description.
     ///
     /// `#6E6E73` (§5.1), which is dimmer than ``label`` — the numeral is a

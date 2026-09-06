@@ -43,6 +43,19 @@ protocol AgentMonitoring: Sendable {
     /// product that leaves files answers even before it can measure them, so
     /// that Settings can draw the row it is going to draw anyway.
     func diskFootprint() async -> AgentDiskFootprintReport
+    /// Sends one answer back down the connection its request arrived on.
+    ///
+    /// Returns whether the whole answer reached the product. `false` is an
+    /// ordinary outcome rather than a bug — the product may have been answered
+    /// in its own window and killed the hook process, and this is the only
+    /// moment that can be discovered (``HookReplyRegistry``). It is
+    /// [`answer-in-notch.md`](../../docs/answer-in-notch.md) §8's *not
+    /// delivered*, and the row says so.
+    ///
+    /// **The ticket rather than the row**, because the connection is what an
+    /// answer travels on and a row is only where it was typed. A ticket no
+    /// longer held answers nothing, which is what makes a stale click harmless.
+    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool
     func hookSetupStatus() async -> HookSetupStatus
     func installHooks() async throws
     func removeHooks() async throws
@@ -60,6 +73,14 @@ extension AgentMonitoring {
     /// arrives over the app server and leaves no files anywhere. Only a product
     /// that writes something the user might want back overrides this.
     func diskFootprint() async -> AgentDiskFootprintReport { .leavesNothing }
+
+    /// Nothing delivered, which is the truthful answer for a provider with no
+    /// hook transport at all — the drawing specimens, and the doubles a test
+    /// builds a list out of. A row backed by one of these never offers an
+    /// affirmative in the first place, because it holds no ticket.
+    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool {
+        false
+    }
 }
 
 actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
@@ -1041,6 +1062,16 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// health can change without this app having caused it, so the cached
     /// reading is dropped here. The other is the file changing underneath us,
     /// which the registrar watches for itself.
+    /// One answer, on the connection its request is still being held on.
+    ///
+    /// A pass-through, and deliberately nothing more: which bytes a product
+    /// will act on is its vocabulary's business (``RequestAnswering``), and
+    /// which connection they go down is the registry's. This is the boundary
+    /// the store reaches both through.
+    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool {
+        await hookEvents.answer(answer, on: ticket)
+    }
+
     func hookSetupStatus() async -> HookSetupStatus {
         await hookRegistrar.invalidateRegistration()
         return HookSetupStatus.card(

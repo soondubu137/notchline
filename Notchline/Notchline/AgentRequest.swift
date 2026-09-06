@@ -139,6 +139,113 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         /// The content width, no ground: sentences a person is meant to read.
         case prose
     }
+
+    /// The set this request asks, however many questions that turns out to be.
+    ///
+    /// **One shape for both question forms.** A question with nothing to pick is
+    /// a set of one whose options are empty, which is what lets §5.3's advance,
+    /// the count on the caption line and the answer that goes back be written
+    /// once rather than twice — and form 04 is then the ordinary case of a set
+    /// with one member rather than a case of its own.
+    ///
+    /// Empty on every form that is not a question, because nothing there is
+    /// answered by choosing.
+    nonisolated var askedQuestions: [AgentQuestion] {
+        switch form {
+        case let .questions(questions):
+            questions
+        case let .question(text):
+            [
+                AgentQuestion(
+                    id: 0,
+                    header: nil,
+                    text: text,
+                    options: [],
+                    allowsSeveralAnswers: false
+                )
+            ]
+        case .command, .document, .unsupported:
+            []
+        }
+    }
+
+    /// What this request's answer row draws, or `nil` where it can only be read.
+    ///
+    /// **The words are the form's, and they are not interchangeable.** A plan is
+    /// `Accept` / `Send it back` and a command is `Approve` / `Deny`, because
+    /// what each one grants is a different kind of thing: a command runs once,
+    /// and a plan is a piece of work agreed to. §4.3 is the other half of that —
+    /// accepting a plan here accepts it into whatever mode the session already
+    /// has, and the row says nothing about a mode it did not set.
+    ///
+    /// `nil` on ``Form/unsupported`` and on every request no connection is being
+    /// held for, which is §11's reading form: one control stands where three
+    /// would, and no white ground is drawn anywhere.
+    nonisolated var answerRow: AnswerRowShape? {
+        guard canBeAnswered else { return nil }
+        switch form {
+        case .command:
+            return AnswerRowShape(
+                affirmative: "Approve",
+                refusal: "Deny",
+                placeholder: "what to do instead…",
+                affirmativeNotice: "Approved",
+                refusalNotice: "Denied"
+            )
+        case .document:
+            return AnswerRowShape(
+                affirmative: "Accept",
+                refusal: "Send it back",
+                placeholder: "or say what to change…",
+                affirmativeNotice: "Accepted",
+                refusalNotice: "Sent back"
+            )
+        case .questions, .question:
+            // **One answer, and the field takes the space** (§7). A question has
+            // no refusal to carry the text, because the text *is* the answer —
+            // which is also why typing moves the ground here rather than away.
+            return AnswerRowShape(
+                affirmative: "Send",
+                refusal: nil,
+                placeholder: "your answer…",
+                affirmativeNotice: "Answered",
+                refusalNotice: "Answered"
+            )
+        case .unsupported:
+            return nil
+        }
+    }
+}
+
+/// The three objects at the foot of an open row, in this request's own words.
+///
+/// **Derived from the form, like ``AgentRequest/setting``, and for the same
+/// reason**: a stored set of labels is one that could be set wrong, and the case
+/// already carries the answer. A shape with no ``refusal`` is §7's one-answer
+/// form — the field takes the space the refusal would have had, and nothing
+/// moves.
+nonisolated struct AnswerRowShape: Sendable, Equatable {
+    /// What the white ground begins on, and what `⏎` does until something is
+    /// typed (§6).
+    let affirmative: String
+    /// The answer that carries the text, where the form has one.
+    let refusal: String?
+    /// What the empty field says it is for.
+    ///
+    /// Its own words per form: a refusal's field asks what to do instead, and a
+    /// question's asks for the answer.
+    let placeholder: String
+
+    /// What the row's preview line says once each of them has been sent (§8
+    /// state 02).
+    ///
+    /// Past tense, and one word where one will do: the row *is* the
+    /// confirmation, so a sentence explaining what a person just did would be
+    /// read once and then be in the way. Carried rather than derived from the
+    /// labels above, because "the past tense of `Send it back`" is a rule about
+    /// English rather than about this surface.
+    let affirmativeNotice: String
+    let refusalNotice: String
 }
 
 /// One question out of a set, in the order the product asked them.

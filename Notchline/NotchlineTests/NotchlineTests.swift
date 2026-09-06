@@ -26007,7 +26007,9 @@ for line in sys.stdin:
         #expect(store.isLatched)
 
         store.pointerExitedPanel()
-        // Long past the collapse dwell, and the panel is still open.
+        // Long past the collapse dwell, and the panel is still open. A fixed
+        // wait is right for this half: it asserts that nothing happened, and
+        // waiting longer can only make it stronger.
         try? await Task.sleep(for: .milliseconds(400))
         #expect(store.isExpanded)
 
@@ -26015,8 +26017,7 @@ for line in sys.stdin:
         store.closeOpenRow()
         #expect(!store.isLatched)
         store.pointerExitedPanel()
-        try? await Task.sleep(for: .milliseconds(400))
-        #expect(!store.isExpanded)
+        #expect(await eventually { !store.isExpanded })
     }
 
     /// Closing the panel takes the open row with it.
@@ -26045,6 +26046,575 @@ for line in sys.stdin:
         store.collapse()
         #expect(store.openRowID == nil)
         #expect(!store.isLatched)
+    }
+
+    /// The white ground begins on the affirmative and typing moves it.
+    ///
+    /// §6, and it is the whole selection rule: the brightest object on the row
+    /// is always what `⏎` will do. **One force moves it in this version** — the
+    /// person's own typing, onto the answer that carries text, because a note
+    /// cannot travel with a yes. On a form whose one answer already carries the
+    /// text there is nowhere for it to go, so it does not move at all.
+    @Test @MainActor
+    func theGroundBeginsOnTheAffirmativeAndOnlyTypingMovesIt() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+        #expect(store.answerGround == .affirmative)
+
+        store.answerDraftChanged(to: "use ripgrep instead")
+        #expect(store.answerGround == .refusal)
+        #expect(store.answerDraft == "use ripgrep instead")
+
+        // And back, because the rule reads the field rather than remembering a
+        // gesture.
+        store.answerDraftChanged(to: "")
+        #expect(store.answerGround == .affirmative)
+    }
+
+    /// A form with one answer omits the refusal, and the ground never leaves it.
+    ///
+    /// §7: `Send` stands alone and the field takes the space the refusal would
+    /// have had. Typing moves the ground *onto* it (§5.4) rather than away, so
+    /// on this form the ground has nowhere else to be.
+    @Test @MainActor
+    func aFormWithOneAnswerOmitsTheRefusalAndKeepsTheGround() async throws {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "AskUserQuestion",
+                form: .question("Which database should this use?"),
+                replyTicket: 1
+            )
+        )
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+
+        let shape = try #require(bench.row.request?.answerRow)
+        #expect(shape.affirmative == "Send")
+        #expect(shape.refusal == nil)
+
+        #expect(store.answerGround == .affirmative)
+        store.answerDraftChanged(to: "Postgres")
+        #expect(store.answerGround == .affirmative)
+    }
+
+    /// A plan's answers are its own words, and a command's are its own.
+    ///
+    /// §4.3: a plan is `Accept` / `Send it back`, because what is granted is a
+    /// piece of work agreed to rather than one command run once — and accepting
+    /// it here accepts it into whatever mode the session already has. The row
+    /// says nothing about a mode it did not set, and neither word is invented
+    /// for it: both are answers the product already offers.
+    @Test @MainActor
+    func aPlanIsAcceptedAndACommandIsApproved() {
+        let plan = AgentRequest(
+            id: "c-1",
+            toolName: "ExitPlanMode",
+            form: .document("Read the file, then write the fix."),
+            replyTicket: 1
+        )
+        #expect(plan.answerRow?.affirmative == "Accept")
+        #expect(plan.answerRow?.refusal == "Send it back")
+
+        let command = AgentRequest(
+            id: "c-2",
+            toolName: "Bash",
+            form: .command("ls"),
+            replyTicket: 1
+        )
+        #expect(command.answerRow?.affirmative == "Approve")
+        #expect(command.answerRow?.refusal == "Deny")
+
+        // And a request no connection is held for draws no answer row at all:
+        // §11 rule 03, one control where three would stand and no white ground
+        // anywhere, because the affirmative ground is the return key made
+        // visible.
+        #expect(
+            AgentRequest(id: "c-3", toolName: "Bash", form: .command("ls")).answerRow == nil
+        )
+    }
+
+    /// Collapsing a row sends nothing and keeps what was typed into it.
+    ///
+    /// §3.2 and §10: the chevron and `⎋` leave the request exactly where it was
+    /// and hold the note with its row for as long as that row lives, so
+    /// reopening resumes rather than starting again. What ends is the row's
+    /// openness and nothing else.
+    @Test @MainActor
+    func collapsingARowSendsNothingAndKeepsWhatWasTyped() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        store.answerDraftChanged(to: "delete only the artefacts")
+
+        store.closeOpenRow()
+        #expect(store.openRowID == nil)
+        #expect(await service.answersTaken().isEmpty)
+
+        store.toggleOpenRow(row)
+        #expect(store.answerDraft == "delete only the artefacts")
+        // And the ground resumes with it, because it reads the field.
+        #expect(store.answerGround == .refusal)
+    }
+
+    /// An answer reaches the product, and the row it left says so.
+    ///
+    /// §8 state 02 and §8.1: the row returns to `80` and says what was sent on
+    /// the line it already draws, and **it is not retired** — a granted command
+    /// is a Turn that is now running, which is the least finished thing on the
+    /// panel. §8.3: the panel does not close, and with nothing left waiting it
+    /// unlatches instead.
+    @Test @MainActor
+    func anAnsweredRowSaysWhatWasSentAndStaysOnTheList() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 7
+            )
+        )
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { store.answerNotices[row.id] != nil })
+
+        #expect(await service.answersTaken() == [.grant])
+        #expect(await service.ticketsUsed() == [7])
+        #expect(store.previewLine(for: row) == "Approved")
+        #expect(store.sessions.contains { $0.id == row.id })
+        #expect(store.openRowID == nil)
+        #expect(!store.isLatched)
+    }
+
+    /// A refusal carries what to do instead, and an empty field a plain no.
+    ///
+    /// §6.4: an empty `Deny` sends a plain no, and a `Deny` carrying text sends
+    /// the text — the third answer both products actually offer, *no, and here
+    /// is what to do instead*. Measured against Claude Code 2.1.261, that
+    /// message reaches the model as the refused tool's own error.
+    @Test @MainActor
+    func aRefusalCarriesTheTextAndAnEmptyOneCarriesNothing() async {
+        for note in ["", "write it under build/ instead"] {
+            let bench = answeringStore(
+                request: AgentRequest(
+                    id: "c-1",
+                    toolName: "Bash",
+                    form: .command("rm -rf /"),
+                    replyTicket: 1
+                )
+            )
+            let (store, service, row) = bench
+            store.toggleOpenRow(row)
+            #expect(await eventually { store.isAffirmativeArmed })
+            store.answerDraftChanged(to: note)
+
+            store.takeAnswer(.refusal)
+            #expect(await eventually { store.answerNotices[row.id] != nil })
+            #expect(await service.answersTaken() == [.refuse(note.isEmpty ? nil : note)])
+            #expect(store.previewLine(for: row) == "Denied")
+        }
+    }
+
+    /// An answer that did not arrive keeps its text and says why.
+    ///
+    /// §8 state 03. The product may have been answered in its own window and
+    /// killed the hook process, which is discovered only when the write fails —
+    /// so this is an ordinary outcome rather than a defect. The reason goes on
+    /// the preview line **in the preview's own ink**: this app has no failure
+    /// ink, and inventing one for a transport error would make it louder than a
+    /// Turn that genuinely failed.
+    @Test @MainActor
+    func anAnswerThatDidNotArriveKeepsItsTextAndSaysWhy() async throws {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            ),
+            delivers: false
+        )
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.answerDraftChanged(to: "delete only the artefacts")
+
+        store.takeAnswer(.refusal)
+        #expect(await eventually { store.answerNotices[row.id] != nil })
+
+        let said = try #require(store.previewLine(for: row))
+        #expect(said.hasPrefix("Not sent"))
+        // The text is still the row's, so reopening finds it where it was left.
+        store.toggleOpenRow(row)
+        #expect(store.answerDraft == "delete only the artefacts")
+    }
+
+    /// A request settled somewhere else closes its row within one publish.
+    ///
+    /// §8 state 04: granted in the product, cancelled, or the Thread gone. It is
+    /// the one close the user did not ask for, which is why it is the row
+    /// changing state rather than a message about a row — and what was typed
+    /// goes with it, because there is nothing left to send it to.
+    @Test @MainActor
+    func aRequestSettledElsewhereClosesItsRowWithinOnePublish() async {
+        let waiting = answerableSession(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let service = AnsweringMonitoringStub(agent: .claudeCode, sessions: [waiting])
+        let store = MonitorStore(
+            displays: [],
+            services: [service],
+            initialSnapshot: AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [waiting],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        store.toggleOpenRow(waiting)
+        store.answerDraftChanged(to: "half a sentence")
+        #expect(store.openRowID == waiting.id)
+
+        // The same row, now running rather than asking.
+        await service.publish([
+            MonitoredSession(
+                agent: .claudeCode,
+                threadID: waiting.threadID,
+                turnID: waiting.turnID,
+                projectName: waiting.projectName,
+                title: waiting.title,
+                preview: waiting.preview,
+                status: .running,
+                startedAt: waiting.startedAt
+            )
+        ])
+        store.refreshNow()
+        #expect(await eventually { store.openRowID == nil })
+        // And the note went with the request it was for.
+        store.toggleOpenRow(waiting)
+        #expect(store.answerDraft == "")
+    }
+
+    /// An answer cannot be taken until it has finished arriving.
+    ///
+    /// §6.3: answering one request opens the next row, which puts something the
+    /// reader has never seen under a pointer that is already there — and the
+    /// affirmative that arrives lands exactly where the affirmative just clicked
+    /// was, so a pointer has to do nothing at all to answer twice. The ground is
+    /// armed by the arrival it already animates rather than by a delay of its
+    /// own.
+    @Test @MainActor
+    func anAnswerCannotBeTakenUntilItHasFinishedArriving() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+
+        #expect(!store.isAffirmativeArmed)
+        store.takeAnswer(.affirmative)
+        #expect(await service.answersTaken().isEmpty)
+        #expect(store.openRowID == row.id)
+
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { await service.answersTaken() == [.grant] })
+    }
+
+    /// Answering the last request leaves the next one open and unarmed.
+    ///
+    /// §8.2: two at once is the ordinary case rather than the edge one — a Turn
+    /// asks while a subagent it forked is already asking. **The next request
+    /// opens itself**, which is the whole notification: there is another, and
+    /// here it is, already open and already legible. Its affirmative arrives
+    /// unarmed, which is what stops the click that answered the first from
+    /// answering the second.
+    @Test @MainActor
+    func answeringOneRequestOpensTheNextUnarmed() async {
+        let first = answerableSession(
+            threadID: "t-1",
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let second = answerableSession(
+            threadID: "t-2",
+            request: AgentRequest(
+                id: "c-2",
+                toolName: "Bash",
+                form: .command("git push --force"),
+                replyTicket: 2
+            )
+        )
+        let service = AnsweringMonitoringStub(
+            agent: .claudeCode,
+            sessions: [first, second]
+        )
+        let store = MonitorStore(
+            displays: [],
+            services: [service],
+            initialSnapshot: AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [first, second],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        store.toggleOpenRow(first)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.affirmative)
+
+        #expect(await eventually { store.openRowID == second.id })
+        #expect(!store.isAffirmativeArmed)
+        // And the click that answered the first cannot answer this one.
+        store.takeAnswer(.affirmative)
+        #expect(await service.answersTaken() == [.grant])
+    }
+
+    /// The ground begins on the first option a question offers.
+    ///
+    /// §6: it begins on the affirmative, *or on the first option a question
+    /// offers* — the brightest object is always what `⏎` will do, and on a
+    /// question with something to pick that is the first thing to pick. Typing
+    /// moves it onto `Send`, because the field's words are then the answer
+    /// (§5.4).
+    @Test @MainActor
+    func theGroundBeginsOnTheFirstOptionAQuestionOffers() async {
+        let bench = answeringStore(request: questionSet(), status: .inputNeeded)
+        let (store, _, row) = bench
+        store.toggleOpenRow(row)
+
+        #expect(store.answerGround == .option(0))
+        store.answerDraftChanged(to: "neither, use SQLite")
+        #expect(store.answerGround == .affirmative)
+        store.answerDraftChanged(to: "")
+        #expect(store.answerGround == .option(0))
+    }
+
+    /// Answering one question of a set draws the next and sends nothing.
+    ///
+    /// §5.3: the set goes back as one answer, so `⏎` on question two draws
+    /// question three — the body alone changes — and **the count is what makes
+    /// that legible**: without it, an answer that appears to do nothing looks
+    /// like a failure. The next question arrives unarmed, for the same reason
+    /// the next row does (§6.3).
+    @Test @MainActor
+    func answeringOneQuestionOfASetDrawsTheNextAndSendsNothing() async throws {
+        let bench = answeringStore(request: questionSet(), status: .inputNeeded)
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        #expect(store.openRowBody?.position?.drawn == "1/2")
+
+        store.takeAnswer(.option(1))
+        #expect(store.openQuestionIndex == 1)
+        #expect(store.openRowBody?.position?.drawn == "2/2")
+        #expect(await service.answersTaken().isEmpty)
+        #expect(store.openRowID == row.id)
+        #expect(!store.isAffirmativeArmed)
+
+        // The whole set leaves on the last one, in the order it was asked.
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.option(0))
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(
+            await service.answersTaken() == [
+                .answers([
+                    AgentQuestionAnswer(question: "Which database?", answer: "Postgres"),
+                    AgentQuestionAnswer(question: "Which host?", answer: "Fly")
+                ])
+            ]
+        )
+        #expect(store.previewLine(for: row) == "Answered")
+    }
+
+    /// An option taken with text in the field carries the text as its note.
+    ///
+    /// **Nothing a person typed is thrown away.** The field is the answer where
+    /// nothing was picked (§5.4), and where something was picked it is a note
+    /// against that one question — which is the field the product's own
+    /// component writes per-question notes into, so it reaches the model rather
+    /// than being dropped on the floor.
+    @Test @MainActor
+    func anOptionTakenWithTextInTheFieldCarriesItAsThatQuestionsNote() async {
+        let bench = answeringStore(
+            request: questionSet(count: 1),
+            status: .inputNeeded
+        )
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.answerDraftChanged(to: "only if it is already installed")
+
+        store.takeAnswer(.option(0))
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(
+            await service.answersTaken() == [
+                .answers([
+                    AgentQuestionAnswer(
+                        question: "Which database?",
+                        answer: "SQLite",
+                        note: "only if it is already installed"
+                    )
+                ])
+            ]
+        )
+        _ = row
+    }
+
+    /// With several answers allowed the ground never leaves `Send`, and a click
+    /// ticks.
+    ///
+    /// §5.5: the alternative — `⏎` toggling and something else sending — would
+    /// make the brightest object on the row stop being what `⏎` does, on the one
+    /// form where a person is most likely to press it twice. So the numerals
+    /// become boxes, a click on one ticks it, and the ground stays where it
+    /// began.
+    @Test @MainActor
+    func withSeveralAnswersAllowedTheGroundNeverLeavesSendAndAClickTicks() async {
+        let bench = answeringStore(
+            request: questionSet(count: 1, allowsSeveralAnswers: true),
+            status: .inputNeeded
+        )
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        #expect(store.answerGround == .affirmative)
+
+        store.takeAnswer(.option(0))
+        #expect(store.isOptionTicked(0))
+        #expect(store.answerGround == .affirmative)
+        #expect(await service.answersTaken().isEmpty)
+
+        store.takeAnswer(.option(1))
+        #expect(store.isOptionTicked(1))
+        // And a second click on the same box unticks it.
+        store.takeAnswer(.option(1))
+        #expect(!store.isOptionTicked(1))
+
+        store.takeAnswer(.option(1))
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(
+            await service.answersTaken() == [
+                .answers([
+                    AgentQuestionAnswer(
+                        question: "Which database?",
+                        answer: "SQLite, Postgres"
+                    )
+                ])
+            ]
+        )
+        _ = row
+    }
+
+    /// `Send` with nothing in the field and nothing ticked sends nothing.
+    ///
+    /// A control that needs something to send is not a control that does
+    /// nothing: it works the moment there is an answer to carry. What it must
+    /// never do is send an empty answer, which would record a person's silence
+    /// as their choice.
+    @Test @MainActor
+    func sendWithNothingToSendSendsNothing() async {
+        let bench = answeringStore(
+            request: questionSet(count: 1, allowsSeveralAnswers: true),
+            status: .inputNeeded
+        )
+        let (store, service, _) = bench
+        store.toggleOpenRow(bench.row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        store.takeAnswer(.affirmative)
+        #expect(await service.answersTaken().isEmpty)
+        #expect(store.openRowID == bench.row.id)
+    }
+
+    /// Drawing the next question resizes the panel, and that reaches the window.
+    ///
+    /// The same failure `everyChangeThatMovesThePanelReachesTheWindow` exists
+    /// for, one step in: answering question two draws question three, and three
+    /// options are `48` points more body than one. Nothing about the row's
+    /// identity moves when it happens, so without a publish of its own the next
+    /// question is drawn into the window the last one asked for.
+    @Test @MainActor
+    func drawingTheNextQuestionResizesThePanelAndReachesTheWindow() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "AskUserQuestion",
+                form: .questions([
+                    AgentQuestion(
+                        id: 0,
+                        header: "Store",
+                        text: "Which database?",
+                        options: [
+                            AgentQuestionOption(id: 0, label: "SQLite", description: nil)
+                        ],
+                        allowsSeveralAnswers: false
+                    ),
+                    AgentQuestion(
+                        id: 1,
+                        header: "Host",
+                        text: "Which host?",
+                        options: (0 ..< 4).map {
+                            AgentQuestionOption(id: $0, label: "Host \($0)", description: nil)
+                        },
+                        allowsSeveralAnswers: false
+                    )
+                ]),
+                replyTicket: 1
+            ),
+            status: .inputNeeded
+        )
+        let (store, _, row) = bench
+        store.isExpanded = true
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        let publishers = OverlayPanelController.frameChangingPublishers(of: store)
+        var updates = 0
+        let subscription = Publishers.MergeMany(publishers)
+            .dropFirst(publishers.count)
+            .sink { updates += 1 }
+
+        let before = store.currentPanelSize
+        store.takeAnswer(.option(0))
+        #expect(store.currentPanelSize != before)
+        #expect(updates > 0)
+        subscription.cancel()
     }
 
     /// A waiting row's ground is sized for its longest word and never resizes.
@@ -29392,6 +29962,159 @@ private func codexRootThread(
 /// Whether a pid still names a process this test could signal.
 private func processIsAlive(_ pid: pid_t) -> Bool {
     kill(pid, 0) == 0
+}
+
+/// Waits for something the store does on its own time.
+///
+/// **Polled rather than slept through, and that is not a style choice.** The
+/// suite runs in parallel and every `@MainActor` test shares one main actor, so
+/// a dwell, a `Task.sleep` or a refresh is served whenever that actor is next
+/// free: a fixed wait long enough on an idle machine is a coin toss in a full
+/// run. What these tests assert is that something *happens*, not that it
+/// happens inside any particular number of milliseconds. The bound is generous
+/// for the same reason: it is paid only when something has genuinely not
+/// happened, and a bound tight enough to lose a race is a test reporting on the
+/// machine it ran on.
+@MainActor
+private func eventually(
+    within seconds: TimeInterval = 5,
+    _ isTrue: @MainActor () async -> Bool
+) async -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if await isTrue() { return true }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+    return await isTrue()
+}
+
+/// One row waiting on a request, for the answering tests.
+@MainActor
+private func answerableSession(
+    threadID: String = "t-1",
+    status: SessionStatus = .approvalNeeded,
+    request: AgentRequest
+) -> MonitoredSession {
+    MonitoredSession(
+        agent: .claudeCode,
+        threadID: threadID,
+        turnID: "u-1",
+        projectName: "notchline",
+        title: "Something",
+        preview: nil,
+        status: status,
+        startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        request: request
+    )
+}
+
+/// A question set in the shape `AskUserQuestion` sends one.
+@MainActor
+private func questionSet(
+    count: Int = 2,
+    allowsSeveralAnswers: Bool = false
+) -> AgentRequest {
+    let asked = [
+        ("Store", "Which database?", ["SQLite", "Postgres"]),
+        ("Host", "Which host?", ["Fly", "Render"])
+    ]
+    return AgentRequest(
+        id: "c-1",
+        toolName: "AskUserQuestion",
+        form: .questions(
+            asked.prefix(count).enumerated().map { index, question in
+                AgentQuestion(
+                    id: index,
+                    header: question.0,
+                    text: question.1,
+                    options: question.2.enumerated().map {
+                        AgentQuestionOption(id: $0.offset, label: $0.element, description: nil)
+                    },
+                    allowsSeveralAnswers: allowsSeveralAnswers
+                )
+            }
+        ),
+        replyTicket: 1
+    )
+}
+
+/// A store with one answerable row on it, and the provider its answer goes to.
+@MainActor
+private func answeringStore(
+    request: AgentRequest,
+    status: SessionStatus = .approvalNeeded,
+    delivers: Bool = true
+) -> (store: MonitorStore, service: AnsweringMonitoringStub, row: MonitoredSession) {
+    let row = answerableSession(status: status, request: request)
+    let service = AnsweringMonitoringStub(
+        agent: .claudeCode,
+        sessions: [row],
+        delivers: delivers
+    )
+    let store = MonitorStore(
+        displays: [],
+        services: [service],
+        initialSnapshot: AgentSnapshot(
+            agent: .claudeCode,
+            availability: .ready,
+            sessions: [row],
+            quota: .unavailable,
+            diagnostic: nil
+        )
+    )
+    return (store, service, row)
+}
+
+/// A provider that publishes a fixed list and remembers what it was asked to
+/// send.
+///
+/// It stands in for the two live services at exactly the boundary they share:
+/// which bytes a product will act on is its vocabulary's business and which
+/// connection they travel down is the registry's, so what the store can be
+/// tested against is *the answer it handed over and the ticket it named*.
+private actor AnsweringMonitoringStub: AgentMonitoring {
+    nonisolated let agent: AgentKind
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+
+    private var sessions: [MonitoredSession]
+    private let delivers: Bool
+    private var answers: [AgentAnswer] = []
+    private var tickets: [HookReplyRegistry.Ticket] = []
+
+    init(agent: AgentKind, sessions: [MonitoredSession], delivers: Bool = true) {
+        self.agent = agent
+        self.sessions = sessions
+        self.delivers = delivers
+    }
+
+    func answersTaken() -> [AgentAnswer] { answers }
+    func ticketsUsed() -> [HookReplyRegistry.Ticket] { tickets }
+
+    /// What this product says next time it is asked.
+    func publish(_ sessions: [MonitoredSession]) { self.sessions = sessions }
+
+    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool {
+        answers.append(answer)
+        tickets.append(ticket)
+        return delivers
+    }
+
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
+        AgentSnapshot(
+            agent: agent,
+            availability: .ready,
+            sessions: sessions,
+            quota: .unavailable,
+            diagnostic: nil,
+            setupStatus: .active
+        )
+    }
+
+    func nextRefreshDeadline() async -> Date? { nil }
+    func hookSetupStatus() async -> HookSetupStatus { .active }
+    func installHooks() async throws {}
+    func removeHooks() async throws {}
+    func disconnect() async {}
 }
 
 /// Waits for a pid to go away.
