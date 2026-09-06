@@ -588,23 +588,6 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
         return Int(ceil(hidden / lineHeight))
     }
 
-    /// Where one option sits in the body, before any scrolling.
-    ///
-    /// **So the arrows can keep the ground in view** (§6.2): a body of `140`
-    /// points holds five options at most, and a question may offer four under a
-    /// question that fills the rest. The arithmetic is the same one
-    /// ``contentHeight`` does, taken one option at a time.
-    nonisolated func extentOfOption(id: Int) -> ClosedRange<CGFloat>? {
-        guard let index = options.firstIndex(where: { $0.id == id }) else {
-            return nil
-        }
-        let text = CGFloat(lines.count) * PanelMetrics.requestLineHeight(for: setting)
-        let top = text
-            + PanelMetrics.optionListSpacing
-            + CGFloat(index) * PanelMetrics.optionRowHeight
-        return top...(top + PanelMetrics.optionRowHeight)
-    }
-
     /// Lays out one request's body at the width the row draws it in.
     ///
     /// `question` selects which of a set is shown, because a set is answered one

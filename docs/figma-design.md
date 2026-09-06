@@ -730,22 +730,6 @@ A `0.8 pt` line along `PanelContour`, **applied identically collapsed and expand
 
 This is not an exception to "do not add unconfirmed features": the rule below forbids pushing undecided features into settings, whereas `Show Notchline on` is existing behaviour given a place in the new shape, and `Hide the wings` and `Outline the panel` are two display preferences added alongside it on the same card — they add no monitored object and change no status decision, deciding only how much of this surface is drawn. Divergences between board and window are recorded here to be resolved when the board is updated.
 
-### 8.5 Keyboard
-
-**Not on the board, present in the implementation, after `Display`.** One row, added 2026-09-06 with the keyboard half of answering ([`answer-in-notch.md`](answer-in-notch.md) §9.3).
-
-| Label | `Chord for the notch` |
-| --- | --- |
-| Control | A capsule button showing the chord (`⌥Space` by default), which arms a recorder on click; a borderless `Reset` appears beside it once the chord is not the default |
-| Caption | `Brings the panel down with the keyboard, from wherever you are working.` |
-| Status line | `⌥Space is held, from any application.` in `statusHealthy`; `⌥Space is not held — another application has it (<status>). Choose a different chord.` in `statusWarning`; `Not registered.` in `statusIdle` |
-| Tooltip | `Click, then press the combination you want. It has to include at least one of ⌘, ⌥, ⌃ or ⇧ — a bare key would be taken away from every application on this Mac. ⎋ leaves it as it is.` |
-| Footnote | `The chord brings the panel down ready to answer: the first waiting request already open with the cursor in its field, or the top of the list when nothing is waiting. Press it again, or ⎋, to hand the keyboard back.` |
-
-**It is the one row in this window with a status dot that is not about a product**, and that is the whole reason it is a card of its own rather than a sixth `Display` row. Every other setting here changes what a surface draws and cannot fail; this one asks the system for a key combination that another application may already hold, and **the row's job is as much to report that refusal as to make the choice**. A settings window that drew the chord the user picked while the app held nothing would be the silent failure §9.3 was written to avoid.
-
-The recorder arms a local key monitor rather than taking first responder: it is a button in a window full of native controls, and changing that window's keyboard behaviour for as long as it was armed would cost more than it buys. `⎋` disarms it and leaves the chord as it is — the same thing `⎋` does everywhere else in this app.
-
 Do not add login items, animation, notification, model selection or other unconfirmed features to the V1 settings board.
 
 ## 9. Interaction

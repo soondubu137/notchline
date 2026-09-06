@@ -1,5 +1,4 @@
 import AppKit
-import Carbon.HIToolbox
 import Combine
 import SwiftUI
 
@@ -1023,14 +1022,7 @@ private struct SessionRow: View {
         } label: {
             SessionRowContent(
                 session: session,
-                // **The walk is drawn in the fill hover already had**
-                // (`answer-in-notch.md` §9.3): the keys add no ink of their own,
-                // and a second way of saying *this one* would be a second thing
-                // to learn. The mark says the rest — under keyboard focus it
-                // draws the word it draws under the pointer, because a keyboard
-                // user would otherwise never see the affordance they are about
-                // to use (§3.3).
-                isHovered: isHovered || store.walkedRowID == session.id
+                isHovered: isHovered
             )
         }
         .buttonStyle(SessionRowButtonStyle())
@@ -1296,9 +1288,7 @@ private struct AnswerRow: View {
                 onEdit: { store.answerDraftChanged(to: $0) },
                 onReturn: { store.takeAnswer(store.answerGround) },
                 onEscape: { store.closeOpenRow() },
-                onArrow: { store.takeArrow($0) },
-                onDigit: { store.takeNumberedOption($0) },
-                onSpace: { store.tickTheGroundedOption() }
+                onDigit: { store.takeNumberedOption($0) }
             )
             .frame(maxWidth: .infinity)
             .frame(height: PanelMetrics.answerRowHeight)
@@ -1425,12 +1415,8 @@ private struct AnswerField: NSViewRepresentable {
     let onEdit: (String) -> Void
     let onReturn: () -> Void
     let onEscape: () -> Void
-    /// An arrow the caret had no use for — see ``AnswerFieldView/keyDown(with:)``.
-    let onArrow: (PanelArrow) -> Void
     /// A digit while the ground is still on an option, and whether it was taken.
     let onDigit: (Int) -> Bool
-    /// `Space` on a form where it ticks, and whether it was taken.
-    let onSpace: () -> Bool
 
     func makeNSView(context: Context) -> AnswerFieldView {
         let view = AnswerFieldView()
@@ -1438,9 +1424,7 @@ private struct AnswerField: NSViewRepresentable {
         view.placeholder = placeholder
         view.string = initialText
         view.isEditable = takesKeys
-        view.onArrow = onArrow
         view.onDigit = onDigit
-        view.onSpace = onSpace
         context.coordinator.identity = identity
         return view
     }
@@ -1451,9 +1435,7 @@ private struct AnswerField: NSViewRepresentable {
         context.coordinator.onEscape = onEscape
         view.placeholder = placeholder
         view.isEditable = takesKeys
-        view.onArrow = onArrow
         view.onDigit = onDigit
-        view.onSpace = onSpace
         guard context.coordinator.identity != identity else { return }
         context.coordinator.identity = identity
         view.string = initialText
@@ -1489,13 +1471,13 @@ private struct AnswerField: NSViewRepresentable {
         /// The three keys the panel answers to here, and they are the field's
         /// own (§9.2).
         ///
-        /// `⌘⏎` and `⇥` stay deliberately unbound: a second way to approve
-        /// would make the white ground advisory rather than definitive, and the
-        /// whole safety of this surface rests on the ground being the literal
-        /// truth about `⏎`. The arrows, the digits and `Space` are read off the
-        /// event in ``AnswerFieldView/keyDown(with:)``, because what each of
-        /// them means depends on where the caret is standing and this table
-        /// cannot see that.
+        /// `⌘⏎`, the arrows, `Space` and `⇥` are deliberately unbound: a second
+        /// way to approve would make the white ground advisory rather than
+        /// definitive, and the whole safety of this surface rests on the ground
+        /// being the literal truth about `⏎`. The digits are the one exception
+        /// and are read off the event in ``AnswerFieldView/keyDown(with:)``,
+        /// because what a digit means depends on whether anything has been
+        /// typed and this table cannot see that.
         func textView(
             _ view: NSTextView,
             doCommandBy selector: Selector
@@ -1529,15 +1511,11 @@ private struct AnswerField: NSViewRepresentable {
 /// cheap direction (§6.4).
 final class AnswerFieldView: NSTextView {
     var placeholder: String = ""
-    /// An arrow the caret had nowhere to go with.
-    var onArrow: ((PanelArrow) -> Void)?
     /// A digit that may be an option's number rather than a character.
     var onDigit: ((Int) -> Bool)?
-    /// `Space`, which on one form is a tick rather than a space.
-    var onSpace: (() -> Bool)?
 
     /// `⇧⏎` puts a new line in the field, and only `⏎` sends (§9.2). Then the
-    /// keys the ground answers to, each of which is the field's first.
+    /// digits, which are the field's too the moment anything has been typed.
     ///
     /// **Read off the event rather than left to the binding table.** In a field
     /// editor `⇧⏎` is `insertNewlineIgnoringFieldEditor:`; in a plain text view
@@ -1546,116 +1524,30 @@ final class AnswerFieldView: NSTextView {
     /// sentences and an alternative command is often two lines, and this is the
     /// only way to get one, which is what lets `⏎` be unambiguous.
     ///
-    /// **An arrow is the caret's while the caret has somewhere to go, and the
-    /// ground's when it has not**, and that rule is a correction to §9.3 made
-    /// while building it. §9.3 gives the arrows to the white ground outright;
-    /// §9.2 says the panel's keys are *the field's own*, and the caret is in
-    /// that field from the moment the row opens. Both cannot be true: an arrow
-    /// bound to the ground cannot put the caret back inside a two-line refusal,
-    /// and a refusal that explains itself is exactly what `⇧⏎` exists for. So
-    /// the arrow moves the caret while there is caret movement to make, and
-    /// moves the ground from the edge the caret is already standing on — which
-    /// is the ordinary behaviour of a field inside a strip of controls, costs an
-    /// empty field nothing at all (both edges are the same place), and costs a
-    /// full one one extra press.
+    /// A digit is offered to the panel **bare only** — `⌥1` types a character of
+    /// its own and is nobody's option number — and the panel refuses it unless
+    /// the white ground is still on an option, which is §15 q08's rule and the
+    /// reason this cannot be a binding: it depends on what the field holds.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36, event.modifierFlags.contains(.shift) {
             insertText("\n", replacementRange: selectedRange())
             return
         }
-        if let arrow = arrowLeavingTheCaretNowhereToGo(event) {
-            onArrow?(arrow)
+        if isBare(event),
+           let digit = event.characters.flatMap({ Int($0) }),
+           digit >= 1, digit <= 4,
+           onDigit?(digit) == true {
             return
-        }
-        if isBare(event) {
-            if event.characters == " ", onSpace?() == true { return }
-            if let digit = event.characters.flatMap({ Int($0) }),
-               digit >= 1, digit <= 4,
-               onDigit?(digit) == true {
-                return
-            }
         }
         super.keyDown(with: event)
     }
 
     /// Whether this key arrived with nothing held down.
-    ///
-    /// `⌥1` types a character of its own and is nobody's option number, so the
-    /// two keys that mean something other than themselves mean it only bare.
     private func isBare(_ event: NSEvent) -> Bool {
         event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.capsLock, .function, .numericPad])
             .isEmpty
-    }
-
-    /// Which arrow this is, where the caret cannot answer it.
-    ///
-    /// `nil` for every arrow the text view should handle itself, which is every
-    /// one with a character or a line on the far side of the caret. A selection
-    /// is one of those: an arrow collapses it, which is caret movement.
-    private func arrowLeavingTheCaretNowhereToGo(_ event: NSEvent) -> PanelArrow? {
-        guard event.modifierFlags
-            .intersection(.deviceIndependentFlagsMask)
-            .subtracting([.function, .numericPad])
-            .isEmpty else { return nil }
-        let range = selectedRange()
-        guard range.length == 0 else { return nil }
-        switch Int(event.keyCode) {
-        case kVK_LeftArrow:
-            return range.location == 0 ? .left : nil
-        case kVK_RightArrow:
-            return range.location >= (string as NSString).length ? .right : nil
-        case kVK_UpArrow:
-            return isCaretOnTheFirstLine ? .up : nil
-        case kVK_DownArrow:
-            return isCaretOnTheLastLine ? .down : nil
-        default:
-            return nil
-        }
-    }
-
-    /// Whether the caret has a line above it, asked of the layout rather than of
-    /// the string.
-    ///
-    /// A wrapped line has no `\n` in it and is still a line the caret can move
-    /// between, so counting newlines would take `↑` away from the second half of
-    /// a long refusal.
-    private var isCaretOnTheFirstLine: Bool {
-        guard let fragment = caretLineFragment() else { return true }
-        return fragment.minY <= firstLineFragmentMinY
-    }
-
-    private var isCaretOnTheLastLine: Bool {
-        guard let fragment = caretLineFragment(), let used = usedRect else {
-            return true
-        }
-        return fragment.maxY >= used.maxY - 0.5
-    }
-
-    private var firstLineFragmentMinY: CGFloat {
-        (usedRect?.minY ?? 0) + 0.5
-    }
-
-    /// What the text actually occupies, which is what the first and last line
-    /// are measured against.
-    private var usedRect: CGRect? {
-        guard let layoutManager, let textContainer else { return nil }
-        return layoutManager.usedRect(for: textContainer)
-    }
-
-    private func caretLineFragment() -> CGRect? {
-        guard let layoutManager else { return nil }
-        let length = (string as NSString).length
-        guard length > 0 else { return nil }
-        let index = min(selectedRange().location, length - 1)
-        let glyph = layoutManager.glyphIndexForCharacter(at: index)
-        guard glyph < layoutManager.numberOfGlyphs else { return nil }
-        return layoutManager.lineFragmentRect(
-            forGlyphAt: glyph,
-            effectiveRange: nil,
-            withoutAdditionalLayout: false
-        )
     }
 
     /// The panel's own recessed step, which is where a field belongs on it: the
@@ -1769,12 +1661,9 @@ final class AnswerFieldView: NSTextView {
 /// arrived together: the rail reports where the reader is, at `1.5` points it is
 /// not a grip, and it is never the only way to move.
 private struct ScrollingRequestBody: View {
-    @EnvironmentObject private var store: MonitorStore
     let layout: RequestBodyLayout
 
     @State private var offset: CGFloat = 0
-    /// The total the arrows had asked for when this body last moved for them.
-    @State private var appliedNudge: CGFloat = 0
 
     private var travel: CGFloat {
         max(layout.contentHeight - PanelMetrics.requestBodyMaximumHeight, 0)
@@ -1813,44 +1702,7 @@ private struct ScrollingRequestBody: View {
                     offset = min(max(offset - delta, 0), travel)
                 }
             )
-            .onChange(of: layout) { _, _ in
-                offset = 0
-                appliedNudge = store.bodyScrollNudge.lines
-            }
-            // **`↑ ↓` where this body has no answers in it** (§6.2). The offset
-            // stays this view's own — publishing it would put a whole-panel
-            // re-render behind every wheel event — so what arrives from the
-            // store is how far the *keyboard* has asked for in total, and this
-            // applies the difference from the total it last saw. A delta would
-            // not survive a burst: `onChange` samples once per render pass, and
-            // four presses inside one pass are one change.
-            .onChange(of: store.bodyScrollNudge) { _, nudge in
-                let asked = nudge.lines - appliedNudge
-                appliedNudge = nudge.lines
-                guard travel > 0 else { return }
-                let step = asked
-                    * PanelMetrics.requestLineHeight(for: layout.setting)
-                offset = min(max(offset + step, 0), travel)
-            }
-            // **And the body follows the ground where it has options** (§6.2):
-            // an arrow that moved the white ground onto an option under the fold
-            // would otherwise put `⏎` on something nobody can see, which is the
-            // one thing §6.3 exists to prevent.
-            .onChange(of: store.answerGround) { _, ground in
-                keepTheGroundInView(ground)
-            }
-    }
-
-    /// Scrolls by as little as it takes to put the ground's option on screen.
-    private func keepTheGroundInView(_ ground: AnswerGround) {
-        guard travel > 0, case let .option(id) = ground,
-              let extent = layout.extentOfOption(id: id) else { return }
-        let visible = PanelMetrics.requestBodyMaximumHeight
-        if extent.lowerBound < offset {
-            offset = max(extent.lowerBound, 0)
-        } else if extent.upperBound > offset + visible {
-            offset = min(extent.upperBound - visible, travel)
-        }
+            .onChange(of: layout) { _, _ in offset = 0 }
     }
 
     /// Solid to the last full line, then out.
@@ -2475,10 +2327,6 @@ private struct SessionStatusControl: View {
     let session: MonitoredSession
     /// Whether the pointer is on **this mark**, rather than anywhere on the row.
     ///
-    /// The keyboard walk is the second way this word appears, and it is read
-    /// from the store rather than held here: a walk is a fact about the list,
-    /// where a pointer is a fact about one view (§3.3, §9.3).
-    ///
     /// The distinction is the whole of `answer-in-notch.md` §3: the row's text
     /// is the Thread and the mark is the request, so a pointer resting on the
     /// title must not offer a word describing what the mark would do. It is
@@ -2600,9 +2448,7 @@ private struct SessionStatusControl: View {
     /// its product, because the two products differ per shape rather than
     /// wholesale (`answer-in-notch.md` §11 rule 06).
     private var word: String {
-        guard isMarkHovered || store.walkedRowID == session.id else {
-            return session.status.displayName
-        }
+        guard isMarkHovered else { return session.status.displayName }
         // `Read` until this request can genuinely be answered from here. The
         // word is a promise about what a click does, and with no write path
         // built there is nothing behind `Answer` -- which is the same rule that

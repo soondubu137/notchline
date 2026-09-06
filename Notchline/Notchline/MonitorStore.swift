@@ -1749,7 +1749,6 @@ final class MonitorStore: ObservableObject {
     private static let aggregateInkDefaultsKey = "aggregateInk"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
-    private static let answerChordDefaultsKey = "answerChord"
     private let services: [any AgentMonitoring]
     /// Whether this store is watching anything at all.
     ///
@@ -1925,13 +1924,6 @@ final class MonitorStore: ObservableObject {
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
         ) ?? false
-        // A chord nobody has set is `⌥Space` (§15 q03), and one stored under a
-        // spelling this build no longer understands is the same thing: the
-        // preference names a position on a keyboard, and a position that cannot
-        // be read is not a chord anybody chose.
-        self.answerChord = preferences?.string(
-            forKey: Self.answerChordDefaultsKey
-        ).flatMap(KeyChord.init(stored:)) ?? .default
         self.lastIntegrationMessage = snapshots.first?.diagnostic
             ?? "Waiting for Codex data"
 
@@ -2784,16 +2776,11 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Whether the panel is holding the keyboard.
+    /// Whether the panel is holding the keyboard for a row.
     ///
-    /// Hover browses and cannot latch, however long it lasts (§9.4). **Two acts
-    /// latch it**, and they are the two doors §9.1 names: a click on a mark,
-    /// which opens a row, and the chord, which brings the panel down already
-    /// latched whether or not there is a row to open. The second is why this is
-    /// no longer ``openRowID`` spelled differently — with nothing waiting, the
-    /// chord latches a panel with no open row on it, and a panel that held no
-    /// keys there would be one `⎋` could not close.
-    var isLatched: Bool { openRowID != nil || isKeyboardEngaged }
+    /// Hover browses and cannot latch, however long it lasts; only a click on a
+    /// mark makes this panel key (§9.4).
+    var isLatched: Bool { openRowID != nil }
 
     /// Collapses the open row, sending nothing and keeping the row where it was.
     ///
@@ -2801,14 +2788,8 @@ final class MonitorStore: ObservableObject {
     /// text and any part-answered set stay with their row for as long as that
     /// row lives, so reopening resumes exactly where it stopped.
     func closeOpenRow() {
-        guard let closing = openRowID else { return }
+        guard openRowID != nil else { return }
         openRowID = nil
-        // **The keyboard is handed back to the walk, not to the pointer**
-        // (§9.2): `⎋` collapses the row and *again* closes the panel, and that
-        // second `⎋` can only arrive if the panel is still key. A panel brought
-        // down by the chord has no pointer on it by construction, so unlatching
-        // here would strand it open with no way to shut it but a mouse.
-        if isKeyboardEngaged { walkedRowID = closing }
         armingTask?.cancel()
         armingTask = nil
         isAffirmativeArmed = false
@@ -2817,258 +2798,6 @@ final class MonitorStore: ObservableObject {
         // than about the row it was typed into. Clearing it here would let the
         // same ticket be answered twice by closing the row and opening it again
         // mid-flight, and it is cleared where it becomes untrue — on landing.
-    }
-
-    // MARK: - The keyboard
-
-    /// Whether the chord is holding this panel open (`answer-in-notch.md` §9.3).
-    ///
-    /// **The second door**, and the only one that does not begin with a
-    /// pointer. It is set by the chord and cleared by every exit the panel
-    /// already had — `⎋` with no row open, a click outside, a navigation — so
-    /// the keyboard goes back to the application underneath by the same three
-    /// routes a click-latched row gives it back on (§9.4).
-    @Published private(set) var isKeyboardEngaged = false
-
-    /// Which row the walk is on, while no row is open.
-    ///
-    /// `nil` whenever a row *is* open: the walk is then inside that row, where
-    /// it moves the white ground rather than the list. Drawn as the list's own
-    /// hover fill, with the word in the mark that a pointer would have drawn
-    /// (§3.3) — a keyboard user must be able to see the affordance they are
-    /// about to use, which is the correction §9.3 brings with the keys.
-    @Published private(set) var walkedRowID: String?
-
-    /// How far the arrows have asked the open row's body to move (§6.2).
-    ///
-    /// **A total rather than the offset itself.** The offset lives in the body's
-    /// own `@State` and must stay there: publishing it would put a whole-panel
-    /// re-render behind every wheel event, which is the cost `AGENTS.md` §7
-    /// exists to keep off this surface. What is published is what the *keyboard*
-    /// has asked for, which changes once per keystroke — and it is cumulative
-    /// because SwiftUI compares it once per render pass, so a delta would lose
-    /// every press but the last of any burst (``BodyScrollNudge``).
-    @Published private(set) var bodyScrollNudge = BodyScrollNudge()
-
-    /// The chord the app is actually holding, or why it is not (§9.3).
-    ///
-    /// Written by ``OverlayPanelController``, which owns the registration, and
-    /// read by the settings row — which shows **the chord the app holds rather
-    /// than the one it asked for**. A store with no panel (a test, a specimen)
-    /// stays `.unasked`, which is the truth about it.
-    @Published private(set) var chordHold: PanelChordHold = .unasked
-
-    /// The chord the user has asked for.
-    ///
-    /// A preference like any other, and it survives the registration failing:
-    /// what somebody chose is not undone by another application holding it
-    /// today.
-    @Published var answerChord: KeyChord {
-        didSet {
-            guard answerChord != oldValue else { return }
-            preferences?.set(answerChord.stored, forKey: Self.answerChordDefaultsKey)
-        }
-    }
-
-    /// The controller reporting what the system gave it.
-    func recordChordHold(_ hold: PanelChordHold) {
-        guard chordHold != hold else { return }
-        chordHold = hold
-    }
-
-    /// The chord landed (§9.3).
-    ///
-    /// **It is never a key that sometimes does nothing.** With a request waiting
-    /// it brings the panel down already latched, with the first row by the
-    /// existing sort already open and the caret in its field; with nothing
-    /// waiting it brings the same panel down latched at the top of the list. The
-    /// only variable is whether a row is open when it lands.
-    ///
-    /// Pressed again while the panel is holding the keyboard, it hands
-    /// everything back — the same exit `⎋` takes, from the key that opened it.
-    /// A chord that did nothing on its second press would be the one key on this
-    /// surface with no way back out of what it started.
-    func takeTheChord() {
-        guard !isKeyboardEngaged else {
-            collapse()
-            return
-        }
-        cancelPendingHoverAction()
-        isKeyboardEngaged = true
-        isExpanded = true
-        // **A row already open stays open**, which is §9.3's own sentence: the
-        // only variable is whether one is open when the chord lands. Opening the
-        // first waiting request over it would throw away a part-answered set and
-        // re-arm an affirmative the reader had already waited for.
-        guard openRowID == nil else { return }
-        if let waiting = sessions.first(where: { $0.request != nil }) {
-            walkedRowID = nil
-            openRow(waiting.id)
-        } else {
-            walkedRowID = sessions.first?.id
-        }
-    }
-
-    /// One arrow, wherever the panel is holding the keyboard (§6.2, §9.3).
-    ///
-    /// **The axes divide the way the drawing already does.** With no row open
-    /// the list is what there is to walk, so `↑ ↓` walk it and the horizontal
-    /// pair have nothing to move between. With a row open and **options** in its
-    /// body, all four move the white ground along the answers this row has —
-    /// the options in the order they are drawn, then the answer row. With a row
-    /// open and **no answers** in its body, `← →` move between the two controls
-    /// and `↑ ↓` scroll the body, which is the only thing on that row with more
-    /// of itself below the fold.
-    func takeArrow(_ arrow: PanelArrow) {
-        guard openRowID != nil else {
-            switch arrow {
-            case .up: walkTheList(by: -1)
-            case .down: walkTheList(by: 1)
-            case .left, .right: break
-            }
-            return
-        }
-        let hasOptions = !(openRowBody?.options.isEmpty ?? true)
-        switch arrow {
-        case .left:
-            moveGround(by: -1)
-        case .right:
-            moveGround(by: 1)
-        case .up:
-            if hasOptions { moveGround(by: -1) } else { nudgeBody(by: -1) }
-        case .down:
-            if hasOptions { moveGround(by: 1) } else { nudgeBody(by: 1) }
-        }
-    }
-
-    /// Walks the list, and does not wrap.
-    ///
-    /// Clamped rather than cyclic: the viewport holds three rows, and a walk
-    /// that reappears at the other end of a list that short reads as a jump
-    /// rather than as a step.
-    private func walkTheList(by step: Int) {
-        guard isKeyboardEngaged, !sessions.isEmpty else { return }
-        let index = sessions.firstIndex { $0.id == walkedRowID } ?? 0
-        let next = min(max(index + step, 0), sessions.count - 1)
-        walkedRowID = sessions[next].id
-    }
-
-    /// The answers this row has, in the order they are drawn.
-    ///
-    /// Top to bottom and then leading to trailing, which is the order the eye
-    /// reads them in: the options, then the refusal, then the affirmative. Two
-    /// on an approval, up to four options and the field's own `Send` on a
-    /// question, one on a question with nothing to pick.
-    var answerWalk: [AnswerGround] {
-        guard let shape = openSession?.request?.answerRow else { return [] }
-        var walk: [AnswerGround] = (openRowBody?.options ?? []).map { .option($0.id) }
-        if shape.refusal != nil { walk.append(.refusal) }
-        walk.append(.affirmative)
-        return walk
-    }
-
-    /// Moves the white ground one answer along, and stops at the ends.
-    ///
-    /// **The second of the two forces on the ground** (§6), and the correction
-    /// the keys make necessary: a rule where only typing moved it would leave
-    /// the non-default answer reachable by pointer alone. Both forces are the
-    /// person's own act, which is the whole of the rule — hover still moves
-    /// nothing.
-    private func moveGround(by step: Int) {
-        guard let openRowID, !isAnswerInFlight else { return }
-        let walk = answerWalk
-        guard walk.count > 1 else { return }
-        let index = walk.firstIndex(of: answerGround) ?? 0
-        let next = min(max(index + step, 0), walk.count - 1)
-        guard next != index else { return }
-        answerProgress[openRowID, default: AnswerProgress()].ground = walk[next]
-        refreshAnswerGround()
-    }
-
-    private func nudgeBody(by lines: CGFloat) {
-        bodyScrollNudge = BodyScrollNudge(lines: bodyScrollNudge.lines + lines)
-    }
-
-    /// `⏎` with no row open: takes whatever the walked row leads to.
-    ///
-    /// **The row has two targets and the walk is on one of them** (§3). Where
-    /// the row has a mark, the walk is on the mark — which is why the mark draws
-    /// its word under keyboard focus — so this opens the request here. Where it
-    /// has none, the row's only target is the Thread, and this is the click that
-    /// has always worked.
-    func takeTheWalkedRow() {
-        guard openRowID == nil, isKeyboardEngaged,
-              let walkedRowID,
-              let session = sessions.first(where: { $0.id == walkedRowID })
-        else { return }
-        if session.request != nil {
-            toggleOpenRow(session)
-        } else {
-            open(session)
-        }
-    }
-
-    /// A digit takes the option it numbers — while the ground is still on one.
-    ///
-    /// §9.3 and §15 q08: the digits are bound **only before anything has been
-    /// typed**, because reserving them permanently would silently eat the first
-    /// character of an answer beginning with a number. The ground being on an
-    /// option is that condition drawn: typing is what moves it off.
-    ///
-    /// Returns whether the panel took it, so the field can type it when the
-    /// panel did not.
-    @discardableResult
-    func takeNumberedOption(_ number: Int) -> Bool {
-        guard case .option = answerGround, answerDraft.isEmpty else { return false }
-        let options = openRowBody?.options ?? []
-        guard number >= 1, number <= options.count else { return false }
-        takeAnswer(.option(options[number - 1].id))
-        return true
-    }
-
-    /// `Space` ticks the option the ground is on, where several are allowed.
-    ///
-    /// **Bound on the same condition as the digits, and for the same reason**
-    /// (§9.3, §15 q08): with anything in the field a space is a space, or a
-    /// multi-word answer would lose its gaps to a control nobody asked for. So
-    /// the gate is the ground being on an option with an empty field, which is
-    /// exactly when there is an option for `Space` to be about.
-    @discardableResult
-    func tickTheGroundedOption() -> Bool {
-        guard openRowBody?.allowsSeveralAnswers == true,
-              case let .option(index) = answerGround,
-              answerDraft.isEmpty else { return false }
-        guard isAffirmativeArmed, !isAnswerInFlight else { return false }
-        tickOption(index)
-        return true
-    }
-
-    /// A click somewhere this panel is not.
-    ///
-    /// **The keyboard goes back to the application underneath** (§9.4). Where a
-    /// click opened the row, this closes the row and the pointer decides the
-    /// rest, exactly as it always did; where the chord opened the panel, there
-    /// is no pointer on it to decide anything, so the click that landed
-    /// elsewhere is the whole answer and the panel goes with it.
-    func pointerClickedOutside() {
-        guard isLatched else { return }
-        if isKeyboardEngaged {
-            collapse()
-        } else {
-            closeOpenRow()
-        }
-    }
-
-    /// Re-anchors the walk on a list that has moved under it.
-    ///
-    /// A walked row can leave exactly as an open one can (§8 state 04), and the
-    /// walk must not be left naming a row nobody draws — the panel would hold
-    /// the keyboard with nothing lit on it.
-    private func reanchorTheWalk() {
-        guard isKeyboardEngaged, openRowID == nil else { return }
-        guard walkedRowID == nil
-            || !sessions.contains(where: { $0.id == walkedRowID }) else { return }
-        walkedRowID = sessions.first?.id
     }
 
     // MARK: - Answering
@@ -3184,11 +2913,6 @@ final class MonitorStore: ObservableObject {
     func answerDraftChanged(to text: String) {
         guard let openRowID else { return }
         answerProgress[openRowID, default: AnswerProgress()].draft = text
-        // **Typing is the more recent act, so it wins** (§6). An arrow may have
-        // put the ground somewhere; a keystroke moves it to the answer that
-        // carries text, because a note cannot travel with a yes — and deleting
-        // the text puts it back where the form says it begins.
-        answerProgress[openRowID]?.ground = nil
         refreshAnswerGround()
     }
 
@@ -3242,6 +2966,28 @@ final class MonitorStore: ObservableObject {
                 )
             }
         }
+    }
+
+    /// A digit takes the option it numbers — while the ground is still on one.
+    ///
+    /// **The one key the keyboard half left behind** (`answer-in-notch.md`
+    /// §9.2). It is bound on §15 q08's condition and no other: *only while the
+    /// ground is still on an option, which is to say before anything has been
+    /// typed*. Reserving the digits permanently would silently eat the first
+    /// character of an answer beginning with a number, and the ground being on
+    /// an option is that condition already drawn — typing is what moves it off.
+    ///
+    /// Returns whether the panel took it, so the field types the digit when the
+    /// panel did not. `takeAnswer` is what a click on that option does, so a
+    /// numbered option and a clicked one cannot mean different things — on a
+    /// `multiSelect` question both tick rather than send (§5.5).
+    @discardableResult
+    func takeNumberedOption(_ number: Int) -> Bool {
+        guard case .option = answerGround, answerDraft.isEmpty else { return false }
+        let options = openRowBody?.options ?? []
+        guard number >= 1, number <= options.count else { return false }
+        takeAnswer(.option(options[number - 1].id))
+        return true
     }
 
     /// Whether one option of the question on screen is ticked (§5.5).
@@ -3321,9 +3067,6 @@ final class MonitorStore: ObservableObject {
             progress.questionIndex = position + 1
             progress.draft = ""
             progress.ticked = []
-            // The ground belongs to the question that was on screen, like the
-            // field and the ticks: the next one begins where its own form says.
-            progress.ground = nil
             answerProgress[openRowID] = progress
             answerDraftGeneration &+= 1
             refreshAnswerGround()
@@ -3411,24 +3154,6 @@ final class MonitorStore: ObservableObject {
            let next = sessions.first(where: { $0.id != rowID && $0.request != nil }) {
             openRow(next.id)
         }
-        // **With nothing left waiting the panel unlatches** (§8.3): it hands the
-        // keyboard back and starts answering the pointer again, and that release
-        // is how it says you are finished. Something still waiting keeps it —
-        // including this row on a send that did not arrive, which is a request
-        // still to be dealt with rather than a finished one.
-        if openRowID == nil, isKeyboardEngaged {
-            // The row just answered is not one of them, and the list has not
-            // been told yet: the product's next publish is what takes its
-            // request away, and this runs a refresh ahead of it.
-            let stillWaiting = sessions.contains { session in
-                guard session.request != nil else { return false }
-                return !(delivered && session.id == rowID)
-            }
-            if !stillWaiting {
-                isKeyboardEngaged = false
-                walkedRowID = nil
-            }
-        }
         // The ticket has been spent either way, so what the mark says about this
         // row is now out of date by one publish. Asking for the refresh is
         // cheaper than teaching the projection to notice a connection closing.
@@ -3438,12 +3163,6 @@ final class MonitorStore: ObservableObject {
     /// Opens one row, and starts the arrival its affirmative is armed by.
     private func openRow(_ id: String) {
         openRowID = id
-        // A new body starts at its own top, so the total the arrows have asked
-        // for starts again with it.
-        bodyScrollNudge = BodyScrollNudge()
-        // The walk is inside the row now: with a row open the arrows move the
-        // white ground, and the list is not what they walk (§6.2).
-        walkedRowID = nil
         refreshAnswerGround()
         armTheAffirmativeOnArrival(of: id)
     }
@@ -3467,22 +3186,13 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Puts the ground where the person's last act says it is.
-    ///
-    /// **Two forces, and both are the person's own** (§6): typing, which is
-    /// derived here, and an arrow, which is held on ``AnswerProgress/ground``
-    /// until the next keystroke clears it. A held ground that this row no longer
-    /// offers — the option numbered three, on the next question of a set that
-    /// has two — is dropped rather than drawn, so the ground cannot name an
-    /// answer that is not on screen.
+    /// Puts the ground where what has been typed says it is.
     private func refreshAnswerGround() {
-        let derived = AnswerGround.where(
+        let ground = AnswerGround.where(
             openSession?.request,
             showing: openRowBody,
             carriesText: !answerDraft.isEmpty
         )
-        let held = openRowID.flatMap { answerProgress[$0]?.ground }
-        let ground = held.flatMap { answerWalk.contains($0) ? $0 : nil } ?? derived
         if answerGround != ground { answerGround = ground }
     }
 
@@ -3639,11 +3349,6 @@ final class MonitorStore: ObservableObject {
     }
 
     func pointerExitedPanel() {
-        // **A panel the keyboard is holding is not the pointer's to close**
-        // (§9.3). The chord brings it down with the pointer wherever it
-        // happened to be, so the first stray movement would otherwise shut a
-        // panel nobody had touched.
-        guard !isKeyboardEngaged else { return }
         // **A row somebody is reading does not close because their pointer
         // drifted** (`answer-in-notch.md` §10). A body of `140` points is read
         // rather than glanced at, and moving to the keyboard is not a pointer
@@ -3703,10 +3408,6 @@ final class MonitorStore: ObservableObject {
         // navigation, the menu bar being concealed. The row keeps its place on
         // the list; only its openness ends.
         openRowID = nil
-        // And the walk goes with it, for the same reason: the chord's latch is
-        // the panel's, so nothing may outlive the panel holding it (§9.4).
-        isKeyboardEngaged = false
-        walkedRowID = nil
         isExpanded = false
     }
 
@@ -4235,7 +3936,6 @@ final class MonitorStore: ObservableObject {
         }
         forgetNoticesTheProductHasOvertaken()
         closeARowWhoseRequestHasGone()
-        reanchorTheWalk()
         if status != aggregateStatus {
             status = aggregateStatus
         }

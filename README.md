@@ -121,13 +121,12 @@ Once running:
 
 - Hover over the collapsed surface to expand it; move the pointer away to collapse it.
 - Left-click a row to return to its originating Thread or host.
-- Left-click the bright mark on a row that wants you to open the request there, and answer it in the notch.
+- Left-click the bright mark on a row that wants you to open the request there and answer it in the notch: type into the field, `1`–`4` to take a numbered option, `⏎` to send whichever answer is drawn in white, `⎋` to fold the row away again.
 - Right-click a completed row to dismiss that session's row without deleting or marking anything read.
-- Press `⌥Space` to bring the panel down from the keyboard, with the first waiting request already open and the cursor in its field. The arrows move between the answers, `⏎` takes the one the white ground is on, and `⎋` hands the keyboard back. The chord is settable in Settings, which also says whether the app is actually holding it.
 - Use the gear in the expanded header to open Settings.
 - Use `Quit` in Settings to stop the app.
 
-`⌥Space` is the only keyboard shortcut, and it is the app's own. Because Notchline runs as `LSUIElement`, it has no Dock tile, app-switcher entry or application menu; consequently there is no application-level `⌘,` or `⌘Q` route either.
+There is no keyboard shortcut for opening or closing the overlay, and Notchline registers no global hotkey: the keys above work only while a request is open in front of you. Because Notchline runs as `LSUIElement`, it has no Dock tile, app-switcher entry or application menu; consequently there is no application-level `⌘,` or `⌘Q` route either.
 
 ## How it works
 
