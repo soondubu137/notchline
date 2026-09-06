@@ -36,22 +36,17 @@ enum NotchPalette {
         ///
         /// The bright end does *not* come from here: it is the ink's own lit
         /// colour, unlifted, because there brightness is the signal itself.
-        var chipFill: Color {
-            chipFill(over: .black)
-        }
-        /// The same ground on a surface that is not black.
         ///
-        /// **A tile has to stay above whatever it is drawn on.** A session row
-        /// lights to `#2B2B2E` under the pointer and `#3A3A3D` while pressed,
-        /// both of which are brighter than the resting `#242424` this returns
-        /// on black -- so a fixed value turns into a hole at the exact moment
-        /// the pointer is on it. Lifting off the brighter of the two keeps the
-        /// value it has always had at rest and lets it rise with the row.
-        func chipFill(over ground: NotchPalette.SurfaceGround) -> Color {
+        /// **Always lifted off black, never off a row's own fill.** A session
+        /// row's background no longer brightens under the pointer or while
+        /// pressed -- hover and press are a border and a halo now, drawn on
+        /// top, so a tile sitting on the row is always sitting on the same
+        /// black the panel itself is.
+        var chipFill: Color {
             Color(
-                red: min(1, max(offRed, ground.red) + Self.chipLift),
-                green: min(1, max(offGreen, ground.green) + Self.chipLift),
-                blue: min(1, max(offBlue, ground.blue) + Self.chipLift)
+                red: min(1, offRed + Self.chipLift),
+                green: min(1, offGreen + Self.chipLift),
+                blue: min(1, offBlue + Self.chipLift)
             )
         }
         /// How far ``chipFill`` is lifted off the unlit colour towards white.
@@ -83,76 +78,91 @@ enum NotchPalette {
         onRed: 0x15 / 255, onGreen: 0x15 / 255, onBlue: 0x15 / 255
     )
 
-    /// The one mark both collapsed forms draw, in the ink it draws it in.
+    /// The one ink this surface owns: the aggregate mark, every product badge,
+    /// and now the row's own edge and halo under the pointer.
     ///
     /// **Hue stopped being identity when the marks folded into one.** With a
     /// matrix per product, hue was the only thing saying which product a mark
     /// belonged to; with one aggregate mark there is no product to name, so the
-    /// channel is free — and it is the user's
-    /// (`compact-view-v2.md` §2.2, `aggregate-ink-palette.md`).
+    /// channel was free for taste instead (`compact-view-v2.md` §2.2).
     ///
     /// Sage · hint, `#1B1F1C` → `#DEE8E0`: the hue furthest in OKLCH from both
     /// products at once (`150°`, `108°` from each, the maximum any hue can be),
     /// so the aggregate can never read as a dim Codex or a dim Claude Code.
     /// Both lightnesses are the greyscale's own — `#E5E5EA` lit and `#1E1E1E`
-    /// unlit — because **brightness is this surface's attention channel** and a
-    /// preference able to dim the mark asking for a person would be a
-    /// preference that changes what the mark means. The whole recorded set of
-    /// 36 shares those two lightnesses for that reason; only chroma and hue
-    /// move.
+    /// unlit — because **brightness is this surface's attention channel**, and
+    /// a value able to dim the mark asking for a person would be a value that
+    /// changes what the mark means.
     ///
-    /// Not yet a preference: the picker is `compact-view-v2.md` §12's third
-    /// Settings row, and this is what an install that has never seen it takes.
-    static let defaultAggregateInk = MatrixInk(
+    /// **A single value rather than a preference.** This surface offered a
+    /// twelve-way picker for it once; the choice cost a Settings row and a
+    /// stored default for a difference nobody asked to see again, so the
+    /// picker is gone and this is what every install draws. Changing the
+    /// app's ink later is still exactly this one edit — every reader below
+    /// reaches it through this name, never through a literal hex pair of its
+    /// own.
+    static let themeInk = MatrixInk(
         offRed: 0x1B / 255, offGreen: 0x1F / 255, offBlue: 0x1C / 255,
         onRed: 0xDE / 255, onGreen: 0xE8 / 255, onBlue: 0xE0 / 255
     )
 
-    /// The aggregate mark's ink, which is the user's hue only once something is
-    /// behind it.
+    /// The aggregate mark's ink: ``themeInk`` once something is behind it, the
+    /// resting grey until then.
     ///
     /// ``restingInk`` is not tinted and must not be: `#151515` means *nothing
-    /// is connected*, and colouring it would say the preference applies to a
-    /// state with no agent in it. The hue arrives with the first connection
-    /// (`aggregate-ink-palette.md` §5).
-    nonisolated static func aggregateInk(
-        _ hue: AggregateInk = .sage,
-        isConnected: Bool
-    ) -> MatrixInk {
-        isConnected ? hue.ink : restingInk
+    /// is connected*, and colouring it would say the theme applies to a state
+    /// with no agent in it. The ink arrives with the first connection.
+    nonisolated static func matrixInk(isConnected: Bool) -> MatrixInk {
+        isConnected ? themeInk : restingInk
     }
 
-    /// A surface a tile can be drawn on, so the tile can be told what it has
-    /// to stay above.
+    /// A step brighter than ``label``, for a caption the pointer has reached.
     ///
-    /// Only the session row is ever anything but black, and only while the
-    /// pointer is on it — but that is the one moment a mark must not vanish,
-    /// so the grounds live here rather than as literals at the two views that
-    /// draw them.
-    nonisolated struct SurfaceGround: Equatable, Sendable {
-        let red, green, blue: Double
+    /// `#9A9A9E` — enough to read as the row answering, not enough to compete
+    /// with the reading ink or the title. Used wherever a plain SwiftUI `Text`
+    /// carries ``label`` and the row it sits in is under the pointer or held
+    /// down; the layer-backed title and preview lines do not read it; see
+    /// ``RowEmphasis``.
+    static let labelEmphasized = Color(
+        red: 0x9A / 255, green: 0x9A / 255, blue: 0x9E / 255
+    )
 
-        var color: Color { Color(red: red, green: green, blue: blue) }
-
-        /// The notch's own surface, and a session row at rest.
-        static let black = SurfaceGround(red: 0, green: 0, blue: 0)
-        /// A session row under the pointer, and one being pressed.
-        static let rowHovered = SurfaceGround(red: 0.17, green: 0.17, blue: 0.18)
-        static let rowPressed = SurfaceGround(red: 0.23, green: 0.23, blue: 0.24)
-    }
-
-    /// A product badge's two colours, which are the mark's own.
+    /// What a row draws instead of a fill, now that hover and press no longer
+    /// repaint its black.
     ///
-    /// The same pair ``aggregateInk(_:isConnected:)`` returns, reached through
-    /// a second name so the chip and the mark can never drift apart: ground
-    /// from the unlit value, text from the lit one (`colour-v2.md` §4).
+    /// **A border and a halo, both in ``themeInk``'s lit colour, never a
+    /// change to the row's own ground.** The row was `#2B2B2E` under the
+    /// pointer and `#3A3A3D` held down; both were a flat rectangle appearing
+    /// and disappearing in a single frame, and at a retired row's 40 pt or the
+    /// Recent seam's 32 pt that rectangle read as a bar rather than a
+    /// highlight. Tracing the edge instead costs nothing at any height, and it
+    /// is the app's own colour doing the answering rather than a grey invented
+    /// for the occasion.
     ///
-    /// It takes no `isConnected`, unlike the mark's accessor. A badge is drawn
-    /// only while more than one product is connected, so the resting grey — the
-    /// value that means *nothing is connected* — is a state this object cannot
-    /// be in.
-    nonisolated static func badgeInk(_ hue: AggregateInk = .sage) -> MatrixInk {
-        hue.ink
+    /// **Two weights.** A live session row and the row held open for an
+    /// answer get the full pair; the Recent seam and a retired row get the
+    /// dimmer border alone and no halo at all -- omitted, not a fainter copy,
+    /// because a disclosure toggle and a finished run are not the main event.
+    enum RowEmphasis {
+        static let hoverBorderOpacity: Double = 0.16
+        static let pressedBorderOpacity: Double = 0.32
+        static let hoverGlowOpacity: Double = 0.10
+        static let pressedGlowOpacity: Double = 0.16
+        static let hoverGlowRadius: CGFloat = 16
+        static let pressedGlowRadius: CGFloat = 10
+
+        /// The Recent seam and a retired row: the same ink, a lighter hand.
+        static let utilityHoverBorderOpacity: Double = 0.10
+        static let utilityPressedBorderOpacity: Double = 0.20
+
+        /// Ease-in-out both ways -- the same gentle acceleration and
+        /// deceleration whether the border is arriving or leaving -- and
+        /// still faster to leave than to arrive, the one asymmetry worth
+        /// keeping.
+        static let hoverEnterDuration: Double = 0.13
+        static let hoverExitDuration: Double = 0.09
+        static let pressEnterDuration: Double = 0.08
+        static let pressExitDuration: Double = 0.10
     }
 
     /// `text/notch-label` — the dim base every notch label sits at.
@@ -502,8 +512,6 @@ final class ElapsedReadoutView: NSView {
 /// reading.
 struct SubagentBadgeView: View {
     let badge: SubagentBadge
-    /// What the badge is drawn on, so its dim ground can stay above it.
-    var ground: NotchPalette.SurfaceGround = .black
 
     var body: some View {
         Text("\(badge.count)")
@@ -533,14 +541,13 @@ struct SubagentBadgeView: View {
     /// Dim while everything it counts is running, bright the moment one of them
     /// is stopped on a question.
     ///
-    /// The bright end is the surface's own white, and the dim end lifts off
-    /// whatever the badge is drawn on — black everywhere but a session row
-    /// under the pointer, which is the one moment a tile must not turn into a
-    /// hole. Only the dim end reads the ground: the bright end is a signal and
-    /// has to be the same white wherever it appears.
+    /// The bright end is the surface's own white. The dim end is
+    /// ``NotchPalette/MatrixInk/chipFill`` lifted off black -- always black,
+    /// now that a session row's own fill no longer brightens under the
+    /// pointer or while held down.
     private var groundFill: Color {
         guard badge.wantsAttention else {
-            return NotchPalette.restingInk.chipFill(over: ground)
+            return NotchPalette.restingInk.chipFill
         }
         return NotchPalette.spotlight
     }

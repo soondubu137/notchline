@@ -1727,21 +1727,6 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
-    /// The hue the aggregate mark is drawn in.
-    ///
-    /// Taste, and it cannot become anything else: every entry shares the
-    /// greyscale's two lightnesses, so this changes no brightness and no width
-    /// (``AggregateInk``). Existing installs take the default with everybody
-    /// else — there is no hue to migrate, because until this preference existed
-    /// the mark was drawn at exactly it.
-    @Published var aggregateInk: AggregateInk {
-        didSet {
-            preferences?.set(
-                aggregateInk.rawValue,
-                forKey: Self.aggregateInkDefaultsKey
-            )
-        }
-    }
     @Published private(set) var lastIntegrationMessage: String
     @Published private(set) var hasCompletedOnboarding: Bool
 
@@ -1750,7 +1735,6 @@ final class MonitorStore: ObservableObject {
     private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
     private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
     private static let namesWorkOnPillDefaultsKey = "namesWorkOnPill"
-    private static let aggregateInkDefaultsKey = "aggregateInk"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
@@ -1922,9 +1906,6 @@ final class MonitorStore: ObservableObject {
         self.namesWorkOnPill = preferences?.object(
             forKey: Self.namesWorkOnPillDefaultsKey
         ) as? Bool ?? true
-        self.aggregateInk = preferences?.string(
-            forKey: Self.aggregateInkDefaultsKey
-        ).flatMap(AggregateInk.init(rawValue:)) ?? .default
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
         ) ?? false
@@ -2355,10 +2336,10 @@ final class MonitorStore: ObservableObject {
         return sessions.map(\.projectName).filter { seen.insert($0).inserted }
     }
 
-    /// The aggregate mark's ink: the user's hue once a product is behind it,
-    /// the resting grey until then.
+    /// The aggregate mark's ink: ``NotchPalette/themeInk`` once a product is
+    /// behind it, the resting grey until then.
     var aggregateMatrixInk: NotchPalette.MatrixInk {
-        NotchPalette.aggregateInk(aggregateInk, isConnected: !isRestingOnly)
+        NotchPalette.matrixInk(isConnected: !isRestingOnly)
     }
 
 

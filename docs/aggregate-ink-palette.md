@@ -1,5 +1,14 @@
 # The aggregate mark's ink — a palette, and the preference it became
 
+> **Superseded, 2026-09-06.** The `Theme colour` picker this document designed is gone —
+> `AggregateInk`'s twelve cases, the Display group's row, and the stored preference all retired
+> together, along with the reference-specimen view they shared. The app now draws one fixed ink,
+> `NotchPalette.themeInk` (`NotchStatusMatrix.swift`), holding exactly the `hint` row's `sage`
+> values this document already recorded (`#1B1F1C` → `#DEE8E0`) — so nothing the palette actually
+> reasoned about was wrong, only the choice of handing it to the user. This page stays as the
+> record of that reasoning; do not build against it as a contract for a control that no longer
+> exists. See `docs/artifacts.md` for the stale `aggregateInk` preference key this leaves behind.
+
 > **Nothing here is void, and the palette's reach has grown.** [`colour-v2.md`](colour-v2.md)
 > makes this the app's *only* hue: no product owns one any more, and the same twelve pairs now
 > tint the badge that names a product on a row and in the footer — ground from the unlit value,
@@ -7,11 +16,10 @@
 > Two things below are affected and neither changes a value: §1's constraint is retired, and §7's
 > reference mark now stands for more than the mark.
 
-**Status: implemented.** The twelve `hint` inks are `AggregateInk`, the picker is
+**Status: superseded — see the note above.** The twelve `hint` inks were `AggregateInk`, the picker was
 the Display group's `Theme colour` (`Mark colour` until [`colour-v2.md`](colour-v2.md) §6, built 2026-09-05), §5's five questions are answered below in the
-order they were asked, and §7 is what the row draws beside the names. What stays recorded rather than built is the other
-twenty-four entries — `whisper` and `tint` — which wait on an intensity control
-earning its place.
+order they were asked, and §7 is what the row drew beside the names. What stays recorded rather than built is the other
+twenty-four entries — `whisper` and `tint` — which no longer have a control to wait on.
 
 The collapsed surface draws **one mark for every product at once**
 ([`compact-view-v2.md`](compact-view-v2.md) §2; the drawings are on

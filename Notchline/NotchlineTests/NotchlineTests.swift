@@ -364,12 +364,11 @@ struct NotchlineTests {
     /// presence channel reads backwards. Asserted as relative luminance rather
     /// than as a hex string, because that is the property that has to hold.
     ///
-    /// **It used to be checked against the two product inks and is now checked
-    /// against all twelve theme inks**, which is a stronger claim on a larger
-    /// set: the products' pairs retired with hue (`colour-v2.md` §11), and what
-    /// a connected mark can be drawn in is now whatever the user picked.
+    /// **Checked against the one theme ink**, now that there is only the one:
+    /// "an agent is connected" must never look dimmer than "nothing is
+    /// connected".
     @Test @MainActor
-    func theRestingGreyIsDarkerThanEveryThemeInk() {
+    func theRestingGreyIsDarkerThanTheThemeInk() {
         func luminance(_ ink: NotchPalette.MatrixInk) -> Double {
             func channel(_ value: Double) -> Double {
                 value <= 0.03928
@@ -382,12 +381,10 @@ struct NotchlineTests {
         }
 
         let resting = luminance(NotchPalette.restingInk)
-        for hue in AggregateInk.allCases {
-            #expect(resting <= luminance(hue.ink))
-            // Every theme ink can light. The resting mark cannot: with nothing
-            // connected there is nothing that could be running.
-            #expect(hue.ink.on != hue.ink.off)
-        }
+        #expect(resting <= luminance(NotchPalette.themeInk))
+        // The theme ink can light. The resting mark cannot: with nothing
+        // connected there is nothing that could be running.
+        #expect(NotchPalette.themeInk.on != NotchPalette.themeInk.off)
         #expect(NotchPalette.restingInk.on == NotchPalette.restingInk.off)
     }
 
@@ -609,7 +606,7 @@ struct NotchlineTests {
         /// The lit cells of one mark, in row-major order.
         func cells(_ state: NotchMatrixState) throws -> [CALayer] {
             let view = MatrixIndicatorView(frame: CGRect(x: 0, y: 0, width: 16, height: 16))
-            view.apply(state: state, size: 16, isAnimated: true, ink: AggregateInk.sage.ink)
+            view.apply(state: state, size: 16, isAnimated: true, ink: NotchPalette.themeInk)
             // The unlit bed is first and never animates; any lit pass will do.
             let passes = try #require(view.layer?.sublayers)
             return try #require(passes.last?.sublayers)
@@ -775,7 +772,7 @@ struct NotchlineTests {
                 state: state,
                 size: 16,
                 isAnimated: true,
-                ink: AggregateInk.sage.ink
+                ink: NotchPalette.themeInk
             )
         }
         func passes() throws -> [CALayer] { try #require(view.layer?.sublayers) }
@@ -931,11 +928,15 @@ struct NotchlineTests {
 
         // One mark first, then the other a beat later — the sequence that used
         // to desynchronise them.
+        let sampleInk = NotchPalette.MatrixInk(
+            offRed: 0x22 / 255, offGreen: 0x1D / 255, offBlue: 0x1C / 255,
+            onRed: 0xF0 / 255, onGreen: 0xE1 / 255, onBlue: 0xE0 / 255
+        )
         let builtCodexAt = CACurrentMediaTime()
-        let codex = try beginTimes(of: .running, ink: AggregateInk.sage.ink)
+        let codex = try beginTimes(of: .running, ink: NotchPalette.themeInk)
         try await Task.sleep(for: .milliseconds(120))
         let builtClaudeAt = CACurrentMediaTime()
-        let claudeCode = try beginTimes(of: .running, ink: AggregateInk.rose.ink)
+        let claudeCode = try beginTimes(of: .running, ink: sampleInk)
 
         // Every lit cell in a mark is anchored together, as it always was.
         // The phase each cell then shows is baked into its own track, not into
@@ -3609,7 +3610,7 @@ struct NotchlineTests {
         #expect(store.showsProductAttribution)
     }
 
-    /// **The badge is the row's one attribution, and its ink is the user's.**
+    /// **The badge and the mark share one ink, and it cannot drift.**
     ///
     /// This replaces four tests at once —
     /// `onlyTheTwoNamingStylesPutTheProductOnTheCaption`,
@@ -3618,34 +3619,18 @@ struct NotchlineTests {
     /// `theRowBlockOnlyGivesUpItsGutterWhileTheRailIsDrawn`. They pinned the
     /// four presentations `Distinguish products` offered, three of which
     /// answered *which product* in a channel other than the name and went with
-    /// the product hues (`colour-v2.md` §6). A one-value picker is not a
-    /// control, so the setting retires with them and the stored value is
-    /// ignored rather than migrated.
+    /// the product hues (`colour-v2.md` §6).
     ///
-    /// What replaces the four claims is the one the badge has to keep: it is
-    /// drawn from the **theme** ink, and it is the same pair the mark takes, so
-    /// the chip and the mark cannot drift.
+    /// **And it is no longer a picker's claim.** The twelve-hue `Theme colour`
+    /// control this test used to loop over is gone too — one ink, chosen once,
+    /// is not a control — so what is left to pin is the exact pair
+    /// (`#1B1F1C` under `#DEE8E0`) and that ``ProductBadge`` and the connected
+    /// mark read it from the same place rather than each keeping a copy.
     @Test @MainActor
-    func theBadgeTakesTheThemeInksOwnPair() {
-        for hue in AggregateInk.allCases {
-            #expect(NotchPalette.badgeInk(hue) == hue.ink)
-            #expect(
-                NotchPalette.badgeInk(hue)
-                    == NotchPalette.aggregateInk(hue, isConnected: true)
-            )
-        }
-        // Ground from the unlit value, text from the lit one -- and at the
-        // default that is `#1B1F1C` under `#DEE8E0`.
-        let sage = NotchPalette.badgeInk(.sage)
-        #expect(abs(sage.offRed - 0x1B / 255.0) < 0.001)
-        #expect(abs(sage.onRed - 0xDE / 255.0) < 0.001)
-
-        // **The chip's contrast is one check rather than twelve.** Every unlit
-        // value in the palette sits at the same lightness, so the grounds are
-        // indistinguishable from each other and only the ink moves.
-        let grounds = AggregateInk.allCases.map { NotchPalette.badgeInk($0).offRed }
-        let spread = (grounds.max() ?? 0) - (grounds.min() ?? 0)
-        #expect(spread < 0.04, "the grounds are one value, whichever entry is chosen")
+    func theBadgeAndTheMarkShareOneInk() {
+        #expect(abs(NotchPalette.themeInk.offRed - 0x1B / 255.0) < 0.001)
+        #expect(abs(NotchPalette.themeInk.onRed - 0xDE / 255.0) < 0.001)
+        #expect(NotchPalette.themeInk == NotchPalette.matrixInk(isConnected: true))
     }
 
     /// **A row is `80` with a badge on it and `80` without one.**
@@ -3805,9 +3790,14 @@ struct NotchlineTests {
     /// This replaces `anUnknownAttributionStyleFallsBackToTheDefault`, which
     /// pinned the picker's own fallback. Every install lands on the badge
     /// whichever of the four it had, and the stale key stays where it is: it
-    /// costs nothing, and reading it back would be the migration
-    /// `colour-v2.md` §6 says there is not (`Theme colour` keeps its own value
-    /// under its own key, which is what actually had to survive).
+    /// costs nothing, and reading it back would be a migration this app does
+    /// not do.
+    ///
+    /// **`aggregateInk` joins it.** The `Theme colour` picker that wrote this
+    /// key is gone too, and an install that has one on disk from before
+    /// should start exactly like a fresh one: this only proves that setting
+    /// it does not crash construction, since nothing on the store can read it
+    /// back any more to disagree.
     @Test @MainActor
     func aStoredAttributionStyleIsIgnoredRatherThanMigrated() {
         let defaults = UserDefaults(suiteName: "rail-\(UUID().uuidString)")!
@@ -3815,9 +3805,7 @@ struct NotchlineTests {
         defaults.set("steel", forKey: "aggregateInk")
 
         let store = MonitorStore(services: [], preferences: defaults)
-        // The theme survives, which is the one preference the badge reads.
-        #expect(store.aggregateInk == .steel)
-        // And nothing on the store answers to the retired key any more, so a
+        // Nothing on the store answers to either retired key any more, so a
         // row's badge is drawn on presence alone.
         #expect(!store.showsProductAttribution)
         store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
@@ -4598,7 +4586,11 @@ struct NotchlineTests {
     /// and a breathing column never reads as a mark going out.
     @Test @MainActor
     func theBreathsFloorStaysAboveTheMarkItStandsBeside() {
-        for ink in [AggregateInk.sage.ink, AggregateInk.rose.ink] {
+        let sampleInk = NotchPalette.MatrixInk(
+            offRed: 0x22 / 255, offGreen: 0x1D / 255, offBlue: 0x1C / 255,
+            onRed: 0xF0 / 255, onGreen: 0xE1 / 255, onBlue: 0xE0 / 255
+        )
+        for ink in [NotchPalette.themeInk, sampleInk] {
             let channels = [
                 (ink.onRed, ink.offRed),
                 (ink.onGreen, ink.offGreen),
@@ -5089,100 +5081,19 @@ struct NotchlineTests {
         #expect(store.spokenCollapsedCountsText == "2 sessions, 2 subagents")
     }
 
-    /// **The mark's palette is the greyscale, rotated.**
+    /// **The running loom stays legible for the whole of its loop.**
     ///
-    /// This is the whole of why the hue can be a preference at all: brightness
-    /// is the collapsed surface's attention channel, so a setting able to dim
-    /// the mark asking for a person would be a setting that changes what the
-    /// mark *means*. Every entry shares one lit lightness and one unlit one, so
-    /// choosing a colour cannot change how bright the mark gets — and cannot
-    /// change any width either (`aggregate-ink-palette.md` §2).
+    /// This used to be pinned by way of the Settings specimen's own sweep,
+    /// which ran the loom for two whole turns on the theory that a hue is seen
+    /// lit, mid-decay and nearly out at once. The specimen and the picker it
+    /// sat beside are gone (`Theme colour` is one value now, not a choice), but
+    /// the claim about the pattern itself does not depend on either: the loom
+    /// still has to hold some cell near full on every frame, against the
+    /// pattern it replaced — the knock — which spends most of itself at the
+    /// darkest this surface ever goes.
     @Test @MainActor
-    func everyMarkColourIsTheSameBrightnessAndClearsTheRestingGrey() {
-        func luminance(_ red: Double, _ green: Double, _ blue: Double) -> Double {
-            0.2126 * red + 0.7152 * green + 0.0722 * blue
-        }
-        let resting = NotchPalette.restingInk
-        let restingLuminance = luminance(resting.onRed, resting.onGreen, resting.onBlue)
-
-        var lit: [Double] = []
-        var unlit: [Double] = []
-        for hue in AggregateInk.allCases {
-            let ink = hue.ink
-            lit.append(luminance(ink.onRed, ink.onGreen, ink.onBlue))
-            unlit.append(luminance(ink.offRed, ink.offGreen, ink.offBlue))
-            // **Every unlit colour is brighter than the resting grey**, so
-            // "an agent is connected" never looks dimmer than "nothing is
-            // connected" (§4).
-            #expect(
-                luminance(ink.offRed, ink.offGreen, ink.offBlue) > restingLuminance,
-                "\(hue.displayName) sinks under the resting grey"
-            )
-            #expect(ink.on != ink.off, "an aggregate mark can light")
-        }
-        // One lightness at each end, to within the rounding a hex triple takes.
-        #expect((lit.max() ?? 0) - (lit.min() ?? 0) < 0.05)
-        #expect((unlit.max() ?? 0) - (unlit.min() ?? 0) < 0.01)
-        // And the whole set is plainly the greyscale it replaced, rather than a
-        // set of colours that happen to be pale.
-        #expect((lit.min() ?? 0) > 0.75)
-    }
-
-    /// **The picker orders by distance from both products, and blocks nothing.**
-    ///
-    /// The constraint the palette was built under is that the aggregate must
-    /// never read as a dim Codex or a dim Claude Code. So the farthest hue
-    /// comes first and the most confusable last, and `Steel` — `8°` from Codex
-    /// — is offered anyway, because it is the user's bar
-    /// (`aggregate-ink-palette.md` §5).
-    ///
-    /// **The equidistant pair is no longer said out loud.** The row used to
-    /// print a `★` beside the two, which is the palette's reasoning shown on a
-    /// control as a rating; the ordering carries it, and the row spends that
-    /// space on a specimen of the mark instead. What the pair still decides is
-    /// the default, so it stays pinned here.
-    @Test @MainActor
-    func theMarkColourPickerLeadsWithTheHuesFurthestFromBothProducts() {
-        let ordered = AggregateInk.ordered
-        #expect(ordered.count == 12, "twelve hues at one chroma, not thirty-six")
-        #expect(Set(ordered) == Set(AggregateInk.allCases), "nothing is hidden")
-
-        let distances = ordered.map(\.distanceFromNearestProduct)
-        #expect(distances == distances.sorted(by: >), "\(distances)")
-        #expect(ordered.first == .sage)
-        #expect(ordered.last == .steel, "the most confusable hue is offered last")
-
-        // `150°` and `330°` are the only two as far from both products as any
-        // hue can be.
-        let equidistant = AggregateInk.allCases.filter(\.isEquidistantFromBothProducts)
-        #expect(Set(equidistant) == [.sage, .mauve])
-        // And every row in the list is the plain name: no star, and no swatch
-        // either — the reference mark beside the popup is what shows the hue.
-        #expect(AggregateInk.sage.displayName == "Sage")
-        #expect(AggregateInk.allCases.allSatisfy { !$0.displayName.contains("★") })
-        // The default is one of them, and it is what an install that has never
-        // opened this row draws.
-        #expect(AggregateInk.default == .sage)
-        #expect(AggregateInk.default.isEquidistantFromBothProducts)
-    }
-
-    /// **The reference mark sweeps twice, and the sweep is why it is legible.**
-    ///
-    /// `Mark colour` answers a change of selection by running the loom for two
-    /// whole turns, so the hue is seen lit, mid-decay and nearly out at once,
-    /// on the surface it will actually be drawn on. It used to run the double
-    /// knock, and that is the choice this pins: both patterns loop in `1.2s`,
-    /// so what separates them is only how much of that loop has colour in it.
-    /// The knock is four flashes and then the darkest this surface ever goes —
-    /// every cell together, under the resting level for twenty of its
-    /// thirty-six frames — which is a hue shown for a tenth of the time it is
-    /// on screen. The loom is under it on none of them.
-    @Test @MainActor
-    func theMarkColourSpecimenSweepsTwiceAndStaysLitThroughout() throws {
+    func theRunningLoomStaysLegibleThroughoutItsLoop() throws {
         let loom = NotchMatrixState.running
-        let period = try #require(loom.period)
-        #expect(AggregateInkSpecimen.sweepDuration == period * 2)
-
         let cells = (0 ..< MatrixGrid.cellCount).map { loom.track(forCell: $0) }
         let frames = cells.map(\.count).max() ?? 1
         // Two rings on two clocks and a still centre, so no two frames of the
@@ -5221,7 +5132,7 @@ struct NotchlineTests {
     @Test @MainActor
     func aSpecimenStartsAtItsFirstFrameAndAMarkOnTheBarDoesNot() throws {
         let size = PanelMetrics.statusMatrixSize
-        let ink = AggregateInk.sage.ink
+        let ink = NotchPalette.themeInk
         let period = try #require(NotchMatrixState.running.period)
 
         func sweep(_ view: MatrixIndicatorView, startsAtItsFirstFrame: Bool) -> CFTimeInterval {
@@ -5298,14 +5209,11 @@ struct NotchlineTests {
             )
         )
 
-        // **The ink.** Chosen, and reaching the mark — but only once something
-        // is connected: the resting grey is not tinted, because it means
-        // nothing is connected and a colour there would apply to a state with
-        // no agent in it.
-        #expect(store.aggregateInk == .default)
-        #expect(store.aggregateMatrixInk == AggregateInk.sage.ink)
-        store.aggregateInk = .mauve
-        #expect(store.aggregateMatrixInk == AggregateInk.mauve.ink)
+        // **The ink.** ``NotchPalette/themeInk``, reaching the mark — but only
+        // once something is connected: the resting grey is not tinted,
+        // because it means nothing is connected and a colour there would
+        // apply to a state with no agent in it.
+        #expect(store.aggregateMatrixInk == NotchPalette.themeInk)
         let disconnected = MonitorStore(displays: [flat], services: [])
         disconnected.applyForTesting(
             makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
@@ -5780,12 +5688,15 @@ struct NotchlineTests {
 
     /// A tile has to stay above whatever it is drawn on.
     ///
-    /// The dim ground was a fixed `#242424`, and a session row lights past that
-    /// under the pointer -- so the one mark on the row turned into a hole at
-    /// the exact moment the pointer was on it. Lifting off the brighter of the
-    /// ink and the row keeps the resting value and rises with the row.
+    /// The dim ground is a fixed `#242424`, lifted off the unlit ink towards
+    /// white. **This used to also have to hold over a session row's own
+    /// fill**, which lit past `#242424` under the pointer and while held
+    /// down -- so a fixed value turned into a hole at the exact moment the
+    /// pointer was on it. Hover and press are a border and a halo now, drawn
+    /// on top rather than a change to the row's own black, so a tile drawn on
+    /// a row is always drawn on the same ground the panel itself is.
     @Test @MainActor
-    func theDimGroundStaysAboveTheRowItIsDrawnOn() {
+    func theDimGroundLiftsTheUnlitInkTowardsWhite() {
         let ink = NotchPalette.restingInk
         func luminance(_ color: Color) -> Double {
             let components = NSColor(color).usingColorSpace(.sRGB)!
@@ -5795,24 +5706,9 @@ struct NotchlineTests {
                     + components.blueComponent
             )
         }
-        // On black it is exactly what it has always been: the unlit grey lifted.
-        #expect(abs(luminance(ink.chipFill(over: .black)) - 3 * (0x24 / 255.0)) < 0.02)
-        for ground in [
-            NotchPalette.SurfaceGround.black,
-            .rowHovered,
-            .rowPressed
-        ] {
-            #expect(luminance(ink.chipFill(over: ground)) > luminance(ground.color))
-        }
-        // And it only ever rises, so hovering a row never dims its mark.
-        #expect(
-            luminance(ink.chipFill(over: .rowPressed))
-                > luminance(ink.chipFill(over: .rowHovered))
-        )
-        #expect(
-            luminance(ink.chipFill(over: .rowHovered))
-                > luminance(ink.chipFill(over: .black))
-        )
+        // Exactly what it has always been: the unlit grey lifted towards white.
+        #expect(abs(luminance(ink.chipFill) - 3 * (0x24 / 255.0)) < 0.02)
+        #expect(luminance(ink.chipFill) > luminance(ink.off))
     }
 
     /// The indicator is a fixed size derived from the label, not a share of the

@@ -224,7 +224,7 @@ private struct OnboardingView: View {
     }
 }
 
-/// The five appearances, live, in the ink the user has chosen.
+/// The five appearances, live, in the surface's one ink.
 ///
 /// They animate here for the same reason they animate in the notch: the
 /// pattern *is* the motion, and a still grid says far less than a moving one.
@@ -236,12 +236,10 @@ private struct OnboardingView: View {
 /// for as long as hue said which product: first as a single matrix cut on its
 /// own diagonal, then as a stacked pair in the two brand colours. Both are
 /// gone with the colours (`colour-v2.md` §1) — the surface has one aggregate
-/// mark standing for every product at once, in the ink chosen under
-/// `Theme colour`, and a legend showing anything else would be teaching a
-/// drawing the product never makes.
+/// mark standing for every product at once, in ``NotchPalette/themeInk``, and
+/// a legend showing anything else would be teaching a drawing the product
+/// never makes.
 private struct MatrixLegend: View {
-    @EnvironmentObject private var store: MonitorStore
-
     private static let states: [(NotchMatrixState, String)] = [
         (.running, "Working..."),
         (.approvalNeeded, "Approval"),
@@ -258,7 +256,7 @@ private struct MatrixLegend: View {
                         NotchStatusMatrix(
                             state: entry.0,
                             size: MarkSpecimenMetrics.matrixSize,
-                            ink: store.aggregateInk.ink
+                            ink: NotchPalette.themeInk
                         )
                     }
 
@@ -288,9 +286,7 @@ private struct MatrixLegend: View {
 /// past the matrix's own bounds, which at this size is less than the padding
 /// here.
 ///
-/// Shared by the two windows that stand a mark on a light card — this one's
-/// legend and Settings' `Theme colour` row — rather than each cutting its own
-/// scrap. A mark shown off the notch should look the same wherever it is shown.
+/// A mark shown off the notch should look the same wherever it is shown.
 struct NotchChip<Content: View>: View {
     @ViewBuilder let content: () -> Content
 

@@ -585,7 +585,7 @@ private struct CompactTrailingSlot: View {
     /// The ground a stopped reading fills with: the dim end of the row's own
     /// pair, unchanged, so a frozen figure up here and a finished row below it
     /// are the same mark.
-    private static let stoppedGround = NotchPalette.restingInk.chipFill(over: .black)
+    private static let stoppedGround = NotchPalette.restingInk.chipFill
 
     /// Fading rather than appearing, because the wing they stand in is a width
     /// that opens for them: a reading arriving at full ink would be drawn over
@@ -897,7 +897,7 @@ private struct ExpandedPanelFooter: View {
     private var table: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.footerCaptionHeight) {
             ForEach(store.footerRules) { rule in
-                FooterProductGroup(rule: rule, hue: store.aggregateInk)
+                FooterProductGroup(rule: rule)
             }
         }
     }
@@ -906,7 +906,6 @@ private struct ExpandedPanelFooter: View {
 /// One product's group: its badge and spend, then a line per window.
 private struct FooterProductGroup: View {
     let rule: FooterRule
-    let hue: AggregateInk
 
     var body: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.footerCaptionSpacing) {
@@ -934,7 +933,7 @@ private struct FooterProductGroup: View {
     /// part of what says which level a line is on**.
     private var outerRow: some View {
         HStack(spacing: PanelMetrics.footerLeaderClearance) {
-            ProductBadge(name: rule.agent.displayName, hue: hue)
+            ProductBadge(name: rule.agent.displayName)
 
             Rectangle()
                 .fill(Color.white.opacity(0.10))
@@ -1179,8 +1178,30 @@ private struct OpenRow: View {
 
     var body: some View {
         ZStack {
+            // Permanently at the hover weight, never at rest -- an open row
+            // reads as a live session's own row would the instant the
+            // pointer arrived, because it is always the one thing on this
+            // surface being looked at. (Adjacent, not done here: this is a
+            // committed, sunken state rather than a transient one under the
+            // pointer, and the pressed pair -- see ``NotchPalette/RowEmphasis``
+            // -- would say that more precisely than reusing hover's.)
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(NotchPalette.SurfaceGround.rowHovered.color)
+                .fill(Color.black)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(
+                            NotchPalette.themeInk.on.opacity(
+                                NotchPalette.RowEmphasis.hoverBorderOpacity
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .shadow(
+                    color: NotchPalette.themeInk.on.opacity(
+                        NotchPalette.RowEmphasis.hoverGlowOpacity
+                    ),
+                    radius: NotchPalette.RowEmphasis.hoverGlowRadius
+                )
 
             VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                 head
@@ -1204,8 +1225,8 @@ private struct OpenRow: View {
             HStack(spacing: 8) {
                 SessionRowCaption(
                     session: session,
-                    hue: store.aggregateInk,
-                    showsAttribution: store.showsProductAttribution
+                    showsAttribution: store.showsProductAttribution,
+                    isEmphasized: true
                 )
                 Spacer(minLength: 8)
                 // The header and the position in the set, on the caption line's
@@ -2080,9 +2101,9 @@ private struct OptionRow: View {
     /// The numeral, or the box that replaces it where several may be taken.
     ///
     /// §5.5: with `multiSelect` the numerals become `12 × 12` boxes — the
-    /// recessed step empty, the theme ink's lit value filled. That is the third
-    /// reader of the user's own hue (`panel-v2.md` §2), and it is a box rather
-    /// than a digit because a digit would promise a key that does not tick.
+    /// recessed step empty, ``NotchPalette/themeInk``'s lit value filled. It is
+    /// a box rather than a digit because a digit would promise a key that does
+    /// not tick.
     @ViewBuilder
     private var handle: some View {
         if allowsSeveralAnswers {
@@ -2092,7 +2113,7 @@ private struct OptionRow: View {
             )
             .fill(
                 isTicked
-                    ? NotchPalette.badgeInk(store.aggregateInk).on
+                    ? NotchPalette.themeInk.on
                     : NotchPalette.recessedGround
             )
             .frame(width: 12, height: 12)
@@ -2179,13 +2200,20 @@ private struct SeamContent: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(ground.color)
+                .fill(Color.black)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(
+                            NotchPalette.themeInk.on.opacity(borderOpacity),
+                            lineWidth: 1
+                        )
+                )
 
             HStack(spacing: 8) {
                 // The caption idiom exactly, separator included.
                 Text("Recent · \(count)")
                     .font(.system(size: 11, weight: .light))
-                    .foregroundStyle(NotchPalette.label)
+                    .foregroundStyle(isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label)
                     .fixedSize()
 
                 // **The list's own top rule drawn again**, and it stops short
@@ -2215,12 +2243,28 @@ private struct SeamContent: View {
             maxHeight: PanelMetrics.recentSeamHeight
         )
         .animation(.easeOut(duration: 0.16), value: store.isRecentExpanded)
+        .animation(
+            isHovered
+                ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
+                : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
+            value: isHovered
+        )
+        .animation(
+            isPressed
+                ? .easeInOut(duration: NotchPalette.RowEmphasis.pressEnterDuration)
+                : .easeInOut(duration: NotchPalette.RowEmphasis.pressExitDuration),
+            value: isPressed
+        )
     }
 
-    private var ground: NotchPalette.SurfaceGround {
-        if isPressed { return .rowPressed }
-        if isHovered { return .rowHovered }
-        return .black
+    private var isEmphasized: Bool { isHovered || isPressed }
+
+    /// The Recent seam and a retired row take the dimmer of the two border
+    /// weights, and no halo at all — see ``NotchPalette/RowEmphasis``.
+    private var borderOpacity: Double {
+        if isPressed { return NotchPalette.RowEmphasis.utilityPressedBorderOpacity }
+        if isHovered { return NotchPalette.RowEmphasis.utilityHoverBorderOpacity }
+        return 0
     }
 }
 
@@ -2288,7 +2332,14 @@ private struct RetiredRowContent: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(ground.color)
+                .fill(Color.black)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(
+                            NotchPalette.themeInk.on.opacity(borderOpacity),
+                            lineWidth: 1
+                        )
+                )
 
             HStack(spacing: 12) {
                 breadcrumb
@@ -2299,7 +2350,7 @@ private struct RetiredRowContent: View {
                 // window and the reading agree (§2.3).
                 Text(departure.ageText(at: store.recentReadAt))
                     .font(.system(size: 13, weight: .light).monospacedDigit())
-                    .foregroundStyle(NotchPalette.label)
+                    .foregroundStyle(isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label)
                     .fixedSize()
             }
             .padding(.horizontal, PanelMetrics.sessionRowPadding)
@@ -2309,6 +2360,18 @@ private struct RetiredRowContent: View {
             maxWidth: .infinity,
             minHeight: PanelMetrics.retiredRowHeight,
             maxHeight: PanelMetrics.retiredRowHeight
+        )
+        .animation(
+            isHovered
+                ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
+                : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
+            value: isHovered
+        )
+        .animation(
+            isPressed
+                ? .easeInOut(duration: NotchPalette.RowEmphasis.pressEnterDuration)
+                : .easeInOut(duration: NotchPalette.RowEmphasis.pressExitDuration),
+            value: isPressed
         )
     }
 
@@ -2321,15 +2384,12 @@ private struct RetiredRowContent: View {
     private var breadcrumb: some View {
         HStack(spacing: 6) {
             if store.showsProductAttribution {
-                ProductBadge(
-                    name: departure.session.agent.displayName,
-                    hue: store.aggregateInk
-                )
+                ProductBadge(name: departure.session.agent.displayName)
             }
 
             (
                 Text("\(departure.session.projectName) · ")
-                    .foregroundStyle(NotchPalette.label)
+                    .foregroundStyle(isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label)
                     + Text(departure.session.title)
                     .foregroundStyle(NotchPalette.reading)
             )
@@ -2352,10 +2412,14 @@ private struct RetiredRowContent: View {
         )
     }
 
-    private var ground: NotchPalette.SurfaceGround {
-        if isPressed { return .rowPressed }
-        if isHovered { return .rowHovered }
-        return .black
+    private var isEmphasized: Bool { isHovered || isPressed }
+
+    /// The Recent seam and a retired row take the dimmer of the two border
+    /// weights, and no halo at all — see ``NotchPalette/RowEmphasis``.
+    private var borderOpacity: Double {
+        if isPressed { return NotchPalette.RowEmphasis.utilityPressedBorderOpacity }
+        if isHovered { return NotchPalette.RowEmphasis.utilityHoverBorderOpacity }
+        return 0
     }
 }
 
@@ -2370,14 +2434,25 @@ private struct SessionRowContent: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(backgroundColor)
+                .fill(Color.black)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(
+                            NotchPalette.themeInk.on.opacity(borderOpacity),
+                            lineWidth: 1
+                        )
+                )
+                .shadow(
+                    color: NotchPalette.themeInk.on.opacity(glowOpacity),
+                    radius: glowRadius
+                )
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                     SessionRowCaption(
                         session: session,
-                        hue: store.aggregateInk,
-                        showsAttribution: store.showsProductAttribution
+                        showsAttribution: store.showsProductAttribution,
+                        isEmphasized: isEmphasized
                     )
 
                     SessionRowText(
@@ -2403,7 +2478,7 @@ private struct SessionRowContent: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                SessionStatusControl(session: session, ground: ground)
+                SessionStatusControl(session: session)
                     .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, PanelMetrics.sessionRowPadding)
@@ -2414,18 +2489,43 @@ private struct SessionRowContent: View {
             minHeight: PanelMetrics.sessionRowHeight,
             maxHeight: PanelMetrics.sessionRowHeight
         )
+        .animation(
+            isHovered
+                ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
+                : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
+            value: isHovered
+        )
+        .animation(
+            isPressed
+                ? .easeInOut(duration: NotchPalette.RowEmphasis.pressEnterDuration)
+                : .easeInOut(duration: NotchPalette.RowEmphasis.pressExitDuration),
+            value: isPressed
+        )
     }
 
     private var sweepsBody: Bool { store.sweepsBody(for: session) }
 
-    /// What the row is drawing behind its marks, so a tile can stay above it.
-    private var ground: NotchPalette.SurfaceGround {
-        if isPressed { return .rowPressed }
-        if isHovered { return .rowHovered }
-        return .black
-    }
+    private var isEmphasized: Bool { isHovered || isPressed }
 
-    private var backgroundColor: Color { ground.color }
+    /// The row's edge, in ``NotchPalette/themeInk``'s lit colour — see
+    /// ``NotchPalette/RowEmphasis``. No longer a change to the row's own
+    /// fill, which stays black at every state so a tile drawn on it never has
+    /// to lift for anything but the panel's own black.
+    private var borderOpacity: Double {
+        if isPressed { return NotchPalette.RowEmphasis.pressedBorderOpacity }
+        if isHovered { return NotchPalette.RowEmphasis.hoverBorderOpacity }
+        return 0
+    }
+    private var glowOpacity: Double {
+        if isPressed { return NotchPalette.RowEmphasis.pressedGlowOpacity }
+        if isHovered { return NotchPalette.RowEmphasis.hoverGlowOpacity }
+        return 0
+    }
+    private var glowRadius: CGFloat {
+        isPressed
+            ? NotchPalette.RowEmphasis.pressedGlowRadius
+            : NotchPalette.RowEmphasis.hoverGlowRadius
+    }
 }
 
 private struct SessionStatusControl: View {
@@ -2439,8 +2539,6 @@ private struct SessionStatusControl: View {
     /// held here rather than passed down for the same reason — the row's own
     /// hover answers a different question.
     @State private var isMarkHovered = false
-    /// What the row is drawing behind this mark.
-    var ground: NotchPalette.SurfaceGround = .black
 
     // One mark per row at most, and no hue — this surface says everything with
     // brightness and shape, and the amber and green dots were the only two
@@ -2494,7 +2592,7 @@ private struct SessionStatusControl: View {
             // product hue for it to be neutral *against*. One badge carrying
             // the whole count, with the ground saying whether any of them is
             // stopped.
-            SubagentBadgeView(badge: session.subagentBadge, ground: ground)
+            SubagentBadgeView(badge: session.subagentBadge)
         } else if let span = store.finishedElapsed(for: session) {
             // What the turn took, which the slot used to throw away. No other
             // part of this surface reports it, and it is what turns the mark
@@ -2589,7 +2687,7 @@ private struct SessionStatusControl: View {
     private var groundFill: Color? {
         if wantsAttention { return NotchPalette.spotlight }
         guard !session.status.keepsTiming else { return nil }
-        return NotchPalette.restingInk.chipFill(over: ground)
+        return NotchPalette.restingInk.chipFill
     }
 
     /// Whether this row wants the person, from either of the two places that
@@ -2647,17 +2745,21 @@ private struct SessionStatusControl: View {
 /// ellipsis, so losing its tail is the cheapest thing on this surface to lose.
 private struct SessionRowCaption: View {
     let session: MonitoredSession
-    let hue: AggregateInk
     let showsAttribution: Bool
+    /// Whether the row this caption sits in is under the pointer or held
+    /// down, so its own text can lift a shade the way the row's border does.
+    var isEmphasized: Bool = false
 
     var body: some View {
         HStack(spacing: 6) {
             if showsAttribution {
-                ProductBadge(name: session.agent.displayName, hue: hue)
+                ProductBadge(name: session.agent.displayName)
             }
 
             Text(session.projectName)
-                .foregroundStyle(NotchPalette.label)
+                .foregroundStyle(
+                    isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label
+                )
                 .font(.system(size: 11, weight: .light))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -2670,25 +2772,19 @@ private struct SessionRowCaption: View {
 
 /// A product's name, in the one presentation this surface has for it.
 ///
-/// Ground from the theme ink's unlit value and text from its lit one, so the
-/// chip and the mark on the bar can never drift: both read
-/// ``NotchPalette/badgeInk(_:)``, which is ``AggregateInk/ink`` under another
-/// name.
+/// Ground from ``NotchPalette/themeInk``'s unlit value and text from its lit
+/// one, so the chip and the mark on the bar can never drift.
 ///
 /// **The hue lives in the text, not in the ground, and that is by
-/// construction.** Every unlit value in the palette runs at `0.55 ×` the lit
-/// chroma at `L 0.235` — what makes a `5 × 5` dark grid carry any hue at all —
-/// and at badge size that reads as near-black whichever entry is chosen. So
-/// switching theme visibly changes the chip's text and barely touches its
-/// ground, which is the right way round: the ground's job is to be a boundary
-/// and the text's is to be the colour. It also means the chip's contrast is one
-/// check rather than twelve.
+/// construction.** The unlit value runs at `0.55 ×` the lit chroma at
+/// `L 0.235` — what makes a `5 × 5` dark grid carry any hue at all — and at
+/// badge size that reads as near-black. The ground's job is to be a boundary
+/// and the text's is to be the colour.
 private struct ProductBadge: View {
     let name: String
-    let hue: AggregateInk
 
     var body: some View {
-        let ink = NotchPalette.badgeInk(hue)
+        let ink = NotchPalette.themeInk
         Text(name)
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(ink.on)
