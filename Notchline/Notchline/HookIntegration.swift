@@ -524,6 +524,12 @@ protocol AgentHookVocabulary: Sendable {
     /// until they trust it again (ADR 0014) — so this is the second and last
     /// re-trust that definition is worth.
     nonisolated var answeringTimeoutSeconds: Int { get }
+    /// How this product spells an answer on the connection it is waiting on.
+    ///
+    /// Named from here so the reducer needs one injection point rather than
+    /// two, and a type of its own so that reading an event and answering it stay
+    /// separate kinds of knowledge. See ``RequestAnswering``.
+    nonisolated var answering: any RequestAnswering { get }
     /// `nil` means "not recognised": drop it and say so.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
 
@@ -548,6 +554,16 @@ protocol AgentHookVocabulary: Sendable {
 }
 
 extension AgentHookVocabulary {
+    /// The event whose connection an answer travels back on, if any.
+    ///
+    /// Read off the registration rather than named a second time: a definition
+    /// that hands the helper ``AgentHookHelper/answeringArgument`` is exactly a
+    /// definition whose connection is being held open, so the transport and the
+    /// registration cannot disagree about which one that is.
+    nonisolated var answeringEventName: String? {
+        managedDefinitions.first { $0.argument != nil }?.event
+    }
+
     /// How long the helper waits for an answer, which is inside
     /// ``answeringTimeoutSeconds`` by construction.
     ///
@@ -597,6 +613,7 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     /// name it without an instance.
     nonisolated static let answeringTimeout = 60 * 60
     nonisolated let answeringTimeoutSeconds = CodexHookVocabulary.answeringTimeout
+    nonisolated let answering: any RequestAnswering = CodexRequestAnswering()
     nonisolated let agent: AgentKind = .codex
     nonisolated let restoreDefinitionAdvice =
         "Run /hooks in Codex and trust the definition again."
@@ -746,6 +763,7 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// to be wrong is one settings write away from being right (ADR 0016).
     nonisolated static let answeringTimeout = 24 * 60 * 60
     nonisolated let answeringTimeoutSeconds = ClaudeCodeHookVocabulary.answeringTimeout
+    nonisolated let answering: any RequestAnswering = ClaudeCodeRequestAnswering()
     nonisolated let agent: AgentKind = .claudeCode
     /// ADR 0016: this app writes that file now, so the repair is a switch
     /// rather than an edit, and the sentence says which one.
@@ -1447,6 +1465,18 @@ nonisolated struct PendingApproval: Sendable, Equatable {
     /// `nil` is an ordinary answer: a wait whose payload carried nothing
     /// readable is still a wait, and the row still says a person is wanted.
     let request: AgentRequest?
+
+    /// The same wait, with its request no longer answerable.
+    ///
+    /// The wait itself stands: §8.1 is that answering does not retire a row.
+    nonisolated func withdrawingReplyTicket() -> PendingApproval {
+        PendingApproval(
+            toolUseID: toolUseID,
+            isInferred: isInferred,
+            openedAt: openedAt,
+            request: request?.answerable(on: nil)
+        )
+    }
 }
 
 /// A question the turn is blocked on, and what it is asking.
@@ -1464,6 +1494,15 @@ nonisolated struct PendingInput: Sendable, Equatable {
     /// What is being asked, where the event carried it. See
     /// ``PendingApproval/request`` for why it lives here rather than beside.
     let request: AgentRequest?
+
+    /// The same wait, with its request no longer answerable.
+    nonisolated func withdrawingReplyTicket() -> PendingInput {
+        PendingInput(
+            toolUseID: toolUseID,
+            openedAt: openedAt,
+            request: request?.answerable(on: nil)
+        )
+    }
 }
 
 /// A tool call that has been announced and not yet closed.
@@ -1726,6 +1765,28 @@ struct HookTurnState: Sendable {
     /// A subagent's *question* is deliberately not offered, exactly as its
     /// count is not drawn: whether one reaches a person at all is unmeasured,
     /// and a request this app cannot vouch for is worse than none.
+    /// Every connection this turn is holding open, its subagents' included.
+    ///
+    /// Deliberately *every* one and not only the request a row can open: a
+    /// subagent's approval that is not the one the row is drawing is still a
+    /// hook process this app is keeping waiting, and closing it because the
+    /// surface has nothing to say about it would answer that subagent's
+    /// question by silence.
+    nonisolated var heldReplyTickets: [HookReplyRegistry.Ticket] {
+        var tickets: [HookReplyRegistry.Ticket] = []
+        if let ticket = pendingInput?.request?.replyTicket { tickets.append(ticket) }
+        if let ticket = pendingApproval?.request?.replyTicket { tickets.append(ticket) }
+        for slots in subagentSlots.values {
+            if let ticket = slots.pendingInput?.request?.replyTicket {
+                tickets.append(ticket)
+            }
+            if let ticket = slots.pendingApproval?.request?.replyTicket {
+                tickets.append(ticket)
+            }
+        }
+        return tickets
+    }
+
     nonisolated var requestAwaitingAnAnswer: AgentRequest? {
         if let request = pendingInput?.request { return request }
         if let request = pendingApproval?.request { return request }
@@ -2569,6 +2630,23 @@ nonisolated enum HookPayloadDistiller {
 nonisolated struct DeliveredHookEvent: Sendable {
     let payload: HookPayload
     let receivedAt: Date
+    /// The connection this event arrived on, where it is still open.
+    ///
+    /// Set only on the one event per product that asks a person something. It
+    /// travels with the event rather than being looked up later because the
+    /// thing it names is a *descriptor*, and the only moment at which this
+    /// payload and that descriptor are both in hand is the read queue.
+    var replyTicket: HookReplyRegistry.Ticket?
+
+    nonisolated init(
+        payload: HookPayload,
+        receivedAt: Date,
+        replyTicket: HookReplyRegistry.Ticket? = nil
+    ) {
+        self.payload = payload
+        self.receivedAt = receivedAt
+        self.replyTicket = replyTicket
+    }
 }
 
 /// The assistant text one session is currently printing.
@@ -2955,6 +3033,13 @@ actor HookEventRepository {
     nonisolated private let inbox = HookDeliveryInbox()
     nonisolated private let previews = HookSessionPreviewStore()
     nonisolated private let changes = HookChangeBroadcast()
+    /// The connections this product's hooks are being kept waiting on.
+    ///
+    /// Lock-protected rather than actor-isolated, and for the same reason as
+    /// the preview store beside it (`AGENTS.md` §6.3): a descriptor is handed
+    /// over on the listener's serial read queue, and an actor hop there would
+    /// put the reducer's mailbox between a product and its own transport.
+    nonisolated private let replies = HookReplyRegistry()
 
     private var hasObservedEvent: Bool
     private var hasObservedLiveEvent = false
@@ -3047,7 +3132,12 @@ actor HookEventRepository {
     /// the decode, so a `PostToolUse` carrying a megabyte of tool result is the
     /// same event as one carrying none (CR-030); what the transport hands over
     /// is bounded, what the reducer is told is not the same thing at all.
-    nonisolated func deliver(_ body: Data, at receivedAt: Date) {
+    @discardableResult
+    nonisolated func deliver(
+        _ body: Data,
+        at receivedAt: Date,
+        on descriptor: Int32? = nil
+    ) -> AgentHookListener.Disposition {
         guard let payload = HookPayload.distilled(
             from: body,
             admittingRequestWhere: vocabulary.carriesRequest(forEvent:toolName:)
@@ -3065,7 +3155,7 @@ actor HookEventRepository {
             // it: nothing rendered changed, and the refresh path drains every
             // cycle anyway.
             inbox.recordUnreadablePayload()
-            return
+            return .close
         }
         // Our own quota reading is a real session firing real hooks.
         // Compared as paths rather than URLs: a URL built from a payload string
@@ -3074,7 +3164,7 @@ actor HookEventRepository {
         if let ignoredWorkingDirectory, let cwd = payload.workingDirectory,
            URL(fileURLWithPath: cwd).standardizedFileURL.path
             == ignoredWorkingDirectory.standardizedFileURL.path {
-            return
+            return .close
         }
 
         // Assistant text stops here. Folding it costs one bounded scan and
@@ -3085,7 +3175,7 @@ actor HookEventRepository {
         // per delta. See ``HookSessionPreviewStore/fold``.
         if let deltaEvent = vocabulary.messageDeltaEventName, eventName == deltaEvent {
             guard let delta = payload.delta, let sessionID = payload.sessionID else {
-                return
+                return .close
             }
             // A subagent's words are not the row's answer, and this is the one
             // path a subagent's event could reach the user by: the fold happens
@@ -3100,7 +3190,7 @@ actor HookEventRepository {
             // is not a price worth paying to find that out from a user.
             if let agentID = payload.agentID,
                !agentID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return
+                return .close
             }
             if previews.fold(
                 delta: delta,
@@ -3113,11 +3203,31 @@ actor HookEventRepository {
             ) {
                 changes.signal()
             }
-            return
+            return .close
         }
 
-        inbox.append(DeliveredHookEvent(payload: payload, receivedAt: receivedAt))
+        // The one event per product whose connection an answer travels back on.
+        // Held here rather than after the reduce, because this is the only
+        // moment at which the payload and its descriptor are both in hand — and
+        // held *by handing it away*, so this queue, whose serialness is what
+        // preserves arrival order, never waits on anybody.
+        //
+        // A ticket that the reducer then does not attach to a wait is closed by
+        // the reconciliation after the drain, so this cannot leak by admitting
+        // too much.
+        var ticket: HookReplyRegistry.Ticket?
+        if let descriptor, eventName == vocabulary.answeringEventName {
+            ticket = replies.hold(descriptor, answering: payload.toolInput)
+        }
+        inbox.append(
+            DeliveredHookEvent(
+                payload: payload,
+                receivedAt: receivedAt,
+                replyTicket: ticket
+            )
+        )
         Task { await self.reduceWhatHasLanded() }
+        return ticket == nil ? .close : .held
     }
 
     /// Reduces everything the transport has handed over, in arrival order.
@@ -3161,6 +3271,7 @@ actor HookEventRepository {
             didReduceSinceLastReport = true
             recordFirstEventOfThisLaunch()
         }
+        releaseConnectionsNoWaitStillNames()
         let didOpenToolCall = didOpenToolCallInThisBatch
         didOpenToolCallInThisBatch = false
         // The projection first, so a batch that both opened a call and changed
@@ -3169,6 +3280,93 @@ actor HookEventRepository {
         if didOpenToolCall, vocabulary.wakesOnToolCallOpened {
             changes.signal()
         }
+    }
+
+    /// Answers one request on the connection it arrived on.
+    ///
+    /// Returns whether the answer reached the product. `false` is an ordinary
+    /// outcome with two ordinary causes, and the row says which is which by
+    /// saying neither: the connection is gone — settled in the product, or the
+    /// hook process killed with it — or this product will not accept an answer
+    /// of this shape at all, which today is a question on Codex
+    /// (``RequestAnswering``).
+    ///
+    /// **Answering does not retire the row** (`answer-in-notch.md` §8.1): a
+    /// granted command is a Turn that is now running, and the product's own
+    /// next event is what closes the wait. What does change is that the request
+    /// stops being answerable — the connection it would have travelled on is
+    /// closed either way, so leaving `canBeAnswered` true would offer a second
+    /// affirmative the app could not deliver.
+    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) -> Bool {
+        guard let body = vocabulary.answering.hookOutput(
+            for: answer,
+            updating: replies.input(for: ticket)
+        ) else {
+            return false
+        }
+        let delivered = replies.answer(ticket, with: body)
+        withdrawTicket(ticket)
+        return delivered
+    }
+
+    /// Takes one connection's name off whatever wait is still holding it.
+    ///
+    /// The mirror of the reconciliation below: that one closes a connection no
+    /// wait names, and this forgets a connection that is no longer open. Both
+    /// exist so that "is this answerable" has exactly one answer — is there a
+    /// connection — rather than two that can disagree.
+    private func withdrawTicket(_ ticket: HookReplyRegistry.Ticket) {
+        for (threadID, var turn) in turnsByThreadID {
+            var changed = false
+            if turn.pendingApproval?.request?.replyTicket == ticket {
+                turn.pendingApproval = turn.pendingApproval?.withdrawingReplyTicket()
+                changed = true
+            }
+            if turn.pendingInput?.request?.replyTicket == ticket {
+                turn.pendingInput = turn.pendingInput?.withdrawingReplyTicket()
+                changed = true
+            }
+            for (agentID, var slots) in turn.subagentSlots {
+                if slots.pendingApproval?.request?.replyTicket == ticket {
+                    slots.pendingApproval = slots.pendingApproval?.withdrawingReplyTicket()
+                    turn.subagentSlots[agentID] = slots
+                    changed = true
+                }
+                if slots.pendingInput?.request?.replyTicket == ticket {
+                    slots.pendingInput = slots.pendingInput?.withdrawingReplyTicket()
+                    turn.subagentSlots[agentID] = slots
+                    changed = true
+                }
+            }
+            if changed { turnsByThreadID[threadID] = turn }
+        }
+    }
+
+    /// Closes every held connection the reducer is no longer holding a wait for.
+    ///
+    /// **The whole lifecycle of a held descriptor, in one place.** Seven sites
+    /// already clear a wait — the paired close, the inferred resolution, the
+    /// turn ending, a session going away, a reading that says the dialog was
+    /// answered elsewhere, a subagent stopping, a turn boundary — and none of
+    /// them knows a connection exists. Reconciling after the drain means none of
+    /// them has to: a rule that holds until one site forgets it is exactly the
+    /// shape CR-030 turned out to be, and this is the same argument that put the
+    /// request inside the wait rather than in a table beside it.
+    ///
+    /// It also covers the case admitting the connection could not: a payload
+    /// held on the read queue and then dropped by the reducer as unplaceable
+    /// names no wait at the next drain, so its connection closes and its
+    /// product carries on unchanged.
+    ///
+    /// Cheap by construction, and it has to be, running once per drain: the set
+    /// is empty for everyone with nothing waiting, and `retain(only:)` walks
+    /// only what is actually held.
+    private func releaseConnectionsNoWaitStillNames() {
+        var live: Set<HookReplyRegistry.Ticket> = []
+        for turn in turnsByThreadID.values {
+            for ticket in turn.heldReplyTickets { live.insert(ticket) }
+        }
+        replies.retain(only: live)
     }
 
     /// One event is the only proof of trust this app can obtain.
@@ -3653,7 +3851,8 @@ actor HookEventRepository {
                 agentID: agentID,
                 threadID: threadID,
                 event: event,
-                at: delivered.receivedAt
+                at: delivered.receivedAt,
+                replyTicket: delivered.replyTicket
             )
             return true
         }
@@ -3679,13 +3878,18 @@ actor HookEventRepository {
         // this event's -- a `PermissionRequest` carries none of its own on
         // either product. Lazy is the point twice over: the ten signals that
         // ask nobody anything never touch `tool_input` at all.
+        //
+        // Filed on this event's connection as it is read, so answerability is
+        // decided by the one fact that decides it -- whether the descriptor
+        // that carried this request is still open.
+        let replyTicket = delivered.replyTicket
         let requestAsked: (String) -> AgentRequest? = { [vocabulary] toolUseID in
             vocabulary.request(
                 forEvent: eventName,
                 toolName: event.toolName,
                 toolInput: event.toolInput,
                 openedBy: toolUseID
-            )
+            )?.answerable(on: replyTicket)
         }
 
         switch signal {
@@ -3811,9 +4015,14 @@ actor HookEventRepository {
                     // not blank a request the call that opened this wait
                     // already supplied -- and must not carry one across to a
                     // *different* call, which is why this is keyed on the id.
+                    //
+                    // Re-filed on *this* event's connection: the request may be
+                    // the one the opening call supplied, but the connection an
+                    // answer travels back on is the one that just arrived.
                     request: requestAsked(openToolUse.id) ?? (
                         state.pendingApproval?.toolUseID == openToolUse.id
-                            ? state.pendingApproval?.request
+                            ? state.pendingApproval?.request?
+                                .answerable(on: replyTicket)
                             : nil
                     )
                 )
@@ -4085,7 +4294,8 @@ actor HookEventRepository {
         agentID: String,
         threadID: String,
         event: HookPayload,
-        at receivedAt: Date
+        at receivedAt: Date,
+        replyTicket: HookReplyRegistry.Ticket?
     ) {
         guard var turn = turnsByThreadID[threadID] else { return }
         var slots = turn.subagentSlots[agentID] ?? AgentWaitSlots()
@@ -4131,7 +4341,7 @@ actor HookEventRepository {
                         toolName: event.toolName,
                         toolInput: event.toolInput,
                         openedBy: toolUseID
-                    )
+                    )?.answerable(on: replyTicket)
                 )
             case .approvalWaitOpened:
                 slots.pendingApproval = PendingApproval(
@@ -4143,7 +4353,7 @@ actor HookEventRepository {
                         toolName: event.toolName,
                         toolInput: event.toolInput,
                         openedBy: toolUseID
-                    )
+                    )?.answerable(on: replyTicket)
                 )
             default:
                 break
@@ -4171,9 +4381,9 @@ actor HookEventRepository {
                     toolName: event.toolName,
                     toolInput: event.toolInput,
                     openedBy: openToolUse.id
-                ) ?? (
+                )?.answerable(on: replyTicket) ?? (
                     slots.pendingApproval?.toolUseID == openToolUse.id
-                        ? slots.pendingApproval?.request
+                        ? slots.pendingApproval?.request?.answerable(on: replyTicket)
                         : nil
                 )
             )

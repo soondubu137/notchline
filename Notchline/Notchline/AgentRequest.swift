@@ -38,22 +38,52 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// special case. So this is a fact about one request rather than a setting,
     /// and the vocabulary that read the request is what knows it.
     ///
-    /// **False everywhere today**, because no write path is built yet (§14.2).
-    /// That is why the mark says `Read` rather than `Answer` under the pointer:
-    /// the affirmative ground is the return key made visible, and offering one
-    /// the app cannot deliver is a promise made quietly (§11 rule 03).
-    let canBeAnswered: Bool
+    /// **Derived from ``replyTicket``, and it cannot be set independently.** A
+    /// request is answerable exactly when a connection is being held open for
+    /// it — not when its product *could* accept an answer, and not when its
+    /// status happens to be `Approval needed`. Offering an affirmative the app
+    /// cannot deliver is a promise made quietly (§11 rule 03), so the one fact
+    /// that decides it is the one that would carry the answer.
+    nonisolated var canBeAnswered: Bool { replyTicket != nil }
+
+    /// The connection this request arrived on, while it is still held.
+    ///
+    /// `nil` on every request that reached this app down a connection already
+    /// closed — every product surface whose approval does not arrive as the
+    /// registered answering event, and every request at all until the row can
+    /// send one. The row then says `Read`, which is true.
+    ///
+    /// Not drawn and not compared by the change projection: it is how an answer
+    /// finds its way back, and the surface's business with it is only whether
+    /// there is one.
+    let replyTicket: HookReplyRegistry.Ticket?
 
     nonisolated init(
         id: String,
         toolName: String?,
         form: Form,
-        canBeAnswered: Bool = false
+        replyTicket: HookReplyRegistry.Ticket? = nil
     ) {
         self.id = id
         self.toolName = toolName
         self.form = form
-        self.canBeAnswered = canBeAnswered
+        self.replyTicket = replyTicket
+    }
+
+    /// The same request, filed against the connection it arrived on.
+    ///
+    /// The vocabulary reads the request out of the payload and knows nothing
+    /// about descriptors; the reducer holds both. Rebuilding here rather than
+    /// making the field `var` keeps the type a value the surface can only read.
+    nonisolated func answerable(
+        on replyTicket: HookReplyRegistry.Ticket?
+    ) -> AgentRequest {
+        AgentRequest(
+            id: id,
+            toolName: toolName,
+            form: form,
+            replyTicket: replyTicket
+        )
     }
 
     nonisolated enum Form: Sendable, Equatable {

@@ -275,8 +275,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
         // none" is part of that projection -- while the deltas themselves stay
         // off it, because three a second is not a redraw rate.
         let resolvedListener = listener ?? AgentHookListener(clock: clock) {
-            [repository] body, receivedAt in
-            repository.deliver(body, at: receivedAt)
+            [repository] body, receivedAt, descriptor in
+            repository.deliver(body, at: receivedAt, on: descriptor)
         }
         self.listener = resolvedListener
         self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()

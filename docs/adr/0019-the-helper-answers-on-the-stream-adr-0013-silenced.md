@@ -59,6 +59,14 @@ The payload that arrived on that event carried `tool_name`, `tool_input`, `permi
 
 **A held connection is a hook process the product is waiting on.** It is released the moment the request settles, the app closes it, or the app goes away — all three measured above — and it is bounded by `-w` in every other case.
 
+**The close was the only back-pressure in the transport, and one event per product gives it up.** `receivePayload` runs on a *serial* queue whose serialness is what preserves arrival order, so the descriptor is handed to `HookReplyRegistry` and the queue returns at once; waiting on that queue would park every subsequent event from that product for the length of a human decision. What is given up is bounded by what a held connection means: a Turn stopped on the tool it just asked about has nothing behind it to reorder.
+
+**Nothing tells this app that a hook process went away.** The half-close that makes the reply channel work also means the read side is already at EOF on every held connection, so there is no disconnect to subscribe to — a peer that has gone is discovered when the answer is written and `write` fails with `EPIPE`. The reference implementation treats "hook process disconnected" as a resolution; this one cannot, and says so rather than watching for a signal that would fire immediately and always.
+
+**Letting go is reconciled, not remembered.** Seven sites already clear a wait, and none of them knows a connection exists: after every drain the registry is told which tickets the reducer still holds and closes the rest. A release beside each of those seven is the shape CR-030 turned out to be — a rule that holds until one site forgets it.
+
 ## Status
 
-The helper, the argument and the registration are implemented. Tests: `theHelperOpensTheReplyChannelOnlyOnTheEventThatAsks`, `theHelperGivesUpInsideTheWindowTheDefinitionRegisters`, `theHelperDeliversWhenTheAppIsUpAndIsSilentWhenItIsNot` (which runs the real script in both forms, with the app up and with it closed, and with the agent told to stay out), `onlyTheAnsweringDefinitionEverChangedAndTheRestAreByteIdentical`.
+Implemented end to end: the helper, the argument, the registration, the held descriptor and one `RequestAnswering` provider per product. What is not built is the surface that calls it — the answer row is the next part, so nothing in the app writes an answer yet.
+
+Tests: `theHelperOpensTheReplyChannelOnlyOnTheEventThatAsks`, `theHelperGivesUpInsideTheWindowTheDefinitionRegisters`, `theHelperDeliversWhenTheAppIsUpAndIsSilentWhenItIsNot` (which runs the real script in both forms, with the app up and with it closed, and with the agent told to stay out), `onlyTheAnsweringDefinitionEverChangedAndTheRestAreByteIdentical`, `anAnswerTravelsBackUpTheConnectionTheRequestArrivedOn` (the real helper, a real `nc`, and the decision read off its stdout), `onlyTheEventThatAsksHoldsItsConnectionAndTheWaitClosesIt` (a real `socketpair`, held, answered, and closed by the paired `PostToolUse`), `aQuestionIsAnsweredOnOneProductAndDeclinedOnTheOther`.

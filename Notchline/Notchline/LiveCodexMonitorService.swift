@@ -344,8 +344,8 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         // connection carries one payload; the closure below is called on the
         // listener's serial read queue, which is what keeps arrival order.
         self.hookListener = hookListener ?? AgentHookListener(clock: clock) {
-            [hookEvents] body, receivedAt in
-            hookEvents.deliver(body, at: receivedAt)
+            [hookEvents] body, receivedAt, descriptor in
+            hookEvents.deliver(body, at: receivedAt, on: descriptor)
         }
         self.projectMetadata = projectMetadata
         self.unreadState = unreadState

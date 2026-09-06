@@ -24,11 +24,18 @@ import os
 /// reducer could read them back. Removing the queue removed that reader's last
 /// client. Same store, same reducer, one transport each.
 ///
-/// The helper is ``AgentHookHelper/script(socketPath:)``: `nc -U` and an
-/// unconditional `exit 0`. One connection carries one payload and is closed by
-/// the writer, so the frame is simply "read to EOF" — there is no request line,
-/// no header, and no token, because the socket is `0600` in this user's own
-/// directory and the filesystem answers the question a bearer token used to.
+/// The helper is ``AgentHookHelper/script(socketPath:answerWindowSeconds:)``:
+/// `nc -U` and an unconditional `exit 0`. One connection carries one payload and
+/// the writer half-closes, so the frame is simply "read to EOF" — there is no
+/// request line, no header, and no token, because the socket is `0600` in this
+/// user's own directory and the filesystem answers the question a bearer token
+/// used to.
+///
+/// **Half-closes, and that word is now load-bearing.** `nc` shuts down only its
+/// write side when its stdin ends, so the descriptor this end holds is at EOF
+/// for reading and still open for writing. That is what lets one connection
+/// carry a payload *and* an answer, on the one event per product that asks a
+/// person something: see ``Disposition/held`` and ``HookReplyRegistry``.
 ///
 /// **Arrival is stamped here.** Claude Code's hook payloads carry no timestamp
 /// of any kind — measured 2026-08-16 — and the Codex helper no longer writes
@@ -80,10 +87,27 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
     /// ``receivePayload(on:)``, which is where that is made true.
     static let receiveTimeoutMicroseconds: Int32 = 250_000
 
+    /// What becomes of a connection once its payload has been handed over.
+    nonisolated enum Disposition: Sendable {
+        /// Close it, which is the acknowledgement. Every lifecycle event.
+        case close
+        /// Somebody else has taken the descriptor and will close it.
+        ///
+        /// The one event per product that opens a wait for a person: the answer
+        /// travels back up this same connection, so it stays open — but not
+        /// here, and not on this queue. See ``HookReplyRegistry``.
+        case held
+    }
+
     private let clock: any MonitorClock
     private let fileManager: FileManager
     /// Where one payload goes, called on ``readQueue`` in arrival order.
-    private let deliver: @Sendable (Data, Date) -> Void
+    ///
+    /// It is handed the descriptor as well as the bytes, because whether this
+    /// connection is one an answer travels back on is a question about the
+    /// *payload* — which product, which event — and this type deliberately
+    /// knows neither.
+    private let deliver: @Sendable (Data, Date, Int32) -> Disposition
 
     /// Listening state, under a lock rather than a queue.
     ///
@@ -119,7 +143,7 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
     init(
         clock: any MonitorClock = SystemMonitorClock(),
         fileManager: FileManager = .default,
-        deliver: @escaping @Sendable (Data, Date) -> Void
+        deliver: @escaping @Sendable (Data, Date, Int32) -> Disposition
     ) {
         self.clock = clock
         self.fileManager = fileManager
@@ -366,9 +390,16 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
     /// only back-pressure in the path: two payloads from one session could then
     /// be in flight at once, and the order the read queue exists to preserve
     /// would be decided by the scheduler.
+    ///
+    /// **Unless the payload is one a person has to answer**, in which case the
+    /// descriptor is handed to ``HookReplyRegistry`` and this returns without
+    /// closing it. The hand-off is a dictionary insert; the *waiting* happens
+    /// nowhere near this queue, because a queue whose serialness is what
+    /// preserves arrival order cannot also hold a human decision. The
+    /// back-pressure given up there is bounded by what a held connection means:
+    /// a Turn stopped on the tool it just asked about has nothing behind it to
+    /// reorder.
     private func receivePayload(on descriptor: Int32) {
-        defer { close(descriptor) }
-
         var body = Data()
         readBody(on: descriptor, into: &body)
         // Handed over whatever it turned out to be, including nothing at all.
@@ -382,7 +413,9 @@ nonisolated final class AgentHookListener: @unchecked Sendable {
         // failing to deliver, which is exactly the kind of thing CR-029 says
         // must stop being silent. There is one place that can say so -- the
         // store -- so everything that arrives goes there and it decides.
-        deliver(body, clock.now())
+        if deliver(body, clock.now(), descriptor) == .close {
+            close(descriptor)
+        }
     }
 
     private func readBody(on descriptor: Int32, into payload: inout Data) {

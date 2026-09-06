@@ -114,3 +114,14 @@ Only the rules already asking that second question read it: summary status, prod
 
 **Primary quota window** — The rate-limit window the current Codex Desktop account marks as primary, expressed by the single quota ring.
 *Avoid:* token balance, total quota, tightest window.
+
+## Asking and answering
+
+**Request** — What one agent is asking a person, in the product's own words: a command to grant, a document to accept, a question with options, or a question with none ([`docs/answer-in-notch.md`](docs/answer-in-notch.md) §2.1). It is a thing the *product* composed and this app only draws — the app never annotates it, never marks a command as dangerous, and never summarises it.
+*Avoid:* prompt, dialog, permission, approval payload.
+
+**Answer** — What the person gave back: a grant, a refusal carrying what to do instead, or the answers to a question set. It travels on the hook connection the request arrived on and is written in that product's own schema ([ADR 0019](docs/adr/0019-the-helper-answers-on-the-stream-adr-0013-silenced.md)).
+*Avoid:* decision, response, permission grant, approval.
+
+**Answerable** — Said of one request, and true exactly when a connection is being held open for it. Not a property of a product, a status or a form: a request whose connection has closed is read, and the row says so.
+*Avoid:* actionable, interactive, live.

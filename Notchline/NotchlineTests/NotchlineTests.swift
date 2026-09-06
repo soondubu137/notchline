@@ -16608,8 +16608,8 @@ for line in sys.stdin:
             hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")
         )
         let repository = HookEventRepository(paths: paths)
-        let listener = AgentHookListener { body, receivedAt in
-            repository.deliver(body, at: receivedAt)
+        let listener = AgentHookListener { body, receivedAt, descriptor in
+            repository.deliver(body, at: receivedAt, on: descriptor)
         }
         defer { listener.stop() }
         #expect(listener.start(socketURL: paths.hookSocket))
@@ -17868,8 +17868,8 @@ for line in sys.stdin:
         try await registrar.install()
 
         let repository = HookEventRepository(paths: paths)
-        let listener = AgentHookListener { body, receivedAt in
-            repository.deliver(body, at: receivedAt)
+        let listener = AgentHookListener { body, receivedAt, descriptor in
+            repository.deliver(body, at: receivedAt, on: descriptor)
         }
         defer { listener.stop() }
         #expect(listener.start(socketURL: paths.hookSocket))
@@ -24878,8 +24878,8 @@ for line in sys.stdin:
             ),
             vocabulary: ClaudeCodeHookVocabulary()
         )
-        let listener = AgentHookListener { body, receivedAt in
-            repository.deliver(body, at: receivedAt)
+        let listener = AgentHookListener { body, receivedAt, descriptor in
+            repository.deliver(body, at: receivedAt, on: descriptor)
         }
         defer { listener.stop() }
         let socket = root.appendingPathComponent("hook.sock")
@@ -24939,8 +24939,8 @@ for line in sys.stdin:
             ),
             vocabulary: CodexHookVocabulary()
         )
-        let listener = AgentHookListener { body, receivedAt in
-            repository.deliver(body, at: receivedAt)
+        let listener = AgentHookListener { body, receivedAt, descriptor in
+            repository.deliver(body, at: receivedAt, on: descriptor)
         }
         defer { listener.stop() }
         let socket = root.appendingPathComponent("hook.sock")
@@ -24987,8 +24987,8 @@ for line in sys.stdin:
             ),
             vocabulary: ClaudeCodeHookVocabulary()
         )
-        let listener = AgentHookListener { body, receivedAt in
-            repository.deliver(body, at: receivedAt)
+        let listener = AgentHookListener { body, receivedAt, descriptor in
+            repository.deliver(body, at: receivedAt, on: descriptor)
         }
         defer { listener.stop() }
         let socket = root.appendingPathComponent("hook.sock")
@@ -26453,8 +26453,8 @@ for line in sys.stdin:
             paths: paths,
             vocabulary: ClaudeCodeHookVocabulary()
         )
-        let listener = AgentHookListener { body, receivedAt in
-            repository.deliver(body, at: receivedAt)
+        let listener = AgentHookListener { body, receivedAt, descriptor in
+            repository.deliver(body, at: receivedAt, on: descriptor)
         }
         defer { listener.stop() }
         let socket = root.appendingPathComponent("hook.sock")
@@ -26600,7 +26600,247 @@ for line in sys.stdin:
         #expect(recorder.count == 2)
     }
 
-    /// Hosting the test bundle is not running the product.
+    /// One event's connection is held, and every other one is closed.
+    ///
+    /// The read queue is serial, and its serialness is what preserves arrival
+    /// order — so the hand-off has to be a hand-off and not a wait. This pins
+    /// the three things that make it one: only the event whose definition
+    /// registers the long window is held, the connection really does stay open
+    /// until it is answered, and it closes the moment the wait it belongs to is
+    /// cleared, by a path that has never heard of connections.
+    @Test @MainActor
+    func onlyTheEventThatAsksHoldsItsConnectionAndTheWaitClosesIt() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-hold-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = HookEventRepository(
+            paths: HookIntegrationPaths(
+                supportDirectory: root.appendingPathComponent("AS"),
+                hooksConfiguration: root.appendingPathComponent("settings.json"),
+                agent: .claudeCode
+            ),
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+
+        try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s-1", "prompt_id": "t-1"
+        ]).deliver(to: repository)
+        _ = await repository.drainDeliveredEvents()
+
+        // A tool call, announced. Ordinary, and its connection is closed as
+        // every lifecycle event's has always been.
+        let announcing = try SocketPair()
+        #expect(
+            repository.deliver(
+                try JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "s-1", "prompt_id": "t-1",
+                    "tool_name": "Bash", "tool_use_id": "call-1",
+                    "tool_input": ["command": "rm -rf /tmp/x"]
+                ]),
+                at: Date(),
+                on: announcing.app
+            ) == .close
+        )
+
+        // The approval about that call. This one is held: it is the definition
+        // that registers a window a person can answer inside.
+        let asking = try SocketPair()
+        #expect(
+            repository.deliver(
+                try JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": "PermissionRequest",
+                    "session_id": "s-1", "prompt_id": "t-1",
+                    "tool_name": "Bash",
+                    "tool_input": ["command": "rm -rf /tmp/x"]
+                ]),
+                at: Date(),
+                on: asking.app
+            ) == .held
+        )
+
+        let waiting = await repository.drainDeliveredEvents()
+        let request = try #require(waiting.turns.first?.requestAwaitingAnAnswer)
+        // Answerable because a connection is being held for it, and for no
+        // other reason: not because the status is `Approval needed`, and not
+        // because this product could accept an answer in principle.
+        #expect(request.canBeAnswered)
+        #expect(!asking.isPeerClosed)
+
+        let ticket = try #require(request.replyTicket)
+        let granted = await repository.answer(.grant, on: ticket)
+        #expect(granted)
+        let sent = try #require(asking.readFromPeer())
+        let decoded = try JSONSerialization.jsonObject(with: sent) as? [String: Any]
+        #expect(decoded?["hookSpecificOutput"] != nil)
+
+        // Answering does not retire the row (§8.1) — a granted command is a
+        // Turn that is now running — but it does end the connection, so the
+        // request stops offering an affirmative nothing could carry.
+        let afterAnswer = await repository.observedState()
+        let stillWaiting = try #require(afterAnswer.turns.first?.requestAwaitingAnAnswer)
+        #expect(!stillWaiting.canBeAnswered)
+        #expect(afterAnswer.turns.first?.sessionStatus == .approvalNeeded)
+
+        // And a wait cleared the ordinary way closes its connection without any
+        // of the seven clearing sites knowing one exists. A second approval,
+        // then the paired close that ends it.
+        let second = try SocketPair()
+        #expect(
+            repository.deliver(
+                try JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": "PermissionRequest",
+                    "session_id": "s-1", "prompt_id": "t-1", "tool_name": "Bash",
+                    "tool_input": ["command": "rm -rf /tmp/y"]
+                ]),
+                at: Date(),
+                on: second.app
+            ) == .held
+        )
+        _ = await repository.drainDeliveredEvents()
+        #expect(!second.isPeerClosed)
+
+        try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "PostToolUse",
+            "session_id": "s-1", "prompt_id": "t-1", "tool_use_id": "call-1"
+        ]).deliver(to: repository)
+        _ = await repository.drainDeliveredEvents()
+        // The product is released rather than left waiting out its window: it
+        // carries on exactly as it does when this app is not running.
+        #expect(second.isPeerClosed)
+    }
+
+    /// An answer travels back up the connection the request arrived on.    /// An answer travels back up the connection the request arrived on.
+    ///
+    /// The whole write path against the real helper, run the way Claude Code
+    /// runs it: the payload goes in on stdin, the app holds the descriptor
+    /// rather than closing it, and what the app writes comes out of the
+    /// helper's stdout — which is the stream the product parses for a decision.
+    /// A stand-in would prove nothing about it, because the thing being pinned
+    /// is that `nc` is still there to read the reply after its own stdin ended.
+    @Test @MainActor
+    func anAnswerTravelsBackUpTheConnectionTheRequestArrivedOn() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-reply-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let paths = HookIntegrationPaths(
+            supportDirectory: root.appendingPathComponent("AS"),
+            hooksConfiguration: root.appendingPathComponent("settings.json"),
+            agent: .claudeCode
+        )
+        let setup = ClaudeCodeHookSetup(paths: paths)
+        #expect(await setup.prepareHelper())
+
+        let recorder = RecordedHookDelivery()
+        recorder.holds = true
+        let listener = AgentHookListener(deliver: recorder.deliver)
+        defer { listener.stop() }
+        #expect(listener.start(socketURL: paths.hookSocket))
+
+        let decision = try #require(
+            ClaudeCodeRequestAnswering().hookOutput(for: .grant, updating: nil)
+        )
+        // The helper is launched, and the answer is written once the payload
+        // has landed — which is the real order: a person is being asked, so the
+        // reply is always later than the request.
+        let answered = Task.detached {
+            for _ in 0 ..< 200 where recorder.count == 0 {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return recorder.answerHeld(with: decision)
+        }
+        let waiting = try runHelper(
+            at: paths.hookHelper,
+            stdin: try JSONSerialization.data(withJSONObject: [
+                "hook_event_name": "PermissionRequest",
+                "session_id": "session-1",
+                "tool_name": "Bash"
+            ]),
+            arguments: [AgentHookHelper.answeringArgument]
+        )
+        #expect(await answered.value)
+        // Exit 0 as ever, nothing on stderr as ever, and the decision on
+        // stdout — the one stream ADR 0013 closed and ADR 0019 reopens.
+        #expect(waiting.status == 0)
+        #expect(waiting.stderr.isEmpty)
+        #expect(waiting.stdout == decision)
+    }
+
+    /// What each product will act on, and what one of them will not.
+    ///
+    /// Both spell an approval identically, which is why the two providers look
+    /// alike; they differ on the one thing that matters, and that difference is
+    /// not a deferral. Codex documents `updatedInput` *reserved* and fails a
+    /// `PermissionRequest` hook **closed** if it is present, so answering a
+    /// question there would be worse than saying nothing.
+    @Test @MainActor
+    func aQuestionIsAnsweredOnOneProductAndDeclinedOnTheOther() throws {
+        let claude = ClaudeCodeRequestAnswering()
+        let codex = CodexRequestAnswering()
+
+        // The approval half, byte for byte, and it is the same on both.
+        let grant = Data(
+            #"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#.utf8
+        )
+        #expect(claude.hookOutput(for: .grant, updating: nil) == grant)
+        #expect(codex.hookOutput(for: .grant, updating: nil) == grant)
+
+        // A refusal carries what to do instead, and it is not decoration:
+        // measured against 2.1.261, the message reaches the model as the
+        // refused tool's own error.
+        let refusal = try #require(
+            claude.hookOutput(for: .refuse("write it to notes/ instead"), updating: nil)
+        )
+        let refused = try #require(
+            JSONSerialization.jsonObject(with: refusal) as? [String: Any]
+        )
+        let output = try #require(refused["hookSpecificOutput"] as? [String: Any])
+        let decision = try #require(output["decision"] as? [String: Any])
+        #expect(decision["behavior"] as? String == "deny")
+        #expect(decision["message"] as? String == "write it to notes/ instead")
+        #expect(codex.hookOutput(for: .refuse(nil), updating: nil) != nil)
+        // `interrupt` is never written by either: on Codex it fails the hook
+        // closed, on Claude Code it ends the Turn.
+        #expect(!String(decoding: refusal, as: UTF8.self).contains("interrupt"))
+
+        // A question, answered by handing the tool back its own input.
+        let input = JSONValue.object([
+            "questions": .array([.object(["question": .string("Which one?")])]),
+            "somethingElse": .string("kept")
+        ])
+        let answers: AgentAnswer = .answers([
+            AgentQuestionAnswer(question: "Which one?", answer: "The first", note: "quickly")
+        ])
+        let sent = try #require(claude.hookOutput(for: answers, updating: input))
+        let root = try #require(
+            JSONSerialization.jsonObject(with: sent) as? [String: Any]
+        )
+        let hookOutput = try #require(root["hookSpecificOutput"] as? [String: Any])
+        let allow = try #require(hookOutput["decision"] as? [String: Any])
+        #expect(allow["behavior"] as? String == "allow")
+        let updated = try #require(allow["updatedInput"] as? [String: Any])
+        // Every field the tool was called with survives: `updatedInput`
+        // *replaces* the input, so dropping one would call the tool differently
+        // from the way the model called it.
+        #expect(updated["somethingElse"] as? String == "kept")
+        #expect(updated["questions"] != nil)
+        #expect(
+            (updated["answers"] as? [String: Any])?["Which one?"] as? String == "The first"
+        )
+        let annotations = try #require(updated["annotations"] as? [String: Any])
+        #expect((annotations["Which one?"] as? [String: Any])?["notes"] as? String == "quickly")
+
+        // And on Codex there is nothing to send rather than something to send
+        // badly.
+        #expect(codex.hookOutput(for: answers, updating: input) == nil)
+        // Nor is an input this app never saw invented: `updatedInput` replaces
+        // what the tool was called with, so a fabricated one loses every field.
+        #expect(claude.hookOutput(for: answers, updating: nil) == nil)
+    }
+
+    /// Hosting the test bundle is not running the product.    /// Hosting the test bundle is not running the product.
     ///
     /// **This suite runs inside the application it tests.** A macOS unit-test
     /// bundle has no executable of its own; it is injected into a host, and the
@@ -27140,6 +27380,64 @@ for line in sys.stdin:
         let err = errors.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return (process.terminationStatus, out, err)
+    }
+
+    /// Two ends of one connection, standing in for a hook process.
+    ///
+    /// A real `socketpair`, not a mock: what is being pinned is that a
+    /// descriptor handed to the reducer is still open, still writable, and
+    /// really closed when it is let go — and none of those is a fact about a
+    /// Swift type.
+    private final class SocketPair {
+        let app: Int32
+        let peer: Int32
+        private var peerClosed = false
+
+        init() throws {
+            var ends: [Int32] = [0, 0]
+            #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &ends) == 0)
+            app = ends[0]
+            peer = ends[1]
+        }
+
+        deinit {
+            if !peerClosed { close(peer) }
+        }
+
+        /// Whether the app's end has been closed, which the peer sees as EOF.
+        ///
+        /// Read with a short receive timeout, because "nothing has been written
+        /// and the peer is still there" and "the peer has gone" differ only in
+        /// whether the read ever returns.
+        var isPeerClosed: Bool {
+            var timeout = timeval(tv_sec: 0, tv_usec: 150_000)
+            setsockopt(
+                peer, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                socklen_t(MemoryLayout<timeval>.size)
+            )
+            var byte: UInt8 = 0
+            return recv(peer, &byte, 1, MSG_PEEK) == 0
+        }
+
+        /// Everything the app wrote, once it has closed its end.
+        func readFromPeer() -> Data? {
+            var timeout = timeval(tv_sec: 1, tv_usec: 0)
+            setsockopt(
+                peer, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                socklen_t(MemoryLayout<timeval>.size)
+            )
+            var received = Data()
+            var buffer = [UInt8](repeating: 0, count: 4_096)
+            while true {
+                let count = read(peer, &buffer, buffer.count)
+                if count > 0 {
+                    received.append(contentsOf: buffer[0 ..< count])
+                    continue
+                }
+                break
+            }
+            return received.isEmpty ? nil : received
+        }
     }
 
     /// The same helper, run by an agent that has been told to stay out.
@@ -29725,8 +30023,8 @@ private final class ClaudeCodeHarness {
             vocabulary: ClaudeCodeHookVocabulary()
         )
         repository = store
-        listener = AgentHookListener { body, receivedAt in
-            store.deliver(body, at: receivedAt)
+        listener = AgentHookListener { body, receivedAt, descriptor in
+            store.deliver(body, at: receivedAt, on: descriptor)
         }
         service = ClaudeCodeMonitorService(
             paths: paths,
@@ -31394,11 +31692,36 @@ private final class RecordedHookDelivery: @unchecked Sendable {
     private let lock = NSLock()
     private var bodies: [Data] = []
 
-    var deliver: @Sendable (Data, Date) -> Void {
-        { [self] body, _ in
+    /// What every connection this recorder is handed becomes.
+    ///
+    /// `.close` by default, which is what every lifecycle event is; a test that
+    /// wants to see a connection held sets ``holds`` and then answers it.
+    var holds = false
+    private var heldDescriptors: [Int32] = []
+
+    var deliver: @Sendable (Data, Date, Int32) -> AgentHookListener.Disposition {
+        { [self] body, _, descriptor in
             lock.lock()
             bodies.append(body)
+            let held = holds
+            if held { heldDescriptors.append(descriptor) }
             lock.unlock()
+            return held ? .held : .close
+        }
+    }
+
+    /// Writes one answer onto the connection most recently held, the way
+    /// ``HookReplyRegistry`` does, and closes it.
+    @discardableResult
+    func answerHeld(with body: Data) -> Bool {
+        lock.lock()
+        let descriptor = heldDescriptors.popLast()
+        lock.unlock()
+        guard let descriptor else { return false }
+        defer { close(descriptor) }
+        return body.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return true }
+            return write(descriptor, base, raw.count) == raw.count
         }
     }
 
