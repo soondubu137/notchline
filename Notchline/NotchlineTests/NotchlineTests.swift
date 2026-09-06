@@ -27461,7 +27461,128 @@ for line in sys.stdin:
         #expect(second.isPeerClosed)
     }
 
-    /// An answer travels back up the connection the request arrived on.    /// An answer travels back up the connection the request arrived on.
+    /// A question is answerable on the connection its own approval held.
+    ///
+    /// **The shape the whole `updatedInput` path exists for, driven as the
+    /// product actually sends it.** An `AskUserQuestion` raises two events for
+    /// one call: a `PreToolUse` that opens the *input* wait, and a
+    /// `PermissionRequest` ~25 ms later that carries no `tool_use_id` and is
+    /// the only connection an answer can travel back on. The status stays
+    /// `Input needed` — `transitioned(on:)` gives approval to input on purpose
+    /// — so `requestAwaitingAnAnswer` draws the input wait's request, and until
+    /// this the ticket sat on the approval slot beside it: the row drew the
+    /// question in full, `header · n/N`, options and all, and offered
+    /// `Answer in Claude Code`. Measured on a real Claude Code 2.1.263 session
+    /// on 2026-09-06, which is the only way it could have been found: every
+    /// test above builds an `AgentRequest` with a ticket already on it.
+    @Test @MainActor
+    func aQuestionIsAnswerableOnTheConnectionItsOwnApprovalHeld() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-ask-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = HookEventRepository(
+            paths: HookIntegrationPaths(
+                supportDirectory: root.appendingPathComponent("AS"),
+                hooksConfiguration: root.appendingPathComponent("settings.json"),
+                agent: .claudeCode
+            ),
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+
+        try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s-1", "prompt_id": "t-1"
+        ]).deliver(to: repository)
+        _ = await repository.drainDeliveredEvents()
+
+        let questions: [String: Any] = [
+            "questions": [[
+                "header": "Store",
+                "question": "Which store should the probe write to?",
+                "multiSelect": false,
+                "options": [
+                    ["label": "DuckDB", "description": "Columnar and fast for scans"],
+                    ["label": "SQLite", "description": "One file and everywhere"]
+                ]
+            ]]
+        ]
+
+        // The call that opens the input wait. Not held: `PreToolUse` is not the
+        // definition that registers a window a person can answer inside.
+        let announcing = try SocketPair()
+        #expect(
+            repository.deliver(
+                try JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "s-1", "prompt_id": "t-1",
+                    "tool_name": "AskUserQuestion", "tool_use_id": "ask-1",
+                    "tool_input": questions
+                ]),
+                at: Date(),
+                on: announcing.app
+            ) == .close
+        )
+
+        // The approval about the same call, borrowing its id. This one is held.
+        let asking = try SocketPair()
+        #expect(
+            repository.deliver(
+                try JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": "PermissionRequest",
+                    "session_id": "s-1", "prompt_id": "t-1",
+                    "tool_name": "AskUserQuestion",
+                    "tool_input": questions
+                ]),
+                at: Date(),
+                on: asking.app
+            ) == .held
+        )
+
+        let waiting = await repository.drainDeliveredEvents()
+        let turn = try #require(waiting.turns.first)
+        // The word on the mark is unchanged and is not what decides this.
+        #expect(turn.status == .inputNeeded)
+        let request = try #require(turn.requestAwaitingAnAnswer)
+        guard case let .questions(asked) = request.form else {
+            Issue.record("the row draws \(request.form) rather than a question")
+            return
+        }
+        #expect(asked.first?.header == "Store")
+        #expect(asked.first?.options.count == 2)
+        #expect(request.canBeAnswered, "a question drawn here must be answerable")
+        #expect(request.answerRow != nil)
+
+        // And the answer really travels: `updatedInput` is the tool's own input
+        // with the person's choices merged into it, so the call runs and
+        // returns them rather than being refused.
+        let ticket = try #require(request.replyTicket)
+        #expect(
+            await repository.answer(
+                .answers([
+                    AgentQuestionAnswer(
+                        question: "Which store should the probe write to?",
+                        answer: "SQLite"
+                    )
+                ]),
+                on: ticket
+            )
+        )
+        let sent = try #require(asking.readFromPeer())
+        let decoded = try JSONSerialization.jsonObject(with: sent) as? [String: Any]
+        let output = try #require(decoded?["hookSpecificOutput"] as? [String: Any])
+        let decision = try #require(output["decision"] as? [String: Any])
+        #expect(decision["behavior"] as? String == "allow")
+        let updated = try #require(decision["updatedInput"] as? [String: Any])
+        let answers = try #require(updated["answers"] as? [String: Any])
+        #expect(
+            answers["Which store should the probe write to?"] as? String == "SQLite"
+        )
+        // The tool's own input is handed back whole, not replaced by the
+        // answers: a merge that dropped `questions` would be a different call.
+        #expect(updated["questions"] != nil)
+    }
+
+    /// An answer travels back up the connection the request arrived on.
     ///
     /// The whole write path against the real helper, run the way Claude Code
     /// runs it: the payload goes in on stdin, the app holds the descriptor

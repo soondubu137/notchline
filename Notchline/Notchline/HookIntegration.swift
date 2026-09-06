@@ -4026,6 +4026,34 @@ actor HookEventRepository {
                             : nil
                     )
                 )
+                // **The connection belongs to the call, not to the slot it
+                // opened.** An `AskUserQuestion` opens the *input* wait on its
+                // own `PreToolUse` and then raises this event for the **same
+                // call**, and this event is the only connection an answer can
+                // travel back on. The row draws the input wait's request --
+                // `transitioned(on:)` keeps the status at `Input needed` and
+                // ``HookTurnState/requestAwaitingAnAnswer`` follows the status
+                // -- so leaving the ticket on the approval slot alone drew a
+                // question in full and offered no way to answer it: §11's
+                // reading form on a request a person could have settled here.
+                //
+                // Keyed on the id, which is what makes it safe: a borrowed
+                // approval about some *other* call than the one that opened the
+                // input wait carries its connection to that other call's slot
+                // and never to this one.
+                if state.pendingInputToolUseID == openToolUse.id,
+                   let waiting = state.pendingInput {
+                    state.pendingInput = PendingInput(
+                        toolUseID: waiting.toolUseID,
+                        openedAt: waiting.openedAt,
+                        // Same two rules as the approval above: the newer
+                        // request is the one held, and a request that did not
+                        // arrive must not blank the one the opening call
+                        // already supplied.
+                        request: requestAsked(waiting.toolUseID)
+                            ?? waiting.request?.answerable(on: replyTicket)
+                    )
+                }
                 state.sessionStatus = state.sessionStatus
                     .transitioned(on: .approvalNeeded)
             }
@@ -4571,18 +4599,29 @@ actor HookEventRepository {
                     // holding it there.
                     String(turn.pausedForBackgroundWork),
                     // The request the row can open, **identified rather than
-                    // spelled out**. A request is fixed by the wait it belongs
-                    // to -- one `tool_use_id` never carries two -- so its id and
-                    // its form say everything a redraw needs, and a 54 KiB plan
-                    // is not string-compared once per arriving event to discover
-                    // that it has not changed.
+                    // spelled out**: its id, its form, and whether a connection
+                    // is being held for it say everything a redraw needs, and a
+                    // 54 KiB plan is not string-compared once per arriving
+                    // event to discover that it has not changed.
+                    //
+                    // **Answerability is a term because it moves inside one
+                    // wait.** The premise this used to rest on -- one
+                    // `tool_use_id` never carries two requests, so the id fixes
+                    // it -- is true of the *body* and false of the answer: an
+                    // `AskUserQuestion` opens its input wait on a `PreToolUse`
+                    // and becomes answerable ~25 ms later, when the
+                    // `PermissionRequest` for the same call arrives with the
+                    // connection. Without this term the row goes on drawing
+                    // `Answer in Claude Code` over a question it could settle.
                     //
                     // It is also the only term that catches one case: with two
                     // subagents waiting, answering the first moves the request
                     // the row draws while `subagentsAwaitingApproval` -- a Bool
                     // -- stands still.
                     turn.requestAwaitingAnAnswer
-                        .map { "\($0.id)\u{2}\($0.form.name)" } ?? ""
+                        .map {
+                            "\($0.id)\u{2}\($0.form.name)\u{2}\($0.canBeAnswered)"
+                        } ?? ""
                 ].joined(separator: "\u{1}")
             }
             .sorted()
