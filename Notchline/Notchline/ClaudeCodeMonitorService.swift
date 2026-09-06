@@ -1731,7 +1731,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             // held there against a subagent's chatter, which is what makes it
             // an end rather than a moving target on the rows this product can
             // leave working after their turn.
-            finishedAt: turn.status == .completed ? turn.lastEventAt : nil
+            finishedAt: turn.status == .completed ? turn.lastEventAt : nil,
+            // No reviewer to subtract on this side: Claude Code has nothing
+            // like Codex's `auto_review`, so a wait this reducer holds is a
+            // person being asked, full stop.
+            request: turn.requestAwaitingAnAnswer
         )
     }
 

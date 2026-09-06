@@ -2433,7 +2433,17 @@ enum CodexSnapshotParser {
             // has stopped. `lastEventAt` is the turn's own last moment and is
             // held there against a subagent's chatter, which is what makes it
             // an end rather than a moving target.
-            finishedAt: status == .completed ? state.lastEventAt : nil
+            finishedAt: status == .completed ? state.lastEventAt : nil,
+            // **The same subtraction the status gets, in the same breath.** A
+            // thread whose approvals an automatic reviewer is handling does not
+            // draw `Approval needed`, and must not offer a request to answer
+            // either -- an `Answer` control over a decision nobody is being
+            // asked to make is the unsafe direction this reading exists to
+            // prevent. `inputNeeded` is the turn's own question and is never
+            // reviewed away, so it keeps its request whatever the reviewer is.
+            request: approvalsReachTheUser || status == .inputNeeded
+                ? state.requestAwaitingAnAnswer
+                : nil
         )
     }
 

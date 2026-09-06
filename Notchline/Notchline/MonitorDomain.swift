@@ -500,6 +500,20 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// `nil` on every unfinished row, where the clock is still running and the
     /// reading comes from ``startedAt`` and the tick instead.
     let finishedAt: Date?
+    /// What this row is being asked, where it is being asked something this app
+    /// can show.
+    ///
+    /// **Row data, like ``runningSubagentCount`` and
+    /// ``isPausedForBackgroundWork``, and not a fifth state.** The four states
+    /// already say a person is wanted; this says what they are wanted *for*, and
+    /// it changes nothing about which state the row is in or how it sorts.
+    ///
+    /// `nil` on every row that is not waiting, and on a waiting row whose
+    /// payload carried nothing this app could read -- which is a row that opens
+    /// nothing and sends the person to the product, exactly as every row does
+    /// today. That is the fail-closed direction: an absent request is a row that
+    /// behaves as it always has, never a row that draws an empty body.
+    let request: AgentRequest?
 
     nonisolated init(
         agent: AgentKind = .codex,
@@ -513,7 +527,8 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         runningSubagentCount: Int = 0,
         subagentsAwaitingApprovalCount: Int = 0,
         isPausedForBackgroundWork: Bool = false,
-        finishedAt: Date? = nil
+        finishedAt: Date? = nil,
+        request: AgentRequest? = nil
     ) {
         self.agent = agent
         self.threadID = threadID
@@ -527,6 +542,7 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.subagentsAwaitingApprovalCount = subagentsAwaitingApprovalCount
         self.isPausedForBackgroundWork = isPausedForBackgroundWork
         self.finishedAt = finishedAt
+        self.request = request
     }
 
     /// Whether the row says work is still in flight beside its own turn.

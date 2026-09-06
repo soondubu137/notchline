@@ -8346,7 +8346,7 @@ struct NotchlineTests {
             threadID: "thread-1",
             turnID: "turn-1",
             sessionStatus: .running,
-            pendingInputToolUseID: nil,
+            pendingInput: nil,
             pendingApproval: nil,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
@@ -8860,11 +8860,12 @@ struct NotchlineTests {
                 threadID: "thread-auto",
                 turnID: "turn-1",
                 sessionStatus: status,
-                pendingInputToolUseID: nil,
+                pendingInput: nil,
                 pendingApproval: PendingApproval(
                     toolUseID: "exec-1",
                     isInferred: true,
-                    openedAt: Date(timeIntervalSince1970: 1_002)
+                    openedAt: Date(timeIntervalSince1970: 1_002),
+                    request: nil
                 ),
                 startedAt: Date(timeIntervalSince1970: 1_000),
                 lastEventAt: Date(timeIntervalSince1970: 1_002),
@@ -9448,7 +9449,7 @@ struct NotchlineTests {
             threadID: "thread-without-turn",
             turnID: "turn-1",
             sessionStatus: .running,
-            pendingInputToolUseID: nil,
+            pendingInput: nil,
             pendingApproval: nil,
             startedAt: Date(timeIntervalSince1970: 1_000),
             lastEventAt: Date(timeIntervalSince1970: 1_000),
@@ -24824,17 +24825,37 @@ for line in sys.stdin:
 
     /// Selecting fields before the decode reads the same as decoding it all.
     ///
+    /// A gate that admits no request, for the tests that are about the other
+    /// three carried kinds.
+    ///
+    /// Written out rather than reaching for a product's vocabulary, because
+    /// these cases are about identities, text and lists: a gate that let a
+    /// request through would put a field they say nothing about into their
+    /// payloads, and the first one to grow a `tool_input` would start failing
+    /// for a reason that has nothing to do with what it pins.
+    private var admitsNoRequest: (String, String?) -> Bool { { _, _ in false } }
+
     /// The distiller decides which bytes `JSONDecoder` sees and nothing else,
     /// so the property that matters is that it never changes the answer. The
     /// cases are the ones a hand-written scan gets wrong: a brace inside a
     /// string, an escaped quote, nesting, every scalar kind, a key repeated,
     /// whitespace anywhere it is allowed, and an object with nothing in it.
+    ///
+    /// **One carve-out, and it is deliberate.** Since `tool_input` became a
+    /// carried field, parity holds only for payloads the *gate* admits: on an
+    /// event that opens no wait the distiller drops the request that a whole
+    /// decode would keep, which is the entire point of the gate (CR-030). So
+    /// every payload below either carries no `tool_input` or names an event
+    /// that asks somebody something. The refusal is pinned by
+    /// ``aToolResultsOwnArgumentsAreNotCarriedBackToTheReducer()``, where it is
+    /// the subject rather than an exception to one.
     @Test @MainActor
     func selectingFieldsReadsTheSameAsDecodingTheWholePayload() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
         let payloads = [
             #"{"hook_event_name":"Stop","session_id":"s-1","prompt_id":"p-1"}"#,
             #"{ "hook_event_name" : "Stop" ,\#n  "session_id" : "s-1" }"#,
-            #"{"tool_input":{"command":"echo \"}\" # }{"},"session_id":"s-2","hook_event_name":"PreToolUse","tool_use_id":"call-1"}"#,
+            #"{"tool_input":{"command":"echo \"}\" # }{"},"session_id":"s-2","hook_event_name":"PermissionRequest","tool_name":"Bash"}"#,
             #"{"tool_response":[1,2,{"a":[{"b":"},{"}]}],"session_id":"s-3"}"#,
             #"{"prompt":"a\ttab, an \"escape\", é and 😀","session_id":"s-4","turn_id":"t-4"}"#,
             #"{"index":-1.5e10,"final":true,"cancelled":false,"reason":null,"session_id":"s-5"}"#,
@@ -24850,7 +24871,10 @@ for line in sys.stdin:
         for text in payloads {
             let body = Data(text.utf8)
             let whole = try? JSONDecoder().decode(HookPayload.self, from: body)
-            #expect(HookPayload.distilled(from: body) == whole, "\(text)")
+            #expect(
+                HookPayload.distilled(from: body, admittingRequestWhere: admits) == whole,
+                "\(text)"
+            )
         }
     }
 
@@ -24868,7 +24892,9 @@ for line in sys.stdin:
             "session_id": String(repeating: "s", count: HookPayloadDistiller.maximumIdentityBytes),
             "prompt_id": "p-1"
         ])
-        let payload = try #require(HookPayload.distilled(from: body))
+        let payload = try #require(
+            HookPayload.distilled(from: body, admittingRequestWhere: admitsNoRequest)
+        )
         #expect(payload.hookEventName == "Stop")
         #expect(payload.turnID == "p-1")
         #expect(payload.sessionID == nil)
@@ -24897,7 +24923,12 @@ for line in sys.stdin:
             let whole = try #require(
                 try JSONDecoder().decode(HookPayload.self, from: body).prompt
             )
-            let carried = try #require(HookPayload.distilled(from: body)?.prompt)
+            let carried = try #require(
+                HookPayload.distilled(
+                    from: body,
+                    admittingRequestWhere: admitsNoRequest
+                )?.prompt
+            )
             #expect(carried.count < whole.count)
             #expect(whole.hasPrefix(carried), "cut at \(padding) is not a prefix")
         }
@@ -24915,10 +24946,602 @@ for line in sys.stdin:
     func aPayloadThatStopsPartWayThroughKeepsTheFieldsThatArrivedWhole() throws {
         let whole = #"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_use_id":"call-1","tool_response":"aaaaaaaaaa"}"#
         let cut = Data(whole.dropLast(15).utf8)
-        let payload = try #require(HookPayload.distilled(from: cut))
+        let payload = try #require(
+            HookPayload.distilled(from: cut, admittingRequestWhere: admitsNoRequest)
+        )
         #expect(payload.hookEventName == "PostToolUse")
         #expect(payload.sessionID == "s-1")
         #expect(payload.toolUseID == "call-1")
+    }
+
+    /// A tool result's own arguments are not carried back to the reducer.
+    ///
+    /// `PostToolUse` carries `tool_input` as well as `tool_response`, and it is
+    /// the event this whole file exists for: one per tool call, on the hottest
+    /// path, and the one whose loss left a row on `Approval needed` until the
+    /// turn's `Stop` (CR-030). Nobody is being asked anything when it fires, so
+    /// its copy of the request is stepped over unread — no copy, no decode, and
+    /// no second pass over the megabyte behind it.
+    ///
+    /// The gate that admits it on `PermissionRequest` and refuses it here is
+    /// the same one, asked twice: it is a fact about the event, not about the
+    /// key.
+    @Test @MainActor
+    func aToolResultsOwnArgumentsAreNotCarriedBackToTheReducer() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let arguments = #"{"command":"\#(String(repeating: "x", count: 100 * 1_024))"}"#
+
+        let after = #"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_name":"Bash","tool_use_id":"call-1","tool_input":\#(arguments),"tool_response":"done"}"#
+        let closed = try #require(
+            HookPayload.distilled(from: Data(after.utf8), admittingRequestWhere: admits)
+        )
+        #expect(closed.toolInput == nil)
+        // And the event itself still arrives whole, which is the half CR-030
+        // was actually about.
+        #expect(closed.hookEventName == "PostToolUse")
+        #expect(closed.toolUseID == "call-1")
+
+        let asking = #"{"hook_event_name":"PermissionRequest","session_id":"s-1","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}"#
+        let request = try #require(
+            HookPayload.distilled(from: Data(asking.utf8), admittingRequestWhere: admits)
+        )
+        #expect(request.toolInput == .object(["command": .string("rm -rf /tmp/x")]))
+    }
+
+    /// Every event that opens a wait carries its request, and no other one does.
+    ///
+    /// Pins the gate against both products' whole signal tables rather than
+    /// against a list written a second time. `answer-in-notch.md` §14.1 proposed
+    /// "`PermissionRequest` and `PreToolUse`", which sounds narrow and is not:
+    /// `PreToolUse` fires for every tool call. Measured 2026-09-05 over 30,909
+    /// tool calls in this machine's own transcripts, that gate admits all of
+    /// them and this one admits 56 — 0.18%.
+    @Test @MainActor
+    func everyEventThatOpensAWaitCarriesItsRequestAndNoOtherEventDoes() {
+        let cases: [(any AgentHookVocabulary, String, String?, Bool)] = [
+            (ClaudeCodeHookVocabulary(), "PermissionRequest", "Bash", true),
+            (ClaudeCodeHookVocabulary(), "PermissionRequest", "ExitPlanMode", true),
+            (ClaudeCodeHookVocabulary(), "PreToolUse", "AskUserQuestion", true),
+            (ClaudeCodeHookVocabulary(), "Elicitation", nil, true),
+            (ClaudeCodeHookVocabulary(), "PreToolUse", "Bash", false),
+            (ClaudeCodeHookVocabulary(), "PostToolUse", "Bash", false),
+            (ClaudeCodeHookVocabulary(), "PostToolUseFailure", "Bash", false),
+            (ClaudeCodeHookVocabulary(), "PermissionDenied", "Bash", false),
+            (ClaudeCodeHookVocabulary(), "UserPromptSubmit", nil, false),
+            (ClaudeCodeHookVocabulary(), "Stop", nil, false),
+            (CodexHookVocabulary(), "PermissionRequest", "shell", true),
+            (CodexHookVocabulary(), "PreToolUse", "request_user_input", true),
+            (CodexHookVocabulary(), "PreToolUse", "request_permissions", true),
+            (CodexHookVocabulary(), "PreToolUse", "shell", false),
+            (CodexHookVocabulary(), "PostToolUse", "shell", false),
+            (CodexHookVocabulary(), "UserPromptSubmit", nil, false),
+            (CodexHookVocabulary(), "Stop", nil, false)
+        ]
+        for (vocabulary, event, tool, expected) in cases {
+            #expect(
+                vocabulary.carriesRequest(forEvent: event, toolName: tool) == expected,
+                "\(vocabulary.agent.rawValue) \(event) \(tool ?? "-")"
+            )
+        }
+    }
+
+    /// A request is carried whichever order its keys arrive in.
+    ///
+    /// The gate needs `hook_event_name` and `tool_name`, and neither is promised
+    /// to precede `tool_input` — on Claude Code neither ever does, its keys
+    /// arriving alphabetically. So the request is held as a range and emitted
+    /// once the loop has ended, and the three orders below have to agree.
+    @Test @MainActor
+    func aRequestIsCarriedWhicheverOrderItsKeysArriveIn() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let orders = [
+            #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s-1"}"#,
+            #"{"session_id":"s-1","tool_input":{"command":"ls"},"tool_name":"Bash","hook_event_name":"PermissionRequest"}"#,
+            #"{"tool_input":{"command":"ls"},"session_id":"s-1","hook_event_name":"PermissionRequest","tool_name":"Bash"}"#
+        ]
+        for text in orders {
+            let payload = try #require(
+                HookPayload.distilled(from: Data(text.utf8), admittingRequestWhere: admits),
+                "\(text)"
+            )
+            #expect(payload.toolInput == .object(["command": .string("ls")]), "\(text)")
+        }
+    }
+
+    /// A request that arrives without its event name is left out.
+    ///
+    /// This is the fail-closed direction and it is the reason the emit waits
+    /// for the loop rather than for the key. A payload cut after a whole
+    /// `tool_input` but before `hook_event_name` has nothing left that can say
+    /// whether anybody is being asked anything, and a request drawn on an event
+    /// this app never established was asking is worse than no request at all.
+    /// The fields that did arrive whole still land, exactly as before.
+    @Test @MainActor
+    func aRequestThatArrivesWithoutItsEventNameIsLeftOut() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let whole = #"{"session_id":"s-1","tool_input":{"command":"ls"},"tool_name":"Bash","hook_event_name":"PermissionRequest"}"#
+        let cut = Data(whole.dropLast(40).utf8)
+        let payload = try #require(
+            HookPayload.distilled(from: cut, admittingRequestWhere: admits)
+        )
+        #expect(payload.sessionID == "s-1")
+        #expect(payload.toolInput == nil)
+    }
+
+    /// A request too long to carry is left out rather than cut short.
+    ///
+    /// The rule ``HookPayload/CarriedValue/list`` already states, for the same
+    /// reason: half an object is not JSON, so cutting one would make the *whole*
+    /// payload undecodable and lose the lifecycle event with it. It is written
+    /// down here rather than inherited from `.text` happening to guard its
+    /// shortening on `isString` — a fact about a neighbouring rule that a later
+    /// edit could quietly change.
+    ///
+    /// A request cut short would also be a different command, which is a worse
+    /// failure than none: `answer-in-notch.md` §4.4 counts what is below the
+    /// fold precisely so that nothing is ever silently missing.
+    @Test @MainActor
+    func aRequestTooLongToCarryIsLeftOutRatherThanCutShort() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let oversized = String(
+            repeating: "x",
+            count: HookPayloadDistiller.maximumRequestBytes
+        )
+        let text = #"{"hook_event_name":"PermissionRequest","session_id":"s-1","tool_name":"Bash","tool_input":{"command":"\#(oversized)"},"cwd":"/tmp"}"#
+        let payload = try #require(
+            HookPayload.distilled(from: Data(text.utf8), admittingRequestWhere: admits)
+        )
+        #expect(payload.toolInput == nil)
+        // Everything else survives, so an unreadably large request costs the
+        // body of the row and never the row.
+        #expect(payload.hookEventName == "PermissionRequest")
+        #expect(payload.workingDirectory == "/tmp")
+    }
+
+    /// A plan the size this machine actually sends is carried whole.
+    ///
+    /// The bound is pinned to a measurement rather than to a round number, so
+    /// that shrinking it fails here instead of in front of somebody trying to
+    /// read a plan. Measured 2026-09-05 across 736 transcripts under
+    /// `~/.claude/projects`: one `ExitPlanMode` call, 54,411 bytes of
+    /// `tool_input`. `maximumTextBytes` — what `answer-in-notch.md` §14.1
+    /// proposed — would have refused it, and a plan is the one form the reading
+    /// half exists for.
+    @Test @MainActor
+    func aPlanTheSizeThisMachineActuallySendsIsCarriedWhole() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let plan = String(repeating: "p", count: 54_411)
+        let text = #"{"hook_event_name":"PermissionRequest","session_id":"s-1","tool_name":"ExitPlanMode","tool_input":{"plan":"\#(plan)"}}"#
+        let payload = try #require(
+            HookPayload.distilled(from: Data(text.utf8), admittingRequestWhere: admits)
+        )
+        #expect(payload.toolInput == .object(["plan": .string(plan)]))
+        #expect(plan.utf8.count > HookPayloadDistiller.maximumTextBytes)
+    }
+
+    /// The first `tool_input` wins when a payload names it twice.
+    ///
+    /// **First, not last** — measured against `JSONDecoder`, which keeps the
+    /// earlier of two identically-named keys. The streamed keys beside this one
+    /// never had to know: they emit every copy and let the decoder choose. A
+    /// request is emitted once, from a variable, so the choice is made in the
+    /// scan and it has to be the decoder's own. Written the other way round
+    /// first, and this test is what said so.
+    @Test @MainActor
+    func theFirstToolInputWinsWhenAPayloadNamesItTwice() throws {
+        let admits = ClaudeCodeHookVocabulary().carriesRequest(forEvent:toolName:)
+        let text = #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"first"},"tool_input":{"command":"second"},"session_id":"s-1"}"#
+        let body = Data(text.utf8)
+        let payload = try #require(
+            HookPayload.distilled(from: body, admittingRequestWhere: admits)
+        )
+        #expect(payload.toolInput == .object(["command": .string("first")]))
+        #expect(payload.toolInput == (try? JSONDecoder().decode(HookPayload.self, from: body))?.toolInput)
+    }
+
+    /// A command to grant is machine text and a plan is prose.
+    ///
+    /// `answer-in-notch.md` §4.2: the setting is decided by which payload the
+    /// request came from and **never** by how long it is. The recessed ground
+    /// exists to mark a string a machine will execute, so putting a plan on it
+    /// would make the mark mean nothing. Asserted with a long command and a
+    /// one-line plan, so that length cannot be what is being read.
+    @Test @MainActor
+    func aCommandToGrantIsMachineTextAndAPlanIsProse() throws {
+        let vocabulary = ClaudeCodeHookVocabulary()
+        let long = String(repeating: "echo hello && ", count: 200)
+
+        let command = try #require(
+            vocabulary.request(
+                forEvent: "PermissionRequest",
+                toolName: "Bash",
+                toolInput: .object(["command": .string(long)]),
+                openedBy: "call-1"
+            )
+        )
+        #expect(command.setting == .machineText)
+        #expect(command.form.name == "command")
+
+        let plan = try #require(
+            vocabulary.request(
+                forEvent: "PermissionRequest",
+                toolName: "ExitPlanMode",
+                toolInput: .object(["plan": .string("Rename one thing.")]),
+                openedBy: "call-2"
+            )
+        )
+        #expect(plan.setting == .prose)
+        #expect(plan.form == .document("Rename one thing."))
+    }
+
+    /// A plan that is not where its schema says is shown as arguments rather
+    /// than as nothing.
+    ///
+    /// Fails closed **to the arguments**, which is the direction that leaves a
+    /// person with something to read. An empty prose body would be a row that
+    /// opens onto nothing, and a row that opens onto nothing is worse than one
+    /// that never offered to open.
+    @Test @MainActor
+    func aPlanThatIsNotWhereItsSchemaSaysIsShownAsArgumentsRatherThanAsNothing() throws {
+        let request = try #require(
+            ClaudeCodeHookVocabulary().request(
+                forEvent: "PermissionRequest",
+                toolName: "ExitPlanMode",
+                toolInput: .object(["proposal": .string("the plan, under another name")]),
+                openedBy: "call-1"
+            )
+        )
+        #expect(request.form.name == "command")
+        #expect(request.setting == .machineText)
+    }
+
+    /// A question set keeps its position and the product's own words.
+    ///
+    /// §5.2 draws the position in the set and §2.3 forbids the surface
+    /// inventing or omitting a word a person's answer will be recorded under.
+    /// So the count and the order are the product's, the labels are verbatim,
+    /// and `multiSelect` travels with the question it belongs to.
+    @Test @MainActor
+    func aQuestionSetKeepsItsPositionAndTheProductsOwnWords() throws {
+        let payload = JSONValue.object([
+            "questions": .array([
+                .object([
+                    "header": .string("Scope"),
+                    "question": .string("How far should this reach?"),
+                    "options": .array([
+                        .object([
+                            "label": .string("This file"),
+                            "description": .string("Only the one open")
+                        ]),
+                        .object(["label": .string("The whole repository")])
+                    ])
+                ]),
+                .object([
+                    "header": .string("Tests"),
+                    "question": .string("Which suites?"),
+                    "multiSelect": .bool(true),
+                    "options": .array([.object(["label": .string("Unit")])])
+                ])
+            ])
+        ])
+        let request = try #require(
+            ClaudeCodeHookVocabulary().request(
+                forEvent: "PreToolUse",
+                toolName: "AskUserQuestion",
+                toolInput: payload,
+                openedBy: "call-1"
+            )
+        )
+        guard case let .questions(questions) = request.form else {
+            Issue.record("not a question set")
+            return
+        }
+        #expect(questions.count == 2)
+        #expect(questions.map(\.id) == [0, 1])
+        #expect(questions[0].header == "Scope")
+        #expect(questions[0].options.map(\.label) == ["This file", "The whole repository"])
+        #expect(questions[0].options[1].description == nil)
+        #expect(questions[0].allowsSeveralAnswers == false)
+        #expect(questions[1].allowsSeveralAnswers)
+        #expect(request.setting == .prose)
+    }
+
+    /// A header longer than its schema promises is cut to the promise.
+    ///
+    /// Sixteen characters is the product's own bound, and §5.2 leans on it to
+    /// keep the header and the count clear of the badge on the caption line. A
+    /// layout promise another product's schema makes is one this app keeps
+    /// rather than assumes.
+    @Test @MainActor
+    func aHeaderLongerThanItsSchemaPromisesIsCutToThePromise() throws {
+        let request = try #require(
+            ClaudeCodeHookVocabulary().request(
+                forEvent: "PreToolUse",
+                toolName: "AskUserQuestion",
+                toolInput: .object([
+                    "questions": .array([
+                        .object([
+                            "header": .string(String(repeating: "H", count: 40)),
+                            "question": .string("Which one?"),
+                            "options": .array([.object(["label": .string("This")])])
+                        ])
+                    ])
+                ]),
+                openedBy: "call-1"
+            )
+        )
+        guard case let .questions(questions) = request.form else {
+            Issue.record("not a question set")
+            return
+        }
+        #expect(questions[0].header?.count == AgentRequestReading.maximumHeaderCharacters)
+    }
+
+    /// A question with no options is still a question.
+    ///
+    /// Codex's `request_user_input` carries a question and nothing attached to
+    /// it, which is §2.1's form 04 — the shortest row that can be opened, where
+    /// the field is the whole answer.
+    @Test @MainActor
+    func aQuestionWithNoOptionsIsStillAQuestion() throws {
+        let request = try #require(
+            CodexHookVocabulary().request(
+                forEvent: "PreToolUse",
+                toolName: "request_user_input",
+                toolInput: .object(["question": .string("Which branch?")]),
+                openedBy: "call-1"
+            )
+        )
+        #expect(request.form == .question("Which branch?"))
+        #expect(request.setting == .prose)
+    }
+
+    /// An elicitation is named rather than drawn.
+    ///
+    /// §2.2 is a capability boundary and not a deferral: an MCP server chooses
+    /// that form's fields, shape and validation at run time, and a half-rendered
+    /// form is a wrong answer submitted confidently. The distinction this pins
+    /// is between `unsupported` — a decision, drawn as a row that says where to
+    /// answer — and `nil`, which is a payload this app could not read at all.
+    @Test @MainActor
+    func anElicitationIsNamedRatherThanDrawn() throws {
+        let request = try #require(
+            ClaudeCodeHookVocabulary().request(
+                forEvent: "Elicitation",
+                toolName: "mcp__weather__configure",
+                toolInput: nil,
+                openedBy: "call-1"
+            )
+        )
+        #expect(request.form == .unsupported)
+        #expect(request.toolName == "mcp__weather__configure")
+    }
+
+    /// A request reads the same twice whatever order its keys were written in.
+    ///
+    /// `JSONValue.object` is a Swift `Dictionary`, whose iteration order differs
+    /// between instances holding equal values. Rendering it unsorted would
+    /// produce a different body for the same request on a later read, and
+    /// `renderedProjection()` would see that as a change and wake the panel —
+    /// once per arriving event, for ever. `sortedKeys` is what stops it, and it
+    /// is load-bearing rather than cosmetic.
+    @Test @MainActor
+    func aRequestReadsTheSameTwiceWhateverOrderItsKeysWereWritten() throws {
+        var first = JSONValue.object([:])
+        var second = JSONValue.object([:])
+        if case .object = first {
+            first = .object([
+                "command": .string("ls"),
+                "description": .string("list"),
+                "timeout": .number(5)
+            ])
+            second = .object([
+                "timeout": .number(5),
+                "description": .string("list"),
+                "command": .string("ls")
+            ])
+        }
+        #expect(
+            AgentRequestReading.arguments(of: first)
+                == AgentRequestReading.arguments(of: second)
+        )
+    }
+
+    /// The approval carries the request, and the call that opened it does not.
+    ///
+    /// The borrowed-id case end to end. A Claude Code approval puts the same
+    /// arguments on the wire twice — the `PreToolUse` that announced the call,
+    /// and the `PermissionRequest` 20-30 ms later that names no id of its own.
+    /// The first is `.toolCallOpened`, so the gate never lets it through and the
+    /// two copies are never compared; the wait then borrows that call's id, and
+    /// the request it holds is the one the *permission* pipeline sent — the same
+    /// object the product's own dialogue draws.
+    @Test
+    func theApprovalCarriesTheRequestAndTheCallThatOpenedItDoesNot() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        var clock = 7_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-ask"
+            payload["prompt_id"] = "turn-ask"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "tidy up"])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "call-1",
+            "tool_input": ["command": "rm -rf build"]
+        ])
+        // The announced call carries no request: nobody is being asked yet.
+        var turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.requestAwaitingAnAnswer == nil)
+
+        try emit([
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": ["command": "rm -rf build"]
+        ])
+        turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .approvalNeeded)
+        let request = try #require(turn.requestAwaitingAnAnswer)
+        // Keyed on the borrowed id, which is what an answer will have to name.
+        #expect(request.id == "call-1")
+        #expect(request.toolName == "Bash")
+        #expect(request.setting == .machineText)
+        if case let .command(body) = request.form {
+            #expect(body.contains("rm -rf build"))
+        } else {
+            Issue.record("not a command")
+        }
+    }
+
+    /// A request leaves with the wait it belongs to.
+    ///
+    /// The whole reason it is a field of ``PendingApproval`` rather than a table
+    /// beside it: every `= nil` the reducer already performs clears it too, so
+    /// there is no eighth site to forget. `answer-in-notch.md` §17 proposed the
+    /// table, and a rule that holds until one site forgets it is precisely the
+    /// shape CR-030 turned out to be.
+    @Test
+    func aRequestLeavesWithTheWaitItBelongsTo() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        var clock = 8_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-leave"
+            payload["prompt_id"] = "turn-leave"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "go"])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "call-1",
+            "tool_input": ["command": "ls"]
+        ])
+        try emit([
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": ["command": "ls"]
+        ])
+        #expect(
+            await repository.drainDeliveredEvents().turns.first?
+                .requestAwaitingAnAnswer != nil
+        )
+
+        // The paired close, which is the ordinary way a wait ends.
+        try emit([
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "call-1",
+            "tool_input": ["command": "ls"],
+            "tool_response": "build\n"
+        ])
+        let closed = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(closed.status == .running)
+        #expect(closed.requestAwaitingAnAnswer == nil)
+
+        // And the turn's own terminal, from a fresh wait, which is the other.
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "call-2",
+            "tool_input": ["command": "make"]
+        ])
+        try emit([
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": ["command": "make"]
+        ])
+        #expect(
+            await repository.drainDeliveredEvents().turns.first?
+                .requestAwaitingAnAnswer != nil
+        )
+        try emit(["hook_event_name": "Stop"])
+        let ended = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(ended.status == .completed)
+        #expect(ended.requestAwaitingAnAnswer == nil)
+    }
+
+    /// The oldest waiting subagent is the one the row opens.
+    ///
+    /// A row is `agent:threadID:turnID` and a subagent has no row of its own, so
+    /// one row holds one request and something has to choose. The oldest has
+    /// been blocking longest, and it is the only stable choice: newest-first
+    /// would swap an open row's contents under a reader's eye, which is what
+    /// `answer-in-notch.md` §6.3 exists to prevent.
+    @Test
+    func theOldestWaitingSubagentIsTheOneTheRowOpens() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        var clock = 9_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-two"
+            payload["prompt_id"] = "turn-two"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "fan out"])
+        for agent in ["agent-a", "agent-b"] {
+            try emit(["hook_event_name": "SubagentStart", "agent_id": agent])
+        }
+        for (agent, command) in [("agent-a", "first"), ("agent-b", "second")] {
+            try emit([
+                "hook_event_name": "PreToolUse",
+                "agent_id": agent,
+                "tool_name": "Bash",
+                "tool_use_id": "call-\(agent)",
+                "tool_input": ["command": command]
+            ])
+            try emit([
+                "hook_event_name": "PermissionRequest",
+                "agent_id": agent,
+                "tool_name": "Bash",
+                "tool_input": ["command": command]
+            ])
+        }
+
+        let turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.subagentsAwaitingApprovalCount == 2)
+        let request = try #require(turn.requestAwaitingAnAnswer)
+        // The one that has been waiting longest, not the one that arrived last.
+        #expect(request.id == "call-agent-a")
     }
 
     /// A payload the store cannot read is reported, not dropped in silence.
@@ -33183,7 +33806,8 @@ extension NotchlineTests {
                 from: try payload(
                     taskCount: 12,
                     description: String(repeating: "d", count: 200)
-                )
+                ),
+                admittingRequestWhere: admitsNoRequest
             )
         )
         #expect(carried.backgroundTasks?.count == 12)
@@ -33194,7 +33818,8 @@ extension NotchlineTests {
                 from: try payload(
                     taskCount: 16,
                     description: String(repeating: "d", count: 1_000)
-                )
+                ),
+                admittingRequestWhere: admitsNoRequest
             )
         )
         #expect(refused.backgroundTasks == nil)

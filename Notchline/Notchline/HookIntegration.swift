@@ -438,6 +438,54 @@ protocol AgentHookVocabulary: Sendable {
     nonisolated var restoreDefinitionAdvice: String { get }
     /// `nil` means "not recognised": drop it and say so.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
+
+    /// The request this event puts to a person, out of the arguments it carried.
+    ///
+    /// Read **here**, in the actor, at the moment the wait opens -- the one
+    /// place holding the signal, the event name, the tool name and this
+    /// vocabulary at once. Not in the view, which stays passive; not on
+    /// ``HookPayload``, which would put both products' tool names into a
+    /// product-free type; and not in the two row builders, where the mapping
+    /// would be written twice and could drift once.
+    ///
+    /// `nil` where nothing readable arrived, which is an ordinary answer and
+    /// never an empty request: a wait with nothing to show still opens, and the
+    /// row still says a person is wanted (`AGENTS.md` §6, failures fail closed).
+    nonisolated func request(
+        forEvent name: String,
+        toolName: String?,
+        toolInput: JSONValue?,
+        openedBy toolUseID: String
+    ) -> AgentRequest?
+}
+
+extension AgentHookVocabulary {
+    /// Whether this event's `tool_input` is a request a person is being asked
+    /// about, rather than a call's arguments nobody reads.
+    ///
+    /// **Derived from the signal table rather than listed a second time**, the
+    /// same discipline ``HookPayloadDistiller`` applies to the key list: an
+    /// event that opens a wait carries its request, and no other event does.
+    /// `PostToolUse` is ``HookSignal/toolCallClosed`` and is therefore refused
+    /// *by construction* rather than by a rule somebody has to remember, which
+    /// is exactly the shape CR-030 turned out to be.
+    ///
+    /// The tempting gate is the one `answer-in-notch.md` §14.1 wrote --
+    /// "`PermissionRequest` and `PreToolUse`" -- and it is far wider than it
+    /// sounds: `PreToolUse` fires for *every* tool call and is one-to-one with
+    /// `PostToolUse`, so it halves the volume rather than removing it. Measured
+    /// 2026-09-05 over 30,909 tool calls in this machine's `~/.claude/projects`
+    /// (p50 263 B, p99 8,951 B, max 136,560 B), that gate would copy and decode
+    /// about 28 MB of arguments nobody reads, on the serial read queue. This one
+    /// admits 56 of those 30,909 calls: **0.18%**.
+    nonisolated func carriesRequest(forEvent name: String, toolName: String?) -> Bool {
+        switch signal(forEvent: name, toolName: toolName) {
+        case .inputWaitOpened, .approvalWaitOpened, .approvalWaitInferred:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
@@ -536,6 +584,37 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
             nil
         }
     }
+
+    /// Codex asks in two shapes, and neither of them is a question with options.
+    ///
+    /// `request_user_input` is a question and nothing more — no labels, no
+    /// `multiSelect` — so it is form 04, answered in a person's own words.
+    /// Everything else Codex stops on is a command to grant, and its arguments
+    /// are drawn verbatim on the recessed ground.
+    nonisolated func request(
+        forEvent name: String,
+        toolName: String?,
+        toolInput: JSONValue?,
+        openedBy toolUseID: String
+    ) -> AgentRequest? {
+        guard let toolInput else { return nil }
+        let form: AgentRequest.Form? = switch (name, toolName) {
+        case ("PreToolUse", "request_user_input"):
+            // The prompt where the tool put one, and its whole arguments where
+            // it did not. Failing closed **to the arguments** rather than to
+            // nothing: a question in an unexpected shape still leaves a person
+            // with the thing they were asked.
+            (AgentRequestReading.text("question", in: toolInput)
+                ?? AgentRequestReading.text("prompt", in: toolInput))
+                .map { .question($0) }
+                ?? AgentRequestReading.arguments(of: toolInput).map { .command($0) }
+        default:
+            AgentRequestReading.arguments(of: toolInput).map { .command($0) }
+        }
+        return form.map {
+            AgentRequest(id: toolUseID, toolName: toolName, form: $0)
+        }
+    }
 }
 
 /// Claude Code's spelling of the same lifecycle.
@@ -594,6 +673,13 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
 
     /// The tool Claude Code uses to put a question to the user.
     static let inputToolName = "AskUserQuestion"
+    /// The tool that hands over a document rather than a command.
+    ///
+    /// Named here rather than matched inline because it is the one tool whose
+    /// request is set as prose: `answer-in-notch.md` §4.2 decides the setting by
+    /// which payload a request came from and never by how long it is, so the
+    /// decision has to be a name and not a length.
+    static let planToolName = "ExitPlanMode"
 
     /// The event that carries assistant text, and the only one that does.
     ///
@@ -762,6 +848,54 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
             .turnEnded
         default:
             nil
+        }
+    }
+
+    /// Claude Code asks in three shapes, and one of them it asks twice.
+    ///
+    /// - `AskUserQuestion` is a **set** of questions, one to four of them, each
+    ///   with a header, two to four labelled options and a `multiSelect` flag.
+    ///   It reaches this app on `PreToolUse` *and* again on the
+    ///   `PermissionRequest` the product raises for it; both are admitted by the
+    ///   gate and both read to the same form, so whichever lands second simply
+    ///   replaces an equal value.
+    /// - `ExitPlanMode` hands over a document — routinely longer than the whole
+    ///   panel — and it is read as prose rather than as machine text, because a
+    ///   plan is read and not scanned.
+    /// - Everything else it stops on is a command to grant.
+    ///
+    /// An `Elicitation` is named and not drawn (§2.2): its fields are an MCP
+    /// server's own, chosen at run time, and a half-rendered form is a wrong
+    /// answer submitted confidently.
+    nonisolated func request(
+        forEvent name: String,
+        toolName: String?,
+        toolInput: JSONValue?,
+        openedBy toolUseID: String
+    ) -> AgentRequest? {
+        // The one form that needs no arguments to be worth drawing: the row
+        // reports that a person is wanted and where to answer, and it would be
+        // wrong to make that depend on a payload this app declines to read.
+        if name == "Elicitation" {
+            return AgentRequest(id: toolUseID, toolName: toolName, form: .unsupported)
+        }
+        guard let toolInput else { return nil }
+        let form: AgentRequest.Form? = switch toolName {
+        case Self.inputToolName:
+            AgentRequestReading.questions(in: toolInput).map { .questions($0) }
+                ?? AgentRequestReading.arguments(of: toolInput).map { .command($0) }
+        case Self.planToolName:
+            // Fails closed **to the arguments, never to nothing**: a plan that
+            // is not where its schema says still leaves a person something to
+            // read, where an empty prose body is a request the row cannot
+            // honour.
+            AgentRequestReading.text("plan", in: toolInput).map { .document($0) }
+                ?? AgentRequestReading.arguments(of: toolInput).map { .command($0) }
+        default:
+            AgentRequestReading.arguments(of: toolInput).map { .command($0) }
+        }
+        return form.map {
+            AgentRequest(id: toolUseID, toolName: toolName, form: $0)
         }
     }
 }
@@ -1139,6 +1273,39 @@ nonisolated struct PendingApproval: Sendable, Equatable {
     /// that backwards would close a dialog the user is still looking at, which
     /// is worse than the delay it exists to fix.
     let openedAt: Date
+    /// What the person is being asked to grant, where the event that opened
+    /// this wait carried it.
+    ///
+    /// **A field of the wait rather than a slot beside it**, and that is the
+    /// whole of its lifecycle: every `pendingApproval = nil` this reducer
+    /// already performs -- the paired close, the inferred resolution, the turn
+    /// ending, a session going away, a reading that says the dialog was
+    /// answered elsewhere, a subagent stopping, a turn boundary -- clears this
+    /// with it, and there is no eighth site to forget. `answer-in-notch.md` §17
+    /// proposed a table keyed by `(agent_id, tool_use_id)`, which would need all
+    /// seven repeated; a rule that held until one site forgot it is exactly the
+    /// shape CR-030 turned out to be.
+    ///
+    /// `nil` is an ordinary answer: a wait whose payload carried nothing
+    /// readable is still a wait, and the row still says a person is wanted.
+    let request: AgentRequest?
+}
+
+/// A question the turn is blocked on, and what it is asking.
+///
+/// Replaces the bare `tool_use_id` this used to be, so that a question travels
+/// with the wait it belongs to exactly as an approval's request does. Every
+/// rule that only ever wanted the id still gets one, from the computed
+/// `pendingInputToolUseID` beside each slot.
+nonisolated struct PendingInput: Sendable, Equatable {
+    /// This event's own `tool_use_id` -- unlike an approval's, never borrowed:
+    /// both `AskUserQuestion` and `request_user_input` are ordinary tool calls
+    /// and carry one.
+    let toolUseID: String
+    let openedAt: Date
+    /// What is being asked, where the event carried it. See
+    /// ``PendingApproval/request`` for why it lives here rather than beside.
+    let request: AgentRequest?
 }
 
 /// A tool call that has been announced and not yet closed.
@@ -1163,8 +1330,8 @@ struct OpenToolUse: Sendable, Equatable {
 /// One per agent is what makes both streams safe, and it is all that makes them
 /// safe.
 nonisolated struct AgentWaitSlots: Sendable, Equatable {
-    /// `tool_use_id` of an open `request_user_input` call, if any.
-    var pendingInputToolUseID: String?
+    /// The open question, if any.
+    var pendingInput: PendingInput?
     /// The call the human is being asked to approve, if any.
     var pendingApproval: PendingApproval?
     /// The most recent call this agent opened and has not yet closed.
@@ -1172,16 +1339,19 @@ nonisolated struct AgentWaitSlots: Sendable, Equatable {
 
     /// Whether this agent has anything at all left in it.
     var isEmpty: Bool {
-        pendingInputToolUseID == nil && pendingApproval == nil && openToolUse == nil
+        pendingInput == nil && pendingApproval == nil && openToolUse == nil
     }
+
+    /// The open question's id, for the rules that only ever wanted that.
+    var pendingInputToolUseID: String? { pendingInput?.toolUseID }
 }
 
 struct HookTurnState: Sendable {
     let threadID: String
     let turnID: String
     var sessionStatus: SessionStatus
-    /// `tool_use_id` of an open `request_user_input` call, if any.
-    var pendingInputToolUseID: String?
+    /// The open question, if any.
+    var pendingInput: PendingInput?
     /// The call the human is being asked to approve, if any.
     var pendingApproval: PendingApproval?
     /// The most recent tool call this turn opened and has not yet closed.
@@ -1192,6 +1362,8 @@ struct HookTurnState: Sendable {
     /// ``HookEventRepository`` -- so the approval can close on the usual pairing
     /// instead of a timer.
     var openToolUse: OpenToolUse?
+    /// The open question's id, for the rules that only ever wanted that.
+    var pendingInputToolUseID: String? { pendingInput?.toolUseID }
     var startedAt: Date
     var lastEventAt: Date
     /// Turns this thread has already moved past.
@@ -1373,6 +1545,37 @@ struct HookTurnState: Sendable {
     /// Whether a subagent of this thread is sitting on a permission prompt.
     nonisolated var subagentsAwaitingApproval: Bool {
         subagentsAwaitingApprovalCount > 0
+    }
+
+    /// The one request this thread's row can open, out of everything it is
+    /// waiting on.
+    ///
+    /// **One row holds one request**, because a row is
+    /// `agent:threadID:turnID` and a subagent has no row of its own. So this
+    /// picks, and the order it picks in is the order the surface already reads:
+    /// the turn's own question first, then the turn's own approval, then a
+    /// subagent's -- which is `PRD.md` §6.2's priority with its stated
+    /// exception, *input outranks approval where both are this turn's*, and it
+    /// has to agree or a row would say `Approval needed` and open to nothing.
+    ///
+    /// Among several waiting subagents the **oldest** wins. It has been
+    /// blocking longest, and it is the only stable choice: newest-first would
+    /// swap an open row's contents under a reader's eye, which is exactly what
+    /// `answer-in-notch.md` §6.3 exists to prevent. `runningSubagentIDs` gates
+    /// it for the same reason ``subagentsAwaitingApprovalCount`` is gated --
+    /// an agent that never announced itself is not this thread's.
+    ///
+    /// A subagent's *question* is deliberately not offered, exactly as its
+    /// count is not drawn: whether one reaches a person at all is unmeasured,
+    /// and a request this app cannot vouch for is worse than none.
+    nonisolated var requestAwaitingAnAnswer: AgentRequest? {
+        if let request = pendingInput?.request { return request }
+        if let request = pendingApproval?.request { return request }
+        return subagentSlots
+            .filter { agentID, _ in runningSubagentIDs.contains(agentID) }
+            .compactMap { _, slots in slots.pendingApproval }
+            .min { $0.openedAt < $1.openedAt }?
+            .request
     }
 
     /// The instant this turn's own terminal arrived.
@@ -1612,6 +1815,24 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     /// still lists the agent that is stopping (measured 2026-08-23 against CLI
     /// 2.1.241, twice), so it is not an absolute reading of what is left.
     let backgroundTasks: [HookBackgroundTask]?
+    /// What a person is being asked, on the events that ask them.
+    ///
+    /// **Present only where the event opens a wait**, which is 0.18% of the
+    /// tool calls this app sees -- see
+    /// ``AgentHookVocabulary/carriesRequest(forEvent:toolName:)`` for the gate
+    /// and why it is that one rather than "`PermissionRequest` and
+    /// `PreToolUse`". On every other event the key is stepped over unread, so
+    /// this is nil there whether or not the product sent it, and in particular
+    /// it is nil on `PostToolUse`, whose copy describes a call nobody is being
+    /// stopped by.
+    ///
+    /// Both products spell it `tool_input`, and both put the whole of a tool's
+    /// arguments in it: a command, a path, a patch, a plan, or a question's
+    /// options. Kept as ``JSONValue`` rather than as bytes because the reducer
+    /// has to read named fields out of it -- a plan's `plan`, a question's
+    /// `questions` -- and as a value type rather than `[String: Any]` so this
+    /// payload stays `Sendable` and `Equatable`.
+    let toolInput: JSONValue?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case hookEventName = "hook_event_name"
@@ -1628,6 +1849,7 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         case messageID = "message_id"
         case delta
         case backgroundTasks = "background_tasks"
+        case toolInput = "tool_input"
 
         /// What kind of value this field is, which is what decides what
         /// happens to it when it arrives too big (see ``HookPayloadDistiller``).
@@ -1635,13 +1857,14 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
             switch self {
             case .prompt, .lastAssistantMessage, .delta: return .text
             case .backgroundTasks: return .list
+            case .toolInput: return .request
             default: return .identity
             }
         }
     }
 
-    /// The three kinds of value this payload carries, and the three answers to
-    /// "it is too big".
+    /// The four kinds of value this payload carries, and the answers to "it is
+    /// too big".
     nonisolated enum CarriedValue: Sendable {
         /// Cut short: a shorter answer is the same answer.
         case text
@@ -1651,6 +1874,23 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         /// not JSON -- and it must not be, because "how many are left" is the
         /// entire reading.
         case list
+        /// Carried whole or left out, and **only on the events that ask**.
+        ///
+        /// Whole or nothing for the same reason ``list`` is: half an object is
+        /// not JSON. Stated rather than inherited -- ``text`` happens to behave
+        /// this way on a non-string only because ``HookPayloadDistiller`` guards
+        /// its shortening on `isString`, which is a fact about the neighbouring
+        /// rule and not about this field. And a request cut short is a
+        /// different command, which is a worse failure than none.
+        ///
+        /// The second half is the one no other case has. `PostToolUse` carries
+        /// this key too, holding the arguments of a call that has already run,
+        /// and carrying it there would put the highest-frequency event's
+        /// variable size back on the read queue this type exists to keep cheap
+        /// (CR-030). So the gate is a fact about the *event* rather than about
+        /// the key, and it lives on the vocabulary:
+        /// ``AgentHookVocabulary/carriesRequest(forEvent:toolName:)``.
+        case request
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1676,6 +1916,7 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
             [HookBackgroundTask].self,
             forKey: .backgroundTasks
         )
+        toolInput = try container.decodeIfPresent(JSONValue.self, forKey: .toolInput)
     }
 
     /// Whether this terminal event says the session is pausing rather than
@@ -1695,8 +1936,22 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     /// the fields nobody reads are the ones that get big — see
     /// ``HookPayloadDistiller``. `JSONDecoder` is still what reads a field; it
     /// just never sees a tool result.
-    nonisolated static func distilled(from body: Data) -> HookPayload? {
-        guard let selected = HookPayloadDistiller.distilled(from: body) else { return nil }
+    ///
+    /// `admitsRequest` decides whether this event's ``toolInput`` is a request
+    /// a person is being asked about or a call's arguments nobody reads, and it
+    /// is **required rather than defaulted**. A default of "carry it" would put
+    /// the highest-frequency event's variable size back on the read queue,
+    /// which is the whole of CR-030; a default of "drop it" would silently
+    /// disable this feature for any caller that forgot. Both are mistakes a
+    /// missing argument should not be able to make, so the caller states it.
+    nonisolated static func distilled(
+        from body: Data,
+        admittingRequestWhere admitsRequest: (String, String?) -> Bool
+    ) -> HookPayload? {
+        guard let selected = HookPayloadDistiller.distilled(
+            from: body,
+            admittingRequestWhere: admitsRequest
+        ) else { return nil }
         return try? JSONDecoder().decode(HookPayload.self, from: selected)
     }
 }
@@ -1759,12 +2014,36 @@ nonisolated enum HookPayloadDistiller {
     /// moment early rather than the payload being lost.
     nonisolated static let maximumListBytes = 16 * 1_024
 
+    /// How much of one request is carried.
+    ///
+    /// **A plan is the largest thing either product sends this way**, and it is
+    /// read in full rather than previewed: `answer-in-notch.md` §4.4 scrolls the
+    /// body and counts what is under the fold, so unlike ``maximumTextBytes`` --
+    /// which bounds a line the row cuts to 240 characters anyway -- this bounds
+    /// a document nobody wants cut.
+    ///
+    /// Measured 2026-09-05 over the 30,909 tool calls in this machine's
+    /// `~/.claude/projects`: the one `ExitPlanMode` plan weighs 54,411 bytes and
+    /// `AskUserQuestion` tops out at 5,002. This is 2.4x that plan and above
+    /// 99.997% of every tool input in the corpus -- one `Bash` heredoc at
+    /// 136,560 is the sole exception -- so a request this refuses is one no
+    /// 240-point viewport was going to draw.
+    ///
+    /// It is eight times ``maximumTextBytes``, and affordable only because of
+    /// the gate: it is paid on the 0.18% of events that open a wait, at the one
+    /// moment in this system with no latency to protect, because a person is
+    /// about to be asked something.
+    nonisolated static let maximumRequestBytes = 128 * 1_024
+
     /// The fields worth carrying, out of the bytes that landed, or `nil` if
     /// this never was a JSON object.
-    nonisolated static func distilled(from body: Data) -> Data? {
+    nonisolated static func distilled(
+        from body: Data,
+        admittingRequestWhere admitsRequest: (String, String?) -> Bool
+    ) -> Data? {
         body.withUnsafeBytes { raw in
             var scan = PayloadScan(bytes: raw)
-            return scan.selectedFields()
+            return scan.selectedFields(admittingRequestWhere: admitsRequest)
         }
     }
 
@@ -1808,7 +2087,9 @@ nonisolated enum HookPayloadDistiller {
             let isComplete: Bool
         }
 
-        mutating func selectedFields() -> Data? {
+        mutating func selectedFields(
+            admittingRequestWhere admitsRequest: (String, String?) -> Bool
+        ) -> Data? {
             skipWhitespace()
             guard index < bytes.count, bytes[index] == Self.openBrace else { return nil }
             index += 1
@@ -1816,6 +2097,18 @@ nonisolated enum HookPayloadDistiller {
             var selected = Data([Self.openBrace])
             var isFirstCarried = true
             var isFirstMember = true
+            // The request seen so far, held rather than emitted.
+            //
+            // **Held because the two names that decide it may arrive after it**,
+            // and on Claude Code they always do -- its keys arrive
+            // alphabetically, so `tool_name` is later than `tool_input` every
+            // time. Held as a range into bytes this scan is already holding, so
+            // a `PostToolUse` whose request is refused pays *nothing* for the
+            // refusal: no copy, no decode, and no second pass over a payload
+            // whose tail may be 16 MiB of tool result (CR-030).
+            var deferredRequest: ScannedValue?
+            var eventName: String?
+            var toolName: String?
             while true {
                 skipWhitespace()
                 guard index < bytes.count else { break }
@@ -1845,17 +2138,74 @@ nonisolated enum HookPayloadDistiller {
                 guard index < bytes.count else { break }
 
                 let value = scanValue()
-                if let kind = HookPayloadDistiller.selectedKeys[key],
-                   let carried = carry(value, kind: kind) {
-                    if !isFirstCarried { selected.append(Self.comma) }
-                    isFirstCarried = false
-                    selected.append(contentsOf: Array("\"\(key)\":".utf8))
-                    selected.append(carried)
+                if let kind = HookPayloadDistiller.selectedKeys[key] {
+                    if case .request = kind {
+                        // **The first one wins**, because that is what
+                        // `JSONDecoder` does with a repeated key -- measured,
+                        // not assumed. The streamed keys below get this for
+                        // free by emitting every copy and letting the decoder
+                        // choose; this one is emitted once, so the choice is
+                        // made here and it has to be the same choice. The
+                        // distiller decides which bytes the decoder sees and
+                        // must never decide what they say.
+                        if deferredRequest == nil { deferredRequest = value }
+                    } else if let carried = carry(value, kind: kind) {
+                        if !isFirstCarried { selected.append(Self.comma) }
+                        isFirstCarried = false
+                        selected.append(contentsOf: Array("\"\(key)\":".utf8))
+                        selected.append(carried)
+                        // Read back off the bytes rather than kept in a second
+                        // variable up the stack: these two are needed only to
+                        // answer the gate, and only if a request turned up.
+                        switch key {
+                        case HookPayload.CodingKeys.hookEventName.rawValue:
+                            eventName = stringContents(of: value)
+                        case HookPayload.CodingKeys.toolName.rawValue:
+                            toolName = stringContents(of: value)
+                        default: break
+                        }
+                    }
                 }
                 guard value.isComplete else { break }
             }
+
+            // After the loop, so a payload that stopped part way through still
+            // carries a request that arrived whole -- and a payload that
+            // stopped *before* its event name carries none, because nothing is
+            // left to vouch for it. That is the fail-closed direction: an
+            // unvouched request would be one drawn for an event this app never
+            // established was asking anybody anything.
+            if let deferredRequest,
+               let eventName,
+               admitsRequest(eventName, toolName),
+               let carried = carry(deferredRequest, kind: .request) {
+                if !isFirstCarried { selected.append(Self.comma) }
+                selected.append(
+                    contentsOf: Array(
+                        "\"\(HookPayload.CodingKeys.toolInput.rawValue)\":".utf8
+                    )
+                )
+                selected.append(carried)
+            }
             selected.append(Self.closeBrace)
             return selected
+        }
+
+        /// A scanned string's contents, unescaped only in the sense that the
+        /// quotes are dropped.
+        ///
+        /// Read the way ``scanKey`` reads a key, and with the same consequence:
+        /// a name spelled with an escape simply fails to match, which leaves the
+        /// request out. Neither product spells an event or tool name that way.
+        private func stringContents(of value: ScannedValue) -> String? {
+            guard value.isString, value.isComplete, value.range.count >= 2 else {
+                return nil
+            }
+            let content = (value.range.lowerBound + 1) ..< (value.range.upperBound - 1)
+            return String(
+                decoding: UnsafeRawBufferPointer(rebasing: bytes[content]),
+                as: UTF8.self
+            )
         }
 
         /// The bytes to emit for one selected value, or `nil` to leave the
@@ -1865,6 +2215,7 @@ nonisolated enum HookPayloadDistiller {
             case .text: HookPayloadDistiller.maximumTextBytes
             case .identity: HookPayloadDistiller.maximumIdentityBytes
             case .list: HookPayloadDistiller.maximumListBytes
+            case .request: HookPayloadDistiller.maximumRequestBytes
             }
             if value.isComplete, value.range.count <= limit {
                 return Data(UnsafeRawBufferPointer(rebasing: bytes[value.range]))
@@ -2531,7 +2882,10 @@ actor HookEventRepository {
     /// same event as one carrying none (CR-030); what the transport hands over
     /// is bounded, what the reducer is told is not the same thing at all.
     nonisolated func deliver(_ body: Data, at receivedAt: Date) {
-        guard let payload = HookPayload.distilled(from: body),
+        guard let payload = HookPayload.distilled(
+            from: body,
+            admittingRequestWhere: vocabulary.carriesRequest(forEvent:toolName:)
+        ),
               let eventName = payload.hookEventName,
               payload.sessionID != nil else {
             // Nothing here can be placed: nothing at all, or not JSON, or
@@ -2789,7 +3143,7 @@ actor HookEventRepository {
                 threadID: record.threadID,
                 turnID: record.turnID,
                 sessionStatus: .running,
-                pendingInputToolUseID: nil,
+                pendingInput: nil,
                 pendingApproval: nil,
                 openToolUse: nil,
                 startedAt: held.startedAt,
@@ -2830,7 +3184,7 @@ actor HookEventRepository {
             return
         }
         turn.sessionStatus = turn.sessionStatus.transitioned(on: .completed)
-        turn.pendingInputToolUseID = nil
+        turn.pendingInput = nil
         turn.pendingApproval = nil
         turn.openToolUse = nil
         if orphansSubagents, !turn.runningSubagentIDs.isEmpty {
@@ -3131,6 +3485,22 @@ actor HookEventRepository {
         // correlate: one connection carried the whole thing.
         let carriesPrompt = vocabulary.carriesPromptText
         let carriesFinalAnswer = vocabulary.carriesFinalAnswerText
+        // What this event is asking, once the arm that opens the wait has said
+        // which id that wait will carry.
+        //
+        // Taken as a function of the id rather than as a value, because a
+        // borrowed approval's wait is keyed on the **open call's** id and not on
+        // this event's -- a `PermissionRequest` carries none of its own on
+        // either product. Lazy is the point twice over: the ten signals that
+        // ask nobody anything never touch `tool_input` at all.
+        let requestAsked: (String) -> AgentRequest? = { [vocabulary] toolUseID in
+            vocabulary.request(
+                forEvent: eventName,
+                toolName: event.toolName,
+                toolInput: event.toolInput,
+                openedBy: toolUseID
+            )
+        }
 
         switch signal {
         case .turnStarted:
@@ -3205,7 +3575,7 @@ actor HookEventRepository {
                 threadID: threadID,
                 turnID: turnID,
                 sessionStatus: .running,
-                pendingInputToolUseID: nil,
+                pendingInput: nil,
                 pendingApproval: nil,
                 openToolUse: nil,
                 startedAt: receivedAt,
@@ -3250,7 +3620,16 @@ actor HookEventRepository {
                 state.pendingApproval = PendingApproval(
                     toolUseID: openToolUse.id,
                     isInferred: true,
-                    openedAt: receivedAt
+                    openedAt: receivedAt,
+                    // A `PermissionRequest` that carried nothing readable must
+                    // not blank a request the call that opened this wait
+                    // already supplied -- and must not carry one across to a
+                    // *different* call, which is why this is keyed on the id.
+                    request: requestAsked(openToolUse.id) ?? (
+                        state.pendingApproval?.toolUseID == openToolUse.id
+                            ? state.pendingApproval?.request
+                            : nil
+                    )
                 )
                 state.sessionStatus = state.sessionStatus
                     .transitioned(on: .approvalNeeded)
@@ -3272,7 +3651,11 @@ actor HookEventRepository {
                     activityOn: toolUseID,
                     whenInferring: infersDenials
                 )
-                $0.pendingInputToolUseID = toolUseID
+                $0.pendingInput = PendingInput(
+                    toolUseID: toolUseID,
+                    openedAt: receivedAt,
+                    request: requestAsked(toolUseID)
+                )
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
             }
@@ -3296,7 +3679,8 @@ actor HookEventRepository {
                 $0.pendingApproval = PendingApproval(
                     toolUseID: toolUseID,
                     isInferred: false,
-                    openedAt: receivedAt
+                    openedAt: receivedAt,
+                    request: requestAsked(toolUseID)
                 )
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
@@ -3346,7 +3730,7 @@ actor HookEventRepository {
                 adoptContinuationWith: .running
             ) {
                 if $0.pendingInputToolUseID == toolUseID {
-                    $0.pendingInputToolUseID = nil
+                    $0.pendingInput = nil
                 }
                 if $0.pendingApproval?.toolUseID == toolUseID {
                     $0.pendingApproval = nil
@@ -3386,7 +3770,7 @@ actor HookEventRepository {
                 // The product intentionally exposes one terminal state. Stop,
                 // completed, failed, and interrupted all converge to Completed.
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .completed)
-                $0.pendingInputToolUseID = nil
+                $0.pendingInput = nil
                 $0.pendingApproval = nil
                 $0.assistantPreview = assistantPreview
                 // And whether that terminal was the session finishing or the
@@ -3519,6 +3903,11 @@ actor HookEventRepository {
     ) {
         guard var turn = turnsByThreadID[threadID] else { return }
         var slots = turn.subagentSlots[agentID] ?? AgentWaitSlots()
+        // The event name this signal was read from, for the request reading
+        // below. Present by construction -- `reduce` could not have named a
+        // signal without it -- and the fallback is the fail-closed one: no name
+        // means no request, and the wait still opens.
+        let eventName = event.hookEventName ?? ""
 
         // **Always infer, whichever product this is.** The turn-level rule asks
         // `reportsApprovalDenials`, and for a subagent the honest answer is
@@ -3548,12 +3937,27 @@ actor HookEventRepository {
                 // whether a subagent's question reaches the user at all has not
                 // been measured, and a hint this product cannot stand behind is
                 // worse than no hint.
-                slots.pendingInputToolUseID = toolUseID
+                slots.pendingInput = PendingInput(
+                    toolUseID: toolUseID,
+                    openedAt: receivedAt,
+                    request: vocabulary.request(
+                        forEvent: eventName,
+                        toolName: event.toolName,
+                        toolInput: event.toolInput,
+                        openedBy: toolUseID
+                    )
+                )
             case .approvalWaitOpened:
                 slots.pendingApproval = PendingApproval(
                     toolUseID: toolUseID,
                     isInferred: false,
-                    openedAt: receivedAt
+                    openedAt: receivedAt,
+                    request: vocabulary.request(
+                        forEvent: eventName,
+                        toolName: event.toolName,
+                        toolInput: event.toolInput,
+                        openedBy: toolUseID
+                    )
                 )
             default:
                 break
@@ -3572,13 +3976,26 @@ actor HookEventRepository {
             slots.pendingApproval = PendingApproval(
                 toolUseID: openToolUse.id,
                 isInferred: true,
-                openedAt: receivedAt
+                openedAt: receivedAt,
+                // Same rule as the turn's own borrowed approval: a request that
+                // did not arrive must not blank one the call that opened this
+                // wait already supplied, and must not travel to another call.
+                request: vocabulary.request(
+                    forEvent: eventName,
+                    toolName: event.toolName,
+                    toolInput: event.toolInput,
+                    openedBy: openToolUse.id
+                ) ?? (
+                    slots.pendingApproval?.toolUseID == openToolUse.id
+                        ? slots.pendingApproval?.request
+                        : nil
+                )
             )
         case .toolCallClosed:
             observedPostToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else { break }
             if slots.pendingInputToolUseID == toolUseID {
-                slots.pendingInputToolUseID = nil
+                slots.pendingInput = nil
             }
             if slots.pendingApproval?.toolUseID == toolUseID {
                 slots.pendingApproval = nil
@@ -3681,7 +4098,7 @@ actor HookEventRepository {
                     threadID: threadID,
                     turnID: turnID,
                     sessionStatus: continuationStatus,
-                    pendingInputToolUseID: nil,
+                    pendingInput: nil,
                     pendingApproval: nil,
                     openToolUse: nil,
                     startedAt: redeemed?.startedAt ?? current.startedAt,
@@ -3701,7 +4118,7 @@ actor HookEventRepository {
                 threadID: threadID,
                 turnID: turnID,
                 sessionStatus: sessionStatus,
-                pendingInputToolUseID: nil,
+                pendingInput: nil,
                 pendingApproval: nil,
                 openToolUse: nil,
                 startedAt: date,
@@ -3756,7 +4173,20 @@ actor HookEventRepository {
                     // the collapsed summary, so the surface has to be woken
                     // when the last subagent stops and this is what is left
                     // holding it there.
-                    String(turn.pausedForBackgroundWork)
+                    String(turn.pausedForBackgroundWork),
+                    // The request the row can open, **identified rather than
+                    // spelled out**. A request is fixed by the wait it belongs
+                    // to -- one `tool_use_id` never carries two -- so its id and
+                    // its form say everything a redraw needs, and a 54 KiB plan
+                    // is not string-compared once per arriving event to discover
+                    // that it has not changed.
+                    //
+                    // It is also the only term that catches one case: with two
+                    // subagents waiting, answering the first moves the request
+                    // the row draws while `subagentsAwaitingApproval` -- a Bool
+                    // -- stands still.
+                    turn.requestAwaitingAnAnswer
+                        .map { "\($0.id)\u{2}\($0.form.name)" } ?? ""
                 ].joined(separator: "\u{1}")
             }
             .sorted()

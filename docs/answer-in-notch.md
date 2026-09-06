@@ -2,8 +2,8 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, not implemented, and it ships in three stages.** §11 reads a request and needs only §14.1, one field this app already receives and discards. §3 to §8 answer one with the pointer and need §14.2, a capability neither product offers. §9.3 — the chord, and everything that navigates without a pointer — is designed, deferred behind both, and kept here whole. |
-| Version | 1.2 |
+| Status | **Stage 01's dependency is built; the drawing is not.** §14.1 landed on 2026-09-05 — the app keeps the request it was already being sent, the reducer holds it on the wait that asked, and it reaches `MonitorSnapshot`. Nothing draws it yet. §15 q01 and q02 are both **answered** below, and q01 came back further than expected: a write path exists on both products, and on Claude Code it reaches questions too. The rest ships in three stages. §11 reads a request and needs only §14.1, one field this app already receives and discards. §3 to §8 answer one with the pointer and need §14.2, a capability neither product offers. §9.3 — the chord, and everything that navigates without a pointer — is designed, deferred behind both, and kept here whole. |
+| Version | 1.3 |
 | Date | 2026-09-05 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `10 — The answer`. `11 — The panel, whole` redraws the open row on the composed surface and corrects §12's panel column — see [`panel-v2.md`](panel-v2.md). |
 | Scope | What happens between a request arriving and a person answering it: how the request reaches somebody who is not looking at the notch, every shape the two products ask in, what an opened row draws for each of them, what a click takes, which keys the panel answers to and which wait for the keyboard half, and what the row becomes once the answer has gone. The band, the quota footer and both collapsed forms are untouched, and nothing here reaches the collapsed surface. |
@@ -43,7 +43,7 @@ Measured 2026-09-04 from the events [`tech-design.md`](tech-design.md) §9 regis
 | --- | --- | --- | --- |
 | Claude Code | `PermissionRequest` | `tool_name`, `tool_input`, optional `permission_suggestions` — the tool's own arguments: a command, a path, a patch, a URL | Grant it, or refuse with a reason |
 | Claude Code | `PermissionRequest` — `ExitPlanMode` | `tool_input.plan`: a document, in prose and markdown, routinely longer than the whole panel | Accept it, or send it back with a note |
-| Claude Code | `PreToolUse` — `AskUserQuestion` | `questions`: one to four of them, each with a `header` of at most sixteen characters, the question, two to four labelled `options` carrying a `description` each, and `multiSelect` | One option, several options, or your own words — once per question |
+| Claude Code | `PreToolUse` — `AskUserQuestion`, **and a `PermissionRequest` for the same call** | `questions`: one to four of them, each with a `header` of at most sixteen characters, the question, two to four labelled `options` carrying a `description` each, and `multiSelect` | One option, several options, or your own words — once per question |
 | Claude Code | `Elicitation` / `ElicitationResult` | An MCP server's own form, described by a JSON schema it chose | **Not from here** — §11 |
 | Codex | `PermissionRequest` | The command, under the shipped `permission-request.command.input` schema. No `tool_use_id`, which is why the wait borrows the open call | Grant it, or refuse with a reason |
 | Codex | `PreToolUse` — `request_permissions` | A dedicated approval that stays open for exactly as long as a person is being asked — a network access, say | Grant it, or refuse |
@@ -382,17 +382,34 @@ The scrolling body is the second thing to watch: it must scroll its own layer ra
 
 That is right as it stands, and the reason is recorded: the helper forwards stdin unchanged, so an oversized `PostToolUse` tool result once took the lifecycle event down with it, leaving a wait its `tool_use_id` opened unclosed until the Turn's `Stop` (CR-030). **Nothing about the size of a tool result is evidence about the Turn.**
 
-What §2 needs is narrower than lifting that:
+What §2 needs is narrower than lifting that. **Built on 2026-09-05, and two of the three clauses below were wrong when this document first wrote them.**
 
-- `tool_input` is kept **only on `PermissionRequest` and `PreToolUse`** — never on `PostToolUse`, whose payload is the *result* rather than the request, and which is the event the distiller exists for.
-- It is kept **bounded**, as `.text` in `CarriedValue`'s vocabulary: a shorter request is the same request, and §4.4's count is already the surface's answer to a request that does not fit.
-- The bound has to be generous enough for a plan, and a plan is the largest thing either product sends this way.
+- ~~`tool_input` is kept **only on `PermissionRequest` and `PreToolUse`**~~ — **that gate is far wider than it sounds.** `PreToolUse` fires for *every* tool call and is one-to-one with `PostToolUse`, so it halves the volume rather than removing it. Measured 2026-09-05 over 30,909 `tool_use` blocks in 736 transcripts under `~/.claude/projects` — p50 263 B, p99 8,951 B, max 136,560 B — it would copy and decode about **28 MB** of arguments nobody reads, on the serial read queue. The gate actually wanted is **the events that open a wait**, which admits 56 of those 30,909 calls: **0.18%**. It is read off the signal table each vocabulary already declares (`AgentHookVocabulary.carriesRequest(forEvent:toolName:)`), so `PostToolUse` is refused *by construction* rather than by a rule somebody has to remember — which is the shape CR-030 turned out to be.
+- ~~It is kept **bounded**, as `.text` in `CarriedValue`'s vocabulary~~ — **`.text` is wrong twice.** It means *cut short: a shorter answer is the same answer*, which is false of an object: half of one is not JSON, and cutting it would make the whole payload undecodable and lose the lifecycle event with it. And `.text`'s bound is 16 KiB, which **would have refused the only `ExitPlanMode` plan on this machine** (54,411 bytes) — the single form the reading half exists for. There is a fourth `CarriedValue` case instead, `.request`, meaning *whole or left out, and only on the events that ask*.
+- The bound has to be generous enough for a plan, and a plan is the largest thing either product sends this way. `maximumRequestBytes = 128 KiB` — 2.4× that plan, and above 99.997% of the measured corpus.
 
-This is the whole dependency for §11, it is inside this app, and it is the first thing to build.
+One mechanical note, because it is the part that is easy to get wrong: the distiller emits fields as it scans, and `hook_event_name` and `tool_name` are not promised to precede `tool_input` — on Claude Code they never do, its keys arriving alphabetically. So the request is **held as a range into bytes the scan already has** and emitted after the loop, once both names are known. A `PostToolUse` whose request is refused therefore pays nothing at all for the refusal: no copy, no decode, and no second pass over a payload whose tail may be 16 MiB of tool result. Where two copies of the key arrive, the **first** wins, because that is what `JSONDecoder` does with a repeated key — measured, not assumed.
 
-### 14.2 A write path per product, which does not exist yet
+This is the whole dependency for §11, it is inside this app, and it was the first thing to build.
 
-To answer a live approval or a question, each product has to offer a way in. **Until one does, §3 to §8 are a drawing** — and [`expanded-panel-v2.md`](expanded-panel-v2.md) §8.4 is right that a panel offering `Approve` it cannot deliver is worse than a panel that offers nothing. §11 is what happens meanwhile, and it makes the wait cheap rather than idle.
+### 14.2 A write path per product, and both products have one
+
+**Measured 2026-09-05, from each product's own shipped binary.** The channel is the hook process's stdout, on the connection it is already holding open:
+
+| Product | Schema | What it accepts |
+| --- | --- | --- |
+| Codex | `permission-request.command.output` | `hookSpecificOutput.decision = { behavior: "allow" \| "deny", message? }`. `interrupt`, `updatedInput` and `updatedPermissions` are documented *reserved*, and the hook **fails closed** if any of them is present |
+| Codex | `pre-tool-use.command.output` | `hookSpecificOutput.permissionDecision = "allow" \| "deny" \| "ask"`, `permissionDecisionReason` |
+| Claude Code | `PermissionRequest` | `decision: { behavior: "allow", updatedInput?, updatedPermissions? }` or `{ behavior: "deny", message?, interrupt? }` |
+| Claude Code | `PreToolUse` | `permissionDecision: "allow" \| "deny" \| "ask" \| "defer"`, `permissionDecisionReason`, `updatedInput` |
+
+Two consequences change this document.
+
+**A question can be answered, on Claude Code, and honestly.** `AskUserQuestion` raises a `PermissionRequest` as well as its `PreToolUse`, and that event's `allow` carries `updatedInput` — so the answer is delivered by handing the tool back its own input with the person's choices merged in, and the tool then runs and returns them. Nothing is blocked and nothing is paraphrased into a refusal. It is the designed path rather than a trick: `AskUserQuestion`'s own input schema carries an `answers` field described as *"User answers collected by the permission component"*, keyed by question text, beside an `annotations` field for per-question notes. **Codex has no equivalent**, its `updatedInput` being reserved — so a question is answerable on one product and readable on the other, which is §11 rule 06 exactly.
+
+**What it costs is inside this app, not outside it.** ADR 0013 makes the helper silent — `exec >/dev/null 2>&1`, `nc -U -w 1`, `exit 0` — so nothing this app computes can reach the product; the reply channel has to be opened, and the registered `timeout: 3` has to become a window a person can answer inside. Measured on `nc` 2026-09-05: it holds the connection past stdin's EOF, takes a reply three seconds later and prints it, exiting 0 — so the transport ADR 0013 chose survives, with the wait selected per event. On Codex that timeout lives in the hashed definition, so changing it costs one silent re-trust of `PermissionRequest` alone (ADR 0014).
+
+~~Until one does, §3 to §8 are a drawing~~ — [`expanded-panel-v2.md`](expanded-panel-v2.md) §8.4's rule still stands and is now satisfied rather than blocking: a panel offering `Approve` it cannot deliver is worse than a panel that offers nothing, and this one can deliver it. §11 is still what ships first, because reading is the larger removal and the cheaper build.
 
 ### 14.3 The panel has to be able to take the keyboard
 
@@ -411,8 +428,8 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 
 | | Question | Where it stands |
 | --- | --- | --- |
-| 01 | Will either product accept an answer from outside it? | **Not a design question, and under investigation** (the board's owner, 2026-09-05). It gates §3 to §8 and nothing else, so it is answered by measuring the two products rather than by drawing. §11 is what ships meanwhile, and §11 is not blocked on it |
-| 02 | Will this app keep the request it is already sent? | **Also not a design question, and this one is ours. Under investigation** (the board's owner, 2026-09-05). §14.1, and the first thing to build. The bytes already arrive on the socket; what is being established is what carrying them costs, against the `PostToolUse` result that took a lifecycle event down with it (CR-030) |
+| 01 | Will either product accept an answer from outside it? | **Answered — yes, and further than expected** (measured 2026-09-05 from both products' shipped binaries, §14.2). Both accept an approval decision on the hook's own stdout; Claude Code also accepts a question's *answers* through `updatedInput`, which Codex reserves and fails closed on. So §3 to §8 are unblocked, with §5 built for one product and read on the other |
+| 02 | Will this app keep the request it is already sent? | **Answered — yes, and built on 2026-09-05.** §14.1, whose own first two clauses were wrong and are struck there. What carrying it costs is 0.18% of tool calls rather than all of them, because the gate is the events that open a wait; `PostToolUse` is refused by construction, so CR-030's hazard is not re-entered |
 | 03 | Which chord, and what happens when it is taken? | **Answered by the board's owner on 2026-09-05, and now deferred with the chord itself.** `⌥Space`, user-settable, registered through the ordinary system path so a clash **fails at registration rather than silently at use**, and the settings row shows the chord the app actually holds rather than the one it asked for (§9.3). The initial version registers no global hotkey, so that failure path is off the critical path until stage 03 — and the answer stands, unreopened, for when it lands. Still worth testing against a machine already running a launcher on that chord |
 | 04 | Does the count say lines, or bytes? | **Standing recommendation: lines.** A byte count is precise and unreadable; a line count matches what the reader is looking at and is the unit in which a hidden clause hides. Where a request arrives as one enormous unbroken line, the count is of wrapped lines |
 | 05 | Should `⏎` ever take an answer the reader has not seen? | **Answered — no**, and §6.3 is how. It now answers the sharper version of the same question — should a *click* — because a pointer already resting on the answer does not have to move to press twice. The rejected alternative was a fixed delay before the control becomes live |
@@ -454,13 +471,14 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 
 ## 17. Implementation mapping
 
-Nothing here is implemented. The work lands in six places, and the first is the only one with no dependency outside this repository.
+**The first row is built** (2026-09-05); the rest is not. The work lands in six places, and the first was the only one with no dependency outside this repository.
 
 | Symbol | Change |
 | --- | --- |
-| `HookPayload`, `HookPayloadDistiller` | `tool_input` as a new `CodingKey` carried as `.text`, kept on `PermissionRequest` and `PreToolUse` and dropped on `PostToolUse`. §14.1 — build this first |
-| `HookEventRepository` | A `PendingRequest` on the Turn's wait slots, per `(agent_id, tool_use_id)`, carrying the form (§2.1), the payload and, for a question, the set and how much of it has been answered |
-| `MonitorSnapshot`, `MonitorStore` | The request reaches the UI on the one data contract; the store holds each row's draft text and part-answered set for the row's lifetime, and `openRowID` beside `quotaFolded` and `recentFolded` |
+| `HookPayload`, `HookPayloadDistiller` | **Built.** `tool_input` as a fifteenth `CodingKey`, carried as a new `.request` kind — whole or left out, bounded at `maximumRequestBytes = 128 KiB` — and admitted only on the events that open a wait, read off each vocabulary's own signal table through `carriesRequest(forEvent:toolName:)`. ~~carried as `.text`, kept on `PermissionRequest` and `PreToolUse`~~ is struck in §14.1 with the measurements that struck it |
+| `AgentRequest`, `AgentRequestReading` | **Built**, and not in the original plan. The typed request and its four drawn forms, read **in the reducer** at the moment the wait opens — the one place holding the signal, the event name, the tool name and the vocabulary at once. A form's setting (§4.2) is derived from its case rather than stored, so it cannot be set wrong; a command's body is the whole `tool_input` re-encoded with sorted keys, not a field picked out of it |
+| `HookEventRepository` | **Built.** The request is a field **of** `PendingApproval` and of a new `PendingInput`, ~~a `PendingRequest` on the Turn's wait slots, per `(agent_id, tool_use_id)`~~ — a table beside the waits would have to be cleared at all seven sites that clear one, and a rule that holds until one site forgets it is exactly CR-030. `HookTurnState.requestAwaitingAnAnswer` picks the one request a row can open, in the order `PRD.md` §6.2 already reads, oldest subagent first |
+| `MonitorSnapshot`, `MonitorStore` | **Half built.** `MonitoredSession.request` reaches the UI on the one data contract, and `renderedProjection()` carries the request's id and form — never its body, so a 54 KiB plan is not string-compared per event. Still owed: the store's draft text and part-answered set for the row's lifetime, and `openRowID` beside `quotaExpanded` and `recentExpanded` |
 | `PanelMetrics` | New: `requestBodyMaximumHeight = 140`, `openRowHeight(bodyHeight:)`, `optionRowHeight = 24`, `answerRowHeight = 28`. `openRowHeight(requestLines:)` from [`expanded-panel-v2.md`](expanded-panel-v2.md) §10 is not introduced — it counted lines, and §4.1 does not |
 | `NotchOverlayView` | `OpenRow` and its four bodies, `OptionRow`, `AnswerRow`, the chevron in the trailing head slot, the mark's second hit region, and a hit region and hover fill on every answer (§6.6). The field is an `NSViewRepresentable` over an AppKit text view (§13.2) |
 | `OverlayPanelController` | Latching and key-window handover (§14.3). The chord's registration and its failure reporting are stage 03 and are not in the initial version (§9.3) |
