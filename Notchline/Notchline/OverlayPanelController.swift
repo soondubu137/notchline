@@ -16,6 +16,8 @@ final class OverlayPanelController {
     private var hasShownPanel = false
     /// Non-nil while one `mouseEntered` is owed — see ``armPointerReentry()``.
     private var pointerReentryMonitor: Any?
+    /// Armed only while a row is open; see ``setLatched(_:)``.
+    private var outsideClickMonitor: Any?
     private let concealmentWatcher: OverlayConcealmentWatcher
     /// Whether the panel is off screen because its display's menu bar is.
     ///
@@ -96,6 +98,27 @@ final class OverlayPanelController {
     }
 
     private func bindStore() {
+        // **Latching, and it is the one thing on this surface that takes
+        // something from the application underneath.** A row opens, the panel
+        // becomes key so the body can be read without being lost, and the key
+        // goes back on `⎋`, on a click outside, and when the row closes.
+        store.$openRowID
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] openRowID in
+                self?.setLatched(openRowID != nil)
+            }
+            .store(in: &cancellables)
+
+        panel.handleEscape = { [weak self] in
+            guard let self else { return }
+            if store.openRowID != nil {
+                store.closeOpenRow()
+            } else {
+                store.collapse()
+            }
+        }
+
         let animatedChanges = Self.frameChangingPublishers(of: store)
 
         Publishers.MergeMany(animatedChanges)
@@ -209,6 +232,26 @@ final class OverlayPanelController {
             // some unrelated publish happens to resize it.
             store.$presenceMarks.map { _ in () }.eraseToAnyPublisher()
         ]
+    }
+
+    /// Takes the keyboard, or gives it back, and watches for the click outside.
+    ///
+    /// The outside click is a global monitor rather than a window callback,
+    /// because the whole point is that it happens somewhere this panel is not.
+    /// It is armed only while latched, so nothing is watching the pointer in the
+    /// state this app spends its life in.
+    private func setLatched(_ isLatched: Bool) {
+        panel.latches = isLatched
+        outsideClickMonitor.map(NSEvent.removeMonitor)
+        outsideClickMonitor = nil
+        guard isLatched else { return }
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            // Global monitors see only events this app did not receive, so
+            // anything arriving here is by construction outside the panel.
+            Task { @MainActor [weak self] in self?.store.closeOpenRow() }
+        }
     }
 
     private func schedulePanelFrameUpdate(animated: Bool) {
@@ -586,8 +629,65 @@ enum OverlayPanelLayout {
 }
 
 final class OverlayPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    /// Whether this panel may hold the keyboard right now.
+    ///
+    /// **False except while a row is open**, which is the whole of
+    /// `answer-in-notch.md` §9.4: hover browses and cannot latch, however long
+    /// it lasts, and only a click on a mark makes this panel key. It sits over
+    /// whatever the person is typing into, so a surface that took focus on
+    /// proximity would eat a line of their code.
+    ///
+    /// A `.nonactivatingPanel` is exactly the right shape for this: it takes key
+    /// status without bringing an `LSUIElement` app to the foreground, so the
+    /// application underneath keeps its own appearance of being frontmost while
+    /// the keys come here.
+    var latches = false {
+        didSet {
+            guard latches != oldValue else { return }
+            if latches {
+                makeKeyAndOrderFront(nil)
+            } else if isKeyWindow {
+                // Handed back to whoever it came from. If that window has gone,
+                // the system decides — this panel does not hold it open waiting
+                // for one (§9.4).
+                resignKey()
+                orderFront(nil)
+            }
+        }
+    }
+
+    /// What `⎋` does, and what a click outside does.
+    ///
+    /// Held rather than reached for through a delegate because it is one closure
+    /// and it belongs to the controller that built this window.
+    var handleEscape: (() -> Void)?
+
+    override var canBecomeKey: Bool { latches }
     override var canBecomeMain: Bool { false }
+
+    /// `⎋`, which AppKit routes here as the cancel action.
+    ///
+    /// **A surface that takes key status has to hand it back, and this is the
+    /// key that does it** (§9.2). The row stays on the list holding whatever was
+    /// typed into it; nothing is sent and the request is left exactly where it
+    /// was.
+    override func cancelOperation(_ sender: Any?) {
+        handleEscape?()
+    }
+
+    /// Every other key, so a latched panel does not beep at the person.
+    ///
+    /// Only `⎋` is bound in this version (§9.2): `⌥Space`, the arrows, the
+    /// digits, `Space`, `⌘⏎` and `⇥` are all deliberately unbound, because a
+    /// keyboard model with a hole in it is worse than a panel that plainly does
+    /// not navigate.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            handleEscape?()
+            return
+        }
+        super.keyDown(with: event)
+    }
 
     override func constrainFrameRect(
         _ frameRect: NSRect,

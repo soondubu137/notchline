@@ -25797,6 +25797,73 @@ for line in sys.stdin:
         #expect(layout.linesBelowTheFold(scrolledBy: toTheEnd) == 0)
     }
 
+    /// A row somebody is reading does not close because their pointer drifted.
+    ///
+    /// §10, and it is the reason latching exists at all: a body of `140` points
+    /// is read rather than glanced at, and **moving to the keyboard is not a
+    /// pointer movement while any drift is one**. It holds even where there is
+    /// nothing to type — a row that can only be read is the state a person
+    /// spends longest on (§15 q13).
+    @Test @MainActor
+    func aRowSomebodyIsReadingDoesNotCloseBecauseTheirPointerDrifted() async {
+        let store = MonitorStore(displays: [], services: [])
+        let asking = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-1",
+            turnID: "u-1",
+            projectName: "notchline",
+            title: "Something",
+            preview: nil,
+            status: .approvalNeeded,
+            startedAt: Date(),
+            request: AgentRequest(id: "c-1", toolName: "Bash", form: .command("ls"))
+        )
+        store.pointerEnteredPanel()
+        store.isExpanded = true
+        store.toggleOpenRow(asking)
+        #expect(store.isLatched)
+
+        store.pointerExitedPanel()
+        // Long past the collapse dwell, and the panel is still open.
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(store.isExpanded)
+
+        // Closing the row hands the panel back to the pointer, unchanged.
+        store.closeOpenRow()
+        #expect(!store.isLatched)
+        store.pointerExitedPanel()
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(!store.isExpanded)
+    }
+
+    /// Closing the panel takes the open row with it.
+    ///
+    /// A panel that is closing cannot be holding a row open behind it, and the
+    /// keyboard goes back with it — `⎋` twice, a click outside, a navigation, or
+    /// the menu bar being concealed. The row keeps its place on the list; only
+    /// its openness ends.
+    @Test @MainActor
+    func closingThePanelTakesTheOpenRowWithIt() {
+        let store = MonitorStore(displays: [], services: [])
+        let asking = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-1",
+            turnID: "u-1",
+            projectName: "notchline",
+            title: "Something",
+            preview: nil,
+            status: .approvalNeeded,
+            startedAt: Date(),
+            request: AgentRequest(id: "c-1", toolName: "Bash", form: .command("ls"))
+        )
+        store.isExpanded = true
+        store.toggleOpenRow(asking)
+        #expect(store.openRowID != nil)
+        store.collapse()
+        #expect(store.openRowID == nil)
+        #expect(!store.isLatched)
+    }
+
     /// A waiting row's ground is sized for its longest word and never resizes.
     ///
     /// `panel-v2.md` §6, and the reason the duration had to leave this ground

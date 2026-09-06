@@ -2762,6 +2762,12 @@ final class MonitorStore: ObservableObject {
         openRowID = openRowID == session.id ? nil : session.id
     }
 
+    /// Whether the panel is holding the keyboard for a row.
+    ///
+    /// Hover browses and cannot latch, however long it lasts; only a click on a
+    /// mark makes this panel key (§9.4).
+    var isLatched: Bool { openRowID != nil }
+
     /// Collapses the open row, sending nothing and keeping the row where it was.
     ///
     /// The chevron's own action, and `⎋`'s once the panel can take a key.
@@ -2878,6 +2884,13 @@ final class MonitorStore: ObservableObject {
     }
 
     func pointerExitedPanel() {
+        // **A row somebody is reading does not close because their pointer
+        // drifted** (`answer-in-notch.md` §10). A body of `140` points is read
+        // rather than glanced at, and moving to the keyboard is not a pointer
+        // movement while any drift is one. This holds even where there is
+        // nothing to type: a row that can only be read is the state a person
+        // spends longest on.
+        guard openRowID == nil else { return }
         scheduleHoverAction(after: timing.hoverCollapseDelay) { store in
             store.isExpanded = false
         }
@@ -2925,6 +2938,11 @@ final class MonitorStore: ObservableObject {
 
     func collapse() {
         cancelPendingHoverAction()
+        // A panel that is closing cannot be holding a row open behind it, and
+        // the keyboard goes back with it -- `⎋` twice, a click outside, a
+        // navigation, the menu bar being concealed. The row keeps its place on
+        // the list; only its openness ends.
+        openRowID = nil
         isExpanded = false
     }
 

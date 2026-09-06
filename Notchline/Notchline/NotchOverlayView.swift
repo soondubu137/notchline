@@ -1129,8 +1129,7 @@ private struct OpenRow: View {
     @ViewBuilder
     private func body(for layout: RequestBodyLayout?) -> some View {
         if let layout {
-            RequestBodyView(layout: layout)
-                .frame(height: layout.drawnHeight, alignment: .top)
+            ScrollingRequestBody(layout: layout)
         }
     }
 
@@ -1201,6 +1200,163 @@ private struct OpenRowChevron: View {
             .accessibilityLabel("Collapse this request")
             .accessibilityAddTraits(.isButton)
     }
+}
+
+/// A body taller than the space it has, and how much of it is missing.
+///
+/// **The wheel is the only thing that scrolls it**, and nothing else on this
+/// surface scrolls (§6.2). The count is what makes that honest: a fade is right
+/// for a title, where what is lost is more of the same sentence, and wrong for a
+/// command, where what is lost may be a second command after `&&`, a `--force`,
+/// or a path outside the project. So the body says how many lines are under the
+/// fold — **lines rather than bytes**, which is the unit a hidden clause hides
+/// in (§15 q04) — and says nothing once nothing is.
+///
+/// A count that names something unreachable is an apology, which is why the two
+/// arrived together: the rail reports where the reader is, at `1.5` points it is
+/// not a grip, and it is never the only way to move.
+private struct ScrollingRequestBody: View {
+    let layout: RequestBodyLayout
+
+    @State private var offset: CGFloat = 0
+
+    private var travel: CGFloat {
+        max(layout.contentHeight - PanelMetrics.requestBodyMaximumHeight, 0)
+    }
+
+    private var overflows: Bool { travel > 0 }
+
+    var body: some View {
+        RequestBodyView(layout: layout)
+            .frame(
+                maxWidth: .infinity,
+                alignment: .topLeading
+            )
+            .offset(y: -offset)
+            .frame(height: layout.drawnHeight, alignment: .top)
+            .clipped()
+            // The fade the count sits over. Without it the line at the fold is
+            // cut through its own glyphs, which reads as damage rather than as
+            // more -- and §4.4's count is drawn *over* this rather than instead
+            // of it, because a fade alone cannot say a `--force` is under there.
+            .mask(alignment: .top) { fold }
+            .overlay(alignment: .trailing) { rail }
+            .overlay(alignment: .bottomTrailing) { count }
+            .background(
+                // **Driven rather than nested.** A second `ScrollView` inside
+                // the list's own chains against it and loses -- the same finding
+                // that left the Recent queue without a scroller of its own -- so
+                // the wheel is read directly and the body is translated. It also
+                // makes §4.4's count exact, because the offset it counts from is
+                // the offset that was applied.
+                WheelCatcher { delta in
+                    guard overflows else { return }
+                    offset = min(max(offset - delta, 0), travel)
+                }
+            )
+            .onChange(of: layout) { _, _ in offset = 0 }
+    }
+
+    /// Solid to the last full line, then out.
+    ///
+    /// Only where there is something below: a body that fits is drawn whole, and
+    /// fading its foot would say there was more when there is not.
+    @ViewBuilder
+    private var fold: some View {
+        if layout.linesBelowTheFold(scrolledBy: offset) > 0 {
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: 0.86),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        } else {
+            Color.black
+        }
+    }
+
+    /// The panel's own hairline value, and a thumb one step up from it.
+    ///
+    /// `1.5` points: it reports where the reader is and is deliberately not a
+    /// grip, because it is never the only way to move (§4.4).
+    @ViewBuilder
+    private var rail: some View {
+        if overflows {
+            let visible = PanelMetrics.requestBodyMaximumHeight
+            let thumb = max(24, visible * visible / layout.contentHeight)
+            let progress = min(max(offset / travel, 0), 1)
+            ZStack(alignment: .top) {
+                Capsule().fill(Color.white.opacity(0.15))
+                Capsule()
+                    .fill(Color.white.opacity(0.5))
+                    .frame(height: thumb)
+                    .offset(y: (visible - thumb) * progress)
+            }
+            .frame(width: 1.5, height: visible)
+            .accessibilityHidden(true)
+        }
+    }
+
+    /// `+2 lines`, over the fade the body's last line already has.
+    ///
+    /// **Spoken as well as drawn** (§13.3): a reader who cannot see the count
+    /// must not be the only one who does not know something is missing.
+    @ViewBuilder
+    private var count: some View {
+        let hidden = layout.linesBelowTheFold(scrolledBy: offset)
+        if hidden > 0 {
+            Text("+\(hidden) line\(hidden == 1 ? "" : "s")")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(NotchPalette.label)
+                .padding(.trailing, 8)
+                .accessibilityLabel(
+                    "\(hidden) more line\(hidden == 1 ? "" : "s") below"
+                )
+        }
+    }
+}
+
+/// Reads the wheel over one region, and claims nothing else.
+///
+/// The same shape as ``SecondaryClickCatcher``: an `NSView` that answers exactly
+/// one kind of event and is transparent to every other, so the row's clicks and
+/// the panel's hover are untouched.
+struct WheelCatcher: NSViewRepresentable {
+    let onScroll: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> WheelCatcherView {
+        let view = WheelCatcherView()
+        view.onScroll = onScroll
+        return view
+    }
+
+    func updateNSView(_ view: WheelCatcherView, context: Context) {
+        view.onScroll = onScroll
+    }
+}
+
+final class WheelCatcherView: NSView {
+    var onScroll: ((CGFloat) -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        // A trackpad reports pixels and a wheel reports lines; both arrive as
+        // `scrollingDeltaY`, and the precise flag is what says which.
+        let delta = event.hasPreciseScrollingDeltas
+            ? event.scrollingDeltaY
+            : event.scrollingDeltaY * 12
+        guard delta != 0 else { return }
+        onScroll?(delta)
+    }
+
+    /// Hit-tests for the wheel and for nothing else.
+    ///
+    /// `nil` from `hitTest` would take this view out of the responder chain for
+    /// scrolling too, so it answers for itself and the views above it keep every
+    /// click: this sits *behind* the body rather than over it.
+    override var acceptsFirstResponder: Bool { false }
 }
 
 /// One request's body: the lines it wrapped to, and the options under them.
