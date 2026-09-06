@@ -25582,6 +25582,221 @@ for line in sys.stdin:
         }
     }
 
+    /// A wrapped line's continuation carries its own indent plus two spaces.
+    ///
+    /// §4.5, and it is not decoration: on a shell command the difference between
+    /// a continuation and a new line is the difference between one command and
+    /// two. Whitespace is never collapsed, order is never changed, and a token
+    /// with nowhere to break is broken at the edge rather than dropped.
+    @Test @MainActor
+    func aWrappedLinesContinuationCarriesItsOwnIndentPlusTwoSpaces() {
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let width = PanelMetrics.textWidth(String(repeating: "0", count: 20), font: font)
+
+        let wrapped = AgentRequestReading.wrapped(
+            "    alpha beta gamma delta epsilon zeta",
+            to: width,
+            font: font
+        )
+        #expect(wrapped.count > 1)
+        #expect(wrapped[0].hasPrefix("    alpha"))
+        for continuation in wrapped.dropFirst() {
+            #expect(continuation.hasPrefix("      "), "\(continuation)")
+        }
+        // Nothing is dropped: the words come back in the order they went in.
+        let words = wrapped.joined(separator: "").split(separator: " ").map(String.init)
+        #expect(words == ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"])
+    }
+
+    /// A token with nowhere to break is broken at the edge rather than dropped.
+    ///
+    /// A URL, a base64 blob or a path with no spaces in it must still be
+    /// readable — and the loop must terminate even where a single glyph is wider
+    /// than the container it is being fitted into.
+    @Test @MainActor
+    func aTokenWithNowhereToBreakIsBrokenAtTheEdge() {
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let token = String(repeating: "x", count: 200)
+        let wrapped = AgentRequestReading.wrapped(
+            token,
+            to: PanelMetrics.textWidth("0000000000", font: font),
+            font: font
+        )
+        #expect(wrapped.count > 1)
+        // Every character survives, in order. The continuations carry §4.5's
+        // two-space indent, which is drawn and is not part of the token.
+        let rejoined = wrapped.first! + wrapped.dropFirst()
+            .map { String($0.dropFirst(2)) }
+            .joined()
+        #expect(rejoined == token)
+        // And a container narrower than one glyph still terminates.
+        #expect(AgentRequestReading.wrapped("abc", to: 1, font: font).count == 3)
+    }
+
+    /// The product's own line breaks survive, blank lines included.
+    ///
+    /// A blank line in a plan is a paragraph break the person is meant to see,
+    /// so the split keeps empty subsequences rather than tidying them away.
+    @Test @MainActor
+    func theProductsOwnLineBreaksSurviveIncludingBlankOnes() {
+        let font = NSFont.systemFont(ofSize: 13)
+        let wrapped = AgentRequestReading.wrapped(
+            "first\n\nthird",
+            to: 400,
+            font: font
+        )
+        #expect(wrapped == ["first", "", "third"])
+    }
+
+    /// An open row is at most the viewport, and its body at most `140`.
+    ///
+    /// §4.1: the body is bounded by the panel rather than by a line count, so
+    /// there is one number to remember rather than one per form, and the tallest
+    /// an open row can be is the viewport itself. Every height in §12 is this
+    /// one arithmetic.
+    @Test @MainActor
+    func anOpenRowIsAtMostTheViewportAndItsBodyAtMostOneHundredAndForty() {
+        #expect(
+            PanelMetrics.openRowHeight(bodyHeight: PanelMetrics.requestBodyMaximumHeight)
+                == PanelMetrics.sessionViewportCap
+        )
+        // Asking for more than the cap gets the cap, and the row is the viewport.
+        #expect(PanelMetrics.openRowHeight(bodyHeight: 10_000) == 240)
+        // The fixed part is everything but the body: `12.5 + 16 + 2 + 17 + 2`
+        // above and `10 + 28 + 12.5` below.
+        #expect(PanelMetrics.openRowFixedHeight == 100)
+        // And a one-line question is the shortest row that can be opened.
+        #expect(PanelMetrics.openRowHeight(bodyHeight: 17) == 117)
+    }
+
+    /// A row with nothing to show does not open.
+    ///
+    /// The mark is a second target only where there is a second thing to reach.
+    /// A row whose payload carried nothing readable stays what every row has
+    /// always been — one target, leading to the product — rather than opening
+    /// onto an empty body (§3).
+    @Test @MainActor
+    func aRowWithNothingToShowDoesNotOpen() {
+        let store = MonitorStore(displays: [], services: [])
+        let bare = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-1",
+            turnID: "u-1",
+            projectName: "notchline",
+            title: "Something",
+            preview: nil,
+            status: .approvalNeeded,
+            startedAt: Date()
+        )
+        store.toggleOpenRow(bare)
+        #expect(store.openRowID == nil)
+
+        let asking = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-1",
+            turnID: "u-1",
+            projectName: "notchline",
+            title: "Something",
+            preview: nil,
+            status: .approvalNeeded,
+            startedAt: Date(),
+            request: AgentRequest(id: "c-1", toolName: "Bash", form: .command("ls"))
+        )
+        store.toggleOpenRow(asking)
+        #expect(store.openRowID == asking.id)
+        // And the same click closes it: one row is open at a time, and the mark
+        // is the one control that says which.
+        store.toggleOpenRow(asking)
+        #expect(store.openRowID == nil)
+    }
+
+    /// Arguments are drawn without the envelope they arrived in.
+    ///
+    /// The first form of this drew `JSONEncoder`'s output, which meant every
+    /// approval opened onto its own braces and quotes before it opened onto its
+    /// request — and a command containing a quote arrived escaped. §4.6 forbids
+    /// the app *annotating* what it was handed; it does not oblige it to draw
+    /// the wrapper the transport used. Nothing is omitted either way: a lone
+    /// argument is drawn bare, and several are drawn one per line in a fixed
+    /// order.
+    @Test @MainActor
+    func argumentsAreDrawnWithoutTheEnvelopeTheyArrivedIn() throws {
+        let lone = try #require(
+            AgentRequestReading.arguments(of: .object(["command": .string("rm -rf build")]))
+        )
+        #expect(lone == "rm -rf build")
+
+        let several = try #require(
+            AgentRequestReading.arguments(of: .object([
+                "description": .string("Clear the build directory"),
+                "command": .string("echo \"hello\"")
+            ]))
+        )
+        // Named, in a fixed order, with the person's own quotes unescaped.
+        #expect(several == "command  echo \"hello\"\ndescription  Clear the build directory")
+        #expect(!several.contains("\\\""))
+        #expect(!several.contains("{"))
+    }
+
+    /// Every question draws its position, a one-question call included.
+    ///
+    /// §5.2: a count that appears only sometimes is a count nobody learns to
+    /// read. 63% of questions arrive in a call carrying more than one, so the
+    /// count is what tells a reader that answering this one is not the end.
+    @Test @MainActor
+    func everyQuestionDrawsItsPositionIncludingAOneQuestionCall() throws {
+        func layout(_ count: Int) throws -> RequestBodyLayout {
+            let questions = (0 ..< count).map { index in
+                AgentQuestion(
+                    id: index,
+                    header: "Scope",
+                    text: "Question \(index)?",
+                    options: [AgentQuestionOption(id: 0, label: "Yes", description: nil)],
+                    allowsSeveralAnswers: false
+                )
+            }
+            return try #require(
+                RequestBodyLayout.laidOut(
+                    AgentRequest(id: "c-1", toolName: "AskUserQuestion", form: .questions(questions))
+                )
+            )
+        }
+        #expect(try layout(1).position?.drawn == "1/1")
+        #expect(try layout(3).position?.drawn == "1/3")
+        // And the options come with it, at `24` a row over the question's lines.
+        let three = try layout(3)
+        #expect(three.options.count == 1)
+        #expect(three.setting == .prose)
+        #expect(
+            three.contentHeight
+                == CGFloat(three.lines.count) * PanelMetrics.requestLineHeight(for: .prose)
+                    + PanelMetrics.optionListSpacing + PanelMetrics.optionRowHeight
+        )
+    }
+
+    /// A body's count of what is below the fold clears when the last line shows.
+    ///
+    /// §4.4: a fade is right for a title, where what is lost is more of the same
+    /// sentence, and wrong for a command, where what is lost may be a second
+    /// command after `&&`, a `--force`, or a path outside the project. So the
+    /// body says how much is missing — in **lines**, which is the unit a hidden
+    /// clause hides in (§15 q04) — and says nothing once nothing is.
+    @Test @MainActor
+    func aBodysCountOfWhatIsBelowTheFoldClearsWhenTheLastLineShows() throws {
+        let long = (0 ..< 20).map { "line \($0)" }.joined(separator: "\n")
+        let layout = try #require(
+            RequestBodyLayout.laidOut(
+                AgentRequest(id: "c-1", toolName: "Bash", form: .command(long))
+            )
+        )
+        #expect(layout.contentHeight > PanelMetrics.requestBodyMaximumHeight)
+        #expect(layout.drawnHeight == PanelMetrics.requestBodyMaximumHeight)
+        #expect(layout.linesBelowTheFold(scrolledBy: 0) > 0)
+        // Scrolled to the end, there is nothing left to name.
+        let toTheEnd = layout.contentHeight - PanelMetrics.requestBodyMaximumHeight
+        #expect(layout.linesBelowTheFold(scrolledBy: toTheEnd) == 0)
+    }
+
     /// A waiting row's ground is sized for its longest word and never resizes.
     ///
     /// `panel-v2.md` §6, and the reason the duration had to leave this ground

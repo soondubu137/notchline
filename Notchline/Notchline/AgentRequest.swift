@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// What one agent is asking a person, in the shapes a row can draw.
@@ -165,24 +166,72 @@ nonisolated enum AgentRequestReading {
     /// the PRD's ban to *the payload of a request the product is already blocked
     /// on* — the payload, not a field of it.
     ///
-    /// **`sortedKeys` is load-bearing and not cosmetic.** ``JSONValue/object``
+    /// **The fixed order is load-bearing and not cosmetic.** ``JSONValue/object``
     /// is a Swift `Dictionary`, whose iteration order differs between instances
-    /// holding equal values — so an unsorted rendering would produce a different
-    /// string for the same request on a later read, and
-    /// ``HookEventRepository/renderedProjection()`` would see a change and wake
-    /// the panel for it.
+    /// holding equal values — so rendering in whatever order the dictionary
+    /// offered would produce a different string for the same request on a later
+    /// read, and ``HookEventRepository/renderedProjection()`` would see a change
+    /// and wake the panel for it. Sorting by name is what makes a request that
+    /// has not changed read as one that has not changed.
     ///
     /// Rendered here, once, inside the actor, and never in a row builder: rows
     /// are rebuilt on every refresh, and a `String` made once is then shared by
     /// copy-on-write, so comparing two rebuilt rows compares a pointer rather
     /// than 128 KiB.
     nonisolated static func arguments(of toolInput: JSONValue) -> String? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(toolInput),
-              let text = String(data: data, encoding: .utf8),
-              !text.isEmpty else { return nil }
-        return text
+        guard case let .object(fields) = toolInput else {
+            return scalar(toolInput)
+        }
+        let named = fields.keys.sorted()
+        // **A lone string is drawn bare.** Most tools have one argument that
+        // matters, and wrapping `rm -rf build` in a name it already implies is
+        // noise a reader has to look past at exactly the wrong moment.
+        if named.count == 1, let only = named.first, let value = scalar(fields[only]) {
+            return value.isEmpty ? nil : value
+        }
+        var lines: [String] = []
+        for key in named {
+            guard let value = scalar(fields[key]), !value.isEmpty else { continue }
+            let broken = value.split(separator: "\n", omittingEmptySubsequences: false)
+            if broken.count == 1 {
+                lines.append("\(key)  \(value)")
+            } else {
+                // A multi-line value keeps its own breaks and is indented under
+                // its name, so a patch still reads as a patch.
+                lines.append("\(key)")
+                lines.append(contentsOf: broken.map { "  " + $0 })
+            }
+        }
+        let text = lines.joined(separator: "\n")
+        return text.isEmpty ? nil : text
+    }
+
+    /// One value as the row would read it, with no JSON around it.
+    ///
+    /// **Not `JSONEncoder`,** which is what this was first written as. It draws
+    /// the braces, the quotes and the escapes as well as the command — so a
+    /// command containing a quote arrived as `\"`, and every approval opened
+    /// onto its own envelope before it opened onto its request. §4.6 forbids the
+    /// app annotating what it was handed; it does not oblige it to draw the
+    /// wrapper the transport happened to use. Nothing is omitted: every field is
+    /// still here, in a fixed order, with the person's own whitespace intact.
+    private nonisolated static func scalar(_ value: JSONValue?) -> String? {
+        switch value {
+        case let .string(text): text
+        case let .number(number):
+            number == number.rounded() && abs(number) < 1e15
+                ? String(Int(number))
+                : String(number)
+        case let .bool(flag): flag ? "true" : "false"
+        case .null: "null"
+        case let .array(items):
+            items.compactMap { scalar($0) }.joined(separator: ", ")
+        case let .object(fields):
+            fields.keys.sorted()
+                .compactMap { key in scalar(fields[key]).map { "\(key)  \($0)" } }
+                .joined(separator: "\n")
+        case nil: nil
+        }
     }
 
     /// The named string inside an object, where there is one worth drawing.
@@ -251,4 +300,214 @@ nonisolated enum AgentRequestReading {
 
     /// What a header may weigh, which is what the product's own schema promises.
     nonisolated static let maximumHeaderCharacters = 16
+
+    /// One body's text, broken into the lines the row will draw.
+    ///
+    /// **Wrapped here rather than by the text system, and the reason is
+    /// agreement.** The panel is sized from a computed height and the row is
+    /// drawn from the same text; if the two wrapped differently the row would
+    /// be a line taller or shorter than the space made for it, and
+    /// `answer-in-notch.md` §4.4's count of what is below the fold would be a
+    /// lie. Measuring and drawing the *same array of lines* makes disagreement
+    /// impossible rather than unlikely.
+    ///
+    /// §4.5, in three clauses:
+    ///
+    /// - **Line breaks are the ones the product sent.** Whitespace is never
+    ///   collapsed and order is never changed.
+    /// - **A continuation carries its own line's indent plus two spaces**, so a
+    ///   wrap is never read as a new argument — which on a shell command is the
+    ///   difference between one command and two.
+    /// - **A token with nowhere to break is broken at the edge** rather than
+    ///   dropped or allowed to overflow.
+    nonisolated static func wrapped(
+        _ text: String,
+        to width: CGFloat,
+        font: NSFont
+    ) -> [String] {
+        guard width > 0 else { return [text] }
+        var lines: [String] = []
+        // `omittingEmptySubsequences: false` because a blank line in a plan is
+        // a paragraph break the person is meant to see.
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let source = String(line)
+            guard measure(source, font) > width else {
+                lines.append(source)
+                continue
+            }
+            let indent = String(source.prefix { $0 == " " || $0 == "\t" }) + "  "
+            var remainder = Substring(source)
+            var isContinuation = false
+            while !remainder.isEmpty {
+                let prefix = isContinuation ? indent : ""
+                let taken = fit(remainder, within: width, prefix: prefix, font: font)
+                lines.append(prefix + taken)
+                // `taken` already includes the space it broke at, where it
+                // broke at one, so nothing else is consumed here -- the
+                // person's own whitespace is never collapsed (§4.5).
+                remainder = remainder.dropFirst(taken.count)
+                isContinuation = true
+            }
+        }
+        return lines.isEmpty ? [""] : lines
+    }
+
+    /// The longest head of `remainder` that fits, broken at a space where there
+    /// is one and at the edge where there is not.
+    private nonisolated static func fit(
+        _ remainder: Substring,
+        within width: CGFloat,
+        prefix: String,
+        font: NSFont
+    ) -> String {
+        var fitting = ""
+        var lastBreak: String?
+        var current = ""
+        for character in remainder {
+            current.append(character)
+            if measure(prefix + current, font) > width { break }
+            fitting = current
+            if character == " " { lastBreak = current }
+        }
+        if fitting.isEmpty {
+            // Nothing fits at all -- a single glyph wider than the container.
+            // Take one character so the loop always makes progress.
+            return String(remainder.prefix(1))
+        }
+        if fitting.count < remainder.count, let lastBreak, !lastBreak.isEmpty {
+            return lastBreak
+        }
+        return fitting
+    }
+
+    private nonisolated static func measure(_ text: String, _ font: NSFont) -> CGFloat {
+        (text as NSString)
+            .size(withAttributes: [.font: font])
+            .width
+    }
+}
+
+/// Everything an open row draws between its title and its answer row, laid out
+/// once.
+///
+/// **The panel's height and the row's drawing come from the same value**, which
+/// is what makes `answer-in-notch.md` §4.4's count of what is under the fold
+/// true rather than approximately true: the lines counted here are the lines
+/// drawn, character for character.
+nonisolated struct RequestBodyLayout: Sendable, Equatable {
+    /// §4.2's setting, which decides the font, the ground and the line height.
+    let setting: AgentRequest.Setting
+    /// The body's text, already wrapped to the width it will be drawn at.
+    let lines: [String]
+    /// The options under it, on a question. Empty on every other form.
+    let options: [AgentQuestionOption]
+    /// The question's own header, for the caption line's trailing side.
+    let header: String?
+    /// Which question of the set this is, one-based, and how many there are.
+    ///
+    /// **Every question draws it, `1/1` included** (§5.2): a count that appears
+    /// only sometimes is a count nobody learns to read. `nil` on every form that
+    /// is not a question.
+    let position: Position?
+    /// Whether ticking several is allowed (§5.5).
+    let allowsSeveralAnswers: Bool
+
+    nonisolated struct Position: Sendable, Equatable {
+        let index: Int
+        let count: Int
+        nonisolated var drawn: String { "\(index)/\(count)" }
+    }
+
+    /// What the whole body weighs, before the viewport's cap is applied.
+    nonisolated var contentHeight: CGFloat {
+        let text = CGFloat(lines.count) * PanelMetrics.requestLineHeight(for: setting)
+        let ground = setting == .machineText
+            ? PanelMetrics.machineTextVerticalInset * 2
+            : 0
+        let list = options.isEmpty
+            ? 0
+            : PanelMetrics.optionListSpacing
+                + CGFloat(options.count) * PanelMetrics.optionRowHeight
+        return text + ground + list
+    }
+
+    /// What the row will actually give it (§4.1), and what is left over.
+    nonisolated var drawnHeight: CGFloat {
+        min(contentHeight, PanelMetrics.requestBodyMaximumHeight)
+    }
+
+    /// How many lines sit below the fold, for §4.4's count.
+    ///
+    /// **Lines rather than bytes** (§15 q04): a byte count is precise and
+    /// unreadable, where a line count matches what the reader is looking at and
+    /// is the unit in which a hidden clause hides. Zero once the last line is on
+    /// screen, which is what makes the count clear itself rather than sit there
+    /// naming something unreachable.
+    nonisolated func linesBelowTheFold(scrolledBy offset: CGFloat) -> Int {
+        let lineHeight = PanelMetrics.requestLineHeight(for: setting)
+        guard lineHeight > 0 else { return 0 }
+        let hidden = contentHeight - offset - PanelMetrics.requestBodyMaximumHeight
+        guard hidden > 0 else { return 0 }
+        return Int(ceil(hidden / lineHeight))
+    }
+
+    /// Lays out one request's body at the width the row draws it in.
+    ///
+    /// `question` selects which of a set is shown, because a set is answered one
+    /// at a time and the count says so (§5.2, §5.3). In the reading form only
+    /// the first is reachable, and the count is what tells a reader there are
+    /// more — which is exactly what §11's single control is for.
+    nonisolated static func laidOut(
+        _ request: AgentRequest,
+        showing question: Int = 0,
+        width: CGFloat = PanelMetrics.requestBodyWidth
+    ) -> RequestBodyLayout? {
+        switch request.form {
+        case let .command(text):
+            return RequestBodyLayout(
+                setting: .machineText,
+                lines: AgentRequestReading.wrapped(
+                    text,
+                    to: width - PanelMetrics.machineTextHorizontalInset * 2,
+                    font: PanelMetrics.machineTextFont
+                ),
+                options: [],
+                header: nil,
+                position: nil,
+                allowsSeveralAnswers: false
+            )
+        case let .document(text), let .question(text):
+            return RequestBodyLayout(
+                setting: .prose,
+                lines: AgentRequestReading.wrapped(
+                    text,
+                    to: width,
+                    font: PanelMetrics.proseFont
+                ),
+                options: [],
+                header: nil,
+                position: nil,
+                allowsSeveralAnswers: false
+            )
+        case let .questions(questions):
+            guard !questions.isEmpty else { return nil }
+            let index = min(max(question, 0), questions.count - 1)
+            let asked = questions[index]
+            return RequestBodyLayout(
+                setting: .prose,
+                lines: AgentRequestReading.wrapped(
+                    asked.text,
+                    to: width,
+                    font: PanelMetrics.proseFont
+                ),
+                options: asked.options,
+                header: asked.header,
+                position: Position(index: index + 1, count: questions.count),
+                allowsSeveralAnswers: asked.allowsSeveralAnswers
+            )
+        case .unsupported:
+            // No body at all: the row says where to answer and nothing else.
+            return nil
+        }
+    }
 }

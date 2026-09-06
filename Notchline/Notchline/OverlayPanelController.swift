@@ -184,6 +184,12 @@ final class OverlayPanelController {
             // is taken out of the queue by its own click. Neither republishes
             // the session list, so neither would resize without this.
             store.$recentDepartures.map { _ in () }.eraseToAnyPublisher(),
+            // And a row opening onto its request, which is the third control
+            // that moves the panel's bottom edge and nothing else. It is the
+            // largest of the three -- a row goes from `80` to as much as the
+            // whole viewport -- so without this the body would be drawn into a
+            // window still sized for the closed row and clipped to nothing.
+            store.$openRowID.map { _ in () }.eraseToAnyPublisher(),
             // Giving up the wings collapses the compact body to the cut-out and
             // takes them back again. Nothing else republishes when it is
             // toggled -- no status, no session, no quota moves -- so without

@@ -673,7 +673,11 @@ private struct ExpandedPanelContent: View {
                         }
 
                         ForEach(store.sessions) { session in
-                            SessionRow(session: session)
+                            if store.openRowID == session.id {
+                                OpenRow(session: session)
+                            } else {
+                                SessionRow(session: session)
+                            }
                         }
 
                         if !store.recentDepartures.isEmpty {
@@ -692,6 +696,7 @@ private struct ExpandedPanelContent: View {
                         - PanelMetrics.sessionRowGutter * 2,
                     height: PanelMetrics.sessionViewportHeight(
                         liveRowCount: store.sessions.count,
+                        openRowHeight: store.openRowHeight,
                         retiredRowCount: store.recentDepartures.count,
                         isRecentExpanded: store.isRecentExpanded
                     )
@@ -1031,6 +1036,266 @@ private struct SessionRow: View {
             : ""
         return "\(session.projectName), \(session.title), "
             + "\(session.status.displayName)\(elapsed)\(took)\(subagents)\(blocked)\(preview)"
+    }
+}
+
+/// A row whose request is open, read rather than answered.
+///
+/// **The reading form** (`answer-in-notch.md` §11), which is what ships before a
+/// product offers a way in. The head does not move: the caption and the title
+/// are where they were on the closed row, so opening grows the row downward and
+/// nothing the eye was already on shifts. Where the mark was, the quota block's
+/// own chevron stands — pointing up, because the thing it folds is open.
+///
+/// **No white ground is drawn anywhere on it.** The affirmative ground is the
+/// return key made visible, and drawing it where there is nothing for a return
+/// key to do is a promise made quietly — which is why a greyed-out `Approve` is
+/// worse than none at all (§11 rule 03). One control stands where three will,
+/// and it is the click that has always worked, moved to a place a reader
+/// arrives at *after* reading.
+private struct OpenRow: View {
+    @EnvironmentObject private var store: MonitorStore
+    let session: MonitoredSession
+
+    @State private var isHovered = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(NotchPalette.SurfaceGround.rowHovered.color)
+
+            VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
+                head
+                body(for: store.openRowBody)
+                Spacer(minLength: 0)
+                answerRow
+            }
+            .padding(.horizontal, PanelMetrics.sessionRowPadding)
+            .padding(.vertical, 12.5)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: store.openRowHeight ?? PanelMetrics.sessionRowHeight)
+        .onHover { isHovered = $0 }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    /// The caption and the title, unmoved, with the chevron where the mark was.
+    private var head: some View {
+        VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
+            HStack(spacing: 8) {
+                SessionRowCaption(
+                    session: session,
+                    hue: store.aggregateInk,
+                    showsAttribution: store.showsProductAttribution
+                )
+                Spacer(minLength: 8)
+                // The header and the position in the set, on the caption line's
+                // trailing side — which carries nothing at all on a closed row,
+                // so this costs the badge and the Project nothing (§5.2).
+                if let position = store.openRowBody?.position {
+                    Text(setCaption(position))
+                        .font(.system(size: 11, weight: .regular).monospacedDigit())
+                        .foregroundStyle(NotchPalette.label)
+                        .fixedSize()
+                }
+                OpenRowChevron()
+                    .onTapGesture { store.closeOpenRow() }
+            }
+            .frame(height: PanelMetrics.sessionRowCaptionHeight)
+
+            SessionRowText(
+                text: session.title,
+                font: .systemFont(ofSize: 13, weight: .medium),
+                color: NotchPalette.sessionTitleDrawingColor,
+                lineHeight: PanelMetrics.sessionRowTitleHeight
+            )
+        }
+    }
+
+    /// `Scope · 2/3`, or the count alone where the product sends no header.
+    ///
+    /// Codex sends none, so that side carries the chevron and the count and
+    /// nothing else — and **every** question draws the count, `1/1` included,
+    /// because a count that appears only sometimes is a count nobody learns to
+    /// read (§5.2).
+    private func setCaption(_ position: RequestBodyLayout.Position) -> String {
+        guard let header = store.openRowBody?.header, !header.isEmpty else {
+            return position.drawn
+        }
+        return "\(header) · \(position.drawn)"
+    }
+
+    @ViewBuilder
+    private func body(for layout: RequestBodyLayout?) -> some View {
+        if let layout {
+            RequestBodyView(layout: layout)
+                .frame(height: layout.drawnHeight, alignment: .top)
+        }
+    }
+
+    /// §11 rule 04: one control where three will stand.
+    private var answerRow: some View {
+        HStack(spacing: 0) {
+            Button {
+                store.open(session)
+            } label: {
+                Text(destination)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(NotchPalette.reading)
+                    .padding(.horizontal, 12)
+                    .frame(height: PanelMetrics.answerRowHeight)
+                    .background(
+                        RoundedRectangle(
+                            cornerRadius: PanelMetrics.machineTextCornerRadius,
+                            style: .continuous
+                        )
+                        .fill(NotchPalette.recessedGround)
+                    )
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 0)
+        }
+        .frame(height: PanelMetrics.answerRowHeight)
+        .padding(.top, 10 - PanelMetrics.sessionRowLineSpacing)
+    }
+
+    private var destination: String { "Answer in \(session.agent.displayName)" }
+
+    private var accessibilityText: String {
+        let asked = store.openRowBody.map { layout in
+            ", " + layout.lines.joined(separator: " ")
+        } ?? ""
+        let position = store.openRowBody?.position.map {
+            ", question \($0.index) of \($0.count)"
+        } ?? ""
+        return "\(session.projectName), \(session.title), "
+            + "\(session.status.displayName)\(position)\(asked)"
+    }
+}
+
+/// The quota block's own control, unchanged, standing where the mark was.
+///
+/// `16 × 16`, a `9 × 4.5` glyph at `1.4` stroke with round caps, pointing up
+/// because the thing it folds is open (`expanded-panel-v2.md` §2.2). Deliberately
+/// the same object rather than one that looks like it: this surface has one
+/// chevron and it means one thing.
+private struct OpenRowChevron: View {
+    @State private var isHovered = false
+
+    var body: some View {
+        Image(systemName: "chevron.down")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(NotchPalette.label)
+            .rotationEffect(.degrees(180))
+            .frame(
+                width: PanelMetrics.quotaFoldControlSize,
+                height: PanelMetrics.quotaFoldControlSize
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.white.opacity(isHovered ? 0.12 : 0))
+            )
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .accessibilityLabel("Collapse this request")
+            .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// One request's body: the lines it wrapped to, and the options under them.
+///
+/// **The lines are the ones the layout counted**, character for character, which
+/// is what makes §4.4's count of what is below the fold true rather than
+/// approximately true.
+private struct RequestBodyView: View {
+    let layout: RequestBodyLayout
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            text
+            if !layout.options.isEmpty {
+                Spacer().frame(height: PanelMetrics.optionListSpacing)
+                ForEach(layout.options) { option in
+                    OptionRow(option: option)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var text: some View {
+        let lines = VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(layout.lines.enumerated()), id: \.offset) { _, line in
+                Text(line.isEmpty ? " " : line)
+                    .font(Font(font))
+                    .foregroundStyle(NotchPalette.reading)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: PanelMetrics.requestLineHeight(for: layout.setting),
+                        maxHeight: PanelMetrics.requestLineHeight(for: layout.setting),
+                        alignment: .leading
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        if layout.setting == .machineText {
+            // The recessed ground exists to mark machine text, and putting
+            // prose on it would make the mark mean nothing (§4.2).
+            lines
+                .padding(.horizontal, PanelMetrics.machineTextHorizontalInset)
+                .padding(.vertical, PanelMetrics.machineTextVerticalInset)
+                .background(
+                    RoundedRectangle(
+                        cornerRadius: PanelMetrics.machineTextCornerRadius,
+                        style: .continuous
+                    )
+                    .fill(NotchPalette.recessedGround)
+                )
+        } else {
+            lines
+        }
+    }
+
+    private var font: NSFont {
+        layout.setting == .machineText
+            ? PanelMetrics.machineTextFont
+            : PanelMetrics.proseFont
+    }
+}
+
+/// One option a question offers, drawn but not yet selectable.
+///
+/// The numeral, the label and the description on one `24` pt line (§5.1). It
+/// takes no click in this form: with no way to send an answer, an option that
+/// looked selectable would be the same quiet promise the white ground would be.
+private struct OptionRow: View {
+    let option: AgentQuestionOption
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text("\(option.id + 1)")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(NotchPalette.optionNumeral)
+                .frame(width: 19, alignment: .leading)
+            Text(option.label)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(NotchPalette.sessionTitle)
+                .fixedSize()
+            if let description = option.description {
+                Text(description)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(NotchPalette.label)
+                    .padding(.leading, 12)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 9)
+        .frame(height: PanelMetrics.optionRowHeight)
     }
 }
 
@@ -1428,9 +1693,20 @@ private struct SessionStatusControl: View {
                 .fixedSize()
         }
         .onHover { isMarkHovered = $0 }
-        // The row already speaks its status in its own accessibility label,
-        // and this draws that same word.
-        .accessibilityHidden(true)
+        .contentShape(Rectangle())
+        // **The mark is the request; the text is the Thread** (§3). A tap on a
+        // descendant takes precedence over the row's own button, so this is the
+        // second target without the row becoming two views — and no other row
+        // gains one, because a row with no mark has nothing to open.
+        .onTapGesture { store.toggleOpenRow(session) }
+        // Spoken as an action rather than a second label: assistive technology
+        // reaches it by its own means, which are not a pointer (§13.3).
+        .accessibilityElement()
+        .accessibilityLabel(session.status.displayName)
+        .accessibilityAddTraits(session.request == nil ? [] : .isButton)
+        .accessibilityAction {
+            store.toggleOpenRow(session)
+        }
     }
 
     /// The word inside the ground: the status at rest, and what a click would

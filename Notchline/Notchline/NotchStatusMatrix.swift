@@ -204,6 +204,31 @@ enum NotchPalette {
     /// reaches this value.
     static let chipOnLight = Color(red: 0.05, green: 0.05, blue: 0.06)
 
+    /// The ground a request's machine text is set on.
+    ///
+    /// `#242424`, and the same value the resting mark's own tile lands on — this
+    /// surface has one recessed step and both readers take it. It exists to mark
+    /// *machine text*: a string a machine will execute, as against sentences a
+    /// person is meant to read, which take no ground at all
+    /// (`answer-in-notch.md` §4.2). Putting prose on it would make the mark mean
+    /// nothing, which is why the setting is decided by the payload a request came
+    /// from and never by how long it is.
+    static let recessedGround = Color(
+        red: 0x24 / 255,
+        green: 0x24 / 255,
+        blue: 0x24 / 255
+    )
+    /// An option's numeral, one step below its own description.
+    ///
+    /// `#6E6E73` (§5.1), which is dimmer than ``label`` — the numeral is a
+    /// handle rather than a reading, and once the digits are bound it is what a
+    /// person's eye goes to rather than what it dwells on.
+    static let optionNumeral = Color(
+        red: 0x6E / 255,
+        green: 0x6E / 255,
+        blue: 0x73 / 255
+    )
+
     /// Drawing colours for the layer-backed notch label.
     static let labelDrawingColor = NSColor(
         srgbRed: labelRGB.red,

@@ -1180,11 +1180,19 @@ enum PanelMetrics {
     /// queue is drawn under it.
     static func sessionListContentHeight(
         liveRowCount: Int,
+        openRowHeight: CGFloat? = nil,
         retiredRowCount: Int = 0,
         isRecentExpanded: Bool = false
     ) -> CGFloat {
+        // One of the live rows may be open, and an open row is taller than the
+        // `80` every row is billed at above. It is added as a difference rather
+        // than counted separately so that a row opening cannot also change how
+        // many rows there are.
+        let opened = liveRowCount > 0 && openRowHeight != nil
+            ? (openRowHeight ?? sessionRowHeight) - sessionRowHeight
+            : 0
         let live = liveRowCount > 0
-            ? sessionRowHeight * CGFloat(liveRowCount)
+            ? sessionRowHeight * CGFloat(liveRowCount) + opened
             : thinExpandedBodyHeight
         let retired = max(retiredRowCount, 0)
         guard retired > 0 else { return live }
@@ -1201,12 +1209,14 @@ enum PanelMetrics {
     /// is the cap exactly and a fifth retired row scrolls.
     static func sessionViewportHeight(
         liveRowCount: Int,
+        openRowHeight: CGFloat? = nil,
         retiredRowCount: Int = 0,
         isRecentExpanded: Bool = false
     ) -> CGFloat {
         min(
             sessionListContentHeight(
                 liveRowCount: liveRowCount,
+                openRowHeight: openRowHeight,
                 retiredRowCount: retiredRowCount,
                 isRecentExpanded: isRecentExpanded
             ),
@@ -1214,8 +1224,85 @@ enum PanelMetrics {
         )
     }
 
+    // MARK: - The open row
+
+    /// What an open row's body may weigh.
+    ///
+    /// **Bounded by the viewport, not by a line count** (`answer-in-notch.md`
+    /// §4.1). The superseded draft capped the request at three lines and faded
+    /// the rest, which is one number per form and a fade over a `--force` nobody
+    /// read. This is one number for every form:
+    ///
+    /// ```text
+    /// 140 = viewport 240 − (12.5 + caption 16 + 2 + title 17 + 2) − (10 + answer row 28 + 12.5)
+    /// ```
+    ///
+    /// Below it the body hugs its content, so a one-line question makes a `117`
+    /// pt row and the rows under it stay on the list.
+    static let requestBodyMaximumHeight: CGFloat = 140
+
+    /// One option on a question, numeral and label and description on one line.
+    static let optionRowHeight: CGFloat = 24
+
+    /// The row of answers at the foot of an open row.
+    ///
+    /// The waiting mark's own `16` grown by ``PanelMotion``'s slot curve as the
+    /// ground travels down the row — one object moving, which is why this is the
+    /// same ground rather than a second one (`answer-in-notch.md` §3.1).
+    static let answerRowHeight: CGFloat = 28
+
+    /// Everything an open row is besides its body.
+    ///
+    /// `12.5 + 16 + 2 + 17 + 2` above and `10 + 28 + 12.5` below — the caption,
+    /// the title and the answer row, none of which changes with the request.
+    static let openRowFixedHeight: CGFloat = 12.5 + sessionRowCaptionHeight
+        + sessionRowLineSpacing + sessionRowTitleHeight + sessionRowLineSpacing
+        + 10 + answerRowHeight + 12.5
+
+    /// The width an open row's body is drawn at.
+    ///
+    /// `520 − 2 × 12`, which is also `508 − 2 × 6`: the row block inside the
+    /// list's own scroller, minus the row's own padding. It is a derived figure
+    /// and has been one since V1 — the panel does not move at any agent or
+    /// product count (`colour-v2.md` §3).
+    static var requestBodyWidth: CGFloat {
+        expandedBaselineWidth - expandedHorizontalPadding * 2
+    }
+
+    /// §4.2's prose setting: sentences a person is meant to read.
+    static let proseFont = NSFont.systemFont(ofSize: 13, weight: .regular)
+    /// And its machine text: strings a machine will execute.
+    static let machineTextFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    static let machineTextHorizontalInset: CGFloat = 10
+    static let machineTextVerticalInset: CGFloat = 8
+    static let machineTextCornerRadius: CGFloat = 4
+    /// Between the question and the options under it.
+    static let optionListSpacing: CGFloat = 4
+
+    /// How tall one line of a body is, which is a fact about its setting.
+    ///
+    /// `17` for prose and `18` for machine text — the second being SF Mono's own
+    /// `12/18`, where the extra point is what keeps a wrapped command legible.
+    static func requestLineHeight(for setting: AgentRequest.Setting) -> CGFloat {
+        switch setting {
+        case .prose: sessionRowTitleHeight
+        case .machineText: 18
+        }
+    }
+
+    /// How tall an open row is, holding a body of this height.
+    ///
+    /// **Not `openRowHeight(requestLines:)`**, which `expanded-panel-v2.md` §10
+    /// still owes: that one counted lines, and §4.1 does not. The cap is the
+    /// viewport itself, so the tallest an open row can be is the whole of what
+    /// the list can show — and every height in §12 is this one arithmetic.
+    static func openRowHeight(bodyHeight: CGFloat) -> CGFloat {
+        openRowFixedHeight + min(max(bodyHeight, 0), requestBodyMaximumHeight)
+    }
+
     static func expandedContentHeight(
         liveRowCount: Int,
+        openRowHeight: CGFloat? = nil,
         retiredRowCount: Int = 0,
         isRecentExpanded: Bool = false,
         footerHeight: CGFloat = restingFooterHeight
@@ -1228,6 +1315,7 @@ enum PanelMetrics {
         // by whether a seam follows it (§4).
         return sessionViewportHeight(
             liveRowCount: liveRowCount,
+            openRowHeight: openRowHeight,
             retiredRowCount: retiredRowCount,
             isRecentExpanded: isRecentExpanded
         ) + footerHeight
@@ -1271,7 +1359,7 @@ enum PanelMetrics {
     }
 
 
-    private static func textWidth(_ text: String, font: NSFont) -> CGFloat {
+    static func textWidth(_ text: String, font: NSFont) -> CGFloat {
         (text as NSString).size(withAttributes: [.font: font]).width
     }
 }
@@ -2621,10 +2709,65 @@ final class MonitorStore: ObservableObject {
     var expandedContentHeight: CGFloat {
         PanelMetrics.expandedContentHeight(
             liveRowCount: sessions.count,
+            openRowHeight: openRowHeight,
             retiredRowCount: recentDepartures.count,
             isRecentExpanded: isRecentExpanded,
             footerHeight: expandedFooterHeight
         )
+    }
+
+    // MARK: - The open row
+
+    /// The row whose request is open, if one is.
+    ///
+    /// **One at a time** (`answer-in-notch.md` §8.2): an open row is the
+    /// subject, and two of them would be two subjects. Not persisted — §10 says
+    /// text and part-answered sets stay with a row *for as long as that row
+    /// lives*, and `artifacts.md` records that no hook payload ever reaches
+    /// disk, which this is one of.
+    @Published private(set) var openRowID: String?
+
+    /// The session that row belongs to, if it is still on the list.
+    ///
+    /// Reading it through the list rather than holding the row is what makes
+    /// §8's *settled elsewhere* free: when the request goes, the row goes with
+    /// it and there is nothing to reconcile.
+    var openSession: MonitoredSession? {
+        guard let openRowID else { return nil }
+        return sessions.first { $0.id == openRowID }
+    }
+
+    /// What the open row's body is, laid out at the width it draws in.
+    var openRowBody: RequestBodyLayout? {
+        guard let request = openSession?.request else { return nil }
+        return RequestBodyLayout.laidOut(request)
+    }
+
+    /// How tall the open row is, or nil where no row is open.
+    var openRowHeight: CGFloat? {
+        guard openSession != nil else { return nil }
+        return PanelMetrics.openRowHeight(
+            bodyHeight: openRowBody?.contentHeight ?? 0
+        )
+    }
+
+    /// Opens this row's request, or closes it if it is the one already open.
+    ///
+    /// **A row with nothing to show does not open.** The mark is a second target
+    /// only where there is a second thing to reach; a row whose payload carried
+    /// nothing readable stays what it has always been — one target, leading to
+    /// the product (`answer-in-notch.md` §3).
+    func toggleOpenRow(_ session: MonitoredSession) {
+        guard session.request != nil else { return }
+        openRowID = openRowID == session.id ? nil : session.id
+    }
+
+    /// Collapses the open row, sending nothing and keeping the row where it was.
+    ///
+    /// The chevron's own action, and `⎋`'s once the panel can take a key.
+    func closeOpenRow() {
+        guard openRowID != nil else { return }
+        openRowID = nil
     }
 
     var currentPanelSize: CGSize {
