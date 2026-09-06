@@ -642,6 +642,17 @@ So latching activates this app for as long as a row is open and activates the pr
 
 `NotchStatusMatrix` and the two layer-backed labels have tests asserting they are still driven by `CAAnimation` and still have their masks, so reverting them to SwiftUI fails to compile. But **adding a new continuous animation elsewhere in the panel is caught by nothing** — that dimension is held only by this section and by the comments on the views.
 
+### Driving the panel to check it, and the two things that lie while you do
+
+`answer-in-notch.md` §16's interaction half is verified by staging a request in a copy of the tree and driving real `CGEvent`s at a Release build. Two artefacts of that setup produce confident, wrong answers, and both cost an afternoon before being recognised:
+
+- **A fixture store built with `preferences: nil` has not been through onboarding**, so the first-run `Window` scene is presented and `applicationDidFinishLaunching` activates the app for it. That window then holds key status: `NSApp.keyWindow` is `SwiftUI.AppKitWindow` rather than `OverlayPanel`, every keystroke goes to it, and an open row's field never sees one. It reads exactly like latching being broken. Give the harness a `UserDefaults(suiteName:)` of its own with `hasCompletedOnboarding` set, and the panel takes the keyboard six times out of six.
+- **A command-line driver that touches AppKit becomes an application.** `NSWorkspace`, `NSRunningApplication` and the rest register the process, and it takes the foreground from whatever was there — so the tool measuring which application is frontmost is the reason the answer keeps changing. `NSApplication.shared.setActivationPolicy(.prohibited)` at the top of the driver stops it.
+
+And a positive rule that falls out of both: **ask the app, not the workspace.** `NSRunningApplication.isActive` reported `true` for this app while `menuBarOwningApplication` named another and keystrokes went elsewhere. The reading that never disagreed with what actually happened is `NSApp.keyWindow` and its `firstResponder`, read from inside the process.
+
+**A gesture aimed at a time window has to be aimed.** §6.3 holds an affirmative unarmed for `PanelMotion.duration`, which is `200` ms; a driver that settles the pointer for `350` ms before pressing, or waits `700` ms between keystrokes, will find every gesture accepted and conclude the gate does not exist. Both halves of it are real when the gesture lands at `40`–`50` ms.
+
 **Nor can they protect where SwiftUI's hit test lands**, which is what let a wheel catcher sit behind the body it was meant to scroll for an entire release. `theWheelCatcherClaimsOnlyTheWheelAndOnlyWithTravel()` pins what the view answers when AppKit asks, and `theWheelCatcherCoversTheBodyItScrolls()` pins that there is a view of the right size for AppKit to ask about — neither can assert that AppKit asks *it* rather than the container above it, because that ordering is decided inside SwiftUI at dispatch time. The only thing that catches it is driving a real wheel event at a Release build and looking, which is what this section's harness is for.
 
 Separately, `SearchlightLabel`'s font and `PanelMetrics.statusLabelFont` are two independent declarations of the same `NSFont`: change one and the drawn label no longer matches the panel width reserved for it.
