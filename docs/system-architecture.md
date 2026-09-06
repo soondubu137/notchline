@@ -596,9 +596,41 @@ Measured on Release by diffing cumulative CPU time, which is the only way to rea
 | --- | --- |
 | Collapsed, nothing open | `0.13` s in `20` s |
 | A row open, the caret blinking | `0.12` s in `20` s |
-| `600` wheel events over a `60`-line body | `3.3` s, against `0.5` s for the same `600` events with nothing to scroll |
+| ~~`600` wheel events over a `60`-line body~~ | ~~`3.3` s, against `0.5` s for the same `600` events with nothing to scroll~~ **Withdrawn — the body was not scrolling. See below.** |
 
-The first two are the same number, which is the finding: **the caret costs nothing**. The third is the body's own scroller (`expanded-panel-v2.md` §2.4 rule 02), it predates the answer row, and it is about `4.7` ms of work per wheel event — a whole panel's worth rather than a translation. It is transient and user-driven, paid only while a finger is moving; `.equatable()` on the body was tried and bought nothing, so what is being re-done is not the sixty `Text` lines. Recorded here rather than fixed: it is a measurement this section is the home of, and the mechanism belongs to the panel's list rather than to answering.
+The first two are the same number, which is the finding: **the caret costs nothing**. ~~The third is the body's own scroller (`expanded-panel-v2.md` §2.4 rule 02), it predates the answer row, and it is about `4.7` ms of work per wheel event — a whole panel's worth rather than a translation. It is transient and user-driven, paid only while a finger is moving; `.equatable()` on the body was tried and bought nothing, so what is being re-done is not the sixty `Text` lines. Recorded here rather than fixed: it is a measurement this section is the home of, and the mechanism belongs to the panel's list rather than to answering.~~ The third measured a scroller that was not running, and the next section is what it was actually measuring.
+
+### The wheel never reached the body, so every number about it was the list's (2026-09-05)
+
+`4.7` ms per wheel event was **not** the body being translated. `WheelCatcherView.scrollWheel(with:)` was never called: over `600` wheel events posted onto an open row with a `60`-line command in it, the app was handed all `600` and the catcher saw **`0`**. The events went to the panel's own list `ScrollView` instead, which had nothing to scroll and drew nothing, and the body stayed on line one throughout — verified on Release by screenshotting the panel before and after.
+
+**Why, exactly.** AppKit dispatches `scrollWheel` to whatever `hitTest` answers with. The catcher was declared as a `.background` of the body, so it sat *behind* the lines; SwiftUI answers a hit test with the frontmost hit-testable thing it finds, and a `Text` is hit-testable. Asking the panel's own content view at the event's `locationInWindow` returns `HostingScrollView`'s document container every time, with a responder chain of `PlatformGroupContainer > DocumentView > NSClipView > HostingScrollView > … > OverlayPanel`, and `WheelCatcherView` nowhere in it — although its frame does contain the point. Behind hit-testable content, a catcher is not a catcher.
+
+This is the failure `answer-in-notch.md` §4.4 already describes and had attributed to the wrong cause: *"a second `ScrollView` inside the list's own chains against it and loses — measured 2026-09-05, the wheel reached the app and the body never moved"*. The symptom was recorded correctly, the nested scroller was replaced with a driven offset, and the symptom was never re-tested — so the replacement inherited it. **The house pattern was already right next door**: `SecondaryClickCatcher` is the same idea, drawn as an `.overlay` and giving back every event it has no business with from `hitTest`, and it works. The wheel catcher now does the same — over the body, `claims(_:)` taking the wheel and nothing else, and taking nothing at all where the body fits, so a short request is not the one place on the panel where the list cannot be scrolled.
+
+**What it costs once it runs.** Release, one binary, the placement chosen by an environment variable so the two are measured back to back; `600` wheel events at `8` ms over a staged `60`-line command body, three runs each, medians:
+
+| Configuration | CPU over `600` events | Per event | The catcher saw |
+| --- | --- | --- | --- |
+| As shipped: the catcher behind the body | `0.46` s | `0.77` ms | `0` — and nothing moves |
+| Over the body, but the offset never written | `0.49` s | `0.81` ms | `599` |
+| Over the body, the body actually moving | `1.03` s | `1.72` ms | `599` |
+| A `3`-line body, which fits: the catcher declines | `0.35` s | `0.58` ms | `0` |
+
+So the honest figure is **`1.7` ms an event, not `4.7`** — and the `0.77` ms the shipped build was paying bought nothing at all, because it was the list being asked to scroll a list that was already at its cap. Working, the scroller costs about `0.9` ms an event more than not working.
+
+**Where that `1.7` ms is, and where it is not.** Every suspect on the list turned out to be innocent, and the cheap fix was tried again under conditions where it could have worked:
+
+- **The `@State` does not invalidate up to the `NSHostingView`.** `NotchOverlayView.body` is evaluated **3** times over a whole `600`-event run, in every configuration. `PanelContour.path(in:)` is built about **673** times in every configuration *including the ones where nothing scrolls at all*, so it is not on this path either. The invalidation is exactly one view deep: `ScrollingRequestBody.body` runs once when the offset is never written and `600` times when it is.
+- **`RequestBodyView.body` runs once or twice a run, never `600` times.** SwiftUI already skips it, which is why `.equatable()` bought nothing before and buys nothing now (`0.90`–`1.05` s against `0.99`–`1.02` s). The inference drawn from that was the wrong one: not re-evaluating the sixty lines is not the same as not re-doing them.
+- **It is nevertheless the lines.** With the body moving, `600` events cost `0.51` s at `10` lines, `0.88` s at `30`, `1.06` s at `60` and `1.35` s at `120`. What scales is SwiftUI's layout and display-list pass over the leaves under a changed offset — not their `body`. The delivery half scales the same way for the same reason: a *declining* catcher costs `0.34` s at `10` lines and `0.61` s at `120`, because the hit test walks the same leaves on the way in.
+- **The mask, the rail and the count are free.** Measured on one build at `300` delivered events: whole `1.014` s, no fade `1.073`, no rail or count `0.945`, neither `0.937`, `.drawingGroup()` `1.006` — every one inside the others' noise. The `LinearGradient` rebuilt per offset costs nothing measurable, and flattening the body into one raster before translating it buys nothing.
+
+**What would actually buy it back** is §7's own answer, and it is not applied here: drawing the lines into a `CALayer` and translating that, as `SessionRowTextView` already does for the row's title, takes the leaves out of both the render pass and the hit test. It is recorded rather than built, because it is a change to a drawing surface with its own design rules (`answer-in-notch.md` §4.2's two settings and the machine-text ground), and because `1.7` ms an event, paid only while a finger is moving, is a real cost and a small one. **What is built is the delivery fix**, because a scroller that never scrolls is not a quality issue.
+
+### `proc_pid_rusage` reports mach ticks, not nanoseconds
+
+`ri_user_time` and `ri_system_time` are documented in nanoseconds and are not, on Apple Silicon. On this machine the timebase is `125/3`, so the raw figures read **41.7× low**: `0.037` "seconds" against `ps -o time`'s `1.54`. Multiply by `mach_timebase_info`'s `numer/denom` and the two agree exactly. It is worth the conversion rather than shelling out to `ps` — `ps` has `10` ms resolution and this has the timebase's own — but an unconverted reading looks like a resounding "there is no cost here", which is the same false conclusion the `%cpu` trap above produces by a different route.
 
 ### Taking the keyboard means taking the application (2026-09-05)
 
@@ -609,6 +641,8 @@ So latching activates this app for as long as a row is open and activates the pr
 ### What the tests cannot protect
 
 `NotchStatusMatrix` and the two layer-backed labels have tests asserting they are still driven by `CAAnimation` and still have their masks, so reverting them to SwiftUI fails to compile. But **adding a new continuous animation elsewhere in the panel is caught by nothing** — that dimension is held only by this section and by the comments on the views.
+
+**Nor can they protect where SwiftUI's hit test lands**, which is what let a wheel catcher sit behind the body it was meant to scroll for an entire release. `theWheelCatcherClaimsOnlyTheWheelAndOnlyWithTravel()` pins what the view answers when AppKit asks, and `theWheelCatcherCoversTheBodyItScrolls()` pins that there is a view of the right size for AppKit to ask about — neither can assert that AppKit asks *it* rather than the container above it, because that ordering is decided inside SwiftUI at dispatch time. The only thing that catches it is driving a real wheel event at a Release build and looking, which is what this section's harness is for.
 
 Separately, `SearchlightLabel`'s font and `PanelMetrics.statusLabelFont` are two independent declarations of the same `NSFont`: change one and the drawn label no longer matches the panel width reserved for it.
 

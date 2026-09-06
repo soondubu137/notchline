@@ -1657,15 +1657,18 @@ private struct ScrollingRequestBody: View {
             .mask(alignment: .top) { fold }
             .overlay(alignment: .trailing) { rail }
             .overlay(alignment: .bottomTrailing) { count }
-            .background(
-                // **Driven rather than nested.** A second `ScrollView` inside
-                // the list's own chains against it and loses -- the same finding
-                // that left the Recent queue without a scroller of its own -- so
-                // the wheel is read directly and the body is translated. It also
-                // makes §4.4's count exact, because the offset it counts from is
-                // the offset that was applied.
-                WheelCatcher { delta in
-                    guard overflows else { return }
+            // **Driven rather than nested.** A second `ScrollView` inside the
+            // list's own chains against it and loses -- the same finding that
+            // left the Recent queue without a scroller of its own -- so the
+            // wheel is read directly and the body is translated. It also makes
+            // §4.4's count exact, because the offset it counts from is the
+            // offset that was applied.
+            //
+            // **Over the body, never behind it** (`system-architecture.md` §6):
+            // the catcher only ever sees a wheel event if it wins the hit test,
+            // and behind the lines it never does.
+            .overlay(
+                WheelCatcher(claimsTheWheel: overflows) { delta in
                     offset = min(max(offset - delta, 0), travel)
                 }
             )
@@ -1736,25 +1739,43 @@ private struct ScrollingRequestBody: View {
 
 /// Reads the wheel over one region, and claims nothing else.
 ///
-/// The same shape as ``SecondaryClickCatcher``: an `NSView` that answers exactly
-/// one kind of event and is transparent to every other, so the row's clicks and
-/// the panel's hover are untouched.
+/// The same shape as ``SecondaryClickCatcher``, down to the placement: an
+/// `NSView` drawn **over** the region, claiming exactly one kind of event in
+/// ``WheelCatcherView/hitTest(_:)`` and transparent to every other, so the
+/// row's clicks and the panel's hover are untouched.
+///
+/// It was written as a `.background` instead, which reads as the safer half of
+/// that shape and is the one thing the shape cannot do: AppKit dispatches
+/// `scrollWheel` to whatever `hitTest` answers with, SwiftUI answers with the
+/// frontmost hit-testable thing it finds, and the body's own lines are
+/// hit-testable -- so behind them this view was never hit at all, and every
+/// wheel event over an open request went to the list's `ScrollView` instead
+/// (`system-architecture.md` §6).
 struct WheelCatcher: NSViewRepresentable {
+    /// Whether there is anything under this region for the wheel to move.
+    ///
+    /// A body that fits claims nothing, so the wheel falls through to the list
+    /// it is drawn in: swallowing it would make the pointer resting on a short
+    /// request the one place on the panel where the list cannot be scrolled.
+    let claimsTheWheel: Bool
     let onScroll: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> WheelCatcherView {
         let view = WheelCatcherView()
         view.onScroll = onScroll
+        view.claimsTheWheel = claimsTheWheel
         return view
     }
 
     func updateNSView(_ view: WheelCatcherView, context: Context) {
         view.onScroll = onScroll
+        view.claimsTheWheel = claimsTheWheel
     }
 }
 
 final class WheelCatcherView: NSView {
     var onScroll: ((CGFloat) -> Void)?
+    var claimsTheWheel = false
 
     override func scrollWheel(with event: NSEvent) {
         // A trackpad reports pixels and a wheel reports lines; both arrive as
@@ -1766,11 +1787,28 @@ final class WheelCatcherView: NSView {
         onScroll?(delta)
     }
 
-    /// Hit-tests for the wheel and for nothing else.
+    /// Whether an event of this type is one this view is entitled to take.
     ///
-    /// `nil` from `hitTest` would take this view out of the responder chain for
-    /// scrolling too, so it answers for itself and the views above it keep every
-    /// click: this sits *behind* the body rather than over it.
+    /// Split out from ``hitTest(_:)`` for the reason
+    /// ``SecondaryClickView/claims(_:)`` is: it is the one thing here that can
+    /// be asserted without a running event loop, and the one thing that must not
+    /// drift. Widen it and the lines and options underneath stop taking clicks;
+    /// narrow it and the body stops scrolling.
+    func claims(_ eventType: NSEvent.EventType?) -> Bool {
+        claimsTheWheel && eventType == .scrollWheel
+    }
+
+    /// Claimed only for the wheel, and only where there is travel.
+    ///
+    /// `nil` is also the answer when there is no current event at all, which is
+    /// how AppKit asks about geometry rather than about a gesture.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard claims(NSApp.currentEvent?.type) else { return nil }
+        return super.hitTest(point)
+    }
+
+    /// It reads one gesture and owns no state; the field on an open row is the
+    /// only thing on this panel that wants the keyboard.
     override var acceptsFirstResponder: Bool { false }
 }
 

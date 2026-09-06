@@ -7127,6 +7127,80 @@ struct NotchlineTests {
         #expect(pressed.value == 1)
     }
 
+    /// The body's catcher takes the wheel and nothing else, and only where
+    /// there is somewhere to go.
+    ///
+    /// The same pair as ``theSecondaryClickCatcherClaimsOnlyTheSecondaryPress()``
+    /// and for the same reason: this view is drawn **over** the request body, so
+    /// every event it claims is one the lines and the options underneath never
+    /// see. Widen it and an option stops taking its click; narrow it and the
+    /// body stops scrolling. ``claimsTheWheel`` is the second half — a request
+    /// that fits claims nothing, so the wheel reaches the list it is drawn in
+    /// rather than being swallowed over the one row that has nothing to move.
+    @Test @MainActor
+    func theWheelCatcherClaimsOnlyTheWheelAndOnlyWithTravel() {
+        let view = WheelCatcherView()
+        let passedThrough: [NSEvent.EventType] = [
+            .leftMouseDown,
+            .leftMouseUp,
+            .leftMouseDragged,
+            .rightMouseDown,
+            .mouseMoved,
+            .mouseEntered,
+            .mouseExited,
+            .cursorUpdate,
+            .keyDown
+        ]
+
+        view.claimsTheWheel = true
+        #expect(view.claims(.scrollWheel))
+        for eventType in passedThrough {
+            #expect(!view.claims(eventType))
+        }
+        // AppKit also asks about geometry with no event in flight at all.
+        #expect(!view.claims(nil))
+
+        // A body that fits gives the wheel back too.
+        view.claimsTheWheel = false
+        #expect(!view.claims(.scrollWheel))
+        #expect(view.hitTest(.zero) == nil)
+    }
+
+    /// SwiftUI puts the catcher over the body, at the body's own size.
+    ///
+    /// **This is the half that was wrong**, and the half no assertion about
+    /// ``WheelCatcherView/claims(_:)`` could have caught: the catcher was
+    /// declared as a `.background`, behind lines that are themselves
+    /// hit-testable, so AppKit's hit test never reached it and not one wheel
+    /// event over an open request was ever delivered to it
+    /// (`system-architecture.md` §6). Ordering inside SwiftUI's own hit test is
+    /// still not something this suite can assert; what it can assert is that
+    /// there is a real view of the right size for AppKit to ask about, and that
+    /// it declines everything but the wheel.
+    @Test @MainActor
+    func theWheelCatcherCoversTheBodyItScrolls() {
+        let bodySize = CGSize(width: 200, height: PanelMetrics.requestBodyMaximumHeight)
+
+        let hosting = NSHostingView(
+            rootView: Color.clear
+                .frame(width: bodySize.width, height: bodySize.height)
+                .overlay { WheelCatcher(claimsTheWheel: true) { _ in } }
+        )
+        hosting.frame = NSRect(origin: .zero, size: bodySize)
+        hosting.layoutSubtreeIfNeeded()
+
+        func catchers(in view: NSView) -> [WheelCatcherView] {
+            (view as? WheelCatcherView).map { [$0] } ?? view.subviews.flatMap(catchers(in:))
+        }
+        let catcher = catchers(in: hosting).first
+        #expect(catcher != nil)
+        #expect(catcher?.frame.size == bodySize)
+        #expect(catcher?.claimsTheWheel == true)
+        // No event is in flight in a test, so the whole hierarchy answers as it
+        // does for geometry: the catcher stands aside.
+        #expect(catcher?.hitTest(.zero) == nil)
+    }
+
     /// Recheck must report what is true now, not what was true before.
     ///
     /// It used to call a refresh that returned immediately whenever an
