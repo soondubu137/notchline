@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import SwiftUI
 
@@ -14,6 +15,14 @@ final class OverlayPanelController {
     /// ``animateFrame(to:delay:)``.
     private var pendingFrameAnimation: DispatchWorkItem?
     private var hasShownPanel = false
+    /// The global chord, and what the system actually gave this app for it.
+    ///
+    /// Owned here because the chord's whole effect is on this panel, and
+    /// because a registration is a live system resource rather than a value the
+    /// store can hold: it is asked for once, re-asked when the preference
+    /// changes, and given back when this controller goes
+    /// (`answer-in-notch.md` §9.3).
+    private let chord = PanelChordHolder()
     /// Whose keyboard this panel borrowed, while it is holding it.
     ///
     /// Held from the moment a row opens until the row closes, so the
@@ -118,13 +127,25 @@ final class OverlayPanelController {
         // something from the application underneath.** A row opens, the panel
         // becomes key so the body can be read without being lost, and the key
         // goes back on `⎋`, on a click outside, and when the row closes.
-        store.$openRowID
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] openRowID in
-                self?.setLatched(openRowID != nil)
-            }
-            .store(in: &cancellables)
+        //
+        // **Two doors, and the latch answers to both** (§9.1): a click on a
+        // mark, which opens a row, and the chord, which brings the panel down
+        // already latched whether or not there is a row to open. Merged rather
+        // than watched separately because the panel has one key status and both
+        // publishers can change it in the same turn -- and read back off the
+        // store after the hop, because `@Published` emits from `willSet` and the
+        // value in flight is the old one.
+        Publishers.Merge(
+            store.$openRowID.map { _ in () },
+            store.$isKeyboardEngaged.map { _ in () }
+        )
+        .receive(on: DispatchQueue.main)
+        .compactMap { [weak self] in self?.store.isLatched }
+        .removeDuplicates()
+        .sink { [weak self] isLatched in
+            self?.setLatched(isLatched)
+        }
+        .store(in: &cancellables)
 
         panel.handleEscape = { [weak self] in
             guard let self else { return }
@@ -134,6 +155,27 @@ final class OverlayPanelController {
                 store.collapse()
             }
         }
+
+        // **Every key the latched panel answers to that is not the field's**
+        // (§9.3). With a row open the caret has them all and this is never
+        // reached; with the panel latched over the list it is the only
+        // responder there is, so the walk and its return live here.
+        panel.handleKey = { [weak self] event in
+            guard let self else { return false }
+            return self.takeKey(event)
+        }
+
+        chord.onChord = { [weak self] in
+            self?.store.takeTheChord()
+        }
+        store.$answerChord
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] chord in
+                guard let self else { return }
+                self.store.recordChordHold(self.chord.hold(chord))
+            }
+            .store(in: &cancellables)
 
         let animatedChanges = Self.frameChangingPublishers(of: store)
 
@@ -302,8 +344,27 @@ final class OverlayPanelController {
         ) { [weak self] _ in
             // Global monitors see only events this app did not receive, so
             // anything arriving here is by construction outside the panel.
-            Task { @MainActor [weak self] in self?.store.closeOpenRow() }
+            Task { @MainActor [weak self] in self?.store.pointerClickedOutside() }
         }
+    }
+
+    /// One key on a latched panel that no field is holding (§9.3).
+    ///
+    /// **This is the walk, and it exists only where there is no open row**: with
+    /// a row open the caret is in the field and every key is the field's, which
+    /// is §9.2's rule rather than an exception to it. Returns whether the panel
+    /// took the key, so anything it does not know still reaches AppKit.
+    private func takeKey(_ event: NSEvent) -> Bool {
+        guard store.isLatched else { return false }
+        switch Int(event.keyCode) {
+        case kVK_UpArrow: store.takeArrow(.up)
+        case kVK_DownArrow: store.takeArrow(.down)
+        case kVK_LeftArrow: store.takeArrow(.left)
+        case kVK_RightArrow: store.takeArrow(.right)
+        case kVK_Return, kVK_ANSI_KeypadEnter: store.takeTheWalkedRow()
+        default: return false
+        }
+        return true
     }
 
     private func schedulePanelFrameUpdate(animated: Bool) {
@@ -683,11 +744,12 @@ enum OverlayPanelLayout {
 final class OverlayPanel: NSPanel {
     /// Whether this panel may hold the keyboard right now.
     ///
-    /// **False except while a row is open**, which is the whole of
-    /// `answer-in-notch.md` §9.4: hover browses and cannot latch, however long
-    /// it lasts, and only a click on a mark makes this panel key. It sits over
-    /// whatever the person is typing into, so a surface that took focus on
-    /// proximity would eat a line of their code.
+    /// **False except while a row is open or the chord is holding it**, which
+    /// is the whole of `answer-in-notch.md` §9.4: hover browses and cannot
+    /// latch, however long it lasts, and only a deliberate act — a click on a
+    /// mark, or the chord — makes this panel key. It sits over whatever the
+    /// person is typing into, so a surface that took focus on proximity would
+    /// eat a line of their code.
     ///
     /// A `.nonactivatingPanel` is exactly the right shape for this: it takes key
     /// status without bringing an `LSUIElement` app to the foreground, so the
@@ -714,6 +776,12 @@ final class OverlayPanel: NSPanel {
     /// and it belongs to the controller that built this window.
     var handleEscape: (() -> Void)?
 
+    /// Every other key this panel answers to, and whether it took one.
+    ///
+    /// Only the walk's, and only while no field holds the caret — see
+    /// ``OverlayPanelController/takeKey(_:)``.
+    var handleKey: ((NSEvent) -> Bool)?
+
     override var canBecomeKey: Bool { latches }
     override var canBecomeMain: Bool { false }
 
@@ -729,15 +797,17 @@ final class OverlayPanel: NSPanel {
 
     /// Every other key, so a latched panel does not beep at the person.
     ///
-    /// Only `⎋` is bound in this version (§9.2): `⌥Space`, the arrows, the
-    /// digits, `Space`, `⌘⏎` and `⇥` are all deliberately unbound, because a
-    /// keyboard model with a hole in it is worse than a panel that plainly does
-    /// not navigate.
+    /// `⎋` first, because it is the key that hands the keyboard back and it must
+    /// work from anywhere; then the walk's own — `↑ ↓` down the list and `⏎` on
+    /// the row it is standing on (§9.3). `⌘⏎` and `⇥` stay unbound on both
+    /// stages: a second way to approve would make the white ground advisory
+    /// rather than definitive, and every journey `⇥` would serve now has a key.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
             handleEscape?()
             return
         }
+        if handleKey?(event) == true { return }
         super.keyDown(with: event)
     }
 

@@ -18,6 +18,7 @@ struct AppSettingsView: View {
         VStack(alignment: .leading, spacing: 22) {
             productsGroup
             displayGroup
+            keyboardGroup
 
             // The closing note, the version, and the one action that ends the
             // app.
@@ -128,6 +129,28 @@ struct AppSettingsView: View {
 
                 ShowInFinderButton(target: report.directory.map(FinderRevealTarget.select))
             }
+        }
+    }
+
+    // MARK: - Keyboard
+
+    /// The one chord this app holds, and whether it is actually holding it.
+    ///
+    /// **A group of one, and it earns the card** (`answer-in-notch.md` §9.3).
+    /// Every other setting here changes what a surface draws; this one takes a
+    /// key combination away from every other application on the machine, and it
+    /// is the only setting in this window that can *fail* — the row exists as
+    /// much to report the failure as to make the choice.
+    private var keyboardGroup: some View {
+        SettingsGroup(header: "Keyboard") {
+            AnswerChordRow()
+        } footnote: {
+            SettingsFootnote(
+                "The chord brings the panel down ready to answer: the first "
+                    + "waiting request already open with the cursor in its "
+                    + "field, or the top of the list when nothing is waiting. "
+                    + "Press it again, or ⎋, to hand the keyboard back."
+            )
         }
     }
 
@@ -416,6 +439,107 @@ struct AppSettingsView: View {
 /// tenth of it. It also sweeps, which shows the hue lit, mid-decay and nearly
 /// out at the same instant — the range the eye wants, drawn side by side
 /// instead of one after the other.
+/// The chord, and what the system gave the app when it asked for it.
+///
+/// **It shows the chord the app actually holds rather than the one it asked
+/// for** (`answer-in-notch.md` §9.3). A global hotkey is the one thing on this
+/// surface that can be taken by somebody else, and the failure is silent
+/// everywhere it is not drawn: the key simply never arrives, from a chord the
+/// settings window would otherwise still be displaying as if it worked.
+struct AnswerChordRow: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    /// Armed by the button, and disarmed by the first key that follows.
+    @State private var isRecording = false
+    @State private var monitor: Any?
+
+    var body: some View {
+        SettingsRow(
+            title: "Chord for the notch",
+            caption: "Brings the panel down with the keyboard, from wherever "
+                + "you are working.",
+            status: status
+        ) {
+            HStack(spacing: 10) {
+                if store.answerChord != .default {
+                    Button("Reset") {
+                        isRecording = false
+                        store.answerChord = .default
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Puts it back to ⌥Space.")
+                }
+
+                Button(isRecording ? "Press a chord…" : store.answerChord.drawn) {
+                    isRecording.toggle()
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .frame(minWidth: 104)
+                .help(
+                    "Click, then press the combination you want. It has to "
+                        + "include at least one of ⌘, ⌥, ⌃ or ⇧ — a bare key "
+                        + "would be taken away from every application on this "
+                        + "Mac. ⎋ leaves it as it is."
+                )
+            }
+        }
+        .onChange(of: isRecording) { _, recording in
+            recording ? arm() : disarm()
+        }
+        .onDisappear { disarm() }
+    }
+
+    /// What the row says under the title: held, refused, or not yet asked.
+    private var status: SettingsRowStatus {
+        switch store.chordHold {
+        case .unasked:
+            return SettingsRowStatus(
+                color: MacOSWindowColor.statusIdle,
+                text: "Not registered."
+            )
+        case let .holding(chord):
+            return SettingsRowStatus(
+                color: MacOSWindowColor.statusHealthy,
+                text: "\(chord.drawn) is held, from any application."
+            )
+        case let .refused(chord, status):
+            return SettingsRowStatus(
+                color: MacOSWindowColor.statusWarning,
+                text: "\(chord.drawn) is not held — another application has "
+                    + "it (\(status)). Choose a different chord."
+            )
+        }
+    }
+
+    /// Watches this app's own key events until one is a chord.
+    ///
+    /// A local monitor rather than a first responder: the recorder is a button
+    /// in a window full of controls, and taking focus off them to read one
+    /// keystroke would leave the window's own keyboard behaviour changed for as
+    /// long as it was armed.
+    private func arm() {
+        disarm()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // `⎋` leaves the chord as it is, which is the same thing it does
+            // everywhere else in this app: it takes nothing and hands back.
+            if event.keyCode == 53 {
+                isRecording = false
+                return nil
+            }
+            guard let chord = KeyChord(recording: event) else { return nil }
+            store.answerChord = chord
+            isRecording = false
+            return nil
+        }
+    }
+
+    private func disarm() {
+        monitor.map(NSEvent.removeMonitor)
+        monitor = nil
+    }
+}
+
 struct AggregateInkSpecimen: View {
     let hue: AggregateInk
 

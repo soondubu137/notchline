@@ -23,7 +23,7 @@ Daily work can already fill the screen with a code editor, a browser, documents,
 
 Once the agent windows are out of sight, it becomes difficult to see which work is still running, which session needs an approval or answer, and which conversation has completed. Repeatedly bringing every window to the front just to check its state interrupts the work that already occupies the desktop.
 
-Notchline moves that overview into the otherwise unused area around the display notch. Its collapsed surface quietly shows the current state of both products without covering any working window; hovering reveals the monitored Threads, and clicking a row returns to the originating conversation. It observes and navigates, but does not approve commands, answer questions, send input, cancel work, archive Threads or mark them as read.
+Notchline moves that overview into the otherwise unused area around the display notch. Its collapsed surface quietly shows the current state of both products without covering any working window; hovering reveals the monitored Threads, and clicking a row returns to the originating conversation. It observes, navigates, and — for the one payload a row is already reporting — lets you answer the request itself without leaving what you are doing: a command granted or refused with a reason, a question answered in its own words. Nothing else moves: it starts no Turn, cancels no work, archives no Thread and marks nothing as read.
 
 ## Features
 
@@ -121,11 +121,13 @@ Once running:
 
 - Hover over the collapsed surface to expand it; move the pointer away to collapse it.
 - Left-click a row to return to its originating Thread or host.
+- Left-click the bright mark on a row that wants you to open the request there, and answer it in the notch.
 - Right-click a completed row to dismiss that session's row without deleting or marking anything read.
+- Press `⌥Space` to bring the panel down from the keyboard, with the first waiting request already open and the cursor in its field. The arrows move between the answers, `⏎` takes the one the white ground is on, and `⎋` hands the keyboard back. The chord is settable in Settings, which also says whether the app is actually holding it.
 - Use the gear in the expanded header to open Settings.
 - Use `Quit` in Settings to stop the app.
 
-There is no keyboard shortcut for opening or closing the overlay. Because Notchline runs as `LSUIElement`, it has no Dock tile, app-switcher entry or application menu; consequently there is no application-level `⌘,` or `⌘Q` route either.
+`⌥Space` is the only keyboard shortcut, and it is the app's own. Because Notchline runs as `LSUIElement`, it has no Dock tile, app-switcher entry or application menu; consequently there is no application-level `⌘,` or `⌘Q` route either.
 
 ## How it works
 

@@ -104,6 +104,43 @@ nonisolated struct AnswerProgress: Sendable, Equatable {
     /// Cleared with the field as the next question is drawn, because both
     /// belong to the question that was on screen rather than to the row.
     var ticked: Set<Int> = []
+    /// Where an arrow key put the white ground, where one has (§6, §9.3).
+    ///
+    /// **`nil` means derived**, which is what it is until somebody moves it:
+    /// the ground begins on the affirmative, or on the first option a question
+    /// offers, and typing moves it to the answer that carries text. The arrows
+    /// are the second force, and this is the whole of what they add — one
+    /// optional value that, while it is set, is what the ground is. Typing
+    /// clears it, so the two forces cannot disagree: the more recent act wins,
+    /// and deleting the text puts the ground back where the form says it
+    /// begins.
+    var ground: AnswerGround?
+}
+
+/// One arrow, as the panel reads it.
+///
+/// Named rather than passed as a key code because what the four mean depends on
+/// what is open (§6.2), and that decision belongs to the store rather than to
+/// the view that felt the keystroke.
+nonisolated enum PanelArrow: Sendable, Equatable {
+    case up, down, left, right
+}
+
+/// How far the arrows have asked the open row's body to move, in lines.
+///
+/// **A running total rather than one press's delta, and that is a correction
+/// made by measuring** (2026-09-06, Release). It was a delta with a serial
+/// beside it, on the reasoning that two `↓` presses are the same delta and
+/// would otherwise coalesce into one change. They coalesce anyway: SwiftUI
+/// compares this value once per render pass, and four presses inside one pass
+/// are one change — so four arrows moved the body a single line, and the count
+/// under the fold fell from `+54` to `+53`. A total cannot lose the presses in
+/// between, because the body applies **the difference from the total it last
+/// saw** rather than whatever it was handed.
+nonisolated struct BodyScrollNudge: Sendable, Equatable {
+    /// Lines below the top the arrows have asked for, since this row opened.
+    /// Negative is up, and it is clamped by the body against its own travel.
+    var lines: CGFloat = 0
 }
 
 /// What one row's preview line says once an answer has left it.

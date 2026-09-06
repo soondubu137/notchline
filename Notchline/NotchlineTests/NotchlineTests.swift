@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import Darwin
 import SwiftUI
@@ -26771,6 +26772,482 @@ for line in sys.stdin:
         )
     }
 
+    // MARK: - The keyboard half (§9.3)
+
+    /// The chord brings the panel down already latched, on the first request.
+    ///
+    /// §9.3: with something waiting it opens that row and puts the caret in its
+    /// field; the panel is key from the moment it arrives, which is what makes
+    /// the journey five steps rather than eight — no pointer is involved at any
+    /// point.
+    @Test @MainActor
+    func theChordOpensTheFirstWaitingRequestAlreadyLatched() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let store = bench.store
+        #expect(!store.isLatched)
+
+        store.takeTheChord()
+        #expect(store.isExpanded)
+        #expect(store.isLatched)
+        #expect(store.openRowID == bench.row.id)
+        // The walk is inside the row now, so the list is not what the arrows
+        // move (§6.2).
+        #expect(store.walkedRowID == nil)
+    }
+
+    /// With nothing waiting it latches at the top of the list instead.
+    ///
+    /// §9.3, and it is the clause that matters: **the chord is never a key that
+    /// sometimes does nothing.** The only variable is whether a row is already
+    /// open when it lands.
+    @Test @MainActor
+    func theChordWithNothingWaitingLatchesAtTheTopOfTheList() async {
+        let store = walkableStore()
+
+        store.takeTheChord()
+        #expect(store.isExpanded)
+        #expect(store.isLatched)
+        #expect(store.openRowID == nil)
+        #expect(store.walkedRowID == store.sessions.first?.id)
+
+        // And `↓` walks it, without wrapping past the end.
+        store.takeArrow(.down)
+        #expect(store.walkedRowID == store.sessions[1].id)
+        store.takeArrow(.down)
+        #expect(store.walkedRowID == store.sessions[1].id)
+        store.takeArrow(.up)
+        #expect(store.walkedRowID == store.sessions[0].id)
+    }
+
+    /// Pressed again, the chord hands everything back.
+    ///
+    /// The same exit `⎋` takes, from the key that opened it: a chord with no way
+    /// out of what it started would be the one key on this surface that can only
+    /// be undone with a mouse.
+    @Test @MainActor
+    func theChordPressedAgainHandsTheKeyboardBack() async {
+        let store = walkableStore()
+        store.takeTheChord()
+        #expect(store.isLatched)
+
+        store.takeTheChord()
+        #expect(!store.isLatched)
+        #expect(!store.isExpanded)
+        #expect(store.walkedRowID == nil)
+    }
+
+    /// A row already open stays open when the chord lands on it.
+    ///
+    /// §9.3's own sentence — *the only variable is whether a row is already open
+    /// when it lands* — read as a rule about what the chord may take away.
+    /// Opening the first waiting request over an open one would throw away a
+    /// part-answered set and re-arm an affirmative the reader had already
+    /// waited out.
+    @Test @MainActor
+    func theChordLeavesARowThatIsAlreadyOpenExactlyWhereItIs() async {
+        let bench = answeringStore(request: questionSet(), status: .inputNeeded)
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.option(0))
+        #expect(store.openQuestionIndex == 1)
+
+        store.takeTheChord()
+        #expect(store.isLatched)
+        #expect(store.openRowID == bench.row.id)
+        #expect(store.openQuestionIndex == 1)
+    }
+
+    /// `⎋` collapses the row and leaves the panel key for the second one.
+    ///
+    /// §9.2: *collapses the row; again, closes the panel*. A panel the chord
+    /// brought down has no pointer on it by construction, so a first `⎋` that
+    /// unlatched would strand it open with no way to shut it but a mouse.
+    @Test @MainActor
+    func escapeCollapsesTheRowAndLeavesThePanelKeyForTheSecondPress() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let store = bench.store
+        store.takeTheChord()
+        #expect(store.openRowID == bench.row.id)
+
+        store.closeOpenRow()
+        #expect(store.openRowID == nil)
+        #expect(store.isLatched)
+        // And the walk is standing on the row that was open, so the second `⏎`
+        // reopens what the first `⎋` shut.
+        #expect(store.walkedRowID == bench.row.id)
+
+        store.collapse()
+        #expect(!store.isLatched)
+        #expect(!store.isExpanded)
+    }
+
+    /// `⏎` on a walked row takes whichever of its two targets it has.
+    ///
+    /// §3: the row's text is the Thread and the mark is the request, and the
+    /// walk is on the mark — which is why the mark draws its word under keyboard
+    /// focus. So a walked row with a request opens here.
+    @Test @MainActor
+    func theWalkedRowIsWhatTheReturnKeyTakes() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let store = bench.store
+        store.takeTheChord()
+        store.closeOpenRow()
+        #expect(store.walkedRowID == bench.row.id)
+
+        store.takeTheWalkedRow()
+        #expect(store.openRowID == bench.row.id)
+    }
+
+    /// The arrows are the second force on the white ground (§6, §9.3).
+    ///
+    /// **Both forces are the person's own act**, which is the whole of the rule
+    /// — and this is the correction the keys make necessary: with typing as the
+    /// only force, the non-default answer would be reachable by pointer alone.
+    /// It clamps rather than wrapping, so `→` on the affirmative is not `Deny`.
+    @Test @MainActor
+    func theArrowsMoveTheGroundAlongTheAnswersARowHas() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+        #expect(store.answerGround == .affirmative)
+        #expect(store.answerWalk == [.refusal, .affirmative])
+
+        store.takeArrow(.left)
+        #expect(store.answerGround == .refusal)
+        store.takeArrow(.left)
+        #expect(store.answerGround == .refusal)
+        store.takeArrow(.right)
+        #expect(store.answerGround == .affirmative)
+        store.takeArrow(.right)
+        #expect(store.answerGround == .affirmative)
+    }
+
+    /// Typing is the more recent act, and it wins.
+    ///
+    /// §6 with two forces rather than one: an arrow holds the ground where it
+    /// was put, until a keystroke moves it to the answer that carries text —
+    /// and deleting that text puts it back where the form says it begins, which
+    /// is the round trip the pointer version already had.
+    @Test @MainActor
+    func typingOverridesWhereAnArrowPutTheGround() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+        store.takeArrow(.left)
+        #expect(store.answerGround == .refusal)
+
+        store.answerDraftChanged(to: "use ripgrep instead")
+        #expect(store.answerGround == .refusal)
+        store.answerDraftChanged(to: "")
+        // Back to the form's own beginning rather than to where the arrow left
+        // it: the ground is derived again the moment nothing holds it.
+        #expect(store.answerGround == .affirmative)
+    }
+
+    /// On a question all four arrows walk the options and then the field.
+    ///
+    /// §6.2: on a row whose body holds **options**, all four move the ground —
+    /// the options in the order they are drawn, then the answer row, which on a
+    /// question is `Send` and the field beside it.
+    @Test @MainActor
+    func allFourArrowsWalkAQuestionsOptionsAndThenItsField() async {
+        let bench = answeringStore(request: questionSet(count: 1), status: .inputNeeded)
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+        #expect(store.answerGround == .option(0))
+        #expect(store.answerWalk == [.option(0), .option(1), .affirmative])
+
+        store.takeArrow(.down)
+        #expect(store.answerGround == .option(1))
+        store.takeArrow(.right)
+        #expect(store.answerGround == .affirmative)
+        store.takeArrow(.up)
+        #expect(store.answerGround == .option(1))
+        store.takeArrow(.left)
+        #expect(store.answerGround == .option(0))
+    }
+
+    /// A body with no answers in it divides the axes the way the drawing does.
+    ///
+    /// §6.2: `← →` between the two controls, `↑ ↓` down the body — which is the
+    /// only thing on that row with more of itself below the fold. The body owns
+    /// its own offset (`AGENTS.md` §7), so what the store publishes is one
+    /// keystroke's worth of movement rather than a position.
+    @Test @MainActor
+    func aBodyWithNoAnswersScrollsOnTheVerticalArrows() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command((0..<60).map { "line \($0)" }.joined(separator: "\n")),
+                replyTicket: 1
+            )
+        )
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+        let atRest = store.bodyScrollNudge
+
+        store.takeArrow(.down)
+        #expect(store.bodyScrollNudge.lines == atRest.lines + 1)
+        // **Cumulative, so a burst cannot lose the presses in between.**
+        // Measured on Release before it was: SwiftUI compares this once per
+        // render pass, and four `↓` inside one pass moved the body a single
+        // line.
+        store.takeArrow(.down)
+        store.takeArrow(.down)
+        #expect(store.bodyScrollNudge.lines == atRest.lines + 3)
+        store.takeArrow(.up)
+        #expect(store.bodyScrollNudge.lines == atRest.lines + 2)
+        // And the ground never moved: this body has no answers in it.
+        #expect(store.answerGround == .affirmative)
+        store.takeArrow(.left)
+        #expect(store.answerGround == .refusal)
+    }
+
+    /// A digit takes the option it numbers, and only before anything is typed.
+    ///
+    /// §9.3 and §15 q08: reserving the digits permanently would silently eat the
+    /// first character of an answer beginning with a number, so the gate is the
+    /// ground still being on an option — which is exactly what typing moves it
+    /// off.
+    @Test @MainActor
+    func aDigitTakesItsOptionOnlyWhileTheGroundIsStillOnOne() async {
+        let bench = answeringStore(request: questionSet(count: 1), status: .inputNeeded)
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        // Out of range is not an option, and is typed like any other character.
+        #expect(!store.takeNumberedOption(3))
+        #expect(await service.answersTaken().isEmpty)
+
+        store.answerDraftChanged(to: "2 of them, actually")
+        #expect(!store.takeNumberedOption(1))
+        #expect(await service.answersTaken().isEmpty)
+
+        store.answerDraftChanged(to: "")
+        #expect(store.takeNumberedOption(2))
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(
+            await service.answersTaken() == [
+                .answers([
+                    AgentQuestionAnswer(question: "Which database?", answer: "Postgres")
+                ])
+            ]
+        )
+    }
+
+    /// `Space` ticks the option the ground is on, where several are allowed.
+    ///
+    /// §5.5, and the clause that waited for these keys: *`Space` ticks the
+    /// option the ground is on when §9.3 lands*. It is bound on the same
+    /// condition as the digits and for the same reason — with anything in the
+    /// field a space is a space, or a multi-word answer would lose its gaps.
+    @Test @MainActor
+    func spaceTicksTheGroundedOptionOnlyWhereSeveralAreAllowed() async {
+        let bench = answeringStore(
+            request: questionSet(count: 1, allowsSeveralAnswers: true),
+            status: .inputNeeded
+        )
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        // §5.5: it still *starts* on `Send`, so `Space` there is a space.
+        #expect(store.answerGround == .affirmative)
+        #expect(!store.tickTheGroundedOption())
+
+        store.takeArrow(.up)
+        #expect(store.answerGround == .option(1))
+        #expect(store.tickTheGroundedOption())
+        #expect(store.isOptionTicked(1))
+        // And the ground did not leave the option to say so.
+        #expect(store.answerGround == .option(1))
+
+        store.answerDraftChanged(to: "either is fine")
+        #expect(!store.tickTheGroundedOption())
+    }
+
+    /// A single-answer question never takes `Space` at all.
+    ///
+    /// The tick belongs to the form that has ticks (§5.5). Everywhere else a
+    /// space is a character, which is the field's own rule (§9.2).
+    @Test @MainActor
+    func spaceIsACharacterOnAQuestionThatTakesOneAnswer() async {
+        let bench = answeringStore(request: questionSet(count: 1), status: .inputNeeded)
+        let store = bench.store
+        store.toggleOpenRow(bench.row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        #expect(store.answerGround == .option(0))
+        #expect(!store.tickTheGroundedOption())
+    }
+
+    /// The walk re-anchors when the row it was standing on leaves.
+    ///
+    /// §8 state 04's rule, one object along: a walk naming a row nobody draws
+    /// would leave the panel holding the keyboard with nothing lit on it, which
+    /// is the same failure `aRowWhoseThreadHasGoneClosesAndUnlatches` pins for
+    /// an open row.
+    @Test @MainActor
+    func theWalkReanchorsWhenItsRowLeavesTheList() async {
+        let store = walkableStore()
+        store.takeTheChord()
+        store.takeArrow(.down)
+        let second = store.sessions[1].id
+        #expect(store.walkedRowID == second)
+
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [store.sessions[0]],
+                quota: .unavailable,
+                diagnostic: nil
+            )
+        )
+        #expect(store.sessions.count == 1)
+        #expect(store.walkedRowID == store.sessions[0].id)
+        #expect(store.isLatched)
+    }
+
+    /// With nothing left waiting, an answer hands the keyboard back (§8.3).
+    ///
+    /// The panel does not close on send — that would shut it in front of a
+    /// second request nobody had seen — it **unlatches**, and that release is
+    /// how it says you are finished.
+    @Test @MainActor
+    func answeringTheLastRequestHandsTheKeyboardBack() async {
+        let bench = answeringStore(
+            request: AgentRequest(
+                id: "c-1",
+                toolName: "Bash",
+                form: .command("rm -rf build"),
+                replyTicket: 1
+            )
+        )
+        let (store, service, row) = bench
+        store.takeTheChord()
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        // The product stops asking, which is what an answered request looks
+        // like on the next publish.
+        await service.publish([
+            MonitoredSession(
+                agent: .claudeCode,
+                threadID: row.threadID,
+                turnID: row.turnID,
+                projectName: row.projectName,
+                title: row.title,
+                preview: nil,
+                status: .running,
+                startedAt: row.startedAt
+            )
+        ])
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(await eventually { !store.isLatched })
+        #expect(store.walkedRowID == nil)
+        // And the panel is still open, because closing it would shut it in
+        // front of whatever came next.
+        #expect(store.isExpanded)
+    }
+
+    /// A chord is stored as a position on the keyboard and drawn as a key.
+    ///
+    /// §9.3's settings row shows **the chord the app actually holds**, and the
+    /// preference behind it names a position rather than a character: the letter
+    /// at that position belongs to whichever layout is in front when somebody
+    /// looks at the row.
+    @Test @MainActor
+    func aChordIsStoredAsAPositionAndDrawnAsAKey() {
+        #expect(KeyChord.default.drawn == "⌥Space")
+        #expect(KeyChord(stored: KeyChord.default.stored) == .default)
+        #expect(KeyChord(stored: "not a chord") == nil)
+
+        let several = KeyChord(
+            keyCode: UInt32(kVK_ANSI_A),
+            modifiers: [.command, .shift, .control, .option]
+        )
+        // The order macOS draws them in, which is not the order they are
+        // written in code.
+        #expect(several.drawn == "⌃⌥⇧⌘A")
+        #expect(KeyChord(stored: several.stored) == several)
+    }
+
+    /// A bare key is not a chord, and the recorder refuses it.
+    ///
+    /// A global hotkey with no modifier takes that key away from every
+    /// application on the machine, including the one the person is typing into.
+    @Test @MainActor
+    func aBareKeyIsNotAChord() throws {
+        let bare = try #require(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: " ",
+                charactersIgnoringModifiers: " ",
+                isARepeat: false,
+                keyCode: UInt16(kVK_Space)
+            )
+        )
+        #expect(KeyChord(recording: bare) == nil)
+
+        let held = try #require(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.option],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: " ",
+                charactersIgnoringModifiers: " ",
+                isARepeat: false,
+                keyCode: UInt16(kVK_Space)
+            )
+        )
+        #expect(KeyChord(recording: held) == .default)
+    }
+
     /// A payload the store cannot read is reported, not dropped in silence.
     ///
     /// The queue-era reducer said `Ignored a corrupted hook event file.` and
@@ -30126,6 +30603,34 @@ private func answerableSession(
         status: status,
         startedAt: Date(timeIntervalSince1970: 1_700_000_000),
         request: request
+    )
+}
+
+/// A store with two ordinary rows on it and nothing waiting, for the walk.
+@MainActor
+private func walkableStore() -> MonitorStore {
+    let rows = (0..<2).map { index in
+        MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-\(index)",
+            turnID: "u-\(index)",
+            projectName: "notchline",
+            title: "Something \(index)",
+            preview: nil,
+            status: .running,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000 - Double(index))
+        )
+    }
+    return MonitorStore(
+        displays: [],
+        services: [AnsweringMonitoringStub(agent: .claudeCode, sessions: rows)],
+        initialSnapshot: AgentSnapshot(
+            agent: .claudeCode,
+            availability: .ready,
+            sessions: rows,
+            quota: .unavailable,
+            diagnostic: nil
+        )
     )
 }
 
