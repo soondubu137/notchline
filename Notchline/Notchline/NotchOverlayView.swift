@@ -714,8 +714,7 @@ private struct ExpandedPanelContent: View {
                         }
                     }
                     .frame(
-                        width: store.currentPanelSize.width
-                            - PanelMetrics.sessionRowGutter * 2,
+                        width: sessionViewportWidth + sessionListScrollerGutter,
                         height: PanelMetrics.sessionViewportHeight(
                             liveRowCount: store.sessions.count,
                             openRowHeight: store.openRowHeight,
@@ -735,6 +734,13 @@ private struct ExpandedPanelContent: View {
                         list.scrollTo(opened, anchor: .top)
                     }
                 }
+                // **The extra width above is `ScrollView`'s own, not the row
+                // block's** — see ``sessionListScrollerGutter``. It never
+                // belongs on screen, which is what pins the visible region
+                // back to the panel's own margin regardless of whether this
+                // pass actually needed the room.
+                .frame(width: sessionViewportWidth, alignment: .leading)
+                .clipped()
             }
         }
         .frame(maxWidth: .infinity)
@@ -744,6 +750,50 @@ private struct ExpandedPanelContent: View {
                 .frame(height: 1)
                 .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
         }
+    }
+
+    private var sessionViewportWidth: CGFloat {
+        store.currentPanelSize.width - PanelMetrics.sessionRowGutter * 2
+    }
+
+    /// Whether the session list's own `ScrollView` will actually need to
+    /// scroll this pass — the same test ``PanelMetrics/sessionViewportHeight``
+    /// answers by capping, asked here for a different reason.
+    private var isSessionListScrolling: Bool {
+        PanelMetrics.sessionListContentHeight(
+            liveRowCount: store.sessions.count,
+            openRowHeight: store.openRowHeight,
+            retiredRowCount: store.recentDepartures.count,
+            isRecentExpanded: store.isRecentExpanded
+        ) > PanelMetrics.sessionViewportCap
+    }
+
+    /// How much width to hand the session list's `ScrollView` beyond the row
+    /// block's own, so its content still lands on the panel's margin once
+    /// `ScrollView` reserves room for a scroller.
+    ///
+    /// **`ScrollView` shrinks the width it hands its content the instant that
+    /// content is actually taller than the viewport**, to leave room for a
+    /// scroller — matching System Settings' "Show scroll bars" set to
+    /// `Always` — even though `.scrollIndicators(.hidden)` means nothing is
+    /// ever drawn into that room. A queue that fits needs no scroller and is
+    /// handed the full width already; one that scrolls is not, which is why
+    /// the row block's right edge sits on the panel's own margin collapsed
+    /// and steps in the moment a fourth live row or an opened Recent queue
+    /// crosses ``PanelMetrics/sessionViewportCap``.
+    ///
+    /// Gated on ``isSessionListScrolling`` because the reservation itself is:
+    /// adding it unconditionally would hand a list that already fits more
+    /// width than the panel's margin allows, pushing its own trailing content
+    /// past the crop below and cutting it off instead of leaving it be.
+    private var sessionListScrollerGutter: CGFloat {
+        guard isSessionListScrolling, NSScroller.preferredScrollerStyle == .legacy else {
+            return 0
+        }
+        return NSScroller.scrollerWidth(
+            for: .regular,
+            scrollerStyle: .legacy
+        )
     }
 
     /// The one line an empty live list draws, at the height it has always been
