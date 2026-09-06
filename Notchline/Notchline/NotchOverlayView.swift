@@ -1329,6 +1329,14 @@ private struct SessionRowContent: View {
 private struct SessionStatusControl: View {
     @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
+    /// Whether the pointer is on **this mark**, rather than anywhere on the row.
+    ///
+    /// The distinction is the whole of `answer-in-notch.md` §3: the row's text
+    /// is the Thread and the mark is the request, so a pointer resting on the
+    /// title must not offer a word describing what the mark would do. It is
+    /// held here rather than passed down for the same reason — the row's own
+    /// hover answers a different question.
+    @State private var isMarkHovered = false
     /// What the row is drawing behind this mark.
     var ground: NotchPalette.SurfaceGround = .black
 
@@ -1360,7 +1368,22 @@ private struct SessionStatusControl: View {
     // turn's terminal. The row's own state is untouched either way; see
     // ``wantsAttention``.
     var body: some View {
-        if let startedAt = store.elapsedStart(for: session) {
+        if session.status.wantsPerson {
+            // **The name, not the duration** (`panel-v2.md` §3.5). A row that
+            // wants a person says what it wants them for, and the ground is
+            // sized once for the longest word it can hold so that nothing moves
+            // when a passing pointer changes that word to `Answer` or `Read`
+            // (`answer-in-notch.md` §3.3). A ground sized for `0:42` could not
+            // hold either without moving, which is why the two could not both
+            // live here and why the duration went to the finished row's dark
+            // ground.
+            //
+            // It reads the row's **own** turn and never its derived status, so
+            // a Running row whose subagent is waiting keeps its timer and says
+            // so in brightness alone -- which is `CONTEXT.md`'s rule that a row
+            // reports one turn, with the ground as its single exception.
+            waitingWord
+        } else if let startedAt = store.elapsedStart(for: session) {
             reading(startedAt: startedAt, stoppedAt: nil)
         } else if session.showsSubagentBadge {
             // `dual-agent-design.md` §10: an expanded row's badge is neutral,
@@ -1384,6 +1407,48 @@ private struct SessionStatusControl: View {
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)
         }
+    }
+
+    /// What this row wants, on the ground that says it wants something.
+    ///
+    /// A `Text` rather than the layer-backed readout it replaces, and that is
+    /// an improvement rather than a compromise: the readout redrew this cell
+    /// once a second for as long as a row sat waiting, and a name does not tick
+    /// at all. `AGENTS.md` §7's rule is about continuous motion, and this
+    /// removes some.
+    private var waitingWord: some View {
+        ReadingGround(
+            fill: NotchPalette.spotlight,
+            width: PanelMetrics.waitingMarkWidth
+        ) {
+            Text(word)
+                .font(Font(PanelMetrics.waitingMarkFont))
+                .foregroundStyle(Color(NotchPalette.chipOnLightDrawingColor))
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .onHover { isMarkHovered = $0 }
+        // The row already speaks its status in its own accessibility label,
+        // and this draws that same word.
+        .accessibilityHidden(true)
+    }
+
+    /// The word inside the ground: the status at rest, and what a click would
+    /// do under the pointer.
+    ///
+    /// `Read` where the request cannot be answered from here and `Answer` where
+    /// it can — which is a fact about **this row's request** rather than about
+    /// its product, because the two products differ per shape rather than
+    /// wholesale (`answer-in-notch.md` §11 rule 06).
+    private var word: String {
+        guard isMarkHovered else { return session.status.displayName }
+        // `Read` until this request can genuinely be answered from here. The
+        // word is a promise about what a click does, and with no write path
+        // built there is nothing behind `Answer` -- which is the same rule that
+        // keeps the white ground off the open row until there is (§11 rule 03).
+        return session.request?.canBeAnswered == true
+            ? PanelMetrics.waitingMarkAnswerWord
+            : PanelMetrics.waitingMarkReadWord
     }
 
     /// The reading, on the ground its state gives it.

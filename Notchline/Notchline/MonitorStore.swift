@@ -746,6 +746,53 @@ enum PanelMetrics {
     /// What a ground adds to the reading it wraps.
     static var readingGroundWidthCost: CGFloat { readingGroundPadding * 2 }
 
+    /// The word on a waiting row's bright ground.
+    ///
+    /// Not the timer's monospaced-digit face: this draws a name rather than a
+    /// figure, and the medium weight is the one the mark already used when it
+    /// wanted a person.
+    static let waitingMarkFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+
+    /// How wide a waiting row's bright ground is, in every state it can be in.
+    ///
+    /// **Fixed, and that is the whole point.** `answer-in-notch.md` §3.3: under
+    /// the pointer the word inside becomes `Answer` or `Read`, and *nothing on
+    /// the row may move* as a pointer passes over it. So the ground is sized
+    /// once for the longest thing it can ever hold and never re-measured.
+    ///
+    /// This is also why the duration left this ground for the finished row's
+    /// dark one (`panel-v2.md` §3.5): a ground sized for `0:42` cannot hold
+    /// `Answer` without moving, and the word is the thing the person needs.
+    static let waitingMarkWidth: CGFloat = {
+        let words = [
+            SessionStatus.approvalNeeded.displayName,
+            SessionStatus.inputNeeded.displayName,
+            waitingMarkAnswerWord,
+            waitingMarkReadWord
+        ]
+        let widest = words
+            .map { textWidth($0, font: waitingMarkFont) }
+            .max() ?? 0
+        return ceil(widest + readingGroundWidthCost)
+    }()
+
+    /// What one word would take on that ground, hugging it.
+    ///
+    /// Not what is drawn -- ``waitingMarkWidth`` is -- and exposed so the ground
+    /// can be shown to be sized for every word rather than for the one that
+    /// happens to be in it.
+    static func drawnWaitingMarkWidth(_ word: String) -> CGFloat {
+        ceil(textWidth(word, font: waitingMarkFont) + readingGroundWidthCost)
+    }
+
+    /// What the mark says under the pointer where the request can be answered
+    /// here.
+    static let waitingMarkAnswerWord = "Answer"
+    /// And where it can only be read — §11, and the two are per row rather than
+    /// per product, because what a row can do is a fact about the request it is
+    /// holding.
+    static let waitingMarkReadWord = "Read"
+
     /// One badge's width, hugging its digits at the minimum size and growing
     /// only when a wider count needs it.
     static func subagentBadgeWidth(_ count: Int) -> CGFloat {

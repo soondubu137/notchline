@@ -125,7 +125,7 @@ These are the checks that span more than one of the three; each document keeps i
 - [x] **Opening the quota table is the only thing that takes the panel past `308`**, full stop: sweep every window's share across its whole range, make every reading unavailable, and the panel does not move. ~~other than a window crossing the threshold, which takes it to `333`~~ is void (§5 q02).
 - [x] A row's caption draws the badge and then the Project, with no separator between them, and the caption line measures `16` with a badge and without one.
 - [ ] The theme ink reaches the mark, the badge and the `multiSelect` tick box, and those three change together when the `Theme colour` selection changes.
-- [ ] A waiting row's white ground is sized for `Approval needed` / `Input needed` and does not resize when the word inside it becomes `Answer` or `Read`.
+- [x] A waiting row's white ground is sized for `Approval needed` / `Input needed` and does not resize when the word inside it becomes `Answer` or `Read`. Built 2026-09-05: `PanelMetrics.waitingMarkWidth` is measured once against all four words, and the word says `Read` on every row until §14.2's write path exists.
 - [x] A finished row's dark ground is the only place on the panel that reports how long a Turn took.
 - [x] With every colour rendered as flat grey, no figure, name or state on the expanded panel becomes ambiguous.
 - [x] An unreadable quota field draws `--` and nothing anywhere else on the panel — band, mark, rows or footer control — reports it.

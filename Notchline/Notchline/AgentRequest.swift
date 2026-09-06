@@ -29,6 +29,31 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// §4.6 is that this app does not annotate what it was handed.
     let toolName: String?
     let form: Form
+    /// Whether this request can be answered **here**, or only read here.
+    ///
+    /// `answer-in-notch.md` §11 rule 06: the two halves are per product and per
+    /// shape, and *the row says what that row can do* — a row that can only be
+    /// read beside one that can be answered is an ordinary mixed list, not a
+    /// special case. So this is a fact about one request rather than a setting,
+    /// and the vocabulary that read the request is what knows it.
+    ///
+    /// **False everywhere today**, because no write path is built yet (§14.2).
+    /// That is why the mark says `Read` rather than `Answer` under the pointer:
+    /// the affirmative ground is the return key made visible, and offering one
+    /// the app cannot deliver is a promise made quietly (§11 rule 03).
+    let canBeAnswered: Bool
+
+    nonisolated init(
+        id: String,
+        toolName: String?,
+        form: Form,
+        canBeAnswered: Bool = false
+    ) {
+        self.id = id
+        self.toolName = toolName
+        self.form = form
+        self.canBeAnswered = canBeAnswered
+    }
 
     nonisolated enum Form: Sendable, Equatable {
         /// A command to grant — an ordinary approval on either product. §2.1

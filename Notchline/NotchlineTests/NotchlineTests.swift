@@ -25544,6 +25544,77 @@ for line in sys.stdin:
         #expect(request.id == "call-agent-a")
     }
 
+    /// A request offers no answer until there is a way to send one.
+    ///
+    /// `answer-in-notch.md` §11 rule 03: the affirmative ground is the return
+    /// key made visible, so drawing one with nothing behind it is a promise made
+    /// quietly — and the word in the mark is the same promise one size smaller.
+    /// Every request this build produces says `Read`, on both products and every
+    /// shape, because §14.2's write path is not built. This is the flag the day
+    /// it is built flips, and it flips **per request** rather than per app,
+    /// because the two products differ per shape (§11 rule 06).
+    @Test @MainActor
+    func aRequestOffersNoAnswerUntilThereIsAWayToSendOne() throws {
+        let cases: [(any AgentHookVocabulary, String, String?, JSONValue?)] = [
+            (ClaudeCodeHookVocabulary(), "PermissionRequest", "Bash",
+             .object(["command": .string("ls")])),
+            (ClaudeCodeHookVocabulary(), "PermissionRequest", "ExitPlanMode",
+             .object(["plan": .string("a plan")])),
+            (ClaudeCodeHookVocabulary(), "PreToolUse", "AskUserQuestion",
+             .object(["questions": .array([.object(["question": .string("Which?")])])])),
+            (ClaudeCodeHookVocabulary(), "Elicitation", "mcp__x__y", nil),
+            (CodexHookVocabulary(), "PermissionRequest", "shell",
+             .object(["command": .string("ls")])),
+            (CodexHookVocabulary(), "PreToolUse", "request_user_input",
+             .object(["question": .string("Which?")]))
+        ]
+        for (vocabulary, event, tool, input) in cases {
+            let request = try #require(
+                vocabulary.request(
+                    forEvent: event,
+                    toolName: tool,
+                    toolInput: input,
+                    openedBy: "call-1"
+                ),
+                "\(event) \(tool ?? "-")"
+            )
+            #expect(!request.canBeAnswered, "\(event) \(tool ?? "-")")
+        }
+    }
+
+    /// A waiting row's ground is sized for its longest word and never resizes.
+    ///
+    /// `panel-v2.md` §6, and the reason the duration had to leave this ground
+    /// for the finished row's dark one: under the pointer the word inside
+    /// becomes `Answer` or `Read`, and **nothing on the row may move as a
+    /// pointer passes over it** (`answer-in-notch.md` §3.3). A ground that hugs
+    /// its content cannot promise that, so it is measured once against every
+    /// word it can ever hold — and a ground sized for `0:42` could hold none of
+    /// them.
+    @Test @MainActor
+    func aWaitingRowsGroundIsSizedForItsLongestWordAndNeverResizes() {
+        let width = PanelMetrics.waitingMarkWidth
+        for word in [
+            SessionStatus.approvalNeeded.displayName,
+            SessionStatus.inputNeeded.displayName,
+            PanelMetrics.waitingMarkAnswerWord,
+            PanelMetrics.waitingMarkReadWord
+        ] {
+            let needed = PanelMetrics.drawnWaitingMarkWidth(word)
+            #expect(needed <= width, "\(word) does not fit")
+        }
+        // And it is the longest name that decides it, not one of the two verbs
+        // -- which is what makes the ground stand still when the word changes.
+        #expect(
+            width == PanelMetrics.drawnWaitingMarkWidth(
+                SessionStatus.approvalNeeded.displayName
+            )
+        )
+        #expect(
+            PanelMetrics.drawnWaitingMarkWidth(PanelMetrics.waitingMarkAnswerWord) < width
+        )
+    }
+
     /// A payload the store cannot read is reported, not dropped in silence.
     ///
     /// The queue-era reducer said `Ignored a corrupted hook event file.` and
