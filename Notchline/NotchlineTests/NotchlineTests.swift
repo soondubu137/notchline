@@ -8,7 +8,7 @@ import Testing
 struct NotchlineTests {
     /// **The notch-less pill is one width in every connected state.**
     ///
-    /// `209` whatever the status, however many rows are open, however many
+    /// `250` whatever the status, however many rows are open, however many
     /// subagents are in flight, at any menu bar height and whatever the reading
     /// says. V1 answered to all four of those: the marks it drew, the word it
     /// was saying, the column each product had open and the digits in the
@@ -16,9 +16,6 @@ struct NotchlineTests {
     /// display and pinned to nothing — every point either end took would be
     /// taken from both edges at once, and the whole of its contents would
     /// travel with them (`compact-view-v2.md` §6.1).
-    ///
-    /// The width is not new. `209` is the reserved composition this form last
-    /// held still at, so the pill is never wider than it has already shipped.
     @Test @MainActor
     func theNotchlessPillIsOneWidthInEveryConnectedState() {
         var widths: Set<CGFloat> = []
@@ -44,7 +41,7 @@ struct NotchlineTests {
                 }
             }
         }
-        #expect(widths == [209])
+        #expect(widths == [250])
         // Height still follows the menu bar; only width was ever loose.
         #expect(heights == [46, 38, 24])
 
@@ -82,11 +79,11 @@ struct NotchlineTests {
             )
         }
         for (text, published) in [
-            (nil, CGFloat(135.2)),
-            ("1:23", 99.2),
-            ("12:05", 91.2),
-            ("1:00:00", 79.2),
-            ("10:00:00", 71.2)
+            (nil, CGFloat(176.2)),
+            ("1:23", 140.2),
+            ("12:05", 132.2),
+            ("1:00:00", 120.2),
+            ("10:00:00", 112.2)
         ] as [(String?, CGFloat)] {
             #expect(abs(middle(text) - published) < 0.05)
         }
@@ -147,7 +144,7 @@ struct NotchlineTests {
         #expect(notched(sessionCount: 3, reading: "12:05") == 312)
 
         // The pill, both of its two widths.
-        #expect(PanelMetrics.fixedCompactWidth(for: .running) == 209)
+        #expect(PanelMetrics.fixedCompactWidth(for: .running) == 250)
         #expect(PanelMetrics.fixedCompactWidth(for: .disconnected) == 41)
     }
 
@@ -279,7 +276,7 @@ struct NotchlineTests {
                 sessionCount: 3
             ).width
         }
-        #expect(Set((1 ... 5).map(pill)) == [209])
+        #expect(Set((1 ... 5).map(pill)) == [250])
     }
 
     /// The collapsed surface reports on products, not on us.
@@ -2575,92 +2572,76 @@ struct NotchlineTests {
         )
     }
 
-    /// **The viewport is its content, capped at `240`** — at every mix of live
-    /// rows and rows that have left (`expanded-panel-v2.md` §2.1, §4).
-    ///
-    /// It used to be `80 × min(rows, 3)`, which is the same figure said as a
-    /// count. Saying it as a height is what lets rows of two sizes share one
-    /// viewport, and it is why the queue needs no metric of its own: with
-    /// nothing live, the apology's `48` and the seam's `32` leave `160`, so
-    /// `48 + 32 + 4 × 40 = 240` is the cap exactly and a fifth retired row is
-    /// `280`, which is outside. **That is the whole implementation of the
-    /// fold** (§2.4 rule 02) — a twelve-deep queue is `560` of content in a
-    /// `240` viewport, carried by the scroller a fourth live row already used,
-    /// rather than by a second one.
-    ///
-    /// ~~Five retired rows fit because `32 + 5 × 40 = 232` is inside `240`.~~
-    /// That arithmetic was for a viewport where an empty live list drew
-    /// nothing at all. It draws its apology again — `No active sessions` is
-    /// owed whenever nothing is running, queue or no queue (§4) — so the fold
-    /// with nothing live is four.
+    /// **Each list is its own content, capped on its own** — the live
+    /// viewport at `240` (three rows), the Recent queue's at `200` (five
+    /// retired rows, half a live one each) — and neither one folds the
+    /// other's rows into its own cap any more: each scrolls entirely on its
+    /// own past its own cap.
     @Test @MainActor
-    func theViewportIsItsContentCappedAtTwoHundredAndForty() {
-        // The arithmetic the fold rests on, asserted before anything derived
-        // from it: a retired row is exactly half a live one, and the two
-        // figures either side of the cap are what decide four.
+    func eachViewportIsItsContentCappedOnItsOwn() {
         #expect(PanelMetrics.retiredRowHeight == PanelMetrics.sessionRowHeight / 2)
         #expect(PanelMetrics.retiredRowHeight == 40)
         #expect(PanelMetrics.recentSeamHeight == 32)
         #expect(PanelMetrics.thinExpandedBodyHeight == 48)
         #expect(PanelMetrics.sessionViewportCap == 240)
-        #expect(
-            PanelMetrics.thinExpandedBodyHeight
-                + PanelMetrics.recentSeamHeight
-                + PanelMetrics.retiredRowHeight * 4
-                == PanelMetrics.sessionViewportCap
-        )
-        #expect(
-            PanelMetrics.thinExpandedBodyHeight
-                + PanelMetrics.recentSeamHeight
-                + PanelMetrics.retiredRowHeight * 5
-                > PanelMetrics.sessionViewportCap
-        )
+        #expect(PanelMetrics.recentViewportCap == 200)
 
-        let cases: [(
-            live: Int, retired: Int, open: Bool,
-            content: CGFloat, viewport: CGFloat, what: String
-        )] = [
-            // An empty live list asks for its own line, and it is the same `48`
-            // whether or not a seam follows it.
-            (0, 0, false, 48, 48, "nothing at all"),
-            // A queue costs its seam whether or not it is open, and costs
-            // nothing at all while it is empty: a zero is never drawn here.
-            (0, 0, true, 48, 48, "an empty queue, open"),
-            (0, 3, false, 80, 80, "nothing live, the queue folded"),
-            (0, 1, true, 120, 120, "one in the window, open"),
-            (0, 4, true, 240, 240, "four in the window, open — the cap exactly"),
-            (0, 5, true, 280, 240, "five in the window, open"),
-            (0, 6, true, 320, 240, "six in the window, open"),
-            (0, 12, true, 560, 240, "twelve in the window, open"),
-            (1, 0, false, 80, 80, "one live row, nothing retired"),
-            (1, 4, false, 112, 112, "one live row, the queue folded"),
-            (2, 4, false, 192, 192, "two live rows, the queue folded"),
-            (3, 4, false, 272, 240, "three live rows, the seam below the fold"),
-            (4, 0, false, 320, 240, "four live rows, nothing retired"),
-            // §4 tabulates this one at `352`, which is the four rows *and* a
-            // folded seam — the table is written for a panel that has a queue.
-            (4, 4, false, 352, 240, "four live rows, as it already scrolled"),
-            (2, 5, true, 392, 240, "two live rows over an open queue"),
+        // The live list: an empty list still draws its own apology, and
+        // three rows — the cap over `80` pt rows — is where the fold falls.
+        let liveCases: [(live: Int, content: CGFloat, viewport: CGFloat, what: String)] = [
+            (0, 48, 48, "nothing live"),
+            (1, 80, 80, "one live row"),
+            (2, 160, 160, "two live rows"),
+            (3, 240, 240, "three live rows — the cap exactly"),
+            (4, 320, 240, "four live rows"),
+            (12, 960, 240, "twelve live rows"),
         ]
-
-        for row in cases {
+        for row in liveCases {
             #expect(
-                PanelMetrics.sessionListContentHeight(
-                    liveRowCount: row.live,
-                    retiredRowCount: row.retired,
-                    isRecentExpanded: row.open
-                ) == row.content,
+                PanelMetrics.sessionListContentHeight(liveRowCount: row.live) == row.content,
                 "content at \(row.what)"
             )
             #expect(
-                PanelMetrics.sessionViewportHeight(
-                    liveRowCount: row.live,
-                    retiredRowCount: row.retired,
-                    isRecentExpanded: row.open
-                ) == row.viewport,
+                PanelMetrics.sessionViewportHeight(liveRowCount: row.live) == row.viewport,
                 "viewport at \(row.what)"
             )
         }
+
+        // The Recent queue: nothing while it is empty, and five rows — the
+        // cap over `40` pt rows — is where its own fold falls.
+        let recentCases: [(retired: Int, content: CGFloat, viewport: CGFloat, what: String)] = [
+            (0, 0, 0, "nothing retired"),
+            (1, 40, 40, "one retired row"),
+            (4, 160, 160, "four retired rows"),
+            (5, 200, 200, "five retired rows — the cap exactly"),
+            (6, 240, 200, "six retired rows"),
+            (12, 480, 200, "twelve retired rows"),
+        ]
+        for row in recentCases {
+            #expect(
+                PanelMetrics.recentContentHeight(retiredRowCount: row.retired) == row.content,
+                "content at \(row.what)"
+            )
+            #expect(
+                PanelMetrics.recentViewportHeight(retiredRowCount: row.retired) == row.viewport,
+                "viewport at \(row.what)"
+            )
+        }
+
+        // The Recent section adds its seam only once there is something
+        // behind it, and only opens its own viewport while expanded.
+        #expect(PanelMetrics.recentSectionHeight(retiredRowCount: 0, isRecentExpanded: true) == 0)
+        #expect(
+            PanelMetrics.recentSectionHeight(retiredRowCount: 3, isRecentExpanded: false) == 32
+        )
+        #expect(
+            PanelMetrics.recentSectionHeight(retiredRowCount: 3, isRecentExpanded: true)
+                == 32 + 120
+        )
+        #expect(
+            PanelMetrics.recentSectionHeight(retiredRowCount: 12, isRecentExpanded: true)
+                == 32 + PanelMetrics.recentViewportCap
+        )
     }
 
     /// **The apology stands above the seam**, so the panel's floor is the same
@@ -3356,12 +3337,12 @@ struct NotchlineTests {
         #expect(store.recentDepartures.isEmpty)
     }
 
-    /// **The queue holds what the window holds; the viewport draws five.**
+    /// **The queue holds what the window holds; its own viewport draws five.**
     ///
     /// Membership is unbounded in count inside its five hours, and the fold is
-    /// what the `240` viewport does to it — a twelve-deep queue is `512` of
-    /// content drawn `240` at a time by the scroller a fourth live row already
-    /// used (§2.4 rules 01 and 02).
+    /// what the `200` viewport does to it — a twelve-deep queue is `480` of
+    /// content drawn `200` at a time by the queue's own scroller, independent
+    /// of whatever the live list is doing.
     @Test @MainActor
     func theQueueHoldsMoreThanTheViewportDraws() async {
         let clock = TestClock()
@@ -3388,11 +3369,8 @@ struct NotchlineTests {
                 == (0..<12).reversed().map { "thread-\($0)" }
         )
         #expect(
-            PanelMetrics.sessionViewportHeight(
-                liveRowCount: 0,
-                retiredRowCount: store.recentDepartures.count,
-                isRecentExpanded: true
-            ) == PanelMetrics.sessionViewportCap
+            PanelMetrics.recentViewportHeight(retiredRowCount: store.recentDepartures.count)
+                == PanelMetrics.recentViewportCap
         )
     }
 
@@ -3542,13 +3520,13 @@ struct NotchlineTests {
         #expect(PanelMetrics.sessionRowGutter == 6)
 
         // The block itself is wider than the panel's content box by the two
-        // gutters it gives back: 520 - 6 - 6, against the header's 520 - 12 - 12.
+        // gutters it gives back: 700 - 6 - 6, against the header's 700 - 12 - 12.
         let block = PanelMetrics.expandedBaselineWidth
             - PanelMetrics.sessionRowGutter * 2
         let contentBox = PanelMetrics.expandedBaselineWidth
             - PanelMetrics.expandedHorizontalPadding * 2
-        #expect(block == 508)
-        #expect(contentBox == 496)
+        #expect(block == 688)
+        #expect(contentBox == 676)
     }
 
     /// Rows say which product they are for as long as both products are connected.
@@ -5335,7 +5313,7 @@ struct NotchlineTests {
         #expect(disconnected.isRestingOnly)
         #expect(disconnected.aggregateMatrixInk == NotchPalette.restingInk)
 
-        // **Naming the work.** On by default, and the pill holds its `209`
+        // **Naming the work.** On by default, and the pill holds its `250`
         // either way -- the ends are anchored, so a width that answered to this
         // preference would move the mark and the reading with it.
         #expect(store.namesWorkOnPill)
@@ -6071,7 +6049,7 @@ struct NotchlineTests {
             compactHeight: 38
         )
 
-        #expect(noNotchSize.width == 520)
+        #expect(noNotchSize.width == 700)
         #expect(notchedSize.width == noNotchSize.width)
         #expect(notchedSingle.width == noNotchSize.width)
         #expect(noNotchSize.height == 24 + PanelMetrics.expandedContentHeight)
@@ -6188,7 +6166,7 @@ struct NotchlineTests {
     /// removed one term from the sum: first the longest status name the band
     /// could reach, then the columns the totals decomposed into
     /// (`colour-v2.md` §3). The band was the only term on either side that read
-    /// an agent count, so **the width series is one number** — `520` at every
+    /// an agent count, so **the width series is one number** — `700` at every
     /// cut-out this product meets, whatever is connected and whatever is
     /// running.
     ///
@@ -6199,7 +6177,7 @@ struct NotchlineTests {
         // The four cut-outs this app has measured, and no cut-out at all.
         for occlusion in [0, 127, 185, 200, 220] as [CGFloat] {
             #expect(
-                PanelMetrics.expandedWidth(centerOcclusionWidth: occlusion) == 520,
+                PanelMetrics.expandedWidth(centerOcclusionWidth: occlusion) == 700,
                 "at \(occlusion)"
             )
         }
@@ -6209,12 +6187,12 @@ struct NotchlineTests {
         // drawn digit runs over the board's nominal `6.6`.
         #expect(abs(PanelMetrics.expandedLeadingSideWidth - 53.8) < 0.05)
 
-        // A side asking `53.8` puts the cut-out branch past `412.4`, which is
-        // twice the widest cut-out on any Mac -- so `expandedNotchClearance`
+        // A side asking `53.8` puts the cut-out branch past `592.4`, well past
+        // the widest cut-out on any Mac -- so `expandedNotchClearance`
         // is the guard that the band clears the hardware and has stopped being
         // the rule that decides a width.
         #expect(
-            520 - PanelMetrics.expandedLeadingSideWidth * 2 > 412,
+            700 - PanelMetrics.expandedLeadingSideWidth * 2 > 592,
             "the baseline binds at every cut-out that exists"
         )
     }
@@ -24381,7 +24359,7 @@ for line in sys.stdin:
         // rule this test was always about, now holding by construction rather
         // than by arithmetic.
         #expect(restingWidth == 41)
-        #expect(oneOpen == 209)
+        #expect(oneOpen == 250)
         #expect(oneOpen > restingWidth)
         #expect(
             PanelMetrics.fixedCompactWidth(for: .running) == oneOpen

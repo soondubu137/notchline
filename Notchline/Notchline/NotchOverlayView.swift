@@ -634,116 +634,13 @@ private struct SettingsButton: View {
 }
 
 private struct ExpandedPanelContent: View {
-    @EnvironmentObject private var store: MonitorStore
-
     var body: some View {
         VStack(spacing: 0) {
-            sessionRegion
+            ActiveSessionList()
+            RecentSessionSection()
             ExpandedPanelFooter()
         }
         .foregroundStyle(.white)
-    }
-
-    @ViewBuilder
-    private var sessionRegion: some View {
-        Group {
-            // **The apology is drawn for an empty live list, and the queue is
-            // drawn under it.** It used to give way to a seam — a list that
-            // continues past its own end being a better answer than a sentence
-            // saying there is nothing — and that traded away the one line this
-            // panel exists to be able to say. What has left is not what is
-            // running, so `No active sessions` stands whenever nothing is
-            // (`expanded-panel-v2.md` §4).
-            if store.sessions.isEmpty, store.recentDepartures.isEmpty {
-                emptyListLabel
-            } else {
-                // **One scroller over both halves**, which is the whole of how
-                // the queue draws its fold and scrolls past it: the apology
-                // and a seam over four retired rows is 240 exactly, and a
-                // fifth is 280, so the scroller a fourth live row already used
-                // carries the rest (§2.4 rule 02). A scroll view of its own
-                // here would chain against this one for nothing.
-                // **The open row is the subject, and it is held at the top of
-                // the viewport** (§8.2): it is scrolled to when it opens and
-                // again whenever the list re-sorts under it, so the row a
-                // person is answering does not travel while they answer it.
-                // Its own body scrolls on the wheel and this does not fight
-                // that — the reader stays inside one region rather than moving
-                // between two.
-                ScrollViewReader { list in
-                    ScrollView(.vertical) {
-                        LazyVStack(spacing: 0) {
-                            // The apology is one of the list's own lines, so it
-                            // scrolls with what is under it rather than pinning a
-                            // sentence over a queue somebody is reading.
-                            if store.sessions.isEmpty {
-                                emptyListLabel
-                            }
-
-                            ForEach(store.sessions) { session in
-                                if store.openRowID == session.id {
-                                    // **No `.id()` on either branch.** `ForEach`
-                                    // already gives each row the identity
-                                    // `scrollTo` needs, and tagging both branches
-                                    // with the same one made SwiftUI treat the
-                                    // closed row and the open row as the same view:
-                                    // the panel resized for a row that went on
-                                    // drawing itself shut.
-                                    OpenRow(session: session)
-                                } else {
-                                    // **One row is open at a time, and it is the
-                                    // subject** (§8.2): everything else on the list
-                                    // drops to `45%` for as long as it is, which is
-                                    // the same value an answer in flight takes and
-                                    // the same statement — this is not the thing
-                                    // you are looking at.
-                                    SessionRow(session: session)
-                                        .opacity(store.openRowID == nil ? 1 : 0.45)
-                                }
-                            }
-
-                            if !store.recentDepartures.isEmpty {
-                                RecentSeam(count: store.recentDepartures.count)
-
-                                if store.isRecentExpanded {
-                                    ForEach(store.recentDepartures) { departure in
-                                        RetiredRow(departure: departure)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .frame(
-                        width: sessionViewportWidth + sessionListScrollerGutter,
-                        height: PanelMetrics.sessionViewportHeight(
-                            liveRowCount: store.sessions.count,
-                            openRowHeight: store.openRowHeight,
-                            retiredRowCount: store.recentDepartures.count,
-                            isRecentExpanded: store.isRecentExpanded
-                        )
-                    )
-                    .scrollIndicators(.hidden)
-                    .onChange(of: store.openRowID) { _, opened in
-                        guard let opened else { return }
-                        withAnimation(PanelMotion.slot(isOpening: true)) {
-                            list.scrollTo(opened, anchor: .top)
-                        }
-                    }
-                    .onChange(of: store.sessions.map(\.id)) { _, _ in
-                        guard let opened = store.openRowID else { return }
-                        list.scrollTo(opened, anchor: .top)
-                    }
-                }
-                // **The extra width above is `ScrollView`'s own, not the row
-                // block's** — see ``sessionListScrollerGutter``. It never
-                // belongs on screen, which is what pins the visible region
-                // back to the panel's own margin regardless of whether this
-                // pass actually needed the room.
-                .frame(width: sessionViewportWidth, alignment: .leading)
-                .clipped()
-            }
-        }
-        .frame(maxWidth: .infinity)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color.white.opacity(0.15))
@@ -751,59 +648,197 @@ private struct ExpandedPanelContent: View {
                 .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
         }
     }
+}
 
-    private var sessionViewportWidth: CGFloat {
-        store.currentPanelSize.width - PanelMetrics.sessionRowGutter * 2
+/// How much width to hand a scrolling list's `ScrollView` beyond the row
+/// block's own, so its content still lands on the panel's margin once
+/// `ScrollView` reserves room for a scroller.
+///
+/// **`ScrollView` shrinks the width it hands its content the instant that
+/// content is actually taller than the viewport**, to leave room for a
+/// scroller — matching System Settings' "Show scroll bars" set to `Always` —
+/// even though `.scrollIndicators(.hidden)` means nothing is ever drawn into
+/// that room. A list that fits needs no scroller and is handed the full width
+/// already; one that scrolls is not, which is why the row block's right edge
+/// sits on the panel's own margin collapsed and steps in the moment the list
+/// crosses its own cap.
+///
+/// Gated on `isScrolling` because the reservation itself is: adding it
+/// unconditionally would hand a list that already fits more width than the
+/// panel's margin allows, pushing its own trailing content past the crop
+/// below and cutting it off instead of leaving it be.
+private func legacyScrollerGutter(isScrolling: Bool) -> CGFloat {
+    guard isScrolling, NSScroller.preferredScrollerStyle == .legacy else {
+        return 0
+    }
+    return NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+}
+
+/// The live session list: at least one row's worth of viewport — the apology
+/// when nothing is running — at most three, and its own scroller past that.
+///
+/// **No longer shares a viewport, a cap or a scroller with the Recent
+/// queue** — each folds and scrolls entirely on its own now
+/// (``RecentSessionSection``).
+private struct ActiveSessionList: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    @State private var scrollOffset: CGFloat = 0
+
+    private var viewportWidth: CGFloat {
+        PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)
     }
 
-    /// Whether the session list's own `ScrollView` will actually need to
-    /// scroll this pass — the same test ``PanelMetrics/sessionViewportHeight``
-    /// answers by capping, asked here for a different reason.
-    private var isSessionListScrolling: Bool {
+    private var contentHeight: CGFloat {
         PanelMetrics.sessionListContentHeight(
             liveRowCount: store.sessions.count,
-            openRowHeight: store.openRowHeight,
-            retiredRowCount: store.recentDepartures.count,
-            isRecentExpanded: store.isRecentExpanded
-        ) > PanelMetrics.sessionViewportCap
-    }
-
-    /// How much width to hand the session list's `ScrollView` beyond the row
-    /// block's own, so its content still lands on the panel's margin once
-    /// `ScrollView` reserves room for a scroller.
-    ///
-    /// **`ScrollView` shrinks the width it hands its content the instant that
-    /// content is actually taller than the viewport**, to leave room for a
-    /// scroller — matching System Settings' "Show scroll bars" set to
-    /// `Always` — even though `.scrollIndicators(.hidden)` means nothing is
-    /// ever drawn into that room. A queue that fits needs no scroller and is
-    /// handed the full width already; one that scrolls is not, which is why
-    /// the row block's right edge sits on the panel's own margin collapsed
-    /// and steps in the moment a fourth live row or an opened Recent queue
-    /// crosses ``PanelMetrics/sessionViewportCap``.
-    ///
-    /// Gated on ``isSessionListScrolling`` because the reservation itself is:
-    /// adding it unconditionally would hand a list that already fits more
-    /// width than the panel's margin allows, pushing its own trailing content
-    /// past the crop below and cutting it off instead of leaving it be.
-    private var sessionListScrollerGutter: CGFloat {
-        guard isSessionListScrolling, NSScroller.preferredScrollerStyle == .legacy else {
-            return 0
-        }
-        return NSScroller.scrollerWidth(
-            for: .regular,
-            scrollerStyle: .legacy
+            openRowHeight: store.openRowHeight
         )
     }
 
-    /// The one line an empty live list draws, at the height it has always been
-    /// drawn at — `48`, whether or not a queue follows it.
+    private var viewportHeight: CGFloat {
+        min(contentHeight, PanelMetrics.sessionViewportCap)
+    }
+
+    private var isScrolling: Bool { contentHeight > PanelMetrics.sessionViewportCap }
+
+    var body: some View {
+        ScrollViewReader { list in
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    // The apology is one of the list's own lines, so it
+                    // scrolls with what is under it rather than pinning a
+                    // sentence over rows somebody is reading.
+                    if store.sessions.isEmpty {
+                        emptyListLabel
+                    }
+
+                    ForEach(store.sessions) { session in
+                        if store.openRowID == session.id {
+                            // **No `.id()` on either branch.** `ForEach`
+                            // already gives each row the identity `scrollTo`
+                            // needs, and tagging both branches with the same
+                            // one made SwiftUI treat the closed row and the
+                            // open row as the same view: the panel resized
+                            // for a row that went on drawing itself shut.
+                            OpenRow(session: session)
+                        } else {
+                            // **One row is open at a time, and it is the
+                            // subject** (§8.2): everything else on the list
+                            // drops to `45%` for as long as it is, which is
+                            // the same value an answer in flight takes and
+                            // the same statement — this is not the thing you
+                            // are looking at.
+                            SessionRow(session: session)
+                                .opacity(store.openRowID == nil ? 1 : 0.45)
+                        }
+                    }
+                }
+            }
+            .frame(
+                width: viewportWidth + legacyScrollerGutter(isScrolling: isScrolling),
+                height: viewportHeight
+            )
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y
+            } action: { _, offset in
+                scrollOffset = offset
+            }
+            .onChange(of: store.openRowID) { _, opened in
+                guard let opened else { return }
+                withAnimation(PanelMotion.slot(isOpening: true)) {
+                    list.scrollTo(opened, anchor: .top)
+                }
+            }
+            .onChange(of: store.sessions.map(\.id)) { _, _ in
+                guard let opened = store.openRowID else { return }
+                list.scrollTo(opened, anchor: .top)
+            }
+        }
+        // The extra width above is `ScrollView`'s own, not the row block's —
+        // see ``legacyScrollerGutter``. It never belongs on screen, which is
+        // what pins the visible region back to the panel's own margin
+        // regardless of whether this pass actually needed the room.
+        .frame(width: viewportWidth, alignment: .leading)
+        .clipped()
+        .overlay(alignment: .trailing) {
+            ScrollRail(
+                visibleHeight: viewportHeight,
+                contentHeight: contentHeight,
+                offset: scrollOffset
+            )
+        }
+    }
+
+    /// The one line an empty live list draws, at the height it has always
+    /// been drawn at — `48`.
     private var emptyListLabel: some View {
         Text(store.emptyListMessage)
             .font(.system(size: 13, weight: .light))
             .foregroundStyle(NotchPalette.label)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .frame(height: PanelMetrics.thinExpandedBodyHeight)
+    }
+}
+
+/// The Recent queue: nothing while it is empty, its seam alone while folded,
+/// and its own five-row viewport — scrolling on its own past that — while
+/// open.
+private struct RecentSessionSection: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    @State private var scrollOffset: CGFloat = 0
+
+    private var viewportWidth: CGFloat {
+        PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)
+    }
+
+    private var contentHeight: CGFloat {
+        PanelMetrics.recentContentHeight(retiredRowCount: store.recentDepartures.count)
+    }
+
+    private var viewportHeight: CGFloat {
+        PanelMetrics.recentViewportHeight(retiredRowCount: store.recentDepartures.count)
+    }
+
+    private var isScrolling: Bool { contentHeight > PanelMetrics.recentViewportCap }
+
+    var body: some View {
+        if !store.recentDepartures.isEmpty {
+            VStack(spacing: 0) {
+                RecentSeam(count: store.recentDepartures.count)
+
+                if store.isRecentExpanded {
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(store.recentDepartures) { departure in
+                                RetiredRow(departure: departure)
+                            }
+                        }
+                    }
+                    .frame(
+                        width: viewportWidth + legacyScrollerGutter(isScrolling: isScrolling),
+                        height: viewportHeight
+                    )
+                    .scrollIndicators(.hidden)
+                    .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.contentOffset.y
+                    } action: { _, offset in
+                        scrollOffset = offset
+                    }
+                    .frame(width: viewportWidth, alignment: .leading)
+                    .clipped()
+                    .overlay(alignment: .trailing) {
+                        ScrollRail(
+                            visibleHeight: viewportHeight,
+                            contentHeight: contentHeight,
+                            offset: scrollOffset
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1697,6 +1732,41 @@ final class AnswerFieldView: NSTextView {
     }
 }
 
+/// A read-only report of where a scroller stands, drawn in place of the
+/// system's own indicator: a thin line over the whole range, and a thicker,
+/// capsule-ended line over the slice currently visible.
+///
+/// **Always drawn while there is anything to scroll**, not just while
+/// scrolling or hovered — the same standard as the request body's own rail
+/// this generalises. `1.5` points for the range and `3` for the position: it
+/// reports where the reader is and is deliberately not a grip, because it is
+/// never the only way to move.
+private struct ScrollRail: View {
+    let visibleHeight: CGFloat
+    let contentHeight: CGFloat
+    let offset: CGFloat
+
+    private var travel: CGFloat { max(contentHeight - visibleHeight, 0) }
+
+    var body: some View {
+        if travel > 0 {
+            let thumb = max(24, visibleHeight * visibleHeight / contentHeight)
+            let progress = min(max(offset / travel, 0), 1)
+            ZStack(alignment: .top) {
+                Capsule()
+                    .fill(Color.white.opacity(0.15))
+                    .frame(width: 1.5)
+                Capsule()
+                    .fill(Color.white.opacity(0.5))
+                    .frame(width: 3, height: thumb)
+                    .offset(y: (visibleHeight - thumb) * progress)
+            }
+            .frame(width: 3, height: visibleHeight)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
 /// A body taller than the space it has, and how much of it is missing.
 ///
 /// **The wheel is the only thing that scrolls it**, and nothing else on this
@@ -1776,26 +1846,12 @@ private struct ScrollingRequestBody: View {
         }
     }
 
-    /// The panel's own hairline value, and a thumb one step up from it.
-    ///
-    /// `1.5` points: it reports where the reader is and is deliberately not a
-    /// grip, because it is never the only way to move (§4.4).
-    @ViewBuilder
     private var rail: some View {
-        if overflows {
-            let visible = PanelMetrics.requestBodyMaximumHeight
-            let thumb = max(24, visible * visible / layout.contentHeight)
-            let progress = min(max(offset / travel, 0), 1)
-            ZStack(alignment: .top) {
-                Capsule().fill(Color.white.opacity(0.15))
-                Capsule()
-                    .fill(Color.white.opacity(0.5))
-                    .frame(height: thumb)
-                    .offset(y: (visible - thumb) * progress)
-            }
-            .frame(width: 1.5, height: visible)
-            .accessibilityHidden(true)
-        }
+        ScrollRail(
+            visibleHeight: PanelMetrics.requestBodyMaximumHeight,
+            contentHeight: layout.contentHeight,
+            offset: offset
+        )
     }
 
     /// `+2 lines`, over the fade the body's last line already has.

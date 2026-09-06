@@ -830,7 +830,7 @@ struct RotatingProjectName: View {
     /// Every Project with an active row, in the panel's own order,
     /// deduplicated, first occurrence winning.
     let names: [String]
-    /// What `209` has left once the anchored ends are taken out.
+    /// What `250` has left once the anchored ends are taken out.
     let width: CGFloat
 
     var body: some View {

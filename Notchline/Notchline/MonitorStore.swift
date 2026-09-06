@@ -276,7 +276,7 @@ enum PanelMetrics {
     /// those follow the hardware's shape, while a boundary does not get
     /// thicker because the menu bar got taller.
     static let surfaceOutlineWidth: CGFloat = 0.8
-    static let expandedBaselineWidth: CGFloat = 520
+    static let expandedBaselineWidth: CGFloat = 700
     static let sessionRowHeight: CGFloat = 80
     /// A row that has left the list, drawn under the seam.
     ///
@@ -297,20 +297,20 @@ enum PanelMetrics {
     /// under a plain SwiftUI gradient. Written apart they would drift, and the
     /// two are three points from each other on the same panel.
     static let rowTrailingFadeWidth: CGFloat = 48
-    /// The tallest the session viewport is ever drawn.
+    /// The tallest the *live* session viewport is ever drawn.
     ///
-    /// **A height rather than a row count, and that restatement is the whole
-    /// of what changed here** (`expanded-panel-v2.md` §2.1). `240` is what
-    /// `sessionRowHeight × 3` already was; saying it in points is what lets
-    /// rows of two heights share one viewport, and `maximumVisibleSessionCount`
-    /// retired with it because "how many rows fit" stopped being one number.
+    /// **A height rather than a row count.** `240` is what `sessionRowHeight ×
+    /// 3` already was; saying it in points is what lets an open row (taller
+    /// than `80`) still share the same viewport rather than needing a row
+    /// count of its own.
     ///
-    /// **The queue's arithmetic rests on this value rather than on the `3`.**
-    /// A seam and five retired rows is `32 + 5 × 40 = 232`, inside it; a sixth
-    /// is `272`, outside. So five is what the viewport draws before the panel's
-    /// own scroller takes over, and the queue needs no scroller, no second
-    /// metric and nothing to snap (§2.4 rule 02).
+    /// **The live list and the Recent queue no longer share one viewport or
+    /// one scroller.** Each folds on its own past its own cap — see
+    /// ``recentViewportCap`` for the queue's.
     static let sessionViewportCap: CGFloat = sessionRowHeight * 3
+    /// The tallest the Recent queue's own viewport is ever drawn: five retired
+    /// rows, half a live row each.
+    static let recentViewportCap: CGFloat = retiredRowHeight * 5
     /// The panel's horizontal inset, collapsed and expanded alike.
     ///
     /// `12`, not the `24` this started at. The name says `expanded` because
@@ -336,6 +336,12 @@ enum PanelMetrics {
     static let sessionRowGutter: CGFloat = 6
     static let sessionRowPadding: CGFloat = expandedHorizontalPadding
         - sessionRowGutter
+
+    /// The width either scrolling list (the live rows, the Recent queue) is
+    /// drawn at: the panel's own width, less the gutter on each side.
+    static func sessionViewportWidth(panelWidth: CGFloat) -> CGFloat {
+        panelWidth - sessionRowGutter * 2
+    }
     /// The row's three text lines, as the row lays them out.
     ///
     /// They live here rather than as literals in the view because the row's
@@ -510,13 +516,15 @@ enum PanelMetrics {
         )
     }
     static let thinExpandedBodyHeight: CGFloat = 48
-    /// A full viewport over a footer at rest, which is the panel's cap: `308`
-    /// at every connected form, every working-agent count and every share.
+    /// The live viewport over a footer at rest: `308` at every connected
+    /// form, every working-agent count and every share, with the Recent queue
+    /// empty or folded.
     ///
-    /// **The cap did not move when the viewport stopped counting rows.** This
-    /// used to read "three live rows"; it now reads "as much list as the
-    /// viewport draws", which is the same `240` whether that is three live
-    /// rows, a seam and five retired ones, or a mix of the two.
+    /// **Not the panel's cap any more.** With the live list and the Recent
+    /// queue scrolling on their own (``sessionViewportCap``,
+    /// ``recentViewportCap``), a queue somebody opens can stand on top of this
+    /// — there is no longer one ceiling the whole panel answers to, only the
+    /// two caps each part answers to on its own.
     static let expandedContentHeight: CGFloat = sessionViewportCap
         + restingFooterHeight
     static let thinExpandedContentHeight: CGFloat = thinExpandedBodyHeight
@@ -588,7 +596,7 @@ enum PanelMetrics {
     /// difference is under a hundredth of a point and it lands inside the
     /// single `ceil` every composed width takes, so the published totals stand:
     /// the notched bar is still `304` at one digit and `310` at two, and the
-    /// pill is still `209` because its middle is a subtraction and absorbs it
+    /// pill is still `250` because its middle is a subtraction and absorbs it
     /// (`compact-view-v2.md` §6.1).
     static var countsDigitWidth: CGFloat {
         textWidth("8", font: countsSessionFont)
@@ -1078,11 +1086,8 @@ enum PanelMetrics {
 
     /// The notch-less pill: **one width in every connected state**.
     ///
-    /// `209` whatever is running, whatever is waiting, however many rows are
-    /// open and however long the reading is. It is not a new number — it is
-    /// what this form last held still at, the reserved composition at one
-    /// product (`12 + 22.26 + 12 + 52.74 + 32 + 65.91 + 12 = 208.91`), so the
-    /// pill is never wider than it has already shipped.
+    /// `250` whatever is running, whatever is waiting, however many rows are
+    /// open and however long the reading is.
     ///
     /// **The two forms are inverses, and this is the half that cannot move its
     /// ends.** The notched bar has a fixed middle and moving ends: it is pinned
@@ -1111,14 +1116,12 @@ enum PanelMetrics {
         status == .disconnected ? disconnectedPillWidth : pillBodyWidth
     }
 
-    /// `209`, the width above.
+    /// `250`, the width above.
     ///
     /// Stated rather than composed, because it is the *sum* that is the
-    /// contract here and the middle is what absorbs everything else: composing
-    /// it upwards from a leading group measured at `33.83` would land on
-    /// `209.03` and ceil to `210`, which is this form growing a point for a
-    /// hundredth of one. See ``pillMiddleWidth(trailing:)``.
-    static let pillBodyWidth: CGFloat = 209
+    /// contract here and the middle is what absorbs everything else. See
+    /// ``pillMiddleWidth(trailing:)``.
+    static let pillBodyWidth: CGFloat = 250
 
     /// `41` — the mark, and a margin either side of it.
     static var disconnectedPillWidth: CGFloat {
@@ -1127,11 +1130,11 @@ enum PanelMetrics {
 
     /// The middle, which is a subtraction and nothing else.
     ///
-    /// No cap, no reservation, no constant of its own: it is whatever `209`
+    /// No cap, no reservation, no constant of its own: it is whatever `250`
     /// has left once the two anchored ends and their clearances are taken out,
     /// so a reading gaining a digit narrows the name by exactly that digit and
-    /// moves nothing else on the surface. `135.2` with nothing being timed,
-    /// `99.2` at `1:23`, `71.2` at `10:00:00`.
+    /// moves nothing else on the surface. `176.2` with nothing being timed,
+    /// `140.2` at `1:23`, `112.2` at `10:00:00`.
     static func pillMiddleWidth(trailing: CompactTrailingReading) -> CGFloat {
         max(
             0,
@@ -1162,27 +1165,16 @@ enum PanelMetrics {
         compactHeight + expandedContentHeight
     }
 
-    /// What the list asks for, before the viewport caps it.
+    /// What the live list asks for, before its own viewport caps it.
     ///
-    /// Live rows, then the seam if anything has left, then the rows below it
-    /// while somebody has them open (`expanded-panel-v2.md` §2.1). **A folded
-    /// queue still costs its seam**, because the seam is the thing that says
-    /// there is one; a queue with no members costs nothing at all, because a
-    /// zero is never drawn anywhere on this surface.
-    ///
-    /// **With nothing live the list leads with its own apology, queue or no
-    /// queue**, and that is the `48` in place of the rows. The queue was read
-    /// for a while as the answer to an empty list — a seam and five things you
-    /// last did instead of a sentence saying there is nothing — and it is not:
-    /// what has left is not what is running, and the one line that says nothing
-    /// is running has to be sayable while the memory of the morning is still on
-    /// screen. So the apology is drawn for an empty *live list* again, and the
-    /// queue is drawn under it.
+    /// **With nothing live the list draws its own apology**, `48` in place of
+    /// the rows: what has left is not what is running, and the one line that
+    /// says nothing is running has to be sayable on its own — the Recent queue
+    /// is a section of its own now and no longer what an empty live list falls
+    /// back on.
     static func sessionListContentHeight(
         liveRowCount: Int,
-        openRowHeight: CGFloat? = nil,
-        retiredRowCount: Int = 0,
-        isRecentExpanded: Bool = false
+        openRowHeight: CGFloat? = nil
     ) -> CGFloat {
         // One of the live rows may be open, and an open row is taller than the
         // `80` every row is billed at above. It is added as a difference rather
@@ -1191,37 +1183,50 @@ enum PanelMetrics {
         let opened = liveRowCount > 0 && openRowHeight != nil
             ? (openRowHeight ?? sessionRowHeight) - sessionRowHeight
             : 0
-        let live = liveRowCount > 0
+        return liveRowCount > 0
             ? sessionRowHeight * CGFloat(liveRowCount) + opened
             : thinExpandedBodyHeight
-        let retired = max(retiredRowCount, 0)
-        guard retired > 0 else { return live }
-        return live
-            + recentSeamHeight
-            + (isRecentExpanded ? retiredRowHeight * CGFloat(retired) : 0)
     }
 
-    /// That content, capped at what the viewport draws.
-    ///
-    /// **Everything past the cap scrolls, and that is not a new mechanic** — a
-    /// fourth live row already scrolled here. It is what gives the queue its
-    /// fold for nothing (§2.4 rule 02): with nothing live, `48 + 32 + 4 × 40`
-    /// is the cap exactly and a fifth retired row scrolls.
+    /// That content, capped at what the live viewport draws: at least one
+    /// row's worth (the apology, with nothing live), at most three.
     static func sessionViewportHeight(
         liveRowCount: Int,
-        openRowHeight: CGFloat? = nil,
-        retiredRowCount: Int = 0,
-        isRecentExpanded: Bool = false
+        openRowHeight: CGFloat? = nil
     ) -> CGFloat {
         min(
             sessionListContentHeight(
                 liveRowCount: liveRowCount,
-                openRowHeight: openRowHeight,
-                retiredRowCount: retiredRowCount,
-                isRecentExpanded: isRecentExpanded
+                openRowHeight: openRowHeight
             ),
             sessionViewportCap
         )
+    }
+
+    /// What the Recent queue's own list asks for, before its viewport caps it.
+    /// Nothing while there are no retired rows — a seam is drawn only once
+    /// there is something behind it.
+    static func recentContentHeight(retiredRowCount: Int) -> CGFloat {
+        retiredRowHeight * CGFloat(max(retiredRowCount, 0))
+    }
+
+    /// That content, capped at what the Recent viewport draws: past five
+    /// retired rows, the queue scrolls on its own rather than growing the
+    /// panel further.
+    static func recentViewportHeight(retiredRowCount: Int) -> CGFloat {
+        min(recentContentHeight(retiredRowCount: retiredRowCount), recentViewportCap)
+    }
+
+    /// The Recent section as a whole: nothing while the queue is empty, its
+    /// seam alone while folded, the seam and its own capped viewport while
+    /// open.
+    static func recentSectionHeight(
+        retiredRowCount: Int,
+        isRecentExpanded: Bool
+    ) -> CGFloat {
+        guard retiredRowCount > 0 else { return 0 }
+        return recentSeamHeight
+            + (isRecentExpanded ? recentViewportHeight(retiredRowCount: retiredRowCount) : 0)
     }
 
     // MARK: - The open row
@@ -1261,7 +1266,7 @@ enum PanelMetrics {
 
     /// The width an open row's body is drawn at.
     ///
-    /// `520 − 2 × 12`, which is also `508 − 2 × 6`: the row block inside the
+    /// `700 − 2 × 12`, which is also `688 − 2 × 6`: the row block inside the
     /// list's own scroller, minus the row's own padding. It is a derived figure
     /// and has been one since V1 — the panel does not move at any agent or
     /// product count (`colour-v2.md` §3).
@@ -1300,6 +1305,11 @@ enum PanelMetrics {
         openRowFixedHeight + min(max(bodyHeight, 0), requestBodyMaximumHeight)
     }
 
+    /// The three sections stacked, none of them capping the others: the live
+    /// viewport (at most three rows), the Recent section (nothing, a seam, or
+    /// a seam and up to five rows of its own), and the footer (uncapped —
+    /// however tall the quota table needs to be). There is no longer a ceiling
+    /// over the sum of the three; each answers only to its own cap.
     static func expandedContentHeight(
         liveRowCount: Int,
         openRowHeight: CGFloat? = nil,
@@ -1307,18 +1317,12 @@ enum PanelMetrics {
         isRecentExpanded: Bool = false,
         footerHeight: CGFloat = restingFooterHeight
     ) -> CGFloat {
-        // **The viewport is the whole of it, and there is no empty case left to
-        // special-case.** This used to fall back to ``thinExpandedBodyHeight``
-        // whenever the list asked for nothing, because the apology was drawn
-        // outside the list; the apology is the list's first line now, so an
-        // empty list already asks for its `48` and the two states differ only
-        // by whether a seam follows it (§4).
-        return sessionViewportHeight(
-            liveRowCount: liveRowCount,
-            openRowHeight: openRowHeight,
-            retiredRowCount: retiredRowCount,
-            isRecentExpanded: isRecentExpanded
-        ) + footerHeight
+        sessionViewportHeight(liveRowCount: liveRowCount, openRowHeight: openRowHeight)
+            + recentSectionHeight(
+                retiredRowCount: retiredRowCount,
+                isRecentExpanded: isRecentExpanded
+            )
+            + footerHeight
     }
 
     /// The expanded panel's width, which answers to a **count of working
@@ -1339,12 +1343,12 @@ enum PanelMetrics {
     /// nil while expanded), so the leading side can only be widened by widening
     /// both. The trailing side wants a gear and no more, and never binds here.
     ///
-    /// The branch is `520` at every cut-out this product meets, and now at
+    /// The branch is `700` at every cut-out this product meets, and now at
     /// every agent count too: a side asks `53.8`, so the baseline is passed
-    /// only where the cut-out is wider than `520 − 107.6 = 412.4`, twice the
-    /// widest cut-out on any Mac. `expandedNotchClearance` therefore stays as
-    /// the guard that this band clears the hardware and stops being the rule
-    /// that decides a width.
+    /// only where the cut-out is wider than `700 − 107.6 = 592.4`, well past
+    /// the widest cut-out on any Mac. `expandedNotchClearance` therefore stays
+    /// as the guard that this band clears the hardware and stops being the
+    /// rule that decides a width.
     ///
     /// **It answers to nothing but the cut-out.** The working-agent count left
     /// with the decomposition (`colour-v2.md` §3), which was the only term on
@@ -1711,7 +1715,7 @@ final class MonitorStore: ObservableObject {
     /// for the whole of every turn — the reservation both wings spent V1 and V2
     /// getting rid of (`compact-view-v2.md` §5.2).
     ///
-    /// Off, the middle draws nothing and **the pill holds its `209` rather than
+    /// Off, the middle draws nothing and **the pill holds its `250` rather than
     /// shrinking**: its two ends are anchored, so a width that answered to this
     /// preference would move the mark and the reading with it, which is the one
     /// thing this form is arranged not to do.

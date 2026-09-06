@@ -671,14 +671,17 @@ struct CollapsedBarAnatomy: View {
 /// opens the rest, so the room the split bought is now spent on drawing the
 /// panel at rest rather than on a third of it.
 ///
-/// The scale is for the card rather than for the height: at `520` in a `532`
-/// card the panel meets both edges and its shoulders overhang the card's own
-/// padding, which reads as a layout fault instead of a specimen on a page.
-/// `0.84` leaves a margin either side and keeps the row copy near `11` pt.
+/// The scale is for the card rather than for the height: at `700` in a `532`
+/// card the panel would meet both edges and its shoulders overhang the
+/// card's own padding, which reads as a layout fault instead of a specimen
+/// on a page. `0.624` holds the drawing at the same `436.8` pt it was drawn
+/// at before the panel widened, so the margin either side is unchanged; the
+/// row copy is smaller for it, `~8.1` pt rather than the `11` pt the
+/// original `520`-pt baseline and `0.84` gave.
 struct ExpandedPanelAnatomy: View {
     private let store = NotchSpecimen.hovered
 
-    private static let scale: CGFloat = 0.84
+    private static let scale: CGFloat = 0.624
 
     var body: some View {
         let scale = Self.scale
