@@ -4072,6 +4072,22 @@ final class MonitorStore: ObservableObject {
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
     }
 
+    /// Show a completed draft in a non-watching tutorial store. No action is
+    /// dispatched and a store connected to a product refuses the fixture.
+    func stageSpecimenAnswer(selectedOptions: Set<Int>, draft: String = "") {
+        guard services.isEmpty, let openRowID,
+              let request = openSession?.request,
+              let question = request.askedQuestions.first else { return }
+        var progress = AnswerProgress(requestID: request.id)
+        let valid = question.options.map(\.id).filter { selectedOptions.contains($0) }
+        progress.ticked = Set(question.allowsSeveralAnswers ? valid : Array(valid.prefix(1)))
+        progress.draft = draft
+        answerProgress[openRowID] = progress
+        answerDraftGeneration &+= 1
+        answerRevision &+= 1
+        refreshAnswerGround()
+    }
+
     /// Put a drawing's Recent queue in front of it, at ages of its own
     /// choosing. Refused on a watching store, on ``restageSpecimen(_:)``'s
     /// terms and for its reason.

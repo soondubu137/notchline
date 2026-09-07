@@ -563,6 +563,8 @@ struct NotchlineTests {
             ("the panel", ExpandedPanelAnatomy().pins, ExpandedPanelAnatomy().specimenSize),
             ("a permission", OpenCommandAnatomy().pins, OpenCommandAnatomy().specimenSize),
             ("a question", OpenQuestionAnatomy().pins, OpenQuestionAnatomy().specimenSize),
+            ("multiple choice", OpenQuestionAnatomy(lesson: .multipleChoice).pins, OpenQuestionAnatomy(lesson: .multipleChoice).specimenSize),
+            ("typed answer", OpenQuestionAnatomy(lesson: .typedAnswer).pins, OpenQuestionAnatomy(lesson: .typedAnswer).specimenSize),
             ("the queue", RecentQueueAnatomy().pins, RecentQueueAnatomy().specimenSize)
         ]
 
@@ -646,15 +648,25 @@ struct NotchlineTests {
         }
     }
 
+    @Test @MainActor
+    func tutorialDraftStagingCannotChangeAWatchingStoresAnswer() async {
+        let (store, service, row) = answeringStore(request: questionSet(count: 1), status: .inputNeeded)
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.answerDraftChanged(to: "My actual answer")
+        store.stageSpecimenAnswer(selectedOptions: [0], draft: "Tutorial words")
+        #expect(store.answerDraft == "My actual answer")
+        #expect(!store.isOptionTicked(0))
+        #expect(await service.answersTaken().isEmpty)
+    }
+
     /// Page three's three specimens: the two shapes a request arrives in, and
     /// a queue that is a sequence rather than three copies of one moment.
     ///
     /// **The request shapes decide what the answer row draws**, which is the
     /// whole reason both are on the page: a permission has a refusal and a
     /// question does not, so one draws three objects at its foot and the other
-    /// two. And the option numerals are the payload's own `enumerated()`
-    /// positions -- `OptionRow` draws `id + 1`, so a fixture numbering them
-    /// from one draws a list beginning at `2`, which is exactly what it did.
+    /// two. The choices retain the option identities assigned by the decoder.
     @Test @MainActor
     func theFirstRunOpenedSpecimensDrawBothRequestShapesAndAQueueOfAges() throws {
         let opened = NotchSpecimen.openedSpecimens()

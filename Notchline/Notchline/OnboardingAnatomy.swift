@@ -302,12 +302,12 @@ enum NotchSpecimen {
 
     // MARK: - Page three: the three things that open
 
-    /// The three drawings page three teaches from, and the instant they share.
+    /// The page-three examples and the instant they share.
     ///
     /// **Built on first use, like the other two and one page later.** Page two
     /// composes no store until it is reached; these compose none until page
     /// three is, so a first run that connects and stops has built nothing at
-    /// all, and one that reads and stops has built two stores rather than five.
+    /// all. The question variants remain isolated from one another.
     /// Optional rather than a lazy `static var` because ``restage()`` has to be
     /// able to ask whether they exist without bringing them into being.
     private static var opened: Opened?
@@ -318,6 +318,8 @@ enum NotchSpecimen {
         let command: MonitorStore
         /// A question with options, open.
         let question: MonitorStore
+        let multipleChoice: MonitorStore
+        let typedAnswer: MonitorStore
         /// The Recent queue, open, with a sequence of ages behind it.
         let queue: MonitorStore
     }
@@ -334,15 +336,22 @@ enum NotchSpecimen {
         let command = makeStore(isExpanded: true, at: now, sessions: [approvalRow(at: now)])
         command.toggleOpenRow(approvalRow(at: now))
 
-        let asked = questionRow(at: now)
-        let question = makeStore(isExpanded: true, at: now, sessions: [asked])
-        question.toggleOpenRow(asked)
+        func questionStore(multiple: Bool, draft: String = "") -> MonitorStore {
+            let asked = questionRow(at: now, multiple: multiple)
+            let store = makeStore(isExpanded: true, at: now, sessions: [asked])
+            store.toggleOpenRow(asked)
+            store.stageSpecimenAnswer(selectedOptions: multiple ? [0, 1] : [0], draft: draft)
+            return store
+        }
+        let question = questionStore(multiple: false)
+        let multipleChoice = questionStore(multiple: true)
+        let typedAnswer = questionStore(multiple: true, draft: "Use a compact summary with optional details.")
 
         let queue = makeStore(isExpanded: true, at: now)
         queue.isRecentExpanded = true
         queue.stageSpecimenQueue(departedQueue(at: now))
 
-        return Opened(at: now, command: command, question: question, queue: queue)
+        return Opened(at: now, command: command, question: question, multipleChoice: multipleChoice, typedAnswer: typedAnswer, queue: queue)
     }
 
     /// The queue page three opens: three rows that left at three different
@@ -376,20 +385,16 @@ enum NotchSpecimen {
         }
     }
 
-    /// The question page three opens.
-    ///
-    /// One question rather than a set, because the set's `2/3` counter is a
-    /// second thing to explain and the shape of the form is what this teaches.
-    /// Three options with a word of description each, which is what the option
-    /// row draws: a selector, the product's own label, and its own gloss.
-    private static func questionRow(at now: Date) -> MonitoredSession {
+    /// The same example in both selection modes, with a description long
+    /// enough to expose the real Show more control.
+    private static func questionRow(at now: Date, multiple: Bool = false) -> MonitoredSession {
         MonitoredSession(
             agent: .claudeCode,
             threadID: "specimen-claude-question",
             turnID: "specimen-claude-question-turn",
             projectName: "notchline",
-            title: "Name the control that opens the quota table",
-            preview: "Three names fit; the caption is written either way.",
+            title: "Improve the quota summary",
+            preview: nil,
             status: .inputNeeded,
             startedAt: now.addingTimeInterval(-38),
             request: AgentRequest(
@@ -397,28 +402,15 @@ enum NotchSpecimen {
                 toolName: "AskUserQuestion",
                 form: .questions([
                     AgentQuestion(
-                        // IDs match the positions assigned by the payload decoder.
                         id: 0,
-                        header: "Naming",
-                        text: "Which name should the footer’s control take?",
+                        header: "Summary",
+                        text: multiple ? "Which details should the summary include?" : "Which detail should the summary emphasise?",
                         options: [
-                            AgentQuestionOption(
-                                id: 0,
-                                label: "Rate limits",
-                                description: "what the windows behind it are"
-                            ),
-                            AgentQuestionOption(
-                                id: 1,
-                                label: "Windows",
-                                description: "what each product calls them"
-                            ),
-                            AgentQuestionOption(
-                                id: 2,
-                                label: "Quota",
-                                description: "what this app calls the whole of it"
-                            )
+                            AgentQuestionOption(id: 0, label: "Usage by product", description: "Show the usage reported by each product, with its own window names and reset times. Keep the totals easy to compare, and make the complete breakdown available without adding every detail to the compact summary."),
+                            AgentQuestionOption(id: 1, label: "Time until reset", description: "Show when each usage window resets."),
+                            AgentQuestionOption(id: 2, label: "Today's total", description: "Keep the summary focused on today's usage.")
                         ],
-                        allowsSeveralAnswers: false
+                        allowsSeveralAnswers: multiple
                     )
                 ]),
                 replyTicket: 0
@@ -1358,7 +1350,15 @@ struct OpenCommandAnatomy: View {
 
 /// A question with options, open: the other shape a product asks in.
 struct OpenQuestionAnatomy: View {
-    private let store = NotchSpecimen.openedSpecimens().question
+    var lesson: QuestionLesson = .singleChoice
+    private var store: MonitorStore {
+        let examples = NotchSpecimen.openedSpecimens()
+        return switch lesson {
+        case .singleChoice: examples.question
+        case .multipleChoice: examples.multipleChoice
+        case .typedAnswer: examples.typedAnswer
+        }
+    }
 
     /// How tall the open row is, which the store composes from the request's
     /// own layout.
@@ -1376,11 +1376,12 @@ struct OpenQuestionAnatomy: View {
                 OpenRow(session: session)
             }
         }
+        // Each example has its own draft despite sharing a specimen Thread ID.
+        // Recreate the native answer field when switching examples.
+        .id(lesson)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            "A question with options, open on the notch: the agent's question, "
-                + "then its own options beneath it, then a field for an "
-                + "answer in words and Send, which holds the white ground."
+            "\(lesson.rawValue). \(lesson.explanation) The example has a long description with Show more, an answer field and Send."
         )
     }
 
@@ -1420,14 +1421,14 @@ struct OpenQuestionAnatomy: View {
                         spread: options.spread * scale,
                         foot: 10
                     ),
-                    label: "Its own answers"
+                    label: lesson == .typedAnswer ? "Choices set aside" : "Select, then Send"
                 )
             )
         }
 
         if let field = centres?.field {
             pins.append(
-                below(3, field, "Or answer in words", scale: scale, body: body)
+                below(3, field, lesson == .typedAnswer ? "Your words take priority" : "Or type your answer", scale: scale, body: body)
             )
         }
         if let affirmative = centres?.affirmative {

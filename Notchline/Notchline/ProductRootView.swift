@@ -28,9 +28,34 @@ enum OnboardingLayout {
     static let cardWidth = width - horizontalPadding * 2
 }
 
+enum AnswerLesson: String, CaseIterable {
+    case permission = "Permissions"
+    case question = "Questions"
+    case recent = "Recent"
+}
+
+enum QuestionLesson: String, CaseIterable {
+    case singleChoice = "Single choice"
+    case multipleChoice = "Multiple choice"
+    case typedAnswer = "Your own answer"
+
+    var explanation: String {
+        switch self {
+        case .singleChoice:
+            "Choose one option, then click Send. Selecting an option does not submit it."
+        case .multipleChoice:
+            "Tick the options you want, then click Send. Click a ticked option again to remove it."
+        case .typedAnswer:
+            "Type in the field beside Send. Your words replace every selected option, in both single and multiple choice."
+        }
+    }
+}
+
 struct OnboardingView: View {
     @EnvironmentObject private var store: MonitorStore
     @State private var page: Page = .connect
+    @State private var answerLesson: AnswerLesson
+    @State private var questionLesson: QuestionLesson
 
     enum Page: CaseIterable {
         case connect
@@ -38,8 +63,10 @@ struct OnboardingView: View {
         case answer
     }
 
-    init(page: Page = .connect) {
+    init(page: Page = .connect, answerLesson: AnswerLesson = .permission, questionLesson: QuestionLesson = .singleChoice) {
         _page = State(initialValue: page)
+        _answerLesson = State(initialValue: answerLesson)
+        _questionLesson = State(initialValue: questionLesson)
     }
 
     var body: some View {
@@ -179,50 +206,73 @@ struct OnboardingView: View {
         .task { await NotchSpecimen.cycle() }
     }
 
-    /// Page three: the three things on this surface that open, and what is
-    /// behind each of them.
-    ///
-    /// **One group of three blocks, which is page two's shape.** They belong
-    /// together for a reason plainer than the page: a mark opens the request it
-    /// is holding, and the seam opens the rows that have left — between them,
-    /// every control on this surface that does anything is on this page.
-    ///
-    /// **Two request shapes, because the answer row is not one shape.** A
-    /// permission has something to refuse, so it draws a field, `Deny` and
-    /// `Approve`; a question has no refusal at all, because the text *is* the
-    /// answer, so the field takes the space and one `Send` stands where two
-    /// would (`answer-in-notch.md` §7). A user shown one of them and then
-    /// handed the other would meet a row that had changed shape for no reason
-    /// they had been told about.
-    ///
-    /// The specimens are rows on the panel's own ground rather than whole
-    /// panels: everything named here is inside the row block, and the header
-    /// and the footer around it are page two's (`OnboardingAnatomy.swift`).
+    /// One lesson at a time keeps each example and its explanation together.
+    /// These controls browse drawings; they never send an answer to a product.
     private var answerGroup: some View {
-        SettingsGroup(header: "Answering and Recent Sessions") {
-            OpenCommandAnatomy()
-                .padding(.vertical, 14)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Answering on the notch")
+                .font(.system(size: 20, weight: .semibold))
+            Text("Open a request from its mark. Read it here, then decide what to send.")
+                .font(.system(size: 13))
+                .foregroundStyle(MacOSWindowColor.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
 
-            SettingsSeparator()
+            Picker("Tutorial topic", selection: $answerLesson) {
+                ForEach(AnswerLesson.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
-            OpenQuestionAnatomy()
-                .padding(.vertical, 14)
+            switch answerLesson {
+            case .permission:
+                SettingsGroup(header: "Read the request before approving") {
+                    OpenCommandAnatomy().padding(.vertical, 18)
+                } footnote: {
+                    SettingsFootnote("Commands keep their monospaced text box. Other arguments appear as labelled fields. Scroll longer requests to read every detail.")
+                }
+                lessonNote("Approve or suggest a change", "Click Approve to allow the request. To refuse with instructions, type beside Deny and then click Deny or press Return.")
+            case .question:
+                Picker("Question example", selection: $questionLesson) {
+                    ForEach(QuestionLesson.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                SettingsGroup(header: questionLesson.rawValue) {
+                    OpenQuestionAnatomy(lesson: questionLesson).padding(.vertical, 18)
+                } footnote: {
+                    SettingsFootnote(questionLesson.explanation)
+                }
+                if questionLesson == .typedAnswer {
+                    lessonNote("Only your words are sent", "The options lose their selection highlight while the field contains text. Clear the field to use your earlier choices again.")
+                } else {
+                    lessonNote("Read more without choosing", "Show more expands a long description. It does not select the option or send an answer. Scroll the question to keep reading; the answer field stays at the bottom.")
+                }
+            case .recent:
+                SettingsGroup(header: "Find a Thread after it leaves the list") {
+                    RecentQueueAnatomy().padding(.vertical, 18)
+                } footnote: {
+                    SettingsFootnote("Open Recent to revisit Threads that have left the live list. Each row shows when it left and opens the Thread in its product.")
+                }
+                lessonNote("Kept for five hours", "A finished Turn leaves the live list when its product records it as read. The Recent queue keeps a route back for five hours.")
+            }
 
-            SettingsSeparator()
-
-            RecentQueueAnatomy()
-                .padding(.vertical, 14)
-        } footnote: {
-            SettingsFootnote(
-                "A row opens where the product sent something to show; where it "
-                    + "did not, the mark says Read and takes you there instead. "
-                    + "A finished turn leaves the list when its product records "
-                    + "it as read, and stays under the seam for five hours."
-            )
+            Text("These are examples. If a request cannot be answered here, the row offers a way to answer in its product.")
+                .font(.system(size: 12))
+                .foregroundStyle(MacOSWindowColor.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        // The queue reads in ages, so it runs on page two's clock and is
-        // re-staged on the same wrap. Cancelled with the view.
         .task { await NotchSpecimen.cycle() }
+    }
+
+    private func lessonNote(_ title: String, _ explanation: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 13, weight: .semibold))
+            Text(explanation)
+                .font(.system(size: 13))
+                .foregroundStyle(MacOSWindowColor.secondaryText)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
