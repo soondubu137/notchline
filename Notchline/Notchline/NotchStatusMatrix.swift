@@ -185,7 +185,7 @@ enum NotchPalette {
         /// rest, for the same reason it failed.** A row washed at `0.08` read
         /// as not answering the pointer, which is exactly what a resting
         /// control must not claim: it has to say *this is an object* and
-        /// nothing more, and leave answering to the step above it.
+        /// nothing more. Request buttons now deepen this wash on hover.
         ///
         /// Without it a quiet answer is bare text beside the field, which is
         /// what `Deny` was — a caption that happened to be clickable. The
@@ -199,6 +199,8 @@ enum NotchPalette {
         /// each carrying a tile would read as stripes, so ``OptionRow`` and the
         /// session rows keep their bare ground and answer with the hover alone.
         static let controlRestFillOpacity: Double = 0.08
+        /// Quiet request buttons deepen their existing wash under the pointer.
+        static let controlHoverFillOpacity: Double = 0.04
 
         /// Ease-in-out both ways -- the same gentle acceleration and
         /// deceleration whether the emphasis is arriving or leaving -- and
@@ -237,20 +239,7 @@ enum NotchPalette {
     /// wallpaper that was merely dim rather than black, and undimmed it read
     /// as a mark. This is the midpoint of those two.
     private static let edgeDimming = 0.75
-    /// `text/notch-spotlight` — white, and it is the **pointer's** value now
-    /// rather than the surface's own.
-    ///
-    /// It used to fill every ground that wanted a person: the waiting row's
-    /// mark, the subagent badge behind it, and the ground `⏎` sits on inside an
-    /// open row. All of those are ``brightGround`` now — the app's own ink —
-    /// and the one filled area still drawn in white is the mark with the
-    /// pointer on it. So the brightest value this surface has says *you are
-    /// touching this* instead of *this exists*, which is the only thing white
-    /// can say that the ink cannot.
-    ///
-    /// The searchlight sweeping a row's text keeps it too, as
-    /// ``spotlightDrawingColor``: that is a glyph brightening, not a filled
-    /// area, and nothing on this surface reads the two against each other.
+    /// White glyph emphasis. Request controls keep their theme hue on hover.
     static let spotlight = Color.white
 
     /// The one bright ground this surface fills, and the ink drawn on it.
@@ -268,6 +257,15 @@ enum NotchPalette {
     /// pressed grows and travels down to the answer row (`answer-in-notch.md`
     /// §3.1), and a ground that changed colour on the way would be two.
     static var brightGround: Color { themeInk.on }
+    /// Opaque, so hovering a row cannot change the button's deepened colour.
+    /// Scaling all channels equally preserves the theme hue.
+    static var requestHoverGround: Color {
+        Color(
+            red: themeInk.onRed * 0.85,
+            green: themeInk.onGreen * 0.85,
+            blue: themeInk.onBlue * 0.85
+        )
+    }
     /// What is drawn on ``brightGround``: the same ink's unlit end, `#1B1F1C`,
     /// at `13.3 : 1`.
     ///
@@ -281,13 +279,13 @@ enum NotchPalette {
     /// **Eight steps of ``RowEmphasis/controlRestFillOpacity``, and the one
     /// weight on this row that contrast chose rather than the ladder.** It was
     /// `0.45`, where ``onBrightGround`` on it is `4.0 : 1` — under AA for the
-    /// `13` pt medium label it carries, for as long as the ground takes to
+    /// `13` pt light label it carries, for as long as the ground takes to
     /// travel. This is the first weight up the ladder that clears it, at
     /// `6.4 : 1`, and it still sits about `25` L∗ below the landed ground, so
     /// it says *not yet* exactly as plainly as the dimmer value did.
     ///
     /// A ground at this weight does not answer the pointer either — see
-    /// ``spotlight``, which is what the landed ground takes and this one must
+    /// ``requestHoverGround``, which is what the landed ground takes and this one must
     /// not, because it is not yet a thing a click can take.
     static let arrivingGroundOpacity: Double = 0.64
     /// Session title — the one element that stays bright.

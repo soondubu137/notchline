@@ -1427,7 +1427,7 @@ private struct OpenRow: View {
                 store.open(session)
             } label: {
                 Text(destination)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(Font(PanelMetrics.requestControlFont))
                     .foregroundStyle(
                         isDestinationHovered
                             ? NotchPalette.themeInk.on
@@ -1443,7 +1443,7 @@ private struct OpenRow: View {
                         .fill(
                             NotchPalette.themeInk.on.opacity(
                                 isDestinationHovered
-                                    ? NotchPalette.RowEmphasis.sessionHoverFillOpacity
+                                    ? NotchPalette.RowEmphasis.controlHoverFillOpacity
                                     : NotchPalette.RowEmphasis.controlRestFillOpacity
                             )
                         )
@@ -1579,8 +1579,8 @@ private struct AnswerRow: View {
 /// §6.6, in three clauses. **A click takes the answer it lands on**, whether or
 /// not the ground is there — there is no select-then-confirm here, because the
 /// confirm would be a second control saying what the first already said.
-/// **Hover moves nothing**: an answer under the pointer takes the list's own
-/// hover fill and the ground stays where the typing left it, because the ground
+/// **Hover moves nothing**: an answer deepens its own fill under the pointer,
+/// and the ground stays where the typing left it, because the ground
 /// is a statement about `⏎` and a pointer crossing an answer is not an act.
 /// And the width is the same either way, so nothing moves as the ground
 /// crosses.
@@ -1595,7 +1595,7 @@ private struct AnswerControl: View {
 
     var body: some View {
         Text(label)
-            .font(.system(size: 13, weight: .medium))
+            .font(Font(PanelMetrics.requestControlFont))
             .foregroundStyle(
                 holdsGround
                     ? NotchPalette.onBrightGround
@@ -1631,7 +1631,7 @@ private struct AnswerControl: View {
     }
 
     /// ``NotchPalette/brightGround`` while it is what `⏎` does; the list's own
-    /// hover fill under the pointer; nothing otherwise.
+    /// deepened theme fill under the pointer; the quiet button wash otherwise.
     ///
     /// **The same ink as the mark that opened this row, and it has to be**: the
     /// ground the pointer pressed on the caption line grows and travels down
@@ -1646,27 +1646,24 @@ private struct AnswerControl: View {
     ///
     /// **The answer without the ground has a body of its own now**, one step
     /// below the wash the row itself takes under the pointer, and one more
-    /// step up while the pointer is on it — see
+    /// step down while the pointer is on it — see
     /// ``NotchPalette/RowEmphasis/controlRestFillOpacity``. It used to be bare
     /// text on a white wash borrowed from nowhere; both weights are the app's
     /// own ink, so a control and the row under it climb one ladder.
     ///
-    /// **At the top of that ladder there is no step left, so the ground under
-    /// the pointer takes ``NotchPalette/spotlight``.** That is not an
-    /// exception: white on this surface already means *the pointer is on a
-    /// filled area*, which is what the waiting mark takes, and it is the only
-    /// thing white can say that the ink cannot.
+    /// Filled and quiet buttons both deepen their existing theme colour on
+    /// hover. The ground stays on the answer chosen by the person's typing.
     private var ground: Color {
         guard !holdsGround else {
             guard store.isAffirmativeArmed else {
                 return NotchPalette.brightGround
                     .opacity(NotchPalette.arrivingGroundOpacity)
             }
-            return isHovered ? NotchPalette.spotlight : NotchPalette.brightGround
+            return isHovered ? NotchPalette.requestHoverGround : NotchPalette.brightGround
         }
         return NotchPalette.themeInk.on.opacity(
             isHovered
-                ? NotchPalette.RowEmphasis.sessionHoverFillOpacity
+                ? NotchPalette.RowEmphasis.controlHoverFillOpacity
                 : NotchPalette.RowEmphasis.controlRestFillOpacity
         )
     }
@@ -2246,7 +2243,7 @@ private struct OptionRow: View {
         HStack(spacing: 0) {
             handle
             Text(option.label)
-                .font(.system(size: 13, weight: .medium))
+                .font(Font(PanelMetrics.requestControlFont))
                 .foregroundStyle(
                     holdsGround
                         ? NotchPalette.onBrightGround
@@ -2345,7 +2342,7 @@ private struct OptionRow: View {
                 return NotchPalette.brightGround
                     .opacity(NotchPalette.arrivingGroundOpacity)
             }
-            return isHovered ? NotchPalette.spotlight : NotchPalette.brightGround
+            return isHovered ? NotchPalette.requestHoverGround : NotchPalette.brightGround
         }
         guard isHovered, isAnswerable else { return .clear }
         return NotchPalette.themeInk.on
@@ -2819,8 +2816,7 @@ private struct SessionStatusControl: View {
     /// reserved for the longest of four strings, which drew a `113 × 16` slab
     /// of pure white under a phrase naming a state. It is ``AnswerControl``'s
     /// own height, corner, padding and weight now, over one verb at one width,
-    /// and the ground is the app's own ink; the only pure white left on this
-    /// panel is this chip with the pointer on it. See
+    /// and the ground is the app's own ink, deepened under the pointer. See
     /// ``NotchPalette/brightGround``.
     private var waitingWord: some View {
         Text(word)
@@ -2896,16 +2892,9 @@ private struct SessionStatusControl: View {
         )
     }
 
-    /// The chip's ground: the app's ink, and white for as long as the pointer
-    /// is on it.
-    ///
-    /// The two are `#DEE8E0` and `#FFFFFF` — nine points of lightness, which is
-    /// the right size for this. The chip is not being told apart from anything;
-    /// it is confirming that the pointer found the one object on the row whose
-    /// click stays here, and the row's own wash arrives underneath it in the
-    /// same `130 ms`.
+    /// The app's ink, deepened in the same hue while the pointer is on it.
     private var ground: Color {
-        isMarkHovered ? NotchPalette.spotlight : NotchPalette.brightGround
+        isMarkHovered ? NotchPalette.requestHoverGround : NotchPalette.brightGround
     }
 
     /// The reading, on the ground its state gives it.

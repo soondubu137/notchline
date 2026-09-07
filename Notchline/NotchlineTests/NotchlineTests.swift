@@ -27284,10 +27284,13 @@ for line in sys.stdin:
         #expect(PanelMetrics.waitingMarkHeight == PanelMetrics.answerRowHeight)
         // And the word is set like an answer's, which is the weight the
         // affirmative takes on this very ground -- `AnswerControl` draws `13`
-        // pt Medium, and a mark a step above it was one control drawn two ways.
+        // pt Light through the same font used to measure the mark.
         #expect(
-            PanelMetrics.waitingMarkFont
-                == NSFont.systemFont(ofSize: 13, weight: .medium)
+            PanelMetrics.waitingMarkFont == PanelMetrics.requestControlFont
+        )
+        #expect(
+            PanelMetrics.requestControlFont
+                == NSFont.systemFont(ofSize: 13, weight: .light)
         )
         // The one property that is deliberately *not* shared: an answer hugs
         // its word and the mark reserves the widest of its three, because the

@@ -814,25 +814,10 @@ enum PanelMetrics {
     /// What a ground adds to the reading it wraps.
     static var readingGroundWidthCost: CGFloat { readingGroundPadding * 2 }
 
-    /// The word on a waiting row's bright ground.
-    ///
-    /// Not the timer's monospaced-digit face: this draws a name rather than a
-    /// figure. ~~**Semibold rather than the Medium it was**, and that is a
-    /// correction for the ground under it rather than a change of emphasis:
-    /// dark glyphs on a light field read a weight lighter than light glyphs on
-    /// a dark one, so matching the perceived weight of the `13 pt` Medium title
-    /// beside it costs one step up.~~
-    ///
-    /// **Superseded — Medium, the same weight the answers take.** The
-    /// correction was sound about the effect and wrong about its scope: the
-    /// affirmative this mark grows into (§3.1) sits on the *same*
-    /// ``NotchPalette/brightGround`` with the *same*
-    /// ``NotchPalette/onBrightGround`` ink, and it was never stepped up. So the
-    /// weight was not a correction applied to a light field, it was one control
-    /// drawn two ways — the divergence ``controlCornerRadius`` had already been
-    /// pulled out of. If dark-on-light really does want a step, it wants it in
-    /// both places and belongs to the ground rather than to the mark.
-    static let waitingMarkFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    /// One light face for request buttons, including the waiting mark and
+    /// destination control. Measurement and drawing share the same font.
+    static let requestControlFont = NSFont.systemFont(ofSize: 13, weight: .light)
+    static let waitingMarkFont = requestControlFont
 
     /// The mark is a control, so it is built like one rather than like the
     /// readings it shares the slot with.
