@@ -3121,8 +3121,9 @@ final class MonitorStore: ObservableObject {
         let wasTyped = questionUsesTypedAnswer
         answerProgress[openRowID, default: AnswerProgress()].draft = text
         refreshAnswerGround()
-        // Only the empty/non-empty boundary changes the option treatment and
-        // Send availability. AppKit continues to own per-character drawing.
+        // Only the empty/non-empty boundary changes whether `Send` is
+        // available on a question with nothing ticked. AppKit continues to own
+        // per-character drawing.
         if wasTyped != questionUsesTypedAnswer { answerRevision &+= 1 }
     }
 
@@ -3161,16 +3162,48 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// With an empty field, digits select a single-choice option by position.
-    /// Selection never submits. Otherwise the field receives the character;
-    /// multiple-choice questions keep digits available for typing.
+    /// The option at that position in the question showing, ticked as a click
+    /// ticks it. Selection never submits.
+    ///
+    /// **Neither an empty field nor a single choice is a condition on it any
+    /// more** (§9.2). Both were: the digit reached the store out of the field's
+    /// own `keyDown`, so it had to give the key back whenever the field might
+    /// want it — which is *any* multiple-choice question, and any question at
+    /// all once a character had been typed. The digit now arrives only when
+    /// nothing holds the caret, so there is nothing to give it back to, and it
+    /// ticks on `multiSelect` exactly as a click does (§5.5).
     @discardableResult
     func takeNumberedOption(_ number: Int) -> Bool {
-        guard answerDraft.isEmpty, openRowBody?.allowsSeveralAnswers == false else { return false }
+        guard !isAnswerInFlight, isAffirmativeArmed else { return false }
         let options = openRowBody?.options ?? []
         guard number >= 1, number <= options.count else { return false }
         takeAnswer(.option(options[number - 1].id))
         return true
+    }
+
+    /// A key the panel took because nothing in it holds the caret (§9.2).
+    ///
+    /// **The one place the unfocused keyboard is decided**, so the window that
+    /// receives the key decodes an `NSEvent` and nothing more: what each key
+    /// means is here, where it can be asked without one.
+    ///
+    /// - Returns: whether anything happened. The window does not act on it —
+    ///   every key stops at ``OverlayPanel/keyDown(with:)`` either way, because
+    ///   past there is a beep — but it is what makes the whole of this panel's
+    ///   keyboard assertable without an `NSEvent`.
+    @discardableResult
+    func takeKey(_ key: PanelKey) -> Bool {
+        guard !isAnswerInFlight, openSession?.request?.answerRow != nil else { return false }
+        switch key {
+        case .submit:
+            guard isAffirmativeArmed, canSubmitCurrentAnswer else { return false }
+            takeAnswer(answerGround)
+            return true
+        case let .option(number):
+            return takeNumberedOption(number)
+        case let .step(direction):
+            return takeQuestionStep(direction)
+        }
     }
 
     // MARK: - Walking a set backwards
@@ -3213,20 +3246,20 @@ final class MonitorStore: ObservableObject {
         drawQuestion(openQuestionIndex + 1)
     }
 
-    /// With an empty field, `←` and `→` walk the set instead of the caret.
+    /// `←` and `→` walk the set, while nothing holds the caret.
     ///
     /// **The digits' own rule, on the digits' own reasoning** (§9.2): a key is
-    /// offered to the panel only while the field has nothing in it for that key
-    /// to mean, and the moment anything is typed it belongs to the caret again.
-    /// So the arrow is the shortcut and ``goBackAQuestion()``'s control is what
-    /// always works — including in the one case the arrow gives up, a question
-    /// whose answer has been typed rather than chosen.
+    /// the field's for as long as the field has the caret, and the panel's when
+    /// it does not. It used to be conditioned on the field being *empty*
+    /// instead, which took `←` off a person editing what they had typed — the
+    /// one state in which an arrow most obviously means the caret.
     ///
-    /// - Returns: whether the panel took the key, which is what tells the field
-    ///   to keep it or to let it through.
+    /// `Back` remains the control that works whatever has focus; the arrow is a
+    /// shortcut over it and never the only way.
+    ///
+    /// - Returns: whether the set actually moved.
     @discardableResult
     func takeQuestionStep(_ direction: Int) -> Bool {
-        guard answerDraft.isEmpty else { return false }
         switch direction {
         case ..<0 where canGoBackAQuestion:
             goBackAQuestion()
@@ -3272,10 +3305,16 @@ final class MonitorStore: ObservableObject {
         !answerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Whether the question showing has an option ticked, which is what makes
+    /// the text in the field beside it moot (§5.4).
+    var questionHasASelection: Bool {
+        openRowBody?.options.contains { isOptionTicked($0.id) } ?? false
+    }
+
     var canSubmitCurrentAnswer: Bool {
         guard let request = openSession?.request else { return false }
         guard !request.askedQuestions.isEmpty else { return true }
-        return questionUsesTypedAnswer || (openRowBody?.options.contains { isOptionTicked($0.id) } ?? false)
+        return questionUsesTypedAnswer || questionHasASelection
     }
 
     func toggleOptionDescription(_ id: Int) {
@@ -3377,8 +3416,14 @@ final class MonitorStore: ObservableObject {
     /// question emptied after being answered stops being passable at exactly
     /// the moment it stops being answered.
     ///
-    /// Text is the answer, never an annotation on a selected label (§5.4), and
-    /// several labels join in the order the product listed them (§5.5).
+    /// **A chosen option is the answer, and typed text is what stands in when
+    /// nothing was chosen** (§5.4). The priority is that way round because a
+    /// selection is an unambiguous act on an option the product itself offered,
+    /// and text left in the field is as often a half-written thought as an
+    /// answer — the person who ticks a box after writing one has decided, and
+    /// the tick is the decision.
+    ///
+    /// Several labels join in the order the product listed them (§5.5).
     private static func answer(
         to question: AgentQuestion,
         from draft: AnswerProgress.Draft
@@ -3388,7 +3433,7 @@ final class MonitorStore: ObservableObject {
         guard !typed.isEmpty || !chosen.isEmpty else { return nil }
         return AgentQuestionAnswer(
             question: question.text,
-            answer: typed.isEmpty ? chosen.joined(separator: ", ") : typed
+            answer: chosen.isEmpty ? typed : chosen.joined(separator: ", ")
         )
     }
 

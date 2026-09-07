@@ -56,6 +56,15 @@ enum NotchPalette {
         /// looking at it: below this the tile still sank into the panel,
         /// above it the fill started competing with the numeral it carries.
         private static let chipLift = 0.06
+        /// The lit colour as AppKit draws it, at whatever weight is asked for.
+        ///
+        /// The answer field is a hosted `NSTextView` drawing its own ground
+        /// (`answer-in-notch.md` §7), so it needs this ink in AppKit's own
+        /// representation rather than SwiftUI's — from the same components, so
+        /// the two cannot drift.
+        func onDrawingColor(_ alpha: Double = 1) -> NSColor {
+            NSColor(srgbRed: onRed, green: onGreen, blue: onBlue, alpha: alpha)
+        }
         var offLayerColor: CGColor {
             CGColor(srgbRed: offRed, green: offGreen, blue: offBlue, alpha: 1)
         }

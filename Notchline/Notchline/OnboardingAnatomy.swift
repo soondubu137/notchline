@@ -345,16 +345,34 @@ enum NotchSpecimen {
         let command = makeStore(isExpanded: true, at: now, sessions: [approvalRow(at: now)])
         command.toggleOpenRow(approvalRow(at: now))
 
-        func questionStore(multiple: Bool, draft: String = "") -> MonitorStore {
+        func questionStore(
+            multiple: Bool,
+            selected: Set<Int>? = nil,
+            draft: String = ""
+        ) -> MonitorStore {
             let asked = questionRow(at: now, multiple: multiple)
             let store = makeStore(isExpanded: true, at: now, sessions: [asked])
             store.toggleOpenRow(asked)
-            store.stageSpecimenAnswer(selectedOptions: multiple ? [0, 1] : [0], draft: draft)
+            store.stageSpecimenAnswer(
+                selectedOptions: selected ?? (multiple ? [0, 1] : [0]),
+                draft: draft
+            )
             return store
         }
         let question = questionStore(multiple: false)
         let multipleChoice = questionStore(multiple: true)
-        let typedAnswer = questionStore(multiple: true, draft: "Use a compact summary with optional details.")
+        // **Nothing ticked, because that is the state this lesson is about**
+        // (`answer-in-notch.md` §5.4). It used to stage both options ticked
+        // *and* a draft, back when text outranked a selection and the drawing
+        // said so by dropping the selection highlight. A selection outranks the
+        // field now, so the same specimen would teach the opposite of what the
+        // app does: the ticks would be the answer and the sentence beside them
+        // decoration.
+        let typedAnswer = questionStore(
+            multiple: true,
+            selected: [],
+            draft: "Use a compact summary with optional details."
+        )
 
         return Opened(command: command, question: question, multipleChoice: multipleChoice, typedAnswer: typedAnswer)
     }
@@ -1420,14 +1438,14 @@ struct OpenQuestionAnatomy: View {
                         spread: options.spread * scale,
                         foot: 10
                     ),
-                    label: lesson == .typedAnswer ? "Choices set aside" : "Select, then Send"
+                    label: lesson == .typedAnswer ? "None of them chosen" : "Select, then Send"
                 )
             )
         }
 
         if let field = centres?.field {
             pins.append(
-                below(3, field, lesson == .typedAnswer ? "Your words take priority" : "Or type your answer", scale: scale, body: body)
+                below(3, field, lesson == .typedAnswer ? "Your words are the answer" : "Or type your answer", scale: scale, body: body)
             )
         }
         if let affirmative = centres?.affirmative {

@@ -45,7 +45,7 @@ enum QuestionLesson: String, CaseIterable {
         case .multipleChoice:
             "Tick the options you want, then click Send. Click a ticked option again to remove it."
         case .typedAnswer:
-            "Type in the field beside Send. Your words replace every selected option, in both single and multiple choice."
+            "Type in the field beside Send when none of the options fit. Your words are the answer while nothing is ticked."
         }
     }
 }
@@ -257,7 +257,7 @@ struct OnboardingView: View {
                     SettingsFootnote(questionLesson.explanation)
                 }
                 if questionLesson == .typedAnswer {
-                    lessonNote("Only your words are sent", "The options lose their selection highlight while the field contains text. Clear the field to use your earlier choices again.")
+                    lessonNote("A ticked option wins", "Tick an option and it becomes the answer, whatever the field holds — your words dim and stay where they are, and are the answer again the moment you untick it.")
                 } else {
                     lessonNote("Read more without choosing", "Show more expands a long description. It does not select the option or send an answer. Scroll the question to keep reading; the answer field stays at the bottom.")
                 }

@@ -27288,108 +27288,156 @@ for line in sys.stdin:
         )
     }
 
-    /// The arrow walks the set only where the caret has nowhere to go.
+    /// The arrow walks the set whatever the field is holding.
     ///
-    /// §5.7 on §9.2's own terms: a key is offered to the panel only while the
-    /// field has nothing in it for that key to mean, which is the digits' rule.
-    /// So `←` over text still moves the caret — the store declines it, and the
-    /// field keeps it — and ``MonitorStore/goBackAQuestion()``'s control is what
-    /// works in every state, including that one.
+    /// §5.7 on §9.2's **corrected** terms: the condition on a panel key is where
+    /// the caret is, not what the field contains. The arrow reaches the store
+    /// only when nothing holds the caret, so there is no caret for it to compete
+    /// with and nothing to ask about the text — which is what used to strand a
+    /// person on a question they had typed into, with `Back` the only way off
+    /// it, and take `←` off the person editing what they had just written.
     @Test @MainActor
-    func theArrowWalksTheSetOnlyWhereTheCaretHasNowhereToGo() async throws {
+    func theArrowWalksTheSetWhateverTheFieldIsHolding() async throws {
         let bench = answeringStore(request: questionSet(), status: .inputNeeded)
         let (store, _, row) = bench
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
 
-        // Nothing behind question one, so the key is the field's.
+        // Nothing behind question one, so there is nowhere to step to.
         #expect(!store.takeQuestionStep(-1))
         store.takeAnswer(.option(1))
         store.takeAnswer(.affirmative)
         #expect(store.openQuestionIndex == 1)
 
-        // With something typed, the arrow belongs to the caret — but the
-        // control does not, and it still goes back.
+        // Question two holds text, and the step is taken all the same.
         store.answerDraftChanged(to: "Render, but only in Europe")
-        #expect(!store.takeQuestionStep(-1))
-        #expect(store.openQuestionIndex == 1)
-        #expect(store.canGoBackAQuestion)
-        store.goBackAQuestion()
+        #expect(store.takeQuestionStep(-1))
         #expect(store.openQuestionIndex == 0)
 
-        // Question one kept nothing in its field, so the arrow is the panel's
-        // there and carries the set forward again.
+        // Forward again, onto the question that kept that text.
         #expect(store.takeQuestionStep(1))
         #expect(store.openQuestionIndex == 1)
+        #expect(store.answerDraft == "Render, but only in Europe")
 
-        // And question two still holds what was typed into it, so the arrow is
-        // still the caret's on the way back — until the field is emptied.
-        #expect(!store.takeQuestionStep(-1))
-        #expect(store.openQuestionIndex == 1)
-        store.answerDraftChanged(to: "")
+        // And back once more, which the emptiness rule refused outright.
         #expect(store.takeQuestionStep(-1))
         #expect(store.openQuestionIndex == 0)
     }
 
-    /// A bare `←` reaches the panel through the field's own command table.
+    /// The field does not take the caret, and a click elsewhere takes it back.
     ///
-    /// **The one thing on §5.7 that is an assumption about AppKit rather than
-    /// about this app**, so it is asserted against the real objects: a real
-    /// ``AnswerFieldView`` inside a real ``OpenRow`` in a real key window, sent
-    /// a real `keyDown`. The arrow is not bound anywhere — it is offered by
-    /// `moveLeft:` arriving at the delegate, which is where `⏎` and `⎋` already
-    /// arrive — so the day the text system stops routing it there, this fails
-    /// instead of the key quietly going back to moving a caret that has nowhere
-    /// to move.
+    /// **The two halves of an ordinary focus mechanism, asserted against the
+    /// real objects** — a real ``AnswerFieldView`` inside a real ``OpenRow`` in
+    /// a real ``OverlayPanel`` — because both are assumptions about AppKit
+    /// rather than about this app. It replaces a test that asserted the
+    /// opposite of the first half: that a bare `←` reached the panel out of the
+    /// focused field's own command table, which was the mechanism that made
+    /// every key on this surface conditional on what the field was holding.
     @Test @MainActor
-    func aBareArrowReachesThePanelThroughTheFieldsOwnCommandTable() async throws {
+    func theFieldTakesTheCaretOnlyOnAClickAndLosesItOnOneElsewhere() async throws {
         let bench = answeringStore(request: questionSet(), status: .inputNeeded)
         let (store, _, row) = bench
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
-        store.takeAnswer(.option(1))
-        store.takeAnswer(.affirmative)
-        #expect(store.openQuestionIndex == 1)
 
         let host = NSHostingView(rootView: OpenRow(session: row).environmentObject(store))
         host.setFrameSize(NSSize(width: 520, height: store.openRowHeight ?? 400))
-        let window = NSWindow(
+        let panel = OverlayPanel(
             contentRect: host.frame,
-            styleMask: [.titled],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        window.contentView = host
-        window.makeKeyAndOrderFront(nil)
+        panel.contentView = host
         host.layoutSubtreeIfNeeded()
         for _ in 0..<20 {
             try await Task.sleep(for: .milliseconds(20))
             if findField(host) != nil { break }
         }
         let field = try #require(findField(host))
-        window.makeFirstResponder(field)
-        #expect(window.firstResponder === field)
 
-        let arrow = String(UnicodeScalar(UInt32(NSLeftArrowFunctionKey))!)
-        let event = try #require(
-            NSEvent.keyEvent(
-                with: .keyDown,
-                location: .zero,
-                modifierFlags: [.function, .numericPad],
+        // Drawn, laid out, and holding nothing: the caret is not handed to a
+        // field nobody asked for.
+        #expect(panel.firstResponder !== field)
+
+        // A click on the field is what gives it, which is `NSTextView`'s own
+        // doing; this stands in for it.
+        #expect(panel.makeFirstResponder(field))
+        #expect(panel.firstResponder === field)
+
+        // And a press anywhere else takes it back, before that press is even
+        // dispatched to whatever it landed on.
+        let elsewhere = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 12, y: host.frame.height - 12),
+                modifierFlags: [],
                 timestamp: 0,
-                windowNumber: window.windowNumber,
+                windowNumber: panel.windowNumber,
                 context: nil,
-                characters: arrow,
-                charactersIgnoringModifiers: arrow,
-                isARepeat: false,
-                keyCode: 123
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
             )
         )
-        field.keyDown(with: event)
-        // Back on question one, wearing the answer it was left with.
-        #expect(store.openQuestionIndex == 0)
+        panel.sendEvent(elsewhere)
+        #expect(panel.firstResponder !== field)
+
+        // And with the caret gone, a bare `2` reaches the window — which is the
+        // whole mechanism, and the one part of it that is an assumption about
+        // AppKit rather than about this app: `NSHostingView` has to let a key it
+        // does not want fall through to ``OverlayPanel/keyDown(with:)``.
+        panel.handleKey = { event in
+            OverlayPanelController.panelKey(for: event).map(store.takeKey) ?? false
+        }
+        let digit = try #require(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+                characters: "2", charactersIgnoringModifiers: "2",
+                isARepeat: false, keyCode: 19
+            )
+        )
+        host.keyDown(with: digit)
         #expect(store.isOptionTicked(1))
-        window.orderOut(nil)
+
+        // Back in the field, the same key is a character and the panel sees
+        // nothing of it.
+        #expect(panel.makeFirstResponder(field))
+        field.keyDown(with: digit)
+        #expect(field.string == "2")
+        panel.orderOut(nil)
+    }
+
+    /// What one bare key means to a panel whose field does not hold the caret.
+    ///
+    /// §9.2. The window decodes an `NSEvent` and nothing else, so this is the
+    /// whole of the decoding — including the two it must refuse: a modified
+    /// digit is a character of its own and a modified arrow is the caret's, and
+    /// binding either would take a key off a person who meant it for the text.
+    @Test @MainActor
+    func onlyABareKeyIsThePanelsAndTheRestAreLeftAlone() throws {
+        func key(_ code: UInt16, _ characters: String, _ flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try #require(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: flags,
+                    timestamp: 0, windowNumber: 0, context: nil,
+                    characters: characters, charactersIgnoringModifiers: characters,
+                    isARepeat: false, keyCode: code
+                )
+            )
+        }
+        let arrow = String(UnicodeScalar(UInt32(NSLeftArrowFunctionKey))!)
+        #expect(OverlayPanelController.panelKey(for: try key(36, "\r")) == .submit)
+        #expect(OverlayPanelController.panelKey(for: try key(123, arrow, [.function, .numericPad])) == .step(-1))
+        #expect(OverlayPanelController.panelKey(for: try key(124, arrow, [.function, .numericPad])) == .step(1))
+        #expect(OverlayPanelController.panelKey(for: try key(18, "1")) == .option(1))
+        #expect(OverlayPanelController.panelKey(for: try key(21, "4")) == .option(4))
+        // Nobody's option number, and nobody's step.
+        #expect(OverlayPanelController.panelKey(for: try key(18, "1", [.option])) == nil)
+        #expect(OverlayPanelController.panelKey(for: try key(123, arrow, [.command, .function])) == nil)
+        #expect(OverlayPanelController.panelKey(for: try key(23, "5")) == nil)
+        #expect(OverlayPanelController.panelKey(for: try key(49, " ")) == nil)
     }
 
     /// `→` cannot reach a question the set has not drawn, and so cannot send.
@@ -27435,9 +27483,16 @@ for line in sys.stdin:
         #expect(await service.answersTaken().isEmpty)
     }
 
-    /// Typed text replaces a selected option; it is never sent as an annotation.
+    /// A chosen option is the answer, and it is never sent as an annotation on
+    /// what was typed.
+    ///
+    /// §5.4, reversed 2026-09-07. Text used to win, which made a selection with
+    /// anything in the field both invisible and inert — the person who wrote
+    /// half a thought, thought better of it and ticked the box got the half
+    /// thought sent. A tick is an unambiguous act on an option the product
+    /// itself offered; text in a field is as often a draft as an answer.
     @Test @MainActor
-    func typedTextReplacesTheSelectedOptionInsteadOfBecomingItsNote() async {
+    func aChosenOptionIsTheAnswerAndTypedTextIsWhatStandsInWithoutOne() async {
         let bench = answeringStore(
             request: questionSet(count: 1),
             status: .inputNeeded
@@ -27447,7 +27502,14 @@ for line in sys.stdin:
         #expect(await eventually { store.isAffirmativeArmed })
         store.answerDraftChanged(to: "only if it is already installed")
 
+        // The field is what answers while nothing is ticked...
+        #expect(store.canSubmitCurrentAnswer)
+        #expect(!store.questionHasASelection)
+
+        // ...and stops the moment something is.
         store.takeAnswer(.option(0))
+        #expect(store.isOptionTicked(0))
+        #expect(store.questionHasASelection)
         store.takeAnswer(.affirmative)
         #expect(await eventually { !(await service.answersTaken().isEmpty) })
         #expect(
@@ -27455,7 +27517,7 @@ for line in sys.stdin:
                 .answers([
                     AgentQuestionAnswer(
                         question: "Which database?",
-                        answer: "only if it is already installed"
+                        answer: "SQLite"
                     )
                 ])
             ]
@@ -27530,8 +27592,14 @@ for line in sys.stdin:
         #expect(store.openRowID == bench.row.id)
     }
 
+    /// A selection outranks the field, and unticking hands the answer back to
+    /// it.
+    ///
+    /// §5.4 both ways round, on both forms: neither is cleared by the other, so
+    /// whichever is in force is a question of which is *present*, and the person
+    /// can change their mind in either direction without retyping anything.
     @Test(arguments: [false, true]) @MainActor
-    func typedAnswersOverrideSelectionsAndClearingRestoresThem(multiple: Bool) async {
+    func aSelectionOutranksTheFieldAndUntickingHandsTheAnswerBack(multiple: Bool) async {
         let (store, service, row) = answeringStore(request: questionSet(count: 1, allowsSeveralAnswers: multiple), status: .inputNeeded)
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
@@ -27543,6 +27611,9 @@ for line in sys.stdin:
         #expect(await service.answersTaken().isEmpty)
         store.answerDraftChanged(to: "Use a different database")
         #expect(store.questionUsesTypedAnswer)
+        // Typing takes nothing away from the ticks, and they still outrank it.
+        #expect(store.isOptionTicked(1))
+        #expect(store.questionHasASelection)
         store.answerDraftChanged(to: "  \n ")
         #expect(!store.questionUsesTypedAnswer)
         #expect(store.canSubmitCurrentAnswer)
@@ -27550,7 +27621,40 @@ for line in sys.stdin:
         store.answerDraftChanged(to: "  Use a different database  ")
         store.takeAnswer(.affirmative)
         #expect(await eventually { !(await service.answersTaken().isEmpty) })
-        #expect(await service.answersTaken() == [.answers([AgentQuestionAnswer(question: "Which database?", answer: "Use a different database")])])
+        let chosen = multiple ? "SQLite, Postgres" : "Postgres"
+        #expect(await service.answersTaken() == [.answers([AgentQuestionAnswer(question: "Which database?", answer: chosen)])])
+    }
+
+    /// Untick the one option a single choice has, and the field answers again.
+    ///
+    /// The other direction of §5.4, and the only way to reach it on a single
+    /// choice: a click *replaces* a selection there and never clears one
+    /// (§5.5), so this is the multiple-choice form's own path back.
+    @Test @MainActor
+    func untickingTheLastOptionHandsTheAnswerBackToTheField() async {
+        let (store, service, row) = answeringStore(
+            request: questionSet(count: 1, allowsSeveralAnswers: true),
+            status: .inputNeeded
+        )
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.answerDraftChanged(to: "Use a different database")
+        store.takeAnswer(.option(1))
+        #expect(store.questionHasASelection)
+        store.takeAnswer(.option(1))
+        #expect(!store.questionHasASelection)
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(
+            await service.answersTaken() == [
+                .answers([
+                    AgentQuestionAnswer(
+                        question: "Which database?",
+                        answer: "Use a different database"
+                    )
+                ])
+            ]
+        )
     }
 
     @Test @MainActor
@@ -27758,23 +27862,29 @@ for line in sys.stdin:
         )
     }
 
-    /// Digits select a single option only while the field is empty; Send commits it.
+    /// A digit selects its option without sending, whatever the field holds.
+    ///
+    /// §9.2, corrected 2026-09-07: the digit reaches the store only when nothing
+    /// holds the caret, so the emptiness condition it used to carry has nothing
+    /// left to protect — and while it stood, a person who had typed a sentence
+    /// beginning with a numeral could not then choose an option at all.
     @Test @MainActor
-    func aDigitSelectsItsOptionWithoutSendingWhileTheFieldIsEmpty() async {
+    func aDigitSelectsItsOptionWithoutSendingWhateverTheFieldHolds() async {
         let bench = answeringStore(request: questionSet(count: 1), status: .inputNeeded)
         let (store, service, row) = bench
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
         #expect(store.answerGround == .affirmative)
 
-        // A number this question does not offer is not an option, and is typed
-        // like any other character.
+        // A number this question does not offer is not an option, and is left
+        // to AppKit.
         #expect(!store.takeNumberedOption(3))
         #expect(await service.answersTaken().isEmpty)
 
         store.answerDraftChanged(to: "2 of them, actually")
         #expect(store.answerGround == .affirmative)
-        #expect(!store.takeNumberedOption(1))
+        #expect(store.takeNumberedOption(1))
+        #expect(store.isOptionTicked(0))
         #expect(await service.answersTaken().isEmpty)
 
         store.answerDraftChanged(to: "")
@@ -27795,7 +27905,10 @@ for line in sys.stdin:
     ///
     /// §5.5: what a numbered option does is what a *clicked* one does, because
     /// both go through the same answer — a second meaning for the same option
-    /// would make the digit a control of its own.
+    /// would make the digit a control of its own. **Including on this form**,
+    /// which used to decline the digit outright so that the field could type it;
+    /// the field now keeps every key it wants by holding the caret, so there is
+    /// nothing left for that exception to protect.
     @Test @MainActor
     func aDigitTicksWhereSeveralAnswersAreAllowed() async {
         let bench = answeringStore(
@@ -27806,11 +27919,54 @@ for line in sys.stdin:
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
         // §5.5: with several allowed the ground never leaves `Send`, so no
-        // option ever holds it and the digits are never bound on this form.
+        // option ever holds it — the digit ticks, and it never submits.
         #expect(store.answerGround == .affirmative)
-        #expect(!store.takeNumberedOption(1))
+        #expect(store.takeNumberedOption(1))
+        #expect(store.isOptionTicked(0))
+        #expect(store.takeNumberedOption(2))
+        #expect(store.isOptionTicked(1))
+        // And it toggles, exactly as a second click on the same card would.
+        #expect(store.takeNumberedOption(1))
         #expect(!store.isOptionTicked(0))
         #expect(await service.answersTaken().isEmpty)
+    }
+
+    /// `⏎` sends from the panel when the field does not hold the caret.
+    ///
+    /// The key the whole focus mechanism turns on: it used to reach the store
+    /// out of the field's own command table, which was available only because
+    /// the field always had focus. It now arrives at the window instead, and
+    /// ``MonitorStore/takeKey(_:)`` is where every one of them means something.
+    @Test @MainActor
+    func thePanelsOwnKeysAnswerTheRowWhenTheFieldDoesNot() async {
+        let bench = answeringStore(request: questionSet(count: 1), status: .inputNeeded)
+        let (store, service, row) = bench
+
+        // Nothing is open, so nothing is any of these keys' business.
+        #expect(!store.takeKey(.submit))
+        #expect(!store.takeKey(.option(1)))
+        #expect(!store.takeKey(.step(-1)))
+
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        // A question with nothing in it answers nothing, so `⏎` is declined
+        // rather than swallowed — the same gate that greys out `Send`.
+        #expect(!store.takeKey(.submit))
+        #expect(await service.answersTaken().isEmpty)
+
+        #expect(store.takeKey(.option(2)))
+        #expect(store.isOptionTicked(1))
+        #expect(await service.answersTaken().isEmpty)
+
+        #expect(store.takeKey(.submit))
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(
+            await service.answersTaken() == [
+                .answers([
+                    AgentQuestionAnswer(question: "Which database?", answer: "Postgres")
+                ])
+            ]
+        )
     }
 
     /// A payload the store cannot read is reported, not dropped in silence.

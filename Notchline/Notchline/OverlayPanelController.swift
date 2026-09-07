@@ -135,6 +135,15 @@ final class OverlayPanelController {
             }
         }
 
+        // The keys that reach the window because nothing in it holds the caret
+        // (`answer-in-notch.md` §9.2). Everything this closure does is decode an
+        // `NSEvent`: what each key *means* is ``MonitorStore/takeKey(_:)``,
+        // where it can be asked without one.
+        panel.handleKey = { [weak self] event in
+            guard let self, let key = Self.panelKey(for: event) else { return false }
+            return store.takeKey(key)
+        }
+
         let animatedChanges = Self.frameChangingPublishers(of: store)
 
         Publishers.MergeMany(animatedChanges)
@@ -303,6 +312,31 @@ final class OverlayPanelController {
             // Global monitors see only events this app did not receive, so
             // anything arriving here is by construction outside the panel.
             Task { @MainActor [weak self] in self?.store.closeOpenRow() }
+        }
+    }
+
+    /// What one key press means to a panel whose field does not have the caret.
+    ///
+    /// **Bare keys only** — `⌥1` is a character of its own and is nobody's
+    /// option number, and `⌘←` is not a step through a question set. Nothing
+    /// else is bound: §9.3's chord and its navigation model are declined, and a
+    /// keyboard model with a hole in it is worse than one that plainly does not
+    /// navigate.
+    static func panelKey(for event: NSEvent) -> PanelKey? {
+        guard event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .function, .numericPad])
+            .isEmpty
+        else { return nil }
+        switch event.keyCode {
+        case 36: return .submit
+        case 123: return .step(-1)
+        case 124: return .step(1)
+        default:
+            guard let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
+                  digit >= 1, digit <= 4
+            else { return nil }
+            return .option(digit)
         }
     }
 
@@ -714,6 +748,16 @@ final class OverlayPanel: NSPanel {
     /// and it belongs to the controller that built this window.
     var handleEscape: (() -> Void)?
 
+    /// A key that reached the window, which means nothing inside it took one.
+    ///
+    /// **The whole of the panel's own keyboard, and it exists because the field
+    /// stopped holding the caret unasked** (`answer-in-notch.md` §9.2). While
+    /// the field has focus every key is the field's; while it does not, `⏎`,
+    /// `1`–`4` and the two horizontal arrows arrive here instead. Returns
+    /// whether anything happened, which this window does not act on — every key
+    /// stops here either way — and which the store's own tests do.
+    var handleKey: ((NSEvent) -> Bool)?
+
     override var canBecomeKey: Bool { latches }
     override var canBecomeMain: Bool { false }
 
@@ -727,18 +771,56 @@ final class OverlayPanel: NSPanel {
         handleEscape?()
     }
 
-    /// Every other key, so a latched panel does not beep at the person.
+    /// `⎋`, the panel's own three keys, and silence for everything else.
     ///
-    /// Only `⎋` is bound in this version (§9.2): `⌥Space`, the arrows, the
-    /// digits, `Space`, `⌘⏎` and `⇥` are all deliberately unbound, because a
-    /// keyboard model with a hole in it is worse than a panel that plainly does
-    /// not navigate.
+    /// **Nothing is passed on, and that is what keeps a latched panel from
+    /// beeping at the person.** A key that gets this far is one no view in the
+    /// window wanted, and past here is AppKit's last responder, which answers an
+    /// unhandled `keyDown` with a beep. §9.2 leaves `⌥Space`, `↑ ↓`, `Space`,
+    /// `⌘⏎` and `⇥` deliberately unbound — a keyboard model with a hole in it is
+    /// worse than a panel that plainly does not navigate — and *unbound* has to
+    /// mean quiet rather than scolded. `⌘`-keys are not affected: an equivalent
+    /// is offered to the whole chain before any of this.
+    ///
+    /// This mattered only from 2026-09-07: while the field held the caret
+    /// unasked, no ordinary key ever reached the window at all.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
             handleEscape?()
             return
         }
-        super.keyDown(with: event)
+        _ = handleKey?(event)
+    }
+
+    /// A click anywhere but the field takes the caret out of it (§6.6).
+    ///
+    /// **The other half of an ordinary focus mechanism**, and it is here rather
+    /// than in the field because the field is exactly the one view that cannot
+    /// see it: what has to be noticed is a press that lands somewhere else, and
+    /// only the window sees every press. Taken before the event is dispatched,
+    /// so an option card or a control gets its click already unfocused and `1`,
+    /// `←` and `⏎` are the panel's again the moment the pointer leaves the
+    /// field.
+    ///
+    /// A click *outside the panel* never arrives here at all — that is the
+    /// global monitor in ``OverlayPanelController``, and it closes the row.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown || event.type == .rightMouseDown,
+           firstResponder is AnswerFieldView,
+           contentView?.hitTest(event.locationInWindow).map(Self.isAnswerField) != true {
+            makeFirstResponder(nil)
+        }
+        super.sendEvent(event)
+    }
+
+    /// Whether a hit view is the answer field, or something drawn inside it.
+    private static func isAnswerField(_ view: NSView) -> Bool {
+        var candidate: NSView? = view
+        while let current = candidate {
+            if current is AnswerFieldView { return true }
+            candidate = current.superview
+        }
+        return false
     }
 
     override func constrainFrameRect(

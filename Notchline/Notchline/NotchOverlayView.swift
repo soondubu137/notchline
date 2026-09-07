@@ -1569,11 +1569,12 @@ private struct AnswerRow: View {
                 // clicks. The caret goes with it, so nothing is typed into a
                 // row that has already been answered.
                 takesKeys: !store.isAnswerInFlight,
+                // §5.4, with the priority the other way round: a ticked option
+                // is the answer, so text it has overruled draws as overruled.
+                superseded: store.questionHasASelection,
                 onEdit: { store.answerDraftChanged(to: $0) },
                 onReturn: { store.takeAnswer(store.answerGround) },
-                onEscape: { store.closeOpenRow() },
-                onDigit: { store.takeNumberedOption($0) },
-                onQuestionStep: { store.takeQuestionStep($0) }
+                onEscape: { store.closeOpenRow() }
             )
             .frame(maxWidth: .infinity)
             .frame(height: PanelMetrics.answerRowHeight)
@@ -1749,6 +1750,16 @@ private struct AnswerControl: View {
 /// **The text never reaches `@Published` either**, for the same reason: a
 /// keystroke is not a layout change. What the store publishes is where the
 /// ground is, which changes at most once per row.
+///
+/// **It is an ordinary focusable field, and it did not used to be** (§6.6,
+/// corrected 2026-09-07). It took the caret the moment the row opened and never
+/// gave it back, which made every rule around it a rule about the *string* it
+/// held rather than about where the caret was: `1` selected an option instead
+/// of typing a `1`, `←` walked the question set instead of moving through what
+/// had just been typed, and a caret blinked over a row nobody was writing in.
+/// It now takes the caret on a click and loses it on a click anywhere else
+/// (``OverlayPanel/sendEvent(_:)``), and the keys the panel answers to are the
+/// ones that arrive while it holds nothing (``PanelKey``).
 private struct AnswerField: NSViewRepresentable {
     /// Which row this field belongs to, and which text the store has put in
     /// it — the only two things that refill it.
@@ -1763,13 +1774,11 @@ private struct AnswerField: NSViewRepresentable {
     let placeholder: String
     let initialText: String
     let takesKeys: Bool
+    /// Whether a ticked option has taken the answer this text would have been.
+    let superseded: Bool
     let onEdit: (String) -> Void
     let onReturn: () -> Void
     let onEscape: () -> Void
-    /// A digit while the ground is still on an option, and whether it was taken.
-    let onDigit: (Int) -> Bool
-    /// An arrow while the field is empty, and whether it walked the set (§5.7).
-    let onQuestionStep: (Int) -> Bool
 
     func makeNSView(context: Context) -> AnswerFieldView {
         let view = AnswerFieldView()
@@ -1777,7 +1786,7 @@ private struct AnswerField: NSViewRepresentable {
         view.placeholder = placeholder
         view.string = initialText
         view.isEditable = takesKeys
-        view.onDigit = onDigit
+        view.isSuperseded = superseded
         context.coordinator.identity = identity
         return view
     }
@@ -1786,10 +1795,15 @@ private struct AnswerField: NSViewRepresentable {
         context.coordinator.onEdit = onEdit
         context.coordinator.onReturn = onReturn
         context.coordinator.onEscape = onEscape
-        context.coordinator.onQuestionStep = onQuestionStep
         view.placeholder = placeholder
         view.isEditable = takesKeys
-        view.onDigit = onDigit
+        view.isSuperseded = superseded
+        // §8 state 01: a row that has been answered stops taking keys, and the
+        // caret has to leave with them rather than sit in a field that will
+        // refuse everything typed into it.
+        if !takesKeys, view.window?.firstResponder === view {
+            view.window?.makeFirstResponder(nil)
+        }
         guard context.coordinator.identity != identity else { return }
         context.coordinator.identity = identity
         view.string = initialText
@@ -1797,12 +1811,7 @@ private struct AnswerField: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(
-            onEdit: onEdit,
-            onReturn: onReturn,
-            onEscape: onEscape,
-            onQuestionStep: onQuestionStep
-        )
+        Coordinator(onEdit: onEdit, onReturn: onReturn, onEscape: onEscape)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -1810,18 +1819,15 @@ private struct AnswerField: NSViewRepresentable {
         var onEdit: (String) -> Void
         var onReturn: () -> Void
         var onEscape: () -> Void
-        var onQuestionStep: (Int) -> Bool
 
         init(
             onEdit: @escaping (String) -> Void,
             onReturn: @escaping () -> Void,
-            onEscape: @escaping () -> Void,
-            onQuestionStep: @escaping (Int) -> Bool
+            onEscape: @escaping () -> Void
         ) {
             self.onEdit = onEdit
             self.onReturn = onReturn
             self.onEscape = onEscape
-            self.onQuestionStep = onQuestionStep
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1830,25 +1836,23 @@ private struct AnswerField: NSViewRepresentable {
             onEdit(view.string)
         }
 
-        /// The keys the panel answers to here, and they are the field's own
-        /// (§9.2).
+        /// The two keys the field answers to itself; every other key is the
+        /// text system's while the field holds the caret (§9.2).
         ///
         /// `⌘⏎`, `Space` and `⇥` are deliberately unbound: a second way to
         /// approve would make the white ground advisory rather than definitive,
         /// and the whole safety of this surface rests on the ground being the
-        /// literal truth about `⏎`. The digits are read off the event in
-        /// ``AnswerFieldView/keyDown(with:)`` instead, because what a digit
-        /// means depends on whether anything has been typed and this table
-        /// cannot see that.
+        /// literal truth about `⏎`.
         ///
-        /// **The two horizontal arrows are offered to the panel here, and the
-        /// panel usually declines them** (§5.7). A bare `←` is exactly
-        /// `moveLeft:` — `⌥←` is `moveWordLeft:` and `⌘←` is
-        /// `moveToBeginningOfLine:`, so the selector is the bareness test and
-        /// no modifier reaches this. The store then takes it only while the
-        /// field is empty, which is where a caret has nowhere to move anyway;
-        /// returning `false` hands the key straight back to the text system, so
-        /// every arrow over text still edits it.
+        /// **The digits and the arrows are no longer taken from here** (§9.2,
+        /// corrected 2026-09-07). They were, on the condition that the field was
+        /// empty — a rule about a string standing in for a rule about focus,
+        /// and one that broke where it mattered most: a person who had clicked
+        /// into the field to write an answer could not type `1`, and could not
+        /// move the caret back through what they had written. A field with the
+        /// caret in it now keeps every key it would keep anywhere else, and the
+        /// panel answers those two only when nothing holds the caret at all
+        /// (``PanelKey``).
         func textView(
             _ view: NSTextView,
             doCommandBy selector: Selector
@@ -1857,10 +1861,6 @@ private struct AnswerField: NSViewRepresentable {
             case #selector(NSResponder.insertNewline(_:)):
                 onReturn()
                 return true
-            case #selector(NSResponder.moveLeft(_:)):
-                return onQuestionStep(-1)
-            case #selector(NSResponder.moveRight(_:)):
-                return onQuestionStep(1)
             case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
                 // `⌥⏎`, which AppKit binds here as well. `⇧⏎` does **not**
                 // arrive as this and is handled in ``AnswerFieldView/keyDown``
@@ -1879,18 +1879,50 @@ private struct AnswerField: NSViewRepresentable {
     }
 }
 
-/// The text view itself: one line of `13` pt on the panel's recessed step.
+/// The text view itself: one line of `13` pt, drawing its own ground.
 ///
-/// It takes the caret when the row opens (§6.6), so a refusal costs a sentence
-/// and a return and no travel at all — which is the whole of why denial is the
-/// cheap direction (§6.4).
+/// **A field that has to be clicked into, and it did not use to be** (§6.6,
+/// corrected 2026-09-07). It took the caret the moment the row opened, which
+/// made the row's one blinking object a promise about a field nobody had asked
+/// for, and made every key on this surface conditional on what the field
+/// happened to be holding. What it costs is one click on the two forms that
+/// carry a refusal — §6.4's cheap direction is now a click and a sentence — and
+/// what it buys is a keyboard whose rules are about focus rather than about a
+/// string, which is the only kind a person can learn once.
+///
+/// **So the ground says what the caret used to.** §7 gave the field no ground
+/// of its own on the reasoning that the caret and the placeholder were enough to
+/// say it was a field; with the caret gone at rest, the ground answers the
+/// pointer and marks the focus, and is still nothing at all when neither is
+/// true.
 final class AnswerFieldView: NSTextView {
     var placeholder: String = ""
-    /// A digit that may be an option's number rather than a character.
-    var onDigit: ((Int) -> Bool)?
 
-    /// `⇧⏎` puts a new line in the field, and only `⏎` sends (§9.2). Then the
-    /// digits, which are the field's too the moment anything has been typed.
+    /// Whether a ticked option has taken the answer this text would have been.
+    ///
+    /// §5.4 with its priority reversed: the losing side is the one that draws
+    /// as losing, and it used to be the option markers. Text that has been
+    /// overruled is dimmed rather than removed — it is still what the field
+    /// holds, and untick the option and it is the answer again.
+    var isSuperseded = false {
+        didSet {
+            guard isSuperseded != oldValue else { return }
+            textColor = Self.ink(superseded: isSuperseded)
+            needsDisplay = true
+        }
+    }
+
+    private static func ink(superseded: Bool) -> NSColor {
+        superseded
+            ? NotchPalette.countsSessionDrawingColor.withAlphaComponent(0.45)
+            : NotchPalette.countsSessionDrawingColor
+    }
+
+    private var isHovered = false {
+        didSet { if isHovered != oldValue { needsDisplay = true } }
+    }
+
+    /// `⇧⏎` puts a new line in the field, and only `⏎` sends (§9.2).
     ///
     /// **Read off the event rather than left to the binding table.** In a field
     /// editor `⇧⏎` is `insertNewlineIgnoringFieldEditor:`; in a plain text view
@@ -1899,30 +1931,14 @@ final class AnswerFieldView: NSTextView {
     /// sentences and an alternative command is often two lines, and this is the
     /// only way to get one, which is what lets `⏎` be unambiguous.
     ///
-    /// A digit is offered to the panel **bare only** — `⌥1` types a character of
-    /// its own and is nobody's option number — and the panel refuses it unless
-    /// the white ground is still on an option, which is §15 q08's rule and the
-    /// reason this cannot be a binding: it depends on what the field holds.
+    /// Nothing else is read off the event here any more. A field holding the
+    /// caret is an ordinary field: `1` types a `1` and `←` moves the caret.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36, event.modifierFlags.contains(.shift) {
             insertText("\n", replacementRange: selectedRange())
             return
         }
-        if isBare(event),
-           let digit = event.characters.flatMap({ Int($0) }),
-           digit >= 1, digit <= 4,
-           onDigit?(digit) == true {
-            return
-        }
         super.keyDown(with: event)
-    }
-
-    /// Whether this key arrived with nothing held down.
-    private func isBare(_ event: NSEvent) -> Bool {
-        event.modifierFlags
-            .intersection(.deviceIndependentFlagsMask)
-            .subtracting([.capsLock, .function, .numericPad])
-            .isEmpty
     }
 
     /// The panel's own recessed step, which is where a field belongs on it: the
@@ -1961,7 +1977,7 @@ final class AnswerFieldView: NSTextView {
         isVerticallyResizable = false
         isHorizontallyResizable = false
         font = NSFont.systemFont(ofSize: 13, weight: .regular)
-        textColor = NotchPalette.countsSessionDrawingColor
+        textColor = Self.ink(superseded: false)
         insertionPointColor = .white
         textContainerInset = NSSize(width: 8, height: 5)
         textContainer?.lineFragmentPadding = 0
@@ -1975,12 +1991,22 @@ final class AnswerFieldView: NSTextView {
         NSSize(width: NSView.noIntrinsicMetric, height: PanelMetrics.answerRowHeight)
     }
 
-    /// The placeholder, drawn here rather than by a view above.
+    /// The ground, then the text, then the placeholder — all three here rather
+    /// than in a view above.
     ///
     /// A SwiftUI overlay would have to be told when the field stopped being
-    /// empty, which means publishing every keystroke — the one thing this view
-    /// exists to avoid.
+    /// empty and when it took the caret, which means publishing every keystroke
+    /// and every click — the one thing this view exists to avoid.
+    ///
+    /// **The ground is the row's quiet button wash, not §4.2's recessed step.**
+    /// §7 refused a recessed rectangle immediately under a body that is already
+    /// on one, because a second one reads as more body rather than as a place to
+    /// type, and that reasoning is untouched: this is the same theme wash the
+    /// `Back`, `Deny` and `Send` beside it wear, at the same corner and the same
+    /// height, and it is drawn only while the pointer is on the field or the
+    /// caret is in it.
     override func draw(_ dirtyRect: NSRect) {
+        drawGround()
         super.draw(dirtyRect)
         guard string.isEmpty, !placeholder.isEmpty else { return }
         let attributes: [NSAttributedString.Key: Any] = [
@@ -1993,32 +2019,91 @@ final class AnswerFieldView: NSTextView {
         )
     }
 
-    /// Takes the caret as soon as it has a window to take it in.
-    ///
-    /// The panel becomes key in the same publish that opens the row, so this and
-    /// ``OverlayPanel/latches`` are two halves of one movement — and if the
-    /// window is not key yet, ``windowDidBecomeKey`` finishes the job.
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard let window else { return }
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidBecomeKey),
-            name: NSWindow.didBecomeKeyNotification,
-            object: window
+    private func drawGround() {
+        let isFocused = window?.firstResponder === self && isEditable
+        let wash: Double = isFocused
+            ? NotchPalette.RowEmphasis.controlHoverFillOpacity
+            : (isHovered ? NotchPalette.RowEmphasis.controlRestFillOpacity : 0)
+        let path = NSBezierPath(
+            roundedRect: bounds,
+            xRadius: PanelMetrics.controlCornerRadius,
+            yRadius: PanelMetrics.controlCornerRadius
         )
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let window = self.window else { return }
-            window.makeFirstResponder(self)
+        if wash > 0 {
+            NotchPalette.themeInk.onDrawingColor(wash).setFill()
+            path.fill()
         }
+        // The focus mark, and it is the option card's own: the field holding the
+        // caret and the option holding the answer are the same statement about
+        // where what you do next will land, so they are drawn the same way.
+        guard isFocused else { return }
+        NotchPalette.themeInk.onDrawingColor(Self.focusEdgeOpacity).setStroke()
+        path.lineWidth = 1
+        path.stroke()
     }
 
-    @objc private func windowDidBecomeKey() {
-        window?.makeFirstResponder(self)
+    /// The weight ``OptionRow`` strokes a selected card at.
+    private static let focusEdgeOpacity = 0.5
+
+    /// The pointer, so a field with nothing in it still says it is one.
+    ///
+    /// `.activeAlways`: this panel holds the keyboard by activating the app
+    /// (ADR 0020), but it is drawn and hovered long before that, and a tracking
+    /// area that waited for key status would leave the field dead under the
+    /// pointer for the whole of the time the panel is merely being read.
+    ///
+    /// **Tagged, and only the tagged one is ever removed.** `NSTextView`
+    /// installs tracking areas of its own and owns them, so removing by owner
+    /// would take the text system's with it — and both this and the ones it
+    /// keeps deliver `mouseEntered:` to the same method, which is why the tag is
+    /// read there too.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas where Self.isHoverArea(area) {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: self,
+                userInfo: [Self.hoverAreaKey: true]
+            )
+        )
     }
 
-    deinit {
-        NotificationCenter.default.removeObserver(self)
+    private static let hoverAreaKey = "notchlineAnswerFieldHover"
+
+    private static func isHoverArea(_ area: NSTrackingArea?) -> Bool {
+        area?.userInfo?[hoverAreaKey] as? Bool == true
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        if Self.isHoverArea(event.trackingArea) { isHovered = true }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        if Self.isHoverArea(event.trackingArea) { isHovered = false }
+    }
+
+    /// The caret arriving and leaving, which is the one state this view draws
+    /// that nothing tells it about.
+    ///
+    /// **Neither of these takes the caret; they only report it.** A click on the
+    /// field is what gives it, `NSTextView` handles that itself, and a click
+    /// anywhere else is what takes it back (``OverlayPanel/sendEvent(_:)``).
+    override func becomeFirstResponder() -> Bool {
+        let took = super.becomeFirstResponder()
+        if took { needsDisplay = true }
+        return took
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let gave = super.resignFirstResponder()
+        if gave { needsDisplay = true }
+        return gave
     }
 }
 
@@ -2361,6 +2446,14 @@ struct RequestBodyView: View {
 /// A selectable title and description with an independent reading disclosure.
 /// Expanding text never selects or sends an answer. Read-only requests retain
 /// the disclosure while disabling selection.
+///
+/// **A ticked option stays ticked whatever is in the field** (§5.4, reversed
+/// 2026-09-07). Text used to suppress the marker and the card emphasis, which
+/// was the announcement that the options had stopped being the answer — and it
+/// made an option unselectable in practice, because selecting one changed
+/// nothing anybody could see. The priority is now the other way round, so the
+/// suppression moves to the side that loses: the field dims, and the card is
+/// simply selected.
 struct OptionRow: View {
     @EnvironmentObject private var store: MonitorStore
     let layout: RequestBodyLayout.Option
@@ -2368,7 +2461,6 @@ struct OptionRow: View {
     @State private var isHovered = false
 
     private var selected: Bool { store.isOptionTicked(layout.id) }
-    private var effectiveSelection: Bool { selected && !store.questionUsesTypedAnswer }
     private var isAnswerable: Bool { store.openSession?.request?.canBeAnswered == true }
 
     var body: some View {
@@ -2393,7 +2485,7 @@ struct OptionRow: View {
             .buttonStyle(.plain)
             .disabled(!isAnswerable || store.isAnswerInFlight || !store.isAffirmativeArmed)
             .accessibilityLabel(layout.option.label)
-            .accessibilityValue(selected ? (store.questionUsesTypedAnswer ? "Selected, replaced by your typed answer" : "Selected") : "Not selected")
+            .accessibilityValue(selected ? "Selected" : "Not selected")
             .accessibilityHint(layout.option.description ?? "")
 
             if layout.canExpand {
@@ -2412,8 +2504,8 @@ struct OptionRow: View {
         }
         .padding(PanelMetrics.optionInset)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(NotchPalette.themeInk.on.opacity(effectiveSelection ? 0.10 : (isHovered ? 0.07 : 0.025))))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(NotchPalette.themeInk.on.opacity(effectiveSelection ? 0.5 : 0), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 8).fill(NotchPalette.themeInk.on.opacity(selected ? 0.10 : (isHovered ? 0.07 : 0.025))))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(NotchPalette.themeInk.on.opacity(selected ? 0.5 : 0), lineWidth: 1))
         .onHover { isHovered = $0 }
     }
 
@@ -2421,14 +2513,14 @@ struct OptionRow: View {
         if allowsSeveralAnswers {
             ZStack {
                 RoundedRectangle(cornerRadius: 3).strokeBorder(NotchPalette.reading, lineWidth: 1)
-                if effectiveSelection { Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(NotchPalette.themeInk.on) }
+                if selected { Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(NotchPalette.themeInk.on) }
             }
             .frame(width: 14, height: 14)
             .accessibilityHidden(true)
         } else {
             ZStack {
                 Circle().strokeBorder(NotchPalette.reading, lineWidth: 1)
-                if effectiveSelection { Circle().fill(NotchPalette.themeInk.on).padding(4) }
+                if selected { Circle().fill(NotchPalette.themeInk.on).padding(4) }
             }
             .frame(width: 14, height: 14)
             .accessibilityHidden(true)

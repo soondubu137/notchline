@@ -64,6 +64,25 @@ nonisolated enum AnswerGround: Sendable, Equatable {
     }
 }
 
+/// A key that reached the panel because nothing in it holds the caret.
+///
+/// **The condition is focus, not emptiness** (`answer-in-notch.md` §9.2). The
+/// digits and the arrows used to be offered to the panel out of the field's own
+/// `keyDown` and taken only while the field was empty, which is a rule about a
+/// *string* standing in for a rule about *where the caret is* — and it broke in
+/// exactly the case it was invented for: a person who clicked into the field to
+/// type an answer beginning `1.` selected an option instead, and could not move
+/// the caret with `←`. So the field keeps every key it holds while it holds the
+/// caret, and these three are what the panel answers to when it does not.
+nonisolated enum PanelKey: Sendable, Equatable {
+    /// `⏎`: takes the answer the white ground is on.
+    case submit
+    /// `1`–`4`: the option at that position in the question showing.
+    case option(Int)
+    /// `←` and `→`: one question of the set, backwards or forwards.
+    case step(Int)
+}
+
 /// What a person has put into one row and not yet sent.
 ///
 /// Kept for the row's lifetime and no longer (`answer-in-notch.md` §10):
