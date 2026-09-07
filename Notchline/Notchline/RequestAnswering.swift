@@ -71,24 +71,80 @@ nonisolated enum AnswerGround: Sendable, Equatable {
 /// resumes rather than starting again — and when the row goes, this goes with
 /// it. It is never written to disk, like every other part of a request.
 nonisolated struct AnswerProgress: Sendable, Equatable {
-    /// The field's own text: a refusal's reason, or a question's answer.
-    var draft: String = ""
     /// Which question of a set the body is showing, from the top (§5.3).
     var questionIndex: Int = 0
-    /// What has been answered so far, by position in the set.
+    /// The furthest question of the set this row has drawn (§5.7).
+    ///
+    /// **The frontier, not a count of answers.** A set is walked forward by
+    /// answering and backward by asking, so this is what tells `→` apart from
+    /// `Send`: `→` may return to a question already reached and can never reach
+    /// a new one, because reaching a new one is the whole of what `Send` means.
+    var furthestQuestionReached: Int = 0
+    /// What has been put into each question of the set, by position.
+    ///
+    /// **Kept per question rather than cleared on the way past** (§5.7).
+    /// Advancing used to empty the field, the ticks and the expanded
+    /// descriptions and record the answer as a string, which made the answer
+    /// unrecoverable as *state*: coming back could only have offered an empty
+    /// question wearing the number of one that had been answered. So the
+    /// answer stops being a snapshot taken on the way past and becomes what
+    /// the draft says at the moment the set leaves — which is the same value
+    /// while nobody goes back, and the newer of two when somebody does.
     ///
     /// **A set is answered one question at a time and sent once** — `⏎` on
-    /// question two draws question three and sends nothing — so this is what
+    /// question two draws question three and sends nothing — which is what
     /// makes the count on the caption line worth drawing: without it, an answer
     /// that appears to do nothing looks like a failure.
-    var answers: [Int: AgentQuestionAnswer] = [:]
-    /// Which options are ticked on the question showing now (§5.5).
-    ///
-    /// Cleared with the field as the next question is drawn, because both
-    /// belong to the question that was on screen rather than to the row.
-    var ticked: Set<Int> = []
-    var expandedOptions: Set<Int> = []
+    private var perQuestion: [Int: Draft] = [:]
     var requestID: String?
+
+    /// One question's own three pieces of unsent state.
+    ///
+    /// All three belong to a question rather than to the row, which is why they
+    /// travel together: the ticks are answers to *this* question, the expanded
+    /// descriptions are this question's options opened, and the text is what
+    /// would replace both (§5.4).
+    nonisolated struct Draft: Sendable, Equatable {
+        /// The field's own text: a refusal's reason, or a question's answer.
+        var text: String = ""
+        /// Which options are ticked on this question (§5.5).
+        var ticked: Set<Int> = []
+        var expandedOptions: Set<Int> = []
+    }
+
+    nonisolated init(requestID: String? = nil) {
+        self.requestID = requestID
+    }
+
+    /// What was put into one question of the set, whether or not it answers it.
+    nonisolated func draft(forQuestion index: Int) -> Draft {
+        perQuestion[index] ?? Draft()
+    }
+
+    /// The question showing now, which is the only one anything draws.
+    ///
+    /// A form that is not a question is a set of one living at `0`, so a
+    /// refusal's note goes through exactly this accessor and no form needs a
+    /// second path.
+    var showing: Draft {
+        get { draft(forQuestion: questionIndex) }
+        set { perQuestion[questionIndex] = newValue }
+    }
+
+    var draft: String {
+        get { showing.text }
+        set { showing.text = newValue }
+    }
+
+    var ticked: Set<Int> {
+        get { showing.ticked }
+        set { showing.ticked = newValue }
+    }
+
+    var expandedOptions: Set<Int> {
+        get { showing.expandedOptions }
+        set { showing.expandedOptions = newValue }
+    }
 }
 
 /// What one row's preview line says once an answer has left it.

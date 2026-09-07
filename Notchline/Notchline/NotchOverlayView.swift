@@ -1572,10 +1572,28 @@ private struct AnswerRow: View {
                 onEdit: { store.answerDraftChanged(to: $0) },
                 onReturn: { store.takeAnswer(store.answerGround) },
                 onEscape: { store.closeOpenRow() },
-                onDigit: { store.takeNumberedOption($0) }
+                onDigit: { store.takeNumberedOption($0) },
+                onQuestionStep: { store.takeQuestionStep($0) }
             )
             .frame(maxWidth: .infinity)
             .frame(height: PanelMetrics.answerRowHeight)
+
+            // The question before this one, in the slot a set's absent refusal
+            // already leaves free (§5.7, §7). It never holds the ground — it
+            // sends nothing, and the brightest object on the row is still the
+            // only thing `⏎` does.
+            if store.canGoBackAQuestion {
+                AnswerControl(
+                    label: "Back",
+                    holdsGround: false,
+                    // A step is not an answer, so it is not held by the
+                    // arrival that holds one (§6.3).
+                    waitsForArrival: false,
+                    spoken: "Back to the previous question"
+                ) {
+                    store.goBackAQuestion()
+                }
+            }
 
             if let refusal = shape.refusal {
                 AnswerControl(
@@ -1622,6 +1640,15 @@ private struct AnswerControl: View {
 
     let label: String
     let holdsGround: Bool
+    /// Whether this control waits out §6.3's arrival before it takes a click.
+    ///
+    /// True of every control that answers, because the arrival is what stops
+    /// the click that answered one thing from answering the next. False of one
+    /// that only changes which question is drawn: it sends nothing, so there is
+    /// nothing for a stray click on it to spend.
+    var waitsForArrival: Bool = true
+    /// What a reader hears where the drawn word is shorter than the act (§13.3).
+    var spoken: String?
     let action: () -> Void
 
     @State private var isHovered = false
@@ -1656,7 +1683,7 @@ private struct AnswerControl: View {
             .onHover { isHovered = $0 }
             .onTapGesture(perform: action)
             .accessibilityElement()
-            .accessibilityLabel(label)
+            .accessibilityLabel(spoken ?? label)
             // §13.3: what the ground says in ink, spoken. It is the one piece
             // of state on this row that is drawn only as brightness, so a
             // reader who cannot see it would otherwise not know what `⏎` does.
@@ -1702,9 +1729,10 @@ private struct AnswerControl: View {
 
     /// Whether a click here would be taken, which is what the pointing hand
     /// promises. ``MonitorStore/takeAnswer(_:)`` refuses on both counts, so
-    /// this is that guard read back rather than a second rule.
+    /// this is that guard read back rather than a second rule — and a control
+    /// that does not answer is refused on only one of them.
     private var isTarget: Bool {
-        store.isAffirmativeArmed && !store.isAnswerInFlight
+        (store.isAffirmativeArmed || !waitsForArrival) && !store.isAnswerInFlight
     }
 }
 
@@ -1740,6 +1768,8 @@ private struct AnswerField: NSViewRepresentable {
     let onEscape: () -> Void
     /// A digit while the ground is still on an option, and whether it was taken.
     let onDigit: (Int) -> Bool
+    /// An arrow while the field is empty, and whether it walked the set (§5.7).
+    let onQuestionStep: (Int) -> Bool
 
     func makeNSView(context: Context) -> AnswerFieldView {
         let view = AnswerFieldView()
@@ -1756,6 +1786,7 @@ private struct AnswerField: NSViewRepresentable {
         context.coordinator.onEdit = onEdit
         context.coordinator.onReturn = onReturn
         context.coordinator.onEscape = onEscape
+        context.coordinator.onQuestionStep = onQuestionStep
         view.placeholder = placeholder
         view.isEditable = takesKeys
         view.onDigit = onDigit
@@ -1766,7 +1797,12 @@ private struct AnswerField: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onEdit: onEdit, onReturn: onReturn, onEscape: onEscape)
+        Coordinator(
+            onEdit: onEdit,
+            onReturn: onReturn,
+            onEscape: onEscape,
+            onQuestionStep: onQuestionStep
+        )
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -1774,15 +1810,18 @@ private struct AnswerField: NSViewRepresentable {
         var onEdit: (String) -> Void
         var onReturn: () -> Void
         var onEscape: () -> Void
+        var onQuestionStep: (Int) -> Bool
 
         init(
             onEdit: @escaping (String) -> Void,
             onReturn: @escaping () -> Void,
-            onEscape: @escaping () -> Void
+            onEscape: @escaping () -> Void,
+            onQuestionStep: @escaping (Int) -> Bool
         ) {
             self.onEdit = onEdit
             self.onReturn = onReturn
             self.onEscape = onEscape
+            self.onQuestionStep = onQuestionStep
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1791,16 +1830,25 @@ private struct AnswerField: NSViewRepresentable {
             onEdit(view.string)
         }
 
-        /// The three keys the panel answers to here, and they are the field's
-        /// own (§9.2).
+        /// The keys the panel answers to here, and they are the field's own
+        /// (§9.2).
         ///
-        /// `⌘⏎`, the arrows, `Space` and `⇥` are deliberately unbound: a second
-        /// way to approve would make the white ground advisory rather than
-        /// definitive, and the whole safety of this surface rests on the ground
-        /// being the literal truth about `⏎`. The digits are the one exception
-        /// and are read off the event in ``AnswerFieldView/keyDown(with:)``,
-        /// because what a digit means depends on whether anything has been
-        /// typed and this table cannot see that.
+        /// `⌘⏎`, `Space` and `⇥` are deliberately unbound: a second way to
+        /// approve would make the white ground advisory rather than definitive,
+        /// and the whole safety of this surface rests on the ground being the
+        /// literal truth about `⏎`. The digits are read off the event in
+        /// ``AnswerFieldView/keyDown(with:)`` instead, because what a digit
+        /// means depends on whether anything has been typed and this table
+        /// cannot see that.
+        ///
+        /// **The two horizontal arrows are offered to the panel here, and the
+        /// panel usually declines them** (§5.7). A bare `←` is exactly
+        /// `moveLeft:` — `⌥←` is `moveWordLeft:` and `⌘←` is
+        /// `moveToBeginningOfLine:`, so the selector is the bareness test and
+        /// no modifier reaches this. The store then takes it only while the
+        /// field is empty, which is where a caret has nowhere to move anyway;
+        /// returning `false` hands the key straight back to the text system, so
+        /// every arrow over text still edits it.
         func textView(
             _ view: NSTextView,
             doCommandBy selector: Selector
@@ -1809,6 +1857,10 @@ private struct AnswerField: NSViewRepresentable {
             case #selector(NSResponder.insertNewline(_:)):
                 onReturn()
                 return true
+            case #selector(NSResponder.moveLeft(_:)):
+                return onQuestionStep(-1)
+            case #selector(NSResponder.moveRight(_:)):
+                return onQuestionStep(1)
             case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
                 // `⌥⏎`, which AppKit binds here as well. `⇧⏎` does **not**
                 // arrive as this and is handled in ``AnswerFieldView/keyDown``

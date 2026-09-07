@@ -27188,6 +27188,253 @@ for line in sys.stdin:
         #expect(store.previewLine(for: row) == "Answered")
     }
 
+    /// A question already answered comes back wearing its own answer.
+    ///
+    /// §5.7. The set is walked forward by answering and backward by asking, and
+    /// what makes going back worth anything is that the question arrives as it
+    /// was left: the option still ticked, the field still holding what was
+    /// typed into *it* rather than into the question that replaced it. The
+    /// answer that finally goes back is then the newer of the two, because the
+    /// draft **is** the answer — a snapshot taken on the way past would send
+    /// the one the person deliberately came back to change.
+    @Test @MainActor
+    func aQuestionAlreadyAnsweredComesBackWearingTheAnswerItWasLeftWith() async throws {
+        let bench = answeringStore(request: questionSet(), status: .inputNeeded)
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        // Question one, answered by ticking, draws question two.
+        #expect(!store.canGoBackAQuestion)
+        store.takeAnswer(.option(1))
+        store.takeAnswer(.affirmative)
+        #expect(store.openRowBody?.position?.drawn == "2/2")
+        #expect(store.canGoBackAQuestion)
+        // Nothing has been reached beyond the question on screen.
+        #expect(!store.canGoForwardAQuestion)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        // And back it comes, with the tick that was left on it.
+        store.goBackAQuestion()
+        #expect(store.openQuestionIndex == 0)
+        #expect(store.openRowBody?.position?.drawn == "1/2")
+        #expect(store.isOptionTicked(1))
+        #expect(!store.canGoBackAQuestion)
+        #expect(store.canGoForwardAQuestion)
+        #expect(await service.answersTaken().isEmpty)
+
+        // Changed here, it is the changed answer that travels.
+        store.takeAnswer(.option(0))
+        #expect(store.isOptionTicked(0))
+        #expect(!store.isOptionTicked(1))
+        store.goForwardAQuestion()
+        #expect(store.openRowBody?.position?.drawn == "2/2")
+        // Question two was never answered, so it kept nothing and Send is
+        // still refused on it.
+        #expect(!store.canSubmitCurrentAnswer)
+        #expect(store.answerDraft.isEmpty)
+
+        store.takeAnswer(.option(0))
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(
+            await service.answersTaken() == [
+                .answers([
+                    AgentQuestionAnswer(question: "Which database?", answer: "SQLite"),
+                    AgentQuestionAnswer(question: "Which host?", answer: "Fly")
+                ])
+            ]
+        )
+    }
+
+    /// Each question keeps its own field, and going back restores it.
+    ///
+    /// §5.7 with §5.4: the text is the answer, so it is the question's own
+    /// state rather than the row's. Before this, advancing emptied the field
+    /// and recorded a string, which made the answer unrecoverable as something
+    /// a person could edit — coming back could only have offered an empty
+    /// question wearing the number of one that had been answered.
+    @Test @MainActor
+    func eachQuestionKeepsItsOwnFieldRatherThanTheRowsOne() async throws {
+        let bench = answeringStore(request: questionSet(), status: .inputNeeded)
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        store.answerDraftChanged(to: "neither, use SQLite")
+        store.takeAnswer(.affirmative)
+        // The field the next question arrives with is its own, and empty.
+        #expect(store.answerDraft.isEmpty)
+        store.answerDraftChanged(to: "our own box")
+
+        store.goBackAQuestion()
+        #expect(store.answerDraft == "neither, use SQLite")
+        store.goForwardAQuestion()
+        #expect(store.answerDraft == "our own box")
+
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(
+            await service.answersTaken() == [
+                .answers([
+                    AgentQuestionAnswer(
+                        question: "Which database?",
+                        answer: "neither, use SQLite"
+                    ),
+                    AgentQuestionAnswer(question: "Which host?", answer: "our own box")
+                ])
+            ]
+        )
+    }
+
+    /// The arrow walks the set only where the caret has nowhere to go.
+    ///
+    /// §5.7 on §9.2's own terms: a key is offered to the panel only while the
+    /// field has nothing in it for that key to mean, which is the digits' rule.
+    /// So `←` over text still moves the caret — the store declines it, and the
+    /// field keeps it — and ``MonitorStore/goBackAQuestion()``'s control is what
+    /// works in every state, including that one.
+    @Test @MainActor
+    func theArrowWalksTheSetOnlyWhereTheCaretHasNowhereToGo() async throws {
+        let bench = answeringStore(request: questionSet(), status: .inputNeeded)
+        let (store, _, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        // Nothing behind question one, so the key is the field's.
+        #expect(!store.takeQuestionStep(-1))
+        store.takeAnswer(.option(1))
+        store.takeAnswer(.affirmative)
+        #expect(store.openQuestionIndex == 1)
+
+        // With something typed, the arrow belongs to the caret — but the
+        // control does not, and it still goes back.
+        store.answerDraftChanged(to: "Render, but only in Europe")
+        #expect(!store.takeQuestionStep(-1))
+        #expect(store.openQuestionIndex == 1)
+        #expect(store.canGoBackAQuestion)
+        store.goBackAQuestion()
+        #expect(store.openQuestionIndex == 0)
+
+        // Question one kept nothing in its field, so the arrow is the panel's
+        // there and carries the set forward again.
+        #expect(store.takeQuestionStep(1))
+        #expect(store.openQuestionIndex == 1)
+
+        // And question two still holds what was typed into it, so the arrow is
+        // still the caret's on the way back — until the field is emptied.
+        #expect(!store.takeQuestionStep(-1))
+        #expect(store.openQuestionIndex == 1)
+        store.answerDraftChanged(to: "")
+        #expect(store.takeQuestionStep(-1))
+        #expect(store.openQuestionIndex == 0)
+    }
+
+    /// A bare `←` reaches the panel through the field's own command table.
+    ///
+    /// **The one thing on §5.7 that is an assumption about AppKit rather than
+    /// about this app**, so it is asserted against the real objects: a real
+    /// ``AnswerFieldView`` inside a real ``OpenRow`` in a real key window, sent
+    /// a real `keyDown`. The arrow is not bound anywhere — it is offered by
+    /// `moveLeft:` arriving at the delegate, which is where `⏎` and `⎋` already
+    /// arrive — so the day the text system stops routing it there, this fails
+    /// instead of the key quietly going back to moving a caret that has nowhere
+    /// to move.
+    @Test @MainActor
+    func aBareArrowReachesThePanelThroughTheFieldsOwnCommandTable() async throws {
+        let bench = answeringStore(request: questionSet(), status: .inputNeeded)
+        let (store, _, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.option(1))
+        store.takeAnswer(.affirmative)
+        #expect(store.openQuestionIndex == 1)
+
+        let host = NSHostingView(rootView: OpenRow(session: row).environmentObject(store))
+        host.setFrameSize(NSSize(width: 520, height: store.openRowHeight ?? 400))
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        for _ in 0..<20 {
+            try await Task.sleep(for: .milliseconds(20))
+            if findField(host) != nil { break }
+        }
+        let field = try #require(findField(host))
+        window.makeFirstResponder(field)
+        #expect(window.firstResponder === field)
+
+        let arrow = String(UnicodeScalar(UInt32(NSLeftArrowFunctionKey))!)
+        let event = try #require(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.function, .numericPad],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: arrow,
+                charactersIgnoringModifiers: arrow,
+                isARepeat: false,
+                keyCode: 123
+            )
+        )
+        field.keyDown(with: event)
+        // Back on question one, wearing the answer it was left with.
+        #expect(store.openQuestionIndex == 0)
+        #expect(store.isOptionTicked(1))
+        window.orderOut(nil)
+    }
+
+    /// `→` cannot reach a question the set has not drawn, and so cannot send.
+    ///
+    /// §5.7. Forward returns to a question already reached; reaching a new one
+    /// is the whole of what `Send` means, and on the last question `Send` is
+    /// what submits. Keeping the two apart is what makes the arrow incapable of
+    /// sending a set — and the gate it does keep, that the question on screen
+    /// answers something, is what stops a short set going back to the product.
+    @Test @MainActor
+    func forwardCannotReachANewQuestionAndSoCannotSendTheSet() async throws {
+        // Several answers allowed, because that is the only form whose question
+        // can stop answering anything: a single choice is replaced by a click
+        // and never cleared by one (§5.5).
+        let bench = answeringStore(
+            request: questionSet(allowsSeveralAnswers: true),
+            status: .inputNeeded
+        )
+        let (store, service, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        // Question one is the frontier: there is nothing ahead to return to,
+        // however answerable it is.
+        store.takeAnswer(.option(1))
+        #expect(store.canSubmitCurrentAnswer)
+        #expect(!store.canGoForwardAQuestion)
+        #expect(!store.takeQuestionStep(1))
+        #expect(store.openQuestionIndex == 0)
+        #expect(await service.answersTaken().isEmpty)
+
+        // Reached, returned from — and now refused again the moment the
+        // question it would leave behind stops answering anything.
+        store.takeAnswer(.affirmative)
+        store.goBackAQuestion()
+        #expect(store.canGoForwardAQuestion)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.option(1))
+        #expect(!store.isOptionTicked(1))
+        #expect(!store.canSubmitCurrentAnswer)
+        #expect(!store.canGoForwardAQuestion)
+        #expect(!store.takeQuestionStep(1))
+        #expect(await service.answersTaken().isEmpty)
+    }
+
     /// Typed text replaces a selected option; it is never sent as an annotation.
     @Test @MainActor
     func typedTextReplacesTheSelectedOptionInsteadOfBecomingItsNote() async {
@@ -36778,4 +37025,14 @@ private extension CGPoint {
     func isNear(_ other: CGPoint, within tolerance: CGFloat = 0.000_1) -> Bool {
         hypot(x - other.x, y - other.y) < tolerance
     }
+}
+
+/// The text view inside a hosted open row, wherever SwiftUI put it.
+@MainActor
+private func findField(_ view: NSView) -> AnswerFieldView? {
+    if let field = view as? AnswerFieldView { return field }
+    for child in view.subviews {
+        if let found = findField(child) { return found }
+    }
+    return nil
 }

@@ -3173,6 +3173,95 @@ final class MonitorStore: ObservableObject {
         return true
     }
 
+    // MARK: - Walking a set backwards
+
+    /// Whether the body can step back to the question before the one showing.
+    ///
+    /// **The one control that is always there while there is a question behind
+    /// this one** (§5.7). It is not gated on ``isAffirmativeArmed``: that arms
+    /// a *ground*, and going back neither holds one nor sends anything, so the
+    /// arrival §6.3 guards — something nobody has read appearing under a
+    /// pointer already on it — is not the arrival this is.
+    var canGoBackAQuestion: Bool {
+        guard !isAnswerInFlight, openSession?.request?.answerRow != nil else { return false }
+        return openQuestionIndex > 0
+    }
+
+    /// Whether the body can step forward again to a question already reached.
+    ///
+    /// **`→` can never reach a new question, and so can never send** (§5.7).
+    /// It returns to one the set has already drawn, which is why it needs no
+    /// answer of its own to be safe — and it still asks for one, on the same
+    /// gate `Send` uses, because leaving a question unanswered is what would
+    /// let a short set go back to the product.
+    var canGoForwardAQuestion: Bool {
+        guard !isAnswerInFlight, openSession?.request?.answerRow != nil,
+              let openRowID, let progress = answerProgress[openRowID] else { return false }
+        return progress.questionIndex < progress.furthestQuestionReached
+            && canSubmitCurrentAnswer
+    }
+
+    /// Draws the question before this one, with what was put into it (§5.7).
+    func goBackAQuestion() {
+        guard canGoBackAQuestion else { return }
+        drawQuestion(openQuestionIndex - 1)
+    }
+
+    /// Draws the question after this one, which the set has already reached.
+    func goForwardAQuestion() {
+        guard canGoForwardAQuestion else { return }
+        drawQuestion(openQuestionIndex + 1)
+    }
+
+    /// With an empty field, `←` and `→` walk the set instead of the caret.
+    ///
+    /// **The digits' own rule, on the digits' own reasoning** (§9.2): a key is
+    /// offered to the panel only while the field has nothing in it for that key
+    /// to mean, and the moment anything is typed it belongs to the caret again.
+    /// So the arrow is the shortcut and ``goBackAQuestion()``'s control is what
+    /// always works — including in the one case the arrow gives up, a question
+    /// whose answer has been typed rather than chosen.
+    ///
+    /// - Returns: whether the panel took the key, which is what tells the field
+    ///   to keep it or to let it through.
+    @discardableResult
+    func takeQuestionStep(_ direction: Int) -> Bool {
+        guard answerDraft.isEmpty else { return false }
+        switch direction {
+        case ..<0 where canGoBackAQuestion:
+            goBackAQuestion()
+        case 1... where canGoForwardAQuestion:
+            goForwardAQuestion()
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// Puts another question of the set on screen, keeping every draft.
+    ///
+    /// Nothing is cleared and nothing is recorded: the drafts are the answers
+    /// (§5.7), so a step is only a change of which one is drawn. It does not
+    /// re-arm the affirmative — ``armTheAffirmativeOnArrival(of:)`` exists for a
+    /// question a person has not asked for and has never seen, and this is the
+    /// opposite of both.
+    private func drawQuestion(_ index: Int) {
+        guard let openRowID,
+              let questions = openSession?.request?.askedQuestions,
+              index >= 0, index < questions.count,
+              var progress = answerProgress[openRowID],
+              progress.questionIndex != index else { return }
+        progress.questionIndex = index
+        answerProgress[openRowID] = progress
+        // The field holds the question that was on screen, and the store is now
+        // the one deciding what it holds instead.
+        answerDraftGeneration &+= 1
+        refreshAnswerGround()
+        // A different question is a different height, so the row and the window
+        // it stands in are both remeasured.
+        answerRevision &+= 1
+    }
+
     /// Whether one option of the question on screen is ticked (§5.5).
     func isOptionTicked(_ index: Int) -> Bool {
         guard let openRowID else { return false }
@@ -3223,35 +3312,38 @@ final class MonitorStore: ObservableObject {
     ///
     /// Non-whitespace text replaces every selected label. Clearing it restores
     /// the selection; neither path creates an annotation on a chosen answer.
+    ///
+    /// **The answers are read out of the drafts at the moment the set leaves**,
+    /// never snapshotted question by question on the way past (§5.7). While
+    /// nobody goes back the two are the same value; when somebody does, a
+    /// snapshot would be the older of the two answers to a question they
+    /// deliberately came back to change.
     private func answerTheQuestion(
         of session: MonitoredSession,
         on ticket: HookReplyRegistry.Ticket,
         saying notice: String
     ) {
-        guard let request = session.request else { return }
+        guard let request = session.request, let openRowID else { return }
         let questions = request.askedQuestions
         guard !questions.isEmpty else { return }
-        let position = min(max(openQuestionIndex, 0), questions.count - 1)
-        let asked = questions[position]
-        let typed = answerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let chosen = asked.options.filter { isOptionTicked($0.id) }.map(\.label)
-        guard !typed.isEmpty || !chosen.isEmpty else { return }
-        // Text is the answer, never an annotation on a selected label.
-        let answered = AgentQuestionAnswer(
-            question: asked.text,
-            answer: typed.isEmpty ? chosen.joined(separator: ", ") : typed
-        )
-
-        guard let openRowID else { return }
         var progress = answerProgress[openRowID] ?? AnswerProgress()
-        progress.answers[position] = answered
+        let position = min(max(progress.questionIndex, 0), questions.count - 1)
+        guard Self.answer(
+            to: questions[position],
+            from: progress.draft(forQuestion: position)
+        ) != nil else { return }
+
         if position + 1 < questions.count {
             progress.questionIndex = position + 1
-            progress.draft = ""
-            progress.ticked = []
-            progress.expandedOptions = []
+            // The frontier only ever moves forward, and only here: `Send` is
+            // the one act that reaches a question for the first time (§5.7).
+            progress.furthestQuestionReached = max(
+                progress.furthestQuestionReached, position + 1
+            )
             answerProgress[openRowID] = progress
+            // The field holds the question that was on screen; the one arriving
+            // has a draft of its own, which is empty until it has been reached
+            // before.
             answerDraftGeneration &+= 1
             refreshAnswerGround()
             // The body is a question taller or shorter than the one it
@@ -3266,10 +3358,37 @@ final class MonitorStore: ObservableObject {
 
         answerProgress[openRowID] = progress
         send(
-            .answers(questions.indices.compactMap { progress.answers[$0] }),
+            .answers(
+                questions.indices.compactMap {
+                    Self.answer(to: questions[$0], from: progress.draft(forQuestion: $0))
+                }
+            ),
             for: session,
             on: ticket,
             saying: notice
+        )
+    }
+
+    /// What one question's draft answers, or `nil` while it answers nothing.
+    ///
+    /// The single place a draft becomes an answer, so the gate on leaving a
+    /// question and the value that finally goes back cannot disagree — which is
+    /// what keeps a set that walks backwards from sending a short one: a
+    /// question emptied after being answered stops being passable at exactly
+    /// the moment it stops being answered.
+    ///
+    /// Text is the answer, never an annotation on a selected label (§5.4), and
+    /// several labels join in the order the product listed them (§5.5).
+    private static func answer(
+        to question: AgentQuestion,
+        from draft: AnswerProgress.Draft
+    ) -> AgentQuestionAnswer? {
+        let typed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let chosen = question.options.filter { draft.ticked.contains($0.id) }.map(\.label)
+        guard !typed.isEmpty || !chosen.isEmpty else { return nil }
+        return AgentQuestionAnswer(
+            question: question.text,
+            answer: typed.isEmpty ? chosen.joined(separator: ", ") : typed
         )
     }
 
