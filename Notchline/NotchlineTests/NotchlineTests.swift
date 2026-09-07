@@ -26886,36 +26886,81 @@ for line in sys.stdin:
         subscription.cancel()
     }
 
-    /// A waiting row's ground is sized for its longest word and never resizes.
+    /// A waiting row's mark offers the act, and it is decided at rest.
     ///
-    /// `panel-v2.md` §6, and the reason the duration had to leave this ground
-    /// for the finished row's dark one: under the pointer the word inside
-    /// becomes `Answer` or `Read`, and **nothing on the row may move as a
-    /// pointer passes over it** (`answer-in-notch.md` §3.3). A ground that hugs
-    /// its content cannot promise that, so it is measured once against every
-    /// word it can ever hold — and a ground sized for `0:42` could hold none of
-    /// them.
+    /// **Replaces `aWaitingRowsGroundIsSizedForItsLongestWordAndNeverResizes`,
+    /// which pinned a reservation that no longer has anything to protect.** The
+    /// ground was measured once against `Approval needed`, `Input needed`,
+    /// `Answer` and `Read` because the word changed under the pointer and
+    /// nothing on a row may move as a pointer passes over it
+    /// (`answer-in-notch.md` §3.3). The word is now a function of the row's own
+    /// status and request, so §3.3 holds by construction — this pins the
+    /// stronger invariant the reservation was standing in for: **the pointer is
+    /// not one of the inputs.**
     @Test @MainActor
-    func aWaitingRowsGroundIsSizedForItsLongestWordAndNeverResizes() {
-        let width = PanelMetrics.waitingMarkWidth
+    func aWaitingRowsMarkIsDecidedByItsRequestAndNotByThePointer() {
+        // A consent and a question are different waits and take different
+        // verbs; everything else can only be read.
+        #expect(
+            PanelMetrics.waitingMarkWord(for: .approvalNeeded, canBeAnswered: true)
+                == PanelMetrics.waitingMarkApproveWord
+        )
+        #expect(
+            PanelMetrics.waitingMarkWord(for: .inputNeeded, canBeAnswered: true)
+                == PanelMetrics.waitingMarkAnswerWord
+        )
+        // §11 rule 03: a request no connection is held open for is offered no
+        // act at all, whatever it is waiting on.
+        for status in SessionStatus.allCases {
+            #expect(
+                PanelMetrics.waitingMarkWord(for: status, canBeAnswered: false)
+                    == PanelMetrics.waitingMarkReadWord,
+                "\(status) promises an act it cannot deliver"
+            )
+        }
+        #expect(
+            PanelMetrics.waitingMarkWord(for: .running, canBeAnswered: true)
+                == PanelMetrics.waitingMarkReadWord
+        )
+        #expect(
+            PanelMetrics.waitingMarkWord(for: .completed, canBeAnswered: true)
+                == PanelMetrics.waitingMarkReadWord
+        )
+    }
+
+    /// And the ground hugs that word, because nothing is reserved any more.
+    ///
+    /// The mark is a control rather than a reading now: twice the reading
+    /// ground's height, on the same corner ratio, hugging one verb. What this
+    /// guards is the reason that became possible — every word it can draw is
+    /// far narrower than the phrase it replaced, so the slab cannot come back
+    /// by way of a longer word.
+    @Test @MainActor
+    func aWaitingRowsGroundHugsTheOneWordItCanShow() {
+        let phrase = PanelMetrics.drawnWaitingMarkWidth(
+            SessionStatus.approvalNeeded.displayName
+        )
         for word in [
-            SessionStatus.approvalNeeded.displayName,
-            SessionStatus.inputNeeded.displayName,
+            PanelMetrics.waitingMarkApproveWord,
             PanelMetrics.waitingMarkAnswerWord,
             PanelMetrics.waitingMarkReadWord
         ] {
-            let needed = PanelMetrics.drawnWaitingMarkWidth(word)
-            #expect(needed <= width, "\(word) does not fit")
-        }
-        // And it is the longest name that decides it, not one of the two verbs
-        // -- which is what makes the ground stand still when the word changes.
-        #expect(
-            width == PanelMetrics.drawnWaitingMarkWidth(
-                SessionStatus.approvalNeeded.displayName
+            let drawn = PanelMetrics.drawnWaitingMarkWidth(word)
+            #expect(
+                drawn == ceil(
+                    PanelMetrics.textWidth(word, font: PanelMetrics.waitingMarkFont)
+                        + PanelMetrics.waitingMarkPadding * 2
+                ),
+                "\(word) does not hug its ground"
             )
-        )
+            #expect(drawn < phrase * 0.65, "\(word) is not meaningfully narrower")
+        }
+        // A control, not a reading: the tile it left is half this tall, and the
+        // corner keeps that tile's proportion.
+        #expect(PanelMetrics.waitingMarkHeight == PanelMetrics.readingGroundHeight * 2)
         #expect(
-            PanelMetrics.drawnWaitingMarkWidth(PanelMetrics.waitingMarkAnswerWord) < width
+            PanelMetrics.waitingMarkCornerRadius
+                == PanelMetrics.readingGroundCornerRadius * 2
         )
     }
 

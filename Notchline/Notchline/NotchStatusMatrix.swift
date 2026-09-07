@@ -131,13 +131,14 @@ enum NotchPalette {
     /// What a row draws under the pointer, and it is not one answer: a row
     /// washes, a folding bar does not.
     ///
-    /// **A session row fills, faintly, in ``themeInk``'s lit colour.**
+    /// **A session row fills in ``themeInk``'s lit colour.**
     /// It tried a border and a halo for a while — traced the edge instead of
     /// repainting the ground — and that read as a wire drawn around the row
     /// rather than as the row answering. A fill is back, but not the flat
-    /// `#2B2B2E` it was before: this one is the app's own ink at a few points
-    /// of opacity, so it is still black doing the answering, only barely
-    /// lifted, never a grey invented for the occasion.
+    /// `#2B2B2E` it was before: this one is the app's own ink at a low
+    /// opacity, so it is still black doing the answering, only lifted, never a
+    /// grey invented for the occasion. Faintly was the first reading of *low*
+    /// and it was too faint to see — the weights below say where it landed.
     ///
     /// **A retired row takes exactly that fill, at exactly those weights.**
     /// ~~It took a short mark of ``themeInk`` at its leading edge instead, on
@@ -155,8 +156,27 @@ enum NotchPalette {
     enum RowEmphasis {
         /// Every row on this panel that fills: a live session row, the row
         /// held open for an answer, and a retired row.
-        static let sessionHoverFillOpacity: Double = 0.08
-        static let sessionPressedFillOpacity: Double = 0.16
+        ///
+        /// **Two weights up from where the wash started**, because at `0.08`
+        /// (`L 0.184`) it was so faint on a real bar that the row read as not
+        /// answering at all — the point of a wash is that the pointer's row is
+        /// obvious without anything moving, and this one had to be looked for.
+        ///
+        /// **`0.12`–`0.14` is not available, and the reason is on the row.**
+        /// A product badge draws its own opaque ground at `L 0.234` and does
+        /// not wash with the row it sits on (see ``MatrixInk/chipFill``), so a
+        /// wash in that band erases the badge's boundary at exactly the moment
+        /// the pointer is on it. `0.20` does the same to the subagent chip's
+        /// `L 0.296`. `0.16` (`L 0.263`) is the nearest weight that is plainly
+        /// brighter and still clears both by about `0.03` — the badge reads as
+        /// an inset, the chip as a lift, which is what `colour-v2.md` §10
+        /// question 02 asked for.
+        ///
+        /// The pressed weight moves with it, keeping the same step between
+        /// the two states the eye was already reading (`ΔL ≈ 0.08`) rather
+        /// than collapsing press into hover.
+        static let sessionHoverFillOpacity: Double = 0.16
+        static let sessionPressedFillOpacity: Double = 0.24
 
         /// Ease-in-out both ways -- the same gentle acceleration and
         /// deceleration whether the emphasis is arriving or leaving -- and
@@ -195,8 +215,44 @@ enum NotchPalette {
     /// wallpaper that was merely dim rather than black, and undimmed it read
     /// as a mark. This is the midpoint of those two.
     private static let edgeDimming = 0.75
-    /// `text/notch-spotlight` — the searchlight highlight.
+    /// `text/notch-spotlight` — white, and it is the **pointer's** value now
+    /// rather than the surface's own.
+    ///
+    /// It used to fill every ground that wanted a person: the waiting row's
+    /// mark, the subagent badge behind it, and the ground `⏎` sits on inside an
+    /// open row. All of those are ``brightGround`` now — the app's own ink —
+    /// and the one filled area still drawn in white is the mark with the
+    /// pointer on it. So the brightest value this surface has says *you are
+    /// touching this* instead of *this exists*, which is the only thing white
+    /// can say that the ink cannot.
+    ///
+    /// The searchlight sweeping a row's text keeps it too, as
+    /// ``spotlightDrawingColor``: that is a glyph brightening, not a filled
+    /// area, and nothing on this surface reads the two against each other.
     static let spotlight = Color.white
+
+    /// The one bright ground this surface fills, and the ink drawn on it.
+    ///
+    /// ``themeInk``'s lit value — `#DEE8E0`, `L∗ 91` — which already draws the
+    /// aggregate mark on the collapsed bar and the text of every product badge.
+    /// A filled area in it is still by a wide margin the loudest thing in a list
+    /// of `#7C7C80` readings, and unlike white it is *this app's*: the row's
+    /// mark and the chip naming its product are then one ink, mirrored, rather
+    /// than a house colour beside a borrowed one.
+    ///
+    /// It is deliberately one name for both meanings the bright ground carries
+    /// — *this row wants a person* on the list, and *this is what `⏎` does*
+    /// inside an open row — because it is one object: the ground the pointer
+    /// pressed grows and travels down to the answer row (`answer-in-notch.md`
+    /// §3.1), and a ground that changed colour on the way would be two.
+    static var brightGround: Color { themeInk.on }
+    /// What is drawn on ``brightGround``: the same ink's unlit end, `#1B1F1C`,
+    /// at `13.3 : 1`.
+    ///
+    /// Not black and not ``label``: the pair inverts within one ink, which is
+    /// what makes a mark on the bright ground and a product badge on the dark
+    /// one legibly the same family and legibly opposite.
+    static var onBrightGround: Color { themeInk.off }
     /// Session title — the one element that stays bright.
     static let sessionTitle = Color.white.opacity(0.98)
     /// `#C7C7CC` — the step between the title's white and ``label``'s
@@ -207,16 +263,6 @@ enum NotchPalette {
     /// spend, which is the brightest thing in the table's three levels
     /// (`quota-footer-v2.md` §5).
     static let reading = Color(red: 0xC7 / 255, green: 0xC7 / 255, blue: 0xCC / 255)
-    /// A neutral subagent badge's numeral once its ground has flipped, drawn
-    /// on ``spotlight`` white.
-    ///
-    /// `dual-agent-design.md` §10. Not ``label`` or pure black: the badge
-    /// inverts the same way the row's own attention state already does
-    /// elsewhere on this surface, and this is that inversion's dark end. A
-    /// product-tinted badge inverts within its own ink instead and never
-    /// reaches this value.
-    static let chipOnLight = Color(red: 0.05, green: 0.05, blue: 0.06)
-
     /// The ground a request's machine text is set on.
     ///
     /// `#242424`, and the same value the resting mark's own tile lands on — this
@@ -231,13 +277,14 @@ enum NotchPalette {
         green: 0x24 / 255,
         blue: 0x24 / 255
     )
-    /// A reading on the white ground: an option's numeral and its description
+    /// A reading on ``brightGround``: an option's numeral and its description
     /// while that option holds the ground.
     ///
     /// `#5A5A5E` (§5.1). The dark end of the same inversion the badge and the
-    /// waiting mark already make — the label goes to ``chipOnLight`` and
+    /// waiting mark already make — the label goes to ``onBrightGround`` and
     /// everything beside it goes here, so the option keeps its two levels on
-    /// white exactly as it has them on black.
+    /// the bright ground exactly as it has them on black. It is `5.3 : 1` on
+    /// `#DEE8E0`, so the step survived the ground ceasing to be white.
     static let readingOnLight = Color(
         red: 0x5A / 255,
         green: 0x5A / 255,
@@ -277,14 +324,17 @@ enum NotchPalette {
         blue: 0xCC / 255,
         alpha: 1
     )
+    /// The searchlight that sweeps a row's text, which is the one white left on
+    /// this surface that the pointer did not put there — and it brightens
+    /// glyphs rather than filling an area. See ``spotlight``.
     static let spotlightDrawingColor = NSColor.white
     static let sessionTitleDrawingColor = NSColor.white.withAlphaComponent(0.98)
-    /// ``chipOnLight`` for the layer-backed readings, which draw through
+    /// ``onBrightGround`` for the layer-backed readings, which draw through
     /// AppKit rather than SwiftUI.
-    static let chipOnLightDrawingColor = NSColor(
-        srgbRed: 0.05,
-        green: 0.05,
-        blue: 0.06,
+    static let onBrightGroundDrawingColor = NSColor(
+        srgbRed: themeInk.offRed,
+        green: themeInk.offGreen,
+        blue: themeInk.offBlue,
         alpha: 1
     )
 }
@@ -521,7 +571,7 @@ struct SubagentBadgeView: View {
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(
                 badge.wantsAttention
-                    ? NotchPalette.chipOnLight
+                    ? NotchPalette.onBrightGround
                     : NotchPalette.label
             )
             .frame(
@@ -544,7 +594,11 @@ struct SubagentBadgeView: View {
     /// Dim while everything it counts is running, bright the moment one of them
     /// is stopped on a question.
     ///
-    /// The bright end is the surface's own white. The dim end is
+    /// The bright end is ``NotchPalette/brightGround`` -- the app's own ink,
+    /// not white, and it moves with the waiting row's mark rather than on its
+    /// own account: the two are the same tile in the same slot, and one of
+    /// them staying white would leave a single white mark in a column whose
+    /// bright marks are all the ink. The dim end is
     /// ``NotchPalette/MatrixInk/chipFill`` lifted off black -- always black,
     /// now that a session row's own fill no longer brightens under the
     /// pointer or while held down.
@@ -552,7 +606,7 @@ struct SubagentBadgeView: View {
         guard badge.wantsAttention else {
             return NotchPalette.restingInk.chipFill
         }
-        return NotchPalette.spotlight
+        return NotchPalette.brightGround
     }
 }
 

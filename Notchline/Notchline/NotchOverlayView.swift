@@ -1512,7 +1512,7 @@ private struct AnswerControl: View {
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(
                 holdsGround
-                    ? Color(NotchPalette.chipOnLightDrawingColor)
+                    ? NotchPalette.onBrightGround
                     : NotchPalette.reading
             )
             .fixedSize()
@@ -1538,8 +1538,13 @@ private struct AnswerControl: View {
             .accessibilityAction { action() }
     }
 
-    /// White while it is what `⏎` does; the list's own hover fill under the
-    /// pointer; nothing otherwise.
+    /// ``NotchPalette/brightGround`` while it is what `⏎` does; the list's own
+    /// hover fill under the pointer; nothing otherwise.
+    ///
+    /// **The same ink as the mark that opened this row, and it has to be**: the
+    /// ground the pointer pressed on the caption line grows and travels down
+    /// here (§3.1), and a ground that changed colour on the way would be two
+    /// objects rather than one moving.
     ///
     /// A ground that has not finished arriving is drawn but is not yet a target
     /// (§6.3) — it is dimmed rather than hidden, because the eye is already
@@ -1547,7 +1552,7 @@ private struct AnswerControl: View {
     /// second object.
     private var ground: Color {
         guard !holdsGround else {
-            return NotchPalette.spotlight.opacity(store.isAffirmativeArmed ? 1 : 0.45)
+            return NotchPalette.brightGround.opacity(store.isAffirmativeArmed ? 1 : 0.45)
         }
         return Color.white.opacity(isHovered ? 0.12 : 0)
     }
@@ -2123,7 +2128,7 @@ private struct OptionRow: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(
                     holdsGround
-                        ? Color(NotchPalette.chipOnLightDrawingColor)
+                        ? NotchPalette.onBrightGround
                         : NotchPalette.sessionTitle
                 )
                 .fixedSize()
@@ -2209,7 +2214,7 @@ private struct OptionRow: View {
 
     private var ground: Color {
         guard !holdsGround else {
-            return NotchPalette.spotlight.opacity(store.isAffirmativeArmed ? 1 : 0.45)
+            return NotchPalette.brightGround.opacity(store.isAffirmativeArmed ? 1 : 0.45)
         }
         return Color.white.opacity(isHovered && isAnswerable ? 0.12 : 0)
     }
@@ -2668,19 +2673,44 @@ private struct SessionStatusControl: View {
     /// once a second for as long as a row sat waiting, and a name does not tick
     /// at all. `AGENTS.md` §7's rule is about continuous motion, and this
     /// removes some.
+    ///
+    /// **It is built like a control now and not like a reading.** It used to be
+    /// a ``ReadingGround`` — the elapsed reading's own `16` pt tile — at a width
+    /// reserved for the longest of four strings, which drew a `113 × 16` slab
+    /// of pure white under a phrase naming a state. It is twice that height on
+    /// the same corner ratio, it hugs one verb, and the ground is the app's own
+    /// ink; the only pure white left on this panel is this chip with the
+    /// pointer on it. See ``NotchPalette/brightGround``.
     private var waitingWord: some View {
-        ReadingGround(
-            fill: NotchPalette.spotlight,
-            width: PanelMetrics.waitingMarkWidth
-        ) {
-            Text(word)
-                .font(Font(PanelMetrics.waitingMarkFont))
-                .foregroundStyle(Color(NotchPalette.chipOnLightDrawingColor))
-                .lineLimit(1)
-                .fixedSize()
-        }
-        .onHover { isMarkHovered = $0 }
-        .contentShape(Rectangle())
+        Text(word)
+            .font(Font(PanelMetrics.waitingMarkFont))
+            .foregroundStyle(NotchPalette.onBrightGround)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, PanelMetrics.waitingMarkPadding)
+            .frame(height: PanelMetrics.waitingMarkHeight)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: PanelMetrics.waitingMarkCornerRadius,
+                    style: .continuous
+                )
+                .fill(ground)
+            )
+            // The row's own curve, on the row's own values: a chip that lit at
+            // a different speed from the row it sits on would read as two
+            // things answering one pointer.
+            .animation(
+                isMarkHovered
+                    ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
+                    : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
+                value: isMarkHovered
+            )
+            // An overlay rather than a background, and it declines every hit:
+            // a view behind the content never wins the hit test, and this one
+            // must not win it anyway -- the tap below is the target.
+            .overlay(PointingHandCursor())
+            .onHover { isMarkHovered = $0 }
+            .contentShape(Rectangle())
         // **The mark is the request; the text is the Thread** (§3). A tap on a
         // descendant takes precedence over the row's own button, so this is the
         // second target without the row becoming two views — and no other row
@@ -2696,22 +2726,37 @@ private struct SessionStatusControl: View {
         }
     }
 
-    /// The word inside the ground: the status at rest, and what a click would
-    /// do under the pointer.
+    /// The word inside the ground, and the pointer no longer changes it.
     ///
-    /// `Read` where the request cannot be answered from here and `Answer` where
-    /// it can — which is a fact about **this row's request** rather than about
-    /// its product, because the two products differ per shape rather than
-    /// wholesale (`answer-in-notch.md` §11 rule 06).
+    /// ~~The status at rest, and what a click would do under the pointer.~~
+    /// **Superseded.** The swap was there because `Approval needed` does not
+    /// look like something to click; a verb does, so the word a click would
+    /// have revealed is simply the word. What that removes is not only a
+    /// hover state but the reserved width it forced (§3.3, and
+    /// ``PanelMetrics/drawnWaitingMarkWidth(_:)``): nothing on the row can move
+    /// under a passing pointer when nothing on the row changes.
+    ///
+    /// Which verb is a fact about **this row's request** rather than about its
+    /// product, because the two products differ per shape rather than wholesale
+    /// (`answer-in-notch.md` §11 rule 06) — so it is asked of the request, and
+    /// a request no connection is held for says `Read` whatever its status.
     private var word: String {
-        guard isMarkHovered else { return session.status.displayName }
-        // `Read` until this request can genuinely be answered from here. The
-        // word is a promise about what a click does, and with no write path
-        // built there is nothing behind `Answer` -- which is the same rule that
-        // keeps the white ground off the open row until there is (§11 rule 03).
-        return session.request?.canBeAnswered == true
-            ? PanelMetrics.waitingMarkAnswerWord
-            : PanelMetrics.waitingMarkReadWord
+        PanelMetrics.waitingMarkWord(
+            for: session.status,
+            canBeAnswered: session.request?.canBeAnswered == true
+        )
+    }
+
+    /// The chip's ground: the app's ink, and white for as long as the pointer
+    /// is on it.
+    ///
+    /// The two are `#DEE8E0` and `#FFFFFF` — nine points of lightness, which is
+    /// the right size for this. The chip is not being told apart from anything;
+    /// it is confirming that the pointer found the one object on the row whose
+    /// click stays here, and the row's own wash arrives underneath it in the
+    /// same `130 ms`.
+    private var ground: Color {
+        isMarkHovered ? NotchPalette.spotlight : NotchPalette.brightGround
     }
 
     /// The reading, on the ground its state gives it.
@@ -2737,7 +2782,7 @@ private struct SessionStatusControl: View {
 
     /// The ground under the reading, or nil on the one state that has none.
     private var groundFill: Color? {
-        if wantsAttention { return NotchPalette.spotlight }
+        if wantsAttention { return NotchPalette.brightGround }
         guard !session.status.keepsTiming else { return nil }
         return NotchPalette.restingInk.chipFill
     }
@@ -2765,7 +2810,7 @@ private struct SessionStatusControl: View {
     /// what makes it legible at a glance instead of only in comparison.
     private var tint: NSColor {
         wantsAttention
-            ? NotchPalette.chipOnLightDrawingColor
+            ? NotchPalette.onBrightGroundDrawingColor
             : NotchPalette.labelDrawingColor
     }
 
@@ -2850,6 +2895,68 @@ private struct ProductBadge: View {
                 .fill(ink.off)
             )
             .fixedSize()
+    }
+}
+
+/// The pointing hand over the one control in the list, on a window that is
+/// never key.
+///
+/// **`addCursorRect(_:cursor:)` is the ordinary way to do this and it does not
+/// work here.** AppKit services cursor rectangles for the key window only, and
+/// this overlay is a non-activating panel that never becomes one -- the same
+/// property ``SecondaryClickView/acceptsFirstMouse(for:)`` exists for. A
+/// tracking area registered `.activeAlways` is delivered regardless, so the
+/// cursor is set on the way in and put back on the way out.
+///
+/// **`set()` rather than `push()`/`pop()`**, deliberately: the cursor stack is
+/// global to the process and this view lives on a row that can retire, and on
+/// a panel that collapses the moment the pointer leaves it. A push whose pop
+/// never runs would leave the hand on the whole machine, where a `set()` that
+/// is never balanced is corrected by the next thing to set a cursor.
+struct PointingHandCursor: NSViewRepresentable {
+    func makeNSView(context: Context) -> PointingHandView { PointingHandView() }
+
+    func updateNSView(_ nsView: PointingHandView, context: Context) {}
+}
+
+final class PointingHandView: NSView {
+    private var tracking: NSTrackingArea?
+
+    /// `.inVisibleRect` keeps the area in step with the row as the list
+    /// scrolls; without it the rectangle is the one captured here and a
+    /// scrolled row hands out the hand over whatever moved into its old place.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    /// Never takes a click. The chip underneath is the target and this view
+    /// only says what the pointer looks like over it -- and a tracking area is
+    /// geometric, so declining every hit costs it nothing.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    /// A row can retire, or the panel collapse, while the pointer is still on
+    /// the chip -- and then `mouseExited` never arrives. Leaving the window is
+    /// the one moment that is always observed, so the arrow is restored there
+    /// too. It is what the pointer would have been given anyway.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { NSCursor.arrow.set() }
     }
 }
 

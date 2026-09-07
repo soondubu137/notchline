@@ -789,48 +789,86 @@ enum PanelMetrics {
     /// The word on a waiting row's bright ground.
     ///
     /// Not the timer's monospaced-digit face: this draws a name rather than a
-    /// figure, and the medium weight is the one the mark already used when it
-    /// wanted a person.
-    static let waitingMarkFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    /// figure. **Semibold rather than the Medium it was**, and that is a
+    /// correction for the ground under it rather than a change of emphasis:
+    /// dark glyphs on a light field read a weight lighter than light glyphs on
+    /// a dark one, so matching the perceived weight of the `13 pt` Medium title
+    /// beside it costs one step up.
+    static let waitingMarkFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
 
-    /// How wide a waiting row's bright ground is, in every state it can be in.
+    /// The mark is a control, so it is built like one rather than like the
+    /// readings it shares the slot with.
     ///
-    /// **Fixed, and that is the whole point.** `answer-in-notch.md` §3.3: under
-    /// the pointer the word inside becomes `Answer` or `Read`, and *nothing on
-    /// the row may move* as a pointer passes over it. So the ground is sized
-    /// once for the longest thing it can ever hold and never re-measured.
-    ///
-    /// This is also why the duration left this ground for the finished row's
-    /// dark one (`panel-v2.md` §3.5): a ground sized for `0:42` cannot hold
-    /// `Answer` without moving, and the word is the thing the person needs.
-    static let waitingMarkWidth: CGFloat = {
-        let words = [
-            SessionStatus.approvalNeeded.displayName,
-            SessionStatus.inputNeeded.displayName,
-            waitingMarkAnswerWord,
-            waitingMarkReadWord
-        ]
-        let widest = words
-            .map { textWidth($0, font: waitingMarkFont) }
-            .max() ?? 0
-        return ceil(widest + readingGroundWidthCost)
-    }()
+    /// Twice the ``readingGroundHeight`` it used to take, on that ground's own
+    /// `0.25` corner ratio, with ``AnswerControl``'s `12` of padding. That
+    /// leaves it `4` taller than ``answerRowHeight`` — the affirmative it grows
+    /// into when the row opens (`answer-in-notch.md` §3.1) — which is the one
+    /// number here settled by how it feels under the pointer rather than by the
+    /// system it belongs to.
+    static let waitingMarkHeight: CGFloat = 32
+    static let waitingMarkCornerRadius: CGFloat = 8
+    static let waitingMarkPadding: CGFloat = 12
 
-    /// What one word would take on that ground, hugging it.
+    /// What the mark takes, hugging the one word it will ever show.
     ///
-    /// Not what is drawn -- ``waitingMarkWidth`` is -- and exposed so the ground
-    /// can be shown to be sized for every word rather than for the one that
-    /// happens to be in it.
+    /// ~~**Fixed, and that is the whole point.**~~ **Superseded.** The ground
+    /// was measured once against every string it might have to hold —
+    /// `Approval needed`, `Input needed`, `Answer`, `Read` — because the word
+    /// changed under the pointer and *nothing on a row may move* as a pointer
+    /// passes over it (`answer-in-notch.md` §3.3). So it drew `113 pt` of the
+    /// brightest value on the panel even for a four-letter word: `19%` of the
+    /// row's content box, spent on a phrase naming a condition.
+    ///
+    /// The word no longer changes under the pointer —
+    /// ``waitingMarkWord(for:canBeAnswered:)`` decides it from the row's own
+    /// request, at rest — so §3.3's rule is kept by construction and nothing
+    /// has to be reserved to keep it. The widest this can draw is `Approve`,
+    /// at `77`.
     static func drawnWaitingMarkWidth(_ word: String) -> CGFloat {
-        ceil(textWidth(word, font: waitingMarkFont) + readingGroundWidthCost)
+        ceil(textWidth(word, font: waitingMarkFont) + waitingMarkPadding * 2)
     }
 
-    /// What the mark says under the pointer where the request can be answered
-    /// here.
+    /// What the mark says on a row that wants a person.
+    ///
+    /// **A verb, and it offers the act rather than naming the condition.** The
+    /// two status names it replaces were the longest strings on this panel and
+    /// both of them described a state; what a person does about either is one
+    /// act, and this is the word for it. The distinction the names carried is
+    /// not lost — it decides which verb, and `SessionStatus/displayName` still
+    /// spells both of them for the mark's accessibility label.
+    ///
+    /// `Read` is not a fourth state but the honest answer wherever the act is
+    /// not available: a request no connection is being held open for can only
+    /// be read here and answered in its product (§11 rule 03). Offering
+    /// `Approve` on a row that cannot approve is exactly the quiet promise that
+    /// rule forbids, which is why this is asked of the request and not of the
+    /// status alone.
+    ///
+    /// It lives here rather than in the view because it is vocabulary, it
+    /// belongs beside the three words themselves, and a private view cannot be
+    /// asked what it would say.
+    static func waitingMarkWord(
+        for status: SessionStatus,
+        canBeAnswered: Bool
+    ) -> String {
+        guard canBeAnswered else { return waitingMarkReadWord }
+        switch status {
+        case .approvalNeeded:
+            return waitingMarkApproveWord
+        case .inputNeeded:
+            return waitingMarkAnswerWord
+        case .running, .completed:
+            return waitingMarkReadWord
+        }
+    }
+
+    /// What the mark says where the wait is a consent.
+    static let waitingMarkApproveWord = "Approve"
+    /// And where it is a question, whose answer is words rather than consent.
     static let waitingMarkAnswerWord = "Answer"
-    /// And where it can only be read — §11, and the two are per row rather than
-    /// per product, because what a row can do is a fact about the request it is
-    /// holding.
+    /// And where it can only be read — §11, and the three are per row rather
+    /// than per product, because what a row can do is a fact about the request
+    /// it is holding.
     static let waitingMarkReadWord = "Read"
 
     /// One badge's width, hugging its digits at the minimum size and growing
