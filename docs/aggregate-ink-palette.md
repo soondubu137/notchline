@@ -163,9 +163,7 @@ The swatches were chosen against a live page that draws all 36 in the real Runni
 with controls for both lightnesses, a chroma multiplier and the unlit ratio, at sizes down to the
 true `16.6`. It generates the `MatrixInk` for whatever is selected.
 
-It lives at `.claude/tmp/matrix-ink.html`, which is **local and gitignored**, following the same
-rule the README figure generators do: the generator stays out of the repo and its output comes in.
-This table is that output. Rebuild the page from these parameters if it is needed again.
+The local prototype and its generators have been removed. This table preserves their output; rebuild the page from these parameters if it is needed again.
 
 **The Settings feature is built and the page did not have to come with it**: §3's table is the
 whole input, `AggregateInk` carries the twelve `hint` pairs verbatim, and what the picker needed on

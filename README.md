@@ -7,44 +7,51 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-macOS%2026.5%2B-lightgrey" alt="macOS 26.5 or later">
   <img src="https://img.shields.io/badge/built%20with-SwiftUI%20%2B%20AppKit-orange" alt="SwiftUI and AppKit">
-  <img src="https://img.shields.io/badge/dependencies-none-blue" alt="No third-party dependencies">
+  <img src="https://img.shields.io/badge/status-in%20development-yellow" alt="In development">
+  <img src="https://img.shields.io/badge/processing-local-blue" alt="Local processing">
 </p>
 
-**Notchline keeps Codex Desktop and Claude Code activity visible at your Mac’s notch.**
+**Notchline keeps coding agent activity visible at your Mac’s notch.**
 
 ## Overview
 
-Notchline shows which Turns are working, waiting for you or completed. Hover to see Threads from both products, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill.
+Notchline shows which sessions are working, waiting for you or completed. Hover to see monitored sessions, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill. Currently supports Codex Desktop and Claude Code (Desktop + CLI).
 
 ## Motivation
 
-My screen is already full of editors, documentation, product pages and communication tools. I built Notchline to keep track of the conversations buried behind them without repeatedly switching windows.
+My screens are already full of code editors, browser windows, and communication tools. I built Notchline to keep track of the coding agents buried behind them without repeatedly switching windows.
 
 ## Features
 
-- **Live overview** — See Threads from both products in one list, ordered by urgency.
+- **Live overview** — See monitored sessions in one list, ordered by urgency.
 - **Content previews** — Read brief progress updates and answers alongside elapsed time and subagent activity.
 - **Answers in the notch** — Respond to supported approval requests and questions directly in the panel.
-- **Thread navigation** — Return to the originating Codex Thread, Claude Desktop or terminal.
-- **Recent Threads** — Revisit completed Threads cleared from the live list during the current app run.
-- **Usage** — Check quota windows and today’s token usage for both products.
+- **Navigation** — Return to the originating conversation or terminal.
+- **Recent sessions** — Revisit completed sessions cleared from the live list during the current app run.
+- **Usage** — Check quota windows and today’s token usage for connected products.
 - **Display settings** — Choose a display and adjust the compact overlay’s appearance.
 
 ## Limitations
 
-- **Existing activity** — Turns predating launch appear only after a new lifecycle event establishes their state.
-- **Side chats** — Temporary side chats in either product do not appear as rows.
-- **Claude Code navigation** — Exact Thread or terminal-tab selection is not always available, and full-screen hosts cannot be reached.
-- **Persistent history** — Recent Threads are temporary; there is no searchable archive or cross-device sync.
+- **Existing activity** — Existing sessions appear only after a new lifecycle event establishes their state.
+- **Side chats** — Temporary side chats do not appear as rows.
+- **Claude Code navigation** — Exact session or terminal-tab selection is not always available, and full-screen hosts cannot be reached.
+- **Persistent history** — Recent sessions are temporary; there is no searchable archive or cross-device sync.
 - **Compatibility** — Some features depend on undocumented product behaviour and may break after updates.
 
 ## Requirements & installation
 
-Requires macOS 26.5 or later and Codex Desktop with the `codex` CLI, or Claude Code with the `claude` CLI.
+Requires macOS 26.5 or later.
 
-Place `Notchline.app` in Applications and open it. **Notchline is not currently notarised**: if macOS blocks it, go to **System Settings → Privacy & Security → Open Anyway**, then confirm opening it ([Apple’s instructions](https://support.apple.com/en-ie/102445)).
+Place `Notchline.app` in Applications and open it.
 
-To build from source, open `Notchline/Notchline.xcodeproj` in Xcode 26.6 or later and run the `Notchline` scheme. Enable the products you use during onboarding; Codex also requires trusting the hooks through `/hooks`.
+> [!NOTE]
+> **Notchline is not currently notarised**: if macOS blocks it, go to **System Settings → Privacy & Security → Open Anyway**, then confirm opening it ([Apple’s instructions](https://support.apple.com/en-ie/102445)).
+
+To build from source, open `Notchline/Notchline.xcodeproj` in Xcode 26.6 or later and run the `Notchline` scheme. Optionally enable integrations during onboarding.
+
+> [!NOTE]
+> **Codex hooks require manual trust.** After enabling the Codex integration, use `/hooks` in Codex to trust Notchline’s hooks.
 
 ## Files and data
 
@@ -57,7 +64,13 @@ See the [file inventory](docs/artifacts.md) for exact paths.
 
 ## How it works
 
-Product adapters collect local hook events and metadata, reduce them into Thread state and combine them into one snapshot for the overlay. User actions return to the originating product through navigation or a supported answer connection. Processing stays on your Mac.
+```text
+Coding agents → Product adapters → session state → Overlay
+      ↑                                              │
+      └────────── Navigation and answers ────────────┘
+```
+
+Product adapters collect local hook events and metadata, reduce them into session state and combine them into one snapshot for the overlay. User actions return to the originating product through navigation or a supported answer connection. Processing stays on your Mac.
 
 ## Project status
 

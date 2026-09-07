@@ -9,11 +9,10 @@
 // row's shape or to the width formula arrives in this window on the same build
 // it arrives on the surface.
 //
-// The README's figures (`docs/assets/notch-anatomy-readme.png` and its pair)
-// are the same teaching at four thousand pixels wide, with a column of prose
-// either side. That layout does not survive a `532` pt content area — the
-// labels would land near `4` pt — so the columns become numbered pins and a
-// key of two-to-four words, and the artwork keeps its real size.
+// The former README figures taught the same parts at four thousand pixels
+// wide, with prose columns either side. That layout does not survive a
+// `532` pt content area — labels would land near `4` pt — so the columns
+// become numbered pins and a short key, and the artwork keeps its real size.
 import Combine
 import SwiftUI
 

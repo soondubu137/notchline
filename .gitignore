@@ -18,22 +18,8 @@ xcuserdata/
 # Local Claude Code state
 /.claude/
 
-# Screen-recording sources; only the exported still or GIF belongs in the repo
+# Local screen recordings
 *.mov
-
-# README figures: the repo keeps only what the README renders. The generators,
-# their SVG/PNG intermediates, and the screen captures they redraw stay local.
-/docs/assets/*.py
-/design/assets/07-readme/*.py
-/docs/assets/list-anatomy.svg
-/docs/assets/notch-anatomy.svg
-/docs/assets/settings-anatomy.svg
-/docs/assets/list-anatomy.png
-/docs/assets/notch-anatomy.png
-/docs/assets/settings-anatomy.png
-/docs/assets/list_anatomy.png
-/docs/assets/notch_anatomy.png
-/docs/assets/settings.png
 
 # Header lockup variants the README does not use
 /design/assets/07-readme/notchline-readme-header-black.png
