@@ -405,7 +405,8 @@ Every open row is `100` plus its body.
 | An approval at three lines | `170` | The machine-text block at `70` |
 | A question at three options | `193` | A question line, `4`, and three `24` pt options — `93` |
 | A restatement at three lines, two options | `203` | Prose `51`, `4`, two options `48` — `103` |
-| Anything at the maximum | `240` | The body's cap, `140`. The row **is** the viewport |
+| An approval or plan at the maximum | `240` | The body's cap, `140`. The row **is** the three-row viewport |
+| A question at the maximum | `400` | The question body's cap, `300` (§4.1). Past the three-row viewport, which grows to it |
 | In flight | unchanged | Nothing resizes; the controls lose `55%` of their opacity |
 
 At the `46` pt menu bar reference with both products connected and the footer at rest — `22`, [`quota-footer-v2.md`](quota-footer-v2.md) §2:
@@ -415,10 +416,11 @@ At the `46` pt menu bar reference with both products connected and the footer at
 | One waiting row, opened at `117` | **217** | Viewport `149` — the row and the seam beneath it |
 | One waiting row, opened at three lines | **270** | Viewport `202`. [`expanded-panel-v2.md`](expanded-panel-v2.md) §4, unchanged |
 | One waiting row, opened at the maximum | **308** | Viewport `240`, and the seam is below the fold |
+| One waiting row, opened at a question's maximum | **468** | Viewport `400`: §4.1's exception, the panel growing with the row rather than clipping it. Arithmetic, not a Release measurement |
 | Two waiting rows, the first opened | **308** | Content over the cap; the second row is clipped, not hidden |
 | Three live rows, one of them opened | **308** | The cap has been reached since V1 and does not move |
 
-These read `279` / `332` / `370` in version 1.0, taken with a footer of `84` — [`dual-agent-design.md`](dual-agent-design.md)'s two-product figure, which [`quota-footer-v2.md`](quota-footer-v2.md) had already replaced with `22` at every product count. **Every one of them falls by exactly `62`** ([`panel-v2.md`](panel-v2.md) §3.1). Nothing in this document's own arithmetic moves: the viewport cap is `240` and the open row's cap is the viewport. Opening the quota table adds `112` on top, at two products and three windows.
+These read `279` / `332` / `370` in version 1.0, taken with a footer of `84` — [`dual-agent-design.md`](dual-agent-design.md)'s two-product figure, which [`quota-footer-v2.md`](quota-footer-v2.md) had already replaced with `22` at every product count. **Every one of them falls by exactly `62`** ([`panel-v2.md`](panel-v2.md) §3.1). Nothing in this document's own arithmetic moves: ~~the viewport cap is `240` and the open row's cap is the viewport.~~ **Corrected 2026-09-07, against the panel:** that held while every form shared one `140` pt body. A question's `300` pt body puts its row at `400`, and §4.1 has the live viewport grow to fit it — so `240` is the cap on *closed* rows, and an open question is its own floor under it. The two were read separately for a day: the window was sized from the grown viewport while the list still drew itself at the flat `240`, which left the panel standing exactly `160` taller than anything painted into it, the last option clipped under the footer, and that strip of panel empty. One height, read off the store, is what closes it. Opening the quota table adds `112` on top, at two products and three windows.
 
 Width is [`expanded-header-v2.md`](expanded-header-v2.md)'s `520` in every state, and [`colour-v2.md`](colour-v2.md) §3 keeps it there at every agent count.
 

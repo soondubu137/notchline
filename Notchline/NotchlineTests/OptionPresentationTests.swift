@@ -74,4 +74,57 @@ struct OptionPresentationTests {
         #expect(store.answerDraftGeneration > generation)
     }
 
+    /// A tall open question is given the room the panel was sized for.
+    ///
+    /// §4.1: a question's body may take `300`, which puts its open row at
+    /// `400` — past the `240` three closed rows are billed at — and the live
+    /// viewport grows to fit that row. The window was sized from the metric
+    /// while the list drew itself at the bare cap, so the panel stood open
+    /// `160` taller than anything painted into it: the last option clipped
+    /// under the footer, and a strip of empty panel below it. Both readings
+    /// come off the store now, so there is one height rather than two.
+    @Test @MainActor
+    func aTallOpenQuestionIsGivenTheRoomThePanelWasSizedFor() throws {
+        let description = String(
+            repeating: "Read every part of this description before deciding. ",
+            count: 18
+        )
+        let request = AgentRequest(id: "tall", toolName: "AskUserQuestion", form: .questions([
+            AgentQuestion(id: 0, header: "Focus area", text: "Which area should I focus on next?", options: [
+                AgentQuestionOption(id: 1, label: "UI work", description: description),
+                AgentQuestionOption(id: 2, label: "Hook work", description: description),
+                AgentQuestionOption(id: 3, label: "Performance work", description: description)
+            ], allowsSeveralAnswers: false)
+        ]))
+        let snapshot = AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [
+            MonitoredSession(agent: .claudeCode, threadID: "thread", turnID: "turn", projectName: "notchline", title: "Question", preview: nil, status: .inputNeeded, startedAt: Date(), request: request)
+        ], quota: .unavailable, diagnostic: nil)
+        let store = MonitorStore(displays: [], services: [], initialSnapshot: snapshot, preferences: nil)
+        store.toggleOpenRow(try #require(snapshot.sessions.first))
+
+        // The row is the tallest a question can make: the fixed heading and
+        // answer footer, and a body at its own cap rather than the approval's.
+        let row = try #require(store.openRowHeight)
+        #expect(row == PanelMetrics.openRowFixedHeight + PanelMetrics.questionBodyMaximumHeight)
+        #expect(row > PanelMetrics.sessionViewportCap)
+
+        // The one open row is the whole of the list, and the list is given all
+        // of it: nothing is left below the fold for a rail to offer.
+        #expect(store.sessionListContentHeight == row)
+        #expect(store.sessionViewportHeight == row)
+        #expect(!(store.sessionListContentHeight > store.sessionViewportHeight))
+
+        // And the panel is that room and its footer, with nothing unpainted.
+        #expect(
+            store.expandedContentHeight
+                == store.sessionViewportHeight + store.expandedFooterHeight
+        )
+
+        // Laid out rather than taken from the metric: the metric was already
+        // right when this broke, and only the drawn list disagreed with it.
+        let host = NSHostingView(rootView: ActiveSessionList().environmentObject(store))
+        host.layoutSubtreeIfNeeded()
+        #expect(abs(host.fittingSize.height - row) < 0.5)
+    }
+
 }

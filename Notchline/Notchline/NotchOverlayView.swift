@@ -675,12 +675,19 @@ private func legacyScrollerGutter(isScrolling: Bool) -> CGFloat {
 }
 
 /// The live session list: at least one row's worth of viewport — the apology
-/// when nothing is running — at most three, and its own scroller past that.
+/// when nothing is running — normally at most three, and its own scroller past
+/// that. An open question taller than three rows enlarges it enough to keep
+/// its own answer footer visible (§4.1).
 ///
 /// **No longer shares a viewport, a cap or a scroller with the Recent
 /// queue** — each folds and scrolls entirely on its own now
 /// (``RecentSessionSection``).
-private struct ActiveSessionList: View {
+///
+/// Internal rather than private for the same reason ``RecentSessionSection``
+/// and ``OpenRow`` are: the height it draws at is the thing that went wrong
+/// against the height the panel was sized to, and that is only checkable by
+/// laying out the list itself rather than the metric behind it.
+struct ActiveSessionList: View {
     @EnvironmentObject private var store: MonitorStore
 
     @State private var scrollOffset: CGFloat = 0
@@ -699,18 +706,26 @@ private struct ActiveSessionList: View {
         )
     }
 
-    private var contentHeight: CGFloat {
-        PanelMetrics.sessionListContentHeight(
-            liveRowCount: store.sessions.count,
-            openRowHeight: store.openRowHeight
-        )
-    }
+    private var contentHeight: CGFloat { store.sessionListContentHeight }
 
-    private var viewportHeight: CGFloat {
-        min(contentHeight, PanelMetrics.sessionViewportCap)
-    }
+    /// What the list is actually given, taken from the store so that it is the
+    /// arithmetic the panel was sized by rather than a second reading of it.
+    ///
+    /// **Not the bare ``PanelMetrics/sessionViewportCap``.** An open question's
+    /// body may take `300`, which puts its row at `400` — past the `240` three
+    /// closed rows are billed at — and `answer-in-notch.md` §4.1 says the live
+    /// viewport grows to fit that row. The window already did: it is sized from
+    /// the metric, which caps at `max(cap, openRowHeight)`. Drawing the list
+    /// from the constant instead left the two disagreeing by the whole of the
+    /// question's extra height — the last option clipped under the footer, and
+    /// a strip of panel below it painting nothing.
+    private var viewportHeight: CGFloat { store.sessionViewportHeight }
 
-    private var isScrolling: Bool { contentHeight > PanelMetrics.sessionViewportCap }
+    /// Compared against what the viewport is rather than against the cap, for
+    /// the same reason: a lone open question is as tall as the room it was
+    /// given, and a rail that says otherwise is offering travel that is not
+    /// there.
+    private var isScrolling: Bool { contentHeight > viewportHeight }
 
     var body: some View {
         ScrollViewReader { list in

@@ -2892,6 +2892,28 @@ final class MonitorStore: ObservableObject {
         )
     }
 
+    /// What the live list asks for, and the room it is drawn in.
+    ///
+    /// **Both are read here rather than measured again in the view.** They are
+    /// the same two calls ``expandedContentHeight`` above is sized from, and
+    /// the panel is only as tall as it is because of them: a list that reaches
+    /// for `PanelMetrics` on its own arguments is free to disagree with the
+    /// window it is standing in, and it did — an open question got a panel
+    /// sized for its `400` pt row and a viewport still capped at `240`.
+    var sessionListContentHeight: CGFloat {
+        PanelMetrics.sessionListContentHeight(
+            liveRowCount: sessions.count,
+            openRowHeight: openRowHeight
+        )
+    }
+
+    var sessionViewportHeight: CGFloat {
+        PanelMetrics.sessionViewportHeight(
+            liveRowCount: sessions.count,
+            openRowHeight: openRowHeight
+        )
+    }
+
     // MARK: - The open row
 
     /// The row whose request is open, if one is.
