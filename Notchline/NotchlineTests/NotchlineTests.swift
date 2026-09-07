@@ -2667,9 +2667,16 @@ struct NotchlineTests {
         #expect(
             PanelMetrics.recentSectionHeight(retiredRowCount: 3, isRecentExpanded: false) == 32
         )
+        // A seam and three retired rows. Written against the metrics rather
+        // than as `32 + 120`: two integer literals added together are an `Int`
+        // expression, and `#expect` compares that against the `CGFloat` on the
+        // left through a conversion that answers `false` on equal values —
+        // `(152.0) == (152)`, which is exactly how this read when it failed.
+        // The assertion below it never had the fault, because one `CGFloat`
+        // constant in the sum is enough to type the whole of it.
         #expect(
             PanelMetrics.recentSectionHeight(retiredRowCount: 3, isRecentExpanded: true)
-                == 32 + 120
+                == PanelMetrics.recentSeamHeight + PanelMetrics.retiredRowHeight * 3
         )
         #expect(
             PanelMetrics.recentSectionHeight(retiredRowCount: 12, isRecentExpanded: true)
