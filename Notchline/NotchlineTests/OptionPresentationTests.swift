@@ -214,3 +214,122 @@ struct OptionPresentationTests {
     }
 
 }
+
+extension OptionPresentationTests {
+    /// **The lit rectangle and the target are one rectangle** (§6.6). A card
+    /// fills under the pointer over the whole of its `10` pt inset ring, and
+    /// until 2026-09-07 it took a click only over its words: the button sat
+    /// *inside* the padding rather than around it, and the disclosure was its
+    /// sibling, so the ring and the whole of `Show more`'s line either side of
+    /// two words answered the pointer and refused the click. Measured at
+    /// `579 × 100`, that was `44%` of an expandable card's lit area — a click
+    /// that did nothing, on the object the panel exists to let a person choose.
+    ///
+    /// **It is driven with real events at a real hosting view, because that is
+    /// the only thing that measures it.** The hit order between a button, its
+    /// padding and a control drawn over it is decided inside SwiftUI at
+    /// dispatch time; the view tree reports nothing about it, and the same
+    /// blindness once let a wheel catcher ship as a `.background` that took no
+    /// events at all.
+    @Test @MainActor
+    func everyPointUnderAnOptionsFillTakesItsClick() async throws {
+        let options = [
+            AgentQuestionOption(id: 7, label: "Inspect first", description: String(repeating: "Read the complete explanation. ", count: 30)),
+            AgentQuestionOption(id: 11, label: "Short option", description: nil)
+        ]
+        let request = AgentRequest(id: "targets", toolName: "AskUserQuestion", form: .questions([
+            AgentQuestion(id: 0, header: "Approach", text: "Which approach?", options: options, allowsSeveralAnswers: false)
+        ]), replyTicket: 1)
+        let snapshot = AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [
+            MonitoredSession(agent: .claudeCode, threadID: "thread", turnID: "turn", projectName: "notchline", title: "Question", preview: nil, status: .inputNeeded, startedAt: Date(), request: request)
+        ], quota: .unavailable, diagnostic: nil)
+        let store = MonitorStore(displays: [], services: [], initialSnapshot: snapshot, preferences: nil)
+        store.toggleOpenRow(try #require(snapshot.sessions.first))
+        let deadline = Date().addingTimeInterval(5)
+        while !store.isAffirmativeArmed && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(store.isAffirmativeArmed)
+
+        let width = PanelMetrics.requestBodyWidth
+        let layout = try #require(RequestBodyLayout.laidOut(request, expandedOptions: [], width: width))
+        let host = NSHostingView(rootView: RequestBodyView(layout: layout).environmentObject(store).frame(width: width))
+        host.setFrameSize(NSSize(width: width, height: layout.contentHeight))
+        // **Ordered in, and twenty thousand points off the left of every
+        // screen.** A window that has never been ordered in has no window
+        // number, and an `NSEvent` carrying that number is dropped before it
+        // reaches anything — the whole card reads as dead and the test passes
+        // or fails on nothing at all. This suite is hosted by the app itself
+        // (`AppProcess.isHostingTests`), so where it is put matters: it is put
+        // where no display reaches.
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: 0, width: width, height: layout.contentHeight), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+        host.layoutSubtreeIfNeeded()
+
+        func click(_ point: CGPoint) {
+            let inWindow = host.convert(point, to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                guard let event = NSEvent.mouseEvent(
+                    with: type, location: inWindow, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0
+                ) else { continue }
+                window.sendEvent(event)
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.002))
+        }
+
+        /// The card each option was drawn on, taken from the list's own foot so
+        /// the arithmetic is the layout's rather than this test's.
+        var cards: [Int: CGRect] = [:]
+        var top = layout.contentHeight
+            - layout.optionLayouts.map(\.height).reduce(0, +)
+            - CGFloat(layout.optionLayouts.count - 1) * PanelMetrics.optionSpacing
+        for option in layout.optionLayouts {
+            cards[option.id] = CGRect(x: 0, y: top, width: width, height: option.height)
+            top += option.height + PanelMetrics.optionSpacing
+        }
+        let expandable = try #require(cards[7])
+        let plain = try #require(cards[11])
+        #expect(try #require(layout.optionLayouts.first).canExpand)
+
+        func selects(_ id: Int, at point: CGPoint) -> Bool {
+            store.takeAnswer(.option(id == 7 ? 11 : 7))
+            click(point)
+            return store.isOptionTicked(id)
+        }
+
+        // Two points in from each edge, because the fill's own boundary is
+        // decided a fraction of a point either way and this is a test about
+        // ten-point bands, not about the last pixel of a rounded corner.
+        for (id, card) in [(7, expandable), (11, plain)] {
+            for point in [
+                CGPoint(x: card.minX + 2, y: card.minY + 2),
+                CGPoint(x: card.maxX - 2, y: card.minY + 2),
+                CGPoint(x: card.minX + 2, y: card.maxY - 2),
+                CGPoint(x: card.maxX - 2, y: card.maxY - 2),
+                CGPoint(x: card.midX, y: card.minY + 2),
+                CGPoint(x: card.midX, y: card.maxY - 2),
+                CGPoint(x: card.minX + 2, y: card.midY),
+                CGPoint(x: card.maxX - 2, y: card.midY)
+            ] {
+                #expect(selects(id, at: point), "option \(id) refused a click at \(point) inside \(card)")
+            }
+        }
+
+        // The disclosure's line is the card's everywhere but under its two
+        // words, which are its own target and change nothing else.
+        let disclosureY = expandable.maxY - PanelMetrics.optionInset - PanelMetrics.optionDisclosureHeight / 2
+        #expect(selects(7, at: CGPoint(x: expandable.minX + 5, y: disclosureY)))
+        #expect(selects(7, at: CGPoint(x: expandable.maxX - 5, y: disclosureY)))
+
+        func isExpanded() -> Bool {
+            store.openRowBody?.optionLayouts.first(where: { $0.id == 7 })?.isExpanded == true
+        }
+        store.takeAnswer(.option(11))
+        #expect(!isExpanded())
+        click(CGPoint(x: PanelMetrics.optionInset + PanelMetrics.optionHandleWidth + 5, y: disclosureY))
+        #expect(isExpanded())
+        #expect(store.isOptionTicked(11))
+    }
+}

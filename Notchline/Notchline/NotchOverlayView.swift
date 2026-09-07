@@ -2557,23 +2557,46 @@ struct OptionRow: View {
     private var selected: Bool { store.isOptionTicked(layout.id) }
     private var isAnswerable: Bool { store.openSession?.request?.canBeAnswered == true }
 
+    /// **The card is the target, and it is the whole card** (§6.6). The
+    /// rectangle the pointer lights up and the rectangle a click lands in are
+    /// the same one: the `10` pt insets, the marker column and the disclosure's
+    /// own line all belong to the option, so anywhere the hover fill reaches
+    /// selects it.
+    ///
+    /// It reads as one statement and it is built as one: the padding is inside
+    /// the button's label rather than around the button, and the disclosure's
+    /// line is *held open* there by a clear band and drawn over the top of it.
+    /// Laid out as siblings in a `VStack` the two buttons divide the card
+    /// between them, and everything neither one covers — the ring, and the
+    /// whole of the disclosure's line either side of two words — is ground that
+    /// answers the pointer and refuses the click.
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        ZStack(alignment: .bottomLeading) {
             Button {
                 store.takeAnswer(.option(layout.id))
             } label: {
-                HStack(alignment: .top, spacing: 0) {
-                    marker
-                        .frame(width: PanelMetrics.optionHandleWidth, height: PanelMetrics.optionTitleLineHeight, alignment: .leading)
-                    VStack(alignment: .leading, spacing: 0) {
-                        lineStack(layout.titleLines, font: PanelMetrics.optionTitleFont, height: PanelMetrics.optionTitleLineHeight, ink: NotchPalette.sessionTitle)
-                        if !layout.visibleDescription.isEmpty {
-                            lineStack(layout.visibleDescription, font: PanelMetrics.optionDescriptionFont, height: PanelMetrics.optionDescriptionLineHeight, ink: NotchPalette.reading)
-                                .padding(.top, 3)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top, spacing: 0) {
+                        marker
+                            .frame(width: PanelMetrics.optionHandleWidth, height: PanelMetrics.optionTitleLineHeight, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 0) {
+                            lineStack(layout.titleLines, font: PanelMetrics.optionTitleFont, height: PanelMetrics.optionTitleLineHeight, ink: NotchPalette.sessionTitle)
+                            if !layout.visibleDescription.isEmpty {
+                                lineStack(layout.visibleDescription, font: PanelMetrics.optionDescriptionFont, height: PanelMetrics.optionDescriptionLineHeight, ink: NotchPalette.reading)
+                                    .padding(.top, 3)
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if layout.canExpand {
+                        // The disclosure's band, held open inside the button so
+                        // the card is one target and its two words are the
+                        // exception drawn over it.
+                        Color.clear.frame(height: PanelMetrics.optionDisclosureHeight)
+                    }
                 }
+                .padding(PanelMetrics.optionInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -2590,14 +2613,13 @@ struct OptionRow: View {
                 .foregroundStyle(NotchPalette.reading)
                 .buttonStyle(.plain)
                 .frame(height: PanelMetrics.optionDisclosureHeight)
-                .padding(.leading, PanelMetrics.optionHandleWidth)
+                .padding(.leading, PanelMetrics.optionInset + PanelMetrics.optionHandleWidth)
+                .padding(.bottom, PanelMetrics.optionInset)
                 .accessibilityLabel("\(layout.isExpanded ? "Show less about" : "Read full description for") \(layout.option.label)")
                 .accessibilityValue(layout.isExpanded ? "Expanded" : "Collapsed")
                 .disabled(store.isAnswerInFlight)
             }
         }
-        .padding(PanelMetrics.optionInset)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8).fill(NotchPalette.themeInk.on.opacity(selected ? 0.10 : (isHovered ? 0.07 : 0.025))))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(NotchPalette.themeInk.on.opacity(selected ? 0.5 : 0), lineWidth: 1))
         .onHover { isHovered = $0 }
