@@ -784,11 +784,13 @@ struct NotchlineTests {
 
     /// Each state draws the pattern the sheet draws.
     ///
-    /// Every one of the four writes one waveform at twenty-five offsets. The
-    /// code holds the waveform once and computes the offsets, so the offsets
-    /// are the half that can drift silently — a sign flipped on the loom's
-    /// inner ring turns both gears the same way and still looks like a loom.
-    /// They are transcribed here.
+    /// Every one of the four writes one waveform at twenty-five offsets — the
+    /// quincunx two, its centre running at twice its satellites' rate. The code
+    /// holds the waveform once and computes the offsets, so the offsets are the
+    /// half that can drift silently: a sign flipped on the loom's inner ring
+    /// turns both gears the same way and still looks like a loom, and a
+    /// quincunx whose diagonals fall into phase is a five-pointed blink. They
+    /// are transcribed here.
     ///
     /// Read off the layers rather than off ``NotchMatrixState/track(forCell:)``
     /// so that what is asserted is what the render server is actually given,
@@ -855,26 +857,44 @@ struct NotchlineTests {
         #expect(close(try #require(values(loom[0]).min()), 0.15))
         #expect(try #require(values(loom[6]).min()) > 0.18)
 
-        // Wedge: 40 frames, every cell on one curve. Eight frames a column, and
-        // six more for every row away from the middle — the three quarters of a
-        // cell the middle row leads by. Nothing is exempt and nothing is still.
-        let wedge = try cells(.inputNeeded)
-        let wedgePeaks = [
-            12, 20, 28, 36,  4,
-             6, 14, 22, 30, 38,
-             0,  8, 16, 24, 32,
-             6, 14, 22, 30, 38,
-            12, 20, 28, 36,  4
+        // Step: 40 frames, every cell on one curve. Eight frames a column and
+        // no row term at all — a column strikes all the way down at once, which
+        // is what the wedge's per-row lead cost it. Nothing is exempt and
+        // nothing is still.
+        let step = try cells(.inputNeeded)
+        let stepPeaks = [
+            0, 8, 16, 24, 32,
+            0, 8, 16, 24, 32,
+            0, 8, 16, 24, 32,
+            0, 8, 16, 24, 32,
+            0, 8, 16, 24, 32
         ]
-        for (index, cell) in wedge.enumerated() {
+        for (index, cell) in step.enumerated() {
             let track = try values(cell)
             #expect(track.count == 41)
             #expect(track.first == track.last)
-            #expect(track.firstIndex(of: try #require(track.max())) == wedgePeaks[index])
-            // The band wraps, so every cell takes the front and the floor.
+            #expect(track.firstIndex(of: try #require(track.max())) == stepPeaks[index])
+            // Every column strikes, and every column goes dark for three steps
+            // after its tail, so every cell takes both ends.
             #expect(close(try #require(track.max()), 1))
             #expect(close(try #require(track.min()), 0.15))
         }
+        // A column is one thing: the five cells of it draw the same track, and
+        // no two columns draw the same one.
+        for column in 0 ..< MatrixGrid.side {
+            let down = try (0 ..< MatrixGrid.side)
+                .map { try values(step[$0 * MatrixGrid.side + column]) }
+            #expect(down.allSatisfy { $0 == down[0] })
+        }
+        #expect(try Set(
+            (0 ..< MatrixGrid.side).map { try values(step[$0]).description }
+        ).count == MatrixGrid.side)
+        // The strike is a strike, not a band: full for one frame, and better
+        // than a third of the way down by the next. This is the whole of why
+        // the step holds a quarter of the grid at white that the wedge did.
+        let strike = try values(step[0])
+        #expect(strike.filter { close($0, 1) }.count == 2)   // frame 0, and the closing repeat
+        #expect(strike[1] < 0.8)
 
         // Double knock: every cell together, twice, 300ms apart. Carried across
         // from the 4×4 mark unchanged.
@@ -886,24 +906,44 @@ struct NotchlineTests {
             #expect(try values(cell) == knockTrack)
         }
 
-        // Bars: rows 0, 2 and 4 breathe eleven frames apart; rows 1 and 3 are
-        // the gaps between them and never animate at all.
-        let bars = try cells(.completed)
-        let barsFirst = try values(bars[0])
-        #expect(barsFirst.count == 61)
-        #expect(close(try #require(barsFirst.max()), 1))
-        #expect(close(try #require(barsFirst.min()), 0.32))
-        for (index, cell) in bars.enumerated() {
-            let row = index / MatrixGrid.side
-            guard row % 2 == 0 else {
-                #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
-                #expect(close(Double(cell.opacity), 0.15))
-                continue
-            }
-            let delay = row / 2 * 11
-            let expected = (0 ... 60).map { barsFirst[(($0 - delay) % 60 + 60) % 60] }
-            #expect(try values(cell) == expected)
+        // Quincunx: 72 frames. Four corners about a centre, the two diagonals
+        // half a loop apart, and the centre at twice their rate so it takes the
+        // light between each pair and the next. The other twenty cells hold.
+        let quincunx = try cells(.completed)
+        let leading = try values(quincunx[0])
+        #expect(leading.count == 73)
+        #expect(leading.first == leading.last)
+        // The satellites top out below the centre, which is what gives the
+        // figure a middle rather than five equal points.
+        #expect(close(try #require(leading.max()), 0.881, 5e-4))
+        #expect(close(try #require(leading.min()), 0.369, 5e-4))
+        #expect(leading.firstIndex(of: try #require(leading.max())) == 0)
+        for index in [0, 24] { #expect(try values(quincunx[index]) == leading) }
+        // Half a loop later, and that is the whole of what makes the two trade.
+        let trailing = (0 ... 72).map { leading[(($0 - 36) % 72 + 72) % 72] }
+        for index in [4, 20] { #expect(try values(quincunx[index]) == trailing) }
+        #expect(trailing.firstIndex(of: try #require(trailing.max())) == 36)
+        // The centre alone reaches full, and does it twice a loop — once
+        // between each diagonal's crest and the other's.
+        let centre = try values(quincunx[12])
+        #expect(centre.count == 73)
+        #expect(close(try #require(centre.max()), 1))
+        #expect(close(try #require(centre.min()), 0.507, 5e-4))
+        #expect(centre.indices.filter { close(centre[$0], 1, 5e-4) } == [18, 54])
+        // Every other cell is dark and still, at the shared floor.
+        let figure = Set([0, 4, 12, 20, 24])
+        for (index, cell) in quincunx.enumerated() where !figure.contains(index) {
+            #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
+            #expect(close(Double(cell.opacity), 0.15))
         }
+        // Neither diagonal ever drops out, so every frame is still a quincunx:
+        // the figure's brightest point never approaches the floor the twenty
+        // dark cells hold, and a finished turn is never for an instant
+        // mistakable for a mark with nothing behind it.
+        let brightestPoint = (0 ..< 72)
+            .map { frame in max(leading[frame], trailing[frame], centre[frame]) }
+            .min()
+        #expect(try #require(brightestPoint) > 0.75)
 
         // Connected and disconnected: a still, at the level three of the four
         // patterns now floor at. That shared floor is why the old argument —
@@ -937,8 +977,28 @@ struct NotchlineTests {
                 .min() ?? 0
         }
         #expect(try dimmestMark(loom) > resting)
-        #expect(try dimmestMark(wedge) > resting)
-        #expect(try dimmestMark(bars) > resting)
+        // **The one scale the whole set is spent on.** Whichever state the mark
+        // is in, its brightest cell is `1` and its dimmest is the shared floor,
+        // so the same cell value means the same thing across all of them. This
+        // is what makes the ceiling useless as a loudness lever, and it is why
+        // the step and the quincunx had to buy quiet with lit area and dwell
+        // instead. The knock is the standing exception and keeps its own
+        // darker silence, asserted separately below.
+        for (name, mark) in [("loom", loom), ("step", step), ("quincunx", quincunx)] {
+            var levels: [Double] = []
+            for cell in mark {
+                if cell.animation(forKey: "notch.matrix.opacity") == nil {
+                    levels.append(Double(cell.opacity))
+                } else {
+                    levels.append(contentsOf: try values(cell))
+                }
+            }
+            #expect(close(try #require(levels.max()), 1, 5e-4), "\(name) must reach full")
+            #expect(close(try #require(levels.min()), 0.15, 5e-4), "\(name) must floor at 0.15")
+        }
+
+        #expect(try dimmestMark(step) > resting)
+        #expect(try dimmestMark(quincunx) > resting)
         // And the one ordering that still has to hold on the level alone: a
         // mark waiting on a decision is darker in its silence than a mark with
         // nothing behind it, which is half of how Approval asks.
