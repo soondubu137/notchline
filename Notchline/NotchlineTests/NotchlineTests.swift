@@ -427,7 +427,7 @@ struct NotchlineTests {
     /// are pointing at nothing and this fails rather than the drawing going
     /// quietly wrong.
     @Test @MainActor
-    func theFirstRunSpecimensAreTheProductAndWatchNothing() {
+    func theFirstRunSpecimensAreTheProductAndWatchNothing() throws {
         let shut = NotchSpecimen.shut
         let hovered = NotchSpecimen.hovered
 
@@ -442,8 +442,20 @@ struct NotchlineTests {
         #expect(shut.geometry == .noNotch)
         #expect(shut.compactHeight == PanelMetrics.referenceCompactHeight)
 
-        // A subagent stopped on a question is what the whole drawing is of.
+        // A turn stopped on an approval is what the whole drawing is of, and
+        // the approval is one the row could take here: `canBeAnswered` is what
+        // decides between `Approve` and `Read`, so a specimen without it would
+        // draw the reading form of the mark and teach the wrong half.
         #expect(shut.status == .approvalNeeded)
+        let waiting = try #require(hovered.sessions.first)
+        #expect(waiting.status == .approvalNeeded)
+        #expect(waiting.request?.canBeAnswered == true)
+        #expect(
+            PanelMetrics.waitingMarkWord(
+                for: waiting.status,
+                canBeAnswered: waiting.request?.canBeAnswered == true
+            ) == PanelMetrics.waitingMarkApproveWord
+        )
         #expect(shut.aggregateSessionCount == shut.sessions.count)
         #expect(shut.compactTimerText != nil)
 
@@ -484,8 +496,8 @@ struct NotchlineTests {
         #expect(shut.buriesAFinishedTurn)
 
         // Claude Code has finished with a subagent still working. That is one
-        // row drawing a badge where a reading would be -- the seventh pin on
-        // the open panel -- and it is also why this product's mark is on radar
+        // row drawing a badge where a reading would be -- the sixth pin on the
+        // open panel -- and it is also why this product's mark is on radar
         // rather than lull.
         let claude = shut.presenceMarks.first { $0.agent == .claudeCode }
         #expect(claude?.status == .running)
@@ -514,6 +526,69 @@ struct NotchlineTests {
         #expect(hovered.footerToday.text == "519M today")
         // And the table starts shut, which is what the pins are placed against.
         #expect(!hovered.isQuotaExpanded)
+
+        // One row has left the list, so the panel draws the Recent seam the
+        // eighth pin names. It gets there by departing rather than by being
+        // placed: the staged list holds it, the next one does not, and the
+        // merge records the arrow.
+        #expect(hovered.recentDepartures.count == 1)
+        #expect(hovered.recentDepartures.first?.reason == .read)
+        #expect(!hovered.isRecentExpanded)
+        #expect(!hovered.sessions.contains { $0.id == hovered.recentDepartures[0].session.id })
+    }
+
+    /// No two pins on a figure stand on the same point.
+    ///
+    /// **The one fault a specimen that cannot drift is still open to.** The
+    /// drawings are the product's own views, so a part that changes shape
+    /// changes here too; what does not follow the product is the *key*, and a
+    /// pin whose part has gone does not disappear -- it stays at whatever
+    /// coordinate its formula still evaluates to. Two of the collapsed bar's
+    /// six ended up on one point that way, one naming a dot column the surface
+    /// had stopped drawing and one naming a badge that had moved, and the
+    /// figure drew a numeral on top of a numeral with nothing to say so.
+    ///
+    /// The second half is the rule §7.1 states and the drawing had quietly
+    /// stopped keeping: **a leader stops at the specimen's edge.** Pin
+    /// positions are in the panel's units and scale with it; a pin's badge is
+    /// `13` pt whatever the scale; a leader written in the first and drawn
+    /// against the second crossed about `5` pt onto the black either side.
+    @Test @MainActor
+    func theFirstRunPinsStandApartAndTheirLeadersStopAtTheEdge() {
+        let shut = CollapsedBarAnatomy().pins
+        let hovered = ExpandedPanelAnatomy().pins
+
+        #expect(shut.map(\.id) == Array(1...6))
+        #expect(hovered.map(\.id) == Array(1...9))
+
+        for pins in [shut, hovered] {
+            let points = pins.map { CGPoint(x: $0.x, y: $0.y) }
+            for (index, point) in points.enumerated() {
+                for other in points[(index + 1)...] {
+                    #expect(
+                        abs(point.x - other.x) > AnatomyMetrics.pinSize
+                            || abs(point.y - other.y) > AnatomyMetrics.pinSize
+                    )
+                }
+            }
+        }
+
+        // The panel's own edges, in the units the pins are drawn in.
+        let drawnWidth = NotchSpecimen.windowSize(of: NotchSpecimen.hovered).width
+            * ExpandedPanelAnatomy.scale
+        let half = AnatomyMetrics.pinSize / 2
+        for pin in hovered {
+            switch pin.leader {
+            case let .left(length):
+                #expect(abs(pin.x - half - length - drawnWidth) < 0.01)
+            case let .right(length):
+                #expect(abs(pin.x + half + length) < 0.01)
+            case let .forkRight(stem, _, foot):
+                #expect(abs(pin.x + half + stem + foot) < 0.01)
+            case .up, .down:
+                Issue.record("The panel's pins stand beside it, never over it")
+            }
+        }
     }
 
     /// The first-run clock starts again rather than running all afternoon.

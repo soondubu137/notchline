@@ -88,9 +88,10 @@ private struct OnboardingView: View {
     /// way on.
     ///
     /// Same shape as the Settings window's closing row — an explanation with
-    /// the action it is about on the end. The read-only promise belongs here
-    /// rather than on page two, because this is the page with the switches on
-    /// it and it is the switches the promise is about.
+    /// the action it is about on the end. ``StandingStatement`` belongs here
+    /// rather than on page two, because this is the page that asks for
+    /// something: what the app will and will not do to the two products is
+    /// what a person deciding whether to flip a switch is deciding on.
     ///
     /// The version rides under that statement, in the same place and the same
     /// view Settings uses (`AppVersionLine`), so the window says it in one form
@@ -100,7 +101,7 @@ private struct OnboardingView: View {
     private var connectClosing: some View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Notchline only reads. Nothing here changes Codex or Claude Code.")
+                Text(StandingStatement.text)
                     .settingsFootnote(MacOSWindowColor.tertiaryText)
 
                 AppVersionLine()
@@ -139,9 +140,9 @@ private struct OnboardingView: View {
     ///
     /// No second title: the window's own title bar already says the name, and
     /// repeating it in the content area is the mistake the Settings redesign
-    /// removed. No second promise either — the closing line carries the
-    /// read-only statement, and saying it twice on one page made the page read
-    /// as though it were arguing with somebody.
+    /// removed. No second promise either — the closing line carries
+    /// ``StandingStatement``, and saying it twice on one page made the page
+    /// read as though it were arguing with somebody.
     private var hero: some View {
         HStack(alignment: .center, spacing: 14) {
             Image(nsImage: NSApp.applicationIconImage)

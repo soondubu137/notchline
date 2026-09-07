@@ -32,14 +32,13 @@ struct AppSettingsView: View {
             // about the build rather than about any setting, so no group can
             // hold it, and this app has no menu bar and therefore no `About
             // Notchline` to put it in. First run closes on the same pair
-            // (`ProductRootView.swift`), so the two windows say it identically.
+            // (`ProductRootView.swift`), and they say it identically because it
+            // is one string now (``StandingStatement``) rather than two
+            // literals that had already drifted a word apart.
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(
-                        "Notchline only reads. Nothing here changes state in "
-                            + "Codex or Claude Code."
-                    )
-                    .settingsFootnote(MacOSWindowColor.tertiaryText)
+                    Text(StandingStatement.text)
+                        .settingsFootnote(MacOSWindowColor.tertiaryText)
 
                     AppVersionLine()
                 }
