@@ -685,8 +685,18 @@ private struct ActiveSessionList: View {
 
     @State private var scrollOffset: CGFloat = 0
 
-    private var viewportWidth: CGFloat {
+    /// The full lane the list stands in, rail included: what the rail is
+    /// aligned inside and what the row block gives part of back.
+    private var laneWidth: CGFloat {
         PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)
+    }
+
+    /// And what is left for the rows once the rail has taken its lane.
+    private var viewportWidth: CGFloat {
+        PanelMetrics.sessionViewportWidth(
+            panelWidth: store.currentPanelSize.width,
+            isScrolling: isScrolling
+        )
     }
 
     private var contentHeight: CGFloat {
@@ -762,12 +772,16 @@ private struct ActiveSessionList: View {
         // regardless of whether this pass actually needed the room.
         .frame(width: viewportWidth, alignment: .leading)
         .clipped()
+        // The rail stands in the lane the rows just gave up, and stops on the
+        // panel's inset rather than in it — see ``PanelMetrics/scrollRailLane``.
+        .frame(width: laneWidth, alignment: .leading)
         .overlay(alignment: .trailing) {
             ScrollRail(
                 visibleHeight: viewportHeight,
                 contentHeight: contentHeight,
                 offset: scrollOffset
             )
+            .padding(.trailing, PanelMetrics.sessionRowPadding)
         }
     }
 
@@ -790,8 +804,15 @@ private struct RecentSessionSection: View {
 
     @State private var scrollOffset: CGFloat = 0
 
-    private var viewportWidth: CGFloat {
+    private var laneWidth: CGFloat {
         PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)
+    }
+
+    private var viewportWidth: CGFloat {
+        PanelMetrics.sessionViewportWidth(
+            panelWidth: store.currentPanelSize.width,
+            isScrolling: isScrolling
+        )
     }
 
     private var contentHeight: CGFloat {
@@ -829,12 +850,14 @@ private struct RecentSessionSection: View {
                     }
                     .frame(width: viewportWidth, alignment: .leading)
                     .clipped()
+                    .frame(width: laneWidth, alignment: .leading)
                     .overlay(alignment: .trailing) {
                         ScrollRail(
                             visibleHeight: viewportHeight,
                             contentHeight: contentHeight,
                             offset: scrollOffset
                         )
+                        .padding(.trailing, PanelMetrics.sessionRowPadding)
                     }
                 }
             }
@@ -1818,10 +1841,10 @@ private struct ScrollRail: View {
                     .frame(width: 1.5)
                 Capsule()
                     .fill(Color.white.opacity(0.5))
-                    .frame(width: 3, height: thumb)
+                    .frame(width: PanelMetrics.scrollRailWidth, height: thumb)
                     .offset(y: (visibleHeight - thumb) * progress)
             }
-            .frame(width: 3, height: visibleHeight)
+            .frame(width: PanelMetrics.scrollRailWidth, height: visibleHeight)
             .accessibilityHidden(true)
         }
     }

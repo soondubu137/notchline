@@ -340,10 +340,34 @@ enum PanelMetrics {
     static let sessionRowPadding: CGFloat = expandedHorizontalPadding
         - sessionRowGutter
 
+    /// The rail a scrolling list draws to report where its reader stands, and
+    /// the lane it stands in.
+    ///
+    /// **The rail is never drawn on the panel's margin.** Its right edge lands
+    /// exactly on ``expandedHorizontalPadding`` — the same column a row's text,
+    /// the matrix above and the footer below all end on — so the `12` pt inset
+    /// stays empty, as it is everywhere else on the panel. Standing it any
+    /// further right would put it in that inset; standing it over the rows would
+    /// put it on top of what it is reporting about.
+    ///
+    /// That lane has to come from somewhere, so a list that scrolls hands it
+    /// back: the rows narrow by ``scrollRailLane`` for exactly as long as there
+    /// is a rail, and take the width back the moment there is not.
+    static let scrollRailWidth: CGFloat = 3
+    /// Between a row's own trailing text and the rail beside it.
+    static let scrollRailGap: CGFloat = 4
+    static let scrollRailLane: CGFloat = scrollRailWidth + scrollRailGap
+
     /// The width either scrolling list (the live rows, the Recent queue) is
     /// drawn at: the panel's own width, less the gutter on each side.
-    static func sessionViewportWidth(panelWidth: CGFloat) -> CGFloat {
-        panelWidth - sessionRowGutter * 2
+    ///
+    /// `isScrolling` is what takes the rail's lane out of it. A list that fits
+    /// has no rail and gives up nothing.
+    static func sessionViewportWidth(
+        panelWidth: CGFloat,
+        isScrolling: Bool = false
+    ) -> CGFloat {
+        panelWidth - sessionRowGutter * 2 - (isScrolling ? scrollRailLane : 0)
     }
     /// The row's three text lines, as the row lays them out.
     ///
@@ -1272,14 +1296,24 @@ enum PanelMetrics {
         + sessionRowLineSpacing + sessionRowTitleHeight + sessionRowLineSpacing
         + 10 + answerRowHeight + 12.5
 
-    /// The width an open row's body is drawn at.
+    /// The width an open row's body is *wrapped* at.
     ///
     /// `610 − 2 × 12`, which is also `598 − 2 × 6`: the row block inside the
     /// list's own scroller, minus the row's own padding. It is a derived figure
     /// and has been one since V1 — the panel does not move at any agent or
     /// product count (`colour-v2.md` §3).
+    ///
+    /// **Less the rail's lane, unconditionally**, even though the rail is not
+    /// always there. An open row is what pushes the live list past its cap, so
+    /// the list's width would otherwise depend on a height measured at that
+    /// width — the row is only narrow because it is tall, and only tall because
+    /// it was measured wide. Wrapping at the narrower of the two settles it: the
+    /// lines are laid out once, and the row draws exactly those lines whether or
+    /// not the pass ended up with a rail. A list that does not scroll simply
+    /// leaves ``scrollRailLane`` of slack past the last glyph, which is `7`
+    /// points of empty ground nobody can see.
     static var requestBodyWidth: CGFloat {
-        expandedBaselineWidth - expandedHorizontalPadding * 2
+        expandedBaselineWidth - expandedHorizontalPadding * 2 - scrollRailLane
     }
 
     /// §4.2's prose setting: sentences a person is meant to read.

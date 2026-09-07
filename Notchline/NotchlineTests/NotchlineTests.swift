@@ -3530,6 +3530,64 @@ struct NotchlineTests {
         #expect(contentBox == 586)
     }
 
+    /// A scrolling list narrows its own rows, and its rail stops on the panel's
+    /// inset rather than standing in it.
+    ///
+    /// The `12` pt margin is empty everywhere else on the panel — the matrix
+    /// ends on it, a row's text ends on it, the footer ends on it — so a rail
+    /// drawn out in that margin is the one thing on the surface breaking the
+    /// column. Standing it inside instead means the rows have to pay for it,
+    /// and they pay only while there is something to pay for: a list that fits
+    /// keeps every point it has.
+    @Test @MainActor
+    func aScrollingListNarrowsItsRowsToStandItsRailOnTheMargin() {
+        let panel = PanelMetrics.expandedBaselineWidth
+        let settled = PanelMetrics.sessionViewportWidth(panelWidth: panel)
+        let scrolling = PanelMetrics.sessionViewportWidth(
+            panelWidth: panel,
+            isScrolling: true
+        )
+        #expect(settled == 598)
+        #expect(settled - scrolling == PanelMetrics.scrollRailLane)
+        #expect(PanelMetrics.scrollRailLane == 7)
+
+        // The rail is laid inside the full lane, padded off its trailing edge by
+        // the row's own padding — which puts its right edge exactly where a
+        // row's last glyph would have landed, on the panel's inset.
+        let railTrailingEdge = PanelMetrics.sessionRowGutter
+            + settled
+            - PanelMetrics.sessionRowPadding
+        #expect(railTrailingEdge == panel - PanelMetrics.expandedHorizontalPadding)
+
+        // And the narrowed row stops short of it by the gap, never under it.
+        let rowTrailingEdge = PanelMetrics.sessionRowGutter
+            + scrolling
+            - PanelMetrics.sessionRowPadding
+        #expect(
+            railTrailingEdge - PanelMetrics.scrollRailWidth - rowTrailingEdge
+                == PanelMetrics.scrollRailGap
+        )
+    }
+
+    /// An open row's body is wrapped for the narrow case whether or not the
+    /// list it is in ends up scrolling.
+    ///
+    /// It is the open row that pushes the live list past its cap, so measuring
+    /// the body at the wide width and then drawing it narrow is a loop: the row
+    /// is narrow because it is tall and tall because it was measured wide. The
+    /// wrap is settled once, at the narrower of the two, and the row draws those
+    /// lines either way — a list that does not scroll just leaves the lane empty.
+    @Test @MainActor
+    func anOpenRowsBodyIsWrappedForTheNarrowCase() {
+        #expect(
+            PanelMetrics.requestBodyWidth
+                == PanelMetrics.expandedBaselineWidth
+                    - PanelMetrics.expandedHorizontalPadding * 2
+                    - PanelMetrics.scrollRailLane
+        )
+        #expect(PanelMetrics.requestBodyWidth == 579)
+    }
+
     /// Rows say which product they are for as long as both products are connected.
     ///
     /// This used to be keyed to the rows themselves — attribution appeared only
