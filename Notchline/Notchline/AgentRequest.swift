@@ -949,7 +949,13 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
                 lines: AgentRequestReading.wrapped(
                     text,
                     to: width,
-                    font: PanelMetrics.proseFont
+                    font: PanelMetrics.proseFont,
+                    // §4.5: the continuation indent is machine text's, and a
+                    // paragraph that wraps is not a second argument. Prose took
+                    // it by default and every wrapped line of a plan, a
+                    // restatement or a question drew two spaces in from the one
+                    // above it.
+                    indentContinuations: false
                 ),
                 options: [],
                 header: nil,
@@ -965,7 +971,8 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
                 lines: AgentRequestReading.wrapped(
                     asked.text,
                     to: width,
-                    font: PanelMetrics.proseFont
+                    font: PanelMetrics.proseFont,
+                    indentContinuations: false
                 ),
                 options: asked.options,
                 header: asked.header,

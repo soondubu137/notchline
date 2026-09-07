@@ -160,7 +160,7 @@ A count that names something unreachable is an apology, which is why the two arr
 
 Line breaks are the ones the product sent. A machine-text line wider than the body wraps at its edge and the continuation carries **that line's own indent plus two spaces**, so a wrap is never read as a new argument. Whitespace is never collapsed, order is never changed, and a token with nowhere to break is broken at the edge rather than dropped.
 
-Prose, resource values and field labels wrap without adding command-continuation indentation. Explicit line breaks and source whitespace remain intact.
+Prose, resource values and field labels wrap without adding command-continuation indentation. Explicit line breaks and source whitespace remain intact. **This paragraph was true of the wrapper and not of its callers until 2026-09-07**: a question, a plan and a document all took the wrapper's default, so every line of a wrapped paragraph after the first drew two spaces in from the one above it — a hanging indent invented for shell arguments, applied to a sentence.
 
 ### 4.6 The app never marks a command as dangerous
 

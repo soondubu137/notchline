@@ -121,4 +121,54 @@ struct ApprovalPresentationTests {
         #expect(lines.count > 1)
         #expect(lines.joined() == source)
     }
+
+    /// And the bodies that are prose actually ask for that.
+    ///
+    /// §4.5 said so and the layout did not: a question, a plan and a document
+    /// all took `wrapped`'s default, so every line of a wrapped paragraph after
+    /// the first drew two spaces in from the one above it — a hanging indent
+    /// invented for shell arguments, applied to a sentence. Asserted through
+    /// ``RequestBodyLayout/laidOut(_:showing:expandedOptions:width:)`` rather
+    /// than against `wrapped` directly, because the call site is what was wrong.
+    @Test @MainActor
+    func aProseBodyIsLaidOutWithoutTheCommandContinuationIndent() throws {
+        let paragraph = "This is a long question about which database to use, "
+            + "asked in enough words that it has to wrap more than once."
+        let forms: [AgentRequest.Form] = [
+            .question(paragraph),
+            .document(paragraph),
+            .questions([
+                AgentQuestion(
+                    id: 0, header: nil, text: paragraph,
+                    options: [AgentQuestionOption(id: 0, label: "SQLite", description: nil)],
+                    allowsSeveralAnswers: false
+                )
+            ])
+        ]
+        for form in forms {
+            let request = AgentRequest(id: "call", toolName: "Tool", form: form)
+            let layout = try #require(RequestBodyLayout.laidOut(request, width: 240))
+            #expect(layout.lines.count > 2, "\(form)")
+            for line in layout.lines.dropFirst() {
+                #expect(!line.hasPrefix(" "), "\(line)")
+            }
+            #expect(layout.lines.joined() == paragraph, "\(form)")
+        }
+    }
+
+    /// A command's continuation indent is untouched by that.
+    ///
+    /// §4.5's rule is machine text's and always was: on a shell command the
+    /// difference between a continuation and a new line is the difference
+    /// between one command and two.
+    @Test @MainActor
+    func aCommandBodyKeepsItsContinuationIndent() throws {
+        let request = AgentRequest(
+            id: "call", toolName: "Bash",
+            form: .command("git log --oneline --graph --decorate --all --since=yesterday")
+        )
+        let layout = try #require(RequestBodyLayout.laidOut(request, width: 200))
+        #expect(layout.lines.count > 1)
+        #expect(layout.lines.dropFirst().allSatisfy { $0.hasPrefix("  ") })
+    }
 }
