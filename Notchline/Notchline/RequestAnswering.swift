@@ -51,9 +51,17 @@ nonisolated enum AnswerGround: Sendable, Equatable {
 
     /// Questions keep the affirmative as the default; approvals carry text on
     /// refusal.
+    ///
+    /// **It takes the request and not the laid-out body**, and it never read
+    /// one: the ground is decided by the shape the request asks in, which
+    /// ``AgentRequest/answerRow(showing:)`` answers without measuring a
+    /// character. The discarded `showing:` parameter it used to declare was
+    /// filled in by ``MonitorStore/refreshAnswerGround()`` with
+    /// ``MonitorStore/openRowBody``, so every keystroke ran a full text layout
+    /// of the whole request body — `14 ms`, measured on Release — to hand it to
+    /// a parameter spelled `_`.
     nonisolated static func `where`(
         _ request: AgentRequest?,
-        showing _: RequestBodyLayout? = nil,
         carriesText: Bool
     ) -> AnswerGround {
         guard let shape = request?.answerRow() else { return .affirmative }

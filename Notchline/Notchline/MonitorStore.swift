@@ -2942,17 +2942,63 @@ final class MonitorStore: ObservableObject {
         return sessions.first { $0.id == openRowID }
     }
 
+    /// The last body laid out, and what it was laid out from.
+    ///
+    /// Keyed on its inputs rather than invalidated by hand. The three of them
+    /// are the whole of what ``openRowBody`` is a function of, the width is a
+    /// constant, and a cache that re-derives its own key cannot be left stale
+    /// by a route somebody forgot — which a `didSet` on four separate
+    /// mutations would be.
+    private var laidOutBody: (key: RequestBodyKey, layout: RequestBodyLayout?)?
+
+    /// Everything ``openRowBody`` is a function of.
+    ///
+    /// Comparing it is a string compare against storage the row is still
+    /// holding, so a hit costs a pointer test rather than a measurement.
+    private struct RequestBodyKey: Equatable {
+        let request: AgentRequest
+        let question: Int
+        let expandedOptions: Set<Int>
+    }
+
+    /// How many bodies this store has actually laid out.
+    ///
+    /// Not diagnostics: it is the only way to state ``openRowBody``'s invariant
+    /// as a test, because a cached layout and a recomputed one are the same
+    /// value and differ only in what they cost. Never published — reading a
+    /// body must not invalidate the panel that is reading it.
+    private(set) var bodyLayoutCount = 0
+
     /// What the open row's body is, laid out at the width it draws in.
     ///
     /// One question of a set at a time (§5.3), which is why the count on the
     /// caption line is a drawn element rather than an ornament: an answer that
     /// appears to do nothing looks like a failure without it.
+    ///
+    /// **Laid out once per change, not once per read** — the layout is text
+    /// measurement and it is the most expensive thing this store does, so a
+    /// property that ran it on every access was a property nobody could afford
+    /// to read twice. Everything that draws an open row reads it, and so does
+    /// every height the panel is sized by (``openRowHeight``,
+    /// ``sessionListContentHeight``, ``sessionViewportHeight``,
+    /// ``expandedContentHeight``): **48** full layouts for one open, **26** for
+    /// one option click, **one per keystroke**, and **24** over a second of
+    /// scrolling the list past an open row — measured on Release, 2026-09-07,
+    /// at `14 ms` each.
     var openRowBody: RequestBodyLayout? {
         guard let request = openSession?.request else { return nil }
-        return RequestBodyLayout.laidOut(
-            request, showing: openQuestionIndex,
+        let key = RequestBodyKey(
+            request: request,
+            question: openQuestionIndex,
             expandedOptions: openRowID.flatMap { answerProgress[$0]?.expandedOptions } ?? []
         )
+        if let laidOutBody, laidOutBody.key == key { return laidOutBody.layout }
+        let layout = RequestBodyLayout.laidOut(
+            request, showing: key.question, expandedOptions: key.expandedOptions
+        )
+        laidOutBody = (key, layout)
+        bodyLayoutCount &+= 1
+        return layout
     }
 
     /// Which question of a set the body is showing, from the top.
@@ -3556,7 +3602,6 @@ final class MonitorStore: ObservableObject {
     private func refreshAnswerGround() {
         let ground = AnswerGround.where(
             openSession?.request,
-            showing: openRowBody,
             carriesText: !answerDraft.isEmpty
         )
         if answerGround != ground { answerGround = ground }

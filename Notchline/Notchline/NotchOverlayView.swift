@@ -2172,6 +2172,34 @@ private struct ScrollingRequestBody: View {
                 maxWidth: .infinity,
                 alignment: .topLeading
             )
+            // **Rasterised once, then moved.** Translating the body made
+            // SwiftUI re-render every leaf under it on every frame of the
+            // wheel, and a question's leaves are four option cards -- a
+            // `Button` around a fill, a `strokeBorder` and two nested stacks
+            // each. Composited into an image *before* the offset, the scroll
+            // becomes a layer transform: `2.32` ms an event to `1.12`, and a
+            // sustained sweep of the list past an open row from `40%` of a
+            // core to `15%`, which is what that sweep costs with the row shut
+            // (Release, 2026-09-07).
+            //
+            // **`system-architecture.md` §6 measured this in 2026-09-05 and
+            // found it bought nothing, and that reading was right about what
+            // it measured**: a sixty-line command is a stack of `Text` views,
+            // which rasterise to about what they cost to draw (`2.20` ms an
+            // event against `2.07`). It is the cards that this takes out of
+            // the frame, not the lines.
+            //
+            // Verified rather than assumed, because this is the class of
+            // change `AGENTS.md` §7 is about: pixel-identical against the same
+            // panel without it (`227` of `1.36M` pixels differing by more than
+            // `8/255`, every one of them option-card antialiasing, and `0` on
+            // the argument-field form), the same accessibility tree element for
+            // element, options still clickable, and hover across the cards
+            // unchanged at `11%`. On a body far past the viewport -- `1,529`
+            // lines, the hook boundary's `128 KB` cap -- it costs `16 MB` of
+            // resident memory and buys nothing, which is the right way round:
+            // nothing is rasterised that the row is not drawing.
+            .drawingGroup()
             .offset(y: -offset)
             .frame(height: layout.drawnHeight, alignment: .top)
             .clipped()

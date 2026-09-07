@@ -628,7 +628,7 @@ So the honest figure is **`1.7` ms an event, not `4.7`** — and the `0.77` ms t
 - **The `@State` does not invalidate up to the `NSHostingView`.** `NotchOverlayView.body` is evaluated **3** times over a whole `600`-event run, in every configuration. `PanelContour.path(in:)` is built about **673** times in every configuration *including the ones where nothing scrolls at all*, so it is not on this path either. The invalidation is exactly one view deep: `ScrollingRequestBody.body` runs once when the offset is never written and `600` times when it is.
 - **`RequestBodyView.body` runs once or twice a run, never `600` times.** SwiftUI already skips it, which is why `.equatable()` bought nothing before and buys nothing now (`0.90`–`1.05` s against `0.99`–`1.02` s). The inference drawn from that was the wrong one: not re-evaluating the sixty lines is not the same as not re-doing them.
 - **Something scales with the lines, and it is a minority of the cost.** With the body moving, `600` events cost `0.51` s at `10` lines, `0.88` s at `30`, `1.06` s at `60` and `1.35` s at `120`; a *declining* catcher scales the same way, `0.34` s at `10` lines against `0.61` s at `120`, because the hit test walks the same leaves on the way in. ~~What scales is SwiftUI's layout and display-list pass over the leaves under a changed offset.~~ **How much of the total that is was not measured until the fix below was attempted, and it is about a third** — see the floor in the next section.
-- **The mask, the rail and the count are free.** Measured on one build at `300` delivered events: whole `1.014` s, no fade `1.073`, no rail or count `0.945`, neither `0.937`, `.drawingGroup()` `1.006` — every one inside the others' noise. The `LinearGradient` rebuilt per offset costs nothing measurable, and flattening the body into one raster before translating it buys nothing.
+- **The mask, the rail and the count are free.** Measured on one build at `300` delivered events: whole `1.014` s, no fade `1.073`, no rail or count `0.945`, neither `0.937`, `.drawingGroup()` `1.006` — every one inside the others' noise. The `LinearGradient` rebuilt per offset costs nothing measurable, ~~and flattening the body into one raster before translating it buys nothing.~~ **The raster's half of that is true of the body this measured and false of the body beside it** — it was a sixty-line command, and a question's option cards are a different kind of leaf; see *A raster buys nothing over lines and halves the cost of cards* below (2026-09-07).
 
 ~~**What would actually buy it back** is §7's own answer, and it is not applied here: drawing the lines into a `CALayer` and translating that, as `SessionRowTextView` already does for the row's title, takes the leaves out of both the render pass and the hit test.~~ **It was built, and it is three times worse.** That paragraph is left struck rather than deleted because it was the obvious answer and it is wrong; what follows is the measurement that settles it.
 
@@ -654,6 +654,59 @@ Four candidate causes were each measured and each ruled out, which is what makes
 - **Not the content.** The layer version plateaus at `5.16`–`5.20` from sixty lines to a hundred and twenty, where the `Text` version goes on climbing (`1.80` → `2.17`). What is left is the fixed cost of updating an `NSViewRepresentable` inside a subtree that moves on every event, and no raster strategy touches it.
 
 **What would be left to try, and why it is not being tried.** The remaining `1.19` ms floor is SwiftUI being told about the scroll at all. Removing it means the wheel writing straight to the layers and `@State` never moving — which means the fade, the rail and §4.4's count all become layer-drawn too, and the options, which take clicks, need a path of their own. That is a rewrite of a surface with its own design rules for about `1.4` ms during a gesture a person holds for a second or two. The measurement is recorded so nobody has to take this route twice; the `Text` views stay.
+
+### The open row was measuring its own text on every read (2026-09-07)
+
+Everything above is about a *gesture* on an open row. This is about the row simply being open, and it was the larger number by an order of magnitude: **opening an approval detail cost `0.66` s of CPU, one option click `0.29` s, and one keystroke `0.26` s** — Release, a four-option question, `proc_pid_rusage` diffed either side of the act.
+
+`MonitorStore.openRowBody` was a computed property that ran `RequestBodyLayout.laidOut` — the whole body's text measurement, `14 ms` for that question — **on every read**. The panel is made of reads. The row's body, its position, its header and its accessibility sentence; the three heights the window is sized by (`openRowHeight`, `sessionListContentHeight`, `sessionViewportHeight`, and `expandedContentHeight` over them); `canSubmitCurrentAnswer`, on each of the three places `AnswerRow` reads it. Counted with a probe in `laidOut` on a Release build:
+
+| The act | Full body layouts | CPU |
+| --- | --- | --- |
+| Open the row, first time after launch | `48` | `0.66` s |
+| One option click | `26` | `0.29` s |
+| One keystroke, the first | `22` | `0.26` s |
+| Nineteen more keystrokes | `19` | `0.35` s |
+| Scroll the panel past it, `120` wheel events | `24` | `0.44` s |
+| The same scroll with no row open | `0` | `0.16` s |
+
+Three separate mistakes, each fixed on its own terms.
+
+**One layout per change, not one per read.** `openRowBody` now keeps the last layout beside the three things it is a function of — the request, the question index, the expanded descriptions — and re-runs only when one of them differs. Keyed on its own inputs rather than invalidated by hand: the width is a constant, the three inputs are the whole of it, and a cache that re-derives its key cannot be left stale by a route somebody forgot, which four scattered `didSet`s would be. A hit costs a string compare against storage the row is still holding, so it is a pointer test. `MonitorStore.bodyLayoutCount` exists for the test that pins this and nothing else: a cached layout and a recomputed one are the same value and differ only in what they cost.
+
+**A keystroke was laying out a body to throw it away.** `AnswerGround.where(_:showing:carriesText:)` declared a `showing: RequestBodyLayout?` parameter and spelled it `_`. It never read one — the ground is decided by the shape the request asks in, which `answerRow(showing:)` answers without measuring a character — and `refreshAnswerGround()` filled it in with `openRowBody` on **every edit**. The parameter is gone.
+
+**And the wrap itself was quadratic.** `AgentRequestReading.fit` measured every prefix of a line in turn: one `NSString.size(withAttributes:)` per character, over a string a character longer each time, at about `24 µs` a call. Width only grows with length, so the first length that overflows can be bracketed in `log n` measurements instead of `n`. The break is unchanged — the lines are byte-identical across `910` cases spanning five fonts, seven widths, both indent modes and a corpus of Unicode, emoji, tabs, URLs, unbreakable tokens and degenerate widths — and the question body's layout falls from `14.1` ms to `2.8` ms. `aWrappedLineIsTheLongestOneThatFitsAndNeverOverflows` pins the property that has to survive: the line fits, and one more character of what follows would not have.
+
+### A raster buys nothing over lines and halves the cost of cards (2026-09-07)
+
+With the layouts gone, scrolling a panel with an open question still cost `40%` of a core against `18%` for the same panel with the row shut, and sweeping the body itself `33%`. That residue is the leaves — which the 2026-09-05 measurement above already located, when it found `RequestBodyView.body` running twice per run while the cost scaled with the line count. `.drawingGroup()` on the body, *before* the offset, composites it into an image once and makes the scroll a layer transform.
+
+That measurement said this buys nothing. **It was right about what it measured and wrong as a general statement**, and the difference is what is in the body. Release, `300` wheel events at `8` ms, one binary either way, two runs each:
+
+| The open body | Plain | `.drawingGroup()` |
+| --- | --- | --- |
+| Sixty-line command — the 2026-09-05 shape | `2.20` ms/event | `2.07` ms/event |
+| Four-option question | `2.32` ms/event | `1.12` ms/event |
+| `1,529`-line document, the `128 KB` cap | `5.5` ms/event | `5.1` ms/event |
+
+A stack of `Text` views rasterises to roughly what it costs to draw. An option card is a `Button` around a `RoundedRectangle` fill, a `strokeBorder` overlay and two nested stacks, and four of those are what the raster removes from every frame. So the rule is not "flattening buys nothing" but **flattening buys what the leaves cost, and a card is an expensive leaf**.
+
+Verified rather than assumed, because §7 rule 12 is the class of change this is: pixel-identical against the same panel without it — `227` of `1.36M` pixels differing by more than `8/255`, every one of them option-card antialiasing, and `0` on the argument-field form; the same accessibility tree element for element, options still `AXButton`s carrying *Selected* / *Not selected*; options still clickable and single-select still moving the tick; hover across the cards unchanged at `11%`. On a body far past the viewport it costs `16 MB` of resident memory and buys nothing, which is the right way round — nothing is rasterised that the row is not drawing.
+
+**What this leaves.** Scrolling a panel with an open approval now costs what scrolling it with the row shut costs, and the four acts stand at:
+
+| The act | Before | After |
+| --- | --- | --- |
+| Open the row, first time after launch | `0.66` s | `0.16` s |
+| One option click | `0.29` s | `0.04` s |
+| One keystroke, the first | `0.26` s | `0.007` s |
+| Nineteen more keystrokes | `0.35` s | `0.02` s |
+| Scroll the panel past it, `120` events | `0.44` s | `0.17` s |
+| Sustained sweep of that list | `40%` of a core | `15%` |
+| — the same sweep with no row open | `18%` | `18%` |
+
+**A long body is still expensive and this did not touch it.** `RequestBodyView` builds a `Text` for every line the payload wrapped to, not for the lines the `140`–`300` pt viewport can show, so a `1,529`-line plan costs `0.7` s to open and about `100%` of a core to scroll. Drawing only the reachable slice would fix it and would change what `contentHeight` means to the tests that pin the drawn height against the measured one; it is not in this change.
 
 ### `proc_pid_rusage` reports mach ticks, not nanoseconds
 
@@ -914,6 +967,6 @@ At one run per 30 seconds the subprocess side is **0.5% of a core, forever**, gr
 
 ## Question rendering boundary (2026-09-07)
 
-Option titles and descriptions are measured in `RequestBodyLayout.Option` and those exact lines are drawn by `OptionRow`. The same value supplies card heights, viewport height and the fold counter. Description disclosure changes layout but never answers the request. The existing wheel catcher translates the one shared body; options do not introduce nested scrollers or continuous animations. Its offset is clamped when a description changes and reset when the request or question changes.
+Option titles and descriptions are measured in `RequestBodyLayout.Option` and those exact lines are drawn by `OptionRow`. The same value supplies card heights, viewport height and the fold counter — **and it is one value, laid out once per change**: `MonitorStore.openRowBody` caches it against the request, the question index and the expanded descriptions, because every one of those readers used to re-measure the whole body (2026-09-07, §6). Description disclosure changes layout but never answers the request. The existing wheel catcher translates the one shared body; options do not introduce nested scrollers or continuous animations. Its offset is clamped when a description changes and reset when the request or question changes.
 
-`AnswerFieldView` continues to own per-character drawing. `MonitorStore` publishes a question-answer revision only when the draft crosses the trimmed-empty boundary, or when selection, disclosure or question state changes. The first boundary changes the affirmative's availability and whether selection emphasis is effective; ordinary typing within a non-empty draft does not publish a SwiftUI revision. Request identity is checked before retained draft state can be reused. These UI changes introduce no new provider, protocol parsing or non-public Codex dependency.
+`AnswerFieldView` continues to own per-character drawing. `MonitorStore` publishes a question-answer revision only when the draft crosses the trimmed-empty boundary, or when selection, disclosure or question state changes — and a keystroke that publishes nothing now also *measures* nothing, which it did not before: `AnswerGround.where` declared a laid-out body it never read, and every edit built one for it (2026-09-07, §6). The first boundary changes the affirmative's availability and whether selection emphasis is effective; ordinary typing within a non-empty draft does not publish a SwiftUI revision. Request identity is checked before retained draft state can be reused. These UI changes introduce no new provider, protocol parsing or non-public Codex dependency.

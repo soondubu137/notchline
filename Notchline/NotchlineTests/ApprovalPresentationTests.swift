@@ -171,4 +171,63 @@ struct ApprovalPresentationTests {
         #expect(layout.lines.count > 1)
         #expect(layout.lines.dropFirst().allSatisfy { $0.hasPrefix("  ") })
     }
+
+    /// Every line is as full as it can be, and none of them overflows.
+    ///
+    /// **The property the bisection has to keep.** The fitter used to measure
+    /// every prefix of a line in turn — one full text layout per character, on
+    /// a string a character longer each time — which made wrapping quadratic in
+    /// the length of a line and a realistic body `14 ms` to lay out. Width only
+    /// grows with length, so the first length that overflows can be bracketed
+    /// in `log n` measurements instead of `n`; what must not move is *where the
+    /// break lands*, and that is exactly this: the line fits, and one more
+    /// character of what follows would not have.
+    ///
+    /// Checked on an unbreakable token, where the break is at the character and
+    /// the assertion is exact, and on prose, where a break at a space is only
+    /// right if the word it moved down would not have fitted whole.
+    @Test @MainActor
+    func aWrappedLineIsTheLongestOneThatFitsAndNeverOverflows() throws {
+        let mono = PanelMetrics.machineTextFont
+        let prose = PanelMetrics.proseFont
+
+        // A token with nowhere to break: every line but the last is exactly
+        // full, and one more glyph would put it over.
+        for width in [37.0, 61.5, 140.0, 233.0] as [CGFloat] {
+            let token = String(repeating: "abcdefghij", count: 12)
+            let lines = AgentRequestReading.wrapped(
+                token, to: width, font: mono, indentContinuations: false
+            )
+            #expect(lines.joined() == token, "\(width)")
+            for (index, line) in lines.enumerated() {
+                #expect(PanelMetrics.textWidth(line, font: mono) <= width, "\(line)")
+                guard index + 1 < lines.count, let next = lines[index + 1].first else { continue }
+                #expect(
+                    PanelMetrics.textWidth(line + String(next), font: mono) > width,
+                    "line \(index) at \(width) is one character short of full"
+                )
+            }
+        }
+
+        // Prose, where the break moves back to the last space: the line fits,
+        // and the word that went down with it would not have.
+        let paragraph = "Claude wants to run a command that will modify files "
+            + "outside the current project directory, which is a change that "
+            + "reaches past this checkout and is worth reading before granting."
+        for width in [120.0, 240.0, PanelMetrics.requestBodyWidth] as [CGFloat] {
+            let lines = AgentRequestReading.wrapped(
+                paragraph, to: width, font: prose, indentContinuations: false
+            )
+            #expect(lines.joined() == paragraph, "\(width)")
+            for (index, line) in lines.enumerated() {
+                #expect(PanelMetrics.textWidth(line, font: prose) <= width, "\(line)")
+                guard index + 1 < lines.count else { continue }
+                let nextWord = lines[index + 1].prefix { $0 != " " }
+                #expect(
+                    PanelMetrics.textWidth(line + nextWord, font: prose) > width,
+                    "line \(index) at \(width) had room for \(nextWord)"
+                )
+            }
+        }
+    }
 }

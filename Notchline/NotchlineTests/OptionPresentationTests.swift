@@ -127,4 +127,90 @@ struct OptionPresentationTests {
         #expect(abs(host.fittingSize.height - row) < 0.5)
     }
 
+    /// The open row's body is laid out once per change, never once per read.
+    ///
+    /// **Every read used to be a full text layout**, and the panel is made of
+    /// reads: the row's body, its position, its header and its accessibility
+    /// text, the three heights the window is sized by
+    /// (``MonitorStore/openRowHeight``,
+    /// ``MonitorStore/sessionListContentHeight``,
+    /// ``MonitorStore/sessionViewportHeight``), and
+    /// ``MonitorStore/canSubmitCurrentAnswer`` on every control that reads it.
+    /// Measured on Release on 2026-09-07, against one four-option question:
+    /// **48** layouts to open the row, **26** for one option click, **24** over
+    /// a second of scrolling the list past it, and **one per keystroke** — at
+    /// `14 ms` each, which is the whole of why the row was slow.
+    ///
+    /// The two halves of that are pinned separately here. Reading lays out
+    /// nothing, and neither does an answer: what a person ticks or types is not
+    /// an input to the drawn lines, and only what changes them costs a layout.
+    @Test @MainActor
+    func theOpenRowsBodyIsLaidOutOncePerChangeRatherThanOncePerRead() async throws {
+        let description = String(
+            repeating: "Read every part of this description before deciding. ",
+            count: 18
+        )
+        let request = AgentRequest(id: "cost", toolName: "AskUserQuestion", form: .questions([
+            AgentQuestion(id: 0, header: "First", text: "Which approach should I take?", options: [
+                AgentQuestionOption(id: 1, label: "Inspect first", description: description),
+                AgentQuestionOption(id: 2, label: "Change it now", description: description)
+            ], allowsSeveralAnswers: false),
+            AgentQuestion(id: 1, header: "Second", text: "And where should it land?", options: [
+                AgentQuestionOption(id: 1, label: "Here", description: description)
+            ], allowsSeveralAnswers: false)
+        ]), replyTicket: 1)
+        let snapshot = AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [
+            MonitoredSession(agent: .claudeCode, threadID: "thread", turnID: "turn", projectName: "notchline", title: "Question", preview: nil, status: .inputNeeded, startedAt: Date(), request: request)
+        ], quota: .unavailable, diagnostic: nil)
+        let store = MonitorStore(displays: [], services: [], initialSnapshot: snapshot, preferences: nil)
+        store.toggleOpenRow(try #require(snapshot.sessions.first))
+        // §6.3: nothing answers until the row has finished arriving.
+        let deadline = Date().addingTimeInterval(5)
+        while !store.isAffirmativeArmed && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.isAffirmativeArmed)
+        _ = store.openRowBody
+
+        // Everything the panel reads while drawing one pass, several times
+        // over, is one layout's worth of work and no more.
+        let afterOpening = store.bodyLayoutCount
+        for _ in 0..<20 {
+            _ = store.openRowBody
+            _ = store.openRowBody?.position
+            _ = store.openRowHeight
+            _ = store.sessionListContentHeight
+            _ = store.sessionViewportHeight
+            _ = store.expandedContentHeight
+            _ = store.questionHasASelection
+            _ = store.canSubmitCurrentAnswer
+        }
+        #expect(store.bodyLayoutCount == afterOpening)
+
+        // Nor does answering: a tick and a keystroke change what will be sent,
+        // not the lines that are drawn.
+        store.answerDraftChanged(to: "a typed answer")
+        store.answerDraftChanged(to: "a typed answer of some length")
+        store.takeAnswer(.option(1))
+        #expect(store.isOptionTicked(1))
+        #expect(store.bodyLayoutCount == afterOpening)
+
+        // A disclosure and a step do change them, and cost exactly one each.
+        store.toggleOptionDescription(1)
+        #expect(store.openRowBody?.optionLayouts.first?.isExpanded == true)
+        #expect(store.bodyLayoutCount == afterOpening + 1)
+        store.takeAnswer(.affirmative)
+        #expect(store.openRowBody?.position?.index == 2)
+        #expect(store.bodyLayoutCount == afterOpening + 2)
+        #expect(store.openSession?.request?.id == "cost")
+
+        // And drawing the list really does read through all of that: one pass
+        // over the whole panel, and still nothing laid out again.
+        let drawn = store.bodyLayoutCount
+        let host = NSHostingView(rootView: ActiveSessionList().environmentObject(store))
+        host.layoutSubtreeIfNeeded()
+        #expect(host.fittingSize.height > 0)
+        #expect(store.bodyLayoutCount == drawn)
+    }
+
 }
