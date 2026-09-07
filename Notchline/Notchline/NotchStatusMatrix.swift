@@ -178,29 +178,14 @@ enum NotchPalette {
         static let sessionHoverFillOpacity: Double = 0.16
         static let sessionPressedFillOpacity: Double = 0.24
 
-        /// The step below ``sessionHoverFillOpacity``, and what a control
-        /// inside a row rests at while it is not holding the bright ground.
-        ///
-        /// **`0.08` is the weight that failed as a hover and is right as a
-        /// rest, for the same reason it failed.** A row washed at `0.08` read
-        /// as not answering the pointer, which is exactly what a resting
-        /// control must not claim: it has to say *this is an object* and
-        /// nothing more. Request buttons now deepen this wash on hover.
-        ///
-        /// Without it a quiet answer is bare text beside the field, which is
-        /// what `Deny` was — a caption that happened to be clickable. The
-        /// alternative it replaces on the destination control was
-        /// ``NotchPalette/recessedGround``, the machine-text step, which on an
-        /// open row is `#242424` against the row's own `#242524` and so drew
-        /// nothing at all.
-        ///
-        /// **A control rests here; a row rests at nothing.** A control is an
-        /// object and an option is a region of a list — five stacked options
-        /// each carrying a tile would read as stripes, so ``OptionRow`` and the
-        /// session rows keep their bare ground and answer with the hover alone.
-        static let controlRestFillOpacity: Double = 0.08
-        /// Quiet request buttons deepen their existing wash under the pointer.
-        static let controlHoverFillOpacity: Double = 0.04
+        /// Quiet request buttons need a visible tile on the open row's
+        /// `0.16` theme wash. The former `0.08` rest and `0.04` hover almost
+        /// disappeared into it, especially when hovering deepened the fill.
+        /// Default theme: approximately #505451 at rest and #454846 on hover,
+        /// against #242524. Resting text retains a 4.57:1 contrast ratio.
+        /// Options remain list regions and keep their separate hover wash.
+        static let controlRestFillOpacity: Double = 0.24
+        static let controlHoverFillOpacity: Double = 0.18
 
         /// Ease-in-out both ways -- the same gentle acceleration and
         /// deceleration whether the emphasis is arriving or leaving -- and
@@ -276,8 +261,8 @@ enum NotchPalette {
     /// What ``brightGround`` is drawn at while it is still growing out of the
     /// caption line and has not become a target yet (`answer-in-notch.md` §6.3).
     ///
-    /// **Eight steps of ``RowEmphasis/controlRestFillOpacity``, and the one
-    /// weight on this row that contrast chose rather than the ladder.** It was
+    /// This opacity is set by text contrast, independently of the quiet
+    /// buttons' rest and hover fills. It was
     /// `0.45`, where ``onBrightGround`` on it is `4.0 : 1` — under AA for the
     /// `13` pt light label it carries, for as long as the ground takes to
     /// travel. This is the first weight up the ladder that clears it, at

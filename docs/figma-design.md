@@ -869,4 +869,4 @@ Awaiting approval, Chats, approval needed
 
 Product and technical behaviour are governed by [`PRD.md`](PRD.md), [`tech-design.md`](tech-design.md), [`CONTEXT.md`](../CONTEXT.md) and [`docs/adr`](adr/). Figma nodes are for visual and layout acceptance and are never a source of truth about a product's protocol.
 
-Request controls share `PanelMetrics.requestControlFont` (`13 pt` Light), including destination buttons, affirmative and refusal buttons, and option labels. Quiet request buttons deepen their theme wash from `0.08` to `0.04` on hover. This supersedes Medium labels and white hover fills in earlier specimens; the Figma file itself has not been updated.
+Request controls share `PanelMetrics.requestControlFont` (`13 pt` Light), including destination buttons, affirmative and refusal buttons, and option labels. Quiet request buttons deepen their theme wash from `0.24` to `0.18` on hover. This supersedes Medium labels and white hover fills in earlier specimens; the Figma file itself has not been updated.

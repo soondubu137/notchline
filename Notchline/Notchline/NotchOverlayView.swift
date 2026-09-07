@@ -1644,12 +1644,9 @@ private struct AnswerControl: View {
     /// second object. It does not answer the pointer either, for the same
     /// reason: nothing here is a thing a click can take yet.
     ///
-    /// **The answer without the ground has a body of its own now**, one step
-    /// below the wash the row itself takes under the pointer, and one more
-    /// step down while the pointer is on it — see
-    /// ``NotchPalette/RowEmphasis/controlRestFillOpacity``. It used to be bare
-    /// text on a white wash borrowed from nowhere; both weights are the app's
-    /// own ink, so a control and the row under it climb one ladder.
+    /// Quiet answers have a stronger theme wash than the open row beneath
+    /// them. Hover deepens it while retaining a visible tile boundary; see
+    /// ``NotchPalette/RowEmphasis/controlRestFillOpacity``.
     ///
     /// Filled and quiet buttons both deepen their existing theme colour on
     /// hover. The ground stays on the answer chosen by the person's typing.
