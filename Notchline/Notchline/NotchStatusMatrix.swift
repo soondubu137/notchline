@@ -128,10 +128,10 @@ enum NotchPalette {
         red: 0x9A / 255, green: 0x9A / 255, blue: 0x9E / 255
     )
 
-    /// What a row draws under the pointer, and it is not one answer: a live
-    /// row washes, a utility bar does not.
+    /// What a row draws under the pointer, and it is not one answer: a row
+    /// washes, a folding bar does not.
     ///
-    /// **A live session row fills, faintly, in ``themeInk``'s lit colour.**
+    /// **A session row fills, faintly, in ``themeInk``'s lit colour.**
     /// It tried a border and a halo for a while — traced the edge instead of
     /// repainting the ground — and that read as a wire drawn around the row
     /// rather than as the row answering. A fill is back, but not the flat
@@ -139,31 +139,24 @@ enum NotchPalette {
     /// of opacity, so it is still black doing the answering, only barely
     /// lifted, never a grey invented for the occasion.
     ///
-    /// **The Recent seam, a retired row, and the footer's own line never
-    /// fill.** All three are bars, not cards — full width, no room either
-    /// side for a wash to read as a shape rather than a stripe.
+    /// **A retired row takes exactly that fill, at exactly those weights.**
+    /// ~~It took a short mark of ``themeInk`` at its leading edge instead, on
+    /// the grounds that a half-height bar has no room either side for a wash to
+    /// read as a shape~~ — **superseded**: it does have the room, the wash
+    /// reads as a shape there, and the two marks side by side said the rows
+    /// under the rule were a different kind of thing to click. They are not.
+    /// One click, one target, one answer to the pointer.
     ///
-    /// A retired row still takes a short mark of ``themeInk`` at its leading
-    /// edge, because it is one row of a list and the mark says which row the
-    /// pointer is on. **The two folding bars take no mark at all**: nothing
-    /// stacks under them for a leading-edge flag to pick out, so the flag read
-    /// as a bar growing in front of a heading. They answer the pointer with
-    /// the brightened label and chevron alone.
+    /// **The two folding bars still never fill, and take no mark either.**
+    /// Nothing stacks under them for a leading-edge flag to pick out and they
+    /// are headings rather than rows, so a wash read as a bar growing in front
+    /// of a heading. They answer the pointer with the brightened label and
+    /// chevron alone.
     enum RowEmphasis {
-        /// A live session row and the row held open for an answer: the one
-        /// pair on this panel that fills.
+        /// Every row on this panel that fills: a live session row, the row
+        /// held open for an answer, and a retired row.
         static let sessionHoverFillOpacity: Double = 0.08
         static let sessionPressedFillOpacity: Double = 0.16
-
-        /// A retired row: a mark at the leading edge in place of the fill
-        /// above, `2.5` pt wide and inset a `9` pt margin from top and
-        /// bottom -- clear of the bar's own rounded corners at every height
-        /// it is drawn at.
-        static let utilityAccentHoverOpacity: Double = 0.5
-        static let utilityAccentPressedOpacity: Double = 0.85
-        static let utilityAccentWidth: CGFloat = 2.5
-        static let utilityAccentLeadingInset: CGFloat = 3
-        static let utilityAccentVerticalInset: CGFloat = 9
 
         /// Ease-in-out both ways -- the same gentle acceleration and
         /// deceleration whether the emphasis is arriving or leaving -- and

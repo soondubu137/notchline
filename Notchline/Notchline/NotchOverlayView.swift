@@ -2314,29 +2314,6 @@ private struct FoldSeamRule: View {
     }
 }
 
-/// The mark a retired row takes instead of a fill: a short accent at its own
-/// leading edge rather than a repainted ground — see
-/// ``NotchPalette/RowEmphasis``.
-///
-/// **The two folding bars no longer take it.** The Recent seam and the
-/// footer's spend line are not rows in a list: nothing under them lines up
-/// with a mark at the panel's leading edge, so the accent read as a bar
-/// growing in front of a heading rather than as one row of many answering the
-/// pointer. Their chevron and their label already brighten under it, which is
-/// the whole of what hover has to say there.
-private struct UtilityHoverAccent: View {
-    let opacity: Double
-
-    var body: some View {
-        Capsule(style: .continuous)
-            .fill(NotchPalette.themeInk.on)
-            .frame(width: NotchPalette.RowEmphasis.utilityAccentWidth)
-            .padding(.vertical, NotchPalette.RowEmphasis.utilityAccentVerticalInset)
-            .padding(.leading, NotchPalette.RowEmphasis.utilityAccentLeadingInset)
-            .opacity(opacity)
-    }
-}
-
 /// A row that has left the list, under the rule.
 ///
 /// One line — **product · project · subject** — and an age, at half a live
@@ -2402,6 +2379,10 @@ private struct RetiredRowContent: View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(NotchPalette.themeInk.on.opacity(fillOpacity))
+                )
 
             HStack(spacing: 12) {
                 breadcrumb
@@ -2423,9 +2404,6 @@ private struct RetiredRowContent: View {
             minHeight: PanelMetrics.retiredRowHeight,
             maxHeight: PanelMetrics.retiredRowHeight
         )
-        .overlay(alignment: .leading) {
-            UtilityHoverAccent(opacity: accentOpacity)
-        }
         .animation(
             isHovered
                 ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
@@ -2479,11 +2457,13 @@ private struct RetiredRowContent: View {
 
     private var isEmphasized: Bool { isHovered || isPressed }
 
-    /// The Recent seam and a retired row take the dimmer of the two accent
-    /// weights — see ``NotchPalette/RowEmphasis``.
-    private var accentOpacity: Double {
-        if isPressed { return NotchPalette.RowEmphasis.utilityAccentPressedOpacity }
-        if isHovered { return NotchPalette.RowEmphasis.utilityAccentHoverOpacity }
+    /// The live row's wash, at the live row's weights — see
+    /// ``NotchPalette/RowEmphasis``. A retired row is a row of a list that is
+    /// clicked for the same reason and opens the same thing, so it answers the
+    /// pointer the same way.
+    private var fillOpacity: Double {
+        if isPressed { return NotchPalette.RowEmphasis.sessionPressedFillOpacity }
+        if isHovered { return NotchPalette.RowEmphasis.sessionHoverFillOpacity }
         return 0
     }
 }
