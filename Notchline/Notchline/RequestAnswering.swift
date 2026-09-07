@@ -38,28 +38,30 @@ nonisolated struct AgentQuestionAnswer: Sendable, Equatable {
 }
 
 /// The submission control the return key takes, or an option-selection intent.
-/// Approval text moves the ground to refusal. Questions keep it on Send;
-/// their selected options are separate draft state until submission.
+/// Approval text moves the ground to refusal. Questions keep it on the
+/// affirmative; their selected options are separate draft state until
+/// submission.
 nonisolated enum AnswerGround: Sendable, Equatable {
-    /// `Approve`, `Accept`, or a question's `Send`.
+    /// `Approve`, `Accept`, or a question's `Next` or `Submit`.
     case affirmative
     /// `Deny` or `Send it back` — the answer that carries the text.
     case refusal
     /// One option of a question, by its identity in the payload.
     case option(Int)
 
-    /// Questions keep Send as the default; approvals carry text on refusal.
+    /// Questions keep the affirmative as the default; approvals carry text on
+    /// refusal.
     nonisolated static func `where`(
         _ request: AgentRequest?,
         showing _: RequestBodyLayout? = nil,
         carriesText: Bool
     ) -> AnswerGround {
-        guard let shape = request?.answerRow else { return .affirmative }
+        guard let shape = request?.answerRow() else { return .affirmative }
         if shape.refusal != nil {
             return carriesText ? .refusal : .affirmative
         }
-        // Questions always submit through Send. Selection is draft state,
-        // not a default answer and never an act of submission.
+        // Questions always answer through the affirmative. Selection is draft
+        // state, not a default answer and never an act of submission.
         return .affirmative
     }
 }
@@ -96,8 +98,8 @@ nonisolated struct AnswerProgress: Sendable, Equatable {
     ///
     /// **The frontier, not a count of answers.** A set is walked forward by
     /// answering and backward by asking, so this is what tells `→` apart from
-    /// `Send`: `→` may return to a question already reached and can never reach
-    /// a new one, because reaching a new one is the whole of what `Send` means.
+    /// `Next`: `→` may return to a question already reached and can never reach
+    /// a new one, because reaching a new one is the whole of what `Next` means.
     var furthestQuestionReached: Int = 0
     /// What has been put into each question of the set, by position.
     ///

@@ -1435,7 +1435,7 @@ struct OpenRow: View {
     /// quietly, which is why a greyed-out `Approve` is worse than none at all.
     @ViewBuilder
     private var answerRow: some View {
-        if let shape = session.request?.answerRow {
+        if let shape = store.openAnswerRow {
             AnswerRow(session: session, shape: shape)
         } else {
             readingControl
@@ -2002,7 +2002,7 @@ final class AnswerFieldView: NSTextView {
     /// §7 refused a recessed rectangle immediately under a body that is already
     /// on one, because a second one reads as more body rather than as a place to
     /// type, and that reasoning is untouched: this is the same theme wash the
-    /// `Back`, `Deny` and `Send` beside it wear, at the same corner and the same
+    /// `Back`, `Deny` and `Submit` beside it wear, at the same corner and the same
     /// height, and it is drawn only while the pointer is on the field or the
     /// caret is in it.
     override func draw(_ dirtyRect: NSRect) {

@@ -2961,6 +2961,17 @@ final class MonitorStore: ObservableObject {
         return answerProgress[openRowID]?.questionIndex ?? 0
     }
 
+    /// What the open row's answers say, in the position the body is showing.
+    ///
+    /// **The one place the drawn words come from**, for the same reason
+    /// ``openRowBody`` is the one place the drawn body comes from: the
+    /// affirmative on a set is `Next` or `Submit` by where the set stands
+    /// (§5.8), and a view reading the shape off the request without the index
+    /// would draw `Next` on the question the set leaves from.
+    var openAnswerRow: AnswerRowShape? {
+        openSession?.request?.answerRow(showing: openQuestionIndex)
+    }
+
     /// How tall the open row is, or nil where no row is open.
     var openRowHeight: CGFloat? {
         guard openSession != nil else { return nil }
@@ -3078,7 +3089,8 @@ final class MonitorStore: ObservableObject {
     ///
     /// It gates **every** answer rather than the affirmative alone, because the
     /// row that arrives is what the pointer is over: on a question the control
-    /// under it is `Send`, and on an approval it may be either. Refusing is the
+    /// under it is `Next` or `Submit`, and on an approval it may be either.
+    /// Refusing is the
     /// cheap direction (§6.4) and costs nothing by waiting `200` ms for a row
     /// nobody has read yet.
     @Published private(set) var isAffirmativeArmed = false
@@ -3121,19 +3133,20 @@ final class MonitorStore: ObservableObject {
         let wasTyped = questionUsesTypedAnswer
         answerProgress[openRowID, default: AnswerProgress()].draft = text
         refreshAnswerGround()
-        // Only the empty/non-empty boundary changes whether `Send` is
-        // available on a question with nothing ticked. AppKit continues to own
+        // Only the empty/non-empty boundary changes whether the affirmative
+        // is available on a question with nothing ticked. AppKit continues to own
         // per-character drawing.
         if wasTyped != questionUsesTypedAnswer { answerRevision &+= 1 }
     }
 
     /// Approval controls submit immediately. Question options only change the
-    /// draft selection; Send records the current answer or submits the set.
+    /// draft selection; the affirmative records the current answer and draws the
+    /// next question, or on the last one sends the set.
     func takeAnswer(_ ground: AnswerGround) {
         guard !isAnswerInFlight, isAffirmativeArmed,
               let session = openSession,
               let request = session.request,
-              let shape = request.answerRow,
+              let shape = request.answerRow(showing: openQuestionIndex),
               let ticket = request.replyTicket else { return }
 
         switch ground {
@@ -3193,7 +3206,7 @@ final class MonitorStore: ObservableObject {
     ///   keyboard assertable without an `NSEvent`.
     @discardableResult
     func takeKey(_ key: PanelKey) -> Bool {
-        guard !isAnswerInFlight, openSession?.request?.answerRow != nil else { return false }
+        guard !isAnswerInFlight, openSession?.request?.answerRow() != nil else { return false }
         switch key {
         case .submit:
             guard isAffirmativeArmed, canSubmitCurrentAnswer else { return false }
@@ -3216,7 +3229,7 @@ final class MonitorStore: ObservableObject {
     /// arrival §6.3 guards — something nobody has read appearing under a
     /// pointer already on it — is not the arrival this is.
     var canGoBackAQuestion: Bool {
-        guard !isAnswerInFlight, openSession?.request?.answerRow != nil else { return false }
+        guard !isAnswerInFlight, openSession?.request?.answerRow() != nil else { return false }
         return openQuestionIndex > 0
     }
 
@@ -3225,10 +3238,10 @@ final class MonitorStore: ObservableObject {
     /// **`→` can never reach a new question, and so can never send** (§5.7).
     /// It returns to one the set has already drawn, which is why it needs no
     /// answer of its own to be safe — and it still asks for one, on the same
-    /// gate `Send` uses, because leaving a question unanswered is what would
+    /// gate the affirmative uses, because leaving a question unanswered is what would
     /// let a short set go back to the product.
     var canGoForwardAQuestion: Bool {
-        guard !isAnswerInFlight, openSession?.request?.answerRow != nil,
+        guard !isAnswerInFlight, openSession?.request?.answerRow() != nil,
               let openRowID, let progress = answerProgress[openRowID] else { return false }
         return progress.questionIndex < progress.furthestQuestionReached
             && canSubmitCurrentAnswer
@@ -3374,7 +3387,7 @@ final class MonitorStore: ObservableObject {
 
         if position + 1 < questions.count {
             progress.questionIndex = position + 1
-            // The frontier only ever moves forward, and only here: `Send` is
+            // The frontier only ever moves forward, and only here: `Next` is
             // the one act that reaches a question for the first time (§5.7).
             progress.furthestQuestionReached = max(
                 progress.furthestQuestionReached, position + 1

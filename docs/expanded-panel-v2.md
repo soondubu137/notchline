@@ -131,7 +131,7 @@ Both products ask the same three-part question — yes; yes and don't ask again;
 
 ```
 Approval needed   [ what to do instead…            ]   Deny   [ Approve ]
-Input needed      [ your answer…                            ]  [ Send ]
+Input needed      [ your answer…                          ]  [ Submit ]
 ```
 
 - The affirmative is the **waiting reading's ground grown from `16` to `28`**: `#FFFFFF`, corner `4`, `12` padding each side, `13` pt Medium at `#0D0D0F`.
@@ -204,7 +204,7 @@ There is now a third exit as well as those two crossings, and it goes neither up
 - The seam is a disclosure control with the accessible name `Recent, 12 sessions` — the window's own count, which changes under the reader as rows age out — and an expanded state; the whole `32` pt line is its target.
 - A retired row spells its line out and appends the age as words — `Codex, notchline, Redraw the mark at five rows, left 2 minutes ago`, and `left 4 hours ago` at the far end of the window.
 - A row that ages out is removed, not announced. Nothing here is worth interrupting a reader for, and the count on the seam has already changed.
-- The open row's controls are a group named after the row's subject. `Approve` and `Deny` (or `Send`) are buttons; the default-button state moves with the white ground, so a screen reader announces the same thing the ground says.
+- The open row's controls are a group named after the row's subject. `Approve` and `Deny` (or a question's `Next` / `Submit`) are buttons; the default-button state moves with the white ground, so a screen reader announces the same thing the ground says.
 - The `Answer` word is drawn only under the pointer, so the closed waiting row keeps the accessible action `Answer this request` regardless of hover, and it is the same action a keyboard reaches.
 
 ## 7. Motion

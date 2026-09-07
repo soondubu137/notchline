@@ -1319,7 +1319,7 @@ struct OpenCommandAnatomy: View {
         let rowWidth = PanelMetrics.sessionViewportWidth(
             panelWidth: store.currentPanelSize.width
         )
-        let shape = store.openSession?.request?.answerRow
+        let shape = store.openAnswerRow
         let centres = shape.map {
             OpenedSpecimen.answerCentres(rowWidth: rowWidth, shape: $0)
         }
@@ -1398,7 +1398,7 @@ struct OpenQuestionAnatomy: View {
         .id(lesson)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            "\(lesson.rawValue). \(lesson.explanation) The example has a long description with Show more, an answer field and Send."
+            "\(lesson.rawValue). \(lesson.explanation) The example has a long description with Show more, an answer field and Submit."
         )
     }
 
@@ -1407,7 +1407,7 @@ struct OpenQuestionAnatomy: View {
         let rowWidth = PanelMetrics.sessionViewportWidth(
             panelWidth: store.currentPanelSize.width
         )
-        let shape = store.openSession?.request?.answerRow
+        let shape = store.openAnswerRow
         let centres = shape.map {
             OpenedSpecimen.answerCentres(rowWidth: rowWidth, shape: $0)
         }
@@ -1438,7 +1438,7 @@ struct OpenQuestionAnatomy: View {
                         spread: options.spread * scale,
                         foot: 10
                     ),
-                    label: lesson == .typedAnswer ? "None of them chosen" : "Select, then Send"
+                    label: lesson == .typedAnswer ? "None of them chosen" : "Select, then Submit"
                 )
             )
         }
@@ -1448,8 +1448,13 @@ struct OpenQuestionAnatomy: View {
                 below(3, field, lesson == .typedAnswer ? "Your words are the answer" : "Or type your answer", scale: scale, body: body)
             )
         }
-        if let affirmative = centres?.affirmative {
-            pins.append(below(4, affirmative, "Send, or ⏎", scale: scale, body: body))
+        // The specimen's own word rather than a copy of it: a set of one
+        // submits, and the pin that named the control would have gone stale the
+        // day the word did (§5.8).
+        if let shape, let affirmative = centres?.affirmative {
+            pins.append(
+                below(4, affirmative, "\(shape.affirmative), or ⏎", scale: scale, body: body)
+            )
         }
         return pins
     }

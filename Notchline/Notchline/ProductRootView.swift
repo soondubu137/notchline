@@ -41,11 +41,11 @@ enum QuestionLesson: String, CaseIterable {
     var explanation: String {
         switch self {
         case .singleChoice:
-            "Choose one option, then click Send. Selecting an option does not submit it."
+            "Choose one option, then click Submit. Selecting an option does not submit it."
         case .multipleChoice:
-            "Tick the options you want, then click Send. Click a ticked option again to remove it."
+            "Tick the options you want, then click Submit. Click a ticked option again to remove it."
         case .typedAnswer:
-            "Type in the field beside Send when none of the options fit. Your words are the answer while nothing is ticked."
+            "Type in the field beside Submit when none of the options fit. Your words are the answer while nothing is ticked."
         }
     }
 }

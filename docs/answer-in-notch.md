@@ -178,7 +178,7 @@ The payload already supplies `label`, optional `description` and `multiSelect`. 
 | Option title | System `13` Medium, `19` pt per line; wraps in full |
 | Description | System `12` Regular, `18` pt per line; two-line preview, then independent `Show more` / `Show less` at `22` pt |
 | Option card | `10` pt insets, `25` pt marker column, `8` pt corners; `6` pt between cards |
-| Answer footer | Permanent input field on the left and `Send` on the right, `28` pt high |
+| Answer footer | Permanent input field on the left and the affirmative on the right — `Next` or `Submit` on a question (§5.8) — `28` pt high |
 
 ~~An instruction line sat between the question and the cards at `24` pt, naming the selection mode.~~ **Removed 2026-09-07:** it spent `28` pt of a `300` pt body restating the marker shape underneath it — a circle already says *one of these* and a box already says *as many as you like* — and the one act it described, that choosing is not sending, is taught in onboarding (§5.3) rather than repeated above every question forever. The gap it stood in becomes `12`, the distance this panel puts between any two objects, so the question still reads as the thing the list answers rather than as the head of the list.
 
@@ -193,11 +193,11 @@ The caption line carries the badge and the Project on the left and **nothing at 
 
 ### 5.3 Answering one question of a set sends nothing
 
-Only `Send` or return records the current answer. Choosing an option never submits or advances. On an intermediate question, Send draws the next question and updates the count; on the last, it sends the complete set once. ~~Advancing clears the field, selection and expanded descriptions.~~ **Corrected 2026-09-07 by §5.7:** advancing draws the next question's *own* field, selection and expanded descriptions, which are empty until that question has been reached before — nothing is cleared, because a question that has been left is a question that can be returned to. Collapsing and reopening the same request preserves all of it. A replacement request in the same Thread starts fresh.
+Only the affirmative or return records the current answer. Choosing an option never submits or advances. On an intermediate question it draws the next question and updates the count; on the last, it sends the complete set once. ~~The control says `Send` throughout.~~ **Corrected 2026-09-07 by §5.8:** it says `Next` on every question but the last and `Submit` on that one, so the control names the act the count was carrying alone. ~~Advancing clears the field, selection and expanded descriptions.~~ **Corrected 2026-09-07 by §5.7:** advancing draws the next question's *own* field, selection and expanded descriptions, which are empty until that question has been reached before — nothing is cleared, because a question that has been left is a question that can be returned to. Collapsing and reopening the same request preserves all of it. A replacement request in the same Thread starts fresh.
 
 ### 5.4 A selection outranks the field
 
-Every question has one input field to the left of Send. There is no separate `Write my own answer` option. **A ticked option is the answer**, for both single and multiple choice; non-whitespace text in the field is the entire answer when nothing is ticked, and is never sent as an annotation on an option that is. Leading and trailing whitespace is trimmed. Send is disabled when there is neither meaningful text nor a selection.
+Every question has one input field to the left of the affirmative (§5.8). There is no separate `Write my own answer` option. **A ticked option is the answer**, for both single and multiple choice; non-whitespace text in the field is the entire answer when nothing is ticked, and is never sent as an annotation on an option that is. Leading and trailing whitespace is trimmed. The affirmative is disabled when there is neither meaningful text nor a selection.
 
 ~~Non-whitespace text is the entire answer regardless of which options are selected, and while text is present the selected markers and card emphasis are suppressed.~~ **Reversed 2026-09-07.** Text winning made an option *unselectable in practice* on a question anybody had typed into: the click was accepted, nothing changed on screen, and the sentence went back to the product. The two failures were one — the suppression was the whole announcement that the options had stopped being the answer, so an option that could not be seen to be selected could not be seen to be selectable either.
 
@@ -207,7 +207,7 @@ This still replaces the original option-plus-note behaviour, which could send a 
 
 ### 5.5 Single and multiple choice share submission
 
-A single-choice click replaces the current selection; a multiple-choice click toggles that option. Both begin without a selection and keep the bright submission ground on Send. Send sends the selected label, or the selected labels joined with `, ` in their original order; with nothing selected it sends what was typed, which is §5.4 and applies to both modes. `1`–`4` do exactly what a click does on both, ticking on `multiSelect` — the exception that withheld the digits there existed only so the field could type them, and the field now keeps every key it wants by holding the caret (§9.2).
+A single-choice click replaces the current selection; a multiple-choice click toggles that option. Both begin without a selection and keep the bright submission ground on the affirmative. It sends the selected label, or the selected labels joined with `, ` in their original order; with nothing selected it sends what was typed, which is §5.4 and applies to both modes. `1`–`4` do exactly what a click does on both, ticking on `multiSelect` — the exception that withheld the digits there existed only so the field could type them, and the field now keeps every key it wants by holding the caret (§9.2).
 
 The former immediate submission on single-choice clicks is withdrawn. Selecting and sending are separate acts so a person can read long descriptions, revise a choice and enter an alternative without inadvertently advancing.
 
@@ -222,9 +222,9 @@ The former immediate submission on single-choice clicks is withdrawn. Selecting 
 | 01 | **`Back` stands in the slot a question's absent refusal already leaves free** — §7's own geometry, and no new region: the field simply gives up the space it took there. It is drawn on question two and after, and not at all on question one | §7 |
 | 02 | **It never holds the ground.** It sends nothing, so the brightest object on the row is still the only thing `⏎` does. Nor does it wait out §6.3's arrival, which arms a ground and not a control that spends nothing | §6, §6.3 |
 | 03 | **The question arrives as it was left** — the option still ticked, the field still holding what was typed into *it*, the descriptions still open. That is the whole of what going back is worth | §5.1, §5.4 |
-| 04 | **`Send` is unchanged, and it is still the only thing that advances.** From a question returned to it draws the next one, which is the one already answered; on the last it sends the set. A person who goes back to question one of four presses `Send` three times, each on an answer already filled in and visible | §5.3 |
-| 05 | **`→` returns to a question already reached and can never reach a new one**, which is what makes it incapable of sending: reaching a new question is the whole of what `Send` means, and on the last question `Send` is what submits | §9.2 |
-| 06 | **A question that stops answering anything cannot be left.** Empty the field and untick the boxes on a question returned to, and `Send` and `→` are both refused on it — the same gate, asked once. That is what stops a set walking backwards from sending a short one | §5.5 |
+| 04 | **The affirmative is unchanged, and it is still the only thing that advances.** From a question returned to it draws the next one, which is the one already answered; on the last it sends the set. A person who goes back to question one of four presses it three times — `Next`, `Next`, `Submit` (§5.8) — each on an answer already filled in and visible | §5.3, §5.8 |
+| 05 | **`→` returns to a question already reached and can never reach a new one**, which is what makes it incapable of sending: reaching a new question is the whole of what `Next` means, and on the last question the affirmative is `Submit` | §9.2, §5.8 |
+| 06 | **A question that stops answering anything cannot be left.** Empty the field and untick the boxes on a question returned to, and the affirmative and `→` are both refused on it — the same gate, asked once. That is what stops a set walking backwards from sending a short one | §5.5 |
 
 **Only a multiple-choice question can be emptied at all**, which is worth saying because it is what rule 06 is guarding: a single choice is *replaced* by a click and never cleared by one (§5.5), so a question answered by one option can never stop being answered.
 
@@ -234,15 +234,31 @@ The former immediate submission on single-choice clicks is withdrawn. Selecting 
 
 Claude Code will sometimes put back what it understood and ask whether that is right. It is the same machinery — the summary is the question, and two options stand under it — so nothing special is needed to support it, and that is the point. What it does need is §4.2's prose setting and §4.4's scrolling, both of which it shares with a plan.
 
+### 5.8 The affirmative says which of the two things it does
+
+**Added 2026-09-07.** One control both draws the next question and sends the set (§5.3), and it said `Send` for either. On question two of three that word was a promise the row did not keep: nothing was sent, the body changed and the count moved — and the person who had read the count knew that, while the person who had read the control had been told the opposite. The count was carrying the whole of the distinction, and the brightest object on the row was arguing with it.
+
+**So the word is a statement about where the set stands.** `Next` while there is a question behind the one on screen; `Submit` on the last one. Nothing else about the row moves: the ground is still the return key made visible, the field still takes the space a refusal would have had (§7), and the two words are measured the same way every control here is — their own text plus `12` a side — so a set that walks from `Next` to `Submit` changes the width of one control and moves nothing that is not it.
+
+| | Rule | |
+| --- | --- | --- |
+| 01 | **`Submit` on a set of one, `1/1` included.** A vocabulary that appears only on long sets is one nobody learns to read — §5.2's own argument for drawing the count on every question | §5.2 |
+| 02 | **A lone question with nothing to pick is that same set of one**, and says `Submit` too. §5.3 already makes form 04 a set with one member rather than a case of its own, and this follows it rather than inventing a third word | §2.1, §5.3 |
+| 03 | **It follows the set backwards as well as forwards.** Go back from the last question and the word is `Next` again; it is not a latch that trips once | §5.7 |
+| 04 | **Approvals are untouched.** `Approve`/`Deny` and `Accept`/`Send it back` are about what is being granted, not about position in a sequence, and there is no sequence to be anywhere in | §7 |
+| 05 | **The notice is unchanged.** Both words leave the same *Answered* on the preview line: what a person did was answer the set, whichever control the last press landed on | §8 |
+
+**`Back` and `Next` are not a pair, and are not drawn as one.** `Back` sends nothing and never holds the ground (§5.7 rule 02); `Next` records the answer and is the only thing that reaches a new question. They sit side by side because §7's geometry puts them there, and the ground is what says they are different — which is the same reason the row does not gain a `Previous`/`Next` symmetry it would then have to explain.
+
 ## 6. One selection rule
 
 **The brightest object on the row is always the thing the return key will do.**
 
 For approvals and plans it begins on the affirmative; typing moves it to the refusal that carries the reason. A deliberate click on either approval control still submits that control's answer.
 
-### 6.1 Questions keep Send as the default
+### 6.1 Questions keep the affirmative as the default
 
-Questions use separate draft selection and submission state. The bright ground stays on Send and is disabled until an answer is available. Option clicks change draft selection; description disclosure changes only what can be read. Return has exactly the same submission semantics as Send, including typed-text priority. Hover changes neither selection nor the default control.
+Questions use separate draft selection and submission state. The bright ground stays on the affirmative — `Next` or `Submit` by §5.8 — and is disabled until an answer is available. Option clicks change draft selection; description disclosure changes only what can be read. Return has exactly the same submission semantics as a click on it, including typed-text priority. Hover changes neither selection nor the default control.
 
 ### 6.2 The wheel is the only thing that scrolls, and the list does not walk
 
@@ -287,7 +303,7 @@ Three things that measurement settled, and they change what building it would co
 
 The initial version is answered with the pointer, so the pointer's rules are the ones that have to be exact.
 
-- **A click on an approval control submits its answer.** A question option only changes selection; Send submits the effective answer. `Show more` and `Show less` only change the description's visible extent.
+- **A click on an approval control submits its answer.** A question option only changes selection; the affirmative submits the effective answer. `Show more` and `Show less` only change the description's visible extent.
 - **Hover moves nothing.** Buttons deepen their existing theme ground under the pointer (§3.3), and the selected ground stays where the person's own typing left it. The ground is a statement about `⏎`, and a pointer crossing an answer is not an act.
 - ~~**The field takes the caret when the row opens**, so a note costs no click of its own and §6.4's cheap refusal stays cheap.~~ **Withdrawn 2026-09-07: the field is an ordinary focusable field.** It takes the caret on a click into it and loses it on a click anywhere else — an option card, a control, the body, the caption. What it cost was the whole keyboard: with the caret always in the field, every key on this surface had to be conditional on *what the field was holding* rather than on where the caret was, and the two rules that followed both broke in the case they were written for — `1` selected an option instead of typing a `1`, and `←` walked the question set instead of moving through the sentence just written (§9.2). It also put the one blinking object on this surface over a row nobody was writing in. **What it costs is one click on the two forms that carry a refusal**: §6.4's cheap direction is now a click and a sentence rather than a sentence alone, which is the price of a keyboard whose rules can be learned once.
 - **A click that is not on an answer is not an answer.** Body text and the rail do not submit; option selection and description disclosure follow §5. The only two regions on an open row that lead anywhere else are the chevron, which collapses it, and the row's own text, which opens the Thread (§3).
@@ -296,7 +312,7 @@ The initial version is answered with the pointer, so the pointer's rules are the
 
 ```text
 Approval      [ what to do instead…        ]   Deny   [ Approve ]
-Input         [ your answer…                        ]  [ Send ]
+Input         [ your answer…                      ]  [ Submit ]
 Plan          [ or say what to change…     ]  Send it back  [ Accept ]
 ```
 
@@ -308,19 +324,20 @@ At the content width of `496`, relative to the content's leading edge:
 | The refusal | `8` before the affirmative; the same padding when it holds the ground, `13` pt Light `#C7C7CC` when it does not |
 | The field | From `0` to `8` before the refusal |
 
-Both grounds are corner `4` and `28` tall — the mark's own `16` grown by §3.1 — and **neither control moves when the ground crosses between them**: each is its own text plus `12` a side whether it is holding the ground or not. A form with one answer (`Send`) omits the refusal and the field takes the space.
+Both grounds are corner `4` and `28` tall — the mark's own `16` grown by §3.1 — and **neither control moves when the ground crosses between them**: each is its own text plus `12` a side whether it is holding the ground or not. A form with one answer (`Next` or `Submit`, §5.8) omits the refusal and the field takes the space.
 
 **The one thing that stands in the space the refusal left is `Back`** (§5.7), on a set past its first question:
 
 ```text
-Question 2/3  [ your answer…                 ]  Back  [ Send ]
+Question 2/3  [ your answer…                 ]  Back  [ Next ]
+Question 3/3  [ your answer…               ]  Back  [ Submit ]
 ```
 
 It is that slot's own geometry unchanged — `8` before the affirmative, its own text plus `12` a side, quiet at rest and never holding the ground — and the field gives up exactly the width it takes, which is the same trade the refusal already makes on the two forms that have one. On question one there is no `Back` and the field is the whole row again, so the two states differ by one control appearing rather than by a layout.
 
 **The field is drawn with no ground of its own at rest**, decided while building it and worth stating because the drawing above implies one. The body directly over it is already on the recessed step where it is machine text, and a second recessed rectangle immediately below reads as more body rather than as a place to type. What says the field is a field is the placeholder, in the label's own ink, which is the only text on this row that is not something the product or the person said.
 
-**Under the pointer and while it holds the caret it wears the row's own quiet button wash** (2026-09-07). That reasoning is untouched: this is not §4.2's recessed step but the wash `Back`, `Deny` and `Send` already wear beside it, at the same `4` corner and the same `28` height, and it is nothing at all when neither is true. It is there because the caret used to be the other half of the answer to *is this a field* and no longer is (§6.6) — resting at the pointer's weight, deepening while focused, and edged at the weight a selected option card is edged at, because a field holding the caret and an option holding the answer are the same statement about where the next thing you do will land.
+**Under the pointer and while it holds the caret it wears the row's own quiet button wash** (2026-09-07). That reasoning is untouched: this is not §4.2's recessed step but the wash `Back`, `Deny` and `Submit` already wear beside it, at the same `4` corner and the same `28` height, and it is nothing at all when neither is true. It is there because the caret used to be the other half of the answer to *is this a field* and no longer is (§6.6) — resting at the pointer's weight, deepening while focused, and edged at the weight a selected option card is edged at, because a field holding the caret and an option holding the answer are the same statement about where the next thing you do will land.
 
 ## 8. Sending, and what the row becomes
 
@@ -491,7 +508,7 @@ The second row is the one to keep an eye on, and it is not the row that was writ
 
 ### 13.3 Accessibility follows the ground, and speaks the count
 
-- Each option control is named by its full title, with its full description as an accessibility hint. Its value reports selection and whether typed text has replaced it. The independent disclosure announces its option and expanded/collapsed state. Send reports disabled when no answer is available.
+- Each option control is named by its full title, with its full description as an accessibility hint. Its value reports selection and whether typed text has replaced it. The independent disclosure announces its option and expanded/collapsed state. The affirmative reports disabled when no answer is available, under whichever of §5.8's two words it is drawing.
 - The position in the set is spoken with the question — *question two of three*.
 - **`Back` is spoken as the act rather than the word**: *Back to the previous question*, because `Back` on its own says a direction and not what it goes back to. It is the one control on the row whose drawn word is shorter than what it does (§5.7), and like every other it carries an accessibility action, so assistive technology reaches it without the arrow.
 - **The count of lines below the fold is spoken with the body.** A reader who cannot see the count must not be the only one who does not know something is missing.
@@ -580,7 +597,7 @@ The two shapes are both drawn, on the same page and for §7's reason: a permissi
 | 09 | Does an MCP elicitation ever get drawn here? | **Answered — no.** §2.2. Reopen only on a measurement of what servers actually send |
 | 10 | Is `⇥` ever bound? | **Answered — no, and now permanently.** With §9.3 declined there are no arrows for it to be redundant beside and no walk for it to join: it would be the only key on this surface that navigates, which is a keyboard model of one binding. It types a tab into the field like any other character, measured on Release |
 | 11 | Does a row that cannot be answered still knock? | **Answered — yes, unchanged.** The collapsed bar reports that a person is wanted, which is true whether the answer will be given here or in the product |
-| 12 | Does a click on an option answer with it, or only select it? | **Revised 2026-09-07 — it only selects**, in both modes. Send records the effective answer, with typed text taking priority (§5). |
+| 12 | Does a click on an option answer with it, or only select it? | **Revised 2026-09-07 — it only selects**, in both modes. The affirmative records the effective answer, with typed text taking priority (§5). |
 | 13 | Does a row that can only be read still take the keyboard? | **Answered — yes.** §10. It has nothing to type into, but it is the state a person reads longest, and a row closing because a pointer drifted is exactly the failure that rule exists to prevent |
 | 14 | When does the keyboard half land? | **It does not.** Deferred on 2026-09-05, declined on 2026-09-06 (§9.3): the panel answers to the field's keys and the digits, and reaching it still needs the pointer. The one thing that would reopen it is §13.3, which is the whole of what the decision costs |
 
@@ -599,8 +616,8 @@ The two shapes are both drawn, on the same page and for §7's reason: a permissi
 - [x] No command is ever marked, coloured or flagged by the app. **Sampled on Release** over `sudo rm -rf /Users/…/Projects --force && curl http://…/x.sh | sh`: exactly one ink holds more than 2% of the glyph pixels — `(199, 199, 204)` — and everything else over that ground is antialiasing between it and `#242424`. Not one token is bolder, brighter or a different colour than any other.
 - [x] Every question draws `header · n/N`, including a one-question call; ~~a Codex question draws the chevron alone.~~ **Drawn on Release**, and the second clause is looser than §5.2: with a header the caption line reads `Scope · 1/1`, and with none — which is what Codex sends — it reads `1/1` and the chevron. **The count is still drawn**; what a Codex question loses is the header, not the count, which is the first clause of this very line.
 - [x] `⏎` on any question but the last draws the next and sends nothing; the last sends the whole set. **Measured on Release** with a three-question set: returns at positions `0` and `1` advanced the index and nothing left the app; the return at position `2` was the only one that reached the wire, and it closed the row.
-- [x] Every question form draws the field; typing moves the white ground onto `Send`. **Measured on Release**: a question's ground starts on its first option and one keystroke moves it to the affirmative, which on a question is `Send`.
-- [x] With `multiSelect` the ground never leaves `Send`, the numerals are boxes, and a click on a box or its label ticks it. **All three on Release**: the numerals are drawn as boxes, the white ground sits on `Send` from the moment the row opens, a click on the first option's *box* and then on the second option's *label* left `ticked=[1, 2]` — and the ground was still on `Send` at the end of it.
+- [x] Every question form draws the field; typing moves the white ground onto the affirmative. **Measured on Release**: a question's ground starts on its first option and one keystroke moves it to the affirmative, which on a question ~~is `Send`~~ **is `Next` or `Submit` since 2026-09-07 (§5.8)** — the measurement is of the ground, and the word under it is the only thing that changed.
+- [x] With `multiSelect` the ground never leaves the affirmative, the numerals are boxes, and a click on a box or its label ticks it. **All three on Release**: the numerals are drawn as boxes, the white ground sits on the affirmative from the moment the row opens, a click on the first option's *box* and then on the second option's *label* left `ticked=[1, 2]` — and the ground was still there at the end of it. The control read `Send` when this was measured; §5.8 renamed it on 2026-09-07 and moved nothing.
 - [x] The white ground is on the affirmative with an empty field and on the refusal with a non-empty one; neither control moves as it crosses. **Measured on Release**, including the return trip — deleting the text puts the ground back on `Approve`. *Neither control moves* is measured rather than eyeballed: `Deny`'s box occupies the same columns whichever control is lit, as does `Approve`'s, and each label sits centred in its own box to the pixel.
 - [x] Nothing but typing moves the white ground: hover moves it nowhere, and a click takes whichever answer it lands on whether the ground is there or not. **Measured on Release**: hovering `Deny` drew its hover fill and left the ground on `Approve`, and clicking `Deny` from there took the refusal.
 - [x] The only keys the panel answers to are the field's — anything printable, `⇧⏎`, `⏎`, `1`–`4` on an untouched question — and `⎋`. ~~`⌥Space`, `↑ ↓ ← →`, `Space`, `⌘⏎` and `⇥` are all unbound~~ **`← →` came out of that list on 2026-09-07** (§5.7): on a question set with an empty field they walk the set, and everywhere else they are still the caret's. ~~*on a question set with an empty field*~~ **— corrected the same day** (§9.2): the condition is that nothing holds the caret, and a focused field keeps both arrows whatever it contains. `⌥Space`, `↑ ↓`, `Space`, `⌘⏎` and `⇥` are unbound, and the app registers no global hotkey. Measured on Release: `⌘⏎`, `⇥`, the arrows and `Space` send nothing and move nothing; inside the field they do what a field does, which is §9.2's rule rather than an exception to it. **Re-measured 2026-09-05** on an open question set with the modifiers actually applied: across `⌘⏎`, `⇥`, all four arrows, `Space` and the digits, **zero answers were taken and nothing was sent**, and the set never advanced. `⇧⏎` put a newline in the field and sent nothing; the `⏎` after it took the answer and drew the next question. `⇥`'s only effect is the tab it types, which moves the ground exactly as any other character does.

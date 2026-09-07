@@ -211,7 +211,16 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// `nil` on ``Form/unsupported`` and on every request no connection is being
     /// held for, which is §11's reading form: one control stands where three
     /// would, and no white ground is drawn anywhere.
-    nonisolated var answerRow: AnswerRowShape? {
+    ///
+    /// **A question's affirmative depends on where in the set it stands**, which
+    /// is why this takes the position ``RequestBodyLayout/laidOut(_:showing:)``
+    /// takes: on every question but the last it is `Next`, and on the last it is
+    /// `Submit` (§5.8). Approvals have no set to be anywhere in and ignore it.
+    ///
+    /// - Parameter question: which question of the set is on screen, from the
+    ///   top. The default reads the words at the first, which is what every
+    ///   caller wanting only the refusal or the notices needs.
+    nonisolated func answerRow(showing question: Int = 0) -> AnswerRowShape? {
         guard canBeAnswered else { return nil }
         switch form {
         case .command:
@@ -234,8 +243,19 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
             // **One answer, and the field takes the space** (§7). A question has
             // no refusal to carry the text, because the text *is* the answer —
             // which is also why typing moves the ground here rather than away.
+            //
+            // **And the word says which of the two things it does** (§5.8).
+            // `Send` said the same thing on question two of three, where it
+            // draws the next one, as on question three, where the set leaves —
+            // so the one control that both advances and submits admitted to
+            // neither. It is `Next` while there is a question after this one
+            // and `Submit` on the last, including a set of one: a vocabulary
+            // that appears only on long sets is one nobody learns to read,
+            // which is §5.2's argument for drawing `1/1`.
+            let asked = askedQuestions
+            let isLast = question >= asked.count - 1
             return AnswerRowShape(
-                affirmative: "Send",
+                affirmative: isLast ? "Submit" : "Next",
                 refusal: nil,
                 placeholder: "your answer…",
                 affirmativeNotice: "Answered",
@@ -312,9 +332,10 @@ nonisolated struct AgentQuestion: Identifiable, Sendable, Equatable {
     let options: [AgentQuestionOption]
     /// Whether several options may be taken at once.
     ///
-    /// §5.5: with this, the white ground starts on `Send` and never leaves it,
-    /// because the brightest object on the row must not stop being what `⏎`
-    /// does on the one form where a person is most likely to press it twice.
+    /// §5.5: with this, the white ground starts on the affirmative and never
+    /// leaves it, because the brightest object on the row must not stop being
+    /// what `⏎` does on the one form where a person is most likely to press it
+    /// twice.
     let allowsSeveralAnswers: Bool
 }
 

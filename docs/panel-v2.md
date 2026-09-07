@@ -106,7 +106,7 @@ Three consequences:
 
 Approval detail refinement (2026-09-07): the body retains labelled argument fields with separate prose and code treatments ([`answer-in-notch.md`](answer-in-notch.md) §4.2). Its measured content includes labels and spacing but is still capped at `140` pt; the open row remains capped at `240` pt. The header, queue and footer dimensions are unchanged.
 
-Question refinement (2026-09-07): the body may reach `300` pt and the row `400` pt, with the same fixed `100` pt heading/footer composition. The live viewport is capped at `max(240, openRowHeight)`, so the Send row remains visible. The height table above describes closed rows and approval/plan bodies; at its question cap the reference panel is `46 + 400 + 22 = 468` pt before any Recent section. Option cards wrap titles and independently expand long descriptions; both selection modes use the same permanent answer field and Send ([`answer-in-notch.md`](answer-in-notch.md) §5).
+Question refinement (2026-09-07): the body may reach `300` pt and the row `400` pt, with the same fixed `100` pt heading/footer composition. The live viewport is capped at `max(240, openRowHeight)`, so the answer row remains visible. The height table above describes closed rows and approval/plan bodies; at its question cap the reference panel is `46 + 400 + 22 = 468` pt before any Recent section. Option cards wrap titles and independently expand long descriptions; both selection modes use the same permanent answer field and affirmative — `Next` until the last question of the set and `Submit` on it ([`answer-in-notch.md`](answer-in-notch.md) §5, §5.8).
 
 
 ## 5. What still gates this

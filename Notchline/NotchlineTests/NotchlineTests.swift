@@ -677,14 +677,14 @@ struct NotchlineTests {
         // A permission, open: the row page two draws shut, and the same request.
         let permission = try #require(opened.command.openSession)
         #expect(permission.threadID == NotchSpecimen.shut.sessions.first?.threadID)
-        let granting = try #require(permission.request?.answerRow)
+        let granting = try #require(permission.request?.answerRow())
         #expect(granting.affirmative == "Approve")
         #expect(granting.refusal == "Deny")
 
         // A question, open: no refusal at all, and answers of its own.
         let asked = try #require(opened.question.openSession)
-        let answering = try #require(asked.request?.answerRow)
-        #expect(answering.affirmative == "Send")
+        let answering = try #require(asked.request?.answerRow())
+        #expect(answering.affirmative == "Submit")
         #expect(answering.refusal == nil)
         let body = try #require(opened.question.openRowBody)
         #expect(body.options.count == 3)
@@ -25891,7 +25891,7 @@ for line in sys.stdin:
         // And nothing draws it: the row still names two answers, and the shape
         // has no third field for one to go in.
         let answerable = request.answerable(on: nil)
-        #expect(answerable.answerRow == nil)
+        #expect(answerable.answerRow() == nil)
         #expect(request.setting == .machineText)
 
         // And nothing writes it: a grant is still a bare `allow`, so accepting
@@ -26765,8 +26765,8 @@ for line in sys.stdin:
 
     /// A form with one answer omits the refusal, and the ground never leaves it.
     ///
-    /// §7: `Send` stands alone and the field takes the space the refusal would
-    /// have had. Typing moves the ground *onto* it (§5.4) rather than away, so
+    /// §7: the affirmative stands alone and the field takes the space the
+    /// refusal would have had. Typing moves the ground *onto* it (§5.4) rather than away, so
     /// on this form the ground has nowhere else to be.
     @Test @MainActor
     func aFormWithOneAnswerOmitsTheRefusalAndKeepsTheGround() async throws {
@@ -26781,8 +26781,8 @@ for line in sys.stdin:
         let store = bench.store
         store.toggleOpenRow(bench.row)
 
-        let shape = try #require(bench.row.request?.answerRow)
-        #expect(shape.affirmative == "Send")
+        let shape = try #require(bench.row.request?.answerRow())
+        #expect(shape.affirmative == "Submit")
         #expect(shape.refusal == nil)
 
         #expect(store.answerGround == .affirmative)
@@ -26805,8 +26805,8 @@ for line in sys.stdin:
             form: .document("Read the file, then write the fix."),
             replyTicket: 1
         )
-        #expect(plan.answerRow?.affirmative == "Accept")
-        #expect(plan.answerRow?.refusal == "Send it back")
+        #expect(plan.answerRow()?.affirmative == "Accept")
+        #expect(plan.answerRow()?.refusal == "Send it back")
 
         let command = AgentRequest(
             id: "c-2",
@@ -26814,15 +26814,15 @@ for line in sys.stdin:
             form: .command("ls"),
             replyTicket: 1
         )
-        #expect(command.answerRow?.affirmative == "Approve")
-        #expect(command.answerRow?.refusal == "Deny")
+        #expect(command.answerRow()?.affirmative == "Approve")
+        #expect(command.answerRow()?.refusal == "Deny")
 
         // And a request no connection is held for draws no answer row at all:
         // §11 rule 03, one control where three would stand and no white ground
         // anywhere, because the affirmative ground is the return key made
         // visible.
         #expect(
-            AgentRequest(id: "c-3", toolName: "Bash", form: .command("ls")).answerRow == nil
+            AgentRequest(id: "c-3", toolName: "Bash", form: .command("ls")).answerRow() == nil
         )
     }
 
@@ -27135,7 +27135,7 @@ for line in sys.stdin:
         #expect(await service.answersTaken() == [.grant])
     }
 
-    /// Questions always submit through Send; entering and clearing text never preselects an option.
+    /// Questions always submit through the affirmative; entering and clearing text never preselects an option.
     @Test @MainActor
     func questionsKeepSendAsTheDefaultWithoutPreselectingAnOption() async {
         let bench = answeringStore(request: questionSet(), status: .inputNeeded)
@@ -27229,7 +27229,7 @@ for line in sys.stdin:
         #expect(!store.isOptionTicked(1))
         store.goForwardAQuestion()
         #expect(store.openRowBody?.position?.drawn == "2/2")
-        // Question two was never answered, so it kept nothing and Send is
+        // Question two was never answered, so it kept nothing and the affirmative is
         // still refused on it.
         #expect(!store.canSubmitCurrentAnswer)
         #expect(store.answerDraft.isEmpty)
@@ -27443,8 +27443,8 @@ for line in sys.stdin:
     /// `→` cannot reach a question the set has not drawn, and so cannot send.
     ///
     /// §5.7. Forward returns to a question already reached; reaching a new one
-    /// is the whole of what `Send` means, and on the last question `Send` is
-    /// what submits. Keeping the two apart is what makes the arrow incapable of
+    /// is the whole of what `Next` means, and on the last question `Submit` is
+    /// what sends. Keeping the two apart is what makes the arrow incapable of
     /// sending a set — and the gate it does keep, that the question on screen
     /// answers something, is what stops a short set going back to the product.
     @Test @MainActor
@@ -27481,6 +27481,54 @@ for line in sys.stdin:
         #expect(!store.canGoForwardAQuestion)
         #expect(!store.takeQuestionStep(1))
         #expect(await service.answersTaken().isEmpty)
+    }
+
+    /// The affirmative says which of the two things it is about to do.
+    ///
+    /// §5.8. One control both draws the next question and sends the set, and
+    /// `Send` said the same word for either — so the question the set leaves
+    /// from looked exactly like the two before it. `Next` while there is a
+    /// question behind the one on screen, `Submit` on the last, and `Submit` on
+    /// a set of one, because a vocabulary that appears only on long sets is one
+    /// nobody learns to read (§5.2's argument for drawing `1/1`).
+    ///
+    /// It follows the set backwards as well as forwards: the word is a
+    /// statement about where the set stands, not a latch that trips once.
+    @Test @MainActor
+    func theAffirmativeIsNextUntilTheLastQuestionAndSubmitOnIt() async throws {
+        let bench = answeringStore(request: questionSet(), status: .inputNeeded)
+        let (store, _, row) = bench
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        #expect(store.openRowBody?.position?.drawn == "1/2")
+        #expect(store.openAnswerRow?.affirmative == "Next")
+
+        store.takeAnswer(.option(0))
+        store.takeAnswer(.affirmative)
+        #expect(store.openRowBody?.position?.drawn == "2/2")
+        #expect(store.openAnswerRow?.affirmative == "Submit")
+
+        store.goBackAQuestion()
+        #expect(store.openAnswerRow?.affirmative == "Next")
+
+        // A set of one is the last question from the moment it opens, and a
+        // lone question with nothing to pick is that same set (§5.3).
+        #expect(questionSet(count: 1).answerRow()?.affirmative == "Submit")
+        #expect(
+            AgentRequest(
+                id: "c-2",
+                toolName: "AskUserQuestion",
+                form: .question("Which database should this use?"),
+                replyTicket: 1
+            ).answerRow()?.affirmative == "Submit"
+        )
+
+        // An approval has no set to be anywhere in, and the position it is
+        // asked for changes nothing about what it says.
+        let granting = AgentRequest(id: "c-3", toolName: "Bash", form: .command("ls"), replyTicket: 1)
+        #expect(granting.answerRow(showing: 0)?.affirmative == "Approve")
+        #expect(granting.answerRow(showing: 3)?.affirmative == "Approve")
     }
 
     /// A chosen option is the answer, and it is never sent as an annotation on
@@ -27525,7 +27573,7 @@ for line in sys.stdin:
         _ = row
     }
 
-    /// With several answers allowed the ground never leaves `Send`, and a click
+    /// With several answers allowed the ground never leaves the affirmative, and a click
     /// ticks.
     ///
     /// §5.5: the alternative — `⏎` toggling and something else sending — would
@@ -27918,7 +27966,7 @@ for line in sys.stdin:
         let (store, service, row) = bench
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
-        // §5.5: with several allowed the ground never leaves `Send`, so no
+        // §5.5: with several allowed the ground never leaves the affirmative, so no
         // option ever holds it — the digit ticks, and it never submits.
         #expect(store.answerGround == .affirmative)
         #expect(store.takeNumberedOption(1))
@@ -27950,7 +27998,7 @@ for line in sys.stdin:
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
         // A question with nothing in it answers nothing, so `⏎` is declined
-        // rather than swallowed — the same gate that greys out `Send`.
+        // rather than swallowed — the same gate that greys out the affirmative.
         #expect(!store.takeKey(.submit))
         #expect(await service.answersTaken().isEmpty)
 
@@ -28689,7 +28737,7 @@ for line in sys.stdin:
         #expect(asked.first?.header == "Store")
         #expect(asked.first?.options.count == 2)
         #expect(request.canBeAnswered, "a question drawn here must be answerable")
-        #expect(request.answerRow != nil)
+        #expect(request.answerRow() != nil)
 
         // And the answer really travels: `updatedInput` is the tool's own input
         // with the person's choices merged into it, so the call runs and
