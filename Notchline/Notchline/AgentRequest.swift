@@ -395,7 +395,14 @@ nonisolated enum AgentRequestReading {
     /// Known textual keys choose presentation only; every unknown key survives.
     /// Containers keep JSON structure (including empty arrays/objects and null).
     nonisolated static func approvalFields(in input: JSONValue) -> [ApprovalArgument] {
-        let fields = input.objectValue ?? ["value": input]
+        // A bare string in an approval is the command itself. Do not turn it
+        // into a generic prose field merely because it has no argument key.
+        let fields: [String: JSONValue]
+        if case .string = input {
+            fields = ["command": input]
+        } else {
+            fields = input.objectValue ?? ["value": input]
+        }
         return fields.keys.sorted().map { key in
             let value = fields[key]!
             let role: ApprovalArgument.Role
@@ -836,7 +843,13 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
         showing question: Int = 0,
         width: CGFloat = PanelMetrics.requestBodyWidth
     ) -> RequestBodyLayout? {
-        if !request.argumentFields.isEmpty, case .command = request.form {
+        // A lone command keeps the original unlabelled code box. Additional
+        // arguments still need their labels so the command and its explanation
+        // remain separate and no permission parameter disappears.
+        let isPlainCommand = request.argumentFields.count == 1
+            && request.argumentFields[0].role == .code
+            && ["command", "cmd"].contains(request.argumentFields[0].id)
+        if !request.argumentFields.isEmpty, !isPlainCommand, case .command = request.form {
             let fields = request.argumentFields.map { argument in
                 let isCode = argument.role == .code || argument.role == .data
                 return Field(

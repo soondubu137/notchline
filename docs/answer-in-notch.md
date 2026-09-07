@@ -144,7 +144,7 @@ Each field has an `11` pt Medium label on a `15` pt line, a `4` pt gap, and its 
 
 Labels use the existing reading ink; values use the title ink. These roles select typography only, never a safety assessment. No field is collapsed behind a summary. The existing single `140` pt viewport and fixed answer row remain; field labels and values both count towards the lines below the fold. The counter counts actual line bottoms rather than dividing mixed field spacing by one line height.
 
-Documents and questions retain their prose setting (`13/17`, reading ink, no ground). Manually constructed plain commands retain their original machine-text layout. Neither path changes answering semantics.
+Documents and questions retain their prose setting (`13/17`, reading ink, no ground). A sole `command` or `cmd` argument, a bare-string approval and manually constructed plain commands use the original unlabelled SF Mono code box. Commands accompanied by other arguments keep the labelled field layout, with the command itself still recessed and monospaced. Neither path changes answering semantics.
 
 ### 4.3 A document is accepted, but its mode is not chosen here
 

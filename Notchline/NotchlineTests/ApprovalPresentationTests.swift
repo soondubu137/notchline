@@ -29,6 +29,24 @@ struct ApprovalPresentationTests {
     }
 
     @Test @MainActor
+    func loneCommandsKeepTheOriginalMonospacedBox() throws {
+        let command = "printf '%s\\n' \"$HOME\"\necho done"
+        for input: JSONValue in [.object(["command": .string(command)]), .object(["cmd": .string(command)]), .string(command)] {
+            for vocabulary: any AgentHookVocabulary in [ClaudeCodeHookVocabulary(), CodexHookVocabulary()] {
+                let request = try #require(vocabulary.request(
+                    forEvent: "PermissionRequest", toolName: "Bash", toolInput: input,
+                    permissionSuggestions: nil, openedBy: "call"
+                ))
+                let layout = try #require(RequestBodyLayout.laidOut(request))
+                #expect(layout.setting == .machineText)
+                #expect(layout.fields.isEmpty, "a lone command needs no field heading")
+                #expect(layout.lines == command.components(separatedBy: "\n"))
+                #expect(layout.contentHeight == 36 + PanelMetrics.machineTextVerticalInset * 2)
+            }
+        }
+    }
+
+    @Test @MainActor
     func emptyValuesStillOpenAnHonestReading() throws {
         for input: JSONValue in [.object(["options": .array([])]), .object(["prompt": .string("")]), .object([:]), .null] {
             let request = try #require(ClaudeCodeHookVocabulary().request(
