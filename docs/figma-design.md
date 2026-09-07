@@ -55,7 +55,7 @@ The file's local text styles and every existing and new text layer use `SF Pro`:
 | Session title | Medium | `13 / 17` |
 | Body and preview | Regular | `12–14 / 16–20` |
 | Project / secondary | Regular | `11 / 14–15` |
-| Status label | Semibold | `13 / 16` |
+| Status label | ~~Semibold~~ Medium | `13 / 16` |
 
 If the font is absent, install SF Pro before editing the file; a similar typeface must never be a permanent substitute. The current design environment provides the required Regular, Medium, Semibold and Bold weights.
 
@@ -263,7 +263,7 @@ PRD §8.2 and the technical design settled authoritative time semantics, waiting
 | Status | Treatment | Ink |
 | --- | --- | --- |
 | Running | A bare reading, no ground | `#7C7C80` Light 13, monospaced digits |
-| Approval / Input needed | ~~The same reading~~ ~~**the status name** — `Approval needed` / `Input needed` — on a white ground~~ **the act** — `Approve` / `Answer`, or `Read` where the request cannot be answered here — on a `32` pt chip hugging that word ([`answer-in-notch.md`](answer-in-notch.md) §3.3, redrawn 2026-09-06) | ~~ground `#FFFFFF`, text `#0D0D0F` Medium~~ ground `#DEE8E0` (`NotchPalette.brightGround`), text `#1B1F1C` Semibold, corner `8`, padding `12`; ground `#FFFFFF` under the pointer, with a pointing hand |
+| Approval / Input needed | ~~The same reading~~ ~~**the status name** — `Approval needed` / `Input needed` — on a white ground~~ **the act** — `Approve` / `Answer`, or `Read` where the request cannot be answered here — on a `28` pt chip ~~hugging that word~~ at one width for all three verbs, `76`, which is `Approve` plus its padding ([`answer-in-notch.md`](answer-in-notch.md) §3.3, redrawn 2026-09-06) | ~~ground `#FFFFFF`, text `#0D0D0F` Medium~~ ground `#DEE8E0` (`NotchPalette.brightGround`), text `#1B1F1C` ~~Semibold, corner `8`~~ Medium, corner `4`, padding `12` — the answer row's control exactly, width apart (§7); ground `#FFFFFF` under the pointer, with a pointing hand |
 | Completed | The reading on a dark ground, holding **how long this Turn took** | ground `row ground + 0.06` (so `#242424` on black), text `#7C7C80` Light |
 
 The ground is §4.6's subagent badge scaled to the reading's width: the same `16` height, `4` corner and `4` each side. It was always "a reading on a ground that inverts", and that one mark now answers for both this Turn and the subagents it spawned, so **combining them on one row needs no special case at all** — a finished row with subagents still running keeps the slot for the badge, the outline unchanged, with a count inside instead of a duration.
