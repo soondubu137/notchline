@@ -381,7 +381,7 @@ enum NotchSpecimen {
     /// One question rather than a set, because the set's `2/3` counter is a
     /// second thing to explain and the shape of the form is what this teaches.
     /// Three options with a word of description each, which is what the option
-    /// row draws: a numeral, the product's own label, and its own gloss.
+    /// row draws: a selector, the product's own label, and its own gloss.
     private static func questionRow(at now: Date) -> MonitoredSession {
         MonitoredSession(
             agent: .claudeCode,
@@ -397,10 +397,7 @@ enum NotchSpecimen {
                 toolName: "AskUserQuestion",
                 form: .questions([
                     AgentQuestion(
-                        // Both ids are the payload's own `enumerated()`
-                        // positions, which is what the decoder assigns and what
-                        // `OptionRow` draws `+ 1` of. Numbering them from one
-                        // here drew a list that began at `2`.
+                        // IDs match the positions assigned by the payload decoder.
                         id: 0,
                         header: "Naming",
                         text: "Which name should the footer’s control take?",
@@ -1382,7 +1379,7 @@ struct OpenQuestionAnatomy: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
             "A question with options, open on the notch: the agent's question, "
-                + "then its own answers numbered beneath it, then a field for an "
+                + "then its own options beneath it, then a field for an "
                 + "answer in words and Send, which holds the white ground."
         )
     }
@@ -1499,10 +1496,15 @@ private struct OpenRowGeometry {
         let lines = CGFloat(body.lines.count)
             * PanelMetrics.requestLineHeight(for: body.setting)
         let top = bodyTop + lines + PanelMetrics.optionListSpacing
-        let list = CGFloat(body.options.count) * PanelMetrics.optionRowHeight
+            + PanelMetrics.questionInstructionHeight
+        let heights = body.optionLayouts.map(\.height)
+        guard let first = heights.first, let last = heights.last else { return nil }
+        let list = heights.reduce(0, +) + CGFloat(heights.count - 1) * PanelMetrics.optionSpacing
+        let firstCentre = top + first / 2
+        let lastCentre = min(top + list - last / 2, bodyTop + body.drawnHeight)
         return (
-            centre: top + list / 2,
-            spread: (list - PanelMetrics.optionRowHeight) / 2
+            centre: (firstCentre + lastCentre) / 2,
+            spread: max(0, (lastCentre - firstCentre) / 2)
         )
     }
 }

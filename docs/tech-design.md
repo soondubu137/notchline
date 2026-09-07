@@ -1138,3 +1138,9 @@ The deliverables are a capability matrix, redacted event traces, a version compa
 - [Codex Hooks](https://learn.chatgpt.com/docs/hooks)
 - [`CONTEXT.md`](../CONTEXT.md)
 - [`docs/adr`](adr/)
+
+## Question drafts and presentation (2026-09-07)
+
+`MonitorSnapshot` remains the UI's only data contract. Existing `AgentQuestionOption.label` and `description` values feed `RequestBodyLayout.Option`; the layout wraps them once per evaluation at the drawing width and exposes the exact visible lines and height. A question with options has a `300` pt body cap, and the live viewport grows to fit its open row. Approval and plan bodies retain `140` pt.
+
+`AnswerProgress` holds the request identity, current question, collected answers, selected option IDs, expanded-description IDs and draft text in memory. Single choice replaces the selection and multiple choice toggles it. Only Send records an answer: trimmed non-empty draft text replaces all selected labels; otherwise labels are joined in source order. No annotation is generated from this input. Advancing clears the current draft, selection and disclosure state; a replacement request clears the entire progress even when the Thread row identity is unchanged. The existing per-product answer encoder and reply-ticket transport are unchanged.

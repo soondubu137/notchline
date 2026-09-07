@@ -28,7 +28,7 @@ Three rules follow, and they are the whole of what the composed surface is:
 
 ```
 46   band       the aggregate mark, the two totals, the gear.  Leading side 53.8 at every agent count
-240  viewport   at most three live rows at 80, or one open request at at most 240
+240  viewport   at most three live rows at 80; an open question may grow it to 400
 22   footer     today's spend, and the control
 ```
 
@@ -78,7 +78,7 @@ Figma page 09 draws `[Codex] notchline`; page 10 draws `[Codex] · notchline`, c
 ## 4. How big it is
 
 ```
-panel  =  46  +  viewport (at most 240)  +  footer            width  =  520
+panel  =  46  +  viewport (normally at most 240; 400 for an open question)  +  footer            width  =  520
 ```
 
 Two of the three terms cannot move at all, and the third moves only between `0` and its cap.
@@ -92,7 +92,7 @@ Two of the three terms cannot move at all, and the third moves only between `0` 
 | ~~A window past the threshold speaks~~ | ~~46~~ | ~~240~~ | ~~47~~ | ~~**333**~~ | void — [`quota-footer-v2.md`](quota-footer-v2.md) §4 |
 | One waiting row, opened at one prose line | 46 | 149 | 22 | **217** | `279` — §3.1 |
 | One waiting row, opened at three lines | 46 | 202 | 22 | **270** | `332` — §3.1 |
-| One waiting row, opened at the body's cap | 46 | 240 | 22 | **308** | `370` — §3.1 |
+| One approval or plan, opened at the body's cap | 46 | 240 | 22 | **308** | `370` — §3.1 |
 | The quota table opened, two products, three windows | 46 | 240 | 134 | **420** | `416` — §3.2 |
 | The quota table opened, three products, six windows | 46 | 240 | 221 | **507** | `501` — §3.2 |
 
@@ -105,6 +105,9 @@ Three consequences:
 - ~~**A limit speaking is the one state neither the user nor the machine chose.** It costs `25`, once, at any product and window count, and it arrives as a line that was not there a moment ago.~~ **Void, and it makes the bullet above absolute.** With the threshold removed, the *only* thing that takes this panel past `308` is the user opening the quota table. Nothing the machine observes — no share, no reset, no unreadable reading — changes its height at all.
 
 Approval detail refinement (2026-09-07): the body retains labelled argument fields with separate prose and code treatments ([`answer-in-notch.md`](answer-in-notch.md) §4.2). Its measured content includes labels and spacing but is still capped at `140` pt; the open row remains capped at `240` pt. The header, queue and footer dimensions are unchanged.
+
+Question refinement (2026-09-07): the body may reach `300` pt and the row `400` pt, with the same fixed `100` pt heading/footer composition. The live viewport is capped at `max(240, openRowHeight)`, so the Send row remains visible. The height table above describes closed rows and approval/plan bodies; at its question cap the reference panel is `46 + 400 + 22 = 468` pt before any Recent section. Option cards wrap titles and independently expand long descriptions; both selection modes use the same permanent answer field and Send ([`answer-in-notch.md`](answer-in-notch.md) §5).
+
 
 ## 5. What still gates this
 

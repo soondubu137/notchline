@@ -750,6 +750,46 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
     /// Whether ticking several is allowed (§5.5).
     let allowsSeveralAnswers: Bool
     var fields: [Field] = []
+    var optionLayouts: [Option] = []
+    var requestID: String = ""
+
+    var maximumHeight: CGFloat {
+        options.isEmpty ? PanelMetrics.requestBodyMaximumHeight : PanelMetrics.questionBodyMaximumHeight
+    }
+
+    nonisolated struct Option: Identifiable, Sendable, Equatable {
+        let option: AgentQuestionOption
+        let titleLines: [String]
+        let descriptionLines: [String]
+        let collapsedLines: [String]
+        let isExpanded: Bool
+        var id: Int { option.id }
+        var canExpand: Bool { descriptionLines.count > 2 }
+        var visibleDescription: [String] { isExpanded ? descriptionLines : collapsedLines }
+        var titleHeight: CGFloat { CGFloat(titleLines.count) * PanelMetrics.optionTitleLineHeight }
+        var descriptionTop: CGFloat { PanelMetrics.optionInset + titleHeight + 3 }
+        var height: CGFloat {
+            PanelMetrics.optionInset * 2 + titleHeight
+                + (descriptionLines.isEmpty ? 0 : 3 + CGFloat(visibleDescription.count) * PanelMetrics.optionDescriptionLineHeight)
+                + (canExpand ? PanelMetrics.optionDisclosureHeight : 0)
+        }
+
+        static func laidOut(_ option: AgentQuestionOption, width: CGFloat, expanded: Bool) -> Option {
+            let textWidth = max(1, width - PanelMetrics.optionInset * 2 - PanelMetrics.optionHandleWidth)
+            let title = AgentRequestReading.wrapped(option.label, to: textWidth, font: PanelMetrics.optionTitleFont, indentContinuations: false)
+            let description = option.description.map {
+                AgentRequestReading.wrapped($0, to: textWidth, font: PanelMetrics.optionDescriptionFont, indentContinuations: false)
+            } ?? []
+            var collapsed = Array(description.prefix(2))
+            if description.count > 2, var tail = collapsed.last {
+                while !tail.isEmpty && ((tail + "…") as NSString).size(withAttributes: [.font: PanelMetrics.optionDescriptionFont]).width > textWidth {
+                    tail.removeLast()
+                }
+                collapsed[collapsed.count - 1] = tail + "…"
+            }
+            return Option(option: option, titleLines: title, descriptionLines: description, collapsedLines: collapsed, isExpanded: expanded)
+        }
+    }
 
     nonisolated struct Field: Identifiable, Sendable, Equatable {
         let argument: ApprovalArgument
@@ -789,13 +829,15 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
         let list = options.isEmpty
             ? 0
             : PanelMetrics.optionListSpacing
-                + CGFloat(options.count) * PanelMetrics.optionRowHeight
+                + PanelMetrics.questionInstructionHeight
+                + optionLayouts.reduce(0) { $0 + $1.height }
+                + CGFloat(max(0, optionLayouts.count - 1)) * PanelMetrics.optionSpacing
         return text + ground + list
     }
 
     /// What the row will actually give it (§4.1), and what is left over.
     nonisolated var drawnHeight: CGFloat {
-        min(contentHeight, PanelMetrics.requestBodyMaximumHeight)
+        min(contentHeight, maximumHeight)
     }
 
     /// How many lines sit below the fold, for §4.4's count.
@@ -807,7 +849,7 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
     /// naming something unreachable.
     nonisolated func linesBelowTheFold(scrolledBy offset: CGFloat) -> Int {
         if !fields.isEmpty {
-            let fold = offset + PanelMetrics.requestBodyMaximumHeight
+            let fold = offset + maximumHeight
             var top = PanelMetrics.argumentBodyInset
             var hidden = 0
             for field in fields {
@@ -825,9 +867,27 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
             }
             return hidden
         }
+        if !optionLayouts.isEmpty {
+            let fold = offset + maximumHeight
+            var hidden = lines.indices.filter { CGFloat($0 + 1) * 17 > fold }.count
+            var top = CGFloat(lines.count) * 17 + PanelMetrics.optionListSpacing
+            if top + PanelMetrics.questionInstructionHeight > fold { hidden += 1 }
+            top += PanelMetrics.questionInstructionHeight
+            for option in optionLayouts {
+                hidden += option.titleLines.indices.filter {
+                    top + PanelMetrics.optionInset + CGFloat($0 + 1) * PanelMetrics.optionTitleLineHeight > fold
+                }.count
+                hidden += option.visibleDescription.indices.filter {
+                    top + option.descriptionTop + CGFloat($0 + 1) * PanelMetrics.optionDescriptionLineHeight > fold
+                }.count
+                if option.canExpand && top + option.height - PanelMetrics.optionInset > fold { hidden += 1 }
+                top += option.height + PanelMetrics.optionSpacing
+            }
+            return hidden
+        }
         let lineHeight = PanelMetrics.requestLineHeight(for: setting)
         guard lineHeight > 0 else { return 0 }
-        let hidden = contentHeight - offset - PanelMetrics.requestBodyMaximumHeight
+        let hidden = contentHeight - offset - maximumHeight
         guard hidden > 0 else { return 0 }
         return Int(ceil(hidden / lineHeight))
     }
@@ -841,6 +901,7 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
     nonisolated static func laidOut(
         _ request: AgentRequest,
         showing question: Int = 0,
+        expandedOptions: Set<Int> = [],
         width: CGFloat = PanelMetrics.requestBodyWidth
     ) -> RequestBodyLayout? {
         // A lone command keeps the original unlabelled code box. Additional
@@ -912,7 +973,11 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
                 options: asked.options,
                 header: asked.header,
                 position: Position(index: index + 1, count: questions.count),
-                allowsSeveralAnswers: asked.allowsSeveralAnswers
+                allowsSeveralAnswers: asked.allowsSeveralAnswers,
+                optionLayouts: asked.options.map {
+                    Option.laidOut($0, width: width, expanded: expandedOptions.contains($0.id))
+                },
+                requestID: request.id
             )
         case .unsupported:
             // No body at all: the row says where to answer and nothing else.

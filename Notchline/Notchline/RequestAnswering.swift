@@ -37,47 +37,30 @@ nonisolated struct AgentQuestionAnswer: Sendable, Equatable {
     }
 }
 
-/// Which of a row's answers the white ground is on — and so which one `⏎`
-/// takes.
-///
-/// **One value names both**, because they are the same thing: `answer-in-notch.md`
-/// §6.1 is that the ground *is* the state, with no second selection model
-/// underneath and no default-button concept beside it. So a click reports which
-/// answer it landed on in the same words the ground reports where it is, and
-/// ``MonitorStore/takeAnswer(_:)`` cannot tell the two apart — which is §6.6:
-/// a click takes the answer it lands on whether or not the ground is there.
+/// The submission control the return key takes, or an option-selection intent.
+/// Approval text moves the ground to refusal. Questions keep it on Send;
+/// their selected options are separate draft state until submission.
 nonisolated enum AnswerGround: Sendable, Equatable {
     /// `Approve`, `Accept`, or a question's `Send`.
     case affirmative
     /// `Deny` or `Send it back` — the answer that carries the text.
     case refusal
-    /// One option of a question, by its position in the list.
+    /// One option of a question, by its identity in the payload.
     case option(Int)
 
-    /// Where the ground stands on this request, given whether anything has been
-    /// typed.
-    ///
-    /// §6: it begins on the affirmative — or on the first option a question
-    /// offers — and typing moves it to the answer that carries text, which is
-    /// the refusal where the form has one and `Send` where it does not. With
-    /// several answers allowed it starts on `Send` and never leaves, because the
-    /// brightest object must not stop being what `⏎` does on the one form where
-    /// a person is most likely to press it twice (§5.5).
+    /// Questions keep Send as the default; approvals carry text on refusal.
     nonisolated static func `where`(
         _ request: AgentRequest?,
-        showing body: RequestBodyLayout? = nil,
+        showing _: RequestBodyLayout? = nil,
         carriesText: Bool
     ) -> AnswerGround {
         guard let shape = request?.answerRow else { return .affirmative }
         if shape.refusal != nil {
             return carriesText ? .refusal : .affirmative
         }
-        // A question, whose one control carries the text — so typing moves the
-        // ground onto it rather than away, and with it there is nowhere else
-        // for the ground to be.
-        guard !carriesText, let body, !body.options.isEmpty,
-              !body.allowsSeveralAnswers else { return .affirmative }
-        return .option(body.options[0].id)
+        // Questions always submit through Send. Selection is draft state,
+        // not a default answer and never an act of submission.
+        return .affirmative
     }
 }
 
@@ -104,6 +87,8 @@ nonisolated struct AnswerProgress: Sendable, Equatable {
     /// Cleared with the field as the next question is drawn, because both
     /// belong to the question that was on screen rather than to the row.
     var ticked: Set<Int> = []
+    var expandedOptions: Set<Int> = []
+    var requestID: String?
 }
 
 /// What one row's preview line says once an answer has left it.

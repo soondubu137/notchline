@@ -1337,7 +1337,8 @@ enum PanelMetrics {
     }
 
     /// That content, capped at what the live viewport draws: at least one
-    /// row's worth (the apology, with nothing live), at most three.
+    /// row's worth (the apology, with nothing live), normally at most three.
+    /// A taller open question enlarges it enough to keep its footer visible.
     static func sessionViewportHeight(
         liveRowCount: Int,
         openRowHeight: CGFloat? = nil
@@ -1347,7 +1348,7 @@ enum PanelMetrics {
                 liveRowCount: liveRowCount,
                 openRowHeight: openRowHeight
             ),
-            sessionViewportCap
+            max(sessionViewportCap, openRowHeight ?? 0)
         )
     }
 
@@ -1379,23 +1380,20 @@ enum PanelMetrics {
 
     // MARK: - The open row
 
-    /// What an open row's body may weigh.
-    ///
-    /// **Bounded by the viewport, not by a line count** (`answer-in-notch.md`
-    /// §4.1). The superseded draft capped the request at three lines and faded
-    /// the rest, which is one number per form and a fade over a `--force` nobody
-    /// read. This is one number for every form:
-    ///
-    /// ```text
-    /// 140 = viewport 240 − (12.5 + caption 16 + 2 + title 17 + 2) − (10 + answer row 28 + 12.5)
-    /// ```
-    ///
-    /// Below it the body hugs its content, so a one-line question makes a `117`
-    /// pt row and the rows under it stay on the list.
+    /// Approval and plan bodies retain their 140 pt viewport. Questions with
+    /// options may use 300 pt for readable descriptions; the fixed 100 pt of
+    /// heading and answer controls remains outside that scrollable body.
     static let requestBodyMaximumHeight: CGFloat = 140
-
-    /// One option on a question, numeral and label and description on one line.
-    static let optionRowHeight: CGFloat = 24
+    static let questionBodyMaximumHeight: CGFloat = 300
+    static let optionTitleFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let optionDescriptionFont = NSFont.systemFont(ofSize: 12, weight: .regular)
+    static let optionTitleLineHeight: CGFloat = 19
+    static let optionDescriptionLineHeight: CGFloat = 18
+    static let optionInset: CGFloat = 10
+    static let optionHandleWidth: CGFloat = 25
+    static let optionSpacing: CGFloat = 6
+    static let optionDisclosureHeight: CGFloat = 22
+    static let questionInstructionHeight: CGFloat = 24
 
     /// The row of answers at the foot of an open row.
     ///
@@ -2922,7 +2920,10 @@ final class MonitorStore: ObservableObject {
     /// appears to do nothing looks like a failure without it.
     var openRowBody: RequestBodyLayout? {
         guard let request = openSession?.request else { return nil }
-        return RequestBodyLayout.laidOut(request, showing: openQuestionIndex)
+        return RequestBodyLayout.laidOut(
+            request, showing: openQuestionIndex,
+            expandedOptions: openRowID.flatMap { answerProgress[$0]?.expandedOptions } ?? []
+        )
     }
 
     /// Which question of a set the body is showing, from the top.
@@ -2934,9 +2935,7 @@ final class MonitorStore: ObservableObject {
     /// How tall the open row is, or nil where no row is open.
     var openRowHeight: CGFloat? {
         guard openSession != nil else { return nil }
-        return PanelMetrics.openRowHeight(
-            bodyHeight: openRowBody?.contentHeight ?? 0
-        )
+        return PanelMetrics.openRowFixedHeight + (openRowBody?.drawnHeight ?? 0)
     }
 
     /// Opens this row's request, or closes it if it is the one already open.
@@ -3086,19 +3085,20 @@ final class MonitorStore: ObservableObject {
     ///
     /// The text view owns the text; this owns what the text *means* for the
     /// ground. Called on every edit, and cheap by construction — the published
-    /// value changes at most once per row, when the field stops or starts being
+    /// value changes only when the field stops or starts being
     /// empty.
     func answerDraftChanged(to text: String) {
         guard let openRowID else { return }
+        let wasTyped = questionUsesTypedAnswer
         answerProgress[openRowID, default: AnswerProgress()].draft = text
         refreshAnswerGround()
+        // Only the empty/non-empty boundary changes the option treatment and
+        // Send availability. AppKit continues to own per-character drawing.
+        if wasTyped != questionUsesTypedAnswer { answerRevision &+= 1 }
     }
 
-    /// Takes one answer, which is what a click on it and what `⏎` both do.
-    ///
-    /// §6.6: **a click takes the answer it lands on**, whether or not the ground
-    /// is there — there is no select-then-confirm on this surface, because the
-    /// confirm would be a second control saying what the first already said.
+    /// Approval controls submit immediately. Question options only change the
+    /// draft selection; Send records the current answer or submits the set.
     func takeAnswer(_ ground: AnswerGround) {
         guard !isAnswerInFlight, isAffirmativeArmed,
               let session = openSession,
@@ -3112,7 +3112,6 @@ final class MonitorStore: ObservableObject {
             // sends is what the person put in — the field's words, or the
             // options they ticked.
             answerTheQuestion(
-                choosing: nil,
                 of: session,
                 on: ticket,
                 saying: shape.affirmativeNotice
@@ -3128,40 +3127,17 @@ final class MonitorStore: ObservableObject {
                 saying: shape.refusalNotice
             )
         case let .option(index):
-            if openRowBody?.allowsSeveralAnswers == true {
-                // §5.5: with several allowed, a click on a box or its label
-                // ticks it and nothing else happens — the ground stays on
-                // `Send`, because the brightest object must not stop being what
-                // `⏎` does on the one form where a person is most likely to
-                // press it twice.
-                tickOption(index)
-            } else {
-                answerTheQuestion(
-                    choosing: index,
-                    of: session,
-                    on: ticket,
-                    saying: shape.affirmativeNotice
-                )
-            }
+            guard openRowBody?.options.contains(where: { $0.id == index }) == true else { return }
+            tickOption(index)
         }
     }
 
-    /// A digit takes the option it numbers — while the ground is still on one.
-    ///
-    /// **The one key the keyboard half left behind** (`answer-in-notch.md`
-    /// §9.2). It is bound on §15 q08's condition and no other: *only while the
-    /// ground is still on an option, which is to say before anything has been
-    /// typed*. Reserving the digits permanently would silently eat the first
-    /// character of an answer beginning with a number, and the ground being on
-    /// an option is that condition already drawn — typing is what moves it off.
-    ///
-    /// Returns whether the panel took it, so the field types the digit when the
-    /// panel did not. `takeAnswer` is what a click on that option does, so a
-    /// numbered option and a clicked one cannot mean different things — on a
-    /// `multiSelect` question both tick rather than send (§5.5).
+    /// With an empty field, digits select a single-choice option by position.
+    /// Selection never submits. Otherwise the field receives the character;
+    /// multiple-choice questions keep digits available for typing.
     @discardableResult
     func takeNumberedOption(_ number: Int) -> Bool {
-        guard case .option = answerGround, answerDraft.isEmpty else { return false }
+        guard answerDraft.isEmpty, openRowBody?.allowsSeveralAnswers == false else { return false }
         let options = openRowBody?.options ?? []
         guard number >= 1, number <= options.count else { return false }
         takeAnswer(.option(options[number - 1].id))
@@ -3174,10 +3150,32 @@ final class MonitorStore: ObservableObject {
         return answerProgress[openRowID]?.ticked.contains(index) ?? false
     }
 
+    var questionUsesTypedAnswer: Bool {
+        !answerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var canSubmitCurrentAnswer: Bool {
+        guard let request = openSession?.request else { return false }
+        guard !request.askedQuestions.isEmpty else { return true }
+        return questionUsesTypedAnswer || (openRowBody?.options.contains { isOptionTicked($0.id) } ?? false)
+    }
+
+    func toggleOptionDescription(_ id: Int) {
+        guard let openRowID,
+              openRowBody?.optionLayouts.contains(where: { $0.id == id && $0.canExpand }) == true else { return }
+        var progress = answerProgress[openRowID] ?? AnswerProgress()
+        if progress.expandedOptions.contains(id) { progress.expandedOptions.remove(id) }
+        else { progress.expandedOptions.insert(id) }
+        answerProgress[openRowID] = progress
+        answerRevision &+= 1
+    }
+
     private func tickOption(_ index: Int) {
         guard let openRowID else { return }
         var progress = answerProgress[openRowID] ?? AnswerProgress()
-        if progress.ticked.contains(index) {
+        if openRowBody?.allowsSeveralAnswers == false {
+            progress.ticked = [index]
+        } else if progress.ticked.contains(index) {
             progress.ticked.remove(index)
         } else {
             progress.ticked.insert(index)
@@ -3194,13 +3192,9 @@ final class MonitorStore: ObservableObject {
     /// — the body alone changes, the head and the answer row stand still — and
     /// the count is what makes that legible.
     ///
-    /// What is recorded depends on which answer was taken, and the rule is that
-    /// **nothing a person typed is thrown away**: an option taken with text in
-    /// the field carries that text as this question's note, which is the field
-    /// the product's own component writes per-question notes into. Text with no
-    /// option taken *is* the answer.
+    /// Non-whitespace text replaces every selected label. Clearing it restores
+    /// the selection; neither path creates an annotation on a chosen answer.
     private func answerTheQuestion(
-        choosing index: Int?,
         of session: MonitoredSession,
         on ticket: HookReplyRegistry.Ticket,
         saying notice: String
@@ -3212,31 +3206,13 @@ final class MonitorStore: ObservableObject {
         let asked = questions[position]
         let typed = answerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let chosen: [String]
-        if let index, index < asked.options.count {
-            chosen = [asked.options[index].label]
-        } else if asked.allowsSeveralAnswers {
-            chosen = asked.options
-                .filter { isOptionTicked($0.id) }
-                .map(\.label)
-        } else {
-            chosen = []
-        }
-
-        let answered: AgentQuestionAnswer
-        if chosen.isEmpty {
-            // Nothing picked, so the field is the whole answer — and an empty
-            // field is not an answer at all. `Send` with nothing to send does
-            // nothing, which is the one honest thing it can do.
-            guard !typed.isEmpty else { return }
-            answered = AgentQuestionAnswer(question: asked.text, answer: typed)
-        } else {
-            answered = AgentQuestionAnswer(
-                question: asked.text,
-                answer: chosen.joined(separator: ", "),
-                note: typed.isEmpty ? nil : typed
-            )
-        }
+        let chosen = asked.options.filter { isOptionTicked($0.id) }.map(\.label)
+        guard !typed.isEmpty || !chosen.isEmpty else { return }
+        // Text is the answer, never an annotation on a selected label.
+        let answered = AgentQuestionAnswer(
+            question: asked.text,
+            answer: typed.isEmpty ? chosen.joined(separator: ", ") : typed
+        )
 
         guard let openRowID else { return }
         var progress = answerProgress[openRowID] ?? AnswerProgress()
@@ -3245,6 +3221,7 @@ final class MonitorStore: ObservableObject {
             progress.questionIndex = position + 1
             progress.draft = ""
             progress.ticked = []
+            progress.expandedOptions = []
             answerProgress[openRowID] = progress
             answerDraftGeneration &+= 1
             refreshAnswerGround()
@@ -3340,6 +3317,11 @@ final class MonitorStore: ObservableObject {
 
     /// Opens one row, and starts the arrival its affirmative is armed by.
     private func openRow(_ id: String) {
+        let requestID = sessions.first(where: { $0.id == id })?.request?.id
+        if answerProgress[id]?.requestID != requestID {
+            answerProgress[id] = AnswerProgress(requestID: requestID)
+            answerDraftGeneration &+= 1
+        }
         openRowID = id
         refreshAnswerGround()
         armTheAffirmativeOnArrival(of: id)
@@ -3396,7 +3378,16 @@ final class MonitorStore: ObservableObject {
     /// on reaching this app with nothing on screen to say why (§8 state 04).
     private func closeARowWhoseRequestHasGone() {
         guard let openRowID, !isAnswerInFlight else { return }
-        guard sessions.first(where: { $0.id == openRowID })?.request == nil else { return }
+        if let request = sessions.first(where: { $0.id == openRowID })?.request {
+            if answerProgress[openRowID]?.requestID != request.id {
+                answerProgress[openRowID] = AnswerProgress(requestID: request.id)
+                answerDraftGeneration &+= 1
+                answerRevision &+= 1
+                refreshAnswerGround()
+                armTheAffirmativeOnArrival(of: openRowID)
+            }
+            return
+        }
         answerProgress[openRowID] = nil
         answerDraftGeneration &+= 1
         closeOpenRow()

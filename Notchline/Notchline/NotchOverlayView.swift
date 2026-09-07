@@ -1577,6 +1577,9 @@ private struct AnswerRow: View {
             ) {
                 store.takeAnswer(.affirmative)
             }
+            .opacity(store.canSubmitCurrentAnswer ? 1 : 0.45)
+            .allowsHitTesting(store.canSubmitCurrentAnswer)
+            .disabled(!store.canSubmitCurrentAnswer)
         }
         .frame(height: PanelMetrics.answerRowHeight)
         // §8 state 01: in flight, the field and both controls drop to `45%` and
@@ -2006,7 +2009,7 @@ private struct ScrollingRequestBody: View {
     @State private var offset: CGFloat = 0
 
     private var travel: CGFloat {
-        max(layout.contentHeight - PanelMetrics.requestBodyMaximumHeight, 0)
+        max(layout.contentHeight - layout.maximumHeight, 0)
     }
 
     private var overflows: Bool { travel > 0 }
@@ -2042,7 +2045,13 @@ private struct ScrollingRequestBody: View {
                     offset = min(max(offset - delta, 0), travel)
                 }
             )
-            .onChange(of: layout) { _, _ in offset = 0 }
+            .onChange(of: layout) { old, new in
+                if !new.optionLayouts.isEmpty && old.requestID == new.requestID && old.position == new.position {
+                    offset = min(offset, travel)
+                } else {
+                    offset = 0
+                }
+            }
     }
 
     /// Solid to the last full line, then out.
@@ -2068,7 +2077,7 @@ private struct ScrollingRequestBody: View {
 
     private var rail: some View {
         ScrollRail(
-            visibleHeight: PanelMetrics.requestBodyMaximumHeight,
+            visibleHeight: layout.maximumHeight,
             contentHeight: layout.contentHeight,
             offset: offset
         )
@@ -2174,6 +2183,7 @@ final class WheelCatcherView: NSView {
 /// is what makes §4.4's count of what is below the fold true rather than
 /// approximately true.
 struct RequestBodyView: View {
+    @EnvironmentObject private var store: MonitorStore
     let layout: RequestBodyLayout
 
     var body: some View {
@@ -2185,11 +2195,14 @@ struct RequestBodyView: View {
             }
             if !layout.options.isEmpty {
                 Spacer().frame(height: PanelMetrics.optionListSpacing)
-                ForEach(layout.options) { option in
-                    OptionRow(
-                        option: option,
-                        allowsSeveralAnswers: layout.allowsSeveralAnswers
-                    )
+                Text(store.questionUsesTypedAnswer ? "Your typed answer will be sent." : (layout.allowsSeveralAnswers ? "Select one or more options." : "Choose one option, then send your answer."))
+                    .font(.system(size: 11))
+                    .foregroundStyle(NotchPalette.reading)
+                    .frame(height: PanelMetrics.questionInstructionHeight, alignment: .topLeading)
+                VStack(spacing: PanelMetrics.optionSpacing) {
+                    ForEach(layout.optionLayouts) { option in
+                        OptionRow(layout: option, allowsSeveralAnswers: layout.allowsSeveralAnswers)
+                    }
                 }
             }
         }
@@ -2283,139 +2296,94 @@ struct RequestBodyView: View {
     }
 }
 
-/// One option a question offers.
-///
-/// The numeral, the label and the description on one `24` pt line (§5.1). **The
-/// option the ground is on carries the white ground** across the full content
-/// width; one under the pointer takes the list's own hover fill instead, and
-/// the ground does not move to meet it (§6.6) — hover is not an act.
-///
-/// On a row that can only be read it takes no click: with no way to send an
-/// answer, an option that looked selectable would be the same quiet promise a
-/// white ground would be (§11 rule 03).
-private struct OptionRow: View {
+/// A selectable title and description with an independent reading disclosure.
+/// Expanding text never selects or sends an answer. Read-only requests retain
+/// the disclosure while disabling selection.
+struct OptionRow: View {
     @EnvironmentObject private var store: MonitorStore
-
-    let option: AgentQuestionOption
+    let layout: RequestBodyLayout.Option
     let allowsSeveralAnswers: Bool
-
     @State private var isHovered = false
 
+    private var selected: Bool { store.isOptionTicked(layout.id) }
+    private var effectiveSelection: Bool { selected && !store.questionUsesTypedAnswer }
+    private var isAnswerable: Bool { store.openSession?.request?.canBeAnswered == true }
+
     var body: some View {
-        HStack(spacing: 0) {
-            handle
-            Text(option.label)
-                .font(Font(PanelMetrics.requestControlFont))
-                .foregroundStyle(
-                    holdsGround
-                        ? NotchPalette.onBrightGround
-                        : NotchPalette.sessionTitle
-                )
-                .fixedSize()
-            if let description = option.description {
-                Text(description)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(
-                        holdsGround ? NotchPalette.readingOnLight : NotchPalette.label
-                    )
-                    .padding(.leading, 12)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                store.takeAnswer(.option(layout.id))
+            } label: {
+                HStack(alignment: .top, spacing: 0) {
+                    marker
+                        .frame(width: PanelMetrics.optionHandleWidth, height: PanelMetrics.optionTitleLineHeight, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 0) {
+                        lineStack(layout.titleLines, font: PanelMetrics.optionTitleFont, height: PanelMetrics.optionTitleLineHeight, ink: NotchPalette.sessionTitle)
+                        if !layout.visibleDescription.isEmpty {
+                            lineStack(layout.visibleDescription, font: PanelMetrics.optionDescriptionFont, height: PanelMetrics.optionDescriptionLineHeight, ink: NotchPalette.reading)
+                                .padding(.top, 3)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: 0)
+            .buttonStyle(.plain)
+            .disabled(!isAnswerable || store.isAnswerInFlight || !store.isAffirmativeArmed)
+            .accessibilityLabel(layout.option.label)
+            .accessibilityValue(selected ? (store.questionUsesTypedAnswer ? "Selected, replaced by your typed answer" : "Selected") : "Not selected")
+            .accessibilityHint(layout.option.description ?? "")
+
+            if layout.canExpand {
+                Button(layout.isExpanded ? "Show less" : "Show more") {
+                    store.toggleOptionDescription(layout.id)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(NotchPalette.reading)
+                .buttonStyle(.plain)
+                .frame(height: PanelMetrics.optionDisclosureHeight)
+                .padding(.leading, PanelMetrics.optionHandleWidth)
+                .accessibilityLabel("\(layout.isExpanded ? "Show less about" : "Read full description for") \(layout.option.label)")
+                .accessibilityValue(layout.isExpanded ? "Expanded" : "Collapsed")
+                .disabled(store.isAnswerInFlight)
+            }
         }
-        .padding(.leading, 9)
-        .frame(height: PanelMetrics.optionRowHeight)
-        .background(
-            RoundedRectangle(
-                cornerRadius: PanelMetrics.controlCornerRadius,
-                style: .continuous
-            )
-            .fill(ground)
-        )
-        .overlay { if isTarget { PointingHandCursor() } }
-        .contentShape(Rectangle())
+        .padding(PanelMetrics.optionInset)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(NotchPalette.themeInk.on.opacity(effectiveSelection ? 0.10 : (isHovered ? 0.07 : 0.025))))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(NotchPalette.themeInk.on.opacity(effectiveSelection ? 0.5 : 0), lineWidth: 1))
         .onHover { isHovered = $0 }
-        .onTapGesture { if isAnswerable { store.takeAnswer(.option(option.id)) } }
-        .accessibilityElement(children: .combine)
-        .accessibilityValue(
-            allowsSeveralAnswers
-                ? (isTicked ? "Ticked" : "Not ticked")
-                : (holdsGround ? "Return takes this" : "")
-        )
-        .accessibilityAddTraits(isAnswerable ? .isButton : [])
-        .accessibilityAction { if isAnswerable { store.takeAnswer(.option(option.id)) } }
     }
 
-    /// The numeral, or the box that replaces it where several may be taken.
-    ///
-    /// §5.5: with `multiSelect` the numerals become `12 × 12` boxes — the
-    /// recessed step empty, ``NotchPalette/themeInk``'s lit value filled. It is
-    /// a box rather than a digit because a digit would promise a key that does
-    /// not tick.
-    @ViewBuilder
-    private var handle: some View {
+    @ViewBuilder private var marker: some View {
         if allowsSeveralAnswers {
-            RoundedRectangle(
-                cornerRadius: PanelMetrics.machineTextCornerRadius,
-                style: .continuous
-            )
-            .fill(
-                isTicked
-                    ? NotchPalette.themeInk.on
-                    : NotchPalette.recessedGround
-            )
-            .frame(width: 12, height: 12)
-            .frame(width: 19, alignment: .leading)
-        } else {
-            Text("\(option.id + 1)")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(
-                    holdsGround ? NotchPalette.readingOnLight : NotchPalette.optionNumeral
-                )
-                .frame(width: 19, alignment: .leading)
-        }
-    }
-
-    /// Whether this row's request can be answered here at all.
-    ///
-    /// Asked of the request rather than passed down: these views are drawn for
-    /// the one open row and for nothing else, so the store's own answer is the
-    /// exact one (§11 rule 06).
-    private var isAnswerable: Bool {
-        store.openSession?.request?.canBeAnswered == true
-    }
-
-    private var isTicked: Bool {
-        isAnswerable && store.isOptionTicked(option.id)
-    }
-
-    private var holdsGround: Bool {
-        isAnswerable && store.answerGround == .option(option.id)
-    }
-
-    /// The same three grounds ``AnswerControl`` draws, minus the resting one:
-    /// an option is a region of a list rather than an object on it, and five
-    /// stacked tiles would read as stripes. So it rests at nothing and answers
-    /// the pointer with the row's own wash — see
-    /// ``NotchPalette/RowEmphasis/controlRestFillOpacity``.
-    private var ground: Color {
-        guard !holdsGround else {
-            guard store.isAffirmativeArmed else {
-                return NotchPalette.brightGround
-                    .opacity(NotchPalette.arrivingGroundOpacity)
+            ZStack {
+                RoundedRectangle(cornerRadius: 3).strokeBorder(NotchPalette.reading, lineWidth: 1)
+                if effectiveSelection { Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(NotchPalette.themeInk.on) }
             }
-            return isHovered ? NotchPalette.requestHoverGround : NotchPalette.brightGround
+            .frame(width: 14, height: 14)
+            .accessibilityHidden(true)
+        } else {
+            ZStack {
+                Circle().strokeBorder(NotchPalette.reading, lineWidth: 1)
+                if effectiveSelection { Circle().fill(NotchPalette.themeInk.on).padding(4) }
+            }
+            .frame(width: 14, height: 14)
+            .accessibilityHidden(true)
         }
-        guard isHovered, isAnswerable else { return .clear }
-        return NotchPalette.themeInk.on
-            .opacity(NotchPalette.RowEmphasis.sessionHoverFillOpacity)
     }
 
-    /// Whether a click here would be taken. An option is outside the answer
-    /// row's own `allowsHitTesting`, so it asks the store the same two
-    /// questions ``MonitorStore/takeAnswer(_:)`` does, plus its own.
-    private var isTarget: Bool {
-        isAnswerable && store.isAffirmativeArmed && !store.isAnswerInFlight
+    private func lineStack(_ lines: [String], font: NSFont, height: CGFloat, ink: Color) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text(verbatim: line.isEmpty ? " " : line)
+                    .font(Font(font))
+                    .foregroundStyle(ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: height, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

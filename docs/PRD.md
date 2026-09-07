@@ -328,6 +328,9 @@ The overlay hangs at the `.statusBar` level, one above the menu bar, so the syst
 
 Approval detail presentation (2026-09-07): show the request’s complete arguments as labelled fields, retaining unknown fields and nested value structure. Use ordinary text for prose and resource values, and code treatment for commands, patches and structured data. Do not summarise permission scope or infer danger. Keep the bounded scrolling body and existing answer semantics ([`answer-in-notch.md`](answer-in-notch.md) §4.2).
 
+Question presentation (2026-09-07): single and multiple choice both select before Send. Each option displays its full wrapped title and a two-line description preview with independent expansion. The permanent field to the left of Send takes priority: meaningful typed text is the entire answer, regardless of selected options; clearing it restores the selection. Empty input with no selection cannot be sent. Questions with options may use a `300` pt scrolling body and `400` pt open row; the live viewport grows to fit while the answer footer remains fixed. This supersedes the earlier shared `240` pt cap and immediate single-choice submission; ordinary approval and plan behaviour is unchanged.
+
+
 ## 10. Navigation
 
 A successful click is defined per product.

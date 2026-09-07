@@ -26564,7 +26564,8 @@ for line in sys.stdin:
         #expect(
             three.contentHeight
                 == CGFloat(three.lines.count) * PanelMetrics.requestLineHeight(for: .prose)
-                    + PanelMetrics.optionListSpacing + PanelMetrics.optionRowHeight
+                    + PanelMetrics.optionListSpacing + PanelMetrics.questionInstructionHeight
+                    + three.optionLayouts.reduce(0) { $0 + $1.height }
         )
     }
 
@@ -27062,24 +27063,18 @@ for line in sys.stdin:
         #expect(await service.answersTaken() == [.grant])
     }
 
-    /// The ground begins on the first option a question offers.
-    ///
-    /// §6: it begins on the affirmative, *or on the first option a question
-    /// offers* — the brightest object is always what `⏎` will do, and on a
-    /// question with something to pick that is the first thing to pick. Typing
-    /// moves it onto `Send`, because the field's words are then the answer
-    /// (§5.4).
+    /// Questions always submit through Send; entering and clearing text never preselects an option.
     @Test @MainActor
-    func theGroundBeginsOnTheFirstOptionAQuestionOffers() async {
+    func questionsKeepSendAsTheDefaultWithoutPreselectingAnOption() async {
         let bench = answeringStore(request: questionSet(), status: .inputNeeded)
         let (store, _, row) = bench
         store.toggleOpenRow(row)
 
-        #expect(store.answerGround == .option(0))
+        #expect(store.answerGround == .affirmative)
         store.answerDraftChanged(to: "neither, use SQLite")
         #expect(store.answerGround == .affirmative)
         store.answerDraftChanged(to: "")
-        #expect(store.answerGround == .option(0))
+        #expect(store.answerGround == .affirmative)
     }
 
     /// Answering one question of a set draws the next and sends nothing.
@@ -27098,6 +27093,7 @@ for line in sys.stdin:
         #expect(store.openRowBody?.position?.drawn == "1/2")
 
         store.takeAnswer(.option(1))
+        store.takeAnswer(.affirmative)
         #expect(store.openQuestionIndex == 1)
         #expect(store.openRowBody?.position?.drawn == "2/2")
         #expect(await service.answersTaken().isEmpty)
@@ -27107,6 +27103,7 @@ for line in sys.stdin:
         // The whole set leaves on the last one, in the order it was asked.
         #expect(await eventually { store.isAffirmativeArmed })
         store.takeAnswer(.option(0))
+        store.takeAnswer(.affirmative)
         #expect(await eventually { !(await service.answersTaken().isEmpty) })
         #expect(
             await service.answersTaken() == [
@@ -27119,15 +27116,9 @@ for line in sys.stdin:
         #expect(store.previewLine(for: row) == "Answered")
     }
 
-    /// An option taken with text in the field carries the text as its note.
-    ///
-    /// **Nothing a person typed is thrown away.** The field is the answer where
-    /// nothing was picked (§5.4), and where something was picked it is a note
-    /// against that one question — which is the field the product's own
-    /// component writes per-question notes into, so it reaches the model rather
-    /// than being dropped on the floor.
+    /// Typed text replaces a selected option; it is never sent as an annotation.
     @Test @MainActor
-    func anOptionTakenWithTextInTheFieldCarriesItAsThatQuestionsNote() async {
+    func typedTextReplacesTheSelectedOptionInsteadOfBecomingItsNote() async {
         let bench = answeringStore(
             request: questionSet(count: 1),
             status: .inputNeeded
@@ -27138,14 +27129,14 @@ for line in sys.stdin:
         store.answerDraftChanged(to: "only if it is already installed")
 
         store.takeAnswer(.option(0))
+        store.takeAnswer(.affirmative)
         #expect(await eventually { !(await service.answersTaken().isEmpty) })
         #expect(
             await service.answersTaken() == [
                 .answers([
                     AgentQuestionAnswer(
                         question: "Which database?",
-                        answer: "SQLite",
-                        note: "only if it is already installed"
+                        answer: "only if it is already installed"
                     )
                 ])
             ]
@@ -27220,11 +27211,60 @@ for line in sys.stdin:
         #expect(store.openRowID == bench.row.id)
     }
 
+    @Test(arguments: [false, true]) @MainActor
+    func typedAnswersOverrideSelectionsAndClearingRestoresThem(multiple: Bool) async {
+        let (store, service, row) = answeringStore(request: questionSet(count: 1, allowsSeveralAnswers: multiple), status: .inputNeeded)
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        #expect(!store.canSubmitCurrentAnswer)
+        store.takeAnswer(.option(0))
+        store.takeAnswer(.option(1))
+        #expect(store.isOptionTicked(1))
+        #expect(store.isOptionTicked(0) == multiple)
+        #expect(await service.answersTaken().isEmpty)
+        store.answerDraftChanged(to: "Use a different database")
+        #expect(store.questionUsesTypedAnswer)
+        store.answerDraftChanged(to: "  \n ")
+        #expect(!store.questionUsesTypedAnswer)
+        #expect(store.canSubmitCurrentAnswer)
+        #expect(store.isOptionTicked(1))
+        store.answerDraftChanged(to: "  Use a different database  ")
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(await service.answersTaken() == [.answers([AgentQuestionAnswer(question: "Which database?", answer: "Use a different database")])])
+    }
+
+    @Test @MainActor
+    func selectingAndReadingAnOptionDoNotSubmitOrAdvanceTheQuestion() async throws {
+        let long = String(repeating: "Read this complete description before deciding. ", count: 30)
+        let request = AgentRequest(id: "reading", toolName: "AskUserQuestion", form: .questions([
+            AgentQuestion(id: 0, header: nil, text: "Which approach?", options: [AgentQuestionOption(id: 7, label: "Inspect first", description: long)], allowsSeveralAnswers: false)
+        ]), replyTicket: 1)
+        let (store, service, row) = answeringStore(request: request, status: .inputNeeded)
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        let before = try #require(store.openRowBody).contentHeight
+        store.toggleOptionDescription(7)
+        #expect(try #require(store.openRowBody).contentHeight > before)
+        #expect(!store.isOptionTicked(7))
+        store.takeAnswer(.option(7))
+        #expect(store.isOptionTicked(7))
+        #expect(store.openRowBody?.optionLayouts.first?.isExpanded == true)
+        #expect(await service.answersTaken().isEmpty)
+        store.takeAnswer(.option(-1))
+        #expect(store.isOptionTicked(7))
+        store.toggleOptionDescription(7)
+        #expect(store.openRowBody?.contentHeight == before)
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { !(await service.answersTaken().isEmpty) })
+        #expect(await service.answersTaken() == [.answers([AgentQuestionAnswer(question: "Which approach?", answer: "Inspect first")])])
+    }
+
     /// Drawing the next question resizes the panel, and that reaches the window.
     ///
     /// The same failure `everyChangeThatMovesThePanelReachesTheWindow` exists
     /// for, one step in: answering question two draws question three, and three
-    /// options are `48` points more body than one. Nothing about the row's
+    /// options are taller than one. Nothing about the row's
     /// identity moves when it happens, so without a publish of its own the next
     /// question is drawn into the window the last one asked for.
     @Test @MainActor
@@ -27270,6 +27310,7 @@ for line in sys.stdin:
 
         let before = store.currentPanelSize
         store.takeAnswer(.option(0))
+        store.takeAnswer(.affirmative)
         #expect(store.currentPanelSize != before)
         #expect(updates > 0)
         subscription.cancel()
@@ -27398,20 +27439,14 @@ for line in sys.stdin:
         )
     }
 
-    /// A digit takes the option it numbers, and only before anything is typed.
-    ///
-    /// §9.2 and §15 q08. **It is the one key the deferred keyboard half left
-    /// behind**, and it is bound on the condition that question answers:
-    /// reserving the digits permanently would silently eat the first character
-    /// of an answer beginning with a number, so the gate is the white ground
-    /// still being on an option — which is exactly what typing moves it off.
+    /// Digits select a single option only while the field is empty; Send commits it.
     @Test @MainActor
-    func aDigitTakesItsOptionOnlyWhileTheGroundIsStillOnOne() async {
+    func aDigitSelectsItsOptionWithoutSendingWhileTheFieldIsEmpty() async {
         let bench = answeringStore(request: questionSet(count: 1), status: .inputNeeded)
         let (store, service, row) = bench
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
-        #expect(store.answerGround == .option(0))
+        #expect(store.answerGround == .affirmative)
 
         // A number this question does not offer is not an option, and is typed
         // like any other character.
@@ -27425,6 +27460,8 @@ for line in sys.stdin:
 
         store.answerDraftChanged(to: "")
         #expect(store.takeNumberedOption(2))
+        #expect(await service.answersTaken().isEmpty)
+        store.takeAnswer(.affirmative)
         #expect(await eventually { !(await service.answersTaken().isEmpty) })
         #expect(
             await service.answersTaken() == [
