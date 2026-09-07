@@ -2166,8 +2166,18 @@ private struct ScrollingRequestBody: View {
 
     private var overflows: Bool { travel > 0 }
 
+    /// The slice of the body ``RequestBodyView`` draws lines for (§4.7).
+    ///
+    /// The arithmetic is ``RequestBodyLayout/drawnWindow(scrolledBy:)``'s,
+    /// beside the fold count it has to agree with rather than here beside the
+    /// wheel that moves it.
+    private var window: ClosedRange<CGFloat>? {
+        guard overflows else { return nil }
+        return layout.drawnWindow(scrolledBy: offset)
+    }
+
     var body: some View {
-        RequestBodyView(layout: layout)
+        RequestBodyView(layout: layout, window: window)
             .frame(
                 maxWidth: .infinity,
                 alignment: .topLeading
@@ -2359,11 +2369,28 @@ final class WheelCatcherView: NSView {
 
 /// One request's body: the lines it wrapped to, and the options under them.
 ///
-/// **The lines are the ones the layout counted**, character for character, which
-/// is what makes §4.4's count of what is below the fold true rather than
+/// **The lines are the ones the layout counted**, character for character,
+/// which is what makes §4.4's count of what is below the fold true rather than
 /// approximately true.
+///
+/// **It draws the lines the window reaches and holds the rest of the height
+/// open** (§4.7). A body is bounded by the panel and a payload is not: the hook
+/// boundary allows `128 KB`, which is a plan of fifteen hundred wrapped lines
+/// behind a viewport that shows eight, and a `Text` per line put opening one at
+/// `0.80` s, `240` wheel events over it at `2.09` s, and `39` MB on the
+/// process that will never be looked at. What stands in for the
+/// lines that are nowhere near the viewport is their own height, so the body is
+/// exactly as tall as ``RequestBodyLayout/contentHeight`` either way — which is
+/// what the wheel's travel, the rail and §4.4's count are all measured from,
+/// and none of them knows this happens.
+///
+/// `window` is `nil` wherever there is no viewport to be outside of — a
+/// measurement, a snapshot, a specimen — and that draws every line.
 struct RequestBodyView: View {
     let layout: RequestBodyLayout
+    /// The vertical slice of the body that is on screen, in the body's own
+    /// coordinates, or `nil` for all of it.
+    var window: ClosedRange<CGFloat>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -2384,20 +2411,29 @@ struct RequestBodyView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// **Every field is built, and only its lines are windowed.** A field is
+    /// one accessibility element carrying its whole label and value
+    /// (§13.3), and it is the argument that supplies those rather than the
+    /// drawn lines — so skipping a field would take a parameter of the
+    /// permission out of the tree, where skipping its lines takes nothing at
+    /// all. Their count is what a tool's own signature bounds; their lines are
+    /// what the payload does.
     private var arguments: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.argumentSpacing) {
-            ForEach(layout.fields) { field in
+            ForEach(Array(zip(layout.fields, layout.fieldTops)), id: \.0.id) { field, top in
                 VStack(alignment: .leading, spacing: PanelMetrics.argumentLabelSpacing) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(field.labelLines.enumerated()), id: \.offset) { _, line in
-                            Text(verbatim: line)
-                                .font(Font(PanelMetrics.argumentLabelFont))
-                                .foregroundStyle(NotchPalette.reading)
-                                .frame(height: PanelMetrics.argumentLabelHeight, alignment: .leading)
-                        }
+                    lineStack(
+                        field.labelLines,
+                        height: PanelMetrics.argumentLabelHeight,
+                        top: top
+                    ) { line in
+                        Text(verbatim: line)
+                            .font(Font(PanelMetrics.argumentLabelFont))
+                            .foregroundStyle(NotchPalette.reading)
+                            .frame(height: PanelMetrics.argumentLabelHeight, alignment: .leading)
                     }
                     .help(field.argument.id)
-                    argumentValue(field)
+                    argumentValue(field, top: top + field.textTop)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .ignore)
@@ -2407,16 +2443,14 @@ struct RequestBodyView: View {
         .padding(.vertical, PanelMetrics.argumentBodyInset)
     }
 
-    private func argumentValue(_ field: RequestBodyLayout.Field) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(field.lines.enumerated()), id: \.offset) { _, line in
-                Text(verbatim: line.isEmpty ? " " : line)
-                    .font(Font(field.isCode ? PanelMetrics.machineTextFont : PanelMetrics.proseFont))
-                    .foregroundStyle(NotchPalette.sessionTitle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: field.lineHeight, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+    private func argumentValue(_ field: RequestBodyLayout.Field, top: CGFloat) -> some View {
+        lineStack(field.lines, height: field.lineHeight, top: top) { line in
+            Text(verbatim: line.isEmpty ? " " : line)
+                .font(Font(field.isCode ? PanelMetrics.machineTextFont : PanelMetrics.proseFont))
+                .foregroundStyle(NotchPalette.sessionTitle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: field.lineHeight, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, field.isCode ? PanelMetrics.machineTextHorizontalInset : 0)
         .padding(.vertical, field.isCode ? PanelMetrics.machineTextVerticalInset : 0)
@@ -2428,21 +2462,53 @@ struct RequestBodyView: View {
         }
     }
 
+    /// One run of equal-height lines, drawn where the window reaches it and
+    /// held open by its own height where it does not.
+    ///
+    /// `top` is where this run starts in the body, which is the one thing a
+    /// stack cannot work out for itself and the one thing that must agree with
+    /// ``RequestBodyLayout/linesBelowTheFold(scrolledBy:)`` — so both take it
+    /// from ``RequestBodyLayout/fieldTops`` and
+    /// ``RequestBodyLayout/textTop`` rather than each adding it up.
+    private func lineStack(
+        _ lines: [String],
+        height: CGFloat,
+        top: CGFloat,
+        @ViewBuilder line draw: @escaping (String) -> some View
+    ) -> some View {
+        let drawn = RequestBodyLayout.visibleLines(
+            of: lines.count, at: height, from: top, within: window
+        )
+        return VStack(alignment: .leading, spacing: 0) {
+            if drawn.lowerBound > 0 {
+                Spacer().frame(height: CGFloat(drawn.lowerBound) * height)
+            }
+            ForEach(drawn, id: \.self) { index in
+                draw(lines[index])
+            }
+            if drawn.upperBound < lines.count {
+                Spacer().frame(height: CGFloat(lines.count - drawn.upperBound) * height)
+            }
+        }
+    }
+
     @ViewBuilder
     private var text: some View {
-        let lines = VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(layout.lines.enumerated()), id: \.offset) { _, line in
-                Text(line.isEmpty ? " " : line)
-                    .font(Font(font))
-                    .foregroundStyle(NotchPalette.reading)
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: PanelMetrics.requestLineHeight(for: layout.setting),
-                        maxHeight: PanelMetrics.requestLineHeight(for: layout.setting),
-                        alignment: .leading
-                    )
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        let lines = lineStack(
+            layout.lines,
+            height: PanelMetrics.requestLineHeight(for: layout.setting),
+            top: layout.textTop
+        ) { line in
+            Text(line.isEmpty ? " " : line)
+                .font(Font(font))
+                .foregroundStyle(NotchPalette.reading)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: PanelMetrics.requestLineHeight(for: layout.setting),
+                    maxHeight: PanelMetrics.requestLineHeight(for: layout.setting),
+                    alignment: .leading
+                )
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 

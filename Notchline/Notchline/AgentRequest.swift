@@ -883,6 +883,92 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
         min(contentHeight, maximumHeight)
     }
 
+    /// Where the body's own text starts, which is not always the top.
+    ///
+    /// Machine text sits on a recessed ground with
+    /// ``PanelMetrics/machineTextVerticalInset`` above its first line; prose
+    /// starts at zero. The drawing and ``linesBelowTheFold(scrolledBy:)`` both
+    /// measure from here, so neither can put a line where the other did not.
+    nonisolated var textTop: CGFloat {
+        setting == .machineText ? PanelMetrics.machineTextVerticalInset : 0
+    }
+
+    /// Where each field's own top sits in the body, top-down.
+    ///
+    /// One arithmetic for the two readers that need it — the count under the
+    /// fold, and the drawing that skips what is nowhere near the viewport.
+    nonisolated var fieldTops: [CGFloat] {
+        var tops: [CGFloat] = []
+        tops.reserveCapacity(fields.count)
+        var top = PanelMetrics.argumentBodyInset
+        for field in fields {
+            tops.append(top)
+            top += field.height + PanelMetrics.argumentSpacing
+        }
+        return tops
+    }
+
+    /// Which of a run of `count` equal lines, stacked down from `top`, a
+    /// vertical window actually reaches.
+    ///
+    /// **The whole of §4.7's windowing**, and the reason it is arithmetic on
+    /// the layout rather than a rule inside the view: a body is bounded by the
+    /// panel (§4.1) and a payload is not — the hook boundary allows `128 KB`,
+    /// which is upwards of fifteen hundred wrapped lines behind a viewport that
+    /// can show eight. Drawing all of them built a `Text` per line and made
+    /// every frame of a scroll walk the lot.
+    ///
+    /// Inclusive at both edges by construction: `floor` on the way in and
+    /// `ceil` on the way out, so a line the window only half reaches is drawn
+    /// rather than clipped away. `nil` is the whole run, which is what a view
+    /// with no viewport over it — a measurement, a snapshot — asks for.
+    nonisolated static func visibleLines(
+        of count: Int,
+        at lineHeight: CGFloat,
+        from top: CGFloat,
+        within window: ClosedRange<CGFloat>?
+    ) -> Range<Int> {
+        guard let window, lineHeight > 0, count > 0 else { return 0..<count }
+        let first = (window.lowerBound - top) / lineHeight
+        let last = (window.upperBound - top) / lineHeight
+        // `first` can be enormous or hugely negative on a body far from the
+        // window; clamping before the `Int` conversion is what keeps that from
+        // trapping rather than merely being wrong.
+        let lower = Int(min(max(first.rounded(.down), 0), CGFloat(count)))
+        let upper = Int(min(max(last.rounded(.up), 0), CGFloat(count)))
+        return lower..<max(lower, upper)
+    }
+
+    /// The slice of the body worth drawing lines for, at this offset (§4.7).
+    ///
+    /// **A slab that moves in steps, not a viewport that slides.** The viewport
+    /// itself is the obvious window and it is the wrong one: it changes every
+    /// time the body moves by a line, and each change rebuilds the body and
+    /// re-rasterises it. Measured on Release — a four-option question went from
+    /// `0.32` s to `0.50` s over `240` wheel events, and a sixty-line command
+    /// from `0.55` to `0.67`, while the long bodies this exists for were still
+    /// three times better either way. Paying for the rare body out of the
+    /// common one is the wrong way round.
+    ///
+    /// So the slab is a fixed sixteen viewports, snapped to eight, and it moves
+    /// about once per eight viewports of travel rather than once per line. Two
+    /// things fall out of that rather than being decided:
+    ///
+    /// - **A body shorter than the slab is never windowed at all** — `nil`,
+    ///   draw everything — which is every question and every command of a
+    ///   hundred-odd lines. Those draw exactly what they always drew.
+    /// - **The viewport is always well inside the slab.** A step is eight
+    ///   viewports and the slab reaches half a step past it either way, so
+    ///   there is no offset at which the row can be looking at ground the body
+    ///   did not draw. `theDrawnSlabAlwaysContainsTheViewport` sweeps every
+    ///   offset a body can reach and asserts exactly that.
+    nonisolated func drawnWindow(scrolledBy offset: CGFloat) -> ClosedRange<CGFloat>? {
+        let step = drawnHeight * 8
+        guard step > 0, contentHeight > step * 2 else { return nil }
+        let anchor = (offset / step).rounded(.down) * step
+        return (anchor - step / 2)...(anchor + step * 3 / 2)
+    }
+
     /// How many lines sit below the fold, for §4.4's count.
     ///
     /// **Lines rather than bytes** (§15 q04): a byte count is precise and
@@ -893,9 +979,8 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
     nonisolated func linesBelowTheFold(scrolledBy offset: CGFloat) -> Int {
         if !fields.isEmpty {
             let fold = offset + maximumHeight
-            var top = PanelMetrics.argumentBodyInset
             var hidden = 0
-            for field in fields {
+            for (field, top) in zip(fields, fieldTops) {
                 for index in field.labelLines.indices {
                     if top + CGFloat(index + 1) * PanelMetrics.argumentLabelHeight > fold {
                         hidden += 1
@@ -906,14 +991,14 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
                         hidden += 1
                     }
                 }
-                top += field.height + PanelMetrics.argumentSpacing
             }
             return hidden
         }
         if !optionLayouts.isEmpty {
             let fold = offset + maximumHeight
-            var hidden = lines.indices.filter { CGFloat($0 + 1) * 17 > fold }.count
-            var top = CGFloat(lines.count) * 17 + PanelMetrics.optionListSpacing
+            let lineHeight = PanelMetrics.requestLineHeight(for: setting)
+            var hidden = lines.indices.filter { CGFloat($0 + 1) * lineHeight > fold }.count
+            var top = CGFloat(lines.count) * lineHeight + PanelMetrics.optionListSpacing
             for option in optionLayouts {
                 hidden += option.titleLines.indices.filter {
                     top + PanelMetrics.optionInset + CGFloat($0 + 1) * PanelMetrics.optionTitleLineHeight > fold

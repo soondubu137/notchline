@@ -706,7 +706,34 @@ Verified rather than assumed, because §7 rule 12 is the class of change this is
 | Sustained sweep of that list | `40%` of a core | `15%` |
 | — the same sweep with no row open | `18%` | `18%` |
 
-**A long body is still expensive and this did not touch it.** `RequestBodyView` builds a `Text` for every line the payload wrapped to, not for the lines the `140`–`300` pt viewport can show, so a `1,529`-line plan costs `0.7` s to open and about `100%` of a core to scroll. Drawing only the reachable slice would fix it and would change what `contentHeight` means to the tests that pin the drawn height against the measured one; it is not in this change.
+~~**A long body is still expensive and this did not touch it.**~~ **It does now** — see below. `RequestBodyView` built a `Text` for every line the payload wrapped to rather than for the lines the `140`–`300` pt viewport can show.
+
+### A body draws the lines near the viewport, not all of them (2026-09-07)
+
+The hook boundary accepts `128 KB` (`answer-in-notch.md` §12.2) and the viewport shows eight lines, so a plan can arrive as fifteen hundred wrapped lines behind it — every one a drawn `Text`. Release, the same rig as above:
+
+| The open body | Open it | `240` wheel events | Resident |
+| --- | --- | --- | --- |
+| `1,529`-line plan, before | `0.80` s | `2.09` s | `158` MB |
+| `1,529`-line plan, after | `0.55` s | `0.51` s | `119` MB |
+| Long argument fields, before | `0.46` s | `1.96` s | `168` MB |
+| Long argument fields, after | `0.26` s | `0.49` s | `119` MB |
+| Four-option question | `0.17` s | `0.31` s | unchanged either way |
+| Sixty-line command | `0.16` s | `0.52` s | unchanged either way |
+
+**The height does not change, which is what makes it invisible.** What stands in for the lines outside the window is their own height, so the body is exactly as tall as `contentHeight` either way — and the wheel's travel, the rail and §4.4's count are all measured from that. Nothing downstream knows this happens, and `RequestBodyView(layout:)` with no window still draws every line, which is what the tests pinning drawn height against measured height ask for.
+
+**The window is a slab that moves in steps, and that is the whole of the design.** The viewport is the obvious window and it was measured being the wrong one: it changes every time the body moves by a line, and each change rebuilds the body and re-rasterises the `.drawingGroup()` above. With the viewport as the window, a four-option question went from `0.32` s to `0.50` s over `240` events and a sixty-line command from `0.55` to `0.67` — a regression on the common body to buy the rare one, which is the wrong way round. The slab is sixteen viewports snapped to eight, so:
+
+- **A body shorter than the slab is not windowed at all.** Every question, and every command of a hundred-odd lines, draws exactly what it drew before, through the same view — confirmed by `RequestBodyView.body` still running twice over a whole sweep, as it did before the change.
+- **A long one re-windows about once per eight viewports of travel**, which over a sustained sweep is once or twice rather than two hundred and sixty times.
+- **The viewport is always well inside the slab**, so no offset can look at ground the body did not draw. `theDrawnSlabAlwaysContainsTheViewport` sweeps every offset a body can reach, on both viewport heights, for bodies either side of the slab.
+
+Verified the same way the raster was: pixel-identical on all four body shapes at the top of the body, mid-scroll, clamped at the end, and walking back up across a slab boundary — `0` differing pixels every time. `aWindowedBodyDrawsWhatTheWholeOneDrewAndStandsAsTall` pins that in the suite by hosting both forms and comparing the viewport's own pixels.
+
+**Every argument field is still built and only its lines are windowed**, because a field is one accessibility element carrying its whole label and value and takes those from the argument rather than from the drawn lines. Field counts are bounded by a tool's signature; line counts are bounded only by the payload.
+
+**The accessibility trade, stated rather than buried.** The row's own label carries the complete body — unchanged at `123,844` characters on the `1,529`-line plan — so the whole request is still read out. What leaves the tree is a per-*wrapped-line* element for lines outside the slab: `1,582` elements became `112`, around wherever the body is scrolled. Those were fragments of wraps rather than sentences, and with §9.3's arrows declined the wheel is the only thing that moves the body, so a reader navigating by them could already reach only what a pointer had scrolled to.
 
 ### `proc_pid_rusage` reports mach ticks, not nanoseconds
 
@@ -967,6 +994,6 @@ At one run per 30 seconds the subprocess side is **0.5% of a core, forever**, gr
 
 ## Question rendering boundary (2026-09-07)
 
-Option titles and descriptions are measured in `RequestBodyLayout.Option` and those exact lines are drawn by `OptionRow`. The same value supplies card heights, viewport height and the fold counter — **and it is one value, laid out once per change**: `MonitorStore.openRowBody` caches it against the request, the question index and the expanded descriptions, because every one of those readers used to re-measure the whole body (2026-09-07, §6). Description disclosure changes layout but never answers the request. The existing wheel catcher translates the one shared body; options do not introduce nested scrollers or continuous animations. Its offset is clamped when a description changes and reset when the request or question changes.
+Option titles and descriptions are measured in `RequestBodyLayout.Option` and those exact lines are drawn by `OptionRow`. The same value supplies card heights, viewport height and the fold counter — **and it is one value, laid out once per change**: `MonitorStore.openRowBody` caches it against the request, the question index and the expanded descriptions, because every one of those readers used to re-measure the whole body (2026-09-07, §6). The layout is of the whole body whatever is on screen; only the *drawing* is windowed to the lines near the viewport, and option cards are never windowed at all. Description disclosure changes layout but never answers the request. The existing wheel catcher translates the one shared body; options do not introduce nested scrollers or continuous animations. Its offset is clamped when a description changes and reset when the request or question changes.
 
 `AnswerFieldView` continues to own per-character drawing. `MonitorStore` publishes a question-answer revision only when the draft crosses the trimmed-empty boundary, or when selection, disclosure or question state changes — and a keystroke that publishes nothing now also *measures* nothing, which it did not before: `AnswerGround.where` declared a laid-out body it never read, and every edit built one for it (2026-09-07, §6). The first boundary changes the affirmative's availability and whether selection emphasis is effective; ordinary typing within a non-empty draft does not publish a SwiftUI revision. Request identity is checked before retained draft state can be reused. These UI changes introduce no new provider, protocol parsing or non-public Codex dependency.

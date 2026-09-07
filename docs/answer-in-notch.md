@@ -166,6 +166,49 @@ Prose, resource values and field labels wrap without adding command-continuation
 
 No verb list, no warning glyph, no colour, ever. A heuristic that knows `rm` does not know `find -delete`, a `tee` into a path, or a pipe into a shell — **every miss is silent, and every hit teaches the reader that an unmarked command has been checked by something**. Nothing on this surface has been checked. The app shows what it was handed, says how much of it is on screen, and leaves the judgement where it already was.
 
+### 4.7 Only the lines near the viewport are drawn
+
+**A body is bounded by the panel (§4.1) and a payload is not.** The hook
+boundary accepts `128 KB` (§12.2), which is a plan of fifteen hundred wrapped
+lines behind a viewport that shows eight — and every one of them was a drawn
+`Text`, so opening such a plan cost `0.80` s of CPU and scrolling it about a
+whole core, on Release. The lines nowhere near the viewport are now replaced by
+their own height, which changes nothing anybody can see: the body is exactly as
+tall as it was, so the wheel's travel, the rail and §4.4's count are all
+measured from the same number, and none of them knows this happens.
+
+**What is drawn is a slab that moves in steps, not a viewport that slides.** The
+viewport is the obvious window and it is the wrong one: it changes every time
+the body moves by a line, and each change rebuilds the body and re-rasterises
+it (§13.2). Measured both ways — with the viewport as the window a four-option
+question went from `0.32` s to `0.50` s over `240` wheel events and a
+sixty-line command from `0.55` to `0.67`, while the long bodies this exists for
+were three times better either way. Paying for the rare body out of the common
+one is the wrong way round. So the slab is sixteen viewports, snapped to eight,
+and two things fall out of that rather than being decided: **a body shorter
+than the slab is not windowed at all**, which is every question and every
+command of a hundred-odd lines; and **the viewport is always well inside the
+slab**, so there is no offset at which the row can be looking at ground the body
+has not drawn.
+
+**Every argument field is still built, and only its lines are windowed.** A
+field is one accessibility element carrying its whole label and value (§13.3),
+and it takes those from the argument rather than from the drawn lines — so
+skipping a field would take a parameter of the permission out of the tree, where
+skipping its lines takes nothing off the screen. Their count is what a tool's
+own signature bounds; their line count is what the payload does.
+
+**What it costs a reader who cannot see the panel** is the one real trade, and
+it is worth stating rather than burying. The row's own accessibility label
+carries the complete body — verified unchanged at `123,844` characters on a
+`1,529`-line plan — so the whole request is still read out. What is no longer in
+the tree is a separate element per *wrapped line* for the lines outside the
+slab: fifteen hundred fragments became a hundred, around wherever the body is
+scrolled. Those fragments were a poor way to read a paragraph in any case, since
+each is a wrap rather than a sentence, and §9.3 leaves the wheel as the only way
+to move the body — so a reader who navigated by them could already only reach
+what a pointer had scrolled to.
+
 ## 5. A question with options
 
 ### 5.1 Composition
@@ -508,6 +551,7 @@ The scrolling body is the second thing to watch: it must scroll its own layer ra
 
 - **The lines are still wrapped here rather than by the text system** (§4.5), and still character for character, so §4.4's count of what is below the fold stays exact. What changed is that the fitter bisects for the break instead of measuring every prefix of a line in turn: identical lines out, across `910` cases spanning five fonts, seven widths, both indent modes and a corpus of Unicode, emoji, tabs, URLs and unbreakable tokens.
 - **The body is composited into an image before it is translated**, so §4.4's wheel moves a layer rather than re-drawing four option cards a frame. It is what took the sustained figure from `40%` of a core to `15%`, which is what the same sweep costs with no row open at all. Verified pixel-identical, with the same accessibility tree and the same clicks.
+- **And a body far longer than the viewport draws only the lines near it** (§4.7), which took a fifteen-hundred-line plan from `2.09` s to `0.51` s over `240` wheel events and `0.80` s to `0.55` s to open, at `39` MB less resident — while leaving every question and every ordinary command drawing exactly what it drew.
 
 The second row is the one to keep an eye on, and it is not the row that was written here first. ~~It is a whole panel's worth of work per event rather than a translation, and `.equatable()` on the body was tried and bought nothing, so what it is re-doing is not the sixty `Text` lines.~~ **That measurement was of a scroller that was never running** — the catcher sat behind the body and AppKit never handed it an event, so `600` wheel events over an open request moved nothing and what was being timed was the panel's list refusing to scroll ([`system-architecture.md`](system-architecture.md) §6). With the delivery fixed the honest figure is `1.7` ms an event, it is transient and user-driven — paid only while a finger is actually moving, and a flick is a second or two — and it does scale with the number of lines drawn (`0.51` s at `10` lines against `1.35` s at `120`, over the same `600` events). ~~which the layer-backed body §7 would prefer is what would take away.~~ **The layer-backed body §7 would prefer was then built and measured, and it is three times worse** — it draws pixel-identically and costs `5.20` ms an event against `1.74`. The scaling is real and it is a minority of the cost: an empty body scrolled the same way costs `1.19` of the `1.74`, so the sixty `Text` views are half a millisecond and the rest is the scroll itself ([`system-architecture.md`](system-architecture.md) §6). **It is `expanded-panel-v2.md`'s scroller rather than this document's**, it predates the answer row, and it is recorded here because §16 asks for the number rather than because this change caused it.
 
