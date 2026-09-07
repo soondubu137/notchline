@@ -276,7 +276,7 @@ enum PanelMetrics {
     /// those follow the hardware's shape, while a boundary does not get
     /// thicker because the menu bar got taller.
     static let surfaceOutlineWidth: CGFloat = 0.8
-    static let expandedBaselineWidth: CGFloat = 700
+    static let expandedBaselineWidth: CGFloat = 610
     static let sessionRowHeight: CGFloat = 80
     /// A row that has left the list, drawn under the seam.
     ///
@@ -285,7 +285,10 @@ enum PanelMetrics {
     /// was measured from the half-row it has to equal rather than from the one
     /// line it carries, so nothing about that line's contents moves it.
     static let retiredRowHeight: CGFloat = sessionRowHeight / 2
-    /// The rule between the list and what has left it.
+    /// The rule between the list and what has left it -- and, now, the
+    /// footer's own spend line: the two closing bars this panel has, drawn
+    /// alike down to the rule each shows only while it is open
+    /// (`quota-footer-v2.md` §2).
     ///
     /// `9` + a `14` pt caption line + `9`.
     static let recentSeamHeight: CGFloat = 32
@@ -469,24 +472,29 @@ enum PanelMetrics {
 
     /// The footer at rest: today's spend, the control, and nothing else.
     ///
-    /// **`22`, at every connected form** — every product count, every window
+    /// **`38`, at every connected form** — every product count, every window
     /// count, and every share. It is the only closed height the footer has:
     /// no window speaks, because there is no threshold for one to cross
     /// (`quota-footer-v2.md` §4), so nothing the machine observes changes this
     /// figure at all.
-    static let restingFooterHeight: CGFloat = quotaFoldControlSize
+    ///
+    /// **The spend line is `32` now, not `16`.** It draws the same bar the
+    /// Recent seam does — ``recentSeamHeight`` — so the two closing lines
+    /// this panel has match, and its own hover reaches the whole line rather
+    /// than the `16pt` chevron alone.
+    static let restingFooterHeight: CGFloat = recentSeamHeight
         + footerBottomMargin
-    /// The disclosure at the trailing end of the footer's spend line.
+    /// The chevron glyph's own square, inside the spend line's `32pt` bar.
     static let quotaFoldControlSize: CGFloat = 16
 
     /// Footer height: the resting line, or the table somebody opened.
     ///
-    /// **`22`, or `19W + 30P + 17`** (`quota-footer-v2.md` §2). The opened form
-    /// composes as the spend line and its gap (`16 + 9`), then one group per
+    /// **`38`, or `19W + 30P + 33`** (`quota-footer-v2.md` §2). The opened form
+    /// composes as the spend line and its gap (`32 + 9`), then one group per
     /// product — a caption line carrying a badge at `16`, and `19` for each of
     /// its windows — with `14` of air between groups and `6` below the last
-    /// line. Multiplied out that is `31 + Σ(16 + 19w) + 14(P − 1) + …`, which
-    /// is `19W + 30P + 17`.
+    /// line. Multiplied out that is `47 + Σ(16 + 19w) + 14(P − 1) + …`, which
+    /// is `19W + 30P + 33`.
     ///
     /// **Nothing connected is no footer at all**: no products, no windows and
     /// no tokens is nothing to say, and a wing with nothing to say is removed
@@ -499,7 +507,7 @@ enum PanelMetrics {
         guard productCount > 0 else { return 0 }
         guard isExpanded else { return restingFooterHeight }
 
-        return quotaFoldControlSize
+        return recentSeamHeight
             + footerRuleSpacing
             + CGFloat(productCount) * productBadgeHeight
             + CGFloat(windowCount) * footerWindowRowHeight
@@ -1086,7 +1094,7 @@ enum PanelMetrics {
 
     /// The notch-less pill: **one width in every connected state**.
     ///
-    /// `250` whatever is running, whatever is waiting, however many rows are
+    /// `230` whatever is running, whatever is waiting, however many rows are
     /// open and however long the reading is.
     ///
     /// **The two forms are inverses, and this is the half that cannot move its
@@ -1116,12 +1124,12 @@ enum PanelMetrics {
         status == .disconnected ? disconnectedPillWidth : pillBodyWidth
     }
 
-    /// `250`, the width above.
+    /// `230`, the width above.
     ///
     /// Stated rather than composed, because it is the *sum* that is the
     /// contract here and the middle is what absorbs everything else. See
     /// ``pillMiddleWidth(trailing:)``.
-    static let pillBodyWidth: CGFloat = 250
+    static let pillBodyWidth: CGFloat = 230
 
     /// `41` — the mark, and a margin either side of it.
     static var disconnectedPillWidth: CGFloat {
@@ -1266,7 +1274,7 @@ enum PanelMetrics {
 
     /// The width an open row's body is drawn at.
     ///
-    /// `700 − 2 × 12`, which is also `688 − 2 × 6`: the row block inside the
+    /// `610 − 2 × 12`, which is also `598 − 2 × 6`: the row block inside the
     /// list's own scroller, minus the row's own padding. It is a derived figure
     /// and has been one since V1 — the panel does not move at any agent or
     /// product count (`colour-v2.md` §3).
@@ -1343,9 +1351,9 @@ enum PanelMetrics {
     /// nil while expanded), so the leading side can only be widened by widening
     /// both. The trailing side wants a gear and no more, and never binds here.
     ///
-    /// The branch is `700` at every cut-out this product meets, and now at
+    /// The branch is `610` at every cut-out this product meets, and now at
     /// every agent count too: a side asks `53.8`, so the baseline is passed
-    /// only where the cut-out is wider than `700 − 107.6 = 592.4`, well past
+    /// only where the cut-out is wider than `610 − 107.6 = 502.4`, well past
     /// the widest cut-out on any Mac. `expandedNotchClearance` therefore stays
     /// as the guard that this band clears the hardware and stops being the
     /// rule that decides a width.

@@ -37,11 +37,12 @@ enum NotchPalette {
         /// The bright end does *not* come from here: it is the ink's own lit
         /// colour, unlifted, because there brightness is the signal itself.
         ///
-        /// **Always lifted off black, never off a row's own fill.** A session
-        /// row's background no longer brightens under the pointer or while
-        /// pressed -- hover and press are a border and a halo now, drawn on
-        /// top, so a tile sitting on the row is always sitting on the same
-        /// black the panel itself is.
+        /// **Always lifted off black, never off a row's own fill.** A live
+        /// row does wash a little under the pointer or while pressed
+        /// (``RowEmphasis``), but the lift here is measured off the raw
+        /// channel values regardless, so a tile sitting on the row never
+        /// itself brightens with it -- it stays the one badge on the surface
+        /// that does not answer to hover.
         var chipFill: Color {
             Color(
                 red: min(1, offRed + Self.chipLift),
@@ -127,36 +128,45 @@ enum NotchPalette {
         red: 0x9A / 255, green: 0x9A / 255, blue: 0x9E / 255
     )
 
-    /// What a row draws instead of a fill, now that hover and press no longer
-    /// repaint its black.
+    /// What a row draws under the pointer, and it is not one answer: a live
+    /// row washes, a utility bar does not.
     ///
-    /// **A border and a halo, both in ``themeInk``'s lit colour, never a
-    /// change to the row's own ground.** The row was `#2B2B2E` under the
-    /// pointer and `#3A3A3D` held down; both were a flat rectangle appearing
-    /// and disappearing in a single frame, and at a retired row's 40 pt or the
-    /// Recent seam's 32 pt that rectangle read as a bar rather than a
-    /// highlight. Tracing the edge instead costs nothing at any height, and it
-    /// is the app's own colour doing the answering rather than a grey invented
-    /// for the occasion.
+    /// **A live session row fills, faintly, in ``themeInk``'s lit colour.**
+    /// It tried a border and a halo for a while — traced the edge instead of
+    /// repainting the ground — and that read as a wire drawn around the row
+    /// rather than as the row answering. A fill is back, but not the flat
+    /// `#2B2B2E` it was before: this one is the app's own ink at a few points
+    /// of opacity, so it is still black doing the answering, only barely
+    /// lifted, never a grey invented for the occasion.
     ///
-    /// **Two weights.** A live session row and the row held open for an
-    /// answer get the full pair; the Recent seam and a retired row get the
-    /// dimmer border alone and no halo at all -- omitted, not a fainter copy,
-    /// because a disclosure toggle and a finished run are not the main event.
+    /// **The Recent seam, a retired row, and the footer's own line never
+    /// fill.** All three are bars, not cards — full width, no room either
+    /// side for a wash to read as a shape rather than a stripe.
+    ///
+    /// A retired row still takes a short mark of ``themeInk`` at its leading
+    /// edge, because it is one row of a list and the mark says which row the
+    /// pointer is on. **The two folding bars take no mark at all**: nothing
+    /// stacks under them for a leading-edge flag to pick out, so the flag read
+    /// as a bar growing in front of a heading. They answer the pointer with
+    /// the brightened label and chevron alone.
     enum RowEmphasis {
-        static let hoverBorderOpacity: Double = 0.16
-        static let pressedBorderOpacity: Double = 0.32
-        static let hoverGlowOpacity: Double = 0.10
-        static let pressedGlowOpacity: Double = 0.16
-        static let hoverGlowRadius: CGFloat = 16
-        static let pressedGlowRadius: CGFloat = 10
+        /// A live session row and the row held open for an answer: the one
+        /// pair on this panel that fills.
+        static let sessionHoverFillOpacity: Double = 0.08
+        static let sessionPressedFillOpacity: Double = 0.16
 
-        /// The Recent seam and a retired row: the same ink, a lighter hand.
-        static let utilityHoverBorderOpacity: Double = 0.10
-        static let utilityPressedBorderOpacity: Double = 0.20
+        /// A retired row: a mark at the leading edge in place of the fill
+        /// above, `2.5` pt wide and inset a `9` pt margin from top and
+        /// bottom -- clear of the bar's own rounded corners at every height
+        /// it is drawn at.
+        static let utilityAccentHoverOpacity: Double = 0.5
+        static let utilityAccentPressedOpacity: Double = 0.85
+        static let utilityAccentWidth: CGFloat = 2.5
+        static let utilityAccentLeadingInset: CGFloat = 3
+        static let utilityAccentVerticalInset: CGFloat = 9
 
         /// Ease-in-out both ways -- the same gentle acceleration and
-        /// deceleration whether the border is arriving or leaving -- and
+        /// deceleration whether the emphasis is arriving or leaving -- and
         /// still faster to leave than to arrive, the one asymmetry worth
         /// keeping.
         static let hoverEnterDuration: Double = 0.13
@@ -837,7 +847,7 @@ struct RotatingProjectName: View {
     /// Every Project with an active row, in the panel's own order,
     /// deduplicated, first occurrence winning.
     let names: [String]
-    /// What `250` has left once the anchored ends are taken out.
+    /// What `230` has left once the anchored ends are taken out.
     let width: CGFloat
 
     var body: some View {

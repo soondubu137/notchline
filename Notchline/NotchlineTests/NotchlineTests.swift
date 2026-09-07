@@ -8,7 +8,7 @@ import Testing
 struct NotchlineTests {
     /// **The notch-less pill is one width in every connected state.**
     ///
-    /// `250` whatever the status, however many rows are open, however many
+    /// `230` whatever the status, however many rows are open, however many
     /// subagents are in flight, at any menu bar height and whatever the reading
     /// says. V1 answered to all four of those: the marks it drew, the word it
     /// was saying, the column each product had open and the digits in the
@@ -41,7 +41,7 @@ struct NotchlineTests {
                 }
             }
         }
-        #expect(widths == [250])
+        #expect(widths == [230])
         // Height still follows the menu bar; only width was ever loose.
         #expect(heights == [46, 38, 24])
 
@@ -79,11 +79,11 @@ struct NotchlineTests {
             )
         }
         for (text, published) in [
-            (nil, CGFloat(176.2)),
-            ("1:23", 140.2),
-            ("12:05", 132.2),
-            ("1:00:00", 120.2),
-            ("10:00:00", 112.2)
+            (nil, CGFloat(156.2)),
+            ("1:23", 120.2),
+            ("12:05", 112.2),
+            ("1:00:00", 100.2),
+            ("10:00:00", 92.2)
         ] as [(String?, CGFloat)] {
             #expect(abs(middle(text) - published) < 0.05)
         }
@@ -144,7 +144,7 @@ struct NotchlineTests {
         #expect(notched(sessionCount: 3, reading: "12:05") == 312)
 
         // The pill, both of its two widths.
-        #expect(PanelMetrics.fixedCompactWidth(for: .running) == 250)
+        #expect(PanelMetrics.fixedCompactWidth(for: .running) == 230)
         #expect(PanelMetrics.fixedCompactWidth(for: .disconnected) == 41)
     }
 
@@ -276,7 +276,7 @@ struct NotchlineTests {
                 sessionCount: 3
             ).width
         }
-        #expect(Set((1 ... 5).map(pill)) == [250])
+        #expect(Set((1 ... 5).map(pill)) == [230])
     }
 
     /// The collapsed surface reports on products, not on us.
@@ -2016,7 +2016,7 @@ struct NotchlineTests {
         #expect(spent.spokenTimer == "unavailable")
     }
 
-    /// **The footer is `22` for every connected form**, and there is no second
+    /// **The footer is `38` for every connected form**, and there is no second
     /// closed height.
     ///
     /// This replaces `aFoldedFooterIsTheSameHeightForEveryShape`, which pinned
@@ -2025,7 +2025,7 @@ struct NotchlineTests {
     /// the claim is unconditional — every product count, every window count,
     /// and, by `noShareReachesTheClosedFooter`, every share.
     @Test @MainActor
-    func theFooterIsTwentyTwoForEveryConnectedForm() {
+    func theFooterIsThirtyEightForEveryConnectedForm() {
         func panelHeight(_ shape: [FooterRule], expanded: Bool) -> CGFloat {
             PanelMetrics.referenceCompactHeight
                 + PanelMetrics.expandedContentHeight(
@@ -2037,8 +2037,8 @@ struct NotchlineTests {
         }
 
         for shape in Self.everyFooterShape {
-            #expect(PanelMetrics.footerHeight(rules: shape) == 22)
-            #expect(panelHeight(shape, expanded: false) == 308)
+            #expect(PanelMetrics.footerHeight(rules: shape) == 38)
+            #expect(panelHeight(shape, expanded: false) == 324)
         }
 
         // Nothing connected is no footer, so there is nothing for the control
@@ -2105,7 +2105,7 @@ struct NotchlineTests {
         )
     }
 
-    /// The opened table is `19W + 30P + 17`, composed as the view lays it out.
+    /// The opened table is `19W + 30P + 33`, composed as the view lays it out.
     ///
     /// Written longhand here rather than restating the closed form in
     /// `PanelMetrics`, so this is a claim about what is drawn: the spend line
@@ -2117,7 +2117,7 @@ struct NotchlineTests {
         for shape in Self.everyFooterShape {
             let windows = shape.reduce(0) { $0 + $1.windows.count }
             let products = shape.count
-            let drawn = PanelMetrics.quotaFoldControlSize
+            let drawn = PanelMetrics.recentSeamHeight
                 + PanelMetrics.footerRuleSpacing
                 + CGFloat(products) * PanelMetrics.productBadgeHeight
                 + CGFloat(windows)
@@ -2126,25 +2126,25 @@ struct NotchlineTests {
                 + CGFloat(products - 1) * PanelMetrics.footerCaptionHeight
             let opened = PanelMetrics.footerHeight(rules: shape, isExpanded: true)
 
-            #expect(opened == 19 * CGFloat(windows) + 30 * CGFloat(products) + 17)
+            #expect(opened == 19 * CGFloat(windows) + 30 * CGFloat(products) + 33)
             // And the last line stands the panel's own margin above the edge,
             // in the opened form and the closed one alike.
             #expect(opened - drawn == PanelMetrics.footerBottomMargin)
             #expect(
                 PanelMetrics.footerHeight(rules: shape)
-                    - PanelMetrics.quotaFoldControlSize
+                    - PanelMetrics.recentSeamHeight
                     == PanelMetrics.footerBottomMargin
             )
         }
 
         // The five forms `quota-footer-v2.md` §6 tabulates.
-        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 66)
-        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 85)
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 82)
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 101)
         #expect(
             PanelMetrics.footerHeight(
                 rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                 isExpanded: true
-            ) == 134
+            ) == 150
         )
     }
 
@@ -2298,7 +2298,7 @@ struct NotchlineTests {
     /// it leave — the exit that never comes and the entry that gets swallowed
     /// next time. The control now rides the spend line, which is the footer's
     /// *first* line, so the table opens beneath it and closing leaves the
-    /// pointer between `6` and `22` above the new bottom edge — inside it
+    /// pointer between `6` and `38` above the new bottom edge — inside it
     /// (`quota-footer-v2.md` §5).
     ///
     /// The second half keeps the guard honest: a resize that really does leave
@@ -2354,7 +2354,7 @@ struct NotchlineTests {
         )
         let chevron = opened.minY
             + table
-            - PanelMetrics.quotaFoldControlSize / 2
+            - PanelMetrics.recentSeamHeight / 2
         let pointer = NSPoint(x: opened.midX, y: chevron)
         #expect(
             OverlayPanelLayout.bodyContainsPointer(
@@ -2530,7 +2530,7 @@ struct NotchlineTests {
         #expect(store.showsQuotaFoldControl)
     }
 
-    /// **The panel is `308` on every connected form**, and only the user can
+    /// **The panel is `324` on every connected form**, and only the user can
     /// take it past that.
     ///
     /// This replaces `theDualProductPanelIsTallerByTheExtraFooterRules`, which
@@ -2544,19 +2544,19 @@ struct NotchlineTests {
     /// not reached by owning a second product, by a window running low, or by
     /// a reading failing.
     @Test @MainActor
-    func thePanelIsThreeHundredAndEightOnEveryConnectedForm() {
+    func thePanelIsThreeHundredAndTwentyFourOnEveryConnectedForm() {
         for shape in Self.everyFooterShape {
             let closed = PanelMetrics.expandedContentHeight(
                 liveRowCount: 3,
                 footerHeight: PanelMetrics.footerHeight(rules: shape)
             )
-            #expect(PanelMetrics.referenceCompactHeight + closed == 308)
+            #expect(PanelMetrics.referenceCompactHeight + closed == 324)
 
             let opened = PanelMetrics.expandedContentHeight(
                 liveRowCount: 3,
                 footerHeight: PanelMetrics.footerHeight(rules: shape, isExpanded: true)
             )
-            #expect(PanelMetrics.referenceCompactHeight + opened > 308)
+            #expect(PanelMetrics.referenceCompactHeight + opened > 324)
         }
 
         // The two figures `quota-footer-v2.md` §6 tabulates for an opened
@@ -2569,7 +2569,7 @@ struct NotchlineTests {
                         rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                         isExpanded: true
                     )
-                ) == 420
+                ) == 436
         )
     }
 
@@ -3521,13 +3521,13 @@ struct NotchlineTests {
         #expect(PanelMetrics.sessionRowGutter == 6)
 
         // The block itself is wider than the panel's content box by the two
-        // gutters it gives back: 700 - 6 - 6, against the header's 700 - 12 - 12.
+        // gutters it gives back: 610 - 6 - 6, against the header's 610 - 12 - 12.
         let block = PanelMetrics.expandedBaselineWidth
             - PanelMetrics.sessionRowGutter * 2
         let contentBox = PanelMetrics.expandedBaselineWidth
             - PanelMetrics.expandedHorizontalPadding * 2
-        #expect(block == 688)
-        #expect(contentBox == 676)
+        #expect(block == 598)
+        #expect(contentBox == 586)
     }
 
     /// Rows say which product they are for as long as both products are connected.
@@ -5945,7 +5945,7 @@ struct NotchlineTests {
             compactHeight: 38
         )
 
-        #expect(noNotchSize.width == 700)
+        #expect(noNotchSize.width == 610)
         #expect(notchedSize.width == noNotchSize.width)
         #expect(notchedSingle.width == noNotchSize.width)
         #expect(noNotchSize.height == 24 + PanelMetrics.expandedContentHeight)
@@ -6062,7 +6062,7 @@ struct NotchlineTests {
     /// removed one term from the sum: first the longest status name the band
     /// could reach, then the columns the totals decomposed into
     /// (`colour-v2.md` §3). The band was the only term on either side that read
-    /// an agent count, so **the width series is one number** — `700` at every
+    /// an agent count, so **the width series is one number** — `610` at every
     /// cut-out this product meets, whatever is connected and whatever is
     /// running.
     ///
@@ -6073,7 +6073,7 @@ struct NotchlineTests {
         // The four cut-outs this app has measured, and no cut-out at all.
         for occlusion in [0, 127, 185, 200, 220] as [CGFloat] {
             #expect(
-                PanelMetrics.expandedWidth(centerOcclusionWidth: occlusion) == 700,
+                PanelMetrics.expandedWidth(centerOcclusionWidth: occlusion) == 610,
                 "at \(occlusion)"
             )
         }
@@ -6083,12 +6083,12 @@ struct NotchlineTests {
         // drawn digit runs over the board's nominal `6.6`.
         #expect(abs(PanelMetrics.expandedLeadingSideWidth - 53.8) < 0.05)
 
-        // A side asking `53.8` puts the cut-out branch past `592.4`, well past
+        // A side asking `53.8` puts the cut-out branch past `502.4`, well past
         // the widest cut-out on any Mac -- so `expandedNotchClearance`
         // is the guard that the band clears the hardware and has stopped being
         // the rule that decides a width.
         #expect(
-            700 - PanelMetrics.expandedLeadingSideWidth * 2 > 592,
+            610 - PanelMetrics.expandedLeadingSideWidth * 2 > 502,
             "the baseline binds at every cut-out that exists"
         )
     }
@@ -24255,7 +24255,7 @@ for line in sys.stdin:
         // rule this test was always about, now holding by construction rather
         // than by arithmetic.
         #expect(restingWidth == 41)
-        #expect(oneOpen == 250)
+        #expect(oneOpen == 230)
         #expect(oneOpen > restingWidth)
         #expect(
             PanelMetrics.fixedCompactWidth(for: .running) == oneOpen

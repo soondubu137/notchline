@@ -858,35 +858,61 @@ private struct RecentSessionSection: View {
 private struct ExpandedPanelFooter: View {
     @EnvironmentObject private var store: MonitorStore
 
+    @State private var isHovered = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: PanelMetrics.footerRuleSpacing) {
+        VStack(spacing: PanelMetrics.footerRuleSpacing) {
             if store.showsQuotaFoldControl {
                 spendLine
 
                 if store.isQuotaExpanded {
                     table
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
                 }
             }
 
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
         .frame(height: store.expandedFooterHeight, alignment: .top)
-        .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
     }
 
-    /// The footer's first line, always drawn, carrying the control.
+    /// The footer's first line, always drawn, carrying the reading and the
+    /// disclosure.
+    ///
+    /// **The same bar the Recent seam is** — the same `32` pt height, the
+    /// same width, and the same hit target: the whole line toggles the
+    /// table now, not the `16` pt chevron alone. A number that resizes the
+    /// panel is still a trap for anyone reaching in to read it, but that
+    /// trap was already set the moment the line sat beside a control that
+    /// did the same thing on a click anywhere near it — matching the seam
+    /// makes the one affordance honest instead of splitting it in two.
     private var spendLine: some View {
-        HStack(spacing: 0) {
-            FooterSpend(store.footerToday)
-
-            Spacer(minLength: 0)
-
-            QuotaFoldChevron(isExpanded: store.isQuotaExpanded)
+        Button {
+            store.toggleQuotaTable()
+        } label: {
+            FooterSpendLineContent(
+                isExpanded: store.isQuotaExpanded,
+                isHovered: isHovered
+            )
         }
-        // The control is a point taller than the caption it rides. The footer's
-        // own height does not move: the trailing `Spacer` absorbs it.
-        .frame(height: PanelMetrics.quotaFoldControlSize)
+        .buttonStyle(SessionRowButtonStyle())
+        .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width))
+        .frame(height: PanelMetrics.recentSeamHeight)
+        // **Centred on the panel, open or shut.** The line is as wide as the
+        // seam is and the seam is centred in the panel's own width; left to
+        // itself the footer's stack was only as wide as its widest child, so
+        // the line sat on the panel's leading edge while the table was folded
+        // and jumped to centre the moment the table — which does fill the
+        // width — appeared under it. Claiming the width here means the stack
+        // is the panel's width in both states, and the line does not move.
+        .frame(maxWidth: .infinity)
+        .onHover { isHovered = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Today, \(store.footerToday.spokenText)")
+        .accessibilityValue(store.isQuotaExpanded ? "Expanded" : "Collapsed")
+        .accessibilityAddTraits(.isButton)
     }
 
     /// Two levels, because the windows belong to products.
@@ -900,6 +926,44 @@ private struct ExpandedPanelFooter: View {
                 FooterProductGroup(rule: rule)
             }
         }
+    }
+}
+
+/// The spend line's own drawing: the same shape the Recent seam draws,
+/// carrying a reading and a chevron instead of a count and a label.
+private struct FooterSpendLineContent: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    let isExpanded: Bool
+    let isHovered: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.black)
+
+            // The seam's own layout, spacing included: label, rule, control.
+            HStack(spacing: 8) {
+                FooterSpend(store.footerToday)
+
+                FoldSeamRule(isVisible: isExpanded)
+
+                QuotaFoldChevron(isExpanded: isExpanded, isHovered: isHovered)
+            }
+            .padding(.horizontal, PanelMetrics.sessionRowPadding)
+        }
+        .contentShape(Rectangle())
+        .frame(
+            maxWidth: .infinity,
+            minHeight: PanelMetrics.recentSeamHeight,
+            maxHeight: PanelMetrics.recentSeamHeight
+        )
+        .animation(
+            isHovered
+                ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
+                : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
+            value: isHovered
+        )
     }
 }
 
@@ -1002,43 +1066,24 @@ private struct FooterWindowRow: View {
 /// hangs from the notch and can only grow downward — the chevron points the way
 /// the panel will move, which is also the "show more" every list uses.
 ///
-/// The chevron is the whole hit target. The rest of the line is a reading —
-/// today's tokens — and a number that resizes the panel when clicked is a trap
-/// for anyone reaching in to select or simply read it; the affordance and the
-/// target are the same `16pt` square instead. Being the only hit target, it
-/// carries the gear's whole hover treatment — the wash behind it and the
-/// brighter glyph — so the square it answers to is visible before the click,
-/// not guessed at.
+/// **A drawing, not its own control.** The spend line it rides is the hit
+/// target and the hover source now, the way the Recent seam's own chevron
+/// already was — this glyph just answers to both, brightening and turning
+/// exactly as that line's `isHovered` and `isExpanded` say.
 private struct QuotaFoldChevron: View {
-    @EnvironmentObject private var store: MonitorStore
-
-    @State private var isHovered = false
-
     let isExpanded: Bool
+    let isHovered: Bool
 
     var body: some View {
-        Button {
-            store.toggleQuotaTable()
-        } label: {
-            Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(isHovered ? NotchPalette.sessionTitle : NotchPalette.label)
-                .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                .frame(
-                    width: PanelMetrics.quotaFoldControlSize,
-                    height: PanelMetrics.quotaFoldControlSize
-                )
-                .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Color.white.opacity(isHovered ? 0.12 : 0))
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.16), value: isExpanded)
-        .animation(.easeOut(duration: 0.12), value: isHovered)
-        .accessibilityLabel(isExpanded ? "Hide limits" : "Show limits")
+        Image(systemName: "chevron.down")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(isHovered ? NotchPalette.sessionTitle : NotchPalette.label)
+            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            .frame(
+                width: PanelMetrics.quotaFoldControlSize,
+                height: PanelMetrics.quotaFoldControlSize
+            )
+            .animation(.easeOut(duration: 0.16), value: isExpanded)
     }
 }
 
@@ -1183,24 +1228,18 @@ private struct OpenRow: View {
             // pointer arrived, because it is always the one thing on this
             // surface being looked at. (Adjacent, not done here: this is a
             // committed, sunken state rather than a transient one under the
-            // pointer, and the pressed pair -- see ``NotchPalette/RowEmphasis``
-            // -- would say that more precisely than reusing hover's.)
+            // pointer, and the pressed weight -- see
+            // ``NotchPalette/RowEmphasis`` -- would say that more precisely
+            // than reusing hover's.)
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(
+                        .fill(
                             NotchPalette.themeInk.on.opacity(
-                                NotchPalette.RowEmphasis.hoverBorderOpacity
-                            ),
-                            lineWidth: 1
+                                NotchPalette.RowEmphasis.sessionHoverFillOpacity
+                            )
                         )
-                )
-                .shadow(
-                    color: NotchPalette.themeInk.on.opacity(
-                        NotchPalette.RowEmphasis.hoverGlowOpacity
-                    ),
-                    radius: NotchPalette.RowEmphasis.hoverGlowRadius
                 )
 
             VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
@@ -2180,7 +2219,7 @@ private struct RecentSeam: View {
             SeamContent(count: count, isHovered: isHovered)
         }
         .buttonStyle(SessionRowButtonStyle())
-        .frame(maxWidth: .infinity)
+        .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width))
         .frame(height: PanelMetrics.recentSeamHeight)
         .onHover { isHovered = $0 }
         .accessibilityLabel("Recent, \(count) session\(count == 1 ? "" : "s")")
@@ -2201,13 +2240,6 @@ private struct SeamContent: View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(
-                            NotchPalette.themeInk.on.opacity(borderOpacity),
-                            lineWidth: 1
-                        )
-                )
 
             HStack(spacing: 8) {
                 // The caption idiom exactly, separator included.
@@ -2216,12 +2248,7 @@ private struct SeamContent: View {
                     .foregroundStyle(isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label)
                     .fixedSize()
 
-                // **The list's own top rule drawn again**, and it stops short
-                // of the control rather than running under it: a 1 pt line
-                // through a chevron reads as a strike, not as a rule.
-                Rectangle()
-                    .fill(Color.white.opacity(0.15))
-                    .frame(height: 1)
+                FoldSeamRule(isVisible: store.isRecentExpanded)
 
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .medium))
@@ -2258,13 +2285,55 @@ private struct SeamContent: View {
     }
 
     private var isEmphasized: Bool { isHovered || isPressed }
+}
 
-    /// The Recent seam and a retired row take the dimmer of the two border
-    /// weights, and no halo at all — see ``NotchPalette/RowEmphasis``.
-    private var borderOpacity: Double {
-        if isPressed { return NotchPalette.RowEmphasis.utilityPressedBorderOpacity }
-        if isHovered { return NotchPalette.RowEmphasis.utilityHoverBorderOpacity }
-        return 0
+/// The rule a folding bar draws between its label and its chevron.
+///
+/// **It says the section is open, not that the section exists.** The Recent
+/// seam used to draw it at rest and the footer's spend line never drew it at
+/// all, which read as two different kinds of bar; they are one kind, so they
+/// draw one mark, and the mark belongs to the state that has a list under it
+/// to rule off. Folded, there is nothing below to separate and the line is
+/// decoration on a closed row.
+///
+/// It keeps its width while hidden so nothing beside it moves on the way in
+/// or out — the label and the chevron stay where they were — and it grows and
+/// retreats from the label's edge, which is the edge a rule is drawn from. It
+/// still stops short of the control rather than running under it: a 1 pt line
+/// through a chevron reads as a strike, not as a rule.
+private struct FoldSeamRule: View {
+    let isVisible: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.15))
+            .frame(height: 1)
+            .scaleEffect(x: isVisible ? 1 : 0, anchor: .leading)
+            .opacity(isVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.2), value: isVisible)
+    }
+}
+
+/// The mark a retired row takes instead of a fill: a short accent at its own
+/// leading edge rather than a repainted ground — see
+/// ``NotchPalette/RowEmphasis``.
+///
+/// **The two folding bars no longer take it.** The Recent seam and the
+/// footer's spend line are not rows in a list: nothing under them lines up
+/// with a mark at the panel's leading edge, so the accent read as a bar
+/// growing in front of a heading rather than as one row of many answering the
+/// pointer. Their chevron and their label already brighten under it, which is
+/// the whole of what hover has to say there.
+private struct UtilityHoverAccent: View {
+    let opacity: Double
+
+    var body: some View {
+        Capsule(style: .continuous)
+            .fill(NotchPalette.themeInk.on)
+            .frame(width: NotchPalette.RowEmphasis.utilityAccentWidth)
+            .padding(.vertical, NotchPalette.RowEmphasis.utilityAccentVerticalInset)
+            .padding(.leading, NotchPalette.RowEmphasis.utilityAccentLeadingInset)
+            .opacity(opacity)
     }
 }
 
@@ -2333,13 +2402,6 @@ private struct RetiredRowContent: View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(
-                            NotchPalette.themeInk.on.opacity(borderOpacity),
-                            lineWidth: 1
-                        )
-                )
 
             HStack(spacing: 12) {
                 breadcrumb
@@ -2361,6 +2423,9 @@ private struct RetiredRowContent: View {
             minHeight: PanelMetrics.retiredRowHeight,
             maxHeight: PanelMetrics.retiredRowHeight
         )
+        .overlay(alignment: .leading) {
+            UtilityHoverAccent(opacity: accentOpacity)
+        }
         .animation(
             isHovered
                 ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
@@ -2414,11 +2479,11 @@ private struct RetiredRowContent: View {
 
     private var isEmphasized: Bool { isHovered || isPressed }
 
-    /// The Recent seam and a retired row take the dimmer of the two border
-    /// weights, and no halo at all — see ``NotchPalette/RowEmphasis``.
-    private var borderOpacity: Double {
-        if isPressed { return NotchPalette.RowEmphasis.utilityPressedBorderOpacity }
-        if isHovered { return NotchPalette.RowEmphasis.utilityHoverBorderOpacity }
+    /// The Recent seam and a retired row take the dimmer of the two accent
+    /// weights — see ``NotchPalette/RowEmphasis``.
+    private var accentOpacity: Double {
+        if isPressed { return NotchPalette.RowEmphasis.utilityAccentPressedOpacity }
+        if isHovered { return NotchPalette.RowEmphasis.utilityAccentHoverOpacity }
         return 0
     }
 }
@@ -2437,14 +2502,7 @@ private struct SessionRowContent: View {
                 .fill(Color.black)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(
-                            NotchPalette.themeInk.on.opacity(borderOpacity),
-                            lineWidth: 1
-                        )
-                )
-                .shadow(
-                    color: NotchPalette.themeInk.on.opacity(glowOpacity),
-                    radius: glowRadius
+                        .fill(NotchPalette.themeInk.on.opacity(fillOpacity))
                 )
 
             HStack(spacing: 12) {
@@ -2507,24 +2565,15 @@ private struct SessionRowContent: View {
 
     private var isEmphasized: Bool { isHovered || isPressed }
 
-    /// The row's edge, in ``NotchPalette/themeInk``'s lit colour — see
-    /// ``NotchPalette/RowEmphasis``. No longer a change to the row's own
-    /// fill, which stays black at every state so a tile drawn on it never has
-    /// to lift for anything but the panel's own black.
-    private var borderOpacity: Double {
-        if isPressed { return NotchPalette.RowEmphasis.pressedBorderOpacity }
-        if isHovered { return NotchPalette.RowEmphasis.hoverBorderOpacity }
+    /// The row's own wash, in ``NotchPalette/themeInk``'s lit colour at a
+    /// few points of opacity — see ``NotchPalette/RowEmphasis``. Still the
+    /// app's own ink doing the answering, just as a fill again rather than a
+    /// border, and still never what a tile sitting on the row measures its
+    /// own lift against.
+    private var fillOpacity: Double {
+        if isPressed { return NotchPalette.RowEmphasis.sessionPressedFillOpacity }
+        if isHovered { return NotchPalette.RowEmphasis.sessionHoverFillOpacity }
         return 0
-    }
-    private var glowOpacity: Double {
-        if isPressed { return NotchPalette.RowEmphasis.pressedGlowOpacity }
-        if isHovered { return NotchPalette.RowEmphasis.hoverGlowOpacity }
-        return 0
-    }
-    private var glowRadius: CGFloat {
-        isPressed
-            ? NotchPalette.RowEmphasis.pressedGlowRadius
-            : NotchPalette.RowEmphasis.hoverGlowRadius
     }
 }
 
