@@ -612,6 +612,40 @@ struct NotchlineTests {
         }
     }
 
+    /// Page changes must not offer a different size to the content-sized
+    /// Window scene. Exercise the real SwiftUI trees, including the tall page.
+    @Test @MainActor
+    func onboardingPagesKeepOneWindowSize() {
+        let store = MonitorStore(preferences: nil)
+        for page in OnboardingView.Page.allCases {
+            let host = NSHostingView(rootView: OnboardingView(page: page).environmentObject(store))
+            let expected = NSSize(width: 580, height: 840)
+            host.setFrameSize(expected)
+            host.layoutSubtreeIfNeeded()
+            #expect(host.fittingSize == expected)
+        }
+    }
+
+    /// The page-three pins belong in the middle of the card's padding,
+    /// clear of both the card stroke and the plate, at their actual badge size.
+    @Test @MainActor
+    func openedSpecimenPinsSitInTheMiddleOfTheCardMargins() {
+        let figures: [(pins: [AnatomyPin], size: CGSize)] = [
+            (OpenCommandAnatomy().pins, OpenCommandAnatomy().specimenSize),
+            (OpenQuestionAnatomy().pins, OpenQuestionAnatomy().specimenSize),
+            (RecentQueueAnatomy().pins, RecentQueueAnatomy().specimenSize)
+        ]
+        for figure in figures {
+            let inset = (OnboardingLayout.cardWidth - figure.size.width) / 2
+            for pin in figure.pins where pin.x < 0 || pin.x > figure.size.width {
+                let centre = inset + pin.x
+                let distance = pin.x < 0 ? centre : OnboardingLayout.cardWidth - centre
+                #expect(abs(distance - inset / 2) < 0.01)
+                #expect(distance - AnatomyMetrics.pinSize / 2 >= 14)
+            }
+        }
+    }
+
     /// Page three's three specimens: the two shapes a request arrives in, and
     /// a queue that is a sequence rather than three copies of one moment.
     ///

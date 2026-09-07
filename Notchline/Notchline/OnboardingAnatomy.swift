@@ -628,19 +628,6 @@ struct AnatomyPin: Identifiable {
     /// What the key says about it. Two to four words: the picture is the
     /// explanation, and this only has to name the part.
     let label: String
-    /// The one thing a name cannot carry. Drawn as a second, dimmer line under
-    /// the label.
-    ///
-    /// **Motion was the original case and is no longer the only one.** A part
-    /// that says something *by moving* cannot be named by a still pin, which is
-    /// what the breathing dot needs; and a part that exists on one kind of
-    /// display and not the other cannot be named by a pin either, because the
-    /// specimen is drawn on one of them. A part that a click *does* something to
-    /// is the third: the pin can name the control, but not that it opens.
-    ///
-    /// Three of them across two figures, and it stays a note rather than
-    /// becoming prose: the picture is still the explanation.
-    var note: String?
 }
 
 enum AnatomyMetrics {
@@ -807,18 +794,9 @@ private struct PinnedFigure<Specimen: View>: View {
                         .font(.system(size: 11))
                         .foregroundStyle(MacOSWindowColor.tertiaryText)
 
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(pin.label)
-                            .font(.system(size: 11))
-                            .foregroundStyle(MacOSWindowColor.secondaryText)
-
-                        if let note = pin.note {
-                            Text(note)
-                                .font(.system(size: 11))
-                                .foregroundStyle(MacOSWindowColor.tertiaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                    Text(pin.label)
+                        .font(.system(size: 11))
+                        .foregroundStyle(MacOSWindowColor.secondaryText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(minHeight: AnatomyMetrics.keyRowHeight, alignment: .leading)
@@ -845,8 +823,7 @@ private struct PinnedFigure<Specimen: View>: View {
 /// the four that went are replaced by what actually stands there now: the two
 /// numerals of the counts column, the Project in the pill's middle, and the
 /// dot that says a finished turn is buried under a mark drawing something
-/// else. The old key's one note moves with its fact: the breath is the dot's
-/// now, which is where it went when the column left.
+/// else. The numbered key names each part without a secondary line.
 struct CollapsedBarAnatomy: View {
     private let store = NotchSpecimen.shut
 
@@ -957,23 +934,14 @@ struct CollapsedBarAnatomy: View {
                 x: middle,
                 y: bottom,
                 leader: .up(stem),
-                label: "The Project",
-                // The one part of this bar that is not on both forms: a notched
-                // display has no middle to give, and says so by leaving the
-                // name out rather than by drawing a wing beside the cut-out
-                // (`compact-view-v2.md` §5.2).
-                note: "Where there is no notch"
+                label: "The Project"
             ),
             AnatomyPin(
                 id: 5,
                 x: dot,
                 y: bottom,
                 leader: .up(stem),
-                label: "A finished turn, unread",
-                // The dot is where the breath went when the session column
-                // left. A still picture cannot say a thing is moving, and this
-                // one says nothing else at all.
-                note: "Breathing: not yet read"
+                label: "A finished turn, unread"
             ),
             AnatomyPin(id: 6, x: timer, y: bottom, leader: .up(stem), label: "Longest turn")
         ]
@@ -1096,32 +1064,28 @@ struct ExpandedPanelAnatomy: View {
         func left(
             _ id: Int,
             _ y: CGFloat,
-            _ label: String,
-            note: String? = nil
+            _ label: String
         ) -> AnatomyPin {
             AnatomyPin(
                 id: id,
                 x: leftMargin * scale,
                 y: y * scale,
                 leader: .right(gutter),
-                label: label,
-                note: note
+                label: label
             )
         }
 
         func right(
             _ id: Int,
             _ y: CGFloat,
-            _ label: String,
-            note: String? = nil
+            _ label: String
         ) -> AnatomyPin {
             AnatomyPin(
                 id: id,
                 x: rightMargin(of: size) * scale,
                 y: y * scale,
                 leader: .left(gutter),
-                label: label,
-                note: note
+                label: label
             )
         }
 
@@ -1143,10 +1107,9 @@ struct ExpandedPanelAnatomy: View {
             ),
             left(4, lastSaid, "The last thing said"),
             // The row's own control, and the one part of either drawing that
-            // does something. `answer-in-notch.md` §3: the mark is the request
-            // and the text is the Thread, so the note names what the click on
-            // *this* reaches rather than what a click on the row does.
-            right(5, firstMark, "Answer it here", note: "Click: the request opens"),
+            // does something: the mark opens this Thread's request
+            // (`answer-in-notch.md` §3).
+            right(5, firstMark, "Answer it here"),
             right(6, secondMark, "Subagents"),
             // The seam between what is running and what has been and gone.
             left(7, seam, "Rows that have left"),
@@ -1204,19 +1167,13 @@ private enum OpenedSpecimen {
     /// The panel's own inset around a row block.
     static var gutter: CGFloat { PanelMetrics.sessionRowGutter }
 
-    /// How far the pin columns stand off the plate, in the drawing's units.
-    ///
-    /// Unscaled, unlike page two's: these figures are placed in drawn units
-    /// throughout, because the plate's own width is what sets the scale rather
-    /// than the other way round.
-    static let margin: CGFloat = 30
+    /// Keep room for the pins within page two's card width. Their centres
+    /// bisect each card margin in drawing units; their badges never scale.
+    static let drawnWidth: CGFloat = 436.8
+    static let margin = (OnboardingLayout.cardWidth - drawnWidth) / 4
 
     /// The clear space a leader crosses, badge edge to plate edge.
     static var gutterToPlate: CGFloat { margin - AnatomyMetrics.pinSize / 2 }
-
-    /// The width the key is drawn across, which is what everything here is
-    /// sized to fit inside.
-    static let keyWidth: CGFloat = 504
 
     /// The plate a figure is drawn on: the panel's width, and the specimen's
     /// own height with the panel's gutter above and below it.
@@ -1228,16 +1185,10 @@ private enum OpenedSpecimen {
         )
     }
 
-    /// One scale for all three figures, derived from the widest thing the page
-    /// draws: the plate, plus a pin column either side of it.
-    ///
-    /// **Bigger than page two's `0.624`, and that is the point of the plate.**
-    /// Page two draws a whole panel and spends its width on a header, a footer
-    /// and two margins; these draw a row, so the same card affords more scale —
-    /// which is what a request body, an option list and an answer row need to
-    /// be read rather than recognised.
+    /// Reserve the pin margins before scaling the plate. Including margins
+    /// in the denominator scaled space that the pins themselves never scale.
     static func scale(plateWidth: CGFloat) -> CGFloat {
-        keyWidth / (plateWidth + margin * 2)
+        drawnWidth / plateWidth
     }
 
     /// Where the answers stand, measured inwards from the row's trailing edge.
@@ -1383,11 +1334,7 @@ struct OpenCommandAnatomy: View {
                 centres?.affirmative,
                 "Approve, or ⏎",
                 scale: scale,
-                body: body,
-                // The one thing the word cannot say: the white ground is not
-                // decoration on the affirmative, it is where `⏎` would land,
-                // and typing moves it (`answer-in-notch.md` §6).
-                note: "White is what ⏎ takes"
+                body: body
             )
         ].compactMap { $0 }
     }
@@ -1397,8 +1344,7 @@ struct OpenCommandAnatomy: View {
         _ x: CGFloat?,
         _ label: String,
         scale: CGFloat,
-        body: OpenRowGeometry,
-        note: String? = nil
+        body: OpenRowGeometry
     ) -> AnatomyPin? {
         guard let x else { return nil }
         return AnatomyPin(
@@ -1408,8 +1354,7 @@ struct OpenCommandAnatomy: View {
                 + AnatomyMetrics.leaderClearance
                 + AnatomyMetrics.pinSize / 2,
             leader: .up(AnatomyMetrics.leaderClearance),
-            label: label,
-            note: note
+            label: label
         )
     }
 }
@@ -1478,10 +1423,7 @@ struct OpenQuestionAnatomy: View {
                         spread: options.spread * scale,
                         foot: 10
                     ),
-                    label: "Its own answers",
-                    // §6.6: a click takes the answer it lands on, and the
-                    // numerals are the keys that do the same.
-                    note: "Or press its number"
+                    label: "Its own answers"
                 )
             )
         }
@@ -1618,10 +1560,7 @@ struct RecentQueueAnatomy: View {
                 x: -OpenedSpecimen.margin,
                 y: (OpenedSpecimen.gutter + firstRow) * scale,
                 leader: .right(OpenedSpecimen.gutterToPlate),
-                label: "Half a live row",
-                // The one thing a still figure cannot say about a queue: these
-                // are not a record, they are still a way back in.
-                note: "Click: it still opens"
+                label: "Half a live row"
             ),
             AnatomyPin(
                 id: 3,

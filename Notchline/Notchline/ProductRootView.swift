@@ -1,23 +1,6 @@
-// First run, as redesigned for macOS 26. See `figma-design.md` §7.
-//
-// One pane, not three. V1 spent a window each on value, consent and
-// confirmation, but the consent is the switch and the confirmation is the row
-// turning green — the other two windows were narration around two controls.
-// Collapsing them leaves room for the thing the flow never explained: what the
-// notch actually draws.
-//
-// It teaches that the way the README figures do, and for the same reason those
-// figures exist: the parts have names, and a still of the real surface with
-// its parts numbered says more than any amount of prose. What does not carry
-// over is their layout — those figures are four thousand pixels wide with a
-// column of callouts either side, and a `532` pt content area would draw that
-// text at four points. So the callouts become pins and a key, and the drawings
-// stay at the size the user will meet them (`OnboardingAnatomy.swift`).
-//
-// It is the Settings window's shapes throughout, because it becomes the
-// Settings window: the same scene shows this view until onboarding completes
-// and `AppSettingsView` afterwards, so the second time it opens nothing has
-// moved.
+// Three first-run pages in one stable macOS window. See `figma-design.md` §7.
+// The specimens use the product's own views with numbered keys. Settings
+// reuses the scene after onboarding completes, at its own content height.
 import AppKit
 import SwiftUI
 
@@ -35,138 +18,86 @@ struct ProductRootView: View {
     }
 }
 
-/// Two pages: the connections, then the notch.
-///
-/// **The teaching outgrew the page it was on.** One window carrying the hero,
-/// both switches, the bar, the five states and the whole panel came to `1026`
-/// pt — past what a 14-inch built-in display leaves under its menu bar, which
-/// put `Start` behind the Dock on the smallest Mac this ships to. Cutting the
-/// drawings back to fit was the wrong economy: what would have gone is the
-/// panel's quota footer and its second row, which are two of the four things
-/// the panel exists to show.
-///
-/// So the flow is two pages of about `380` and `850`, and they divide on the
-/// seam the content already had: **page one asks for something, page two
-/// explains something.** Nothing on the first page needs the second to make
-/// sense — a user who presses `Continue` without reading has connected both
-/// products correctly — and nothing on the second asks for anything, which is
-/// why it can carry a `Back` and be re-read.
-///
-/// The second page is also where every specimen lives, and they are built on
-/// first use (``NotchSpecimen``), so a launch that stops at page one never
-/// composes a panel, a store or a mark.
-private struct OnboardingView: View {
+/// Three pages share one fixed content area and one bottom navigation row.
+/// Only the current page is built, so opening the connection page does not
+/// initialise the specimen stores. Long content scrolls above the controls.
+enum OnboardingLayout {
+    static let width: CGFloat = 580
+    static let height: CGFloat = 840
+    static let horizontalPadding: CGFloat = 24
+    static let cardWidth = width - horizontalPadding * 2
+}
+
+struct OnboardingView: View {
     @EnvironmentObject private var store: MonitorStore
     @State private var page: Page = .connect
 
-    private enum Page {
+    enum Page: CaseIterable {
         case connect
         case read
         case answer
     }
 
+    init(page: Page = .connect) {
+        _page = State(initialValue: page)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            switch page {
-            case .connect:
-                hero
-                connectGroup
-                connectClosing
-            case .read:
-                notchGroup
-                readClosing
-            case .answer:
-                answerGroup
-                answerClosing
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 22) {
+                    switch page {
+                    case .connect:
+                        hero
+                        connectGroup
+                    case .read:
+                        notchGroup
+                    case .answer:
+                        answerGroup
+                    }
+                }
+                .frame(width: OnboardingLayout.cardWidth, alignment: .topLeading)
             }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .id(page)
+
+            navigation
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, OnboardingLayout.horizontalPadding)
         .padding(.top, 20)
         .padding(.bottom, 22)
-        .frame(width: 580, alignment: .leading)
+        .frame(width: OnboardingLayout.width, height: OnboardingLayout.height)
         .background(MacOSWindowColor.windowBackground)
         .background(SettingsWindowChrome(title: "Welcome to Notchline"))
     }
 
-    /// Page one's closing line: the standing statement, the version, and the
-    /// way on.
-    ///
-    /// Same shape as the Settings window's closing row — an explanation with
-    /// the action it is about on the end. ``StandingStatement`` belongs here
-    /// rather than on page two, because this is the page that asks for
-    /// something: what the app will and will not do to the two products is
-    /// what a person deciding whether to flip a switch is deciding on.
-    ///
-    /// The version rides under that statement, in the same place and the same
-    /// view Settings uses (`AppVersionLine`), so the window says it in one form
-    /// before and after onboarding. Page one and not page two: this is the page
-    /// the window opens on, and a build number is a fact about the app rather
-    /// than part of the teaching.
-    private var connectClosing: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(StandingStatement.text)
-                    .settingsFootnote(MacOSWindowColor.tertiaryText)
+    private var navigation: some View {
+        HStack(spacing: 16) {
+            Spacer()
 
-                AppVersionLine()
+            if page != .connect {
+                Button("Back") {
+                    page = page == .answer ? .read : .connect
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
             }
 
-            Button("Continue") {
-                page = .read
+            Button(page == .answer ? "Start" : "Continue") {
+                switch page {
+                case .connect: page = .read
+                case .read: page = .answer
+                case .answer: store.completeOnboarding()
+                }
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
+
         }
     }
 
-    /// Page two's closing line: what page three is for, `Back`, and the way on.
-    private var readClosing: some View {
-        HStack(alignment: .center, spacing: 16) {
-            Text("The mark and the seam both open. Next, what is behind them.")
-                .settingsFootnote(MacOSWindowColor.tertiaryText)
-
-            Button("Back") {
-                page = .connect
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-
-            Button("Continue") {
-                page = .answer
-            }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-        }
-    }
-
-    /// Page three's closing line: where all of this lives afterwards, `Back`,
-    /// and the one action that ends onboarding.
-    private var answerClosing: some View {
-        HStack(alignment: .center, spacing: 16) {
-            Text("All of this is in Settings afterwards, behind the gear.")
-                .settingsFootnote(MacOSWindowColor.tertiaryText)
-
-            Button("Back") {
-                page = .read
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-
-            Button("Start") {
-                store.completeOnboarding()
-            }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-        }
-    }
-
-    /// The icon, and the one sentence about what the app is for.
-    ///
-    /// No second title: the window's own title bar already says the name, and
-    /// repeating it in the content area is the mistake the Settings redesign
-    /// removed. No second promise either — the closing line carries
-    /// ``StandingStatement``, and saying it twice on one page made the page
-    /// read as though it were arguing with somebody.
+    /// The icon and the one sentence about what the app is for.
     private var hero: some View {
         HStack(alignment: .center, spacing: 14) {
             Image(nsImage: NSApp.applicationIconImage)
@@ -268,7 +199,7 @@ private struct OnboardingView: View {
     /// panels: everything named here is inside the row block, and the header
     /// and the footer around it are page two's (`OnboardingAnatomy.swift`).
     private var answerGroup: some View {
-        SettingsGroup(header: "Answering, and what has left") {
+        SettingsGroup(header: "Answering and Recent Sessions") {
             OpenCommandAnatomy()
                 .padding(.vertical, 14)
 

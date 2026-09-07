@@ -428,6 +428,8 @@ Recovery logic handles only "can this connection still work" and takes no part i
 
 ## 5. Component responsibilities and code locations
 
+First-run pages share one `Window` scene and a fixed `580 × 840` pt content area (`OnboardingLayout`). `OnboardingView` swaps only the current page inside a vertical scroll view; the shared navigation row stays outside it at the bottom right. Specimen stores are still created only when their page is first visited. Settings retains its own content height after onboarding completes.
+
 | Layer | Component | Single responsibility | Code |
 | --- | --- | --- | --- |
 | UI state | `MonitorStore` | Pull complete snapshots, merge refresh triggers, publish UI state, compute the top-level summary, remove rows on user intent (right-click on one row, in any state, recorded per product in `dismissedSessionIDsByAgent`, forgotten only once that product is visible and no longer lists that Turn, `tech-design.md` §17), and **hold what the list has let go of** — every row archived within `recentWindow`, keyed by Thread in `departuresByThread`, published as `recentDepartures` and filtered on read rather than evicted on a timer ([`expanded-panel-v2.md`](expanded-panel-v2.md) §2.5) | [`MonitorStore.swift`](../Notchline/Notchline/MonitorStore.swift) |
