@@ -107,14 +107,15 @@ A missing, corrupt, permission-denied or schema-incompatible main state must con
 
 ## 5. First-run onboarding
 
-First installation opens **one standalone macOS window, in two pages**. It is the same window Settings becomes afterwards, in the same shape, so nothing has moved by the second opening.
+First installation opens **one standalone macOS window, in three pages**. It is the same window Settings becomes afterwards, in the same shape, so nothing has moved by the second opening.
 
 1. **`Connect your agents`** — the app's one sentence, a switch per product with its live connection status, and a footnote naming the files those switches write and the backups they take first. The page closes on the standing statement of what this app sends back to a product, with the app's version under it (§11). `Continue` moves on.
-2. **`Reading the notch`** — what the component draws, taught from the product's own drawings rather than pictures of them: the collapsed bar and the expanded panel at their own size with every part numbered and named, and the five state patterns between them. The panel specimen is staged holding a request it could answer and a row that has left the list, so the two things the panel can do that a still list cannot show — the answer control and the Recent seam — are on the drawing rather than described. `Back` returns to the first page; `Start` completes onboarding.
+2. **`Reading the notch`** — what the component draws, taught from the product's own drawings rather than pictures of them: the collapsed bar and the expanded panel at their own size with every part numbered and named, and the five state patterns between them. The panel specimen is staged holding a request it could answer and a row that has left the list, so the answer control and the Recent seam are on the drawing rather than described. `Back` returns to the first page; `Continue` moves on.
+3. **`Answering, and what has left`** — what the component *does*, from the same live drawings: a permission request and a question with options, each drawn open at the moment a person would answer it, and the Recent queue open behind its seam. `Back` returns to the second page; `Start` completes onboarding.
 
-**The two pages divide on the seam the content already had: page one asks for something, page two explains something.** Nothing on page one needs page two to make sense — a user who presses `Continue` without reading has connected both products correctly — and nothing on page two asks for anything, which is what makes going back to it cheap. The split is also what keeps the window inside the height a 14-inch built-in display leaves under its menu bar; the alternative was cutting the drawings back until one page fitted, which would have spent exactly the parts worth showing ([`figma-design.md`](figma-design.md) §7.3).
+**The pages divide on the seam the content already had: page one asks for something, page two explains what the surface draws, page three explains what it does.** Nothing on page one needs the others to make sense — a user who presses `Continue` without reading has connected both products correctly — and neither later page asks for anything, which is what makes going back to them cheap. The splits are also what keep the window inside the height a 14-inch built-in display leaves under its menu bar; the alternative was cutting the drawings back until one page fitted, which would have spent exactly the parts worth showing ([`figma-design.md`](figma-design.md) §7.3).
 
-**Neither page gates the other, and neither gates the product**: onboarding can be finished with no product connected at all, and the notch will honestly say `Disconnected`.
+**No page gates another, and none gates the product**: onboarding can be finished with no product connected at all, and the notch will honestly say `Disconnected`.
 
 Setup must be explicit, reversible and user-confirmed. The app must not silently modify Codex configuration, bypass Codex's trust mechanism, or launch Codex Desktop by itself.
 
@@ -412,7 +413,7 @@ If Project, unread membership or exact navigation cannot be met, V1 must not fak
 - Figma file: [Codex in Notch — V1](https://www.figma.com/design/B9qIi46zhdjbQYbjZo3AnM/Codex-in-Notch-%E2%80%94-V1)
 - `06 — Notch Core`: collapsed and shared expanded core geometry.
 - `07 — Integration States`: quota degradation, empty and integration states.
-- `08 — Onboarding`: the two-page first-run flow (`1016:2`); `750:2` and `232:95` are superseded references.
+- `08 — Onboarding`: the first-run flow (`1016:2`), now three pages in the app and two on the board; `750:2` and `232:95` are superseded references.
 - `09 — Settings`: integration management.
 
 ## 16. Terminology and architectural decisions

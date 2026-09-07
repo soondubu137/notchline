@@ -537,7 +537,8 @@ struct NotchlineTests {
         #expect(!hovered.sessions.contains { $0.id == hovered.recentDepartures[0].session.id })
     }
 
-    /// No two pins on a figure stand on the same point.
+    /// No two pins on a figure stand on the same point, and every leader stops
+    /// on the specimen's edge.
     ///
     /// **The one fault a specimen that cannot drift is still open to.** The
     /// drawings are the product's own views, so a part that changes shape
@@ -548,47 +549,109 @@ struct NotchlineTests {
     /// had stopped drawing and one naming a badge that had moved, and the
     /// figure drew a numeral on top of a numeral with nothing to say so.
     ///
-    /// The second half is the rule §7.1 states and the drawing had quietly
-    /// stopped keeping: **a leader stops at the specimen's edge.** Pin
-    /// positions are in the panel's units and scale with it; a pin's badge is
-    /// `13` pt whatever the scale; a leader written in the first and drawn
-    /// against the second crossed about `5` pt onto the black either side.
+    /// The second half is the rule `figma-design.md` §7.1 states and the
+    /// drawing had quietly stopped keeping: **a leader stops at the specimen's
+    /// edge.** Pin positions are in the panel's units and scale with it; a
+    /// pin's badge is `13` pt whatever the scale; a leader written in the first
+    /// and drawn against the second crossed about `5` pt onto the black either
+    /// side. Every figure is checked rather than the two that had the fault,
+    /// because the arithmetic is the same in all five.
     @Test @MainActor
     func theFirstRunPinsStandApartAndTheirLeadersStopAtTheEdge() {
-        let shut = CollapsedBarAnatomy().pins
-        let hovered = ExpandedPanelAnatomy().pins
+        let figures: [(what: String, pins: [AnatomyPin], size: CGSize)] = [
+            ("the collapsed bar", CollapsedBarAnatomy().pins, CollapsedBarAnatomy().specimenSize),
+            ("the panel", ExpandedPanelAnatomy().pins, ExpandedPanelAnatomy().specimenSize),
+            ("a permission", OpenCommandAnatomy().pins, OpenCommandAnatomy().specimenSize),
+            ("a question", OpenQuestionAnatomy().pins, OpenQuestionAnatomy().specimenSize),
+            ("the queue", RecentQueueAnatomy().pins, RecentQueueAnatomy().specimenSize)
+        ]
 
-        #expect(shut.map(\.id) == Array(1...6))
-        #expect(hovered.map(\.id) == Array(1...9))
+        for figure in figures {
+            #expect(
+                figure.pins.map(\.id) == Array(1...figure.pins.count),
+                "the key on \(figure.what) is numbered from one, in order"
+            )
 
-        for pins in [shut, hovered] {
-            let points = pins.map { CGPoint(x: $0.x, y: $0.y) }
+            let points = figure.pins.map { CGPoint(x: $0.x, y: $0.y) }
             for (index, point) in points.enumerated() {
                 for other in points[(index + 1)...] {
                     #expect(
                         abs(point.x - other.x) > AnatomyMetrics.pinSize
-                            || abs(point.y - other.y) > AnatomyMetrics.pinSize
+                            || abs(point.y - other.y) > AnatomyMetrics.pinSize,
+                        "two pins on \(figure.what) stand on one point"
                     )
                 }
             }
-        }
 
-        // The panel's own edges, in the units the pins are drawn in.
-        let drawnWidth = NotchSpecimen.windowSize(of: NotchSpecimen.hovered).width
-            * ExpandedPanelAnatomy.scale
-        let half = AnatomyMetrics.pinSize / 2
-        for pin in hovered {
-            switch pin.leader {
-            case let .left(length):
-                #expect(abs(pin.x - half - length - drawnWidth) < 0.01)
-            case let .right(length):
-                #expect(abs(pin.x + half + length) < 0.01)
-            case let .forkRight(stem, _, foot):
-                #expect(abs(pin.x + half + stem + foot) < 0.01)
-            case .up, .down:
-                Issue.record("The panel's pins stand beside it, never over it")
+            let half = AnatomyMetrics.pinSize / 2
+            for pin in figure.pins {
+                let landing: CGFloat
+                let edge: CGFloat
+                switch pin.leader {
+                case let .left(length):
+                    landing = pin.x - half - length
+                    edge = figure.size.width
+                case let .right(length):
+                    landing = pin.x + half + length
+                    edge = 0
+                case let .up(length):
+                    landing = pin.y - half - length
+                    edge = figure.size.height
+                case let .down(length):
+                    landing = pin.y + half + length
+                    edge = 0
+                case let .forkRight(stem, _, foot):
+                    landing = pin.x + half + stem + foot
+                    edge = 0
+                }
+                #expect(
+                    abs(landing - edge) < 0.01,
+                    "pin \(pin.id) on \(figure.what) stops short of its edge, or crosses it"
+                )
             }
         }
+    }
+
+    /// Page three's three specimens: the two shapes a request arrives in, and
+    /// a queue that is a sequence rather than three copies of one moment.
+    ///
+    /// **The request shapes decide what the answer row draws**, which is the
+    /// whole reason both are on the page: a permission has a refusal and a
+    /// question does not, so one draws three objects at its foot and the other
+    /// two. And the option numerals are the payload's own `enumerated()`
+    /// positions -- `OptionRow` draws `id + 1`, so a fixture numbering them
+    /// from one draws a list beginning at `2`, which is exactly what it did.
+    @Test @MainActor
+    func theFirstRunOpenedSpecimensDrawBothRequestShapesAndAQueueOfAges() throws {
+        let opened = NotchSpecimen.openedSpecimens()
+
+        #expect(!opened.command.isWatching)
+        #expect(!opened.question.isWatching)
+        #expect(!opened.queue.isWatching)
+
+        // A permission, open: the row page two draws shut, and the same request.
+        let permission = try #require(opened.command.openSession)
+        #expect(permission.threadID == NotchSpecimen.shut.sessions.first?.threadID)
+        let granting = try #require(permission.request?.answerRow)
+        #expect(granting.affirmative == "Approve")
+        #expect(granting.refusal == "Deny")
+
+        // A question, open: no refusal at all, and answers of its own.
+        let asked = try #require(opened.question.openSession)
+        let answering = try #require(asked.request?.answerRow)
+        #expect(answering.affirmative == "Send")
+        #expect(answering.refusal == nil)
+        let body = try #require(opened.question.openRowBody)
+        #expect(body.options.count == 3)
+        #expect(body.options.map(\.id) == Array(body.options.indices))
+
+        // The queue: open, and three rows that left at three different times.
+        #expect(opened.queue.isRecentExpanded)
+        let queue = opened.queue.recentDepartures
+        #expect(queue.count == 3)
+        #expect(Set(queue.map(\.departedAt)).count == 3)
+        // Newest first, which is the order the section draws them in.
+        #expect(queue == queue.sorted { $0.departedAt > $1.departedAt })
     }
 
     /// The first-run clock starts again rather than running all afternoon.

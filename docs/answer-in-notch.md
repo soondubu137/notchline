@@ -500,6 +500,14 @@ Latching means the `NSPanel` becomes key, which takes focus from whatever the us
 
 **Neither amendment is made in this change**, on the same footing as [`expanded-panel-v2.md`](expanded-panel-v2.md) §8.1: nothing here is implemented, and the PRD is the product contract rather than a design record. They are made in the change that builds §14.1.
 
+### 14.5 First run has to be able to teach it
+
+The window a user meets before anything else described the surface as it was before this shipped, and the two statements it made about it were both wrong: it said the app *only reads*, and it drew a waiting row as a reading on white rather than as the control this document made of it ([`figma-design.md`](figma-design.md) §7.4, §7.1).
+
+Both are corrected there rather than here, and one of them reaches this document's own rules. **A specimen that teaches the answer control has to carry an answerable request**, and `canBeAnswered` is `replyTicket != nil` and nothing else — so the first-run fixture holds a ticket that leads nowhere. §11 rule 03 forbids offering an affirmative the app cannot deliver, and this does not breach it: the rule protects a person who can click, the drawing declines every hit, and a click that somehow arrived would find no connection under that number and say so. The alternative — a specimen drawing `Read` — would have taught the reading-only form as though it were the ordinary one.
+
+The two shapes are both drawn, on the same page and for §7's reason: a permission has a refusal and a question does not, so their answer rows are not the same object, and a user shown one and later handed the other would meet a row that had changed shape unannounced (`figma-design.md` §7.1.2).
+
 ## 15. Open questions
 
 | | Question | Where it stands |

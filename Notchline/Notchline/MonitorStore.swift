@@ -817,6 +817,20 @@ enum PanelMetrics {
     /// One light face for request buttons, including the waiting mark and
     /// destination control. Measurement and drawing share the same font.
     static let requestControlFont = NSFont.systemFont(ofSize: 13, weight: .light)
+
+    /// What one answer takes: its own word, and ``controlHorizontalPadding`` a
+    /// side.
+    ///
+    /// **One expression, read by the control and by the pin that names it.**
+    /// The answers hug — they are two or three words of the request's own
+    /// vocabulary, and a reserved width would have to be the widest of every
+    /// word either product can send. The first-run window measures inwards from
+    /// the row's trailing edge to place its pins, so it needs the same figure
+    /// the control is drawn at; asking it here is what keeps the drawing and
+    /// the pin from parting company (`figma-design.md` §7.1.2).
+    static func drawnAnswerControlWidth(_ label: String) -> CGFloat {
+        ceil(textWidth(label, font: requestControlFont)) + controlHorizontalPadding * 2
+    }
     static let waitingMarkFont = requestControlFont
 
     /// The mark is a control, so it is built like one rather than like the
@@ -4060,6 +4074,30 @@ final class MonitorStore: ObservableObject {
             latestByAgent[snapshot.agent] = snapshot
         }
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
+    }
+
+    /// Put a drawing's Recent queue in front of it, at ages of its own
+    /// choosing. Refused on a watching store, on ``restageSpecimen(_:)``'s
+    /// terms and for its reason.
+    ///
+    /// **The one thing a specimen cannot reach through the ordinary arrow.** A
+    /// row departs when a merge finds it gone, and the queue stamps it with the
+    /// clock — so a drawing staged through that path gets a queue whose rows all
+    /// left at the same instant and all read the same age. The onboarding queue
+    /// exists to show that a queue is a *sequence* — `2m`, `18m`, `1h`, five
+    /// hours and gone — which is exactly the one fact that staging cannot say.
+    ///
+    /// It writes the queue and nothing else: the window, the ceiling, the order
+    /// and the eviction are `refreshRecentDepartures(at:)`'s as always, so a
+    /// staged queue obeys every rule a real one does, including a staged age
+    /// past the window simply not being drawn.
+    func stageSpecimenQueue(_ departures: [RecentDeparture]) {
+        guard services.isEmpty else { return }
+        departuresByThread = Dictionary(
+            departures.map { (RecentDeparture.key(for: $0.session), $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        refreshRecentDepartures(at: clock.now())
     }
 
     private func apply(_ snapshot: MonitorSnapshot) {

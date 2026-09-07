@@ -103,24 +103,7 @@ enum NotchSpecimen {
     ) -> [AgentKind: [MonitoredSession]] {
         [
             .codex: [
-                MonitoredSession(
-                    agent: .codex,
-                    threadID: "specimen-codex-approval",
-                    turnID: "specimen-codex-approval-turn",
-                    projectName: "notchline",
-                    title: "Wire the quota footer to the fold control",
-                    preview: "Reading PanelMetrics to find the trailing slot.",
-                    status: .approvalNeeded,
-                    // The clock this window teaches from starts here; see
-                    // ``clockPeriod``. An approval keeps timing
-                    // (`SessionStatus.keepsTiming`), so this is still the
-                    // longest unfinished turn and still what the collapsed
-                    // reading draws -- the row itself spends that slot on the
-                    // control instead.
-                    startedAt: now,
-                    runningSubagentCount: 3,
-                    request: approval
-                ),
+                approvalRow(at: now),
                 finished(
                     id: "audit",
                     title: "Audit the hook payload paths",
@@ -161,7 +144,35 @@ enum NotchSpecimen {
         ]
     }
 
-    /// The approval the first row is holding, and the reason its mark says
+    /// The row at the head of the list: stopped on an approval, and holding
+    /// the request page three opens.
+    ///
+    /// **One row in two figures.** Page two draws it shut, with `Approve` on
+    /// its trailing end; page three draws the same row open, with the command
+    /// that mark leads to. Building it in one place is what makes the two the
+    /// same row rather than two rows that resemble each other — the title, the
+    /// preview and the request are read from here by both.
+    private static func approvalRow(at now: Date) -> MonitoredSession {
+        MonitoredSession(
+            agent: .codex,
+            threadID: "specimen-codex-approval",
+            turnID: "specimen-codex-approval-turn",
+            projectName: "notchline",
+            title: "Wire the quota footer to the fold control",
+            preview: "Reading PanelMetrics to find the trailing slot.",
+            status: .approvalNeeded,
+            // The clock this window teaches from starts here; see
+            // ``clockPeriod``. An approval keeps timing
+            // (`SessionStatus.keepsTiming`), so this is still the longest
+            // unfinished turn and still what the collapsed reading draws --
+            // the row itself spends that slot on the control instead.
+            startedAt: now,
+            runningSubagentCount: 3,
+            request: approval
+        )
+    }
+
+    /// The approval that row is holding, and the reason its mark says
     /// `Approve` rather than `Read`.
     ///
     /// **A ticket that leads nowhere, on a drawing that declines every hit.**
@@ -208,7 +219,7 @@ enum NotchSpecimen {
     private static func finished(
         id: String,
         title: String,
-        preview: String,
+        preview: String?,
         at now: Date,
         endedAgo: TimeInterval
     ) -> MonitoredSession {
@@ -287,6 +298,160 @@ enum NotchSpecimen {
                 todayTokens: 208_600_000
             )
         ]
+    }
+
+    // MARK: - Page three: the three things that open
+
+    /// The three drawings page three teaches from, and the instant they share.
+    ///
+    /// **Built on first use, like the other two and one page later.** Page two
+    /// composes no store until it is reached; these compose none until page
+    /// three is, so a first run that connects and stops has built nothing at
+    /// all, and one that reads and stops has built two stores rather than five.
+    /// Optional rather than a lazy `static var` because ``restage()`` has to be
+    /// able to ask whether they exist without bringing them into being.
+    private static var opened: Opened?
+
+    struct Opened {
+        var at: Date
+        /// A permission request, open: the row page two draws shut.
+        let command: MonitorStore
+        /// A question with options, open.
+        let question: MonitorStore
+        /// The Recent queue, open, with a sequence of ages behind it.
+        let queue: MonitorStore
+    }
+
+    /// The page-three stores, composed if this is the first look at them.
+    static func openedSpecimens() -> Opened {
+        if let opened { return opened }
+        let built = makeOpened(at: Date())
+        opened = built
+        return built
+    }
+
+    private static func makeOpened(at now: Date) -> Opened {
+        let command = makeStore(isExpanded: true, at: now, sessions: [approvalRow(at: now)])
+        command.toggleOpenRow(approvalRow(at: now))
+
+        let asked = questionRow(at: now)
+        let question = makeStore(isExpanded: true, at: now, sessions: [asked])
+        question.toggleOpenRow(asked)
+
+        let queue = makeStore(isExpanded: true, at: now)
+        queue.isRecentExpanded = true
+        queue.stageSpecimenQueue(departedQueue(at: now))
+
+        return Opened(at: now, command: command, question: question, queue: queue)
+    }
+
+    /// The queue page three opens: three rows that left at three different
+    /// times.
+    ///
+    /// **The ages are the teaching**, which is why they are staged directly
+    /// (``MonitorStore/stageSpecimenQueue(_:)``) rather than through the arrow
+    /// page two's single departure takes. A queue is a sequence — this one runs
+    /// `2m`, `18m`, `1h` — and rows that all departed in the same pass would
+    /// have drawn one age three times and said the opposite.
+    private static func departedQueue(at now: Date) -> [RecentDeparture] {
+        let left: [(id: String, title: String, ago: TimeInterval)] = [
+            ("named", "Name every quota window as its product does", 2 * 60),
+            ("rail", "Stand the scroll rail on the panel’s margin", 18 * 60),
+            ("ink", "Draw every control in one ink", 66 * 60)
+        ]
+        return left.map { row in
+            RecentDeparture(
+                session: finished(
+                    id: row.id,
+                    title: row.title,
+                    preview: nil,
+                    at: now,
+                    endedAgo: row.ago + 30
+                ),
+                departedAt: now.addingTimeInterval(-row.ago),
+                // The lifecycle's own arrow: the turn ended, and then its
+                // product recorded the Thread as read.
+                reason: .read
+            )
+        }
+    }
+
+    /// The question page three opens.
+    ///
+    /// One question rather than a set, because the set's `2/3` counter is a
+    /// second thing to explain and the shape of the form is what this teaches.
+    /// Three options with a word of description each, which is what the option
+    /// row draws: a numeral, the product's own label, and its own gloss.
+    private static func questionRow(at now: Date) -> MonitoredSession {
+        MonitoredSession(
+            agent: .claudeCode,
+            threadID: "specimen-claude-question",
+            turnID: "specimen-claude-question-turn",
+            projectName: "notchline",
+            title: "Name the control that opens the quota table",
+            preview: "Three names fit; the caption is written either way.",
+            status: .inputNeeded,
+            startedAt: now.addingTimeInterval(-38),
+            request: AgentRequest(
+                id: "specimen-claude-question-request",
+                toolName: "AskUserQuestion",
+                form: .questions([
+                    AgentQuestion(
+                        // Both ids are the payload's own `enumerated()`
+                        // positions, which is what the decoder assigns and what
+                        // `OptionRow` draws `+ 1` of. Numbering them from one
+                        // here drew a list that began at `2`.
+                        id: 0,
+                        header: "Naming",
+                        text: "Which name should the footer’s control take?",
+                        options: [
+                            AgentQuestionOption(
+                                id: 0,
+                                label: "Rate limits",
+                                description: "what the windows behind it are"
+                            ),
+                            AgentQuestionOption(
+                                id: 1,
+                                label: "Windows",
+                                description: "what each product calls them"
+                            ),
+                            AgentQuestionOption(
+                                id: 2,
+                                label: "Quota",
+                                description: "what this app calls the whole of it"
+                            )
+                        ],
+                        allowsSeveralAnswers: false
+                    )
+                ]),
+                replyTicket: 0
+            )
+        )
+    }
+
+    private static func makeStore(
+        isExpanded: Bool,
+        at now: Date,
+        sessions: [MonitoredSession]
+    ) -> MonitorStore {
+        let store = MonitorStore(
+            displays: [display],
+            services: [],
+            initialSnapshots: [AgentKind.codex, .claudeCode].map { agent in
+                AgentSnapshot(
+                    agent: agent,
+                    availability: .ready,
+                    sessions: sessions.filter { $0.agent == agent },
+                    quota: quota(at: now)[agent] ?? .unavailable,
+                    diagnostic: nil,
+                    setupStatus: .active,
+                    presence: .open
+                )
+            },
+            preferences: nil
+        )
+        store.isExpanded = isExpanded
+        return store
     }
 
     private static func makeStore(isExpanded: Bool, at now: Date) -> MonitorStore {
@@ -380,6 +545,15 @@ enum NotchSpecimen {
         staged.at = now
         stageDeparture(in: staged.shut, at: now)
         stageDeparture(in: staged.hovered, at: now)
+        // Page three's queue reads in ages, so it wraps with the clock rather
+        // than counting on into `1h 12m`. Its two open rows draw no reading at
+        // all — an open row spends that slot on the chevron — so there is
+        // nothing in them to wrap, and re-merging them would only risk closing
+        // a row this window exists to draw open.
+        if let opened {
+            Self.opened?.at = now
+            opened.queue.stageSpecimenQueue(departedQueue(at: now))
+        }
     }
 
     /// The body's size, as the product would compose it for this moment.
@@ -676,11 +850,15 @@ private struct PinnedFigure<Specimen: View>: View {
 struct CollapsedBarAnatomy: View {
     private let store = NotchSpecimen.shut
 
+    /// The bar at its own size, which is what the pins are placed against.
+    /// Internal for the assertion that they land on it.
+    var specimenSize: CGSize { NotchSpecimen.windowSize(of: store) }
+
     var body: some View {
         PinnedFigure(
             pins: pins,
             margin: (top: pinRow, bottom: pinRow),
-            specimenSize: NotchSpecimen.windowSize(of: store)
+            specimenSize: specimenSize
         ) {
             NotchSpecimenView(store: store)
         }
@@ -827,10 +1005,16 @@ struct ExpandedPanelAnatomy: View {
 
     static let scale: CGFloat = 0.624
 
+    /// The panel as this page draws it. Internal for the assertion that the
+    /// pins land on its edges.
+    var specimenSize: CGSize {
+        let panel = NotchSpecimen.windowSize(of: store)
+        return CGSize(width: panel.width * Self.scale, height: panel.height * Self.scale)
+    }
+
     var body: some View {
         let scale = Self.scale
-        let panel = NotchSpecimen.windowSize(of: store)
-        let drawn = CGSize(width: panel.width * scale, height: panel.height * scale)
+        let drawn = specimenSize
 
         return PinnedFigure(pins: pins, keyInset: 14, specimenSize: drawn) {
             NotchSpecimenView(store: store)
@@ -1002,6 +1186,452 @@ struct ExpandedPanelAnatomy: View {
     /// How far a forked leader's two feet reach past its spine. In the
     /// drawing's units, like the gutter it is taken out of.
     private var forkFoot: CGFloat { 10 }
+}
+
+// MARK: - Opened
+
+/// What page three's three figures have in common: the panel's own ground with
+/// the panel's header and footer cut away, and one scale for all three.
+///
+/// **A plate rather than a whole panel.** Every part page three names is inside
+/// the row block, and drawing the header and the footer around each of them
+/// three times would have repeated two things page two teaches — and spent the
+/// height on them that this page spends on being legible instead. So the ground
+/// is the panel's width with the row block inset by the panel's own gutter,
+/// which is what the black behind a row actually is; the row and the section
+/// drawn on it are the product's own views, unchanged.
+private enum OpenedSpecimen {
+    /// The panel's own inset around a row block.
+    static var gutter: CGFloat { PanelMetrics.sessionRowGutter }
+
+    /// How far the pin columns stand off the plate, in the drawing's units.
+    ///
+    /// Unscaled, unlike page two's: these figures are placed in drawn units
+    /// throughout, because the plate's own width is what sets the scale rather
+    /// than the other way round.
+    static let margin: CGFloat = 30
+
+    /// The clear space a leader crosses, badge edge to plate edge.
+    static var gutterToPlate: CGFloat { margin - AnatomyMetrics.pinSize / 2 }
+
+    /// The width the key is drawn across, which is what everything here is
+    /// sized to fit inside.
+    static let keyWidth: CGFloat = 504
+
+    /// The plate a figure is drawn on: the panel's width, and the specimen's
+    /// own height with the panel's gutter above and below it.
+    static func plateSize(store: MonitorStore, height: CGFloat) -> CGSize {
+        let scale = scale(plateWidth: store.currentPanelSize.width)
+        return CGSize(
+            width: store.currentPanelSize.width * scale,
+            height: (height + gutter * 2) * scale
+        )
+    }
+
+    /// One scale for all three figures, derived from the widest thing the page
+    /// draws: the plate, plus a pin column either side of it.
+    ///
+    /// **Bigger than page two's `0.624`, and that is the point of the plate.**
+    /// Page two draws a whole panel and spends its width on a header, a footer
+    /// and two margins; these draw a row, so the same card affords more scale —
+    /// which is what a request body, an option list and an answer row need to
+    /// be read rather than recognised.
+    static func scale(plateWidth: CGFloat) -> CGFloat {
+        keyWidth / (plateWidth + margin * 2)
+    }
+
+    /// Where the answers stand, measured inwards from the row's trailing edge.
+    ///
+    /// The answer row is the field, then the refusal where the form has one,
+    /// then the affirmative — each hugging its own word
+    /// (``PanelMetrics/drawnAnswerControlWidth(_:)``), `8` apart. So the
+    /// affirmative is placed from the edge and everything else from it.
+    static func answerCentres(
+        rowWidth: CGFloat,
+        shape: AnswerRowShape
+    ) -> (field: CGFloat, refusal: CGFloat?, affirmative: CGFloat) {
+        let trailing = rowWidth - PanelMetrics.sessionRowPadding
+        let affirmativeWidth = PanelMetrics.drawnAnswerControlWidth(shape.affirmative)
+        let affirmative = trailing - affirmativeWidth / 2
+        var fieldEnd = trailing - affirmativeWidth - 8
+        var refusal: CGFloat?
+        if let word = shape.refusal {
+            let width = PanelMetrics.drawnAnswerControlWidth(word)
+            refusal = fieldEnd - width / 2
+            fieldEnd -= width + 8
+        }
+        return (
+            field: (PanelMetrics.sessionRowPadding + fieldEnd) / 2,
+            refusal: refusal,
+            affirmative: affirmative
+        )
+    }
+}
+
+/// One page-three figure: a specimen on the panel's ground, with its pins in
+/// the left margin and along the bottom.
+///
+/// **Left and below rather than left and right**, which is page two's pair.
+/// The parts these figures name are a body in the middle of a row and three
+/// controls side by side at the foot of it, and three pins in one column would
+/// land on top of each other — the fault §7.1 records. A row is short enough to
+/// have a bottom margin to give, which a `740` pt panel is not.
+private struct OpenedFigure<Specimen: View>: View {
+    let store: MonitorStore
+    let pins: [AnatomyPin]
+    /// The specimen's own height, in the panel's units.
+    let height: CGFloat
+    @ViewBuilder let specimen: () -> Specimen
+
+    var body: some View {
+        let scale = OpenedSpecimen.scale(plateWidth: store.currentPanelSize.width)
+        let plate = OpenedSpecimen.plateSize(store: store, height: height)
+
+        return PinnedFigure(
+            pins: pins,
+            margin: (top: 0, bottom: AnatomyMetrics.pinSize + AnatomyMetrics.leaderClearance),
+            keyInset: 14,
+            specimenSize: plate
+        ) {
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black)
+
+                specimen()
+                    .environmentObject(store)
+                    .frame(
+                        width: PanelMetrics.sessionViewportWidth(
+                            panelWidth: store.currentPanelSize.width
+                        )
+                    )
+                    .padding(OpenedSpecimen.gutter)
+            }
+            // Drawn at the panel's own size and scaled as one object, so the
+            // ground and what stands on it cannot come apart.
+            .frame(
+                width: store.currentPanelSize.width,
+                height: height + OpenedSpecimen.gutter * 2,
+                alignment: .topLeading
+            )
+            .scaleEffect(scale, anchor: .topLeading)
+            .frame(width: plate.width, height: plate.height, alignment: .topLeading)
+            // Drawings inside a settings window: a pointer crossing one must
+            // not hover a row, arm an answer or take a click.
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// A permission request, open: what the mark on page two leads to.
+///
+/// The same row page two draws shut — same title, same request — so the two
+/// figures are one row seen in its two states rather than two rows that
+/// resemble each other.
+struct OpenCommandAnatomy: View {
+    private let store = NotchSpecimen.openedSpecimens().command
+
+    /// How tall the open row is, which the store composes from the request's
+    /// own layout.
+    private var height: CGFloat { store.openRowHeight ?? PanelMetrics.sessionRowHeight }
+
+    /// The plate it is drawn on. Internal, with ``pins``, for the assertion
+    /// that they land on its edges and not on each other.
+    var specimenSize: CGSize {
+        OpenedSpecimen.plateSize(store: store, height: height)
+    }
+
+    var body: some View {
+        OpenedFigure(store: store, pins: pins, height: height) {
+            if let session = store.openSession {
+                OpenRow(session: session)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "A permission request, open on the notch: the row names its "
+                + "product, Project and title, then draws the command the agent "
+                + "is asking to run, and a row of answers — a field for what to "
+                + "do instead, Deny, and Approve, which holds the white ground "
+                + "and is what the return key takes."
+        )
+    }
+
+    var pins: [AnatomyPin] {
+        let scale = OpenedSpecimen.scale(plateWidth: store.currentPanelSize.width)
+        let rowWidth = PanelMetrics.sessionViewportWidth(
+            panelWidth: store.currentPanelSize.width
+        )
+        let shape = store.openSession?.request?.answerRow
+        let centres = shape.map {
+            OpenedSpecimen.answerCentres(rowWidth: rowWidth, shape: $0)
+        }
+        let body = OpenRowGeometry(store: store)
+
+        return [
+            AnatomyPin(
+                id: 1,
+                x: -OpenedSpecimen.margin,
+                y: (OpenedSpecimen.gutter + body.bodyCentre) * scale,
+                leader: .right(OpenedSpecimen.gutterToPlate),
+                label: "The command it sent"
+            ),
+            below(2, centres?.field, "Say what instead", scale: scale, body: body),
+            below(3, centres?.refusal, "Turn it down", scale: scale, body: body),
+            below(
+                4,
+                centres?.affirmative,
+                "Approve, or ⏎",
+                scale: scale,
+                body: body,
+                // The one thing the word cannot say: the white ground is not
+                // decoration on the affirmative, it is where `⏎` would land,
+                // and typing moves it (`answer-in-notch.md` §6).
+                note: "White is what ⏎ takes"
+            )
+        ].compactMap { $0 }
+    }
+
+    private func below(
+        _ id: Int,
+        _ x: CGFloat?,
+        _ label: String,
+        scale: CGFloat,
+        body: OpenRowGeometry,
+        note: String? = nil
+    ) -> AnatomyPin? {
+        guard let x else { return nil }
+        return AnatomyPin(
+            id: id,
+            x: (OpenedSpecimen.gutter + x) * scale,
+            y: (body.height + OpenedSpecimen.gutter * 2) * scale
+                + AnatomyMetrics.leaderClearance
+                + AnatomyMetrics.pinSize / 2,
+            leader: .up(AnatomyMetrics.leaderClearance),
+            label: label,
+            note: note
+        )
+    }
+}
+
+/// A question with options, open: the other shape a product asks in.
+struct OpenQuestionAnatomy: View {
+    private let store = NotchSpecimen.openedSpecimens().question
+
+    /// How tall the open row is, which the store composes from the request's
+    /// own layout.
+    private var height: CGFloat { store.openRowHeight ?? PanelMetrics.sessionRowHeight }
+
+    /// The plate it is drawn on. Internal, with ``pins``, for the assertion
+    /// that they land on its edges and not on each other.
+    var specimenSize: CGSize {
+        OpenedSpecimen.plateSize(store: store, height: height)
+    }
+
+    var body: some View {
+        OpenedFigure(store: store, pins: pins, height: height) {
+            if let session = store.openSession {
+                OpenRow(session: session)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "A question with options, open on the notch: the agent's question, "
+                + "then its own answers numbered beneath it, then a field for an "
+                + "answer in words and Send, which holds the white ground."
+        )
+    }
+
+    var pins: [AnatomyPin] {
+        let scale = OpenedSpecimen.scale(plateWidth: store.currentPanelSize.width)
+        let rowWidth = PanelMetrics.sessionViewportWidth(
+            panelWidth: store.currentPanelSize.width
+        )
+        let shape = store.openSession?.request?.answerRow
+        let centres = shape.map {
+            OpenedSpecimen.answerCentres(rowWidth: rowWidth, shape: $0)
+        }
+        let body = OpenRowGeometry(store: store)
+
+        var pins: [AnatomyPin] = [
+            AnatomyPin(
+                id: 1,
+                x: -OpenedSpecimen.margin,
+                y: (OpenedSpecimen.gutter + body.questionCentre) * scale,
+                leader: .right(OpenedSpecimen.gutterToPlate),
+                label: "What it is asking"
+            )
+        ]
+
+        // One pin over the whole list rather than one per answer: they are one
+        // part with as many rows as the product sent, and a numeral beside each
+        // would have said they were separate questions. The same bracket, and
+        // the same argument, as the caption and title on page two.
+        if let options = body.optionList {
+            pins.append(
+                AnatomyPin(
+                    id: 2,
+                    x: -OpenedSpecimen.margin,
+                    y: (OpenedSpecimen.gutter + options.centre) * scale,
+                    leader: .forkRight(
+                        stem: OpenedSpecimen.gutterToPlate - 10,
+                        spread: options.spread * scale,
+                        foot: 10
+                    ),
+                    label: "Its own answers",
+                    // §6.6: a click takes the answer it lands on, and the
+                    // numerals are the keys that do the same.
+                    note: "Or press its number"
+                )
+            )
+        }
+
+        if let field = centres?.field {
+            pins.append(
+                below(3, field, "Or answer in words", scale: scale, body: body)
+            )
+        }
+        if let affirmative = centres?.affirmative {
+            pins.append(below(4, affirmative, "Send, or ⏎", scale: scale, body: body))
+        }
+        return pins
+    }
+
+    private func below(
+        _ id: Int,
+        _ x: CGFloat,
+        _ label: String,
+        scale: CGFloat,
+        body: OpenRowGeometry
+    ) -> AnatomyPin {
+        AnatomyPin(
+            id: id,
+            x: (OpenedSpecimen.gutter + x) * scale,
+            y: (body.height + OpenedSpecimen.gutter * 2) * scale
+                + AnatomyMetrics.leaderClearance
+                + AnatomyMetrics.pinSize / 2,
+            leader: .up(AnatomyMetrics.leaderClearance),
+            label: label
+        )
+    }
+}
+
+/// Where an open row's parts stand, composed from the same figures the row
+/// stacks them with.
+///
+/// Nothing here is measured off a drawing: the row is `12.5` of air, the
+/// caption, the title, the body, whatever is left, and the answer row. Asking
+/// the store for the body's own layout is what makes the question's list and
+/// the command's single line the same arithmetic.
+private struct OpenRowGeometry {
+    let store: MonitorStore
+
+    var height: CGFloat { store.openRowHeight ?? PanelMetrics.sessionRowHeight }
+
+    /// Where the request's body begins, under the caption and the title.
+    var bodyTop: CGFloat {
+        12.5
+            + PanelMetrics.sessionRowCaptionHeight
+            + PanelMetrics.sessionRowLineSpacing
+            + PanelMetrics.sessionRowTitleHeight
+            + PanelMetrics.sessionRowLineSpacing
+    }
+
+    /// The middle of the whole body, which is what a one-line command wants.
+    var bodyCentre: CGFloat {
+        bodyTop + (store.openRowBody?.drawnHeight ?? 0) / 2
+    }
+
+    /// The middle of the question itself: its lines, before its answers.
+    var questionCentre: CGFloat {
+        guard let body = store.openRowBody else { return bodyCentre }
+        let lines = CGFloat(body.lines.count)
+            * PanelMetrics.requestLineHeight(for: body.setting)
+        return bodyTop + lines / 2
+    }
+
+    /// The option list's middle, and how far its bracket opens: half the
+    /// distance between the first option's centre and the last one's.
+    var optionList: (centre: CGFloat, spread: CGFloat)? {
+        guard let body = store.openRowBody, !body.options.isEmpty else { return nil }
+        let lines = CGFloat(body.lines.count)
+            * PanelMetrics.requestLineHeight(for: body.setting)
+        let top = bodyTop + lines + PanelMetrics.optionListSpacing
+        let list = CGFloat(body.options.count) * PanelMetrics.optionRowHeight
+        return (
+            centre: top + list / 2,
+            spread: (list - PanelMetrics.optionRowHeight) / 2
+        )
+    }
+}
+
+/// The Recent queue, open: what is behind the seam page two names.
+struct RecentQueueAnatomy: View {
+    private let store = NotchSpecimen.openedSpecimens().queue
+
+    /// The plate it is drawn on. Internal, with ``pins``, for the assertion
+    /// that they land on its edges and not on each other.
+    var specimenSize: CGSize {
+        OpenedSpecimen.plateSize(store: store, height: height)
+    }
+
+    var body: some View {
+        OpenedFigure(store: store, pins: pins, height: height) {
+            RecentSessionSection()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "The Recent queue, open: a seam saying how many rows have left the "
+                + "list, and under it one line each — half the height of a live "
+                + "row — ending in how long ago it left. Five hours, and a row "
+                + "is gone."
+        )
+    }
+
+    /// The seam and its own viewport, which is what the section draws.
+    private var height: CGFloat {
+        PanelMetrics.recentSectionHeight(
+            retiredRowCount: store.recentDepartures.count,
+            isRecentExpanded: store.isRecentExpanded
+        )
+    }
+
+    var pins: [AnatomyPin] {
+        let scale = OpenedSpecimen.scale(plateWidth: store.currentPanelSize.width)
+        let plate = store.currentPanelSize.width
+        let seam = PanelMetrics.recentSeamHeight / 2
+        // The first retired row under it, and the trailing end of that row —
+        // where a `2m` stands, one row padding in from its own edge.
+        let firstRow = PanelMetrics.recentSeamHeight + PanelMetrics.retiredRowHeight / 2
+        let age = plate - OpenedSpecimen.gutter - PanelMetrics.sessionRowPadding - 9
+
+        return [
+            AnatomyPin(
+                id: 1,
+                x: -OpenedSpecimen.margin,
+                y: (OpenedSpecimen.gutter + seam) * scale,
+                leader: .right(OpenedSpecimen.gutterToPlate),
+                label: "How many have left"
+            ),
+            AnatomyPin(
+                id: 2,
+                x: -OpenedSpecimen.margin,
+                y: (OpenedSpecimen.gutter + firstRow) * scale,
+                leader: .right(OpenedSpecimen.gutterToPlate),
+                label: "Half a live row",
+                // The one thing a still figure cannot say about a queue: these
+                // are not a record, they are still a way back in.
+                note: "Click: it still opens"
+            ),
+            AnatomyPin(
+                id: 3,
+                x: plate * scale + OpenedSpecimen.margin,
+                y: (OpenedSpecimen.gutter + firstRow) * scale,
+                leader: .left(OpenedSpecimen.gutterToPlate),
+                label: "When it left"
+            )
+        ]
+    }
 }
 
 #Preview("Collapsed bar") {

@@ -799,7 +799,14 @@ private struct ActiveSessionList: View {
 /// The Recent queue: nothing while it is empty, its seam alone while folded,
 /// and its own five-row viewport — scrolling on its own past that — while
 /// open.
-private struct RecentSessionSection: View {
+/// The Recent queue: the seam, and the retired rows behind it while it is
+/// open.
+///
+/// Internal rather than private so the first-run window can draw one on its own
+/// (`OnboardingAnatomy.swift`). It is self-contained — the seam is its own
+/// control and the queue its own viewport and scroller — so a specimen of it is
+/// the section the panel draws, not a picture of one.
+struct RecentSessionSection: View {
     @EnvironmentObject private var store: MonitorStore
 
     @State private var scrollOffset: CGFloat = 0
@@ -1288,7 +1295,15 @@ private struct SessionRow: View {
 /// worse than none at all (§11 rule 03). One control stands where three will,
 /// and it is the click that has always worked, moved to a place a reader
 /// arrives at *after* reading.
-private struct OpenRow: View {
+/// A row with its request open: the caption and title, the body, and the
+/// answers.
+///
+/// Internal for the same reason ``RecentSessionSection`` is: the first-run
+/// window draws one on its own black rather than repeating the header and
+/// footer around it three times (`OnboardingAnatomy.swift`). Everything it
+/// draws follows from the store's `openRowID`, so a specimen opens a row and
+/// composes exactly what the notch would.
+struct OpenRow: View {
     @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
 
@@ -1602,8 +1617,10 @@ private struct AnswerControl: View {
                     : (isHovered ? NotchPalette.themeInk.on : NotchPalette.reading)
             )
             .fixedSize()
-            .padding(.horizontal, PanelMetrics.controlHorizontalPadding)
-            .frame(height: PanelMetrics.answerRowHeight)
+            .frame(
+                width: PanelMetrics.drawnAnswerControlWidth(label),
+                height: PanelMetrics.answerRowHeight
+            )
             .background(
                 RoundedRectangle(
                     cornerRadius: PanelMetrics.controlCornerRadius,

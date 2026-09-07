@@ -1129,7 +1129,7 @@ The deliverables are a capability matrix, redacted event traces, a version compa
 | `06 — Notch Core` / `118:120` | `520 × 316` shared expanded, `46` top, `30` footer |
 | `05 — Panel` / `327:305` | `496 × 40` expanded footer, today's tokens, reset copy and the Settings gear |
 | `07 — Integration States` / `227:3` | Quota partial degradation, the membership lifecycle and the `520 × 124` thin states |
-| `08 — Onboarding` / `1016:2` | The two-page first-run flow: the explicitly authorised install on page one, and the notch explained from live specimens on page two; `232:95` and `750:2` are superseded references |
+| `08 — Onboarding` / `1016:2` | The first-run flow: the explicitly authorised install on page one, the notch explained from live specimens on page two, and what a click on it opens on page three; `232:95` and `750:2` are superseded references. The board has the first two pages |
 | `09 — Settings` / `609:2` | The macOS 26 single-panel settings window: the Products / Display / Session list groups and two-mode colour; `233:3` is the v1 reference |
 
 ## 22. References

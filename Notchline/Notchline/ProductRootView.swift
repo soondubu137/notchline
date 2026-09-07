@@ -62,6 +62,7 @@ private struct OnboardingView: View {
     private enum Page {
         case connect
         case read
+        case answer
     }
 
     var body: some View {
@@ -74,6 +75,9 @@ private struct OnboardingView: View {
             case .read:
                 notchGroup
                 readClosing
+            case .answer:
+                answerGroup
+                answerClosing
             }
         }
         .padding(.horizontal, 24)
@@ -115,15 +119,35 @@ private struct OnboardingView: View {
         }
     }
 
-    /// Page two's closing line: where all of this lives afterwards, `Back`, and
-    /// the one action that ends onboarding.
+    /// Page two's closing line: what page three is for, `Back`, and the way on.
     private var readClosing: some View {
+        HStack(alignment: .center, spacing: 16) {
+            Text("The mark and the seam both open. Next, what is behind them.")
+                .settingsFootnote(MacOSWindowColor.tertiaryText)
+
+            Button("Back") {
+                page = .connect
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+
+            Button("Continue") {
+                page = .answer
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+        }
+    }
+
+    /// Page three's closing line: where all of this lives afterwards, `Back`,
+    /// and the one action that ends onboarding.
+    private var answerClosing: some View {
         HStack(alignment: .center, spacing: 16) {
             Text("All of this is in Settings afterwards, behind the gear.")
                 .settingsFootnote(MacOSWindowColor.tertiaryText)
 
             Button("Back") {
-                page = .connect
+                page = .read
             }
             .buttonStyle(.bordered)
             .buttonBorderShape(.capsule)
@@ -221,6 +245,52 @@ private struct OnboardingView: View {
         // afternoon is still teaching from a turn-shaped figure rather than
         // from `4:17:33`. Cancelled with the view, which is the whole of its
         // lifetime.
+        .task { await NotchSpecimen.cycle() }
+    }
+
+    /// Page three: the three things on this surface that open, and what is
+    /// behind each of them.
+    ///
+    /// **One group of three blocks, which is page two's shape.** They belong
+    /// together for a reason plainer than the page: a mark opens the request it
+    /// is holding, and the seam opens the rows that have left — between them,
+    /// every control on this surface that does anything is on this page.
+    ///
+    /// **Two request shapes, because the answer row is not one shape.** A
+    /// permission has something to refuse, so it draws a field, `Deny` and
+    /// `Approve`; a question has no refusal at all, because the text *is* the
+    /// answer, so the field takes the space and one `Send` stands where two
+    /// would (`answer-in-notch.md` §7). A user shown one of them and then
+    /// handed the other would meet a row that had changed shape for no reason
+    /// they had been told about.
+    ///
+    /// The specimens are rows on the panel's own ground rather than whole
+    /// panels: everything named here is inside the row block, and the header
+    /// and the footer around it are page two's (`OnboardingAnatomy.swift`).
+    private var answerGroup: some View {
+        SettingsGroup(header: "Answering, and what has left") {
+            OpenCommandAnatomy()
+                .padding(.vertical, 14)
+
+            SettingsSeparator()
+
+            OpenQuestionAnatomy()
+                .padding(.vertical, 14)
+
+            SettingsSeparator()
+
+            RecentQueueAnatomy()
+                .padding(.vertical, 14)
+        } footnote: {
+            SettingsFootnote(
+                "A row opens where the product sent something to show; where it "
+                    + "did not, the mark says Read and takes you there instead. "
+                    + "A finished turn leaves the list when its product records "
+                    + "it as read, and stays under the seam for five hours."
+            )
+        }
+        // The queue reads in ages, so it runs on page two's clock and is
+        // re-staged on the same wrap. Cancelled with the view.
         .task { await NotchSpecimen.cycle() }
     }
 }
