@@ -1529,11 +1529,11 @@ final class BreathingDotView: NSView {
 /// whole columns or the whole grid, and none asks the eye to resolve a single
 /// cell.
 ///
-/// **``NotchMatrixState/completed`` is the one exception**, and it is a
-/// deliberate one. The quincunx is five single cells, and it holds up here
-/// because a die-five is read as one figure rather than as five marks to be
-/// told apart, and because the glow carries each point well past its own cell.
-/// Nothing else on the surface may take that liberty without the same argument.
+/// **The one pattern that argued for an exception did not survive it.** The
+/// quincunx drew Completed as five isolated single cells for a day, on the
+/// grounds that a die-five reads as one figure; at `2.89` it read as scattered
+/// specks. The bloom that replaced it is a whole row crossing a whole column.
+/// Take the rule as having no exceptions.
 enum MatrixGrid {
     static let side = 5
     static let cellCount = side * side
@@ -1593,10 +1593,12 @@ enum NotchMatrixState: Equatable {
     /// showing two things on one grid rather than two clocks. Input and
     /// Completed each keep their own.
     ///
-    /// **Two of the three moved when the step and the quincunx landed.** Input
-    /// went `0.8` → `1`, which is `8` whole frames to a column rather than a
-    /// front timed to cross in `0.8`; Completed went `2` → `2.4`, buying the
-    /// quincunx four beats where the bars had one swell. Both are still ordered
+    /// **Two of the three moved when the wedge and the bars were replaced.**
+    /// Input went `0.8` → `1`, which is `8` whole frames to a column rather
+    /// than a front timed to cross in `0.8`; Completed went `2` → `2.4`. The
+    /// treatments have changed again since — Input to the glide, Completed to
+    /// the bloom — and both periods survived that, which is some evidence they
+    /// are the right two. Both are still ordered
     /// the way they have to be — the state that asks for nothing is much the
     /// slowest thing on the bar, and the state asking for the keyboard is
     /// faster than the two that share `1.2`. Completed's ceiling is the session
@@ -1622,22 +1624,23 @@ enum NotchMatrixState: Equatable {
 /// a column striking and the next taking it up, two diagonals trading about a
 /// centre — is the half that has to survive being read.
 ///
-/// The quincunx is the one that needs two curves rather than one, because its
-/// centre runs at twice its satellites' rate; it is still a curve and an
-/// offset, just two of them.
+/// The bloom is the one that needs more than a single curve: a cell's level
+/// depends on how far along its arm it sits, so it holds three, one per
+/// distance from the centre. It is still a curve and a rule for choosing it.
 ///
 /// **The offsets are whole frames**, and a pattern is sampled at whatever rate
 /// makes that true: the loom runs 48 frames at 40fps rather than 36 at 30
 /// because `1.2s` over sixteen outer cells is otherwise `2.25` frames a step.
 /// ~~One phase still does not land: the bars want their tiers `10.8` frames
 /// apart.~~ Void with the bars — every offset in the file is now exact. The
-/// step takes `8` frames to a column and the quincunx `42` to its far
-/// diagonal, both by construction.
+/// glide takes `8` frames to a column, and the bloom needs no offsets at all —
+/// its arms move together, so every cell at a given distance draws the same
+/// curve unshifted.
 ///
 /// **Three of the four share one scale, and the knock does not.** Each pattern
 /// was drawn against a floor and a ceiling that suited it alone; shipping four
 /// of them means the same cell value has to mean the same thing whichever
-/// state the mark is in, so loom, step and quincunx are each stretched linearly
+/// state the mark is in, so loom, glide and bloom are each stretched linearly
 /// until their dimmest cell sits at ``floor`` and their brightest at `1`. The
 /// stretch is linear, so no pattern's *shape* moves — only the two ends it is
 /// measured between.
@@ -1646,27 +1649,41 @@ enum NotchMatrixState: Equatable {
 /// the first thing to say when one is called too loud: lowering a peak is
 /// undone by the next stretch. What a treatment actually spends is lit area,
 /// time held at white, and how fast it moves — the three readings quoted on
-/// ``step`` and ``quincunx``, both of which were chosen against them.
+/// ``glide`` and ``bloom``, both of which were chosen against them.
 ///
 /// The knock keeps its own `0.05`. Approval is the one state whose silence has
-/// to stay darker than a resting mark: a mark asking for a person is three
-/// times darker than a bar with nothing connected, and that darkness is half
-/// of how it asks (`dual-agent-design.md` §2). Lifting it to ``floor`` would
-/// have made the two indistinguishable for the `900ms` after the second knock.
+/// to stay darker than a resting mark: a mark asking for a person is twice as
+/// dark as a bar with nothing connected, and that darkness is half of how it
+/// asks (`dual-agent-design.md` §2). Lifting it to ``floor`` would have made
+/// the two indistinguishable for the `900ms` after the second knock. It was
+/// three times over until ``floor`` was lowered to `0.100`, and that narrowing
+/// is why the floor did not go lower still.
 ///
 /// **Nothing rests where a disconnected mark rests.** Three patterns now floor
 /// at exactly ``inactiveLevel``, so the old argument — that the resting grey
 /// threaded between the levels the patterns fell to — no longer holds and is
 /// not what keeps them apart. What keeps them apart is that none of the three
 /// is ever at its floor *everywhere at once*: the loom always has two ring
-/// heads and a lit pivot, the step always has a column striking, and the
-/// quincunx's brightest point never falls below `0.799`. A live mark always
+/// heads and a lit pivot, the glide always has a rule crossing, and the
+/// bloom's centre never falls below `0.595`. A live mark always
 /// has a lit cell and a still one never does, which was the load-bearing half
 /// of that argument all along.
 private enum MatrixTrack {
     /// The level the three normalised patterns rest at, and the level a mark
     /// with nothing behind it holds.
-    static let floor = 0.150
+    ///
+    /// **Lowered from `0.150` to `0.100` on 2026-09-07**, which darkens every
+    /// normalised pattern's resting level and the still with it. The stretch is
+    /// linear and the ceiling did not move, so no pattern's *shape* changed —
+    /// only the bottom of the range each is drawn against, and the marks sit
+    /// quieter on the bar for it.
+    ///
+    /// **It could not go much further.** ``doubleKnock`` keeps its own `0.05`
+    /// so that a mark waiting on a decision is darker in its silence than a
+    /// mark with nothing behind it, and that ordering is half of how Approval
+    /// asks. At `0.100` the still is twice the knock's silence; it was three
+    /// times, and taking the floor to `0.05` would collapse the two entirely.
+    static let floor = 0.100
 
     /// Stretch tracks so the dimmest sample across all of them sits at
     /// `floor` and the brightest at `1`.
@@ -1731,47 +1748,54 @@ private enum MatrixTrack {
         return [loom.centre]
     }
 
-    // MARK: Input needed — step
+    // MARK: Input needed — glide
 
-    /// **Step**, 40 frames over `1s`.
+    /// **Glide**, 40 frames over `1s`.
     ///
-    /// One column strikes at full and decays across its own eighth of the
-    /// loop, then the next: a cursor marching left to right in hard steps
-    /// rather than a front sweeping across. The column just vacated keeps a
-    /// short tail at a fifth of the strike, and that tail is the whole of what
-    /// gives the march a direction — without it there is nothing in the figure
-    /// to say which way the sequence runs.
+    /// One upright rule crossing the grid, brightest where its centre is and
+    /// falling away evenly to either side. The distance is taken **around** the
+    /// grid rather than across it, so a column the rule has just left re-enters
+    /// on the other side and nothing resets at the right-hand edge: the figure
+    /// is always mid-crossing.
     ///
-    /// **It replaced the wedge over what loudness costs, not over what it
-    /// said.** Input has to stay loud, and by the one-scale rule below it
-    /// cannot be quietened at the ceiling: every pattern's brightest cell is
-    /// `1`. What it can spend is area and dwell. The wedge held `37.5%` of the
-    /// grid at or above `0.35` and `7.5%` of it at white; the step holds
-    /// `12.5%` and `2.5%`. Each column still takes the full `1` — but for a
-    /// single frame, and it is a third of the way down by the next, so the peak
-    /// is a strike rather than a band being dragged across the mark.
+    /// **The profile is symmetric, and that is the whole of the change from the
+    /// step it replaced.** The step's fault was never how bright it got — it
+    /// held only `2.5%` of the grid at white, less than anything else on the
+    /// surface. It was how fast it got there: each column arrived at full in a
+    /// single frame, `34` units of opacity a second, five times a loop, and
+    /// that instant arrival read as five hard strikes rather than as one thing
+    /// moving. A rule that falls away on *both* sides has no leading edge to
+    /// jump, so a column brightens as the rule approaches instead of switching
+    /// on when it arrives. Same full `1`, reached at `8.9` instead of `34`.
+    ///
+    /// **What it costs is Input's distance from Running.** The step sat at `34`
+    /// against the loom's `7.2` and could not be taken for it; the glide sits
+    /// at `8.9`, and on mean level and lit area the two are now within a few
+    /// points of each other. They read apart by shape — one crosses, one turns
+    /// — rather than by urgency, which is a weaker separation than the one it
+    /// had, and Input outranks Running. The lever if it ever needs one is the
+    /// period: the same figure narrower and crossing in `0.8s` measures `12.5`,
+    /// and costs nothing else.
     ///
     /// This is the curve for column `0`. Every other column is it, later.
-    static let step: [Double] = {
-        let frames = 40, hold = 8
+    static let glide: [Double] = {
+        let frames = 40, span = Double(MatrixGrid.side)
         let track = (0 ..< frames).map { frame -> Double in
-            let since = Double(frame % hold)
-            switch frame / hold {
-            case 0: return exp(-since / 3.4)          // the column striking
-            case 1: return 0.22 * exp(-since / 3.0)   // the one it has just left
-            default: return 0                          // dark, for three steps
-            }
+            let behind = (Double(frame) / Double(frames) * span)
+                .truncatingRemainder(dividingBy: span)
+            let gap = min(behind, span - behind)       // the nearer way round
+            return exp(-gap / 0.44)
         }
         return stretched([track], floor: floor)[0]
     }()
 
-    /// The frame this cell's column strikes on: `8` frames a column, a fifth
-    /// of the loop each.
+    /// The frame the rule's centre reaches this cell's column: `8` frames a
+    /// column, a fifth of the loop each.
     ///
-    /// Every offset is whole, so the step needs no rounding — and unlike the
-    /// wedge it takes no row term at all, because a column strikes all the way
-    /// down at once. That is what keeps it legible when the cell is `2.89`.
-    static func stepOffset(column: Int) -> Int { column * 8 }
+    /// Every offset is whole, so the glide needs no rounding — and it takes no
+    /// row term at all, because a column brightens all the way down at once.
+    /// That is what keeps it legible when the cell is `2.89`.
+    static func glideOffset(column: Int) -> Int { column * 8 }
 
     // MARK: Approval needed — double knock
 
@@ -1795,74 +1819,61 @@ private enum MatrixTrack {
         0.051, 0.050, 0.050, 0.050
     ]
 
-    // MARK: Completed — quincunx
+    // MARK: Completed — bloom
 
-    /// **Quincunx**, 72 frames over `2.4s`.
+    /// **Bloom**, 72 frames over `2.4s`.
     ///
-    /// The five of a die: four corners about a centre. The two diagonals
-    /// through that centre trade weight in antiphase while the centre runs at
-    /// twice their rate, so the light goes one corner pair, centre, the other
-    /// corner pair, centre — four beats to a loop. Nothing travels and nothing
-    /// turns, which is what keeps it clear of the loom two states away.
+    /// The middle row and the middle column swell from a shared core out to the
+    /// full width of the grid and draw back in, in step: a cross that grows
+    /// heavier and lighter without ever changing its silhouette. Nothing
+    /// travels, nothing turns, and there is no moment at which the figure is
+    /// assembling or coming apart.
     ///
-    /// **Neither diagonal ever drops out.** Every frame is still a quincunx and
-    /// only the weight across it moves, so the figure is never assembling or
-    /// coming apart — a thing at rest shifting its balance. The satellites top
-    /// out at `0.881` against the centre's `1`, which is what gives the figure
-    /// a middle rather than five equal points.
+    /// **It replaced the quincunx, which broke the rule the other patterns
+    /// keep.** The die-five measured well — mean `0.250`, only `5.9%` of the
+    /// grid at white — and still looked wrong, because the numbers do not see
+    /// size. It was built from five isolated single cells, and at a `2.89` cell
+    /// with a `0.54` gap its points sit at opposite corners with nothing
+    /// between them, so they read as scattered specks rather than as one
+    /// figure, and the two diagonals trading read as twinkling. A cross is a
+    /// whole row and a whole column, so ``MatrixGrid``'s constraint holds again
+    /// with no exception argued for it.
     ///
-    /// **It replaced the bars, which were the loudest thing on this surface** —
-    /// fifteen of twenty-five cells to white every `2s`, for the one state that
-    /// asks nothing of anybody. This holds `5.8%` of the grid at white against
-    /// the bars' `21%`, and its mean cell is `0.250` against `0.456`. A
-    /// finished turn lingers until it is read, so this is the pattern that has
-    /// to survive being looked at for minutes, and it was the one least able to.
-    ///
-    /// **It is the only pattern built from single cells** rather than whole
-    /// rows or columns, which is the constraint the others were chosen to
-    /// respect at a `2.89` cell (``MatrixGrid``). The die-five earns the
-    /// exception: it is read as one figure rather than as five marks to be
-    /// resolved separately, and the glow carries each point well past its own
-    /// cell. It is also the one Completed treatment that is not level and
-    /// horizontal, which was the bars' argument for carrying nothing that could
-    /// be read as a fault; a symmetric figure about a held centre carries none
-    /// either.
-    /// **`2.4s`, and the ceiling on that is the column beside it.** The
-    /// session-dot breath runs at `2.8s` and has to stay slower than every
-    /// track here, or at `2.92` away it reads as a fifth pattern rather than as
-    /// the column's own movement (`dual-agent-design.md` §12). `2.4` is the
-    /// longest loop that leaves it that margin, and it is still much the
-    /// longest on the mark — the loom and the knock run `1.2`, the step `1`.
-    static let quincunx: (satellite: [Double], centre: [Double], dark: Double) = {
+    /// **Nine lit cells rather than five** — the horizontal arm on its own
+    /// measured `0.231` against this `0.244` — and the arms are what make it a
+    /// figure rather than a rule. The three distances from the centre are held
+    /// as three curves because that is all the pattern is: a cell's track
+    /// depends only on how far along its arm it sits.
+    static let bloom: (arms: [[Double]], dark: Double) = {
         let frames = 72
-        func breath(_ frame: Int, rate: Double, phase: Double) -> Double {
-            0.5 * (1 + cos(rate * 2 * .pi * Double(frame) / Double(frames) - phase))
+        func arm(_ distance: Double) -> [Double] {
+            (0 ..< frames).map { frame in
+                let swell = 0.5 * (1 + cos(2 * .pi * Double(frame) / Double(frames)))
+                // The core never narrows past three cells, so the figure is a
+                // pair of strokes throughout and never collapses to a point.
+                let width = 1.1 + 1.4 * swell, amplitude = 0.55 + 0.45 * swell
+                return amplitude * exp(-pow(distance / width, 2))
+            }
         }
-        let satellite = (0 ..< frames).map { 0.86 * (0.30 + 0.70 * breath($0, rate: 1, phase: 0)) }
-        let centre = (0 ..< frames).map { 0.42 + 0.58 * breath($0, rate: 2, phase: .pi) }
-        // The twenty dark cells are stretched *with* the figure rather than
+        // The sixteen dark cells are stretched *with* the figure rather than
         // set afterwards, which is what puts them at exactly `floor` while
-        // leaving the dimmest satellite well above them.
-        let all = stretched([satellite, centre, [0]], floor: floor)
-        return (all[0], all[1], all[2][0])
+        // leaving the arms' tips well above them.
+        let all = stretched([arm(0), arm(1), arm(2), [0]], floor: floor)
+        return (Array(all[0 ..< 3]), all[3][0])
     }()
 
-    /// The corners of the leading diagonal, of the trailing one, and the pivot
-    /// they turn about. Row-major indices into the 5×5 grid.
-    static let leadingDiagonal = [0, 24]
-    static let trailingDiagonal = [4, 20]
-    static let quincunxPivot = 12
-
-    /// One cell's quincunx track.
+    /// One cell's bloom track: how far it sits from the centre along its arm,
+    /// or the dark level if it is on neither arm.
     ///
-    /// The trailing diagonal is the leading one **half a loop later**, which is
-    /// the whole of what makes the two trade: `36` of `72` frames, so like every
-    /// other offset in this file it is whole.
-    static func quincunxTrack(forCell index: Int) -> [Double] {
-        if leadingDiagonal.contains(index) { return quincunx.satellite }
-        if trailingDiagonal.contains(index) { return quincunx.satellite.delayed(by: 36) }
-        if index == quincunxPivot { return quincunx.centre }
-        return [quincunx.dark]
+    /// The centre belongs to both arms and is simply distance `0`.
+    static func bloomTrack(forCell index: Int) -> [Double] {
+        let middle = (MatrixGrid.side - 1) / 2
+        let row = index / MatrixGrid.side, column = index % MatrixGrid.side
+        let onRow = row == middle, onColumn = column == middle
+        guard onRow || onColumn else { return [bloom.dark] }
+        let distance = onRow && onColumn ? 0
+            : onRow ? abs(column - middle) : abs(row - middle)
+        return bloom.arms[distance]
     }
 
     // MARK: Nothing running
@@ -1876,8 +1887,8 @@ private enum MatrixTrack {
     /// which is the direction that would actually mislead.
     ///
     /// It stays above the knock's `0.05`, so a mark waiting on a decision is
-    /// still three times darker in its silence than a mark with nothing
-    /// behind it.
+    /// still twice as dark in its silence as a mark with nothing behind it.
+    /// It was three times over, before ``floor`` was lowered to `0.100`.
     static let inactiveLevel = floor
 }
 
@@ -1904,12 +1915,12 @@ extension NotchMatrixState {
         case .running:
             return MatrixTrack.loomTrack(forCell: index)
         case .inputNeeded:
-            return MatrixTrack.step
-                .delayed(by: MatrixTrack.stepOffset(column: index % MatrixGrid.side))
+            return MatrixTrack.glide
+                .delayed(by: MatrixTrack.glideOffset(column: index % MatrixGrid.side))
         case .approvalNeeded:
             return MatrixTrack.doubleKnock
         case .completed:
-            return MatrixTrack.quincunxTrack(forCell: index)
+            return MatrixTrack.bloomTrack(forCell: index)
         case .inactive:
             return [MatrixTrack.inactiveLevel]
         }

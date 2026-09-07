@@ -784,13 +784,13 @@ struct NotchlineTests {
 
     /// Each state draws the pattern the sheet draws.
     ///
-    /// Every one of the four writes one waveform at twenty-five offsets — the
-    /// quincunx two, its centre running at twice its satellites' rate. The code
-    /// holds the waveform once and computes the offsets, so the offsets are the
-    /// half that can drift silently: a sign flipped on the loom's inner ring
-    /// turns both gears the same way and still looks like a loom, and a
-    /// quincunx whose diagonals fall into phase is a five-pointed blink. They
-    /// are transcribed here.
+    /// Three of the four write one waveform at twenty-five offsets; the bloom
+    /// writes three, one per distance out along its arms, and needs no offsets
+    /// at all. The code holds the waveforms once and computes the rest, so what
+    /// is computed is the half that can drift silently: a sign flipped on the
+    /// loom's inner ring turns both gears the same way and still looks like a
+    /// loom, and a glide whose columns lose their order still looks like
+    /// something crossing. They are transcribed here.
     ///
     /// Read off the layers rather than off ``NotchMatrixState/track(forCell:)``
     /// so that what is asserted is what the render server is actually given,
@@ -838,8 +838,9 @@ struct NotchlineTests {
                 // The centre is the pivot: it holds, so it has no animation.
                 #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
                 // Quoted to three decimals; the pivot is what the stretch puts
-                // 0.42 at, not a number chosen here.
-                #expect(close(Double(cell.opacity), 0.437, 5e-4))
+                // 0.42 at, not a number chosen here. It moved with the floor:
+                // 0.437 while that was 0.150.
+                #expect(close(Double(cell.opacity), 0.404, 5e-4))
                 continue
             }
             let track = try values(cell)
@@ -854,47 +855,57 @@ struct NotchlineTests {
         // so it alone reaches the shared floor and the inner ring's darkest sits
         // well above it. That is the two rings reading as different gears rather
         // than as one texture.
-        #expect(close(try #require(values(loom[0]).min()), 0.15))
-        #expect(try #require(values(loom[6]).min()) > 0.18)
+        #expect(close(try #require(values(loom[0]).min()), 0.10))
+        // 0.158, against a floor of 0.10 — still half again as bright as the
+        // level the outer ring reaches.
+        #expect(try #require(values(loom[6]).min()) > 0.14)
 
-        // Step: 40 frames, every cell on one curve. Eight frames a column and
-        // no row term at all — a column strikes all the way down at once, which
-        // is what the wedge's per-row lead cost it. Nothing is exempt and
-        // nothing is still.
-        let step = try cells(.inputNeeded)
-        let stepPeaks = [
+        // Glide: 40 frames, every cell on one curve. Eight frames a column
+        // and no row term at all — a column brightens all the way down at once.
+        // Nothing is exempt and nothing is still.
+        let glide = try cells(.inputNeeded)
+        let glidePeaks = [
             0, 8, 16, 24, 32,
             0, 8, 16, 24, 32,
             0, 8, 16, 24, 32,
             0, 8, 16, 24, 32,
             0, 8, 16, 24, 32
         ]
-        for (index, cell) in step.enumerated() {
+        for (index, cell) in glide.enumerated() {
             let track = try values(cell)
             #expect(track.count == 41)
             #expect(track.first == track.last)
-            #expect(track.firstIndex(of: try #require(track.max())) == stepPeaks[index])
-            // Every column strikes, and every column goes dark for three steps
-            // after its tail, so every cell takes both ends.
+            #expect(track.firstIndex(of: try #require(track.max())) == glidePeaks[index])
+            // The rule wraps, so every column takes both the crest and the floor.
             #expect(close(try #require(track.max()), 1))
-            #expect(close(try #require(track.min()), 0.15))
+            #expect(close(try #require(track.min()), 0.10))
         }
-        // A column is one thing: the five cells of it draw the same track, and
-        // no two columns draw the same one.
+        // A column is one thing: its five cells draw the same track, and no two
+        // columns draw the same one.
         for column in 0 ..< MatrixGrid.side {
             let down = try (0 ..< MatrixGrid.side)
-                .map { try values(step[$0 * MatrixGrid.side + column]) }
+                .map { try values(glide[$0 * MatrixGrid.side + column]) }
             #expect(down.allSatisfy { $0 == down[0] })
         }
         #expect(try Set(
-            (0 ..< MatrixGrid.side).map { try values(step[$0]).description }
+            (0 ..< MatrixGrid.side).map { try values(glide[$0]).description }
         ).count == MatrixGrid.side)
-        // The strike is a strike, not a band: full for one frame, and better
-        // than a third of the way down by the next. This is the whole of why
-        // the step holds a quarter of the grid at white that the wedge did.
-        let strike = try values(step[0])
-        #expect(strike.filter { close($0, 1) }.count == 2)   // frame 0, and the closing repeat
-        #expect(strike[1] < 0.8)
+        // **The profile is symmetric, and that is the whole of what separates
+        // this from the step it replaced.** A rule that falls away only behind
+        // its head jumps from the floor to full in the frame it arrives: the
+        // step climbed `0.850` of opacity in that one frame, which is what read
+        // as a strike. This one is worth the same on both sides of its crest,
+        // so it climbs into the peak and back out by equal amounts.
+        let crossing = try values(glide[0])
+        #expect(close(crossing[1], crossing[crossing.count - 2], 1e-6))
+        let intoTheCrest = crossing[0] - crossing[crossing.count - 2]
+        #expect(close(intoTheCrest, 0.223, 5e-4))
+        // And that arrival is the steepest thing the pattern ever does, so
+        // there is no harder edge hiding elsewhere in the loop.
+        let steepest = (1 ..< crossing.count)
+            .map { abs(crossing[$0] - crossing[$0 - 1]) }
+            .max()
+        #expect(close(try #require(steepest), intoTheCrest, 1e-6))
 
         // Double knock: every cell together, twice, 300ms apart. Carried across
         // from the 4×4 mark unchanged.
@@ -906,44 +917,50 @@ struct NotchlineTests {
             #expect(try values(cell) == knockTrack)
         }
 
-        // Quincunx: 72 frames. Four corners about a centre, the two diagonals
-        // half a loop apart, and the centre at twice their rate so it takes the
-        // light between each pair and the next. The other twenty cells hold.
-        let quincunx = try cells(.completed)
-        let leading = try values(quincunx[0])
-        #expect(leading.count == 73)
-        #expect(leading.first == leading.last)
-        // The satellites top out below the centre, which is what gives the
-        // figure a middle rather than five equal points.
-        #expect(close(try #require(leading.max()), 0.881, 5e-4))
-        #expect(close(try #require(leading.min()), 0.369, 5e-4))
-        #expect(leading.firstIndex(of: try #require(leading.max())) == 0)
-        for index in [0, 24] { #expect(try values(quincunx[index]) == leading) }
-        // Half a loop later, and that is the whole of what makes the two trade.
-        let trailing = (0 ... 72).map { leading[(($0 - 36) % 72 + 72) % 72] }
-        for index in [4, 20] { #expect(try values(quincunx[index]) == trailing) }
-        #expect(trailing.firstIndex(of: try #require(trailing.max())) == 36)
-        // The centre alone reaches full, and does it twice a loop — once
-        // between each diagonal's crest and the other's.
-        let centre = try values(quincunx[12])
-        #expect(centre.count == 73)
-        #expect(close(try #require(centre.max()), 1))
-        #expect(close(try #require(centre.min()), 0.507, 5e-4))
-        #expect(centre.indices.filter { close(centre[$0], 1, 5e-4) } == [18, 54])
-        // Every other cell is dark and still, at the shared floor.
-        let figure = Set([0, 4, 12, 20, 24])
-        for (index, cell) in quincunx.enumerated() where !figure.contains(index) {
-            #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
-            #expect(close(Double(cell.opacity), 0.15))
+        // Bloom: 72 frames. The middle row and the middle column swell from a
+        // shared core to the full width of the grid and draw back in, together.
+        // A cell's track depends only on how far along its arm it sits, so
+        // there are three curves and no offsets at all.
+        let bloom = try cells(.completed)
+        let middle = (MatrixGrid.side - 1) / 2
+        func arm(_ index: Int) -> Int? {
+            let row = index / MatrixGrid.side, column = index % MatrixGrid.side
+            let onRow = row == middle, onColumn = column == middle
+            guard onRow || onColumn else { return nil }
+            return onRow && onColumn ? 0 : onRow ? abs(column - middle) : abs(row - middle)
         }
-        // Neither diagonal ever drops out, so every frame is still a quincunx:
-        // the figure's brightest point never approaches the floor the twenty
-        // dark cells hold, and a finished turn is never for an instant
-        // mistakable for a mark with nothing behind it.
-        let brightestPoint = (0 ..< 72)
-            .map { frame in max(leading[frame], trailing[frame], centre[frame]) }
-            .min()
-        #expect(try #require(brightestPoint) > 0.75)
+        // The three curves, read off the cells that carry them.
+        let arms = try (0 ... 2).map { d in
+            try values(bloom[bloom.indices.first { arm($0) == d }!])
+        }
+        for track in arms {
+            #expect(track.count == 73)
+            #expect(track.first == track.last)
+            // The arms move together: every one crests on the opening frame.
+            #expect(track.firstIndex(of: try #require(track.max())) == 0)
+        }
+        // The centre alone reaches full, and each step out along an arm is
+        // dimmer than the one inside it — which is what makes the figure a
+        // cross with a middle rather than five equal points.
+        #expect(close(try #require(arms[0].max()), 1))
+        #expect(close(try #require(arms[1].max()), 0.867, 5e-4))
+        #expect(close(try #require(arms[2].max()), 0.575, 5e-4))
+        #expect(arms[0].max()! > arms[1].max()! && arms[1].max()! > arms[2].max()!)
+        // Every cell of a given distance draws exactly the same curve.
+        for (index, cell) in bloom.enumerated() {
+            guard let distance = arm(index) else {
+                #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
+                #expect(close(Double(cell.opacity), 0.10))
+                continue
+            }
+            #expect(try values(cell) == arms[distance])
+        }
+        // Nine cells on the figure, sixteen dark: the cross is a whole row and
+        // a whole column, so nothing here is a lone cell.
+        #expect(bloom.indices.filter { arm($0) != nil }.count == 9)
+        // The core never narrows to a point — the centre stays well lit through
+        // the trough, so the mark keeps one silhouette the whole way round.
+        #expect(close(try #require(arms[0].min()), 0.595, 5e-4))
 
         // Connected and disconnected: a still, at the level three of the four
         // patterns now floor at. That shared floor is why the old argument —
@@ -978,13 +995,15 @@ struct NotchlineTests {
         }
         #expect(try dimmestMark(loom) > resting)
         // **The one scale the whole set is spent on.** Whichever state the mark
-        // is in, its brightest cell is `1` and its dimmest is the shared floor,
+        // is in, its brightest cell is `1` and its dimmest is the shared floor
+        // — `0.10` since 2026-09-07, lowered from `0.15` so every mark rests
+        // darker on the bar without any pattern's shape changing,
         // so the same cell value means the same thing across all of them. This
         // is what makes the ceiling useless as a loudness lever, and it is why
-        // the step and the quincunx had to buy quiet with lit area and dwell
+        // the glide and the bloom had to buy quiet with lit area and dwell
         // instead. The knock is the standing exception and keeps its own
         // darker silence, asserted separately below.
-        for (name, mark) in [("loom", loom), ("step", step), ("quincunx", quincunx)] {
+        for (name, mark) in [("loom", loom), ("glide", glide), ("bloom", bloom)] {
             var levels: [Double] = []
             for cell in mark {
                 if cell.animation(forKey: "notch.matrix.opacity") == nil {
@@ -994,11 +1013,11 @@ struct NotchlineTests {
                 }
             }
             #expect(close(try #require(levels.max()), 1, 5e-4), "\(name) must reach full")
-            #expect(close(try #require(levels.min()), 0.15, 5e-4), "\(name) must floor at 0.15")
+            #expect(close(try #require(levels.min()), 0.10, 5e-4), "\(name) must floor at 0.10")
         }
 
-        #expect(try dimmestMark(step) > resting)
-        #expect(try dimmestMark(quincunx) > resting)
+        #expect(try dimmestMark(glide) > resting)
+        #expect(try dimmestMark(bloom) > resting)
         // And the one ordering that still has to hold on the level alone: a
         // mark waiting on a decision is darker in its silence than a mark with
         // nothing behind it, which is half of how Approval asks.
@@ -5448,17 +5467,30 @@ struct NotchlineTests {
         // Continuously legible: on every frame of the loop some cell is at
         // least four fifths lit, and the mark as a whole never sinks to a flat
         // dark. Two heads are always somewhere on the grid, so the loom holds
-        // its output almost flat — the mean moves only between 0.353 and 0.362
+        // its output almost flat — the mean moves only between 0.314 and 0.325
         // across the whole loop, which is a mark that never pulses in the
         // corner of the eye while still having to be looked at to be read.
+        //
+        // **Both levels came down with ``MatrixTrack/floor``** on 2026-09-07,
+        // `0.15` to `0.10`: the band was 0.353 to 0.362 while the floor was
+        // `0.15`. It is the same span in the same place, a tenth lower.
         #expect((brightest.min() ?? 0) > 0.8)
-        #expect((average.min() ?? 0) > 0.34)
-        // And the pattern it replaced, measured the same way: for most of its
-        // loop the whole grid is darker than the still it is drawn against.
+        #expect((average.min() ?? 0) > 0.31)
+        // And the pattern it replaced, measured the same way: through its
+        // silence the whole grid is darker than the still it is drawn against,
+        // which is half of how Approval asks.
         let resting = try #require(NotchMatrixState.inactive.track(forCell: 0).first)
         let knock = NotchMatrixState.approvalNeeded.track(forCell: 0)
-        let dark = knock.filter { $0 <= resting }
-        #expect(dark.count > knock.count / 2)
+        // **The knock kept its own `0.05` when the floor dropped, so this
+        // reading narrowed.** ~~For most of its loop~~ the grid is darker than
+        // the still is no longer true of the loop as a whole — 17 frames of 36,
+        // where it was 20 — because the still came down to meet it. It is still
+        // true of the part that carries the meaning: of the 18 frames of
+        // silence after the second knock, all but the first are at or below a
+        // resting mark. Lowering the floor further would have taken that too,
+        // which is where `0.10` came from.
+        let silence = knock.suffix(knock.count / 2)
+        #expect(silence.filter { $0 <= resting }.count >= silence.count - 1)
         #expect((knock.min() ?? 1) < 0.06)
     }
 
