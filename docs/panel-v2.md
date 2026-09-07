@@ -104,6 +104,8 @@ Three consequences:
 - **The cap has not moved; the floor under it has.** `308` is still reached by three live rows or by one request opened at the body's cap — not by owning a second product.
 - ~~**A limit speaking is the one state neither the user nor the machine chose.** It costs `25`, once, at any product and window count, and it arrives as a line that was not there a moment ago.~~ **Void, and it makes the bullet above absolute.** With the threshold removed, the *only* thing that takes this panel past `308` is the user opening the quota table. Nothing the machine observes — no share, no reset, no unreadable reading — changes its height at all.
 
+Approval detail refinement (2026-09-07): the body retains labelled argument fields with separate prose and code treatments ([`answer-in-notch.md`](answer-in-notch.md) §4.2). Its measured content includes labels and spacing but is still capped at `140` pt; the open row remains capped at `240` pt. The header, queue and footer dimensions are unchanged.
+
 ## 5. What still gates this
 
 Nothing new, and as of 2026-09-05 nothing undecided either. All six were put to the board's owner from Figma page `11` §07 and came back settled; the two marked **★** are settled *as investigations*, which is what they always were — neither is a drawing question, and both are answered by measuring something rather than by choosing something.

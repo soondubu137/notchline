@@ -758,7 +758,10 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
             AgentRequestReading.arguments(of: toolInput).map { .command($0) }
         }
         return form.map {
-            AgentRequest(id: toolUseID, toolName: toolName, form: $0)
+            AgentRequest(
+                id: toolUseID, toolName: toolName, form: $0,
+                argumentFields: $0.name == "command" ? AgentRequestReading.approvalFields(in: toolInput) : []
+            )
         }
     }
 }
@@ -1064,6 +1067,7 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
                 id: toolUseID,
                 toolName: toolName,
                 form: $0,
+                argumentFields: $0.name == "command" ? AgentRequestReading.approvalFields(in: toolInput) : [],
                 offeredRules: offeredRules
             )
         }

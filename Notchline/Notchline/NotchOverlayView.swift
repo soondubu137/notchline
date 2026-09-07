@@ -2173,12 +2173,16 @@ final class WheelCatcherView: NSView {
 /// **The lines are the ones the layout counted**, character for character, which
 /// is what makes §4.4's count of what is below the fold true rather than
 /// approximately true.
-private struct RequestBodyView: View {
+struct RequestBodyView: View {
     let layout: RequestBodyLayout
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            text
+            if layout.fields.isEmpty {
+                text
+            } else {
+                arguments
+            }
             if !layout.options.isEmpty {
                 Spacer().frame(height: PanelMetrics.optionListSpacing)
                 ForEach(layout.options) { option in
@@ -2190,6 +2194,50 @@ private struct RequestBodyView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var arguments: some View {
+        VStack(alignment: .leading, spacing: PanelMetrics.argumentSpacing) {
+            ForEach(layout.fields) { field in
+                VStack(alignment: .leading, spacing: PanelMetrics.argumentLabelSpacing) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(field.labelLines.enumerated()), id: \.offset) { _, line in
+                            Text(verbatim: line)
+                                .font(Font(PanelMetrics.argumentLabelFont))
+                                .foregroundStyle(NotchPalette.reading)
+                                .frame(height: PanelMetrics.argumentLabelHeight, alignment: .leading)
+                        }
+                    }
+                    .help(field.argument.id)
+                    argumentValue(field)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(field.argument.label): \(field.argument.value)")
+            }
+        }
+        .padding(.vertical, PanelMetrics.argumentBodyInset)
+    }
+
+    private func argumentValue(_ field: RequestBodyLayout.Field) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(field.lines.enumerated()), id: \.offset) { _, line in
+                Text(verbatim: line.isEmpty ? " " : line)
+                    .font(Font(field.isCode ? PanelMetrics.machineTextFont : PanelMetrics.proseFont))
+                    .foregroundStyle(NotchPalette.sessionTitle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: field.lineHeight, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, field.isCode ? PanelMetrics.machineTextHorizontalInset : 0)
+        .padding(.vertical, field.isCode ? PanelMetrics.machineTextVerticalInset : 0)
+        .background {
+            if field.isCode {
+                RoundedRectangle(cornerRadius: PanelMetrics.machineTextCornerRadius)
+                    .fill(NotchPalette.recessedGround)
+            }
+        }
     }
 
     @ViewBuilder

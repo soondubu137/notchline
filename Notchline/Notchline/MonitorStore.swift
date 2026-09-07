@@ -1462,6 +1462,11 @@ enum PanelMetrics {
     }
 
     /// §4.2's prose setting: sentences a person is meant to read.
+    static let argumentLabelFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+    static let argumentLabelHeight: CGFloat = 15
+    static let argumentLabelSpacing: CGFloat = 4
+    static let argumentSpacing: CGFloat = 12
+    static let argumentBodyInset: CGFloat = 8
     static let proseFont = NSFont.systemFont(ofSize: 13, weight: .regular)
     /// And its machine text: strings a machine will execute.
     static let machineTextFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)

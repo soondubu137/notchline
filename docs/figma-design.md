@@ -902,3 +902,5 @@ Awaiting approval, Chats, approval needed
 Product and technical behaviour are governed by [`PRD.md`](PRD.md), [`tech-design.md`](tech-design.md), [`CONTEXT.md`](../CONTEXT.md) and [`docs/adr`](adr/). Figma nodes are for visual and layout acceptance and are never a source of truth about a product's protocol.
 
 Request controls share `PanelMetrics.requestControlFont` (`13 pt` Light), including destination buttons, affirmative and refusal buttons, and option labels. Quiet request buttons deepen their theme wash from `0.24` to `0.18` on hover. This supersedes Medium labels and white hover fills in earlier specimens; the Figma file itself has not been updated.
+
+Approval detail bodies now use labelled fields rather than one flattened code block (2026-09-07; [`answer-in-notch.md`](answer-in-notch.md) §4.2). Prose and full resource values use system type; only code and structured data use the recessed ground. Labels are `11/15` Medium, values `13/19` Regular or SF Mono `12/18`, with `4` pt label gaps, `12` pt field gaps and `8` pt body insets. The existing viewport and answer controls remain. The Figma specimens have not been updated for this change.

@@ -30,6 +30,10 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// §4.6 is that this app does not annotate what it was handed.
     let toolName: String?
     let form: Form
+    /// Approval arguments projected at the hook boundary, before flattening.
+    /// Empty for prose/questions and for manually constructed plain commands.
+    /// The command string remains the compatibility reading, never parsed by UI.
+    let argumentFields: [ApprovalArgument]
     /// The persistent rules the product offered to write alongside a grant.
     ///
     /// Empty on every request that was offered none -- which is the product's
@@ -82,12 +86,14 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         id: String,
         toolName: String?,
         form: Form,
+        argumentFields: [ApprovalArgument] = [],
         offeredRules: [PermissionRuleOffer] = [],
         replyTicket: HookReplyRegistry.Ticket? = nil
     ) {
         self.id = id
         self.toolName = toolName
         self.form = form
+        self.argumentFields = argumentFields
         self.offeredRules = offeredRules
         self.replyTicket = replyTicket
     }
@@ -104,6 +110,7 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
             id: id,
             toolName: toolName,
             form: form,
+            argumentFields: argumentFields,
             offeredRules: offeredRules,
             replyTicket: replyTicket
         )
@@ -240,6 +247,19 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     }
 }
 
+/// One argument with its name and value kept separate. Roles select typography,
+/// never a safety judgement. Unknown fields remain visible, in source spelling.
+nonisolated struct ApprovalArgument: Identifiable, Sendable, Equatable {
+    let id: String
+    let label: String
+    let value: String
+    let role: Role
+
+    nonisolated enum Role: Sendable, Equatable {
+        case prose, code, resource, data
+    }
+}
+
 /// The three objects at the foot of an open row, in this request's own words.
 ///
 /// **Derived from the form, like ``AgentRequest/setting``, and for the same
@@ -371,43 +391,63 @@ nonisolated struct PermissionRuleOffer: Sendable, Equatable {
 /// a product and lives on its ``AgentHookVocabulary``, while *how* a question
 /// set or a command body is read out of one is the same work on both sides.
 nonisolated enum AgentRequestReading {
-    /// One request's arguments, exactly as they arrived, rendered once.
-    ///
-    /// **The whole object, not a field picked out of it.** Every tool has
-    /// different arguments — `Bash` has `command`, `Edit` has three paths and
-    /// two strings, an MCP tool has whatever it likes — so reading
-    /// `tool_input.command` would cover `Bash` and leave every other approval
-    /// with an empty body, and "the longest string" is a heuristic, which is the
-    /// kind of thing §4.6 exists to refuse. `answer-in-notch.md` §14.4 narrows
-    /// the PRD's ban to *the payload of a request the product is already blocked
-    /// on* — the payload, not a field of it.
-    ///
-    /// **The fixed order is load-bearing and not cosmetic.** ``JSONValue/object``
-    /// is a Swift `Dictionary`, whose iteration order differs between instances
-    /// holding equal values — so rendering in whatever order the dictionary
-    /// offered would produce a different string for the same request on a later
-    /// read, and ``HookEventRepository/renderedProjection()`` would see a change
-    /// and wake the panel for it. Sorting by name is what makes a request that
-    /// has not changed read as one that has not changed.
-    ///
-    /// Rendered here, once, inside the actor, and never in a row builder: rows
-    /// are rebuilt on every refresh, and a `String` made once is then shared by
-    /// copy-on-write, so comparing two rebuilt rows compares a pointer rather
-    /// than 128 KiB.
+    /// Preserve field boundaries once, while the payload is still structured.
+    /// Known textual keys choose presentation only; every unknown key survives.
+    /// Containers keep JSON structure (including empty arrays/objects and null).
+    nonisolated static func approvalFields(in input: JSONValue) -> [ApprovalArgument] {
+        let fields = input.objectValue ?? ["value": input]
+        return fields.keys.sorted().map { key in
+            let value = fields[key]!
+            let role: ApprovalArgument.Role
+            let rendered: String
+            if case let .string(text) = value {
+                rendered = text.isEmpty ? "\"\"" : text
+                switch key {
+                case "command", "cmd", "patch", "diff", "old_string", "new_string", "content", "code":
+                    role = .code
+                case "url", "uri", "path", "file_path", "cwd", "workdir":
+                    role = .resource
+                default:
+                    role = .prose
+                }
+            } else {
+                role = .data
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                // JSONValue came from valid JSON; non-finite manually supplied
+                // numbers still have an explicit reading rather than vanishing.
+                rendered = (try? encoder.encode(value)).flatMap { String(data: $0, encoding: .utf8) }
+                    ?? scalar(value) ?? "null"
+            }
+            let label = switch key {
+            case "url": "URL"
+            case "uri": "URI"
+            case "cwd": "Working directory"
+            default: key.replacingOccurrences(of: "_", with: " ").capitalized
+            }
+            return ApprovalArgument(id: key, label: label, value: rendered, role: role)
+        }
+    }
+
+    /// Compatibility reading for the command form and its plain-text callers.
+    /// Structured approval rendering uses `approvalFields(in:)` instead. Both
+    /// projections are made at the boundary, in deterministic key order.
     nonisolated static func arguments(of toolInput: JSONValue) -> String? {
         guard case let .object(fields) = toolInput else {
             return scalar(toolInput)
         }
         let named = fields.keys.sorted()
+        guard !named.isEmpty else { return "{}" }
         // **A lone string is drawn bare.** Most tools have one argument that
         // matters, and wrapping `rm -rf build` in a name it already implies is
         // noise a reader has to look past at exactly the wrong moment.
         if named.count == 1, let only = named.first, let value = scalar(fields[only]) {
-            return value.isEmpty ? nil : value
+            return value.isEmpty ? "\"\"" : value
         }
         var lines: [String] = []
         for key in named {
-            guard let value = scalar(fields[key]), !value.isEmpty else { continue }
+            guard let raw = scalar(fields[key]) else { continue }
+            let value = raw.isEmpty ? "\"\"" : raw
             let broken = value.split(separator: "\n", omittingEmptySubsequences: false)
             if broken.count == 1 {
                 lines.append("\(key)  \(value)")
@@ -422,7 +462,7 @@ nonisolated enum AgentRequestReading {
         return text.isEmpty ? nil : text
     }
 
-    /// One value as the row would read it, with no JSON around it.
+    /// One value for the compatibility reading, with no JSON string escapes.
     ///
     /// **Not `JSONEncoder`,** which is what this was first written as. It draws
     /// the braces, the quotes and the escapes as well as the command — so a
@@ -441,9 +481,9 @@ nonisolated enum AgentRequestReading {
         case let .bool(flag): flag ? "true" : "false"
         case .null: "null"
         case let .array(items):
-            items.compactMap { scalar($0) }.joined(separator: ", ")
+            items.isEmpty ? "[]" : items.compactMap { scalar($0) }.joined(separator: ", ")
         case let .object(fields):
-            fields.keys.sorted()
+            fields.isEmpty ? "{}" : fields.keys.sorted()
                 .compactMap { key in scalar(fields[key]).map { "\(key)  \($0)" } }
                 .joined(separator: "\n")
         case nil: nil
@@ -612,7 +652,8 @@ nonisolated enum AgentRequestReading {
     nonisolated static func wrapped(
         _ text: String,
         to width: CGFloat,
-        font: NSFont
+        font: NSFont,
+        indentContinuations: Bool = true
     ) -> [String] {
         guard width > 0 else { return [text] }
         var lines: [String] = []
@@ -624,7 +665,8 @@ nonisolated enum AgentRequestReading {
                 lines.append(source)
                 continue
             }
-            let indent = String(source.prefix { $0 == " " || $0 == "\t" }) + "  "
+            let indent = indentContinuations
+                ? String(source.prefix { $0 == " " || $0 == "\t" }) + "  " : ""
             var remainder = Substring(source)
             var isContinuation = false
             while !remainder.isEmpty {
@@ -700,6 +742,25 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
     let position: Position?
     /// Whether ticking several is allowed (§5.5).
     let allowsSeveralAnswers: Bool
+    var fields: [Field] = []
+
+    nonisolated struct Field: Identifiable, Sendable, Equatable {
+        let argument: ApprovalArgument
+        let labelLines: [String]
+        let lines: [String]
+        var id: String { argument.id }
+        var isCode: Bool { argument.role == .code || argument.role == .data }
+        var lineHeight: CGFloat { isCode ? 18 : 19 }
+        var textTop: CGFloat {
+            CGFloat(labelLines.count) * PanelMetrics.argumentLabelHeight
+                + PanelMetrics.argumentLabelSpacing
+                + (isCode ? PanelMetrics.machineTextVerticalInset : 0)
+        }
+        var height: CGFloat {
+            textTop + CGFloat(lines.count) * lineHeight
+                + (isCode ? PanelMetrics.machineTextVerticalInset : 0)
+        }
+    }
 
     nonisolated struct Position: Sendable, Equatable {
         let index: Int
@@ -709,6 +770,11 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
 
     /// What the whole body weighs, before the viewport's cap is applied.
     nonisolated var contentHeight: CGFloat {
+        if !fields.isEmpty {
+            return fields.reduce(0) { $0 + $1.height }
+                + CGFloat(fields.count - 1) * PanelMetrics.argumentSpacing
+                + PanelMetrics.argumentBodyInset * 2
+        }
         let text = CGFloat(lines.count) * PanelMetrics.requestLineHeight(for: setting)
         let ground = setting == .machineText
             ? PanelMetrics.machineTextVerticalInset * 2
@@ -733,6 +799,25 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
     /// screen, which is what makes the count clear itself rather than sit there
     /// naming something unreachable.
     nonisolated func linesBelowTheFold(scrolledBy offset: CGFloat) -> Int {
+        if !fields.isEmpty {
+            let fold = offset + PanelMetrics.requestBodyMaximumHeight
+            var top = PanelMetrics.argumentBodyInset
+            var hidden = 0
+            for field in fields {
+                for index in field.labelLines.indices {
+                    if top + CGFloat(index + 1) * PanelMetrics.argumentLabelHeight > fold {
+                        hidden += 1
+                    }
+                }
+                for index in field.lines.indices {
+                    if top + field.textTop + CGFloat(index + 1) * field.lineHeight > fold {
+                        hidden += 1
+                    }
+                }
+                top += field.height + PanelMetrics.argumentSpacing
+            }
+            return hidden
+        }
         let lineHeight = PanelMetrics.requestLineHeight(for: setting)
         guard lineHeight > 0 else { return 0 }
         let hidden = contentHeight - offset - PanelMetrics.requestBodyMaximumHeight
@@ -751,6 +836,28 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
         showing question: Int = 0,
         width: CGFloat = PanelMetrics.requestBodyWidth
     ) -> RequestBodyLayout? {
+        if !request.argumentFields.isEmpty, case .command = request.form {
+            let fields = request.argumentFields.map { argument in
+                let isCode = argument.role == .code || argument.role == .data
+                return Field(
+                    argument: argument,
+                    labelLines: AgentRequestReading.wrapped(
+                        argument.label, to: width, font: PanelMetrics.argumentLabelFont,
+                        indentContinuations: false
+                    ),
+                    lines: AgentRequestReading.wrapped(
+                        argument.value,
+                        to: width - (isCode ? PanelMetrics.machineTextHorizontalInset * 2 : 0),
+                        font: isCode ? PanelMetrics.machineTextFont : PanelMetrics.proseFont,
+                        indentContinuations: isCode
+                    )
+                )
+            }
+            return RequestBodyLayout(
+                setting: .prose, lines: [], options: [], header: nil,
+                position: nil, allowsSeveralAnswers: false, fields: fields
+            )
+        }
         switch request.form {
         case let .command(text):
             return RequestBodyLayout(
