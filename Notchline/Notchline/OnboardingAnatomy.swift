@@ -1497,7 +1497,6 @@ private struct OpenRowGeometry {
         let lines = CGFloat(body.lines.count)
             * PanelMetrics.requestLineHeight(for: body.setting)
         let top = bodyTop + lines + PanelMetrics.optionListSpacing
-            + PanelMetrics.questionInstructionHeight
         let heights = body.optionLayouts.map(\.height)
         guard let first = heights.first, let last = heights.last else { return nil }
         let list = heights.reduce(0, +) + CGFloat(heights.count - 1) * PanelMetrics.optionSpacing

@@ -175,11 +175,12 @@ The payload already supplies `label`, optional `description` and `multiSelect`. 
 | Object | Treatment |
 | --- | --- |
 | Question | Prose, `17` pt per line |
-| Instruction | `24` pt; names the selection mode or states that the typed answer will be sent |
 | Option title | System `13` Medium, `19` pt per line; wraps in full |
 | Description | System `12` Regular, `18` pt per line; two-line preview, then independent `Show more` / `Show less` at `22` pt |
 | Option card | `10` pt insets, `25` pt marker column, `8` pt corners; `6` pt between cards |
 | Answer footer | Permanent input field on the left and `Send` on the right, `28` pt high |
+
+~~An instruction line sat between the question and the cards at `24` pt, naming the selection mode.~~ **Removed 2026-09-07:** it spent `28` pt of a `300` pt body restating the marker shape underneath it — a circle already says *one of these* and a box already says *as many as you like* — and the one act it described, that choosing is not sending, is taught in onboarding (§5.3) rather than repeated above every question forever. The gap it stood in becomes `12`, the distance this panel puts between any two objects, so the question still reads as the thing the list answers rather than as the head of the list.
 
 Single choice uses a `14` pt radio circle; multiple choice uses a `14` pt checkbox. The selected card has a subtle theme fill and border. Description disclosure never changes selection or submits. Expanded text is complete and shares the body's wheel scrolling; there is no nested scroll area in an option. The same measured lines determine the drawing, card height and fold counter. Read-only requests still allow description disclosure while withholding selection and submission.
 
@@ -198,7 +199,7 @@ Only `Send` or return records the current answer. Choosing an option never submi
 
 Every question has one input field to the left of Send. There is no separate `Write my own answer` option. Non-whitespace text in this field is the entire answer for both single and multiple choice, regardless of which options are selected. It is never sent as an annotation on those options. Leading and trailing whitespace is trimmed.
 
-While text is present, selected markers and card emphasis are suppressed and the instruction reads `Your typed answer will be sent.` The underlying choices remain in memory: clearing the field, or leaving only whitespace, restores them. Selecting another option while text remains does not override the field. Send is disabled when there is neither meaningful text nor a selection.
+While text is present, selected markers and card emphasis are suppressed ~~and the instruction reads `Your typed answer will be sent.`~~ — the suppression is the whole of the announcement now that the instruction line is gone, and it is the more direct one: the options visibly stop being the answer at the moment the first character lands. The underlying choices remain in memory: clearing the field, or leaving only whitespace, restores them. Selecting another option while text remains does not override the field. Send is disabled when there is neither meaningful text nor a selection.
 
 This replaces the previous option-plus-note behaviour, which could send a selected label even when the person had written a different answer.
 
@@ -403,8 +404,8 @@ Every open row is `100` plus its body.
 | Closed, waiting | `80` | None. `12.5 + 16 + 2 + 17 + 2 + 18 + 12.5`, the [`colour-v2.md`](colour-v2.md) badge caption included |
 | A question with nothing to pick | `117` | One prose line, `17`. The shortest row that can be opened |
 | An approval at three lines | `170` | The machine-text block at `70` |
-| A question at three options | `193` | A question line, `4`, and three `24` pt options — `93` |
-| A restatement at three lines, two options | `203` | Prose `51`, `4`, two options `48` — `103` |
+| A question at three options | `193` | A question line, `12`, and three `24` pt options — `93` |
+| A restatement at three lines, two options | `203` | Prose `51`, `12`, two options `48` — `103` |
 | An approval or plan at the maximum | `240` | The body's cap, `140`. The row **is** the three-row viewport |
 | A question at the maximum | `400` | The question body's cap, `300` (§4.1). Past the three-row viewport, which grows to it |
 | In flight | unchanged | Nothing resizes; the controls lose `55%` of their opacity |

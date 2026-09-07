@@ -1393,7 +1393,6 @@ enum PanelMetrics {
     static let optionHandleWidth: CGFloat = 25
     static let optionSpacing: CGFloat = 6
     static let optionDisclosureHeight: CGFloat = 22
-    static let questionInstructionHeight: CGFloat = 24
 
     /// The row of answers at the foot of an open row.
     ///
@@ -1472,7 +1471,15 @@ enum PanelMetrics {
     static let machineTextVerticalInset: CGFloat = 8
     static let machineTextCornerRadius: CGFloat = 4
     /// Between the question and the options under it.
-    static let optionListSpacing: CGFloat = 4
+    ///
+    /// It was `4` while a `24` pt instruction line stood in this gap and did the
+    /// separating; with that line gone (`answer-in-notch.md` §5.1) `4` would
+    /// leave the question closer to the first card than the cards are to each
+    /// other, and read as the head of the list rather than the thing the list
+    /// answers. `12` is ``argumentSpacing`` — the same distance this panel
+    /// already puts between two objects — and still returns `16` pt of the `28`
+    /// the instruction occupied.
+    static let optionListSpacing: CGFloat = 12
 
     /// How tall one line of a body is, which is a fact about its setting.
     ///

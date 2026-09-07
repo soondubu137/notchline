@@ -26568,14 +26568,15 @@ for line in sys.stdin:
         }
         #expect(try layout(1).position?.drawn == "1/1")
         #expect(try layout(3).position?.drawn == "1/3")
-        // And the options come with it, at `24` a row over the question's lines.
+        // And the options come with it, a gap under the question's lines and
+        // then the cards themselves -- no instruction line between the two.
         let three = try layout(3)
         #expect(three.options.count == 1)
         #expect(three.setting == .prose)
         #expect(
             three.contentHeight
                 == CGFloat(three.lines.count) * PanelMetrics.requestLineHeight(for: .prose)
-                    + PanelMetrics.optionListSpacing + PanelMetrics.questionInstructionHeight
+                    + PanelMetrics.optionListSpacing
                     + three.optionLayouts.reduce(0) { $0 + $1.height }
         )
     }

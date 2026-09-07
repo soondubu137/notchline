@@ -829,7 +829,6 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
         let list = options.isEmpty
             ? 0
             : PanelMetrics.optionListSpacing
-                + PanelMetrics.questionInstructionHeight
                 + optionLayouts.reduce(0) { $0 + $1.height }
                 + CGFloat(max(0, optionLayouts.count - 1)) * PanelMetrics.optionSpacing
         return text + ground + list
@@ -871,8 +870,6 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
             let fold = offset + maximumHeight
             var hidden = lines.indices.filter { CGFloat($0 + 1) * 17 > fold }.count
             var top = CGFloat(lines.count) * 17 + PanelMetrics.optionListSpacing
-            if top + PanelMetrics.questionInstructionHeight > fold { hidden += 1 }
-            top += PanelMetrics.questionInstructionHeight
             for option in optionLayouts {
                 hidden += option.titleLines.indices.filter {
                     top + PanelMetrics.optionInset + CGFloat($0 + 1) * PanelMetrics.optionTitleLineHeight > fold

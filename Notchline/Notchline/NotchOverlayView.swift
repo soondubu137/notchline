@@ -2198,7 +2198,6 @@ final class WheelCatcherView: NSView {
 /// is what makes §4.4's count of what is below the fold true rather than
 /// approximately true.
 struct RequestBodyView: View {
-    @EnvironmentObject private var store: MonitorStore
     let layout: RequestBodyLayout
 
     var body: some View {
@@ -2210,10 +2209,6 @@ struct RequestBodyView: View {
             }
             if !layout.options.isEmpty {
                 Spacer().frame(height: PanelMetrics.optionListSpacing)
-                Text(store.questionUsesTypedAnswer ? "Your typed answer will be sent." : (layout.allowsSeveralAnswers ? "Select one or more options." : "Choose one option, then send your answer."))
-                    .font(.system(size: 11))
-                    .foregroundStyle(NotchPalette.reading)
-                    .frame(height: PanelMetrics.questionInstructionHeight, alignment: .topLeading)
                 VStack(spacing: PanelMetrics.optionSpacing) {
                     ForEach(layout.optionLayouts) { option in
                         OptionRow(layout: option, allowsSeveralAnswers: layout.allowsSeveralAnswers)
