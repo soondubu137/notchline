@@ -7194,6 +7194,53 @@ struct NotchlineTests {
         #expect(catcher?.hitTest(.zero) == nil)
     }
 
+    /// The window server still lets this process set a cursor while another
+    /// application is the active one.
+    ///
+    /// **This is an assertion about macOS, and it is here on purpose.** Every
+    /// control on a closed row promises a click with a pointing hand, and
+    /// `NSCursor.set()` is refused outside the active application -- see
+    /// ``BackgroundCursor`` for the measurement. The permission that lifts that
+    /// is asked for through a property no public header declares, so the day a
+    /// release stops offering it, nothing breaks, throws or logs: the hand
+    /// simply stops appearing, on the one surface nobody runs a test against.
+    /// This failing is that signal.
+    ///
+    /// It asserts the agreement rather than the cursor, because a test host has
+    /// no pointer to read one from -- the hand itself is verified by driving the
+    /// Release app and screenshotting the pointer.
+    @Test @MainActor
+    func theWindowServerLetsAnInactiveApplicationSetTheCursor() {
+        #expect(BackgroundCursor.isAllowed)
+    }
+
+    /// Both mechanisms the hand needs, and neither is the other's fallback.
+    ///
+    /// `.mouseEnteredAndExited` is what carries it on a closed row, where no
+    /// cursor pass runs at all; `.cursorUpdate` is what wins it on an open one,
+    /// where the panel is key and the request body's scroll view owns the
+    /// rectangle under the pointer and would otherwise hand back an arrow.
+    /// Drop either and one of the two surfaces silently loses its pointer.
+    @Test @MainActor
+    func thePointingHandTracksForBothTheCrossingAndTheCursorPass() {
+        let view = PointingHandView()
+        view.frame = NSRect(x: 0, y: 0, width: 76, height: 24)
+        view.updateTrackingAreas()
+
+        // One area, replaced rather than stacked on every layout pass.
+        #expect(view.trackingAreas.count == 1)
+        let options = view.trackingAreas.first?.options
+        #expect(options?.contains(.mouseEnteredAndExited) == true)
+        #expect(options?.contains(.cursorUpdate) == true)
+        // Delivered to a panel that is neither key nor in the active app, and
+        // kept in step with the row as the list scrolls under it.
+        #expect(options?.contains(.activeAlways) == true)
+        #expect(options?.contains(.inVisibleRect) == true)
+        // It says what the pointer looks like and never takes the click; the
+        // chip underneath is the target.
+        #expect(view.hitTest(.zero) == nil)
+    }
+
     /// Recheck must report what is true now, not what was true before.
     ///
     /// It used to call a refresh that returned immediately whenever an

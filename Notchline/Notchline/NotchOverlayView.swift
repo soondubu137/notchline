@@ -3056,6 +3056,13 @@ private struct ProductBadge: View {
 /// registered `.activeAlways` is delivered regardless, so the cursor is set on
 /// the way in and put back on the way out.
 ///
+/// **~~That is the whole mechanism.~~ Superseded -- delivery was never the hard
+/// part.** The area arrives on a closed row exactly as described above and the
+/// hand still did not appear, because the *set* is the half the window server
+/// refuses from an application that is not the active one. What makes the
+/// paragraph above true is ``BackgroundCursor``, which asks for the right to
+/// give the instruction at all.
+///
 /// **`.cursorUpdate` as well as `.mouseEnteredAndExited`, and both are load
 /// bearing.** An open row latches the panel, and a latched panel *is* key --
 /// so AppKit starts running the cursor-management pass it had been skipping,
@@ -3076,6 +3083,65 @@ struct PointingHandCursor: NSViewRepresentable {
     func makeNSView(context: Context) -> PointingHandView { PointingHandView() }
 
     func updateNSView(_ nsView: PointingHandView, context: Context) {}
+}
+
+/// Lets this process set the cursor while another application is the active
+/// one -- which is every hover the panel ever gets, apart from those on an open
+/// row.
+///
+/// **`NSCursor.set()` does nothing outside the active application**, and that,
+/// not the tracking area, is what the hand on a closed row had been running
+/// into. Measured 2026-09-06 on a panel built exactly like this one -- a
+/// non-activating panel at level `25` in an accessory application:
+/// `mouseEntered` arrives on time, `set()` returns, and the pointer in the very
+/// next screenshot is still an arrow. Activate the application and the same
+/// call takes with the panel still **not key**, so what the window server gates
+/// on is activation, not key status.
+///
+/// That is the whole reason the controls inside an open row were right and the
+/// mark on a closed row was wrong: opening a row latches the panel and latching
+/// activates this app (``OverlayPanelController``), while hover deliberately
+/// does neither. `answer-in-notch.md` §9.4 leaves the keyboard with the
+/// application the person is typing in, and a pointer image is not worth taking
+/// it back for -- so the fix cannot be to activate.
+///
+/// **The window server will take the instruction from a background connection
+/// if the connection asks to be allowed to give it**, which is all this does.
+/// It changes nothing else: this app still does not activate, does not take key
+/// status, and does not take the keyboard.
+///
+/// **The property is not in a public header**, so it is asked for through
+/// `dlsym` and its absence is simply `false` -- a macOS that stops offering it
+/// puts the panel back to the arrow it drew before this, rather than failing to
+/// launch. ``NotchlineTests`` pins the agreement, which is the signal that a
+/// release has withdrawn it.
+enum BackgroundCursor {
+    /// Asked once per process, and the answer is whether the window server
+    /// agreed. Reading it is what asks.
+    static let isAllowed: Bool = requestFromWindowServer()
+
+    private static func requestFromWindowServer() -> Bool {
+        typealias MainConnectionID = @convention(c) () -> Int32
+        typealias SetConnectionProperty =
+            @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+        // `RTLD_DEFAULT`. CoreGraphics is already loaded either way, and a
+        // symbol that has gone is a `nil` to check here rather than a process
+        // that will not start.
+        let loadedImages = UnsafeMutableRawPointer(bitPattern: -2)
+        guard
+            let connectionSymbol = dlsym(loadedImages, "CGSMainConnectionID"),
+            let propertySymbol = dlsym(loadedImages, "CGSSetConnectionProperty")
+        else { return false }
+        let connection = unsafeBitCast(connectionSymbol, to: MainConnectionID.self)()
+        let setProperty = unsafeBitCast(propertySymbol, to: SetConnectionProperty.self)
+        let status = setProperty(
+            connection,
+            connection,
+            "SetsCursorInBackground" as CFString,
+            kCFBooleanTrue
+        )
+        return status == 0
+    }
 }
 
 final class PointingHandView: NSView {
@@ -3123,9 +3189,18 @@ final class PointingHandView: NSView {
     /// the chip -- and then `mouseExited` never arrives. Leaving the window is
     /// the one moment that is always observed, so the arrow is restored there
     /// too. It is what the pointer would have been given anyway.
+    ///
+    /// Arriving in a window is where the process asks the window server for the
+    /// right to set a cursor at all (``BackgroundCursor``). Here rather than at
+    /// launch because this is the only view on the panel that sets one, and it
+    /// is asked before any tracking area of this view can fire.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { NSCursor.arrow.set() }
+        guard window != nil else {
+            NSCursor.arrow.set()
+            return
+        }
+        _ = BackgroundCursor.isAllowed
     }
 }
 

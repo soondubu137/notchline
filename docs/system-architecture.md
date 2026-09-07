@@ -661,6 +661,12 @@ Four candidate causes were each measured and each ruled out, which is what makes
 
 So latching activates this app for as long as a row is open and activates the previous application again when the row closes ([ADR 0020](adr/0020-the-panel-takes-the-keyboard-by-activating.md)). Two flags were in the way and each produced a symptom that looked like the same bug: `becomesKeyOnlyIfNeeded`, which makes AppKit refuse `makeKeyAndOrderFront` outright, and an `NSTextView` built with a `nil` text container, which takes the caret, receives `keyDown` and inserts nothing.
 
+### The cursor is the same rule, and hover cannot pay that price (2026-09-06)
+
+**`NSCursor.set()` is ignored outside the active application**, exactly as keys are. Measured on a panel built like `OverlayPanel` — non-activating, level `25`, accessory app: `mouseEntered` lands on time, `set()` returns, and the pointer in the next screenshot is unchanged; activate the application and the same call takes **with the panel still not key**, so the gate is activation rather than key status. It is why `PointingHandCursor` was right on every control inside an open row — those are latched, and latching activates — and wrong on the mark of a closed row, where the panel only ever hovers. Verifying the fixed half is what let the broken half ship.
+
+The answer above is not available here. Hover browses (`answer-in-notch.md` §9.4), and taking the keyboard off the application the person is typing in to change a pointer image is not a trade this surface makes. So `BackgroundCursor` asks the window server's connection for the right to set a cursor from the background instead, and asks for nothing else: no activation, no key status, no keyboard. **The property is private** — `CGSSetConnectionProperty(_:_:"SetsCursorInBackground":_:)`, resolved through `dlsym` so a macOS that withdraws it answers `false` and the panel returns to the arrow it drew before, rather than failing to launch. `theWindowServerLetsAnInactiveApplicationSetTheCursor()` is what makes that withdrawal a failing suite instead of a silence, because nothing else about the panel would change.
+
 ### What the tests cannot protect
 
 `NotchStatusMatrix` and the two layer-backed labels have tests asserting they are still driven by `CAAnimation` and still have their masks, so reverting them to SwiftUI fails to compile. But **adding a new continuous animation elsewhere in the panel is caught by nothing** — that dimension is held only by this section and by the comments on the views.
