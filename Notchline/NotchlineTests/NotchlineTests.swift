@@ -26955,13 +26955,20 @@ for line in sys.stdin:
             )
             #expect(drawn < phrase * 0.65, "\(word) is not meaningfully narrower")
         }
-        // A control, not a reading: the tile it left is half this tall, and the
-        // corner keeps that tile's proportion.
+        // A control, not a reading: the tile it left is half this tall.
         #expect(PanelMetrics.waitingMarkHeight == PanelMetrics.readingGroundHeight * 2)
-        #expect(
-            PanelMetrics.waitingMarkCornerRadius
-                == PanelMetrics.readingGroundCornerRadius * 2
-        )
+        // ~~And the corner keeps that tile's proportion~~ — superseded. The
+        // proportion was the badge family's, inherited from the reading this
+        // replaced, and at `32` tall it drew an `8` pt pill above a row of `4`
+        // pt tiles. The ground the pointer presses here is the ground that
+        // travels down to the answer row (`answer-in-notch.md` §3.1), so the
+        // two are cut alike; the pair below fails the moment they diverge
+        // again, however the divergence is spelled.
+        #expect(PanelMetrics.waitingMarkCornerRadius == PanelMetrics.controlCornerRadius)
+        #expect(PanelMetrics.waitingMarkPadding == PanelMetrics.controlHorizontalPadding)
+        // The heights stay apart, and that is the one number on this control
+        // settled by how it feels under the pointer rather than by the system.
+        #expect(PanelMetrics.waitingMarkHeight != PanelMetrics.answerRowHeight)
     }
 
     /// A digit takes the option it numbers, and only before anything is typed.

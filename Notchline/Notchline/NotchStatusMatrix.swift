@@ -178,6 +178,28 @@ enum NotchPalette {
         static let sessionHoverFillOpacity: Double = 0.16
         static let sessionPressedFillOpacity: Double = 0.24
 
+        /// The step below ``sessionHoverFillOpacity``, and what a control
+        /// inside a row rests at while it is not holding the bright ground.
+        ///
+        /// **`0.08` is the weight that failed as a hover and is right as a
+        /// rest, for the same reason it failed.** A row washed at `0.08` read
+        /// as not answering the pointer, which is exactly what a resting
+        /// control must not claim: it has to say *this is an object* and
+        /// nothing more, and leave answering to the step above it.
+        ///
+        /// Without it a quiet answer is bare text beside the field, which is
+        /// what `Deny` was — a caption that happened to be clickable. The
+        /// alternative it replaces on the destination control was
+        /// ``NotchPalette/recessedGround``, the machine-text step, which on an
+        /// open row is `#242424` against the row's own `#242524` and so drew
+        /// nothing at all.
+        ///
+        /// **A control rests here; a row rests at nothing.** A control is an
+        /// object and an option is a region of a list — five stacked options
+        /// each carrying a tile would read as stripes, so ``OptionRow`` and the
+        /// session rows keep their bare ground and answer with the hover alone.
+        static let controlRestFillOpacity: Double = 0.08
+
         /// Ease-in-out both ways -- the same gentle acceleration and
         /// deceleration whether the emphasis is arriving or leaving -- and
         /// still faster to leave than to arrive, the one asymmetry worth
@@ -253,6 +275,21 @@ enum NotchPalette {
     /// what makes a mark on the bright ground and a product badge on the dark
     /// one legibly the same family and legibly opposite.
     static var onBrightGround: Color { themeInk.off }
+    /// What ``brightGround`` is drawn at while it is still growing out of the
+    /// caption line and has not become a target yet (`answer-in-notch.md` §6.3).
+    ///
+    /// **Eight steps of ``RowEmphasis/controlRestFillOpacity``, and the one
+    /// weight on this row that contrast chose rather than the ladder.** It was
+    /// `0.45`, where ``onBrightGround`` on it is `4.0 : 1` — under AA for the
+    /// `13` pt medium label it carries, for as long as the ground takes to
+    /// travel. This is the first weight up the ladder that clears it, at
+    /// `6.4 : 1`, and it still sits about `25` L∗ below the landed ground, so
+    /// it says *not yet* exactly as plainly as the dimmer value did.
+    ///
+    /// A ground at this weight does not answer the pointer either — see
+    /// ``spotlight``, which is what the landed ground takes and this one must
+    /// not, because it is not yet a thing a click can take.
+    static let arrivingGroundOpacity: Double = 0.64
     /// Session title — the one element that stays bright.
     static let sessionTitle = Color.white.opacity(0.98)
     /// `#C7C7CC` — the step between the title's white and ``label``'s

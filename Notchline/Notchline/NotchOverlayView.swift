@@ -1243,6 +1243,9 @@ private struct OpenRow: View {
     let session: MonitoredSession
 
     @State private var isHovered = false
+    /// The destination control's own hover, which is not the row's: the row is
+    /// permanently at the hover weight and never answers a pointer of its own.
+    @State private var isDestinationHovered = false
 
     var body: some View {
         ZStack {
@@ -1360,6 +1363,14 @@ private struct OpenRow: View {
     }
 
     /// §11 rule 04: one control where three will stand.
+    ///
+    /// **It is on the quiet answers' ladder and never reaches the bright
+    /// ground.** It used to draw on ``NotchPalette/recessedGround``, which
+    /// marks machine text (§4.2) and is not what this is — and on an open row
+    /// that is `#242424` against the row's own `#242524`, so the tile it drew
+    /// had no boundary at all. The ground it must not take is the other half:
+    /// the bright ground is the return key made visible, and `⏎` has nothing
+    /// to do here.
     private var readingControl: some View {
         HStack(spacing: 0) {
             Button {
@@ -1367,16 +1378,28 @@ private struct OpenRow: View {
             } label: {
                 Text(destination)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(NotchPalette.reading)
-                    .padding(.horizontal, 12)
+                    .foregroundStyle(
+                        isDestinationHovered
+                            ? NotchPalette.themeInk.on
+                            : NotchPalette.reading
+                    )
+                    .padding(.horizontal, PanelMetrics.controlHorizontalPadding)
                     .frame(height: PanelMetrics.answerRowHeight)
                     .background(
                         RoundedRectangle(
-                            cornerRadius: PanelMetrics.machineTextCornerRadius,
+                            cornerRadius: PanelMetrics.controlCornerRadius,
                             style: .continuous
                         )
-                        .fill(NotchPalette.recessedGround)
+                        .fill(
+                            NotchPalette.themeInk.on.opacity(
+                                isDestinationHovered
+                                    ? NotchPalette.RowEmphasis.sessionHoverFillOpacity
+                                    : NotchPalette.RowEmphasis.controlRestFillOpacity
+                            )
+                        )
                     )
+                    .overlay(PointingHandCursor())
+                    .onHover { isDestinationHovered = $0 }
             }
             .buttonStyle(.plain)
             Spacer(minLength: 0)
@@ -1417,10 +1440,23 @@ private struct OpenRowChevron: View {
                 width: PanelMetrics.quotaFoldControlSize,
                 height: PanelMetrics.quotaFoldControlSize
             )
+            // The row's own wash, not a white one: a chevron inside a row that
+            // washes in the app's ink cannot answer the same pointer in a
+            // different colour. It rests at nothing rather than at
+            // ``NotchPalette/RowEmphasis/controlRestFillOpacity``, because a
+            // permanent 16-point tile in the corner of the head would read as
+            // a mark rather than as a target.
             .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color.white.opacity(isHovered ? 0.12 : 0))
+                    .fill(
+                        NotchPalette.themeInk.on.opacity(
+                            isHovered
+                                ? NotchPalette.RowEmphasis.sessionHoverFillOpacity
+                                : 0
+                        )
+                    )
             )
+            .overlay(PointingHandCursor())
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
             .accessibilityLabel("Collapse this request")
@@ -1513,18 +1549,24 @@ private struct AnswerControl: View {
             .foregroundStyle(
                 holdsGround
                     ? NotchPalette.onBrightGround
-                    : NotchPalette.reading
+                    : (isHovered ? NotchPalette.themeInk.on : NotchPalette.reading)
             )
             .fixedSize()
-            .padding(.horizontal, 12)
+            .padding(.horizontal, PanelMetrics.controlHorizontalPadding)
             .frame(height: PanelMetrics.answerRowHeight)
             .background(
                 RoundedRectangle(
-                    cornerRadius: PanelMetrics.machineTextCornerRadius,
+                    cornerRadius: PanelMetrics.controlCornerRadius,
                     style: .continuous
                 )
                 .fill(ground)
             )
+            // An overlay rather than a background, and only while a click
+            // would be taken: the tracking area is geometric and answers to
+            // AppKit, so `allowsHitTesting(false)` on the row in flight does
+            // not reach it -- a hand over a control that refuses the click
+            // would promise exactly what ``ground`` is careful not to.
+            .overlay { if isTarget { PointingHandCursor() } }
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
             .onTapGesture(perform: action)
@@ -1549,12 +1591,41 @@ private struct AnswerControl: View {
     /// A ground that has not finished arriving is drawn but is not yet a target
     /// (§6.3) — it is dimmed rather than hidden, because the eye is already
     /// following it down the row and something that appears late reads as a
-    /// second object.
+    /// second object. It does not answer the pointer either, for the same
+    /// reason: nothing here is a thing a click can take yet.
+    ///
+    /// **The answer without the ground has a body of its own now**, one step
+    /// below the wash the row itself takes under the pointer, and one more
+    /// step up while the pointer is on it — see
+    /// ``NotchPalette/RowEmphasis/controlRestFillOpacity``. It used to be bare
+    /// text on a white wash borrowed from nowhere; both weights are the app's
+    /// own ink, so a control and the row under it climb one ladder.
+    ///
+    /// **At the top of that ladder there is no step left, so the ground under
+    /// the pointer takes ``NotchPalette/spotlight``.** That is not an
+    /// exception: white on this surface already means *the pointer is on a
+    /// filled area*, which is what the waiting mark takes, and it is the only
+    /// thing white can say that the ink cannot.
     private var ground: Color {
         guard !holdsGround else {
-            return NotchPalette.brightGround.opacity(store.isAffirmativeArmed ? 1 : 0.45)
+            guard store.isAffirmativeArmed else {
+                return NotchPalette.brightGround
+                    .opacity(NotchPalette.arrivingGroundOpacity)
+            }
+            return isHovered ? NotchPalette.spotlight : NotchPalette.brightGround
         }
-        return Color.white.opacity(isHovered ? 0.12 : 0)
+        return NotchPalette.themeInk.on.opacity(
+            isHovered
+                ? NotchPalette.RowEmphasis.sessionHoverFillOpacity
+                : NotchPalette.RowEmphasis.controlRestFillOpacity
+        )
+    }
+
+    /// Whether a click here would be taken, which is what the pointing hand
+    /// promises. ``MonitorStore/takeAnswer(_:)`` refuses on both counts, so
+    /// this is that guard read back rather than a second rule.
+    private var isTarget: Bool {
+        store.isAffirmativeArmed && !store.isAnswerInFlight
     }
 }
 
@@ -2147,11 +2218,12 @@ private struct OptionRow: View {
         .frame(height: PanelMetrics.optionRowHeight)
         .background(
             RoundedRectangle(
-                cornerRadius: PanelMetrics.machineTextCornerRadius,
+                cornerRadius: PanelMetrics.controlCornerRadius,
                 style: .continuous
             )
             .fill(ground)
         )
+        .overlay { if isTarget { PointingHandCursor() } }
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .onTapGesture { if isAnswerable { store.takeAnswer(.option(option.id)) } }
@@ -2212,11 +2284,29 @@ private struct OptionRow: View {
         isAnswerable && store.answerGround == .option(option.id)
     }
 
+    /// The same three grounds ``AnswerControl`` draws, minus the resting one:
+    /// an option is a region of a list rather than an object on it, and five
+    /// stacked tiles would read as stripes. So it rests at nothing and answers
+    /// the pointer with the row's own wash — see
+    /// ``NotchPalette/RowEmphasis/controlRestFillOpacity``.
     private var ground: Color {
         guard !holdsGround else {
-            return NotchPalette.brightGround.opacity(store.isAffirmativeArmed ? 1 : 0.45)
+            guard store.isAffirmativeArmed else {
+                return NotchPalette.brightGround
+                    .opacity(NotchPalette.arrivingGroundOpacity)
+            }
+            return isHovered ? NotchPalette.spotlight : NotchPalette.brightGround
         }
-        return Color.white.opacity(isHovered && isAnswerable ? 0.12 : 0)
+        guard isHovered, isAnswerable else { return .clear }
+        return NotchPalette.themeInk.on
+            .opacity(NotchPalette.RowEmphasis.sessionHoverFillOpacity)
+    }
+
+    /// Whether a click here would be taken. An option is outside the answer
+    /// row's own `allowsHitTesting`, so it asks the store the same two
+    /// questions ``MonitorStore/takeAnswer(_:)`` does, plus its own.
+    private var isTarget: Bool {
+        isAnswerable && store.isAffirmativeArmed && !store.isAnswerInFlight
     }
 }
 
@@ -2898,15 +2988,25 @@ private struct ProductBadge: View {
     }
 }
 
-/// The pointing hand over the one control in the list, on a window that is
-/// never key.
+/// The pointing hand over every control on the panel.
 ///
 /// **`addCursorRect(_:cursor:)` is the ordinary way to do this and it does not
 /// work here.** AppKit services cursor rectangles for the key window only, and
-/// this overlay is a non-activating panel that never becomes one -- the same
-/// property ``SecondaryClickView/acceptsFirstMouse(for:)`` exists for. A
-/// tracking area registered `.activeAlways` is delivered regardless, so the
-/// cursor is set on the way in and put back on the way out.
+/// this overlay is usually not one -- the same property
+/// ``SecondaryClickView/acceptsFirstMouse(for:)`` exists for. A tracking area
+/// registered `.activeAlways` is delivered regardless, so the cursor is set on
+/// the way in and put back on the way out.
+///
+/// **`.cursorUpdate` as well as `.mouseEnteredAndExited`, and both are load
+/// bearing.** An open row latches the panel, and a latched panel *is* key --
+/// so AppKit starts running the cursor-management pass it had been skipping,
+/// and whatever owns the rectangle under the pointer wins. Inside the request
+/// body that is the scroll view, whose document cursor is the arrow: measured
+/// 2026-09-06, an option row washed correctly under the pointer and handed
+/// back an arrow, because `mouseEntered` had set the hand once and the next
+/// mouse-moved reset it. A `.cursorUpdate` area takes part in that same pass
+/// and outranks the rectangle, so the hand survives; the entered/exited pair
+/// stays for the unlatched panel, where the pass never runs at all.
 ///
 /// **`set()` rather than `push()`/`pop()`**, deliberately: the cursor stack is
 /// global to the process and this view lives on a row that can retire, and on
@@ -2930,11 +3030,21 @@ final class PointingHandView: NSView {
         if let tracking { removeTrackingArea(tracking) }
         let area = NSTrackingArea(
             rect: .zero,
-            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            options: [
+                .activeAlways, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect
+            ],
             owner: self
         )
         addTrackingArea(area)
         tracking = area
+    }
+
+    /// The key window's own cursor pass, which is the one the scroll view under
+    /// the options would otherwise win. Same cursor as ``mouseEntered(with:)``
+    /// -- this says it again at the moment AppKit asks, rather than once on the
+    /// way in and never afterwards.
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.pointingHand.set()
     }
 
     /// Never takes a click. The chip underneath is the target and this view

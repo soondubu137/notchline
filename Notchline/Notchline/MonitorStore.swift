@@ -799,15 +799,21 @@ enum PanelMetrics {
     /// The mark is a control, so it is built like one rather than like the
     /// readings it shares the slot with.
     ///
-    /// Twice the ``readingGroundHeight`` it used to take, on that ground's own
-    /// `0.25` corner ratio, with ``AnswerControl``'s `12` of padding. That
-    /// leaves it `4` taller than ``answerRowHeight`` — the affirmative it grows
-    /// into when the row opens (`answer-in-notch.md` §3.1) — which is the one
-    /// number here settled by how it feels under the pointer rather than by the
-    /// system it belongs to.
+    /// Twice the ``readingGroundHeight`` it used to take, and cut like the
+    /// answer it becomes rather than like the reading it replaced. That leaves
+    /// it `4` taller than ``answerRowHeight`` — the affirmative it grows into
+    /// when the row opens (`answer-in-notch.md` §3.1) — which is the one number
+    /// here settled by how it feels under the pointer rather than by the system
+    /// it belongs to.
+    ///
+    /// ~~On ``readingGroundHeight``'s own `0.25` corner ratio~~ — **superseded**:
+    /// that ratio was the badge family's, inherited from the reading this
+    /// replaced, and at `32` tall it drew an `8` pt pill above a row of `4` pt
+    /// tiles. The corner and the padding are ``controlCornerRadius`` and
+    /// ``controlHorizontalPadding`` now, which the answers already took.
     static let waitingMarkHeight: CGFloat = 32
-    static let waitingMarkCornerRadius: CGFloat = 8
-    static let waitingMarkPadding: CGFloat = 12
+    static var waitingMarkCornerRadius: CGFloat { controlCornerRadius }
+    static var waitingMarkPadding: CGFloat { controlHorizontalPadding }
 
     /// What the mark takes, hugging the one word it will ever show.
     ///
@@ -1325,6 +1331,23 @@ enum PanelMetrics {
     /// ground travels down the row — one object moving, which is why this is the
     /// same ground rather than a second one (`answer-in-notch.md` §3.1).
     static let answerRowHeight: CGFloat = 28
+
+    /// The corner every control on this surface takes, and the horizontal
+    /// padding around the one word it holds.
+    ///
+    /// **One pair for the mark on a row and for the answers inside it**, which
+    /// is the same argument ``answerRowHeight`` makes about the height: the
+    /// ground the pointer presses on the caption line *is* the ground that
+    /// travels down to the answer row, so a mark and an answer cut to different
+    /// corners would be two objects rather than one moving. The padding was
+    /// already `12` in both places and the corner was not — `8` on the mark and
+    /// `4` on the answers, which read as a pill above a set of tiles.
+    ///
+    /// The mark stays `4` taller than the answer it becomes
+    /// (``waitingMarkHeight``); that difference is deliberate and is the one
+    /// number here settled by how it feels under the pointer.
+    static let controlCornerRadius: CGFloat = 4
+    static let controlHorizontalPadding: CGFloat = 12
 
     /// Everything an open row is besides its body.
     ///
