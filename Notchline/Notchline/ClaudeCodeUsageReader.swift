@@ -10,7 +10,7 @@ import os
 /// reading it is a private dependency and is registered as one.
 ///
 /// That makes the parser's job "refuse confidently" rather than "extract
-/// cleverly". It anchors on two whole line prefixes and nothing else, because
+/// cleverly". It anchors on whole line prefixes and nothing else, because
 /// the same output continues into a free-text section full of other
 /// percentages — `94% of your usage was at >150k context` sits a few lines
 /// below the numbers this reads. Anything that scanned for a number would find
@@ -21,19 +21,34 @@ actor ClaudeCodeUsageReader {
         category: "ClaudeCodeUsageReader"
     )
 
-    /// The two windows this product draws, and their labels in the output.
+    /// The two windows this product always reports, and what it calls them.
     ///
-    /// A third is reported — a weekly cap for one named model — and is
-    /// deliberately ignored. Which model it names varies, so a rule that
-    /// sometimes meant one thing and sometimes another would have to be read
-    /// rather than glanced at. The risk is recorded rather than designed
-    /// around: a user who exhausts the per-model cap sees two healthy rules and
-    /// is still refused. If that happens the fix is a third window, not a
-    /// second one that changes meaning.
-    private static let windows: [(prefix: String, label: String)] = [
-        ("Current session:", "5 h"),
-        ("Current week (all models):", "7 d")
+    /// **The labels are the output's own words.** They were `5 h` and `7 d` —
+    /// durations invented here from what the windows are, which read badly the
+    /// moment the column beside them also held a duration, and which said
+    /// nothing about the one window whose meaning is not its length. `Current
+    /// week (all models)` shortens to `All models` because the product name
+    /// stands above the group and the week is the only period that line has.
+    private static let fixedWindows: [(prefix: String, label: String)] = [
+        ("Current session:", "Current session"),
+        ("Current week (all models):", "All models")
     ]
+
+    /// The per-model weekly cap, reported as `Current week (Fable):` under
+    /// whichever model the account is capped on.
+    ///
+    /// **It used to be dropped, and the cost was written down**: which model it
+    /// names varies, so a rule that sometimes meant one thing and sometimes
+    /// another would have to be read rather than glanced at — and a user who
+    /// exhausts it sees healthy windows and is still refused
+    /// (`dual-agent-design.md` §5.2). What that argument was missing is that
+    /// the varying part is the *answer*: label the window with the model and
+    /// the thing that moves is the thing the label says. So it is drawn, named
+    /// by whatever the output names it, and it appears only on accounts whose
+    /// output names one.
+    private static let perModelWindow = #"^Current week \([^)]+\):"#
+    /// The one parenthetical that is not a model.
+    private static let allModels = "all models"
 
     private let read: @Sendable () async -> String?
     /// Announces that a reading landed, because nothing waits for one any more.
@@ -50,11 +65,14 @@ actor ClaudeCodeUsageReader {
     /// what is drawn from what has already been read.
     private let screenIsAvailable: @Sendable () -> Bool
     private let transcripts: ClaudeCodeUsageTranscripts?
-    // Both start as this product's two windows with nothing known about
+    // Both start as this product's two fixed windows with nothing known about
     // either. `QuotaSnapshot.unavailable` is the single-window form and would
     // draw one unlabelled rule where the footer expects two labelled ones --
     // which nothing could see while every answer came from a completed
-    // reading, and everything can now that answers come before one.
+    // reading, and everything can now that answers come before one. The
+    // per-model window is not among them: it is discovered in the output
+    // rather than declared here, so a machine that has not been read yet
+    // claims nothing about whether the account has one.
     private var cachedWindows = ClaudeCodeUsageReader.unavailableWindows
     private var cached = QuotaSnapshot(
         windows: ClaudeCodeUsageReader.unavailableWindows
@@ -352,12 +370,19 @@ actor ClaudeCodeUsageReader {
 
     /// The windows this draws, with nothing known about any of them.
     nonisolated static var unavailableWindows: [QuotaWindow] {
-        windows.map {
+        fixedWindows.map {
             QuotaWindow(label: $0.label, remainingPercent: nil, resetsAt: nil)
         }
     }
 
-    /// Pulls the two windows out of the paragraph, or reports neither.
+    /// Pulls the windows out of the paragraph: the two fixed ones by their
+    /// whole line prefix, then any per-model week the output names.
+    ///
+    /// **The anchors are still whole line prefixes.** The same output continues
+    /// into a free-text section full of other percentages — `94% of your usage
+    /// was at >150k context` sits a few lines below — so the per-model pattern
+    /// is bound to the start of a line and to the shape of the whole label,
+    /// never to a number.
     ///
     /// Made `static` and pure so the whole of this — the one part most likely
     /// to break on a Claude Code update — can be tested against captured output
@@ -367,22 +392,58 @@ actor ClaudeCodeUsageReader {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
 
-        return windows.map { window in
-            guard let line = lines.first(where: { $0.hasPrefix(window.prefix) }) else {
+        var parsed = fixedWindows.map { fixed in
+            guard let line = lines.first(where: { $0.hasPrefix(fixed.prefix) }) else {
                 return QuotaWindow(
-                    label: window.label,
+                    label: fixed.label,
                     remainingPercent: nil,
                     resetsAt: nil
                 )
             }
-            let body = String(line.dropFirst(window.prefix.count))
-            return QuotaWindow(
-                label: window.label,
-                // Reported as used; the rule draws what is left.
-                remainingPercent: usedPercent(in: body).map { 100 - $0 },
-                resetsAt: resetDate(in: body, now: now)
+            return window(
+                labelled: fixed.label,
+                body: line.dropFirst(fixed.prefix.count),
+                now: now
             )
         }
+
+        // In the order the product reports them, which is the order every
+        // other surface in this app sees (`quota-footer-v2.md` §5).
+        for line in lines {
+            guard line.range(of: perModelWindow, options: .regularExpression) != nil,
+                  let open = line.firstIndex(of: "("),
+                  let close = line[open...].firstIndex(of: ")") else {
+                continue
+            }
+            let model = String(line[line.index(after: open) ..< close])
+            guard model.caseInsensitiveCompare(allModels) != .orderedSame else {
+                continue
+            }
+            parsed.append(
+                window(
+                    labelled: model,
+                    // Past the `)` and the `:` that closes the label.
+                    body: line[line.index(after: close)...].dropFirst(),
+                    now: now
+                )
+            )
+        }
+        return parsed
+    }
+
+    /// One window, read off the part of its line that follows the label.
+    nonisolated private static func window(
+        labelled label: String,
+        body: some StringProtocol,
+        now: Date
+    ) -> QuotaWindow {
+        let body = String(body)
+        return QuotaWindow(
+            label: label,
+            // Reported as used; the rule draws what is left.
+            remainingPercent: usedPercent(in: body).map { 100 - $0 },
+            resetsAt: resetDate(in: body, now: now)
+        )
     }
 
     nonisolated private static func usedPercent(in body: String) -> Int? {

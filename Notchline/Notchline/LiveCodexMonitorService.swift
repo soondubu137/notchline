@@ -1227,9 +1227,11 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             CodexSnapshotParser.quota(from: $0)
         }
             ?? .unavailable
+        // Every window the read produced, not just the first: rebuilding this
+        // through the single-window initialiser is what used to throw the
+        // second one away before the footer could draw it.
         let quota = QuotaSnapshot(
-            remainingPercent: rateLimitQuota.remainingPercent,
-            resetsAt: rateLimitQuota.resetsAt,
+            windows: rateLimitQuota.windows,
             todayTokens: responses.1.flatMap {
                 CodexSnapshotParser.todayTokenCount(from: $0, now: clock.now())
             }
@@ -2293,19 +2295,61 @@ enum CodexSnapshotParser {
         .joined(separator: "|")
     }
 
+    /// Both of the account's rate-limit windows, in the order the App Server
+    /// reports them.
+    ///
+    /// `secondary` is null for most accounts and was never read; where it is
+    /// present it is a second window of the same limit, and a window is a line
+    /// (`quota-footer-v2.md` §5). `primary` stays first, so every surface that
+    /// draws one rule — ``QuotaSnapshot/remainingPercent`` and
+    /// ``QuotaSnapshot/resetsAt`` both read `windows.first` — reads exactly what
+    /// it read before.
+    ///
+    /// The per-limit map under `rateLimitsByLimitId` is **not** read. It
+    /// repeats the account's own limit under the id `codex` and adds one entry
+    /// per model-specific cap, and which of those actually binds a given
+    /// request is not something this response says.
     nonisolated static func quota(from response: JSONValue) -> QuotaSnapshot {
-        guard let primary = response["rateLimits"]?["primary"],
-              let usedPercent = primary["usedPercent"]?.intValue else {
-            return .unavailable
-        }
+        guard let limits = response["rateLimits"] else { return .unavailable }
 
-        let resetDate = primary["resetsAt"]?.doubleValue.map {
-            Date(timeIntervalSince1970: $0)
+        let windows = ["primary", "secondary"].compactMap { key -> QuotaWindow? in
+            guard let window = limits[key],
+                  let usedPercent = window["usedPercent"]?.intValue else {
+                return nil
+            }
+            return QuotaWindow(
+                label: windowLabel(minutes: window["windowDurationMins"]?.intValue),
+                // Reported as used; the rule draws what is left.
+                remainingPercent: 100 - usedPercent,
+                resetsAt: window["resetsAt"]?.doubleValue.map {
+                    Date(timeIntervalSince1970: $0)
+                }
+            )
         }
-        return QuotaSnapshot(
-            remainingPercent: 100 - usedPercent,
-            resetsAt: resetDate
-        )
+        guard !windows.isEmpty else { return .unavailable }
+        return QuotaSnapshot(windows: windows)
+    }
+
+    /// What Codex calls a window, from the only thing it publishes about one.
+    ///
+    /// `account/rateLimits/read` names the *limit* — and `limitName` is null
+    /// for the account's own — while it gives every window a duration in
+    /// minutes. So the name is the duration, in the product's own terms: `300`
+    /// is the 5-hour limit and `10080` the weekly one, which is how Codex
+    /// presents them to the same account. Anything else is written out from the
+    /// minutes rather than guessed at, and a window reporting no duration keeps
+    /// the empty label the single unlabelled rule always had.
+    nonisolated static func windowLabel(minutes: Int?) -> String {
+        switch minutes {
+        case 300: "5h limit"
+        case 10_080: "Weekly limit"
+        case .some(let minutes) where minutes > 0 && minutes % 1_440 == 0:
+            "\(minutes / 1_440)d limit"
+        case .some(let minutes) where minutes > 0 && minutes % 60 == 0:
+            "\(minutes / 60)h limit"
+        case .some(let minutes) where minutes > 0: "\(minutes)m limit"
+        default: ""
+        }
     }
 
     nonisolated static func todayTokenCount(

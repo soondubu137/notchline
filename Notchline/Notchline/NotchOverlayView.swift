@@ -967,7 +967,7 @@ private struct FooterSpendLineContent: View {
 
             // The seam's own layout, spacing included: label, rule, control.
             HStack(spacing: 8) {
-                FooterSpend(store.footerToday)
+                FooterReading(store.footerToday)
 
                 FoldSeamRule(isVisible: isExpanded)
 
@@ -1009,63 +1009,87 @@ private struct FooterProductGroup: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// The product, a faint leader, and what it has spent today.
+    /// The product, and what it has spent today.
     ///
-    /// **The leader is what makes the spend attributable without colour.** On
-    /// the collapsed line those parts had to be coloured numerals; here each
-    /// one sits beside its product's own name, joined to it by `1` pt of white
-    /// at `10%` — one step below the white-at-`15%` the panel's structural
-    /// hairlines use, because it is joining two things rather than dividing
-    /// anything. It is drawn on outer rows only, so **having a leader is itself
-    /// part of what says which level a line is on**.
+    /// **Nothing is drawn between them.** A leader used to join the two across
+    /// `450` pt of black — `1` pt of white at `10%`, against the `15%` the
+    /// panel's own hairlines use — on the argument that having a leader is
+    /// itself part of what says which level a line is on. Five per cent of
+    /// white on a `1` pt line does not read as a step at that distance; it
+    /// reads as the panel's rule drawn twice, once badly. The level is already
+    /// said three times over — by the indent below it, by the `14` pt of air
+    /// above it, and by this being the one line on the footer set in Medium —
+    /// and the pair is joined by being the only two things on the line, at the
+    /// same brightness. That is what a heading line is.
     private var outerRow: some View {
-        HStack(spacing: PanelMetrics.footerLeaderClearance) {
-            ProductBadge(name: rule.agent.displayName)
+        HStack(spacing: 0) {
+            FooterCaption(
+                rule.agent.displayName,
+                ink: NotchPalette.reading,
+                weight: .medium
+            )
 
-            Rectangle()
-                .fill(Color.white.opacity(0.10))
-                .frame(height: 1)
-                .accessibilityHidden(true)
+            Spacer(minLength: PanelMetrics.footerColumnGutter)
 
-            FooterSpend(rule.today)
+            FooterReading(rule.today)
         }
-        .frame(height: PanelMetrics.productBadgeHeight)
+        .frame(height: PanelMetrics.footerCaptionHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(rule.agent.displayName), \(rule.today.spokenText)")
     }
 }
 
-/// One window's line: the label, the share, and the countdown.
+/// One window's line: the name, the share, and the countdown.
 ///
-/// Three columns and one trailing edge shared with the outer row above: the
-/// window at `24` — one step in from the panel's own `12` — the share
-/// right-aligned at `300`, and the timer right-aligned at `508`, which is where
-/// the product's spend is right-aligned too.
+/// **Two anchors, not three columns**, and they are the two the heading line
+/// above already has: a cluster on the left margin and a figure on the
+/// trailing edge. The window's name is at `24` — one step in from the panel's
+/// own `12` — the share is right-aligned at `184` where it sits beside the
+/// name it belongs to, and the countdown is right-aligned at the same edge the
+/// product's spend is.
 ///
-/// **Every one of them is `#7C7C80`, whatever the share.** Brightness on this
-/// footer separates the table's three levels and separates nothing by value
-/// (§5).
+/// The share used to end at `300`, which was measured when the panel was `520`
+/// wide. At `610` it anchored to nothing: the row read as `5 h`, a gap of
+/// `216`, `96% left`, a gap of `284`, `4h` — `74` points of reading on a `574`
+/// point line, with the one column that mattered stopped in the middle of it.
+///
+/// **The share's figure is the row's one bright thing.** Every part of this row
+/// used to be `#7C7C80`, so `96%` was drawn at exactly the value of the word
+/// `left` beside it. Brightness now separates a figure from the words around
+/// it, at every level of the table and at every value — see ``ShareReading``
+/// for why that is not the value threshold §4 removed. The countdown stays
+/// grey throughout: it qualifies the share rather than answering anything.
 private struct FooterWindowRow: View {
     let window: FooterWindow
 
     var body: some View {
         HStack(spacing: 0) {
-            // The label at `24` and the share ending at `300`, which is one
-            // box: what is between them is whitespace either way, and giving
-            // it a boundary of its own would be a column nothing is in.
+            // The name and the share are one box with the slack between them,
+            // so a longer window name eats the gutter rather than colliding
+            // with the figure. What is between them is whitespace either way,
+            // and giving it a boundary of its own would be a column nothing
+            // is in.
             HStack(spacing: 0) {
+                // Capped at its own column and truncated past it, so the
+                // column is a fact rather than a hope: a window named for
+                // whatever model the account is capped on can be any width,
+                // and the figure beside it is the thing nobody may lose.
                 FooterCaption(window.label)
-                Spacer(minLength: 0)
-                FooterCaption(window.share)
+                    .frame(
+                        maxWidth: PanelMetrics.footerWindowColumnWidth,
+                        alignment: .leading
+                    )
+                Spacer(minLength: PanelMetrics.footerColumnGutter)
+                FooterReading(window.share)
             }
             .frame(
                 width: PanelMetrics.footerShareTrailingEdge
                     - PanelMetrics.footerWindowIndent
             )
 
-            // The timer, right-aligned on the footer's own trailing edge,
+            // The countdown, right-aligned on the footer's own trailing edge,
             // which is where the spend above it is right-aligned too.
-            Spacer(minLength: 0)
+            Spacer(minLength: PanelMetrics.footerColumnGutter)
             FooterCaption(window.timer)
         }
         .padding(.leading, PanelMetrics.footerWindowIndent)
@@ -1078,7 +1102,7 @@ private struct FooterWindowRow: View {
     /// away for a duration (§7).
     private var spokenLine: String {
         let head = window.label.isEmpty ? "" : "\(window.label), "
-        return "\(head)\(window.share), \(window.spokenTimer)"
+        return "\(head)\(window.share.text), \(window.spokenTimer)"
     }
 }
 
@@ -1117,46 +1141,72 @@ private struct QuotaFoldChevron: View {
 private struct FooterCaption: View {
     let text: String
     let ink: Color
+    let weight: Font.Weight
 
-    init(_ text: String, ink: Color = NotchPalette.label) {
+    init(
+        _ text: String,
+        ink: Color = NotchPalette.label,
+        weight: Font.Weight = .light
+    ) {
         self.text = text
         self.ink = ink
+        self.weight = weight
     }
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .light))
+            .font(.system(size: 11, weight: weight))
             .foregroundStyle(ink)
             .lineLimit(1)
-            .fixedSize()
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-/// A day's spend, in the two brightnesses it is drawn in.
+/// Any reading on this footer, in the two brightnesses every one of them is
+/// drawn in.
 ///
-/// The figure in `#C7C7CC` and `today` in `#7C7C80` — one reading, with the
-/// part that is a number set apart from the part that is a unit. It is the same
-/// on the resting line and on a product's outer row, because they are the same
-/// reading at two scopes.
-private struct FooterSpend: View {
-    let reading: SpendReading
+/// The figure in `#C7C7CC` and its unit in `#7C7C80` — one reading, with the
+/// part that is a number set apart from the part that is a word. **This is the
+/// footer's whole ink rule**, and the resting spend line was the only place
+/// that used to obey it: `251M today` on the resting line, `51M today` on a
+/// product's outer row, and `96% left` on a window's, which is the one that
+/// changed. They are the same shape of reading at three scopes.
+///
+/// A `--` takes the figure's ink like any other figure. A reading that could
+/// not be made is not a quieter reading (`quota-footer-v2.md` §8.3), and the
+/// unit beside it was never the part that failed.
+private struct FooterReading: View {
+    private let figure: String
+    private let unit: String
+    private let spokenText: String
 
-    init(_ reading: SpendReading) { self.reading = reading }
+    init(_ reading: SpendReading) {
+        figure = reading.figure
+        unit = reading.unit
+        spokenText = reading.spokenText
+    }
+
+    init(_ reading: ShareReading) {
+        figure = reading.figure
+        unit = reading.unit
+        spokenText = reading.spokenText
+    }
 
     var body: some View {
         Text(runs)
             .font(.system(size: 11, weight: .light))
             .lineLimit(1)
             .fixedSize()
-            .accessibilityLabel(reading.spokenText)
+            .accessibilityLabel(spokenText)
     }
 
     /// One string, two runs — rather than two `Text`s side by side, so the
     /// figure and its unit are still typeset as one line.
     private var runs: AttributedString {
-        var figure = AttributedString(reading.figure)
+        var figure = AttributedString(self.figure)
         figure.foregroundColor = NotchPalette.reading
-        var unit = AttributedString(" " + reading.unit)
+        var unit = AttributedString(" " + self.unit)
         unit.foregroundColor = NotchPalette.label
         return figure + unit
     }
@@ -2767,10 +2817,11 @@ private struct SessionStatusControl: View {
     /// **It is built like a control now and not like a reading.** It used to be
     /// a ``ReadingGround`` — the elapsed reading's own `16` pt tile — at a width
     /// reserved for the longest of four strings, which drew a `113 × 16` slab
-    /// of pure white under a phrase naming a state. It is twice that height on
-    /// the same corner ratio, it hugs one verb, and the ground is the app's own
-    /// ink; the only pure white left on this panel is this chip with the
-    /// pointer on it. See ``NotchPalette/brightGround``.
+    /// of pure white under a phrase naming a state. It is ``AnswerControl``'s
+    /// own height, corner, padding and weight now, over one verb at one width,
+    /// and the ground is the app's own ink; the only pure white left on this
+    /// panel is this chip with the pointer on it. See
+    /// ``NotchPalette/brightGround``.
     private var waitingWord: some View {
         Text(word)
             .font(Font(PanelMetrics.waitingMarkFont))

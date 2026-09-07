@@ -145,6 +145,8 @@ Single-product footers differ: Codex alone keeps today's inline form (footer `30
 
 ### 5.2 Which windows are shown
 
+> **And the per-model cap is drawn as of 2026-09-06** ([`quota-footer-v2.md`](quota-footer-v2.md) §12.4). The paragraph below is answered rather than worked around: what it objected to is that the window's meaning moves with the model it names, and the answer is to let the label say so. It is named for the model — `Fable` — discovered in the output rather than declared, so it appears only on an account whose `/usage` names one. The recorded risk is closed: a user who exhausts it now has a line to read.
+>
 > **Superseded by [`quota-footer-v2.md`](quota-footer-v2.md) §5, built on 2026-09-05.** The recorded risk below is fixed for free rather than argued with: its whole force was that a **half** could not report a third window without becoming something that must be read first, and there are no halves any more. Every window a product publishes is one line inside its own group, the per-model weekly cap included, and a cap sitting permanently at `100%` for someone who never uses that model is simply one more line. Nothing on the table is drawn differently for being low, so it cannot mislead by being healthy either.
 
 `/usage` reports three windows: `Current session` (5 hours), `Current week (all models)` and `Current week (<model>)`. **Only the first two are drawn, and fixed**: the left half is always the 5-hour all-models window and the right half always the 7-day all-models window.

@@ -740,12 +740,13 @@ nonisolated struct SubagentBadge: Equatable, Sendable {
 
 /// One rate-limit window, and what is left of it.
 ///
-/// A window has a label because a product can have more than one. Codex has a
-/// single primary window and its rule spans the footer unlabelled; Claude Code
-/// reports a 5-hour session window and a 7-day one, and the footer halves for
-/// them -- not to fit them in, but because that side genuinely has two.
+/// A window has a label because a product can have more than one, and the label
+/// is the product's own name for it rather than this app's paraphrase. Codex
+/// publishes a duration per window and names the limit only when the account is
+/// capped on one model; Claude Code writes `Current session`, `Current week
+/// (all models)` and a per-model week whose name changes with the model.
 nonisolated struct QuotaWindow: Equatable, Sendable {
-    /// Empty when the product has only one window to draw.
+    /// Empty only where the product publishes no name at all.
     let label: String
     let remainingPercent: Int?
     let resetsAt: Date?
@@ -863,12 +864,15 @@ struct AgentSnapshot: Equatable, Sendable {
 /// two points to its right printed as a figure — and what is left is the three
 /// things that were in the caption, each now with a column of its own.
 nonisolated struct FooterWindow: Equatable, Sendable {
-    /// What the product calls this window: `5 h`, `7 d`, or empty where the
-    /// product reports a single unlabelled one.
+    /// What the product calls this window, in the product's own words:
+    /// `Current session`, `All models`, `Fable`, `Weekly limit`. Empty only
+    /// where a product publishes no name for the window at all.
     let label: String
-    /// `72% left`, or `-- left` where the reading could not be made.
-    let share: String
-    /// The countdown to the reset — `47m`, `2h`, `3d 12h` — or `--`.
+    /// `72% left`, or `-- left` where the reading could not be made — held as
+    /// its two parts, because only one of them can fail.
+    let share: ShareReading
+    /// The countdown to the reset — `Resets in 4 hours 12 minutes`,
+    /// `Resets in 5 days 2 hours` — or `Not started`, or `--`.
     let timer: String
     /// What a screen reader hears in place of ``timer``, which keeps the
     /// absolute day the column trades away (§7).
@@ -1377,14 +1381,25 @@ enum UsageSummaryFormatter {
         Double(max(0, tokenCount)).formatted(compactNumberStyle)
     }
 
-    /// Time remaining until the quota resets, written as a countdown.
+    /// Time remaining until the quota resets, written out.
     ///
-    /// **`47m`, `2h`, `3d 12h` — two units at most** (`quota-footer-v2.md` §5).
-    /// It used to read `Resets in 3 days 12 hours`, and the words were repeated
-    /// once a window down a column where every single line is a countdown. Days
-    /// pair with hours and nothing else does: an hour with minutes beside it
-    /// would be a precision this reading has not got, and the column is read to
-    /// find out roughly when, not exactly when.
+    /// **`Resets in 34 minutes`, `Resets in 4 hours 12 minutes`,
+    /// `Resets in 5 days 2 hours` — two units, in words.** It was `47m`, `2h`,
+    /// `3d 12h`, on the argument that the words were repeated once a window
+    /// down a column where every line is a countdown. Two things overturned
+    /// that, and both arrived with the same change. The column beside this one
+    /// now holds each window's own name — `Current session`, `All models`,
+    /// `5h limit` — so a bare `4h` stood next to a `5h` that was a window
+    /// length rather than a countdown, and the two read as the same kind of
+    /// thing. And the row stopped being a rank of bare figures the moment it
+    /// carried a phrase, so the verb costs width the line has and buys back
+    /// what the abbreviation was eliding.
+    ///
+    /// **Minutes survive an hour now.** `2h` was drawn for anything between two
+    /// hours and two hours fifty-nine, which made this the one reading on the
+    /// footer less precise than the figure it read — a share is drawn to the
+    /// percent beside it. The rule is two units, largest first, and the smaller
+    /// is dropped only when it is zero rather than written as `0 minutes`.
     ///
     /// This reads the remaining *duration*, not calendar days: "Resets today"
     /// was true at both 00:30 and 23:30 and told you nothing about which. The
@@ -1417,18 +1432,31 @@ enum UsageSummaryFormatter {
         }
 
         let remaining = resetsAt.timeIntervalSince(now)
-        guard remaining > 0 else { return "Now" }
+        guard remaining > 0 else { return "Resets now" }
 
         let totalMinutes = max(1, Int(remaining / 60))
         let days = totalMinutes / 1440
         let hours = (totalMinutes % 1440) / 60
+        let minutes = totalMinutes % 60
 
-        switch (days, hours) {
-        case (0, 0): return "\(totalMinutes)m"
-        case (0, _): return "\(hours)h"
-        case (_, 0): return "\(days)d"
-        default: return "\(days)d \(hours)h"
+        let parts: [String?] = if days > 0 {
+            [count(days, of: "day"), count(hours, of: "hour")]
+        } else if hours > 0 {
+            [count(hours, of: "hour"), count(minutes, of: "minute")]
+        } else {
+            [count(minutes, of: "minute")]
         }
+        return "Resets in " + parts.compactMap { $0 }.joined(separator: " ")
+    }
+
+    /// `1 day`, `5 days`, and nothing at all for a zero.
+    ///
+    /// A zero returns nil rather than `0 hours` so the caller drops the unit
+    /// instead of drawing it: `Resets in 5 days` is the whole reading when the
+    /// hours are none, and two units is a ceiling rather than a shape.
+    nonisolated private static func count(_ value: Int, of unit: String) -> String? {
+        guard value > 0 else { return nil }
+        return "\(value) \(unit)\(value == 1 ? "" : "s")"
     }
 
     /// The same reset, spoken.
@@ -1484,8 +1512,8 @@ enum UsageSummaryFormatter {
     nonisolated static let unreadable = "--"
 
     /// A window's share of what is left: `72% left`, or `-- left`.
-    nonisolated static func shareText(remainingPercent: Int?) -> String {
-        "\(remainingPercent.map { "\($0)%" } ?? unreadable) left"
+    nonisolated static func share(remainingPercent: Int?) -> ShareReading {
+        ShareReading(figure: remainingPercent.map { "\($0)%" } ?? unreadable)
     }
 
     /// A day's spend: `518.7M today`, or `-- today`.
@@ -1515,5 +1543,36 @@ nonisolated struct SpendReading: Equatable, Sendable {
         figure == UsageSummaryFormatter.unreadable
             ? "Tokens today unavailable"
             : "\(figure) tokens today"
+    }
+}
+
+/// A window's share of what is left, in the two parts it is drawn in.
+///
+/// The same split ``SpendReading`` makes, for the same reason and now under one
+/// rule: **on this footer the figure is ``NotchPalette/reading`` and the words
+/// around it are ``NotchPalette/label``.** The resting line already drew it —
+/// `518.7M` bright, `today` grey — and it was the only line that did, so `96%`
+/// used to be drawn at exactly the value of the word `left` beside it. The one
+/// number a person opens the table to read had no emphasis at all.
+///
+/// **It says nothing about value.** The split is identical at `2%` and at
+/// `98%`, so `quota-footer-v2.md` §4 holds as written: no quota figure on this
+/// surface is drawn differently for being low. What changed is role, not
+/// value — and a `--` that could not be read is a figure like any other, drawn
+/// in the figure's own ink rather than dimmed (§8.3).
+nonisolated struct ShareReading: Equatable, Sendable {
+    /// `96%`, or `--`.
+    let figure: String
+    /// `left`, always: this reading has one unit and it never changes.
+    let unit = "left"
+
+    /// The whole reading, which is what a test reads.
+    nonisolated var text: String { "\(figure) \(unit)" }
+
+    /// What the line says out loud — never the two characters.
+    nonisolated var spokenText: String {
+        figure == UsageSummaryFormatter.unreadable
+            ? "share unavailable"
+            : "\(figure) left"
     }
 }

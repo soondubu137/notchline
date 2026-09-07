@@ -53,6 +53,8 @@ Three rules follow, and they are the whole of what the composed surface is:
 
 **The first of those corrections was overtaken before it was applied.** The spoken line was removed entirely on 2026-09-05 ([`quota-footer-v2.md`](quota-footer-v2.md) §4), so `45` and `47` are both void and this correction now covers the table's five figures alone. It is recorded rather than dropped because it is what settled the disagreement, and because the same `16` is what makes the table's `30P` right.
 
+> **And the whole of it is reversed on 2026-09-06** ([`quota-footer-v2.md`](quota-footer-v2.md) §12.1). The badge came off the footer's outer row, so a product line is `footerCaptionHeight`'s `14` again and the table is `19W + 28P + 33` — the arithmetic §6's tables carried all along. The correction stands as the record of a disagreement that was real while the badge was there; the tables it corrected were right for a reason nobody had yet, which is worth leaving visible.
+
 ### 3.3 Figma page 09 draws a grey chip and keeps `Name and colour` as the default
 
 The page argues that the badge is the one presentation of four that still answers when the hue is taken away, and proposes it as an option among four, in `#242424` / `#C7C7CC`. [`colour-v2.md`](colour-v2.md) §4 makes it the **only** presentation, in the theme ink's own pair.

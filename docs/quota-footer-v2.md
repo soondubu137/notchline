@@ -2,9 +2,9 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Designed, and implemented on 2026-09-05.** Nothing here needed a capability the app lacked: the data model was already a list of products each holding a list of windows (`MonitorStore.footerRules`), and only the layout was written for two. §11 records what each symbol became. |
-| Version | 3.4 |
-| Date | 2026-09-05 |
+| Status | **Version 4 designed and implemented on 2026-09-06** — §12 is the whole of it, and it is a redrawing of the opened table rather than a new design: the badge and the leader come out, the share moves from `300` to `120`, the countdown is written out, and every window is named in its product's own words. Everything above §12 is version 3 as built on 2026-09-05, amended in place only where 4.0 makes a sentence false. **Version 3 designed and implemented on 2026-09-05.** Nothing here needed a capability the app lacked: the data model was already a list of products each holding a list of windows (`MonitorStore.footerRules`), and only the layout was written for two. §11 records what each symbol became. |
+| Version | 4.0 |
+| Date | 2026-09-06 |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `08 — The footer without a gauge`. `07 — The quota footer (superseded)` is kept as the record of the direction this one leaves (§9). `11 — The panel, whole` draws this footer composed with the other two V2 decisions — see [`panel-v2.md`](panel-v2.md). |
 | Scope | The expanded panel's footer only: the quota rules and today's tokens. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the session list is [`expanded-panel-v2.md`](expanded-panel-v2.md), both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None is touched, and the panel's width does not move. |
 | Supersedes | [`dual-agent-design.md`](dual-agent-design.md) §5.1 (structure and the four heights), §5.2 (which windows are drawn), §5.4 (the fold, its default and its trap). |
@@ -58,6 +58,21 @@ Today's tokens and the control. Nothing else. **There is no second closed form**
 and there is no threshold left to put it on the surface (§4).
 
 **Opened — `19W + 28P + 17`**, a two-level table: the product outside, its windows inside.
+
+> **Redrawn at 4.0 (§12).** The badge and the leader are gone, the share stands at `120` beside the
+> window it belongs to, and the countdown is a sentence. What the diagram below still gets right is
+> the *structure* — the product outside, its windows inside, one line each — which is the part 4.0
+> does not touch. What it draws is:
+>
+> ```
+>       251M today ────────────────────────────────────────────────  ⌃
+>       Codex                                                51M today
+>           Weekly limit    100% left        Resets in 6 days 23 hours
+>       Claude Code                                         200M today
+>           Current session  96% left     Resets in 4 hours 12 minutes
+>           All models       73% left        Resets in 5 days 2 hours
+>           Fable           100% left        Resets in 5 days 2 hours
+> ```
 
 ```
       518.7M today                                                  ⌃
@@ -133,9 +148,9 @@ Every rule this section held is void. They are kept below because all but the fi
 
 **Three columns inside, one figure outside, and one trailing edge for both.** The window at `24` — one step in from the panel's own `12` — the share right-aligned at `300`, and the timer right-aligned at `508`, which is where the product's spend is right-aligned too. **Indentation and the leader carry the level between them**: no box, rule or divider is drawn.
 
-**`Resets in` is gone, and the column is a timer.** Repeated once a window it was noise, and what the column holds is a countdown — so it is written like every other countdown on this panel: `47m`, `2h`, `3d 12h`, two units at most. The absolute day survives in the accessible name, for anyone who wants Friday rather than four days (§8.5 question 04).
+~~**`Resets in` is gone, and the column is a timer.** Repeated once a window it was noise, and what the column holds is a countdown — so it is written like every other countdown on this panel: `47m`, `2h`, `3d 12h`, two units at most.~~ **Void at 4.0 (§12.3): the words came back and the minutes with them.** The absolute day still survives in the accessible name, for anyone who wants Friday rather than four days (§8.5 question 04).
 
-**The levels are three steps of brightness, and ~~hue~~ a badge names the group.** ~~The product in its own lit ink (`#6CB4FF` / `#D97757`)~~ — **the product is a badge** in the `Theme colour` pair ([`colour-v2.md`](colour-v2.md) §5) — its spend in `#C7C7CC`, everything inside it in `#7C7C80`. ~~A share past the threshold is the one thing inside a group that steps back up to `#C7C7CC` — so **every** window that could have spoken is visible here, not only the one that did.~~ Void since 3.3 (§4): **every window inside a group is `#7C7C80`, whatever its share.** The sentence was true and is now trivial — the table is where every window is, so there is no *only the one that did* left to correct.
+**The levels are three steps of brightness, and ~~hue~~ ~~a badge~~ the weight of the name names the group** (§12.1). ~~The product in its own lit ink (`#6CB4FF` / `#D97757`)~~ — **the product is a badge** in the `Theme colour` pair ([`colour-v2.md`](colour-v2.md) §5) — its spend in `#C7C7CC`, everything inside it in `#7C7C80`. ~~A share past the threshold is the one thing inside a group that steps back up to `#C7C7CC` — so **every** window that could have spoken is visible here, not only the one that did.~~ Void since 3.3 (§4): **every window inside a group is `#7C7C80`, whatever its share.** The sentence was true and is now trivial — the table is where every window is, so there is no *only the one that did* left to correct.
 
 **Brightness was always doing this work, and now it is doing all of it.** Three steps already separated the product, its spend and its windows; the lit ink only said *which* product, which the name inside the badge says outright. The badge's own ground is darker than the panel, so it adds a step downwards rather than a fourth step up, and the group's brightest thing is still its spend.
 
@@ -293,3 +308,179 @@ page `08` and page `11` §03.
 | `aFoldedFooterIsTheSameHeightForEveryShape` | Became `theFooterIsTwentyTwoForEveryConnectedForm`; `foldingLiftsThePanelsBottomEdgePastTheChevronThatWasClicked` inverted into `foldingCannotStrandThePointer`, which also keeps the stranding guard honest by checking a shrink that *would* strand; `aProductWithNoLimitsKeepsItsRow` is new. ~~`aQuietWindowIsNotDrawn`~~ became `noShareReachesTheClosedFooter` — sweeping the share across its whole range and asserting the closed footer is identical is a stronger pin than one quiet window, and it is what §4 actually claims. `anUnreadableFieldDrawsTwoDashes`, `everyDashAnnouncesAsUnavailable`, `theResetColumnCountsDownInTwoUnitsAtMost` and `theOpenedTableIsNineteenAWindowAndThirtyAProduct` are new (§8.3, §7, §5, §2) |
 
 [`dual-agent-design.md`](dual-agent-design.md) §5.1, §5.2 and §5.4 were amended in the same change, as was [`tech-design.md`](tech-design.md) §13's `Reset unavailable` wording and the matching signal row in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) — §8.3 said both would be amended when the footer was built, and the footer is built.
+
+## 12. Version 4 — the table, set
+
+**Designed and built on 2026-09-06**, from the Figma page `Quota table` in
+[Notchline — Hover Redesign](https://www.figma.com/design/G5HTs1eJ5cw1dnMZi6ZmXK/Notchline-%E2%80%94-Hover-Redesign?node-id=54-3),
+after the board's owner called the opened table badge-heavy, over-ruled and sparse. Nothing above §12
+is deleted; where 4.0 makes a sentence false it is struck where it stands, and the reasoning is here.
+
+The subject is the **opened table only**. The resting line is untouched — `38`, today's spend, the
+seam rule and the control — and §3 and §4 stand entire: there is still no threshold, and no figure
+anywhere on this footer is drawn differently for being low.
+
+### 12.1 The badge comes out, and the leader with it
+
+**A badge marks a product on something that is happening.** `ProductBadge` earns its ground on a
+session row, where the product is one fact about a live object among four and the chip is what stops
+the eye reading the caption to place it. In the footer there is no object: the product is the name of
+a group in a table somebody opened, and the chip is the only saturated thing in a column of grey
+figures. It answers a question nobody asked at the cost of the one they did.
+
+So [`colour-v2.md`](colour-v2.md) §5's list loses one row and keeps the other two. The clause's
+purpose — a product is never named in *hue* — is untouched, and it is `colour-v2.md` §10 question 03
+that is answered the other way: **the name alone does do.** In Medium at `#C7C7CC`, it is the one word
+on the footer set in a weight of its own, which is what a heading is.
+
+**The leader goes with it, and nothing replaces it.** It was `1` pt of white at `10%` against the
+`15%` the panel's own hairlines use — "one step below", §5 said. Five per cent of white on a `1` pt
+line at `41` pt of distance is not a step anybody sees; it reads as the panel's rule drawn twice,
+once badly, which is what the board's owner objected to. What it was for was attribution across
+`450` pt of black, and the level is already said three times over: by the indent under it, by the
+`14` pt of air above it, and by the weight of the name. Two things at one brightness, alone on a
+line, are joined by being the only two things on it.
+
+**The product line is `14` again**, so the opened table is `19W + 28P + 33` — the arithmetic §2 was
+written with, before the badge added a point to every product group. [`panel-v2.md`](panel-v2.md)
+§3.2's correction is reversed by the thing that caused it. Every opened form is four points shorter
+per product; the closed form does not move.
+
+### 12.2 The share stands beside the window it belongs to
+
+**`300` was measured when the panel was `520` wide.** At `610` it is not a margin, an edge or a
+centre — it is where the column stopped. The row read as `5 h`, a gap of `216`, `96% left`, a gap of
+`284`, `4h`: **`74` points of reading on a `574` point line**, with the one column that mattered
+stranded in the middle of it.
+
+**The share's trailing edge is `184`, and it is set rather than chosen:**
+
+```
+184 = 24 (the window column's indent)
+    + 84 (the window column — Current session is 81.56 at 11 pt Light)
+    + 24 (the gutter, twice expandedHorizontalPadding)
+    + 52 (the share column — 100% left is 48.78)
+```
+
+The label and the share share one box with the slack between them, as they already did, so a longer
+window name eats the gutter rather than colliding with the figure; past `84` the **name** truncates
+and the figure never moves. The countdown keeps the trailing edge, which is where the product's spend
+is right-aligned too.
+
+**So the table has two columns at both levels**, and they are the same two: a cluster on the left
+margin and a figure on the right. A heading line is the product and what it spent; a window line is
+the window and its share, then its countdown. No rule, box, indent guide or leader is drawn to say so.
+
+Two alternates were drawn on the board and lost. A narrow left-set block — every stop pulled in to
+`190` — is the densest of the three and reads as pushed aside under a spend line that spans the whole
+width. Two products abreast in `278` columns is `49` pt shorter and was the best-looking of them until
+you notice that `51M today` sits directly to the left of `Claude Code`: it re-creates, exactly, the
+attribution problem the leader existed to solve.
+
+### 12.3 One ink rule, and the countdown gets its verb back
+
+**The figure is `#C7C7CC` and the words around it are `#7C7C80`, at every level.** The resting line
+already drew this — `251M` bright, `today` grey — and it was the only line that did, so `96%` was
+drawn at exactly the value of the word `left` beside it. The one number a person opens the table to
+read had no emphasis at all. `FooterWindow.share` becomes a `ShareReading`, figure and unit, exactly
+as `SpendReading` already was.
+
+**This is not §4 coming back.** The split is identical at `2%` and at `98%`; nothing is drawn
+differently for being low. It separates role, not value — and a `--` that could not be read takes the
+figure's own ink rather than being dimmed, which is §8.3 stated once more.
+
+The countdown stays grey throughout. It qualifies the share rather than answering anything, so a
+window line has one bright figure and a heading line two, in exactly two columns.
+
+**`Resets in` comes back, and the minutes with it.** §5 took the words out because they were repeated
+once a window down a column where every line is a countdown. Two things overturn that, and both
+arrive with §12.4. The column beside this one now holds the window's own name, so a bare `4h` stood
+next to a `5h limit` and a `Current session` and read as the same kind of thing. And the row stopped
+being a rank of bare figures the moment it carried a phrase, so the verb costs width the line has.
+
+`2h` was also drawn for anything between two hours and two hours fifty-nine, which made this the one
+reading on the footer less precise than the figure beside it. The rule is now **two units, largest
+first, written out, and the smaller dropped only when it is zero**: `Resets in 47 minutes`,
+`Resets in 4 hours 12 minutes`, `Resets in 5 days 2 hours`, `Resets in 1 day 1 hour`. A reset already
+past reads `Resets now`. `Not started` and `--` are untouched, and so is §7 — the accessible name
+still trades the duration for `resets Saturday at 16:00`.
+
+**The right column is right-aligned, and the phrase is ragged at its left because of it.** That was
+the argument against the words on the board, and it loses to the alternative: left-aligning the phrase
+gives up the one right margin the table has, and the widest realistic spread is `Resets in 4 hours` at
+`89.59` against `Resets in 23 hours 59 minutes` at `156.89`, on a line with `257` pt of slack.
+
+### 12.4 Every window is named in its product's own words
+
+`5 h` and `7 d` were durations invented here. They said nothing about the one window whose meaning is
+not its length, and they read badly the moment the column beside them also held a duration.
+
+| Product | Was | Is |
+| --- | --- | --- |
+| Claude Code | `5 h` | `Current session` |
+| Claude Code | `7 d` | `All models` |
+| Claude Code | *not drawn* | the model's own name — `Fable` |
+| Codex | *unlabelled* | `5h limit` / `Weekly limit`, from `windowDurationMins` |
+
+**Claude Code's per-model week is drawn now, and [`dual-agent-design.md`](dual-agent-design.md) §5.2
+is answered rather than worked around.** It was dropped because which model it names varies, so a rule
+that sometimes meant one thing and sometimes another would have to be read rather than glanced at —
+and the cost was written down: *a user who exhausts the per-model cap sees healthy rules and is still
+refused.* What that argument missed is that the varying part is the **answer**. Label the window with
+the model and the thing that moves is the thing the label says. It is discovered in the output rather
+than declared, so it appears only on accounts whose `/usage` names one, and two of them draw two
+lines.
+
+**Codex publishes no name for its own limit**, so the name is the only thing it does publish about a
+window: `account/rateLimits/read` gives `limitName` — null for the account's own — and a
+`windowDurationMins` per window. `300` is the 5-hour limit and `10080` the weekly one, which is how
+the same account sees them in Codex; anything else is written out from the minutes rather than guessed
+at. **Its `secondary` window is read at last**: it was parsed and then thrown away by a caller that
+rebuilt the snapshot through the single-window initialiser. `primary` stays first, so every surface
+that draws one rule reads exactly what it read before.
+
+The per-limit map under `rateLimitsByLimitId` is deliberately **not** read. It repeats the account's
+own limit and adds one entry per model-specific cap, and which of them binds a given request is not
+something the response says.
+
+### 12.5 Heights
+
+| Connected | P | W | Opened at 3.4 | Opened at 4.0 |
+| --- | --- | --- | --- | --- |
+| Codex alone | 1 | 1 | `82` | **`80`** |
+| Claude Code alone | 1 | 2 | `101` | **`99`** |
+| Both, as they were read | 2 | 3 | `150` | **`146`** |
+| Both, as they are read now | 2 | 4 | — | **`165`** |
+
+Closed is `38` in every one of them, as it was. The fourth row is the shape this change actually
+produces on a machine with both products: Codex's one weekly window, and Claude Code's three.
+
+### 12.6 What it cost in code
+
+| Symbol | Change |
+| --- | --- |
+| `UsageSummaryFormatter.resetText` | Two units written out, minutes kept beside hours, `Resets now` in place of `Now`. `Not started` and `--` unchanged |
+| `UsageSummaryFormatter.shareText` | Became `share(remainingPercent:)`, returning a `ShareReading` |
+| `ShareReading` | New, mirroring `SpendReading`: `figure` and a constant `unit` of `left` |
+| `FooterWindow.share` | `String` → `ShareReading` |
+| `ClaudeCodeUsageReader` | `windows` became `fixedWindows` with the output's own labels, plus a discovered per-model window; `unavailableWindows` is still the two fixed ones |
+| `CodexSnapshotParser.quota` | Reads `primary` **and** `secondary`, and names each from `windowDurationMins`; `windowLabel(minutes:)` is new |
+| `LiveCodexMonitorService.quota(...)` | Rebuilds the snapshot from `windows` rather than from `remainingPercent`/`resetsAt`, which is what used to drop the second window |
+| `PanelMetrics.footerShareTrailingEdge` | `300 − expandedHorizontalPadding` → composed from the columns it holds, `184` on the panel |
+| `PanelMetrics.footerColumnGutter` | New — `expandedHorizontalPadding × 2`, the one gutter this footer has |
+| `PanelMetrics.footerWindowColumnWidth` / `footerShareColumnWidth` | New — `84` and `52`, the two columns the stop is composed from |
+| `PanelMetrics.footerLeaderClearance` | Retires with the leader |
+| `PanelMetrics.footerHeight(...)` | `productCount * productBadgeHeight` → `* footerCaptionHeight` |
+| `PanelMetrics.productBadgeHeight` | Keeps the session row's caption and the retired row's breadcrumb. The footer stops reading it |
+| `FooterProductGroup.outerRow` | Badge + rule + spend → a Medium caption, a spacer, and the spend |
+| `FooterWindowRow` | The label/share box narrows from `276` to `160`; the label is capped at its column and truncates past it |
+| `FooterSpend` | Became `FooterReading`, taking either reading — one view for the whole footer's ink rule |
+| `FooterCaption` | Gains a weight, and truncates rather than overflowing |
+| `theOpenedTableIsNineteenAWindowAndThirtyAProduct` | Became `...AndTwentyEightAProduct`; `theResetColumnCountsDownInTwoUnitsAtMost` became `...InTwoUnitsWrittenOut`; `aPerModelWindowIsDrawnOnlyWhereTheOutputNamesOne` and `codexWindowsAreNamedByTheDurationTheProductPublishes` are new |
+
+### 12.7 Open
+
+| | Question | Where it stands |
+| --- | --- | --- |
+| 01 | Is `5h limit` / `Weekly limit` what Codex calls them? | **Unverified, and it is one string each.** The App Server publishes no label for the account's own limit and the `codex` binary carries no such string, so this is the wording ChatGPT presents the same limits under rather than something read out of the product. Everything else on this page is read from the product's own output |
+| 02 | Does the per-model window need the word `week` in it? | **Standing recommendation: no.** `Fable` sits under `All models`, which carries the period for the pair, and the countdown beside it says when it turns over |

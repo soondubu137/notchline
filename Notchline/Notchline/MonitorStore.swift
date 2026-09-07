@@ -385,9 +385,13 @@ enum PanelMetrics {
     static let sessionRowPreviewHeight: CGFloat = 18
     static let sessionRowLineSpacing: CGFloat = 2
 
-    /// The chip that names a product, wherever the notch surface names one:
-    /// the row's caption line and the quota table's outer row
-    /// (`colour-v2.md` §4).
+    /// The chip that names a product on a session row's caption line and on a
+    /// retired row's breadcrumb (`colour-v2.md` §4).
+    ///
+    /// **Not on the footer.** A badge marks a product on something that is
+    /// happening, against three other pieces of text; the quota table names a
+    /// group in a table somebody opened, where the chip was the only saturated
+    /// object among a column of grey figures.
     ///
     /// Its width is `6 + measured text + 6` and is never tabulated — the text
     /// is real rendered text, so the chip is measured by drawing it rather than
@@ -432,19 +436,40 @@ enum PanelMetrics {
     ///
     /// One more step of ``expandedHorizontalPadding``, which puts a window's
     /// label at `24` on the panel — one step in from the `12` its product's
-    /// badge stands on. Indentation and the leader carry the level between
-    /// them, so no box, rule or divider is drawn (`quota-footer-v2.md` §5).
+    /// name stands on. **Indentation carries the level on its own now**: the
+    /// leader that used to help it was a second hairline five per cent away
+    /// from the panel's own, and the weight of the product's name says the
+    /// same thing without being drawn.
     static let footerWindowIndent: CGFloat = expandedHorizontalPadding
-    /// Where the share column's trailing edge lands, measured inside the
-    /// footer's content box: `300` on the panel.
-    static let footerShareTrailingEdge: CGFloat = 300 - expandedHorizontalPadding
-    /// The clear space at each end of an outer row's leader.
+    /// The clear space between two columns on this footer.
     ///
-    /// It starts `8` after the product's badge and stops `8` before that
-    /// product's spend (`quota-footer-v2.md` §5). Wider than the badge's own
-    /// `6` of padding because this is clearance between a hairline and two
-    /// things it joins, not an inset inside a chip.
-    static let footerLeaderClearance: CGFloat = 8
+    /// Twice ``expandedHorizontalPadding``, and it does both of the jobs a
+    /// gutter has here: the least a product's name may stand from its own
+    /// spend, and the space between a window's name and its share.
+    static let footerColumnGutter: CGFloat = expandedHorizontalPadding * 2
+    /// The window column, sized to the widest name a window can carry.
+    ///
+    /// `Current session` measures `81.56` at 11 pt Light, which is the widest
+    /// this app draws; a per-model window is named for whatever model the
+    /// account is capped on, so this is a column rather than a measurement.
+    /// The label and the share share one box with the slack between them, so a
+    /// longer name eats the gutter instead of colliding with the figure.
+    static let footerWindowColumnWidth: CGFloat = 84
+    /// The share column: `100% left` is `48.78`, and nothing wider can appear.
+    static let footerShareColumnWidth: CGFloat = 52
+    /// Where the share column's trailing edge lands, measured inside the
+    /// footer's content box: `184` on the panel.
+    ///
+    /// **It is set rather than chosen.** It was `300`, measured when the panel
+    /// was `520` wide; at `610` that is not a margin, an edge or a centre, and
+    /// it left the share stranded between two gaps of `216` and `284` with
+    /// `74` points of reading on the line. Composed from the columns it
+    /// actually holds, the share lands beside the window it belongs to and the
+    /// row reads as one phrase.
+    static let footerShareTrailingEdge: CGFloat = footerWindowIndent
+        + footerWindowColumnWidth
+        + footerColumnGutter
+        + footerShareColumnWidth
 
     /// The gear scales with the menu bar: `32` under a `46pt` bar, `20` under a
     /// `24pt` one. It is trailing-aligned inside the footer's content box, which
@@ -513,12 +538,15 @@ enum PanelMetrics {
 
     /// Footer height: the resting line, or the table somebody opened.
     ///
-    /// **`38`, or `19W + 30P + 33`** (`quota-footer-v2.md` §2). The opened form
-    /// composes as the spend line and its gap (`32 + 9`), then one group per
-    /// product — a caption line carrying a badge at `16`, and `19` for each of
-    /// its windows — with `14` of air between groups and `6` below the last
-    /// line. Multiplied out that is `47 + Σ(16 + 19w) + 14(P − 1) + …`, which
-    /// is `19W + 30P + 33`.
+    /// **`38`, or `19W + 28P + 33`**. The opened form composes as the spend
+    /// line and its gap (`32 + 9`), then one group per product — a caption
+    /// line at `14`, and `19` for each of its windows — with `14` of air
+    /// between groups and `6` below the last line. Multiplied out that is
+    /// `47 + Σ(14 + 19w) + 14(P − 1) + …`, which is `19W + 28P + 33`.
+    ///
+    /// **`28P` is the arithmetic `quota-footer-v2.md` was written with**, before
+    /// §2 added a point to every product line so a badge would fit on it. The
+    /// badge is gone from this footer and the line is a caption line again.
     ///
     /// **Nothing connected is no footer at all**: no products, no windows and
     /// no tokens is nothing to say, and a wing with nothing to say is removed
@@ -533,7 +561,7 @@ enum PanelMetrics {
 
         return recentSeamHeight
             + footerRuleSpacing
-            + CGFloat(productCount) * productBadgeHeight
+            + CGFloat(productCount) * footerCaptionHeight
             + CGFloat(windowCount) * footerWindowRowHeight
             + CGFloat(productCount - 1) * footerCaptionHeight
             + footerBottomMargin
@@ -789,29 +817,48 @@ enum PanelMetrics {
     /// The word on a waiting row's bright ground.
     ///
     /// Not the timer's monospaced-digit face: this draws a name rather than a
-    /// figure. **Semibold rather than the Medium it was**, and that is a
+    /// figure. ~~**Semibold rather than the Medium it was**, and that is a
     /// correction for the ground under it rather than a change of emphasis:
     /// dark glyphs on a light field read a weight lighter than light glyphs on
     /// a dark one, so matching the perceived weight of the `13 pt` Medium title
-    /// beside it costs one step up.
-    static let waitingMarkFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+    /// beside it costs one step up.~~
+    ///
+    /// **Superseded — Medium, the same weight the answers take.** The
+    /// correction was sound about the effect and wrong about its scope: the
+    /// affirmative this mark grows into (§3.1) sits on the *same*
+    /// ``NotchPalette/brightGround`` with the *same*
+    /// ``NotchPalette/onBrightGround`` ink, and it was never stepped up. So the
+    /// weight was not a correction applied to a light field, it was one control
+    /// drawn two ways — the divergence ``controlCornerRadius`` had already been
+    /// pulled out of. If dark-on-light really does want a step, it wants it in
+    /// both places and belongs to the ground rather than to the mark.
+    static let waitingMarkFont = NSFont.systemFont(ofSize: 13, weight: .medium)
 
     /// The mark is a control, so it is built like one rather than like the
     /// readings it shares the slot with.
     ///
-    /// Twice the ``readingGroundHeight`` it used to take, and cut like the
+    /// ~~Twice the ``readingGroundHeight`` it used to take, and cut like the
     /// answer it becomes rather than like the reading it replaced. That leaves
     /// it `4` taller than ``answerRowHeight`` — the affirmative it grows into
     /// when the row opens (`answer-in-notch.md` §3.1) — which is the one number
     /// here settled by how it feels under the pointer rather than by the system
-    /// it belongs to.
+    /// it belongs to.~~
+    ///
+    /// **Superseded — it *is* ``answerRowHeight``, and derived rather than
+    /// written down.** `32` was the reading's tile doubled, which is a number
+    /// about the mark's ancestry rather than about what it now is; against the
+    /// answer row it left the one object §3.1 describes travelling down the row
+    /// and shedding four points on the way. The corner, the padding and the
+    /// weight are already the answers'; the height was the last of the four
+    /// still holding out, and "how it feels under the pointer" is not a
+    /// measurement that outranks the three.
     ///
     /// ~~On ``readingGroundHeight``'s own `0.25` corner ratio~~ — **superseded**:
     /// that ratio was the badge family's, inherited from the reading this
     /// replaced, and at `32` tall it drew an `8` pt pill above a row of `4` pt
     /// tiles. The corner and the padding are ``controlCornerRadius`` and
     /// ``controlHorizontalPadding`` now, which the answers already took.
-    static let waitingMarkHeight: CGFloat = 32
+    static var waitingMarkHeight: CGFloat { answerRowHeight }
     static var waitingMarkCornerRadius: CGFloat { controlCornerRadius }
     static var waitingMarkPadding: CGFloat { controlHorizontalPadding }
 
@@ -833,7 +880,7 @@ enum PanelMetrics {
     /// right-aligned to its row's trailing edge, left a ragged column down a
     /// mixed queue — and these are one control appearing once per row, not
     /// three controls. So they draw one silhouette: the widest of the three,
-    /// which is `Approve` at `77`. `Read` pays `21 pt` for that, against the
+    /// which is `Approve` at `76`. `Read` pays `20 pt` for that, against the
     /// `57` the phrase used to cost it, and the reservation is now over the
     /// three words the mark can actually say rather than over the four strings
     /// it once might have.
@@ -1353,9 +1400,13 @@ enum PanelMetrics {
 
     /// The row of answers at the foot of an open row.
     ///
-    /// The waiting mark's own `16` grown by ``PanelMotion``'s slot curve as the
-    /// ground travels down the row — one object moving, which is why this is the
-    /// same ground rather than a second one (`answer-in-notch.md` §3.1).
+    /// ~~The waiting mark's own `16` grown by ``PanelMotion``'s slot curve as
+    /// the ground travels down the row~~ — the mark is `28` too now, so the
+    /// ground travels without resizing at all. One object moving, which is why
+    /// this is the same ground rather than a second one (`answer-in-notch.md`
+    /// §3.1), and it is ``waitingMarkHeight`` that reads this rather than the
+    /// other way round: the answer row is the control's size on this surface,
+    /// and the mark is that control in its collapsed position.
     static let answerRowHeight: CGFloat = 28
 
     /// The corner every control on this surface takes, and the horizontal
@@ -1369,9 +1420,17 @@ enum PanelMetrics {
     /// already `12` in both places and the corner was not — `8` on the mark and
     /// `4` on the answers, which read as a pill above a set of tiles.
     ///
-    /// The mark stays `4` taller than the answer it becomes
+    /// ~~The mark stays `4` taller than the answer it becomes
     /// (``waitingMarkHeight``); that difference is deliberate and is the one
-    /// number here settled by how it feels under the pointer.
+    /// number here settled by how it feels under the pointer.~~
+    ///
+    /// **Superseded — the height went the same way, and so did the weight.**
+    /// The mark is ``answerRowHeight`` and ``waitingMarkFont`` is the answers'
+    /// Medium, so the four properties that make a control on this surface —
+    /// height, corner, padding, weight — are now one set with one exception:
+    /// the mark reserves ``waitingMarkWidth`` for its three verbs while an
+    /// answer hugs its own word, because a mark appears once per row and must
+    /// draw a straight column down a mixed queue.
     static let controlCornerRadius: CGFloat = 4
     static let controlHorizontalPadding: CGFloat = 12
 
@@ -2744,19 +2803,20 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// One window's line: its label, its share, and the countdown to its reset.
+    /// One window's line: its name, its share, and the countdown to its reset.
     ///
-    /// Three columns where there was one caption. `Resets in` is gone with the
-    /// prose — repeated once a window it was noise, and what the column holds
-    /// is a countdown, so it is written like every other countdown on this
-    /// panel (§5).
+    /// **`Resets in` came back.** It went out on the argument that the words
+    /// were repeated once a window down a column of countdowns; what put them
+    /// back is that the column beside this one now carries the window's own
+    /// name, and a bare `4h` next to a `5h limit` reads as the same kind of
+    /// thing. See ``UsageSummaryFormatter/resetText(resetsAt:remainingPercent:now:calendar:)``.
     private static func footerWindow(
         for window: QuotaWindow,
         now: Date
     ) -> FooterWindow {
         FooterWindow(
             label: window.label,
-            share: UsageSummaryFormatter.shareText(
+            share: UsageSummaryFormatter.share(
                 remainingPercent: window.remainingPercent
             ),
             timer: UsageSummaryFormatter.resetText(

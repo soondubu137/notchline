@@ -497,10 +497,19 @@ struct NotchlineTests {
 
         // The panel's own footer, which the second page has the room to draw:
         // today's spend, and the control that opens one group per product --
-        // Codex publishes one window, Claude Code two. Pins 7 and 8 name a line
-        // and a control that only exist if this fixture carries real quota.
+        // Codex publishes one window, Claude Code three, each named the way its
+        // own product names it. Pins 7 and 8 name a line and a control that
+        // only exist if this fixture carries real quota.
         #expect(hovered.footerRules.count == 2)
-        #expect(hovered.footerRules.first { $0.agent == .claudeCode }?.windows.count == 2)
+        let claudeQuota = hovered.footerRules.first { $0.agent == .claudeCode }
+        #expect(
+            claudeQuota?.windows.map(\.label)
+                == ["Current session", "All models", "Fable"]
+        )
+        #expect(
+            hovered.footerRules.first { $0.agent == .codex }?
+                .windows.map(\.label) == ["Weekly limit"]
+        )
         #expect(hovered.showsQuotaFoldControl)
         #expect(hovered.footerToday.text == "519M today")
         // And the table starts shut, which is what the pins are placed against.
@@ -1858,8 +1867,8 @@ struct NotchlineTests {
                 windows: (0 ..< windowCount).map { index in
                     FooterWindow(
                         label: "w\(index)",
-                        share: "72% left",
-                        timer: "3d 12h",
+                        share: UsageSummaryFormatter.share(remainingPercent: 72),
+                        timer: "Resets in 3 days 12 hours",
                         spokenTimer: "resets Friday at 09:00"
                     )
                 }
@@ -1874,6 +1883,9 @@ struct NotchlineTests {
         footerShape([(.claudeCode, 2)]),
         footerShape([(.codex, 0)]),
         footerShape([(.codex, 1), (.claudeCode, 2)]),
+        // What this machine reports since the per-model week stopped being
+        // dropped and Codex's second window stopped being thrown away.
+        footerShape([(.codex, 2), (.claudeCode, 3)]),
         footerShape([(.codex, 1), (.claudeCode, 0)])
     ]
 
@@ -1909,8 +1921,8 @@ struct NotchlineTests {
                     windows: [
                         // The tighter window second, so a sort by share would
                         // be visible here.
-                        QuotaWindow(label: "5 h", remainingPercent: 85, resetsAt: nil),
-                        QuotaWindow(label: "7 d", remainingPercent: 12, resetsAt: nil)
+                        QuotaWindow(label: "Current session", remainingPercent: 85, resetsAt: nil),
+                        QuotaWindow(label: "All models", remainingPercent: 12, resetsAt: nil)
                     ],
                     todayTokens: 2000
                 ),
@@ -1919,8 +1931,12 @@ struct NotchlineTests {
         )
         #expect(store.footerRules.map(\.agent) == [.codex, .claudeCode])
         let claudeCode = try #require(store.footerRules[checked: 1])
-        #expect(claudeCode.windows.map(\.label) == ["5 h", "7 d"])
-        #expect(claudeCode.windows.map(\.share) == ["85% left", "12% left"])
+        #expect(
+            claudeCode.windows.map(\.label) == ["Current session", "All models"]
+        )
+        #expect(
+            claudeCode.windows.map(\.share.text) == ["85% left", "12% left"]
+        )
 
         // Each product's own spend is on its own group, and it is the only
         // place the footer names one: the resting line is the whole.
@@ -1992,8 +2008,8 @@ struct NotchlineTests {
                 sessions: [],
                 quota: QuotaSnapshot(
                     windows: [
-                        QuotaWindow(label: "5 h", remainingPercent: 100, resetsAt: nil),
-                        QuotaWindow(label: "7 d", remainingPercent: 85, resetsAt: nil)
+                        QuotaWindow(label: "Current session", remainingPercent: 100, resetsAt: nil),
+                        QuotaWindow(label: "All models", remainingPercent: 85, resetsAt: nil)
                     ],
                     todayTokens: 0
                 ),
@@ -2002,8 +2018,8 @@ struct NotchlineTests {
         )
         let windows = try #require(store.footerRules[checked: 0]).windows
         let fresh = try #require(windows[checked: 0])
-        #expect(fresh.label == "5 h")
-        #expect(fresh.share == "100% left")
+        #expect(fresh.label == "Current session")
+        #expect(fresh.share.text == "100% left")
         #expect(fresh.timer == "Not started")
         #expect(fresh.spokenTimer == "not started")
 
@@ -2011,7 +2027,7 @@ struct NotchlineTests {
         // still how a wording change announces itself, and it now announces
         // itself as a share beside a `--`.
         let spent = try #require(windows[checked: 1])
-        #expect(spent.share == "85% left")
+        #expect(spent.share.text == "85% left")
         #expect(spent.timer == "--")
         #expect(spent.spokenTimer == "unavailable")
     }
@@ -2074,7 +2090,7 @@ struct NotchlineTests {
                     quota: QuotaSnapshot(
                         windows: [
                             QuotaWindow(
-                                label: "5 h",
+                                label: "Current session",
                                 remainingPercent: share,
                                 resetsAt: Date().addingTimeInterval(4 * 86_400)
                             )
@@ -2100,33 +2116,40 @@ struct NotchlineTests {
         let unreadable = store(share: nil)
         #expect(unreadable.currentPanelSize == reference.currentPanelSize)
         #expect(
-            try #require(unreadable.footerRules[checked: 0]).windows.first?.share
-                == "-- left"
+            try #require(unreadable.footerRules[checked: 0])
+                .windows.first?.share.text == "-- left"
         )
     }
 
-    /// The opened table is `19W + 30P + 33`, composed as the view lays it out.
+    /// The opened table is `19W + 28P + 33`, composed as the view lays it out.
     ///
     /// Written longhand here rather than restating the closed form in
     /// `PanelMetrics`, so this is a claim about what is drawn: the spend line
-    /// and its gap, then a caption line carrying a badge and `19` for each of
-    /// that product's windows, with a line of air between groups and the
-    /// panel's own margin below the last line.
+    /// and its gap, then a caption line and `19` for each of that product's
+    /// windows, with a line of air between groups and the panel's own margin
+    /// below the last line.
+    ///
+    /// **`28` a product, not `30`.** It was `30` for exactly as long as the
+    /// product line carried a badge, which is a point taller than the `11` pt
+    /// caption it stood on; with the name set as a heading instead, the line is
+    /// `footerCaptionHeight` like every other line down here — and the
+    /// arithmetic is the one `quota-footer-v2.md` §2 was written with before
+    /// the badge arrived.
     @Test @MainActor
-    func theOpenedTableIsNineteenAWindowAndThirtyAProduct() {
+    func theOpenedTableIsNineteenAWindowAndTwentyEightAProduct() {
         for shape in Self.everyFooterShape {
             let windows = shape.reduce(0) { $0 + $1.windows.count }
             let products = shape.count
             let drawn = PanelMetrics.recentSeamHeight
                 + PanelMetrics.footerRuleSpacing
-                + CGFloat(products) * PanelMetrics.productBadgeHeight
+                + CGFloat(products) * PanelMetrics.footerCaptionHeight
                 + CGFloat(windows)
                     * (PanelMetrics.footerCaptionHeight
                         + PanelMetrics.footerCaptionSpacing)
                 + CGFloat(products - 1) * PanelMetrics.footerCaptionHeight
             let opened = PanelMetrics.footerHeight(rules: shape, isExpanded: true)
 
-            #expect(opened == 19 * CGFloat(windows) + 30 * CGFloat(products) + 33)
+            #expect(opened == 19 * CGFloat(windows) + 28 * CGFloat(products) + 33)
             // And the last line stands the panel's own margin above the edge,
             // in the opened form and the closed one alike.
             #expect(opened - drawn == PanelMetrics.footerBottomMargin)
@@ -2137,14 +2160,23 @@ struct NotchlineTests {
             )
         }
 
-        // The five forms `quota-footer-v2.md` §6 tabulates.
-        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 82)
-        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 101)
+        // The forms `quota-footer-v2.md` §6 tabulates, each four points
+        // shorter than the badge-carrying arithmetic made it.
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 80)
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 99)
         #expect(
             PanelMetrics.footerHeight(
                 rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                 isExpanded: true
-            ) == 150
+            ) == 146
+        )
+        // And the shape this machine actually reports, now that Claude Code's
+        // per-model week is drawn rather than dropped: one window and three.
+        #expect(
+            PanelMetrics.footerHeight(
+                rules: Self.footerShape([(.codex, 1), (.claudeCode, 3)]),
+                isExpanded: true
+            ) == 165
         )
     }
 
@@ -2180,8 +2212,8 @@ struct NotchlineTests {
                 sessions: [],
                 quota: QuotaSnapshot(
                     windows: [
-                        QuotaWindow(label: "5 h", remainingPercent: 40, resetsAt: nil),
-                        QuotaWindow(label: "7 d", remainingPercent: 87, resetsAt: nil)
+                        QuotaWindow(label: "Current session", remainingPercent: 40, resetsAt: nil),
+                        QuotaWindow(label: "All models", remainingPercent: 87, resetsAt: nil)
                     ],
                     todayTokens: 208_600_000
                 ),
@@ -2229,8 +2261,8 @@ struct NotchlineTests {
                 ],
                 quota: QuotaSnapshot(
                     windows: [
-                        QuotaWindow(label: "5 h", remainingPercent: 40, resetsAt: nil),
-                        QuotaWindow(label: "7 d", remainingPercent: 87, resetsAt: nil)
+                        QuotaWindow(label: "Current session", remainingPercent: 40, resetsAt: nil),
+                        QuotaWindow(label: "All models", remainingPercent: 87, resetsAt: nil)
                     ],
                     todayTokens: 208_600_000
                 ),
@@ -2328,8 +2360,8 @@ struct NotchlineTests {
             QuotaWindow(label: "", remainingPercent: 89, resetsAt: nil)
         ])
         connect(.claudeCode, windows: [
-            QuotaWindow(label: "5 h", remainingPercent: 85, resetsAt: nil),
-            QuotaWindow(label: "7 d", remainingPercent: 53, resetsAt: nil)
+            QuotaWindow(label: "Current session", remainingPercent: 85, resetsAt: nil),
+            QuotaWindow(label: "All models", remainingPercent: 53, resetsAt: nil)
         ])
         store.isExpanded = true
         #expect(store.footerRules.count == 2)
@@ -2569,7 +2601,7 @@ struct NotchlineTests {
                         rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                         isExpanded: true
                     )
-                ) == 436
+                ) == 432
         )
     }
 
@@ -3123,8 +3155,8 @@ struct NotchlineTests {
         // that every control below has something of its own to move.
         let quota = QuotaSnapshot(
             windows: [
-                QuotaWindow(label: "5 h", remainingPercent: 40, resetsAt: nil),
-                QuotaWindow(label: "7 d", remainingPercent: 87, resetsAt: nil)
+                QuotaWindow(label: "Current session", remainingPercent: 40, resetsAt: nil),
+                QuotaWindow(label: "All models", remainingPercent: 87, resetsAt: nil)
             ],
             todayTokens: 208_600_000
         )
@@ -6160,20 +6192,26 @@ struct NotchlineTests {
         #expect(UsageSummaryFormatter.compactTokenCount(999) == "999")
     }
 
-    /// The reset column is a countdown, two units at most.
+    /// The reset column is a countdown of two units, written out.
     ///
-    /// **This replaces `resetTextReadsRemainingDaysAndHours`**, which pinned
-    /// `Resets in 3 days 4 hours`. The words were repeated once a window down a
-    /// column where every single line is a countdown, so they went with the
-    /// `Resets in` label (`quota-footer-v2.md` §5). What survives from that
-    /// test is the claim underneath it: this reads the remaining *duration*
-    /// rather than a count of calendar days, because "Resets today" was equally
-    /// true at 00:30 and at 23:30.
+    /// **The abbreviation is what went, and the words came back.** `47m`, `2h`,
+    /// `3d 12h` were drawn on the argument that `Resets in` was repeated once a
+    /// window down a column of countdowns. What overturned it is the column
+    /// beside this one: a window is now named in the product's own words, so
+    /// `5h limit` and `Current session` sit next to what used to be a bare
+    /// `4h`, and the two read as the same kind of thing.
     ///
-    /// Days pair with hours and nothing else does — an hour with minutes beside
-    /// it would be a precision this reading has not got.
+    /// **Minutes survive an hour.** `2h` was drawn for anything up to two
+    /// hours fifty-nine, which made this the least precise reading on a footer
+    /// whose shares are drawn to the percent. Two units, largest first, and the
+    /// smaller is dropped only when it is zero.
+    ///
+    /// What survives unchanged from `resetTextReadsRemainingDaysAndHours` is
+    /// the claim underneath: this reads the remaining *duration* rather than a
+    /// count of calendar days, because "Resets today" was equally true at 00:30
+    /// and at 23:30.
     @Test
-    func theResetColumnCountsDownInTwoUnitsAtMost() throws {
+    func theResetColumnCountsDownInTwoUnitsWrittenOut() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
         let now = try #require(calendar.date(from: DateComponents(
@@ -6193,17 +6231,32 @@ struct NotchlineTests {
             )
         }
 
-        #expect(try text(afterMinutes: 47) == "47m")
-        #expect(try text(afterMinutes: 60 * 2) == "2h")
-        #expect(try text(afterMinutes: 60 * 8) == "8h")
-        // Minutes are dropped once there is an hour to say: the column holds a
-        // countdown, not a stopwatch.
-        #expect(try text(afterMinutes: 60 * 2 + 30) == "2h")
-        #expect(try text(afterMinutes: 60 * 24) == "1d")
-        #expect(try text(afterMinutes: 60 * 24 * 3) == "3d")
-        #expect(try text(afterMinutes: 60 * (24 * 3 + 12)) == "3d 12h")
-        #expect(try text(afterMinutes: 60 * 25) == "1d 1h")
-        #expect(UsageSummaryFormatter.resetText(resetsAt: now, now: now) == "Now")
+        #expect(try text(afterMinutes: 47) == "Resets in 47 minutes")
+        #expect(try text(afterMinutes: 60 * 2) == "Resets in 2 hours")
+        #expect(try text(afterMinutes: 60 * 8) == "Resets in 8 hours")
+        // The minutes are kept beside the hours, which is the whole of what
+        // "more accurate" means here.
+        #expect(
+            try text(afterMinutes: 60 * 2 + 30) == "Resets in 2 hours 30 minutes"
+        )
+        #expect(
+            try text(afterMinutes: 60 * 10 + 34) == "Resets in 10 hours 34 minutes"
+        )
+        // Days pair with hours, and the minutes go: two units is the ceiling.
+        #expect(try text(afterMinutes: 60 * 24) == "Resets in 1 day")
+        #expect(try text(afterMinutes: 60 * 24 * 3) == "Resets in 3 days")
+        #expect(
+            try text(afterMinutes: 60 * (24 * 3 + 12) + 40)
+                == "Resets in 3 days 12 hours"
+        )
+        #expect(try text(afterMinutes: 60 * 25) == "Resets in 1 day 1 hour")
+        // A zero is dropped rather than written, and one of anything is
+        // singular.
+        #expect(try text(afterMinutes: 1) == "Resets in 1 minute")
+        #expect(try text(afterMinutes: 60) == "Resets in 1 hour")
+        #expect(
+            UsageSummaryFormatter.resetText(resetsAt: now, now: now) == "Resets now"
+        )
     }
 
     /// **An unreadable field draws `--` in its own place, and nothing else.**
@@ -6222,8 +6275,8 @@ struct NotchlineTests {
 
         #expect(UsageSummaryFormatter.today(tokens: 518_700_000).text == "519M today")
         #expect(UsageSummaryFormatter.today(tokens: nil).text == "-- today")
-        #expect(UsageSummaryFormatter.shareText(remainingPercent: 72) == "72% left")
-        #expect(UsageSummaryFormatter.shareText(remainingPercent: nil) == "-- left")
+        #expect(UsageSummaryFormatter.share(remainingPercent: 72).text == "72% left")
+        #expect(UsageSummaryFormatter.share(remainingPercent: nil).text == "-- left")
         // The timer has no unit to keep, so its unreadable form is the two
         // characters alone -- the general rule stated without an exception.
         #expect(
@@ -6281,8 +6334,9 @@ struct NotchlineTests {
     /// **`--` is a reading for the eye; a screen reader gets the word.**
     ///
     /// And where the column trades an absolute day for a duration, the spoken
-    /// form keeps the day: `4d 6h` is drawn and `resets Friday at 09:00` is
-    /// heard (`quota-footer-v2.md` §7). Nothing here ever announces as zero.
+    /// form keeps the day: `Resets in 4 days 6 hours` is drawn and
+    /// `resets Saturday at 16:00` is heard (`quota-footer-v2.md` §7). Nothing
+    /// here ever announces as zero.
     @Test
     func everyDashAnnouncesAsUnavailable() throws {
         var calendar = Calendar(identifier: .gregorian)
@@ -6303,7 +6357,7 @@ struct NotchlineTests {
                 resetsAt: resetsAt,
                 now: now,
                 calendar: calendar
-            ) == "4d 6h"
+            ) == "Resets in 4 days 6 hours"
         )
         #expect(
             UsageSummaryFormatter.spokenResetText(
@@ -6567,7 +6621,7 @@ struct NotchlineTests {
         // §4), so what is checked here is the reading arriving rather than a
         // figure on the bar.
         #expect(
-            store.footerRules.first?.windows.first?.share == "72% left"
+            store.footerRules.first?.windows.first?.share.text == "72% left"
         )
 
         store.applyForTesting(
@@ -6593,7 +6647,7 @@ struct NotchlineTests {
         // The notch and the panel say the same thing.
         #expect(store.statusDisplayName == "Input needed")
         #expect(
-            store.footerRules.first?.windows.first?.share == "72% left"
+            store.footerRules.first?.windows.first?.share.text == "72% left"
         )
     }
 
@@ -8268,6 +8322,67 @@ struct NotchlineTests {
 
         #expect(quota.remainingPercent == 64)
         #expect(quota.resetsAt == Date(timeIntervalSince1970: 2_000))
+    }
+
+    /// Codex reports two windows and names neither, so the name is the only
+    /// thing it does publish about one: the window's own duration.
+    ///
+    /// `account/rateLimits/read` gives `limitName` — null for the account's own
+    /// limit — and a `windowDurationMins` per window. `300` is the 5-hour limit
+    /// and `10080` the weekly one, which is how the same account sees them in
+    /// Codex. `secondary` is null on most accounts and was never read at all;
+    /// where it is there, it is a window, and a window is a line.
+    @Test @MainActor
+    func codexWindowsAreNamedByTheDurationTheProductPublishes() {
+        let both = CodexSnapshotParser.quota(from: .object([
+            "rateLimits": .object([
+                "limitName": .null,
+                "primary": .object([
+                    "usedPercent": .number(40),
+                    "windowDurationMins": .number(300),
+                    "resetsAt": .number(2_000)
+                ]),
+                "secondary": .object([
+                    "usedPercent": .number(12),
+                    "windowDurationMins": .number(10_080),
+                    "resetsAt": .number(9_000)
+                ])
+            ])
+        ]))
+        #expect(both.windows.map(\.label) == ["5h limit", "Weekly limit"])
+        #expect(both.windows.map(\.remainingPercent) == [60, 88])
+        // `primary` stays first, so every surface that draws one rule reads
+        // exactly what it read before the second window existed.
+        #expect(both.remainingPercent == 60)
+        #expect(both.resetsAt == Date(timeIntervalSince1970: 2_000))
+
+        // The shape this account actually has: one weekly window, no second.
+        let one = CodexSnapshotParser.quota(from: .object([
+            "rateLimits": .object([
+                "primary": .object([
+                    "usedPercent": .number(0),
+                    "windowDurationMins": .number(10_080),
+                    "resetsAt": .number(2_000)
+                ]),
+                "secondary": .null
+            ])
+        ]))
+        #expect(one.windows.map(\.label) == ["Weekly limit"])
+
+        // Durations neither constant covers are written out from the minutes
+        // rather than guessed at, and a window with no duration keeps the
+        // empty label the single unlabelled rule always had.
+        #expect(CodexSnapshotParser.windowLabel(minutes: 60) == "1h limit")
+        #expect(CodexSnapshotParser.windowLabel(minutes: 2_880) == "2d limit")
+        #expect(CodexSnapshotParser.windowLabel(minutes: 90) == "90m limit")
+        #expect(CodexSnapshotParser.windowLabel(minutes: nil) == "")
+
+        // A response with no readable window at all is unavailable, not zero.
+        #expect(
+            CodexSnapshotParser.quota(from: .object([
+                "rateLimits": .object(["primary": .object([:])])
+            ])).remainingPercent == nil
+        )
     }
 
     @Test
@@ -19682,7 +19797,7 @@ for line in sys.stdin:
     /// under the ones that matter, and anything hunting for a percentage would
     /// find it.
     @Test @MainActor
-    func theUsageParserAnchorsOnItsTwoLinesAndIgnoresTheProseBelow() throws {
+    func theUsageParserAnchorsOnWholeLinesAndIgnoresTheProseBelow() throws {
         let output = """
         You are currently using your subscription to power your Claude Code usage
 
@@ -19701,24 +19816,72 @@ for line in sys.stdin:
         let now = ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!
         let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
 
-        #expect(windows.count == 2)
+        #expect(windows.count == 3)
         let sessionWindow = try #require(windows[checked: 0])
         let weekWindow = try #require(windows[checked: 1])
-        // Reported as used; a rule draws what is left.
-        #expect(sessionWindow.label == "5 h")
+        let modelWindow = try #require(windows[checked: 2])
+        // Every label is the output's own word for the window, and reported as
+        // used; a rule draws what is left.
+        #expect(sessionWindow.label == "Current session")
         #expect(sessionWindow.remainingPercent == 78)
-        #expect(weekWindow.label == "7 d")
+        #expect(weekWindow.label == "All models")
         #expect(weekWindow.remainingPercent == 82)
-        // The per-model window is deliberately not one of them: which model it
-        // names varies, so a rule that changed meaning would have to be read
-        // rather than glanced at.
-        #expect(!windows.contains { $0.remainingPercent == 100 })
+        // **The per-model window is drawn now**, named for the model rather
+        // than for a duration. It used to be dropped because which model it
+        // names varies -- and the varying part is exactly what the label
+        // says, so the objection is what makes the label right.
+        #expect(modelWindow.label == "Fable")
+        #expect(modelWindow.remainingPercent == 100)
+        // In the order the product reports them. Nothing sorts.
+        #expect(
+            windows.map(\.label) == ["Current session", "All models", "Fable"]
+        )
 
-        // The year is not printed. It is inferred, and both resets land ahead.
+        // The year is not printed. It is inferred, and every reset lands ahead.
         let session = try #require(sessionWindow.resetsAt)
         let week = try #require(weekWindow.resetsAt)
         #expect(session > now)
         #expect(week > session)
+        #expect(try #require(modelWindow.resetsAt) == week)
+    }
+
+    /// An account with no per-model cap draws no third line.
+    ///
+    /// The per-model window is discovered in the output rather than declared,
+    /// so it appears only where the product names one -- and `all models` is
+    /// the one parenthetical that is not a model.
+    @Test @MainActor
+    func aPerModelWindowIsDrawnOnlyWhereTheOutputNamesOne() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!
+
+        let withoutCap = ClaudeCodeUsageReader.parseWindows("""
+        Current session: 22% used · resets Aug 16 at 7:19pm (America/Los_Angeles)
+        Current week (all models): 18% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
+        """, now: now)
+        #expect(withoutCap.map(\.label) == ["Current session", "All models"])
+
+        // Two of them, and both are drawn: a line is a line.
+        let twoCaps = ClaudeCodeUsageReader.parseWindows("""
+        Current session: 22% used · resets Aug 16 at 7:19pm (America/Los_Angeles)
+        Current week (all models): 18% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
+        Current week (Fable): 4% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
+        Current week (Opus): 40% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
+        """, now: now)
+        #expect(
+            twoCaps.map(\.label)
+                == ["Current session", "All models", "Fable", "Opus"]
+        )
+        #expect(twoCaps.map(\.remainingPercent) == [78, 82, 96, 60])
+
+        // The prose below the figures cannot invent one: the pattern is bound
+        // to the start of a line and to the whole shape of the label.
+        let prose = ClaudeCodeUsageReader.parseWindows("""
+        Current session: 22% used · resets Aug 16 at 7:19pm (America/Los_Angeles)
+        Current week (all models): 18% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
+        94% of your usage was at >150k context (Fable): mostly
+        see Current week (Fable): in the docs
+        """, now: now)
+        #expect(prose.map(\.label) == ["Current session", "All models"])
     }
 
     /// A reset printed before today's date belongs to next year.
@@ -26978,20 +27141,32 @@ for line in sys.stdin:
                 )
             }
         }
-        // A control, not a reading: the tile it left is half this tall.
-        #expect(PanelMetrics.waitingMarkHeight == PanelMetrics.readingGroundHeight * 2)
-        // ~~And the corner keeps that tile's proportion~~ — superseded. The
-        // proportion was the badge family's, inherited from the reading this
-        // replaced, and at `32` tall it drew an `8` pt pill above a row of `4`
-        // pt tiles. The ground the pointer presses here is the ground that
-        // travels down to the answer row (`answer-in-notch.md` §3.1), so the
-        // two are cut alike; the pair below fails the moment they diverge
-        // again, however the divergence is spelled.
+        // A control, not a reading: ~~the tile it left is half this tall~~ —
+        // superseded, and the tile is no longer the comparison at all. The
+        // ground the pointer presses here is the ground that travels down to
+        // the answer row (`answer-in-notch.md` §3.1), so it is cut, padded,
+        // sized and set like the answer it becomes; the four below fail the
+        // moment any of them diverges again, however the divergence is spelled.
         #expect(PanelMetrics.waitingMarkCornerRadius == PanelMetrics.controlCornerRadius)
         #expect(PanelMetrics.waitingMarkPadding == PanelMetrics.controlHorizontalPadding)
-        // The heights stay apart, and that is the one number on this control
-        // settled by how it feels under the pointer rather than by the system.
-        #expect(PanelMetrics.waitingMarkHeight != PanelMetrics.answerRowHeight)
+        // ~~The heights stay apart, and that is the one number on this control
+        // settled by how it feels under the pointer rather than by the
+        // system.~~ **Superseded**: the ground now travels without resizing.
+        #expect(PanelMetrics.waitingMarkHeight == PanelMetrics.answerRowHeight)
+        // And the word is set like an answer's, which is the weight the
+        // affirmative takes on this very ground -- `AnswerControl` draws `13`
+        // pt Medium, and a mark a step above it was one control drawn two ways.
+        #expect(
+            PanelMetrics.waitingMarkFont
+                == NSFont.systemFont(ofSize: 13, weight: .medium)
+        )
+        // The one property that is deliberately *not* shared: an answer hugs
+        // its word and the mark reserves the widest of its three, because the
+        // mark appears once per row and draws a column.
+        #expect(
+            PanelMetrics.waitingMarkWidth
+                > PanelMetrics.huggedWaitingMarkWidth(PanelMetrics.waitingMarkReadWord)
+        )
     }
 
     /// A digit takes the option it numbers, and only before anything is typed.

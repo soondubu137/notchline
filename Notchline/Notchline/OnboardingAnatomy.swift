@@ -196,20 +196,30 @@ enum NotchSpecimen {
     private static func quota(at now: Date) -> [AgentKind: QuotaSnapshot] {
         [
             .codex: QuotaSnapshot(
-                remainingPercent: 72,
-                resetsAt: now.addingTimeInterval(3 * 86_400 + 12 * 3_600),
+                windows: [
+                    QuotaWindow(
+                        label: "Weekly limit",
+                        remainingPercent: 72,
+                        resetsAt: now.addingTimeInterval(3 * 86_400 + 12 * 3_600)
+                    )
+                ],
                 todayTokens: 310_100_000
             ),
             .claudeCode: QuotaSnapshot(
                 windows: [
                     QuotaWindow(
-                        label: "5 h",
+                        label: "Current session",
                         remainingPercent: 40,
-                        resetsAt: now.addingTimeInterval(2 * 3_600)
+                        resetsAt: now.addingTimeInterval(2 * 3_600 + 34 * 60)
                     ),
                     QuotaWindow(
-                        label: "7 d",
+                        label: "All models",
                         remainingPercent: 87,
+                        resetsAt: now.addingTimeInterval(3 * 86_400 + 11 * 3_600)
+                    ),
+                    QuotaWindow(
+                        label: "Fable",
+                        remainingPercent: 96,
                         resetsAt: now.addingTimeInterval(3 * 86_400 + 11 * 3_600)
                     )
                 ],
