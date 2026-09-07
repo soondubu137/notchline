@@ -660,8 +660,7 @@ struct NotchlineTests {
         #expect(await service.answersTaken().isEmpty)
     }
 
-    /// Page three's three specimens: the two shapes a request arrives in, and
-    /// a queue that is a sequence rather than three copies of one moment.
+    /// The answer page's request shapes and the reading page's Recent queue.
     ///
     /// **The request shapes decide what the answer row draws**, which is the
     /// whole reason both are on the page: a permission has a refusal and a
@@ -673,7 +672,7 @@ struct NotchlineTests {
 
         #expect(!opened.command.isWatching)
         #expect(!opened.question.isWatching)
-        #expect(!opened.queue.isWatching)
+        #expect(!NotchSpecimen.recentQueue.isWatching)
 
         // A permission, open: the row page two draws shut, and the same request.
         let permission = try #require(opened.command.openSession)
@@ -692,8 +691,8 @@ struct NotchlineTests {
         #expect(body.options.map(\.id) == Array(body.options.indices))
 
         // The queue: open, and three rows that left at three different times.
-        #expect(opened.queue.isRecentExpanded)
-        let queue = opened.queue.recentDepartures
+        #expect(NotchSpecimen.recentQueue.isRecentExpanded)
+        let queue = NotchSpecimen.recentQueue.recentDepartures
         #expect(queue.count == 3)
         #expect(Set(queue.map(\.departedAt)).count == 3)
         // Newest first, which is the order the section draws them in.

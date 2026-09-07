@@ -31,7 +31,6 @@ enum OnboardingLayout {
 enum AnswerLesson: String, CaseIterable {
     case permission = "Permissions"
     case question = "Questions"
-    case recent = "Recent"
 }
 
 enum QuestionLesson: String, CaseIterable {
@@ -79,6 +78,7 @@ struct OnboardingView: View {
                         connectGroup
                     case .read:
                         notchGroup
+                        recentGroup
                     case .answer:
                         answerGroup
                     }
@@ -206,6 +206,20 @@ struct OnboardingView: View {
         .task { await NotchSpecimen.cycle() }
     }
 
+    /// Recent follows the expanded panel whose seam opens it.
+    private var recentGroup: some View {
+        SettingsGroup(header: "Recent: find a Thread after it leaves the list") {
+            RecentQueueAnatomy().padding(.vertical, 18)
+        } footnote: {
+            SettingsFootnote(
+                "Open Recent to revisit Threads that have left the live list. "
+                    + "Each row shows when it left and opens the Thread in its product. "
+                    + "A finished Turn leaves the live list when its product records it as read; "
+                    + "the Recent queue keeps a route back for five hours."
+            )
+        }
+    }
+
     /// One lesson at a time keeps each example and its explanation together.
     /// These controls browse drawings; they never send an answer to a product.
     private var answerGroup: some View {
@@ -247,13 +261,6 @@ struct OnboardingView: View {
                 } else {
                     lessonNote("Read more without choosing", "Show more expands a long description. It does not select the option or send an answer. Scroll the question to keep reading; the answer field stays at the bottom.")
                 }
-            case .recent:
-                SettingsGroup(header: "Find a Thread after it leaves the list") {
-                    RecentQueueAnatomy().padding(.vertical, 18)
-                } footnote: {
-                    SettingsFootnote("Open Recent to revisit Threads that have left the live list. Each row shows when it left and opens the Thread in its product.")
-                }
-                lessonNote("Kept for five hours", "A finished Turn leaves the live list when its product records it as read. The Recent queue keeps a route back for five hours.")
             }
 
             Text("These are examples. If a request cannot be answered here, the row offers a way to answer in its product.")

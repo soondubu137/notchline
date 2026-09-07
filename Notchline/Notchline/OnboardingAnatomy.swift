@@ -300,7 +300,21 @@ enum NotchSpecimen {
         ]
     }
 
-    // MARK: - Page three: the three things that open
+    /// The open Recent queue belongs to the reading page. Building it must
+    /// not construct the answer examples before their page is visited.
+    private static var recent: MonitorStore?
+
+    static var recentQueue: MonitorStore {
+        if let recent { return recent }
+        let now = Date()
+        let store = makeStore(isExpanded: true, at: now)
+        store.isRecentExpanded = true
+        store.stageSpecimenQueue(departedQueue(at: now))
+        recent = store
+        return store
+    }
+
+    // MARK: - Page three: answering requests
 
     /// The page-three examples and the instant they share.
     ///
@@ -308,20 +322,16 @@ enum NotchSpecimen {
     /// composes no store until it is reached; these compose none until page
     /// three is, so a first run that connects and stops has built nothing at
     /// all. The question variants remain isolated from one another.
-    /// Optional rather than a lazy `static var` because ``restage()`` has to be
-    /// able to ask whether they exist without bringing them into being.
+    /// Cached separately from the reading page's Recent queue.
     private static var opened: Opened?
 
     struct Opened {
-        var at: Date
         /// A permission request, open: the row page two draws shut.
         let command: MonitorStore
         /// A question with options, open.
         let question: MonitorStore
         let multipleChoice: MonitorStore
         let typedAnswer: MonitorStore
-        /// The Recent queue, open, with a sequence of ages behind it.
-        let queue: MonitorStore
     }
 
     /// The page-three stores, composed if this is the first look at them.
@@ -347,14 +357,10 @@ enum NotchSpecimen {
         let multipleChoice = questionStore(multiple: true)
         let typedAnswer = questionStore(multiple: true, draft: "Use a compact summary with optional details.")
 
-        let queue = makeStore(isExpanded: true, at: now)
-        queue.isRecentExpanded = true
-        queue.stageSpecimenQueue(departedQueue(at: now))
-
-        return Opened(at: now, command: command, question: question, multipleChoice: multipleChoice, typedAnswer: typedAnswer, queue: queue)
+        return Opened(command: command, question: question, multipleChoice: multipleChoice, typedAnswer: typedAnswer)
     }
 
-    /// The queue page three opens: three rows that left at three different
+    /// The queue page two opens: three rows that left at three different
     /// times.
     ///
     /// **The ages are the teaching**, which is why they are staged directly
@@ -534,15 +540,9 @@ enum NotchSpecimen {
         staged.at = now
         stageDeparture(in: staged.shut, at: now)
         stageDeparture(in: staged.hovered, at: now)
-        // Page three's queue reads in ages, so it wraps with the clock rather
-        // than counting on into `1h 12m`. Its two open rows draw no reading at
-        // all — an open row spends that slot on the chevron — so there is
-        // nothing in them to wrap, and re-merging them would only risk closing
-        // a row this window exists to draw open.
-        if let opened {
-            Self.opened?.at = now
-            opened.queue.stageSpecimenQueue(departedQueue(at: now))
-        }
+        // The reading page's queue wraps with its other specimens. Open
+        // answer rows draw no clock and must not be re-merged or closed.
+        recent?.stageSpecimenQueue(departedQueue(at: now))
     }
 
     /// The body's size, as the product would compose it for this moment.
@@ -1142,8 +1142,8 @@ struct ExpandedPanelAnatomy: View {
 
 // MARK: - Opened
 
-/// What page three's three figures have in common: the panel's own ground with
-/// the panel's header and footer cut away, and one scale for all three.
+/// Shared by the open-request and Recent figures: the panel's own ground
+/// with its header and footer cut away, and one scale for each specimen.
 ///
 /// **A plate rather than a whole panel.** Every part page three names is inside
 /// the row block, and drawing the header and the footer around each of them
@@ -1208,7 +1208,7 @@ private enum OpenedSpecimen {
     }
 }
 
-/// One page-three figure: a specimen on the panel's ground, with its pins in
+/// An open-request or Recent figure on the panel's ground, with its pins in
 /// the left margin and along the bottom.
 ///
 /// **Left and below rather than left and right**, which is page two's pair.
@@ -1512,7 +1512,7 @@ private struct OpenRowGeometry {
 
 /// The Recent queue, open: what is behind the seam page two names.
 struct RecentQueueAnatomy: View {
-    private let store = NotchSpecimen.openedSpecimens().queue
+    private let store = NotchSpecimen.recentQueue
 
     /// The plate it is drawn on. Internal, with ``pins``, for the assertion
     /// that they land on its edges and not on each other.

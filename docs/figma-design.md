@@ -529,9 +529,9 @@ The window uses the settings window's whole shape (§8.0: `22` group spacing, `8
 
 1. **Page one asks for something**: the hero, `Connect your agents`, `Continue`.
 2. **Page two explains what the surface draws**: `Reading the notch`, `Back`, `Continue`.
-3. **Page three explains what it does**: `Answering and Recent Sessions` — the two shapes a request arrives in and the queue behind the seam — `Back`, `Start`.
+3. **Page three explains answering**: `Answering on the notch` — permissions and questions — `Back`, `Start`. Recent is part of page two’s reading and navigation tutorial.
 
-**The third page is what the height ceiling makes of the second.** Page two names the answer control and the Recent seam and cannot show either opened: the two open rows and the queue come to about `500` pt drawn, and page two has `~170` to give. A page of its own is also the honest seam — page two is *what the notch draws*, page three is *what it does*, and the two things on this surface that a click opens are both on it.
+**The content boundary is reading versus answering.** Page two shows the Recent seam in the expanded panel, then the open queue beneath it. Page three shows only requests and answers. Longer reading content scrolls inside the existing window, leaving Back and Continue fixed at the bottom.
 
 **One stable window across every page.** The earlier content-sized layout measured `375`, `771` and `893` pt including the title bar (2026-09-07), making each step look like a different window. All three pages now occupy the same `580 × 840` pt content area and use the same `532` pt card width. A shared navigation row stays at the bottom right, outside the scrolling content; shorter pages leave blank space below their content. Page changes reset the scroll position. Only the current page is built, so a launch that stops at page one still composes no specimen store. Layout measurement in the native hosting window puts every primary button’s trailing edge at `x = 556` and its bottom at `y = 818` in content coordinates: `24` pt from the right and `22` pt from the bottom on every page.
 
@@ -541,7 +541,7 @@ Page one, top to bottom:
 2. **`Connect your agents`**: `ProductConnectionRows` — the **same view** as the settings window, not a copy. **A switch on each of the two rows** ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)). The footnote states that the switches write Notchline's lifecycle definitions into `~/.codex/hooks.json` and `~/.claude/settings.json`, take them out again when off, and back both files up first; the trailing control is `Recheck`, because turning the Codex switch on is not the end — Codex keys trust to a definition's position in the file, so the user must trust it under `/hooks` and run a Turn before that row says `Connected`. Claude Code has no such step.
 3. **The closing row**: only the primary `Continue`, aligned to the bottom right. The standing statement and version remain in Settings; onboarding has no copy beside its navigation buttons.
 
-Page two is one group, `Reading the notch`: one card, three blocks separated by the settings hairline, and the group footnote. Page three is one group of the same shape (§7.1.2). Their shared bottom row contains `Back` and the primary `Continue` or `Start`, with no text to their left. **No gate**: onboarding can be reached and finished with no product connected at all, and the notch will honestly say `Disconnected`.
+Page two is one group, `Reading the notch`: one card, three blocks separated by the settings hairline, and the group footnote. A second group below it opens the Recent queue. Page three presents selectable answer lessons (§7.1.2). Their shared bottom row contains `Back` and the primary `Continue` or `Start`, with no text to their left. **No gate**: onboarding can be reached and finished with no product connected at all, and the notch will honestly say `Disconnected`.
 
 Every numbered key entry has only its label. The former dim second lines have been removed from both teaching pages.
 
@@ -559,7 +559,7 @@ The numbered keys have no secondary lines. The dot still breathes to indicate an
 
 The first says the header **is** the bar from the block above, which is the join between the two figures. `Answer it here` and `Subagents` are what the first two rows are for — the panel's marks are silhouettes, and *a control offering the act* and *a badge where a reading would be* only teach as a pair. A click on **the mark** opens the request in the row ([`answer-in-notch.md`](answer-in-notch.md) §3). `Rows that have left` names the Recent seam, and the last two are the footer's two halves — since [`quota-footer-v2.md`](quota-footer-v2.md) it draws one figure and one control, so the pin that named the rate-limit windows now names the control that opens them. The group footnote carries the two facts no pin should have to: hovering opens one list, both products, most urgent first — and with nothing connected the mark is grey, or absent on a notched display.
 
-Two of the nine name controls rather than readings, and what they open is page three (§7.1.2): `Answer it here` is the request drawn open, `Rows that have left` the queue drawn open.
+Two of the nine name controls rather than readings: `Answer it here` leads to the requests on page three (§7.1.2), while `Rows that have left` leads to the open Recent queue immediately below the panel on page two.
 
 **Three of the nine are new or renamed, and each is a part of the panel that changed under them.** `Waiting on you` named a reading on white, which is now a `76` pt control saying `Approve`; `Live progress` named a line that is the product's own preview *or* this app's notice after an answer, which is `The last thing said`; and `Product · project · title` kept a middle dot the caption stopped drawing when the badge replaced the `Codex ·` prefix (§4.1). The Recent seam had no pin at all.
 
@@ -587,9 +587,11 @@ Two details are what make that hold rather than nearly hold. The period is **`59
 
 The last page's bottom row is `Back` and the primary `Start`, **with no gate**: onboarding can be entered and finished with no product connected at all, and the notch will honestly say `Disconnected`. The standing statement remains in Settings. The window requests neither Accessibility nor Screen Recording, and promises no silent bypass of Codex's trust step.
 
+**Recent on page two** shows the queue with three rows at distinct ages (`2m`, `18m`, `1h`), immediately after the expanded panel that names its seam. Its key names the count, compact row and departure age; the footnote explains navigation and five-hour retention. Its store is constructed separately from the answer examples, so reading this page does not initialise page three.
+
 ### 7.1.2 Page three: one example at a time
 
-**Redrawn 2026-09-07.** `Answering on the notch` has a native segmented topic picker: `Permissions`, `Questions`, `Recent`. The previous three stacked drawings made the larger option cards push their explanation below the fold. Each topic now keeps its drawing, numbered key and explanation together, inside the existing `580 × 840` pt window. Back and Start remain fixed at the bottom.
+**Redrawn 2026-09-07.** `Answering on the notch` has a native segmented topic picker: `Permissions`, `Questions`. The previous three stacked drawings made the larger option cards push their explanation below the fold. Each topic now keeps its drawing, numbered key and explanation together, inside the existing `580 × 840` pt window. Back and Start remain fixed at the bottom.
 
 **Permissions** shows the same command request page two draws shut. Four pins name `The command it sent`, `Say what instead`, `Turn it down`, `Approve, or ⏎`. The accompanying copy explains the monospaced command box, labelled arguments, scrolling and refusal with instructions.
 
@@ -597,7 +599,7 @@ The last page's bottom row is `Back` and the primary `Start`, **with no gate**: 
 
 The four pins name the question, selection, field and Send. The selection pin reads `Select, then Send` or `Choices set aside`; the field reads `Or type your answer` or `Your words take priority`. The explanatory text teaches that selecting never submits, Show more only expands the description, and meaningful typed text replaces all selected options in either mode. Clearing the field restores the earlier choices. There is no extra answer option inside the illustrated request.
 
-**Recent** shows the queue with three rows at distinct ages (`2m`, `18m`, `1h`). Its key names the count, compact row and departure age; its explanation names navigation and the five-hour retention. The final note distinguishes tutorial examples from real requests and explains the route back to a product where answering here is unavailable.
+The final note distinguishes tutorial examples from real requests and explains the route back to a product where answering here is unavailable.
 
 **The drawings stay passive.** Only the native topic/example pickers are interactive. Specimens have hit testing disabled and use stores with no services or preferences. `stageSpecimenAnswer` populates draft selections and text without dispatching an answer, and refuses any store with services. No live hook connection is created.
 
@@ -609,7 +611,7 @@ The README's two anatomy figures (`docs/assets/notch-anatomy-readme.png`, `list-
 
 - **The specimens cannot drift.** They are drawn from `PanelMetrics` and the same leaf views the overlay uses — `NotchStatusMatrix`, `CountsColumn`, `RotatingProjectName`, `BuriedFinishDot`, `SubagentBadgeView`, `ReadingGround`, `SessionRowContent` — so a change to the mark, the counts column or a row's shape shows up here without anybody redrawing a figure. `theFirstRunSpecimensAreTheProductAndWatchNothing` asserts that the specimen store watches nothing, carries both products, holds an answerable request and a departure, and composes the same pill width `PanelMetrics.size` would — which is what the pins are measured against.
 
-  Page three's specimens are the same argument one level down: `OpenRow` and `RecentSessionSection` are the panel's own views, drawn on the panel's own ground rather than composed for a window (§7.1.2).
+  The open-request and Recent specimens are the same argument one level down: `OpenRow` and `RecentSessionSection` are the panel's own views, drawn on the panel's own ground rather than composed for a window (§7.1.2).
 
   **What does not follow the product is the key**, and that is the whole of how this page went stale: a pin whose part has gone does not disappear, it stays at whatever coordinate its formula still evaluates to, wearing a name for something that is no longer there. Two of them ended up on one point that way. `theFirstRunPinsStandApartAndTheirLeadersStopAtTheEdge` catches the collision and the overshoot; it cannot catch a wrong *word*, which is why §7.1 spells the two keys out.
 - **The panel is whole, and scaled only a little.** It was cropped to two rows with the rest faded out while everything shared one page; the second page is what bought the footer back. The scale is for the card and not for the height: at the panel's own width in a `532` card it meets both edges and its shoulders overhang the card's own padding, which reads as a layout fault rather than as a specimen on a page. `0.624` holds the drawing at the same `436.8` pt it was at before the panel widened, so the margin either side is unchanged and the row copy is smaller for it — `~8.1` pt, against the `11` the original `520`-pt baseline and `0.84` gave.
