@@ -26928,32 +26928,55 @@ for line in sys.stdin:
         )
     }
 
-    /// And the ground hugs that word, because nothing is reserved any more.
+    /// And the ground is one width for every word it can say.
     ///
-    /// The mark is a control rather than a reading now: twice the reading
-    /// ground's height, on the same corner ratio, hugging one verb. What this
-    /// guards is the reason that became possible — every word it can draw is
-    /// far narrower than the phrase it replaced, so the slab cannot come back
-    /// by way of a longer word.
+    /// The mark is a control rather than a reading now, and it appears once per
+    /// row — so it draws one silhouette down a mixed queue rather than three.
+    /// ~~And the ground hugs that word, because nothing is reserved any more.~~
+    /// **Superseded**: hugging was right to kill the *phrase*'s reservation and
+    /// wrong about the list, which it left with a ragged column.
+    ///
+    /// What this guards is that the slab cannot come back — the reservation is
+    /// over the three verbs the mark can actually say, each far narrower than
+    /// the phrase it replaced, and no word it can reach may outgrow it.
     @Test @MainActor
-    func aWaitingRowsGroundHugsTheOneWordItCanShow() {
-        let phrase = PanelMetrics.drawnWaitingMarkWidth(
+    func aWaitingRowsGroundIsOneWidthForEveryWordItCanSay() {
+        let phrase = PanelMetrics.huggedWaitingMarkWidth(
             SessionStatus.approvalNeeded.displayName
         )
-        for word in [
-            PanelMetrics.waitingMarkApproveWord,
-            PanelMetrics.waitingMarkAnswerWord,
-            PanelMetrics.waitingMarkReadWord
-        ] {
-            let drawn = PanelMetrics.drawnWaitingMarkWidth(word)
+        for word in PanelMetrics.waitingMarkWords {
+            let hugged = PanelMetrics.huggedWaitingMarkWidth(word)
             #expect(
-                drawn == ceil(
+                hugged == ceil(
                     PanelMetrics.textWidth(word, font: PanelMetrics.waitingMarkFont)
                         + PanelMetrics.waitingMarkPadding * 2
                 ),
-                "\(word) does not hug its ground"
+                "\(word) is not measured against its own padding"
             )
-            #expect(drawn < phrase * 0.65, "\(word) is not meaningfully narrower")
+            #expect(hugged < phrase * 0.65, "\(word) is not meaningfully narrower")
+            // One width, and it is the widest of them rather than a number of
+            // its own -- so every word fits, and the widest fits exactly.
+            #expect(hugged <= PanelMetrics.waitingMarkWidth, "\(word) does not fit")
+        }
+        #expect(
+            PanelMetrics.waitingMarkWidth
+                == PanelMetrics.huggedWaitingMarkWidth(PanelMetrics.waitingMarkApproveWord)
+        )
+        // A fourth verb cannot quietly outgrow the frame the other three are
+        // drawn in: the mark centres its word in a fixed width, so anything
+        // wider is clipped rather than accommodated. Asked of the vocabulary
+        // itself rather than of the list above, which is the thing that would
+        // be forgotten.
+        for status in SessionStatus.allCases {
+            for canBeAnswered in [true, false] {
+                let word = PanelMetrics.waitingMarkWord(
+                    for: status, canBeAnswered: canBeAnswered
+                )
+                #expect(
+                    PanelMetrics.waitingMarkWords.contains(word),
+                    "\(word) is not among the words the width was measured over"
+                )
+            }
         }
         // A control, not a reading: the tile it left is half this tall.
         #expect(PanelMetrics.waitingMarkHeight == PanelMetrics.readingGroundHeight * 2)

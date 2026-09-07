@@ -2777,8 +2777,16 @@ private struct SessionStatusControl: View {
             .foregroundStyle(NotchPalette.onBrightGround)
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, PanelMetrics.waitingMarkPadding)
-            .frame(height: PanelMetrics.waitingMarkHeight)
+            // One width for all three verbs, and the word centred in it --
+            // ``PanelMetrics/waitingMarkWidth`` is the widest of them, so the
+            // padding is `12` a side on `Approve` and more on the other two.
+            // A frame rather than padding because it is the silhouette that is
+            // shared here, not the inset: one control appearing once per row
+            // should draw one shape down the list.
+            .frame(
+                width: PanelMetrics.waitingMarkWidth,
+                height: PanelMetrics.waitingMarkHeight
+            )
             .background(
                 RoundedRectangle(
                     cornerRadius: PanelMetrics.waitingMarkCornerRadius,

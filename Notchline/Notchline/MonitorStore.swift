@@ -815,22 +815,48 @@ enum PanelMetrics {
     static var waitingMarkCornerRadius: CGFloat { controlCornerRadius }
     static var waitingMarkPadding: CGFloat { controlHorizontalPadding }
 
-    /// What the mark takes, hugging the one word it will ever show.
+    /// What the mark takes, and it is one width whichever word it holds.
     ///
-    /// ~~**Fixed, and that is the whole point.**~~ **Superseded.** The ground
-    /// was measured once against every string it might have to hold —
-    /// `Approval needed`, `Input needed`, `Answer`, `Read` — because the word
-    /// changed under the pointer and *nothing on a row may move* as a pointer
-    /// passes over it (`answer-in-notch.md` §3.3). So it drew `113 pt` of the
-    /// brightest value on the panel even for a four-letter word: `19%` of the
-    /// row's content box, spent on a phrase naming a condition.
+    /// ~~**Fixed, and that is the whole point.**~~ ~~Superseded — it hugs the
+    /// one word it will ever show.~~ **Fixed again, and for a different
+    /// reason.** The first reservation was forced: the word changed to `Answer`
+    /// or `Read` under the pointer, *nothing on a row may move* as a pointer
+    /// passes over it (`answer-in-notch.md` §3.3), so the ground was measured
+    /// against the longest phrase it might have to hold — `113 pt` of the
+    /// brightest value on the panel even for a four-letter word, `19%` of the
+    /// row's content box spent naming a condition. That is what hugging was
+    /// right to remove, and the word no longer changes under the pointer
+    /// anyway: ``waitingMarkWord(for:canBeAnswered:)`` decides it from the
+    /// row's own request, at rest.
     ///
-    /// The word no longer changes under the pointer —
-    /// ``waitingMarkWord(for:canBeAnswered:)`` decides it from the row's own
-    /// request, at rest — so §3.3's rule is kept by construction and nothing
-    /// has to be reserved to keep it. The widest this can draw is `Approve`,
-    /// at `77`.
-    static func drawnWaitingMarkWidth(_ word: String) -> CGFloat {
+    /// What hugging cost was the **list**. Three verbs of three lengths, each
+    /// right-aligned to its row's trailing edge, left a ragged column down a
+    /// mixed queue — and these are one control appearing once per row, not
+    /// three controls. So they draw one silhouette: the widest of the three,
+    /// which is `Approve` at `77`. `Read` pays `21 pt` for that, against the
+    /// `57` the phrase used to cost it, and the reservation is now over the
+    /// three words the mark can actually say rather than over the four strings
+    /// it once might have.
+    ///
+    /// **Derived rather than written down**, so a fourth word cannot quietly
+    /// outgrow it — the test pins that every word
+    /// ``waitingMarkWord(for:canBeAnswered:)`` can return fits.
+    static let waitingMarkWidth: CGFloat = waitingMarkWords
+        .map(huggedWaitingMarkWidth)
+        .max() ?? 0
+
+    /// Every word the mark can say, which is what ``waitingMarkWidth`` is the
+    /// widest of.
+    static let waitingMarkWords = [
+        waitingMarkApproveWord, waitingMarkAnswerWord, waitingMarkReadWord
+    ]
+
+    /// What one word would take if the ground still hugged it: the string as
+    /// measured, plus ``waitingMarkPadding`` a side.
+    ///
+    /// Only the widest word is drawn with that padding; the rest keep the width
+    /// and centre inside it, which is what makes the column straight.
+    static func huggedWaitingMarkWidth(_ word: String) -> CGFloat {
         ceil(textWidth(word, font: waitingMarkFont) + waitingMarkPadding * 2)
     }
 
