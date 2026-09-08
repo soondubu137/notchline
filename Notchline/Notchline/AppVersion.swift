@@ -1,4 +1,4 @@
-// What this build calls itself, and the line the two windows draw it on.
+// What this build calls itself, and the line Settings draws it on.
 //
 // The numbers are read from the bundle rather than written here. They live in
 // `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION`, which is what the build
@@ -37,8 +37,7 @@ enum AppVersion {
         return stage.map { "\(marketing) \($0)" } ?? marketing
     }
 
-    /// `Version 0.1.0 Alpha (1)` — the About-box form, and what both windows
-    /// draw.
+    /// `Version 0.1.0 Alpha (1)` — the About-box form drawn in Settings.
     ///
     /// The build number is kept rather than tidied away because this is an
     /// alpha: two people running `0.1.0` can be running different code, and the
@@ -68,40 +67,7 @@ enum AppVersion {
     }
 }
 
-/// The version, on the closing line of whichever window is showing.
-///
-/// One view rather than a line written into each window, so first run and
-/// Settings cannot end up saying it in two different forms — which is the same
-/// argument that makes `ProductConnectionRows` one view used twice.
-///
-/// It sits under the read-only statement both windows close on, at the
-/// footnote's own size and in the same tertiary ink: a version is the quietest
-/// true thing in a window, and nothing here should read louder than the
-/// sentence above it.
-/// What this app does to the two products, in one sentence, on the closing
-/// line of both windows.
-///
-/// **One string rather than two literals, because the two windows are meant to
-/// say it identically** — first run closes on this pair and Settings opens on
-/// it, and they had already drifted a word apart while both were still true.
-/// It rides here with ``AppVersionLine`` for the same reason that line does:
-/// it belongs to the app rather than to any group or page.
-///
-/// **It no longer says "only reads".** That was true of everything this app
-/// did until an answer could leave it: an approval taken on the notch is sent
-/// back down the connection the request arrived on, and the product acts on it
-/// (`answer-in-notch.md` §7). A promise the surface has stopped keeping is
-/// worse than no promise, and the honest version is barely longer — what is
-/// worth saying is that nothing goes back except something the user did.
-///
-/// The hooks the switches write are **not** an exception to it and are not
-/// named here: each window's own footnote says which file its switch writes,
-/// which is where a person deciding whether to flip it will read it.
-enum StandingStatement {
-    static let text = "Notchline reads. The one thing it sends back is an "
-        + "answer you give on the notch."
-}
-
+/// The build version on the closing line of Settings.
 struct AppVersionLine: View {
     var body: some View {
         if let summary = AppVersion.summary {

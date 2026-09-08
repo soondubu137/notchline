@@ -569,7 +569,7 @@ Page one, top to bottom:
 
 1. **Hero**: the `52` app icon and one sentence, not repeating the window title.
 2. **`Connect your agents`**: `ProductConnectionRows` — the **same view** as the settings window, not a copy. **A switch on each of the two rows** ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md)). The footnote states that the switches write Notchline's lifecycle definitions into `~/.codex/hooks.json` and `~/.claude/settings.json`, take them out again when off, and back both files up first; the trailing control is `Recheck`, because turning the Codex switch on is not the end — Codex keys trust to a definition's position in the file, so the user must trust it under `/hooks` and run a Turn before that row says `Connected`. Claude Code has no such step.
-3. **The closing row**: only the primary `Continue`, aligned to the bottom right. The standing statement and version remain in Settings; onboarding has no copy beside its navigation buttons.
+3. **The closing row**: only the primary `Continue`, aligned to the bottom right. The version remains in Settings; onboarding has no copy beside its navigation buttons.
 
 Page two is one group, `Reading the notch`: one card, three blocks separated by the settings hairline, and the group footnote. A second group below it opens the Recent queue. Page three presents selectable answer lessons (§7.1.2). Their shared bottom row contains `Back` and the primary `Continue` or `Start`, with no text to their left. **No gate**: onboarding can be reached and finished with no product connected at all, and the notch will honestly say `Disconnected`.
 
@@ -615,7 +615,7 @@ One instant, seen twice — the bar shut and the panel open — composed so that
 
 Two details are what make that hold rather than nearly hold. The period is **`599.5` s, not `600`**: the reading says `9:59` from `599.0` and the tick that would draw `10:00` fires at `600.0`, so the wrap lands between them and `9:59` is the last figure anybody sees. And **each pass waits the remainder, not a fresh period** — `remainingBeforeWrap(stagedAt:now:)` is asked again every time — because a fixed sleep drifts past the wrap the moment the task and the wall clock part company, which two ordinary things do: `Back` to page one cancels the task and coming forward re-sleeps a whole period against a store that has been counting all along, and a sleeping Mac holds the task while the reading runs on. Both are pinned by `theFirstRunClockStartsAgainRatherThanRunningAllAfternoon`, including the lid-closed case, which wraps on the next wake-up rather than sleeping through another period. `MonitorStore`'s `max(now, start)` is what keeps the wrap clean, since the staged start is newer than the last tick.
 
-The last page's bottom row is `Back` and the primary `Start`, **with no gate**: onboarding can be entered and finished with no product connected at all, and the notch will honestly say `Disconnected`. The standing statement remains in Settings. The window requests neither Accessibility nor Screen Recording, and promises no silent bypass of Codex's trust step.
+The last page's bottom row is `Back` and the primary `Start`, **with no gate**: onboarding can be entered and finished with no product connected at all, and the notch will honestly say `Disconnected`. The window requests neither Accessibility nor Screen Recording, and promises no silent bypass of Codex's trust step.
 
 **Recent on page two** shows the queue with three rows at distinct ages (`2m`, `18m`, `1h`), immediately after the expanded panel that names its seam. Its key names the count, compact row and departure age; the footnote explains navigation and five-hour retention. Its store is constructed separately from the answer examples, so reading this page does not initialise page three.
 
@@ -656,15 +656,9 @@ The former README anatomy figures were `4060` px wide with callout columns eithe
 
 Onboarding is also the one uninvited window, so it has to take the foreground itself (`PRD.md` §11, `system-architecture.md` §5); nothing about the taller window changes that.
 
-### 7.4 What the window promises
+### 7.4 Closing copy
 
-Settings closes on one sentence about what this app does to the two products (`StandingStatement`). Onboarding formerly shared it, but now leaves the area beside its navigation buttons empty.
-
-> Notchline reads. The one thing it sends back is an answer you give on the notch.
-
-**`Notchline only reads` is what it said, and that stopped being true.** An approval taken on the notch is sent back down the connection the request arrived on and the product acts on it ([`answer-in-notch.md`](answer-in-notch.md) §8 and §16, measured on both products 2026-09-06) — so the window was making a promise the surface had stopped keeping, on the page whose whole job is to be trusted. The replacement is barely longer and says the thing that actually matters: nothing goes back to a product except something the user did.
-
-**The hooks are not an exception to it and are not named in it.** Each window's own group footnote already says which file its switch writes and that it is backed up first, which is where somebody deciding whether to flip it will read it; repeating it in the closing line would make one sentence carry two unrelated facts.
+Settings ends with the version and Quit control, without a standing statement above the version. Onboarding leaves the area beside its navigation buttons empty. Each window's product group footnote explains which file its switch writes and that it is backed up first.
 
 
 ## 8. Settings
@@ -690,7 +684,7 @@ The settings window is a **single panel with no sidebar**. V1 has three confirme
 
 The board's three groups top to bottom are `Products`, `Session list` and `Privacy`; the implementation has `Products`, `Display` and `Session list` — `Privacy` is deleted (§8.3) and `Display` is not on the board (§8.4). Each group is "a small heading, one rounded card, and footnote text beneath the card". The footnote replaces v1's blue hint bar — macOS states consequences in a footnote rather than a colour block, and a colour block in a native window only reads as a control nobody can press.
 
-The window's last row is the `closing note`: the standing statement (§7.4) on the left and the capsule `Quit Notchline` on the right. Sharing a shape with `Recheck` is no accident — both are "explanatory text with the action it describes on the end". Quitting belongs to no group: it is not a setting, and the component it takes away has no window of its own to close, so Settings is the only interface that can carry it. This row takes no indent (the group footnotes' `2 pt` left indent belongs to the groups), so it sits on the same vertical line as the three group titles.
+The window's last row shows the version and the capsule `Quit` control. Quitting belongs to no group: it is not a setting, and the component it takes away has no window of its own to close. This row takes no indent, so it sits on the same vertical line as the group titles.
 
 **Under that statement, the version.** `Version 0.1.0 Alpha (1)` at footnote size in the tertiary ink, monospaced digits, taking no indent for the same reason the row above it does not. Not on the board. It goes here because it belongs to the window rather than to any group — a version is a fact about the build, not a setting — and because this app has no menu bar and therefore no `About Notchline`: with no line here there is nowhere in the interface a user can find out which build they are running. Onboarding omits both closing lines (§7); the version remains available in Settings through `AppVersionLine`.
 

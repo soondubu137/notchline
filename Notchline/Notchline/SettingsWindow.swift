@@ -19,29 +19,10 @@ struct AppSettingsView: View {
             productsGroup
             displayGroup
 
-            // The closing note, the version, and the one action that ends the
-            // app.
-            //
-            // Quit belongs to the window, not to a group: it is not a setting,
-            // and the component it removes has no window of its own to close.
-            // Same shape as `Recheck` — a footnote line with a control on its
-            // trailing side — because it is the same kind of thing: the action
-            // that the text beside it is about.
-            //
-            // The version goes under that statement for the same reason: it is
-            // about the build rather than about any setting, so no group can
-            // hold it, and this app has no menu bar and therefore no `About
-            // Notchline` to put it in. First run closes on the same pair
-            // (`ProductRootView.swift`), and they say it identically because it
-            // is one string now (``StandingStatement``) rather than two
-            // literals that had already drifted a word apart.
+            // The build version and the action that quits the app belong to
+            // the window rather than to a settings group.
             HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(StandingStatement.text)
-                        .settingsFootnote(MacOSWindowColor.tertiaryText)
-
-                    AppVersionLine()
-                }
+                AppVersionLine()
 
                 Button("Quit") {
                     NSApp.terminate(nil)
