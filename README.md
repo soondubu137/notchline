@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="design/assets/03-stacked/notchline-stacked-black-1024.png">
-    <img src="design/assets/03-stacked/notchline-stacked-white-1024.png" width="180 alt="Notchline">
+    <img src="design/assets/03-stacked/notchline-stacked-white-1024.png" width="180" alt="Notchline">
   </picture>
 </p>
 <p align="center">
@@ -12,6 +12,10 @@
 </p>
 
 **Notchline keeps coding agent activity visible at your Mac’s notch.**
+
+<p align="center">
+  <img src="design/assets/07-readme/notchline-hero.webp" width="100%" alt="A recording of the notch: the compact bar sits above a code editor, a Claude Code question opens the panel, two questions are answered by picking an option and pressing Next then Submit, and the panel collapses back to the compact bar.">
+</p>
 
 ## Overview
 

@@ -83,12 +83,13 @@ struct ReadmeAnsweringCard: View {
                     .foregroundStyle(AnatomyCardStyle.captionDetail)
             }
 
-            // Centred against each other rather than hung from one line. Two
-            // requests are never this size at once anyway — a panel draws one
-            // open row — so the shared edge is a composition rather than a
-            // claim, and top-aligning left the whole of the shorter plate's
-            // difference as one empty block under it.
-            HStack(alignment: .center, spacing: Self.plateGap) {
+            // Hung from one line. Both plates are a panel opened at the top of
+            // the screen, so their top edges are the edge they actually share;
+            // centring them slid each one half of the height difference away
+            // from that line and read as two panels at two heights. The
+            // shorter plate's difference falls under it as empty page, which
+            // is the honest shape of one row being taller than the other.
+            HStack(alignment: .top, spacing: Self.plateGap) {
                 ForEach(Array(plates.enumerated()), id: \.offset) { _, store in
                     OpenRowPlate(store: store)
                 }
