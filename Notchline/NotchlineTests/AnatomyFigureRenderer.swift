@@ -427,19 +427,19 @@ struct AnatomyFigureRenderer {
         )
         report.append("anatomy: \(cardWidth) x \(cardHeight) -> \(cardPixels.width) x \(cardPixels.height)")
 
-        // The three shapes a request arrives in, stacked and named.
-        let approvals = ApprovalSpecimens.staged(at: now)
-        let approvalCard = ReadmeApprovalCard(staged: approvals)
-        let approvalWidth = ReadmeApprovalCard.width(approvals)
-        let approvalHeight = try Self.fittingHeight(approvalCard, width: approvalWidth)
-        let approvalPixels = try Self.png(
-            approvalCard,
-            size: CGSize(width: approvalWidth, height: approvalHeight),
-            to: out.appendingPathComponent("anatomy-requests.png")
+        // The two shapes a request opens in, side by side and unlabelled.
+        let answering = ApprovalSpecimens.staged(at: now)
+        let answeringCard = ReadmeAnsweringCard(staged: answering)
+        let answeringWidth = ReadmeAnsweringCard.width(answering)
+        let answeringHeight = try Self.fittingHeight(answeringCard, width: answeringWidth)
+        let answeringPixels = try Self.png(
+            answeringCard,
+            size: CGSize(width: answeringWidth, height: answeringHeight),
+            to: out.appendingPathComponent("anatomy-answering.png")
         )
         report.append(
-            "anatomy-requests: \(approvalWidth) x \(approvalHeight) -> "
-                + "\(approvalPixels.width) x \(approvalPixels.height)"
+            "anatomy-answering: \(answeringWidth) x \(answeringHeight) -> "
+                + "\(answeringPixels.width) x \(answeringPixels.height)"
         )
 
         try report.joined(separator: "\n").write(

@@ -1,4 +1,4 @@
-// The three shapes a person answers in, staged as the product stages them.
+// The two shapes a person answers in, staged as the product stages them.
 //
 // **Each specimen is walked into its state through the store's own acts**,
 // never assigned one: the row is opened, options are ticked with
@@ -13,10 +13,9 @@ import SwiftUI
 
 @MainActor
 enum ApprovalSpecimens {
-    /// The three, in the order the figure stacks them.
+    /// The two, in the order the figure sets them beside each other.
     struct Staged {
         let command: MonitorStore
-        let multipleChoice: MonitorStore
         let series: MonitorStore
     }
 
@@ -31,6 +30,10 @@ enum ApprovalSpecimens {
             id: "anatomy-command",
             toolName: "Bash",
             form: .command("npm run build -- --profile"),
+            // Two fields, because a third takes the body past
+            // `requestBodyMaximumHeight`'s `140` and the row starts scrolling —
+            // which is what the product should do and not what a picture of it
+            // should show, with the last argument cut off mid-label.
             argumentFields: [
                 ApprovalArgument(
                     id: "command",
@@ -50,44 +53,6 @@ enum ApprovalSpecimens {
     }
 
     // MARK: - Form 03: questions
-
-    static func multipleChoiceRequest() -> AgentRequest {
-        AgentRequest(
-            id: "anatomy-multiple",
-            toolName: "AskUserQuestion",
-            form: .questions([
-                AgentQuestion(
-                    id: 0,
-                    header: "Summary",
-                    text: "Which details should the summary include?",
-                    options: [
-                        AgentQuestionOption(
-                            id: 0,
-                            label: "Usage by product",
-                            // Long enough to wrap past two lines, which is what
-                            // makes an option draw `Show more` at all.
-                            description: "Show what each product reports, under its own window "
-                                + "names and reset times, and keep the totals easy to compare "
-                                + "without putting every figure on the summary itself. The full "
-                                + "breakdown stays one click away for anyone who wants it."
-                        ),
-                        AgentQuestionOption(
-                            id: 1,
-                            label: "Time until reset",
-                            description: "Show when each window resets."
-                        ),
-                        AgentQuestionOption(
-                            id: 2,
-                            label: "Today's total",
-                            description: "Keep it to what has been spent today."
-                        )
-                    ],
-                    allowsSeveralAnswers: true
-                )
-            ]),
-            replyTicket: 0
-        )
-    }
 
     static func seriesRequest() -> AgentRequest {
         func question(
@@ -209,22 +174,6 @@ enum ApprovalSpecimens {
         // arrived rather than at the `45%` of a row still coming up.
         command.stageSpecimenAnswer(selectedOptions: [])
 
-        // One question, several answers: two ticked.
-        let multipleChoice = store(
-            holding: session(
-                id: "multiple",
-                agent: .claudeCode,
-                project: "acme-api",
-                title: "Improve the usage summary",
-                preview: nil,
-                status: .inputNeeded,
-                request: multipleChoiceRequest(),
-                at: now
-            ),
-            at: now
-        )
-        multipleChoice.stageSpecimenAnswer(selectedOptions: [0, 1])
-
         // A set of three, one answer each, drawn at the second — which is the
         // only place both of a set's own controls stand: `Back`, because there
         // is a question behind this one, and `Next`, because there is one in
@@ -250,6 +199,6 @@ enum ApprovalSpecimens {
         series.stageSpecimenAnswer(selectedOptions: [1], showingQuestion: 0)
         series.stageSpecimenAnswer(selectedOptions: [0], showingQuestion: 1)
 
-        return Staged(command: command, multipleChoice: multipleChoice, series: series)
+        return Staged(command: command, series: series)
     }
 }

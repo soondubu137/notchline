@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="design/assets/07-readme/notchline-readme-header-dark.png">
-    <img src="design/assets/07-readme/notchline-readme-header.png" width="340" alt="Notchline">
+    <source media="(prefers-color-scheme: dark)" srcset="design/assets/03-stacked/notchline-stacked-black-1024.png">
+    <img src="design/assets/03-stacked/notchline-stacked-white-1024.png" width="180 alt="Notchline">
   </picture>
 </p>
 <p align="center">
@@ -21,6 +21,10 @@ Notchline shows which sessions are working, waiting for you or completed. Hover 
   <img src="design/assets/07-readme/notchline-anatomy.png" width="820" alt="Notchline anatomy: the compact view with the status mark, session and subagent counts, project name, unread dot and elapsed timer; and the expanded view with the live session list, recent sessions and usage.">
 </p>
 
+<p align="center">
+  <img src="design/assets/07-readme/notchline-answering.png" width="880" alt="Answering in the notch: a permission request with its labelled arguments and Deny and Approve, beside a question from a set of three, answered with a radio option and walked with Back and Next.">
+</p>
+
 ## Motivation
 
 My screens are already full of code editors, browser windows, and communication tools. I built Notchline to keep track of the coding agents buried behind them without repeatedly switching windows.
@@ -34,12 +38,6 @@ My screens are already full of code editors, browser windows, and communication 
 - **Recent sessions** — Revisit completed sessions cleared from the live list during the current app run.
 - **Usage** — Check quota windows and today’s token usage for connected products.
 - **Display settings** — Choose a display and adjust the compact overlay’s appearance.
-
-A request opens in place, and what it draws follows the shape the product asked in:
-
-<p align="center">
-  <img src="design/assets/07-readme/notchline-requests.png" width="780" alt="The three shapes a request arrives in, open on the notch: a permission request with its labelled arguments and Deny and Approve; one question with several answers, ticked and sent with Submit; and a series of single-answer questions, walked with Back and Next.">
-</p>
 
 ## Limitations
 

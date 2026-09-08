@@ -12,8 +12,9 @@ anchored to a `PanelMetrics` figure rather than to a point read off a
 screenshot — so a change to the mark, a row's shape or the footer's arithmetic
 moves the label with the part it names.
 
-`assets/07-readme/notchline-requests.png` is the same, for the three shapes a
-request arrives in.
+`assets/07-readme/notchline-answering.png` is built the same way and labelled
+not at all: two `OpenRow`s on the panel's own ground — a permission request, and
+one question out of a set of three — at the height the store composes for each.
 
 To regenerate them, see the header of
 [`AnatomyFigureRenderer.swift`](../Notchline/NotchlineTests/AnatomyFigureRenderer.swift).
