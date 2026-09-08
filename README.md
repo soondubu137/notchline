@@ -11,6 +11,7 @@
   <img src="https://img.shields.io/badge/version-0.2.2-blue" alt="Version 0.2.2">
   <img src="https://img.shields.io/badge/licence-GPL--3.0--or--later-green" alt="Licensed under GPL 3.0 or later">
 </p>
+
 **Notchline keeps coding agent activity reachable at your Mac’s notch.**
 
 <p align="center">
