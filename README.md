@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/badge/built%20with-SwiftUI%20%2B%20AppKit-orange" alt="SwiftUI and AppKit">
   <img src="https://img.shields.io/badge/status-in%20development-yellow" alt="In development">
   <img src="https://img.shields.io/badge/processing-local-blue" alt="Local processing">
+  <img src="https://img.shields.io/badge/licence-GPL--3.0--or--later-green" alt="Licensed under GPL 3.0 or later">
 </p>
 
 **Notchline keeps coding agent activity visible at your Mac’s notch.**
@@ -114,4 +115,6 @@ A solo side project in active development.
 
 ## Licence
 
-No open-source licence. All rights reserved; no permission is granted to use, copy, modify or distribute the source.
+Notchline is free software under the [GNU General Public License v3.0 or later](LICENSE): you may use, study, share and modify it, and anything you distribute that is built from it carries the same freedoms to whoever receives it.
+
+Copyright (C) 2026 Yinfeng Lu. Distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the licence for details.

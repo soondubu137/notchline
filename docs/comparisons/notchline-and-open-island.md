@@ -81,7 +81,7 @@ These affect adoption, but are separate from the monitoring feature set.
 | Application language | British English; no language selector | English, Simplified Chinese and Traditional Chinese, plus system selection. The source includes Traditional Chinese even though the README's feature table only names Simplified Chinese. |
 | Updating | Manual replacement; no updater in the inspected app | Sparkle integration with automatic checks and a manual check action. Automatic downloading is disabled in the current wrapper. |
 | Installation/distribution | Local app/build workflow; README states it is not currently notarised | README offers GitHub DMGs and Homebrew, and describes signed/notarised distribution. Packaging/signing workflows exist; a downloaded release's signature was not independently checked here. |
-| Source licence | No open-source licence; all rights reserved | GPL v3 |
+| Source licence | GPL v3 or later | GPL v3 |
 
 Sources: [Notchline README](../../README.md), [Notchline changelog](../../CHANGELOG.md), [Open Island package][oi-package], [language manager][oi-language], [update checker][oi-update], [release workflow][oi-releasing], [README][oi-readme] and [licence][oi-licence].
 

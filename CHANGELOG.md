@@ -4,6 +4,27 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.2.1 Alpha — 2026-09-07
+
+**A licence, and a README that opens on the notch.** No behaviour changed; what changed is what somebody is allowed to do with the source, and what they see before they read a word of it.
+
+### Added
+
+- **Notchline is under the GNU General Public License v3.0 or later.** The repository carried no licence at all until now, which is the most restrictive state there is — default copyright, no permission granted to anybody for anything. `LICENSE` is the FSF's verbatim text, and the README says in its own words what it buys: the source may be used, studied, shared and modified, and a distributed build carries the same freedoms onward to whoever receives it. The choice of a copyleft licence over a permissive one is deliberate, and it is the one the closest comparable app ([Open Island](docs/comparisons/notchline-and-open-island.md)) already uses; the source-licence row in that comparison now reads `GPL v3 or later` on both sides.
+- **The README opens on a recording of the notch.** The two figures under it say what the surface is made of and what a request looks like open, and neither can say *where any of it sits* — which is the first question a notch app has to answer. The hero is the screen recording at its full frame ratio for that reason: the top strip of a display, the compact bar above a code editor, a Claude Code question opening the panel, two answers picked and sent, and the panel collapsing back. Animated WebP, 323 frames, about a megabyte; how to rebuild it is in [`design/README.md`](design/README.md).
+
+### Changed
+
+- **The two plates in the answering figure hang from a shared top edge.** They were centred against each other, which slid each one half the height difference off that line and read as two panels at two heights. Both are a panel opened at the top of the screen, so the top edge is the one they actually share, and the shorter plate's difference falls under it as page.
+
+### Fixed
+
+- **The README's header lockup shows its `alt` text again.** An unterminated `width` attribute had been swallowing it.
+
+### Known limitations
+
+Everything listed under `0.2.0` and earlier still stands, unchanged.
+
 ## 0.2.0 Alpha — 2026-09-07
 
 **An answer can now leave this app.** Until this version everything Notchline did was read-only: a request reached the notch, was named there, and was answered in the product that asked. It is now read *and* answered on the surface it arrives on, in every shape either product asks in — and the surface underneath it was redrawn around that. One hue, and it belongs to the user rather than to a product. A collapsed bar that reports on the work instead of on what is installed. A footer with no gauge. A list that keeps what it let go of for five hours. This is the minor version rather than a patch because the app's own standing sentence changed with it: it used to say Notchline only reads.
