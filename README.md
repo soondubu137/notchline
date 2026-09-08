@@ -72,6 +72,30 @@ Coding agents → Product adapters → session state → Overlay
 
 Product adapters collect local hook events and metadata, reduce them into session state and combine them into one snapshot for the overlay. User actions return to the originating product through navigation or a supported answer connection. Processing stays on your Mac.
 
+## Next steps
+
+Introduce tiered support for more coding agents: a shared monitoring core for Turn starts and endings, with optional product-specific capabilities such as wait detection, previews, read state, quota and answers. Products can add these capabilities independently while sharing the same lifecycle rules. See the [tiered support plan](docs/technical-explorations/multi-product-provider-architecture/README.md).
+
+## Comparison with Open Island
+
+[Open Island](https://github.com/Octane0411/open-vibe-island) is another native macOS notch companion. This summary is based on the [source comparison from 7 September 2026](docs/comparisons/notchline-and-open-island.md), which documents support boundaries and implementation details.
+
+| Capability | Notchline | Open Island |
+| --- | --- | --- |
+| Shared features | Notch overlay, previews, supported request answers, Codex deep links and Recent | Same core features |
+| Supported products | Codex Desktop and Claude Code (Desktop + CLI) | Also standalone Codex CLI, Cursor, Gemini CLI, OpenCode and more |
+| Completed rows | Cleared using per-Thread read evidence | Visibility follows activity and process state |
+| Codex Projects | Actual Desktop Project assignments and Chats | Working-directory names |
+| Codex automatic approvals | Distinguishes automatic review from requests needing a person | No equivalent filter found |
+| Subagent activity | Both products; tracks work continuing after the parent Turn ends | Claude detail list; cleared on parent completion |
+| Usage | Quota windows and today's token totals | Quota windows; Claude readings depend on a terminal status-line cache |
+| Turn timing | Elapsed time and finished duration | Activity age and Claude subagent timers |
+| Navigation | Exact Codex Thread; Claude host, with Terminal.app/iTerm2 tab targeting | Additional terminal-pane and IDE workspace targets |
+| Startup and history | New lifecycle events; Recent covers the current app run | Restores cached records and discovers existing conversations |
+| Expanded list | Urgency ordering and brief content previews | Configurable grouping/sorting and more tool and work-item detail |
+| Notifications | Compact status and a panel opened on hover | Automatic notification cards, sounds and haptics |
+| Remote monitoring | Local observation | SSH setup for remote Claude Code |
+
 ## Project status
 
 A solo side project in active development.
