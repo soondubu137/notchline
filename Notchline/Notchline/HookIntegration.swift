@@ -696,7 +696,37 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
             // to borrow the call that is still open.
             .approvalWaitInferred
         case ("PreToolUse", "request_user_input"):
+            // The blocking question, and the only one of the two that is a
+            // wait. Measured 2026-09-07 against CLI `0.153.4` in Plan mode: it
+            // carries its own `call_…` id and its `PostToolUse` lands when the
+            // person answers, carrying their answers.
             .inputWaitOpened
+        case ("PreToolUse", "request_user_input_async"):
+            // **Not a wait, and this case exists to say so.** Codex ships two
+            // question handlers and which one a Turn gets is decided by the
+            // model, not by a setting: measured 2026-09-07 on CLI `0.153.4`,
+            // `gpt-6-astra` — this machine's default — registers only this one
+            // in Default mode, and `gpt-5.6-sol` registers the blocking one.
+            // So both are live for the same user on the same day.
+            //
+            // It asks a person and does not stop. Its `PostToolUse` arrived
+            // **51 ms** after the open carrying `{"accepted":true}` whatever
+            // the person does, and the Turn went on to run another tool and
+            // reach its own `Stop`; any answer arrives later as a new user
+            // message, which is a new Turn. Reading it as `.inputWaitOpened`
+            // would therefore put *Input needed* on the row for 51 ms and take
+            // it away again — attention spent on a wait that never existed —
+            // and `carriesRequest` derives from this table, so a wait would
+            // also decode a `{"questions":[{"title": …}]}` body no answer this
+            // app could send has anywhere to go. What the person is owed is
+            // already delivered: Codex emits the question as its own assistant
+            // message, and the Turn's `Stop` carries it in
+            // `last_assistant_message`, which the Completed row draws.
+            //
+            // A third variant would fall to the default below and land here
+            // too, which is the safe direction: the default never claims a
+            // wait, and only claiming one can misreport.
+            .toolCallOpened
         case ("PreToolUse", "request_permissions"):
             // A Desktop approval prompt is surfaced as a tool call that stays
             // open for exactly as long as the human is being asked.
@@ -726,10 +756,25 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
         }
     }
 
-    /// Codex asks in two shapes, and neither of them is a question with options.
+    /// Codex asks in two shapes, and one of them **is** a question with options.
     ///
-    /// `request_user_input` is a question and nothing more — no labels, no
-    /// `multiSelect` — so it is form 04, answered in a person's own words.
+    /// **This used to say neither of them was, and that was wrong.** Measured
+    /// 2026-09-07 against CLI `0.153.4`, a real `PreToolUse(request_user_input)`
+    /// carries `{"questions":[{"header","id","question","options":[{"label",
+    /// "description"}]}]}` — field for field the shape
+    /// ``AgentRequestReading/questions(in:)`` already reads for Claude Code's
+    /// `AskUserQuestion`. The reading below looked for a **top-level**
+    /// `question` or `prompt`, which that payload does not have, so every real
+    /// question fell through to the arguments and was drawn as a *command* on
+    /// the recessed ground: machine text, marked as a string a machine will
+    /// execute, for a sentence a person was being asked. So the question set is
+    /// read first now, and it is form 03 where the tool attached options and
+    /// form 04 where it did not — Codex's own schema makes options optional and
+    /// says the client adds the free-text answer itself.
+    ///
+    /// The text readings are kept **after** it rather than deleted: they cost a
+    /// dictionary lookup on a payload that already failed the first reading,
+    /// and they are what a question in some third shape would still land on.
     /// Everything else Codex stops on is a command to grant, and its arguments
     /// are drawn verbatim on the recessed ground.
     /// - Parameter permissionSuggestions: never anything on this product, which
@@ -746,12 +791,14 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
         guard let toolInput else { return nil }
         let form: AgentRequest.Form? = switch (name, toolName) {
         case ("PreToolUse", "request_user_input"):
-            // The prompt where the tool put one, and its whole arguments where
-            // it did not. Failing closed **to the arguments** rather than to
-            // nothing: a question in an unexpected shape still leaves a person
-            // with the thing they were asked.
-            (AgentRequestReading.text("question", in: toolInput)
-                ?? AgentRequestReading.text("prompt", in: toolInput))
+            // The question set the tool actually sends, then the prompt where
+            // some other shape put one, then its whole arguments. Failing
+            // closed **to the arguments** rather than to nothing: a question in
+            // an unexpected shape still leaves a person with the thing they
+            // were asked.
+            AgentRequestReading.questions(in: toolInput).map { .questions($0) }
+                ?? (AgentRequestReading.text("question", in: toolInput)
+                    ?? AgentRequestReading.text("prompt", in: toolInput))
                 .map { .question($0) }
                 ?? AgentRequestReading.arguments(of: toolInput).map { .command($0) }
         default:

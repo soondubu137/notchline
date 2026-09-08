@@ -25698,6 +25698,10 @@ for line in sys.stdin:
             (ClaudeCodeHookVocabulary(), "Stop", nil, false),
             (CodexHookVocabulary(), "PermissionRequest", "shell", true),
             (CodexHookVocabulary(), "PreToolUse", "request_user_input", true),
+            // The async question opens no wait, so it carries no request
+            // either — `carriesRequest` derives from the signal table, and
+            // that is the whole point of deriving it.
+            (CodexHookVocabulary(), "PreToolUse", "request_user_input_async", false),
             (CodexHookVocabulary(), "PreToolUse", "request_permissions", true),
             (CodexHookVocabulary(), "PreToolUse", "shell", false),
             (CodexHookVocabulary(), "PostToolUse", "shell", false),
@@ -26173,9 +26177,13 @@ for line in sys.stdin:
 
     /// A question with no options is still a question.
     ///
-    /// Codex's `request_user_input` carries a question and nothing attached to
-    /// it, which is §2.1's form 04 — the shortest row that can be opened, where
-    /// the field is the whole answer.
+    /// §2.1's form 04 — the shortest row that can be opened, where the field is
+    /// the whole answer. **The payload here is the fallback reading and not
+    /// Codex's own shape**: this used to be written as though a top-level
+    /// `question` were what `request_user_input` sends, and the test below
+    /// measures what it actually sends. What this one pins is that a question
+    /// arriving in some other shape still opens as prose rather than as a
+    /// command, which is why that reading was kept behind the question set.
     @Test @MainActor
     func aQuestionWithNoOptionsIsStillAQuestion() throws {
         let request = try #require(
@@ -26189,6 +26197,99 @@ for line in sys.stdin:
         )
         #expect(request.form == .question("Which branch?"))
         #expect(request.setting == .prose)
+    }
+
+    /// Codex's blocking question is a question set, not a command.
+    ///
+    /// The `tool_input` here is copied from a `PreToolUse` captured on
+    /// 2026-09-07 against CLI `0.153.4` — an isolated `CODEX_HOME`, a Plan-mode
+    /// Turn on `gpt-6-astra`, hooks trusted by their own `currentHash`. The
+    /// reading looked for a **top-level** `question`, which this does not have,
+    /// so before this test the form was `.command` and the row put a person's
+    /// own question on the recessed ground reserved for machine text.
+    @Test @MainActor
+    func codexsBlockingQuestionIsAQuestionSetRatherThanACommand() throws {
+        let request = try #require(
+            CodexHookVocabulary().request(
+                forEvent: "PreToolUse",
+                toolName: "request_user_input",
+                toolInput: .object([
+                    "questions": .array([
+                        .object([
+                            "header": .string("Function rename"),
+                            "id": .string("function_rename"),
+                            "question": .string(
+                                "Which function do you want to rename, and "
+                                    + "what exact new name should it have?"
+                            ),
+                            "options": .array([
+                                .object([
+                                    "label": .string("Provide both names"),
+                                    "description": .string(
+                                        "Enter the current name and the new one."
+                                    )
+                                ])
+                            ])
+                        ])
+                    ])
+                ]),
+                permissionSuggestions: nil,
+                openedBy: "call-1"
+            )
+        )
+        guard case let .questions(questions) = request.form else {
+            Issue.record("drawn as \(request.form.name), not a question set")
+            return
+        }
+        #expect(questions.count == 1)
+        #expect(questions[0].header == "Function rename")
+        #expect(questions[0].text.hasPrefix("Which function"))
+        #expect(questions[0].options.map(\.label) == ["Provide both names"])
+        #expect(request.setting == .prose)
+    }
+
+    /// The async question is not a wait, and is not read as one.
+    ///
+    /// Codex ships two question handlers and the **model** picks which a Turn
+    /// gets: measured 2026-09-07 on CLI `0.153.4`, `gpt-6-astra` in Default
+    /// mode registers only `request_user_input_async`, so this is not a variant
+    /// waiting in a feature flag. It asks a person and does not stop — its
+    /// `PostToolUse` arrived 51 ms later carrying `{"accepted":true}` whatever
+    /// the person does, and the Turn ran on to its own `Stop`.
+    ///
+    /// Before this, the exact-name match sent it to the catch-all, so the row
+    /// said *Working…* — right by accident. It is now right on purpose, and the
+    /// distinction matters: the tempting repair is to add the name to the
+    /// `.inputWaitOpened` case, which would announce *Input needed* for 51 ms
+    /// and then withdraw it.
+    @Test @MainActor
+    func codexsAsyncQuestionOpensNoWaitBecauseNothingIsWaiting() throws {
+        let vocabulary = CodexHookVocabulary()
+        #expect(
+            vocabulary.signal(
+                forEvent: "PreToolUse", toolName: "request_user_input_async"
+            ) == .toolCallOpened
+        )
+        // Its close is an ordinary close, so the pair still balances.
+        #expect(
+            vocabulary.signal(
+                forEvent: "PostToolUse", toolName: "request_user_input_async"
+            ) == .toolCallClosed
+        )
+        // The blocking one is the wait, and stays one.
+        #expect(
+            vocabulary.signal(
+                forEvent: "PreToolUse", toolName: "request_user_input"
+            ) == .inputWaitOpened
+        )
+        // And the body it would have decoded is never asked for: the async
+        // question's `{"questions":[{"title": …}]}` has no field an answer
+        // could be written into, which is why offering one is the wrong repair.
+        #expect(
+            !vocabulary.carriesRequest(
+                forEvent: "PreToolUse", toolName: "request_user_input_async"
+            )
+        )
     }
 
     /// An elicitation is named rather than drawn.

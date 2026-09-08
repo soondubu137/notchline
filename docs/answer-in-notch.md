@@ -47,7 +47,8 @@ Measured 2026-09-04 from the events [`tech-design.md`](tech-design.md) §9 regis
 | Claude Code | `Elicitation` / `ElicitationResult` | An MCP server's own form, described by a JSON schema it chose | **Not from here** — §11 |
 | Codex | `PermissionRequest` | The command, under the shipped `permission-request.command.input` schema. No `tool_use_id`, which is why the wait borrows the open call | Grant it, or refuse with a reason |
 | Codex | `PreToolUse` — `request_permissions` | A dedicated approval that stays open for exactly as long as a person is being asked — a network access, say | Grant it, or refuse |
-| Codex | `PreToolUse` — `request_user_input` | A question, with no options attached to it | Your own words |
+| Codex | `PreToolUse` — `request_user_input` | ~~A question, with no options attached to it~~ — **wrong, corrected 2026-09-07.** `questions`, the same shape `AskUserQuestion` sends: a `header`, an `id`, the question, and `options` carrying a `label` and a `description` each. Options are optional in Codex's schema, so both forms 03 and 04 occur | One option, or your own words |
+| Codex | `PreToolUse` — `request_user_input_async` | The **second** question tool, selected by the model rather than by a setting. Asks without stopping: it returns `{"accepted":true}` in about 50 ms whatever the person does, and any answer arrives later as a new user message | **Not from here** — nothing is waiting, and its `{"questions":[{"title": …}]}` has no field an answer could go in. §3 of [`system-architecture.md`](system-architecture.md) |
 
 **A question is a set, not a question.** Across every transcript under `~/.claude/projects`, 86 questions arrived in 55 calls: 32 calls carried one, 17 carried two, 4 carried three and 2 carried four. **63% of questions therefore arrive in a call carrying more than one**, options run two to four with three the mode, and `multiSelect` is rare but real. That measurement is what makes the position in the set (§5.2) a drawn element rather than an edge case.
 
@@ -57,8 +58,8 @@ Measured 2026-09-04 from the events [`tech-design.md`](tech-design.md) §9 regis
 | --- | --- | --- | --- |
 | 01 | **A command to grant** | `PermissionRequest` on either product, and `request_permissions` | Machine text on the recessed ground, verbatim, scrolling past the fold. Two answers, and a field that belongs to the refusal |
 | 02 | **A document to accept** | `ExitPlanMode`, and anything else that hands over prose | The same body set as prose rather than machine text, and taller: a plan is read, not scanned. Two answers — §4.3 |
-| 03 | **A question with options** | `AskUserQuestion` | The header and the position in the set on the caption line, the question and the options as the body, and the field beneath them |
-| 04 | **A question with none** | `request_user_input`, and any option list once a person decides none of them is right | No body at all. The question sits where the preview does, and the field is the whole answer. The shortest row that can be opened |
+| 03 | **A question with options** | `AskUserQuestion`, and `request_user_input` where it attached any | The header and the position in the set on the caption line, the question and the options as the body, and the field beneath them |
+| 04 | **A question with none** | `request_user_input` where it attached none, and any option list once a person decides none of them is right | No body at all. The question sits where the preview does, and the field is the whole answer. The shortest row that can be opened |
 
 ### 2.2 The form this declines, and why it is a boundary
 
