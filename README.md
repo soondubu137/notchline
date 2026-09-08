@@ -17,6 +17,10 @@
 
 Notchline shows which sessions are working, waiting for you or completed. Hover to see monitored sessions, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill. Currently supports Codex Desktop and Claude Code (Desktop + CLI).
 
+<p align="center">
+  <img src="design/assets/07-readme/notchline-anatomy.png" width="820" alt="Notchline anatomy: the compact view with the status mark, session and subagent counts, project name, unread dot and elapsed timer; and the expanded view with the live session list, recent sessions and usage.">
+</p>
+
 ## Motivation
 
 My screens are already full of code editors, browser windows, and communication tools. I built Notchline to keep track of the coding agents buried behind them without repeatedly switching windows.
