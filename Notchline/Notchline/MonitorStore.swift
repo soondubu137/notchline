@@ -4318,15 +4318,50 @@ final class MonitorStore: ObservableObject {
 
     /// Show a completed draft in a non-watching tutorial store. No action is
     /// dispatched and a store connected to a product refuses the fixture.
-    func stageSpecimenAnswer(selectedOptions: Set<Int>, draft: String = "") {
+    /// - Parameter index: which question of a set the body is showing. Calling
+    ///   this once per question walks a specimen through a set exactly as
+    ///   answering it does, because it keeps the progress it already has: the
+    ///   drafts are per question (``AnswerProgress/Draft``), and the frontier
+    ///   only moves forward. `Back` therefore appears on any question but the
+    ///   first, on ``canGoBackAQuestion``'s own terms.
+    func stageSpecimenAnswer(
+        selectedOptions: Set<Int>,
+        draft: String = "",
+        showingQuestion index: Int = 0
+    ) {
         guard services.isEmpty, let openRowID,
-              let request = openSession?.request,
-              let question = request.askedQuestions.first else { return }
-        var progress = AnswerProgress(requestID: request.id)
-        let valid = question.options.map(\.id).filter { selectedOptions.contains($0) }
-        progress.ticked = Set(question.allowsSeveralAnswers ? valid : Array(valid.prefix(1)))
+              let request = openSession?.request else { return }
+        // A form that is not a question is a set of one living at `0`, which is
+        // what ``AnswerProgress/showing`` already assumes.
+        let questions = request.askedQuestions
+        let position = min(max(index, 0), max(questions.count - 1, 0))
+
+        var progress = answerProgress[openRowID] ?? AnswerProgress(requestID: request.id)
+        if progress.requestID != request.id {
+            progress = AnswerProgress(requestID: request.id)
+        }
+        progress.questionIndex = position
+        progress.furthestQuestionReached = max(progress.furthestQuestionReached, position)
+
+        if let question = questions.indices.contains(position) ? questions[position] : nil {
+            let valid = question.options.map(\.id).filter { selectedOptions.contains($0) }
+            progress.ticked = Set(question.allowsSeveralAnswers ? valid : Array(valid.prefix(1)))
+        }
         progress.draft = draft
         answerProgress[openRowID] = progress
+
+        // **And the affirmative is armed.** §6.3 holds it unarmed for
+        // `PanelMotion.duration` after a row arrives, on a task of its own; a
+        // specimen is a still, and a still taken before that lands draws every
+        // control at the `45%` a row wears while it is still coming up — a
+        // state that exists for two hundred milliseconds and is not what a
+        // drawing of this row is for. Taken here rather than waited for,
+        // because a wait is a wait on an executor a caller may not be able to
+        // turn.
+        armingTask?.cancel()
+        armingTask = nil
+        isAffirmativeArmed = true
+
         answerDraftGeneration &+= 1
         answerRevision &+= 1
         refreshAnswerGround()

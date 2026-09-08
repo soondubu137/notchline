@@ -41,6 +41,11 @@ struct AnatomyCallout: Identifiable {
     var stem: CGFloat = 24
     /// How far the label sits off the target's own line, for two parts that
     /// share one. Zero draws a straight leader.
+    ///
+    /// Vertical for `.leading` and `.trailing`, and **horizontal** for `.above`
+    /// and `.below`, which is the axis those two crowd on: three answers `70`
+    /// pt apart carry labels twice that wide, so one of them steps sideways to
+    /// clear the leader of the one behind it.
     var drop: CGFloat = 0
 }
 
@@ -173,12 +178,12 @@ private struct CalloutLabelPlacement: ViewModifier {
             content
                 .multilineTextAlignment(.center)
                 .frame(width: AnatomyCardStyle.stackedLabelColumn)
-                .position(x: target.x, y: top - callout.stem - gap - 9)
+                .position(x: target.x + callout.drop, y: top - callout.stem - gap - 9)
         case .below:
             content
                 .multilineTextAlignment(.center)
                 .frame(width: AnatomyCardStyle.stackedLabelColumn)
-                .position(x: target.x, y: bottom + callout.stem + gap + 9)
+                .position(x: target.x + callout.drop, y: bottom + callout.stem + gap + 9)
         }
     }
 }
@@ -209,11 +214,19 @@ private struct LeaderPath: Shape {
                 path.addLine(to: CGPoint(x: bend.x, y: target.y + callout.drop))
             }
         case .above:
+            let head = top - callout.stem
             path.move(to: CGPoint(x: target.x, y: target.y - AnatomyCardStyle.standoff))
-            path.addLine(to: CGPoint(x: target.x, y: top - callout.stem))
+            path.addLine(to: CGPoint(x: target.x, y: head))
+            if callout.drop != 0 {
+                path.addLine(to: CGPoint(x: target.x + callout.drop, y: head))
+            }
         case .below:
+            let foot = bottom + callout.stem
             path.move(to: CGPoint(x: target.x, y: target.y + AnatomyCardStyle.standoff))
-            path.addLine(to: CGPoint(x: target.x, y: bottom + callout.stem))
+            path.addLine(to: CGPoint(x: target.x, y: foot))
+            if callout.drop != 0 {
+                path.addLine(to: CGPoint(x: target.x + callout.drop, y: foot))
+            }
         }
         return path
     }

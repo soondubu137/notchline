@@ -1169,7 +1169,11 @@ struct ExpandedPanelAnatomy: View {
 /// is the panel's width with the row block inset by the panel's own gutter,
 /// which is what the black behind a row actually is; the row and the section
 /// drawn on it are the product's own views, unchanged.
-private enum OpenedSpecimen {
+/// Internal rather than private for the same reason ``OpenRow`` and
+/// ``RecentSessionSection`` are: the README's anatomy figure draws the same
+/// three specimens (`AnatomyFigureRenderer.swift`), and where its labels land is
+/// arithmetic that must not be kept in two places and allowed to disagree.
+enum OpenedSpecimen {
     /// The panel's own inset around a row block.
     static var gutter: CGFloat { PanelMetrics.sessionRowGutter }
 
@@ -1203,10 +1207,16 @@ private enum OpenedSpecimen {
     /// then the affirmative — each hugging its own word
     /// (``PanelMetrics/drawnAnswerControlWidth(_:)``), `8` apart. So the
     /// affirmative is placed from the edge and everything else from it.
+    /// - Parameter showsBack: whether the set's own `Back` stands between the
+    ///   field and what follows it (`answer-in-notch.md` §5.7). It takes the
+    ///   slot a set's absent refusal already leaves free, so the two are never
+    ///   both drawn — but they are placed the same way, and the field ends
+    ///   before whichever of them is there.
     static func answerCentres(
         rowWidth: CGFloat,
-        shape: AnswerRowShape
-    ) -> (field: CGFloat, refusal: CGFloat?, affirmative: CGFloat) {
+        shape: AnswerRowShape,
+        showsBack: Bool = false
+    ) -> (field: CGFloat, back: CGFloat?, refusal: CGFloat?, affirmative: CGFloat) {
         let trailing = rowWidth - PanelMetrics.sessionRowPadding
         let affirmativeWidth = PanelMetrics.drawnAnswerControlWidth(shape.affirmative)
         let affirmative = trailing - affirmativeWidth / 2
@@ -1217,8 +1227,15 @@ private enum OpenedSpecimen {
             refusal = fieldEnd - width / 2
             fieldEnd -= width + 8
         }
+        var back: CGFloat?
+        if showsBack {
+            let width = PanelMetrics.drawnAnswerControlWidth("Back")
+            back = fieldEnd - width / 2
+            fieldEnd -= width + 8
+        }
         return (
             field: (PanelMetrics.sessionRowPadding + fieldEnd) / 2,
+            back: back,
             refusal: refusal,
             affirmative: affirmative
         )
@@ -1485,7 +1502,9 @@ struct OpenQuestionAnatomy: View {
 /// caption, the title, the body, whatever is left, and the answer row. Asking
 /// the store for the body's own layout is what makes the question's list and
 /// the command's single line the same arithmetic.
-private struct OpenRowGeometry {
+/// Internal for ``OpenedSpecimen``'s reason: the README figure names the same
+/// parts of the same rows, from the same figures.
+struct OpenRowGeometry {
     let store: MonitorStore
 
     var height: CGFloat { store.openRowHeight ?? PanelMetrics.sessionRowHeight }

@@ -12,7 +12,16 @@ anchored to a `PanelMetrics` figure rather than to a point read off a
 screenshot — so a change to the mark, a row's shape or the footer's arithmetic
 moves the label with the part it names.
 
-To regenerate it, see the header of
+`assets/07-readme/notchline-requests.png` is the same, for the three shapes a
+request arrives in.
+
+To regenerate them, see the header of
 [`AnatomyFigureRenderer.swift`](../Notchline/NotchlineTests/AnatomyFigureRenderer.swift).
-Render from a clean tree: the figure is a drawing of `master`, and uncommitted
-work in the views ends up in it.
+Two things it says that are worth repeating here:
+
+- **Render from a clean tree.** The figures are a drawing of `master`, and
+  uncommitted work in the views ends up in them.
+- **Run that test on its own.** Drawing the specimens holds the main actor for
+  a few seconds, and the answering tests running beside it time out waiting for
+  their own arming window. The switch that enables it is spent as it is read,
+  so it cannot be left set by accident.

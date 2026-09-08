@@ -9,14 +9,21 @@
 // build it reaches the notch on.
 //
 // Opt-in, because it writes files and takes a window: it does nothing unless
-// `~/.notchline-anatomy-out` names a directory to write into. Delete that file
-// and an ordinary test run is untouched.
+// `~/.notchline-anatomy-out` names a directory to write into, and it deletes
+// that file as it starts, so the switch is good for exactly one run.
 //
 //   echo -n /path/to/out > ~/.notchline-anatomy-out
 //   xcodebuild test -project Notchline/Notchline.xcodeproj -scheme Notchline \
 //     -destination 'platform=macOS' \
 //     '-only-testing:NotchlineTests/AnatomyFigureRenderer/writesTheReadmeAnatomyFigures()'
-//   rm ~/.notchline-anatomy-out
+//
+// **Run it on its own, which is what `-only-testing` above is for.** Composing
+// five specimens holds the main actor for a few seconds, and Swift Testing runs
+// the rest of the suite beside it: the answering tests poll for a `200` ms
+// arming window on a deadline of their own (`eventually`), and roughly `27` of
+// them time out while this one is drawing. Nothing is wrong with either — they
+// simply cannot share an actor. With the switch off, which is every ordinary
+// run, this test returns before it allocates anything.
 //
 // **A file rather than an environment variable, and rather than a `print`.**
 // Unit tests here run inside the app, and `TEST_RUNNER_`-prefixed variables do
@@ -68,6 +75,22 @@ struct AnatomyFigureRenderer {
     static let panelDisplay = display(bandHeight: PanelMetrics.referenceCompactHeight)
 
     // MARK: - The staged moment
+
+    /// The preferences every staged store is given.
+    ///
+    /// **Never `nil`.** `hasCompletedOnboarding` then reads `false`, the
+    /// first-run `Window` scene is presented, and it holds key status for the
+    /// rest of the process — which inside the test host costs `27` failures in
+    /// the answering suite, every one of them a row that never became first
+    /// responder. A throwaway suite carries that one key and nothing else, so
+    /// every other preference still falls back to the same default a `nil`
+    /// store used and the figures are unchanged.
+    static let preferences: UserDefaults = {
+        let defaults = UserDefaults(suiteName: "notchline.anatomy.figure")!
+        defaults.set(true, forKey: "hasCompletedOnboarding")
+        return defaults
+    }()
+
 
     /// The approval the leading row is stopped on.
     ///
@@ -203,7 +226,7 @@ struct AnatomyFigureRenderer {
                     presence: .open
                 )
             },
-            preferences: nil
+            preferences: Self.preferences
         )
         store.isExpanded = isExpanded
         return store
@@ -304,6 +327,16 @@ struct AnatomyFigureRenderer {
         let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)
 
+        // The hosted views go before the window does: a specimen of an open row
+        // carries the real answer field, which is an `NSTextView`.
+        //
+        // **Not `close()`.** `isReleasedWhenClosed` is `true` on a window built
+        // this way, so closing one held only by a local reference over-releases
+        // it and takes the test host with it — 301 failures, this test among
+        // them. Dropping the last reference is what deallocates a window that
+        // was never ordered in.
+        window.contentView = nil
+
         let data = try #require(rep.representation(using: .png, properties: [:]))
         try data.write(to: url)
         return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
@@ -328,6 +361,10 @@ struct AnatomyFigureRenderer {
         let marker = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".notchline-anatomy-out")
         guard let named = try? String(contentsOf: marker, encoding: .utf8) else { return }
+        // **Spent as it is read.** The switch costs the answering tests their
+        // timing for as long as it is set, so it is good for one run and has to
+        // be put back deliberately rather than left lying in a home directory.
+        try? FileManager.default.removeItem(at: marker)
         let directory = named.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !directory.isEmpty else { return }
         let out = URL(fileURLWithPath: directory, isDirectory: true)
@@ -389,6 +426,21 @@ struct AnatomyFigureRenderer {
             to: out.appendingPathComponent("anatomy.png")
         )
         report.append("anatomy: \(cardWidth) x \(cardHeight) -> \(cardPixels.width) x \(cardPixels.height)")
+
+        // The three shapes a request arrives in, stacked and named.
+        let approvals = ApprovalSpecimens.staged(at: now)
+        let approvalCard = ReadmeApprovalCard(staged: approvals)
+        let approvalWidth = ReadmeApprovalCard.width(approvals)
+        let approvalHeight = try Self.fittingHeight(approvalCard, width: approvalWidth)
+        let approvalPixels = try Self.png(
+            approvalCard,
+            size: CGSize(width: approvalWidth, height: approvalHeight),
+            to: out.appendingPathComponent("anatomy-requests.png")
+        )
+        report.append(
+            "anatomy-requests: \(approvalWidth) x \(approvalHeight) -> "
+                + "\(approvalPixels.width) x \(approvalPixels.height)"
+        )
 
         try report.joined(separator: "\n").write(
             to: out.appendingPathComponent("sizes.txt"),

@@ -35,6 +35,12 @@ My screens are already full of code editors, browser windows, and communication 
 - **Usage** — Check quota windows and today’s token usage for connected products.
 - **Display settings** — Choose a display and adjust the compact overlay’s appearance.
 
+A request opens in place, and what it draws follows the shape the product asked in:
+
+<p align="center">
+  <img src="design/assets/07-readme/notchline-requests.png" width="780" alt="The three shapes a request arrives in, open on the notch: a permission request with its labelled arguments and Deny and Approve; one question with several answers, ticked and sent with Submit; and a series of single-answer questions, walked with Back and Next.">
+</p>
+
 ## Limitations
 
 - **Existing activity** — Existing sessions appear only after a new lifecycle event establishes their state.
