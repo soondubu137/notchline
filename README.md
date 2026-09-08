@@ -8,11 +8,10 @@
   <img src="https://img.shields.io/badge/platform-macOS%2026.5%2B-lightgrey" alt="macOS 26.5 or later">
   <img src="https://img.shields.io/badge/built%20with-SwiftUI%20%2B%20AppKit-orange" alt="SwiftUI and AppKit">
   <img src="https://img.shields.io/badge/status-in%20development-yellow" alt="In development">
-  <img src="https://img.shields.io/badge/processing-local-blue" alt="Local processing">
+  <img src="https://img.shields.io/badge/version-0.2.1-blue" alt="Version 0.2.1">
   <img src="https://img.shields.io/badge/licence-GPL--3.0--or--later-green" alt="Licensed under GPL 3.0 or later">
 </p>
-
-**Notchline keeps coding agent activity visible at your Mac’s notch.**
+**Notchline keeps coding agent activity reachable at your Mac’s notch.**
 
 <p align="center">
   <img src="design/assets/07-readme/notchline-hero.webp" width="100%" alt="A recording of the notch: the compact bar sits above a code editor, a Claude Code question opens the panel, two questions are answered by picking an option and pressing Next then Submit, and the panel collapses back to the compact bar.">
@@ -113,8 +112,6 @@ Introduce tiered support for more coding agents: a shared monitoring core for Tu
 
 A solo side project in active development.
 
-## Licence
+## License
 
-Notchline is free software under the [GNU General Public License v3.0 or later](LICENSE): you may use, study, share and modify it, and anything you distribute that is built from it carries the same freedoms to whoever receives it.
-
-Copyright (C) 2026 Yinfeng Lu. Distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the licence for details.
+Copyright © 2026 Yinfeng Lu. Licensed under [GPL-3.0-or-later](LICENSE), without warranty. See [LICENSE](LICENSE) for the full terms.
