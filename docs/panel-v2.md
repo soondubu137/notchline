@@ -138,3 +138,10 @@ These are the checks that span more than one of the three; each document keeps i
 - [x] A finished row's dark ground is the only place on the panel that reports how long a Turn took.
 - [x] With every colour rendered as flat grey, no figure, name or state on the expanded panel becomes ambiguous.
 - [x] An unreadable quota field draws `--` and nothing anywhere else on the panel — band, mark, rows or footer control — reports it.
+
+### Quota footer bottom clearance (2026-09-07)
+
+The opened quota footer now shares the collapsed caption's **15 pt** bottom
+clearance. Its height is **`19W + 28P + 42`**, 9 pt taller; the collapsed
+footer stays **38 pt**. This supersedes the earlier footer heights above;
+see [the quota footer specification](quota-footer-v2.md#quota-footer-bottom-clearance-2026-09-07).

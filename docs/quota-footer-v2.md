@@ -484,3 +484,15 @@ produces on a machine with both products: Codex's one weekly window, and Claude 
 | --- | --- | --- |
 | 01 | Is `5h limit` / `Weekly limit` what Codex calls them? | **Unverified, and it is one string each.** The App Server publishes no label for the account's own limit and the `codex` binary carries no such string, so this is the wording ChatGPT presents the same limits under rather than something read out of the product. Everything else on this page is read from the product's own output |
 | 02 | Does the per-model window need the word `week` in it? | **Standing recommendation: no.** `Fable` sits under `All models`, which carries the period for the pair, and the countdown beside it says when it turns over |
+
+### Quota footer bottom clearance (2026-09-07)
+
+The opened table uses the same caption-to-edge clearance as the collapsed
+footer: `footerBottomMargin + (recentSeamHeight − footerCaptionHeight) / 2`
+= `6 + (32 − 14) / 2` = **15 pt**. The earlier 6 pt opened margin omitted the
+space below the caption inside the collapsed spend line. Bottom padding is
+explicit; a trailing spacer no longer introduces an extra stack gap.
+The collapsed footer remains **38 pt**; the opened footer is now
+**`19W + 28P + 42`**, 9 pt taller than before. One product with one or two
+windows is 89 or 108 pt; two products with three or four windows are 155 or
+174 pt. These values supersede the earlier opened-height figures above.

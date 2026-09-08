@@ -934,3 +934,10 @@ Request controls share `PanelMetrics.requestControlFont` (`13 pt` Light), includ
 Approval detail bodies now use labelled fields rather than one flattened code block (2026-09-07; [`answer-in-notch.md`](answer-in-notch.md) §4.2). Prose and full resource values use system type; only code and structured data use the recessed ground. Labels are `11/15` Medium, values `13/19` Regular or SF Mono `12/18`, with `4` pt label gaps, `12` pt field gaps and `8` pt body insets. The existing viewport and answer controls remain. A sole `command` or `cmd` argument and a bare-string command use the original unlabelled SF Mono code box; accompanying arguments retain the field layout. The Figma specimens have not been updated for this change.
 
 Question options (2026-09-07): the code uses content-measured cards with `10` pt insets, `6` pt gaps and `8` pt corners. Titles are `13/19` Medium; descriptions `12/18` Regular, previewed at two lines with a separate `22` pt Show more / Show less control. Radio circles and checkboxes are `14` pt in a `25` pt marker column. Both modes select before the affirmative, which is `Next` until the set's last question and `Submit` on it; meaningful text in the permanent field overrides the selection and suppresses its emphasis until cleared. Question bodies cap at `300` pt, rows at `400` pt, and the live viewport grows to fit the open row. This is an exception to the ordinary `240` pt viewport figures above. Native onboarding uses the same option measurements; external Figma specimens have not been updated. Full interaction rules: [`answer-in-notch.md`](answer-in-notch.md) §5.
+
+### Quota footer bottom clearance (2026-09-07)
+
+The opened quota footer now shares the collapsed caption's **15 pt** bottom
+clearance. Its height is **`19W + 28P + 42`**, 9 pt taller; the collapsed
+footer stays **38 pt**. This supersedes the earlier footer heights above;
+see [the quota footer specification](quota-footer-v2.md#quota-footer-bottom-clearance-2026-09-07).

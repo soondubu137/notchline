@@ -2383,7 +2383,7 @@ struct NotchlineTests {
         )
     }
 
-    /// The opened table is `19W + 28P + 33`, composed as the view lays it out.
+    /// The opened table is `19W + 28P + 42`, composed as the view lays it out.
     ///
     /// Written longhand here rather than restating the closed form in
     /// `PanelMetrics`, so this is a claim about what is drawn: the spend line
@@ -2411,26 +2411,25 @@ struct NotchlineTests {
                 + CGFloat(products - 1) * PanelMetrics.footerCaptionHeight
             let opened = PanelMetrics.footerHeight(rules: shape, isExpanded: true)
 
-            #expect(opened == 19 * CGFloat(windows) + 28 * CGFloat(products) + 33)
+            #expect(opened == 19 * CGFloat(windows) + 28 * CGFloat(products) + 42)
             // And the last line stands the panel's own margin above the edge,
             // in the opened form and the closed one alike.
-            #expect(opened - drawn == PanelMetrics.footerBottomMargin)
-            #expect(
-                PanelMetrics.footerHeight(rules: shape)
-                    - PanelMetrics.recentSeamHeight
-                    == PanelMetrics.footerBottomMargin
-            )
+            let closedCaptionBottom = (PanelMetrics.recentSeamHeight
+                + PanelMetrics.footerCaptionHeight) / 2
+            let closedClearance = PanelMetrics.footerHeight(rules: shape)
+                - closedCaptionBottom
+            #expect(opened - drawn == closedClearance)
+            #expect(closedClearance == 15)
         }
 
-        // The forms `quota-footer-v2.md` §6 tabulates, each four points
-        // shorter than the badge-carrying arithmetic made it.
-        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 80)
-        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 99)
+        // The documented shapes retain the same caption clearance.
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 89)
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 108)
         #expect(
             PanelMetrics.footerHeight(
                 rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                 isExpanded: true
-            ) == 146
+            ) == 155
         )
         // And the shape this machine actually reports, now that Claude Code's
         // per-model week is drawn rather than dropped: one window and three.
@@ -2438,7 +2437,7 @@ struct NotchlineTests {
             PanelMetrics.footerHeight(
                 rules: Self.footerShape([(.codex, 1), (.claudeCode, 3)]),
                 isExpanded: true
-            ) == 165
+            ) == 174
         )
     }
 
@@ -2853,8 +2852,7 @@ struct NotchlineTests {
             #expect(PanelMetrics.referenceCompactHeight + opened > 324)
         }
 
-        // The two figures `quota-footer-v2.md` §6 tabulates for an opened
-        // table: two products with three windows, and three with six.
+        // Two products with three windows, including the shared caption clearance.
         #expect(
             PanelMetrics.referenceCompactHeight
                 + PanelMetrics.expandedContentHeight(
@@ -2863,7 +2861,7 @@ struct NotchlineTests {
                         rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                         isExpanded: true
                     )
-                ) == 432
+                ) == 441
         )
     }
 

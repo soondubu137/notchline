@@ -414,20 +414,13 @@ enum PanelMetrics {
     /// group and the next — one line of it.
     static let footerCaptionHeight: CGFloat = 14
 
-    /// The black between the footer's last line and the panel's bottom edge.
-    ///
-    /// **One number for every shape, which it was not.** The four footers were
-    /// four constants, and this margin was whatever each had left once its
-    /// content was laid out: `6` with both products, `7` with Claude Code
-    /// alone, `16` with Codex alone, `12` folded. So the panel's bottom edge
-    /// stood at a different distance from the same line depending on what
-    /// happened to be connected — and folding the rules away, which does not
-    /// touch that line, moved the edge under it from `6` to `12`. Composing
-    /// each height from its content plus this puts the edge in one place, and
-    /// the value is the thinnest of the four rather than an average of them:
-    /// at `6` the black reads as the panel's own edge, and at `12` or `16` as
-    /// a gap left by something that was taken away.
+    /// The inset below the resting footer's 32 pt spend line.
     static let footerBottomMargin: CGFloat = 6
+    /// Match the resting caption's bottom clearance when the table is open.
+    /// The resting caption is centred inside the spend line; table captions
+    /// occupy only their own line height, so they need that inner inset too.
+    static let footerCaptionBottomMargin: CGFloat = footerBottomMargin
+        + (recentSeamHeight - footerCaptionHeight) / 2
 
     /// One window's line in the table, and the gap after it.
     static let footerWindowRowHeight: CGFloat = footerCaptionHeight
@@ -538,11 +531,11 @@ enum PanelMetrics {
 
     /// Footer height: the resting line, or the table somebody opened.
     ///
-    /// **`38`, or `19W + 28P + 33`**. The opened form composes as the spend
+    /// **`38`, or `19W + 28P + 42`**. The opened form composes as the spend
     /// line and its gap (`32 + 9`), then one group per product — a caption
     /// line at `14`, and `19` for each of its windows — with `14` of air
-    /// between groups and `6` below the last line. Multiplied out that is
-    /// `47 + Σ(14 + 19w) + 14(P − 1) + …`, which is `19W + 28P + 33`.
+    /// between groups and `15` below the last line. Multiplied out that is
+    /// `56 + Σ(14 + 19w) + 14(P − 1)`, which is `19W + 28P + 42`.
     ///
     /// **`28P` is the arithmetic `quota-footer-v2.md` was written with**, before
     /// §2 added a point to every product line so a badge would fit on it. The
@@ -564,7 +557,7 @@ enum PanelMetrics {
             + CGFloat(productCount) * footerCaptionHeight
             + CGFloat(windowCount) * footerWindowRowHeight
             + CGFloat(productCount - 1) * footerCaptionHeight
-            + footerBottomMargin
+            + footerCaptionBottomMargin
     }
 
     /// The same height, asked of the rules themselves.

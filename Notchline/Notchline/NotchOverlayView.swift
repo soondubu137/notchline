@@ -916,9 +916,10 @@ private struct ExpandedPanelFooter: View {
                         .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
                 }
             }
-
-            Spacer(minLength: 0)
         }
+        .padding(.bottom, store.isQuotaExpanded
+            ? PanelMetrics.footerCaptionBottomMargin
+            : PanelMetrics.footerBottomMargin)
         .frame(maxWidth: .infinity)
         .frame(height: store.expandedFooterHeight, alignment: .top)
     }
