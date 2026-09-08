@@ -941,3 +941,16 @@ The opened quota footer now shares the collapsed caption's **15 pt** bottom
 clearance. Its height is **`19W + 28P + 42`**, 9 pt taller; the collapsed
 footer stays **38 pt**. This supersedes the earlier footer heights above;
 see [the quota footer specification](quota-footer-v2.md#quota-footer-bottom-clearance-2026-09-07).
+
+### Expansion and collapse move as one surface (2026-09-07)
+
+The background, header and body share one geometry group. AppKit alone animates
+the window bounds; SwiftUI applies no second geometry animation to the root or
+header. The body's opacity uses the shared `200 ms` curve and
+loses the independent `−6 pt` insertion offset. Lists and footer controls follow
+the current body width rather than switching early to the destination width.
+The body stays mounted through its closing fade and is removed afterwards;
+reopening cancels that removal. It takes no interaction while closing.
+Hover dwells, top attachment and final dimensions are unchanged.
+Apple documents the grouping behaviour in
+[`geometryGroup()`](https://developer.apple.com/documentation/swiftui/view/geometrygroup()).

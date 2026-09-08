@@ -2,8 +2,67 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// The width being drawn by the window, rather than the store's destination.
+/// Nil lets standalone onboarding specimens retain their chosen store width.
+private struct OverlayBodyWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    var overlayBodyWidth: CGFloat? {
+        get { self[OverlayBodyWidthKey.self] }
+        set { self[OverlayBodyWidthKey.self] = newValue }
+    }
+}
+
+/// Keep the same live layout through the fade instead of asking SwiftUI to
+/// retain a removed subtree with its old geometry. No work remains when shut.
+@MainActor
+final class OverlayBodyPresentation: ObservableObject {
+    @Published private(set) var isMounted = false
+    private let clock: any MonitorClock
+    private var removal: Task<Void, Never>?
+    private var revision = 0
+
+    init(clock: any MonitorClock = SystemMonitorClock()) { self.clock = clock }
+
+    deinit { removal?.cancel() }
+
+    func setExpanded(_ expanded: Bool) {
+        revision += 1
+        removal?.cancel()
+        removal = nil
+        if expanded {
+            isMounted = true
+            return
+        }
+        guard isMounted else { return }
+        let expectedRevision = revision
+        let clock = clock
+        removal = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            do { try await clock.sleep(seconds: PanelMotion.duration) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.revision == expectedRevision else { return }
+                self.isMounted = false
+                self.removal = nil
+            }
+        }
+    }
+
+    func cancel() {
+        revision += 1
+        removal?.cancel()
+        removal = nil
+        isMounted = false
+    }
+}
+
 struct NotchOverlayView: View {
     @EnvironmentObject private var store: MonitorStore
+    @StateObject private var bodyPresentation = OverlayBodyPresentation()
 
     var body: some View {
         GeometryReader { proxy in
@@ -18,14 +77,16 @@ struct NotchOverlayView: View {
                     OverlayHeader()
                         .frame(height: store.compactHeight)
 
-                    if store.isExpanded, !store.expandsToPillOnly {
+                    if (store.isExpanded || bodyPresentation.isMounted),
+                       !store.expandsToPillOnly {
                         ExpandedPanelContent()
-                            .transition(
-                                .asymmetric(
-                                    insertion: .opacity.combined(with: .offset(y: -6)),
-                                    removal: .opacity
-                                )
-                            )
+                            .transaction { transaction in
+                                if !store.isExpanded { transaction.animation = nil }
+                            }
+                            .opacity(store.isExpanded ? 1 : 0)
+                            .animation(PanelMotion.animation, value: store.isExpanded)
+                            .allowsHitTesting(store.isExpanded)
+                            .accessibilityHidden(!store.isExpanded)
                     }
                 }
                 // The window is one shoulder wider than the panel on each side,
@@ -48,16 +109,21 @@ struct NotchOverlayView: View {
                         store.pointerExitedPanel()
                     }
                 }
-                .animation(contentAnimation, value: store.isExpanded)
             }
+            // AppKit already animates these bounds. Resolve surface and
+            // content together without a second SwiftUI geometry animation;
+            // only the body's opacity has its own transition.
+            .geometryGroup()
+            .environment(\.overlayBodyWidth,
+                         max(0, proxy.size.width - store.surfaceShoulderRadius * 2))
         }
         .clipped()
+        .onChange(of: store.isExpanded, initial: true) { _, expanded in
+            bodyPresentation.setExpanded(expanded)
+        }
+        .onDisappear { bodyPresentation.cancel() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(panelAccessibilityLabel)
-    }
-
-    private var contentAnimation: Animation {
-        PanelMotion.animation
     }
 
     private var panelAccessibilityLabel: String {
@@ -402,17 +468,10 @@ private struct OverlayHeader: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(.white)
         .contentShape(Rectangle())
-        .animation(headerAnimation, value: store.isExpanded)
     }
 
     private var horizontalPadding: CGFloat {
         PanelMetrics.expandedHorizontalPadding
-    }
-
-    private var headerAnimation: Animation {
-        // The same curve the window resizes on and the same one the status
-        // label hands its reading over on: the three are one movement.
-        PanelMotion.animation
     }
 }
 
@@ -689,19 +748,20 @@ private func legacyScrollerGutter(isScrolling: Bool) -> CGFloat {
 /// laying out the list itself rather than the metric behind it.
 struct ActiveSessionList: View {
     @EnvironmentObject private var store: MonitorStore
+    @Environment(\.overlayBodyWidth) private var overlayBodyWidth
 
     @State private var scrollOffset: CGFloat = 0
 
     /// The full lane the list stands in, rail included: what the rail is
     /// aligned inside and what the row block gives part of back.
     private var laneWidth: CGFloat {
-        PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)
+        PanelMetrics.sessionViewportWidth(panelWidth: overlayBodyWidth ?? store.currentPanelSize.width)
     }
 
     /// And what is left for the rows once the rail has taken its lane.
     private var viewportWidth: CGFloat {
         PanelMetrics.sessionViewportWidth(
-            panelWidth: store.currentPanelSize.width,
+            panelWidth: overlayBodyWidth ?? store.currentPanelSize.width,
             isScrolling: isScrolling
         )
     }
@@ -823,16 +883,17 @@ struct ActiveSessionList: View {
 /// the section the panel draws, not a picture of one.
 struct RecentSessionSection: View {
     @EnvironmentObject private var store: MonitorStore
+    @Environment(\.overlayBodyWidth) private var overlayBodyWidth
 
     @State private var scrollOffset: CGFloat = 0
 
     private var laneWidth: CGFloat {
-        PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)
+        PanelMetrics.sessionViewportWidth(panelWidth: overlayBodyWidth ?? store.currentPanelSize.width)
     }
 
     private var viewportWidth: CGFloat {
         PanelMetrics.sessionViewportWidth(
-            panelWidth: store.currentPanelSize.width,
+            panelWidth: overlayBodyWidth ?? store.currentPanelSize.width,
             isScrolling: isScrolling
         )
     }
@@ -902,6 +963,7 @@ struct RecentSessionSection: View {
 /// thing that can change the footer's height is somebody opening the table.
 private struct ExpandedPanelFooter: View {
     @EnvironmentObject private var store: MonitorStore
+    @Environment(\.overlayBodyWidth) private var overlayBodyWidth
 
     @State private var isHovered = false
 
@@ -944,7 +1006,7 @@ private struct ExpandedPanelFooter: View {
             )
         }
         .buttonStyle(SessionRowButtonStyle())
-        .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width))
+        .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: overlayBodyWidth ?? store.currentPanelSize.width))
         .frame(height: PanelMetrics.recentSeamHeight)
         // **Centred on the panel, open or shut.** The line is as wide as the
         // seam is and the seam is centred in the panel's own width; left to
@@ -2673,6 +2735,7 @@ struct OptionRow: View {
 /// over-full queue is drawn exactly like a full one.
 private struct RecentSeam: View {
     @EnvironmentObject private var store: MonitorStore
+    @Environment(\.overlayBodyWidth) private var overlayBodyWidth
 
     @State private var isHovered = false
 
@@ -2685,7 +2748,7 @@ private struct RecentSeam: View {
             SeamContent(count: count, isHovered: isHovered)
         }
         .buttonStyle(SessionRowButtonStyle())
-        .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width))
+        .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: overlayBodyWidth ?? store.currentPanelSize.width))
         .frame(height: PanelMetrics.recentSeamHeight)
         .onHover { isHovered = $0 }
         .accessibilityLabel("Recent, \(count) session\(count == 1 ? "" : "s")")

@@ -2479,13 +2479,13 @@ enum MatrixDissolve {
 
 /// The one curve this overlay opens, closes and hands text over on.
 ///
-/// The window, the header and the labels inside it all move together, and a
-/// label that dissolves one reading into another has to be finished exactly as
+/// The AppKit window and opacity transitions use the same curve. SwiftUI
+/// does not animate the window's geometry again; a reading finishes fading as
 /// the width animating underneath it settles. `0.20` and `(0.22, 1, 0.36, 1)`
 /// used to be written out separately in each of those three places, which is
 /// how they were free to drift apart; this is the single declaration they read
-/// from, in the two forms the surface needs — SwiftUI lays out the header, and
-/// Core Animation drives the window and the layer-backed labels.
+/// from, in the forms the surface needs: SwiftUI transitions, AppKit's window
+/// resize and the Core Animation labels.
 enum PanelMotion {
     static let duration: TimeInterval = 0.20
 

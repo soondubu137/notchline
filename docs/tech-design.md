@@ -1050,6 +1050,21 @@ The test became **a visible product no longer listing it**: that product is `isC
 
 Geometry remains the existing AppKit overlay's: it uses the full `NSScreen.frame`, every intermediate frame keeps the same `maxY`, and the top height comes from the target display's panel band — the cut-out on a notched display, the menu bar band on every other (`figma-design.md` §3.5). Horizontally the expanded form locks `midX` while the notched collapsed form anchors to the cut-out's right edge, with the window leaving one corner radius of shoulder on each side of the body (`figma-design.md` §3.4). Three visible session rows give a total expanded height of `panelHeight + 270` (`240` viewport + `30` footer), and empty/global states `panelHeight + 78` (`48` body + `30` footer) — so at the `46 pt` reference those are `316` and `124`, and a notch-less `24 pt` menu bar with three rows is `294`.
 
+Expansion and collapse keep AppKit as the sole window-frame animation owner.
+`NotchOverlayView` groups the surface and content with `geometryGroup()` but
+applies the shared `PanelMotion` animation only to the body's opacity.
+`OverlayBodyPresentation` keeps that body mounted for the fade, then removes it
+with one cancellable cleanup task; reopening supersedes the task. Closing
+content is non-interactive and absent from accessibility. No hidden list or
+cleanup task remains after collapse.
+The root and header do not interpolate the already animated bounds again.
+The root passes its actual body width through `EnvironmentValues.overlayBodyWidth`
+to the lists and footer; `store.currentPanelSize` remains the destination.
+A standalone specimen without this environment value uses its store's chosen
+width. This is presentation geometry, with no new polling source or monitoring
+state projection. Release measurements and rejected alternatives are in
+`system-architecture.md` §6.
+
 ## 18. Phase 0 verification plan
 
 1. **Versions and schema**: record the Desktop and embedded CLI versions, generate and read the official schema, and build unknown-field compatibility fixtures.

@@ -516,6 +516,82 @@ Conversely, **steady-state cost reads accurately on `ps %cpu`**, which is how th
 
 So: `ps %cpu` for steady state, cumulative CPU time for bursts. Choosing the wrong tool produces the false conclusion that there is no cost left.
 
+### Expansion and collapse have one geometry animation (2026-09-07)
+
+The window owns the resize. Sharing `PanelMotion`'s curve did not make
+SwiftUI's independently interpolated header, body and background one object:
+in a cropped Release recording, text and controls moved independently of the
+surface. The body also entered with its own `−6 pt` offset.
+
+`NotchOverlayView` groups the surface and content with `geometryGroup()` and
+**does not apply a SwiftUI geometry animation to either the root or header**.
+Only the body's opacity carries an explicit expansion/collapse animation. Animating
+the root as well as the window was rejected: even with a shared geometry group,
+the disappearing body could still drift inside the shrinking surface. One
+framework owns intermediate geometry; the other draws the bounds it receives.
+
+A SwiftUI removal transition also retained a subtree whose layout could drift
+while the surrounding window narrowed. `OverlayBodyPresentation` instead keeps
+the same live body mounted during its fade and unmounts it after `PanelMotion.duration`.
+A cancellable, revision-guarded task performs that one cleanup, explicitly on
+the main actor. Reopening cancels it; disappearance cancels it and releases the
+body immediately. The closing body takes no clicks and is hidden from
+accessibility. The closed panel retains no list and schedules no body work.
+
+The expanded list, Recent section and footer also used `store.currentPanelSize`
+for their widths. That is the **destination**, so the content laid itself out
+wide before an opening window arrived, and narrow as soon as collapse began,
+while its removal transition was still visible. The root now passes its actual
+body width through `EnvironmentValues.overlayBodyWidth`; these views use that
+presentation geometry. Standalone onboarding specimens keep their previous
+store-based width when the environment value is absent. `OverlayGeometryTests`
+checks the rendered live list at intermediate widths across both state changes
+and checks the standalone fallback. It also checks fade-lifetime retention,
+reopening cancellation and disappearance cleanup with the test clock.
+
+The `200 ms` curve, hover dwells, window-frame driver, pointer reconciliation,
+final geometry and layer-backed persistent motion are unchanged. There is no
+resident timer, display link, snapshot cache or continuously animated SwiftUI
+view; the single pending cleanup exists only during collapse.
+Apple describes why a geometry group keeps subviews together in
+[`geometryGroup()`](https://developer.apple.com/documentation/swiftui/view/geometrygroup()).
+
+**Release measurement:** the same isolated overlay fixture, two visible Threads
+(one Running and one Input needed), no monitoring services, on the built-in
+notched display at a `38 pt` band. Each run warmed for two seconds, measured
+20 seconds collapsed, then alternated 60 expansions/collapses at 0.5-second
+intervals by changing `isExpanded` directly. Pointer callbacks and resize
+reconciliation were disabled in both fixtures so a stationary pointer could
+not override the sequence; hover dwell time is not part of the CPU figure.
+CPU is the difference in `getrusage(RUSAGE_SELF)` user plus system
+time; the transition figure subtracts the same run's idle rate. The final
+baseline/candidate pair ran sequentially without recording or compiling
+alongside it.
+
+| Version | Idle CPU, 20 s | Net CPU per transition |
+| --- | --- | --- |
+| Before | 0.145 s | 86.89 ms |
+| Presented widths and live-body fade | 0.148 s | 86.48 ms |
+
+The final pair is effectively unchanged: **86.89 → 86.48 ms per transition**.
+Idle CPU differs by 0.003 s per 20 seconds, about 0.02 percentage points of one
+core. These samples show comparable cost, not a speed-up or a guarantee of
+identical CPU use. The temporary body lifetime leaves no work behind when the
+panel is shut. Screen recording was a separate visual check: titles and
+controls kept their panel-edge insets in both directions, without the earlier
+sideways drift during removal. This fixture does not measure whole-system
+GPU/WindowServer energy, hardware vertical synchronisation or every external
+display.
+
+**Rejected:** replacing the existing frame driver with
+`NSAnimationContext.animate` brought no demonstrated cost advantage in the
+initial screening run (88.7 ms per transition, against that run series' original
+77.7 ms); its use of the same SwiftUI animation type alone did not justify a
+window-driver change. Those unpaired screening values are not the controlled
+comparison above. Keeping the window driver also preserves its existing
+interruption and delayed-wing behaviour. No non-public Codex dependency was
+added or changed.
+
 ### The migrated mechanism is not bound to the current design
 
 The indicator hands the SVG's `<animate values="…">` list straight to a `CAKeyframeAnimation` — linear calculation mode spreads N values across N−1 intervals, which is SMIL's own rule, so the curve is unchanged and only the evaluation moved to the render server. The label rasterises its glyphs once and lets Core Animation push a gradient mask across a highlighted copy; session rows additionally take over the trailing fade as their own layer mask, because SwiftUI's `.mask` over an AppKit host view is not reliable.
