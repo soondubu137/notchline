@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/platform-macOS%2026.5%2B-lightgrey" alt="macOS 26.5 or later">
   <img src="https://img.shields.io/badge/built%20with-SwiftUI%20%2B%20AppKit-orange" alt="SwiftUI and AppKit">
   <img src="https://img.shields.io/badge/status-in%20development-yellow" alt="In development">
-  <img src="https://img.shields.io/badge/version-0.2.1-blue" alt="Version 0.2.1">
+  <img src="https://img.shields.io/badge/version-0.2.2-blue" alt="Version 0.2.2">
   <img src="https://img.shields.io/badge/licence-GPL--3.0--or--later-green" alt="Licensed under GPL 3.0 or later">
 </p>
 **Notchline keeps coding agent activity reachable at your Mac’s notch.**
@@ -112,6 +112,6 @@ Introduce tiered support for more coding agents: a shared monitoring core for Tu
 
 A solo side project in active development.
 
-## License
+## Licence
 
 Copyright © 2026 Yinfeng Lu. Licensed under [GPL-3.0-or-later](LICENSE), without warranty. See [LICENSE](LICENSE) for the full terms.

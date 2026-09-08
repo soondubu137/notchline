@@ -4,6 +4,23 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.2.2 Alpha — 2026-09-07
+
+**The licence travels with the app.** `0.2.1` put the source under the GPL and said so in the README, which is everything somebody who takes a clone needs. It said nothing to somebody handed the built app: the bundle carried neither a copyright line nor a copy of the terms, and both are asked for wherever the program itself is conveyed.
+
+### Added
+
+- **The bundle carries its copyright notice.** `NSHumanReadableCopyright` was empty in every configuration, so Finder's Get Info and the standard About panel had nothing to draw under the name. It now reads `Copyright © 2026 Yinfeng Lu. Licensed under GPL-3.0-or-later, without warranty.` — the same sentence the README's licence section uses, so the app and the repository say one thing.
+- **`LICENSE` ships inside the app.** The FSF's verbatim text is copied to `Notchline.app/Contents/Resources/LICENSE`, the first entry the app target's resources phase has ever carried. A downloaded `.app` now holds the terms it is offered under instead of pointing at a repository the person holding it may never open.
+
+### Changed
+
+- **The README's licence section is a single notice.** It named the licence and then spent a sentence spelling out in its own words what that buys; the terms themselves say it, and saying it twice invites the two to drift apart. What is left is the holder, the licence, the absence of warranty and a link to the full text. The heading is `Licence` again, matching the badge above it and the spelling the rest of the documentation uses.
+
+### Known limitations
+
+Everything listed under `0.2.1` and earlier still stands, unchanged.
+
 ## 0.2.1 Alpha — 2026-09-07
 
 **A licence, and a README that opens on the notch.** No behaviour changed; what changed is what somebody is allowed to do with the source, and what they see before they read a word of it.
