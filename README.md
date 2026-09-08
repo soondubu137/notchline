@@ -74,7 +74,7 @@ Product adapters collect local hook events and metadata, reduce them into sessio
 
 ## Next steps
 
-Introduce tiered support for more coding agents: a shared monitoring core for Turn starts and endings, with optional product-specific capabilities such as wait detection, previews, read state, quota and answers. Products can add these capabilities independently while sharing the same lifecycle rules. See the [tiered support plan](docs/technical-explorations/multi-product-provider-architecture/README.md).
+Introduce tiered support for more coding agents: a shared monitoring core for Turn starts and endings, with optional product-specific capabilities such as wait detection, previews, navigation, read state, subagents, quota, and answers. Products can add these capabilities independently while sharing the same lifecycle rules. See the [tiered support plan](docs/technical-explorations/multi-product-provider-architecture/README.md).
 
 ## Comparison with Open Island
 
