@@ -36,26 +36,36 @@ import Testing
 
 @MainActor
 struct AnatomyFigureRenderer {
-    /// A display that is not a display: a `46` pt menu bar and no notch, so
-    /// both figures draw the self-contained pill rather than a shape that only
-    /// reads wrapped around a cut-out.
-    static let display = DisplayOption(
-        id: "anatomy",
-        displayID: nil,
-        ordinal: 1,
-        name: "Anatomy",
-        frame: NSRect(x: 0, y: 0, width: 1440, height: 900),
-        visibleFrame: NSRect(
-            x: 0,
-            y: 0,
-            width: 1440,
-            height: 900 - PanelMetrics.referenceCompactHeight
-        ),
-        safeAreaInsets: NSEdgeInsets(),
-        auxiliaryTopLeftArea: nil,
-        auxiliaryTopRightArea: nil,
-        fallbackMenuBarHeight: PanelMetrics.referenceCompactHeight
-    )
+    /// A display that is not a display: no notch, so both figures draw the
+    /// self-contained pill rather than a shape that only reads wrapped around a
+    /// cut-out.
+    ///
+    /// The bar height is the figure's own. `panelBandHeight` on a display with
+    /// no cut-out is its menu bar, so it is set by the visible frame and by the
+    /// fallback together.
+    static func display(bandHeight: CGFloat) -> DisplayOption {
+        DisplayOption(
+            id: "anatomy-\(Int(bandHeight))",
+            displayID: nil,
+            ordinal: 1,
+            name: "Anatomy",
+            frame: NSRect(x: 0, y: 0, width: 1440, height: 900),
+            visibleFrame: NSRect(x: 0, y: 0, width: 1440, height: 900 - bandHeight),
+            safeAreaInsets: NSEdgeInsets(),
+            auxiliaryTopLeftArea: nil,
+            auxiliaryTopRightArea: nil,
+            fallbackMenuBarHeight: bandHeight
+        )
+    }
+
+    /// The pill is drawn on a `32` pt bar. At the `46` pt reference it is `241`
+    /// wide and `46` tall, which reads as a slab rather than as something that
+    /// hugs a menu bar; the width is composed from the wing and the reading and
+    /// does not move with the height, so the whole of the change is proportion.
+    static let compactDisplay = display(bandHeight: 32)
+    /// The panel keeps the reference bar, which is what its band is measured at
+    /// everywhere else in the documents.
+    static let panelDisplay = display(bandHeight: PanelMetrics.referenceCompactHeight)
 
     // MARK: - The staged moment
 
@@ -82,7 +92,7 @@ struct AnatomyFigureRenderer {
                 agent: .codex,
                 threadID: "anatomy-approval-thread",
                 turnID: "anatomy-approval-turn",
-                projectName: "acme-web",
+                projectName: "notchline",
                 title: "Rebuild the checkout bundle",
                 preview: "Ready to run the production build.",
                 status: .approvalNeeded,
@@ -171,7 +181,8 @@ struct AnatomyFigureRenderer {
     static func store(
         isExpanded: Bool,
         buriedFinish: Bool,
-        at now: Date
+        at now: Date,
+        on display: DisplayOption
     ) -> MonitorStore {
         let rows = sessions(at: now, buriedFinish: buriedFinish)
         let quotas = quota(at: now)
@@ -276,7 +287,13 @@ struct AnatomyFigureRenderer {
         // runs; pinning the appearance keeps a figure from changing with
         // whatever the machine rendering it happens to be set to.
         window.appearance = NSAppearance(named: .darkAqua)
-        window.orderFront(nil)
+        // **The window is never ordered in.** It exists to give the hosting
+        // view an appearance and a backing scale; `cacheDisplay` draws the view
+        // tree itself and does not need it on screen -- the figure is byte for
+        // byte the same either way. Ordering it front cost 27 failures
+        // elsewhere in the suite, on the tests that synthesise events at their
+        // own offscreen hosting views: a real window in front of them takes the
+        // hit that was meant for theirs.
         host.layoutSubtreeIfNeeded()
         // Turns of the loop, so SwiftUI has committed a layout pass and the
         // lists have filled before anything is cached out of them.
@@ -286,7 +303,6 @@ struct AnatomyFigureRenderer {
 
         let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)
-        window.orderOut(nil)
 
         let data = try #require(rep.representation(using: .png, properties: [:]))
         try data.write(to: url)
@@ -322,7 +338,12 @@ struct AnatomyFigureRenderer {
 
         // The collapsed pill: the mark, the counts, the Project, the dot for a
         // finished turn nobody has read, and the longest running turn.
-        let compact = Self.store(isExpanded: false, buriedFinish: true, at: now)
+        let compact = Self.store(
+            isExpanded: false,
+            buriedFinish: true,
+            at: now,
+            on: Self.compactDisplay
+        )
         let compactSize = CGSize(
             width: compact.currentPanelSize.width + compact.surfaceShoulderRadius * 2,
             height: compact.currentPanelSize.height
@@ -338,7 +359,12 @@ struct AnatomyFigureRenderer {
         // moment the pill is: the counts on the two figures are one reading,
         // and the fourth row -- the finished one the pill's dot speaks for --
         // is the one the rail says is below.
-        let panel = Self.store(isExpanded: true, buriedFinish: true, at: now)
+        let panel = Self.store(
+            isExpanded: true,
+            buriedFinish: true,
+            at: now,
+            on: Self.panelDisplay
+        )
         panel.stageSpecimenQueue(Self.departures(at: now))
         panel.isRecentExpanded = true
         panel.isQuotaExpanded = true

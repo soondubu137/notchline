@@ -288,6 +288,19 @@ struct AnatomyAnchors {
 
     var buriedDotTop: CGFloat { matrixMidY - PanelMetrics.buriedFinishDotSize / 2 }
 
+    /// The bottom of a single line of text centred in the band — its baseline,
+    /// since neither reading the pill draws has a descender below it.
+    ///
+    /// SwiftUI centres the *line box*, not the cap, so the baseline sits half
+    /// the box's own asymmetry below the middle. Both readings are `13` pt
+    /// Light: the timer's monospaced-digit face is the same font with tabular
+    /// figures on, and carries the same ascender and descender, so one figure
+    /// serves the pair.
+    var readingGlyphBottom: CGFloat {
+        let font = PanelMetrics.projectNameFont
+        return matrixMidY + (font.ascender + font.descender) / 2
+    }
+
     // MARK: The expanded panel
 
     /// The gear's own glyph, not the `32` pt button around it: `gearshape` at
@@ -321,6 +334,10 @@ struct AnatomyAnchors {
             + PanelMetrics.sessionViewportWidth(panelWidth: bodyWidth)
             - PanelMetrics.sessionRowPadding
     }
+
+    /// A retired row's age. The Recent queue has its own viewport and its own
+    /// rail, and three rows do not fill five, so it keeps the whole lane.
+    var retiredAgeRight: CGFloat { seamChevronRight }
 
     /// The rail stands on the panel's own `12` pt inset and never in it.
     var railLeft: CGFloat { trailingEdge - PanelMetrics.scrollRailWidth }
@@ -567,7 +584,7 @@ struct ReadmeAnatomyCard: View {
                 id: 4,
                 text: "The project being worked on",
                 side: .below,
-                target: CGPoint(x: a.projectNameX * s, y: a.band * s),
+                target: CGPoint(x: a.projectNameX * s, y: a.readingGlyphBottom * s),
                 stem: 20 + Self.stackedRowStep
             ),
             AnatomyCallout(
@@ -581,7 +598,7 @@ struct ReadmeAnatomyCard: View {
                 id: 6,
                 text: "The longest running turn",
                 side: .below,
-                target: CGPoint(x: a.timerX * s, y: a.band * s),
+                target: CGPoint(x: a.timerX * s, y: a.readingGlyphBottom * s),
                 stem: 20
             )
         ]
@@ -686,13 +703,27 @@ struct ReadmeAnatomyCard: View {
             ),
             AnatomyCallout(
                 id: 13,
+                text: "Product, project and title",
+                side: .leading,
+                target: CGPoint(x: a.rowTextLeft, y: a.retiredRowY(1)),
+                stem: 26
+            ),
+            AnatomyCallout(
+                id: 14,
+                text: "How long ago it left",
+                side: .trailing,
+                target: CGPoint(x: a.retiredAgeRight, y: a.retiredRowY(1)),
+                stem: 26
+            ),
+            AnatomyCallout(
+                id: 15,
                 text: "Tokens spent today",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.spendY),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 14,
+                id: 16,
                 text: "Each product's own\nquota windows",
                 side: .leading,
                 target: CGPoint(x: a.windowLineLeft, y: a.windowLineY),
