@@ -56,28 +56,32 @@ struct ReadmeAnsweringCard: View {
     let staged: ApprovalSpecimens.Staged
 
     static let padding = ReadmeAnatomyCard.padding
-    /// Between the two plates. They are the panel's own width, so the page is
-    /// wide and the gutter between them does not need to be.
+    /// Between the two plates. They are the panel's own width, and the two of
+    /// them plus this is what sets ``ReadmeAnatomyCard/pageWidth``.
     static let plateGap: CGFloat = 32
-    static let titleGap: CGFloat = 28
-
-    static let titleFont = Font.system(size: 17, weight: .semibold)
+    static let titleGap = ReadmeAnatomyCard.captionGap
 
     private var plates: [MonitorStore] { [staged.command, staged.series] }
 
+    /// The page both figures share, which this one is what sets.
     static func width(_ staged: ApprovalSpecimens.Staged) -> CGFloat {
-        let card = ReadmeAnsweringCard(staged: staged)
-        let widths = card.plates.map { OpenRowPlate(store: $0).size.width }
-        return widths.reduce(0, +)
-            + plateGap * CGFloat(max(widths.count - 1, 0))
-            + padding * 2
+        ReadmeAnatomyCard.pageWidth
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.titleGap) {
-            Text("Answering in the notch")
-                .font(Self.titleFont)
-                .foregroundStyle(AnatomyCardStyle.caption)
+            // The anatomy figure's own caption pair, at the same sizes: the two
+            // figures are siblings on the README, and a heading a couple of
+            // points larger here would have made this one look like the parent
+            // of the other.
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Answering in the notch")
+                    .font(AnatomyCardStyle.captionFont)
+                    .foregroundStyle(AnatomyCardStyle.caption)
+                Text("A request opens in the row that reported it, and is answered there.")
+                    .font(AnatomyCardStyle.captionDetailFont)
+                    .foregroundStyle(AnatomyCardStyle.captionDetail)
+            }
 
             // Centred against each other rather than hung from one line. Two
             // requests are never this size at once anyway — a panel draws one

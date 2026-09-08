@@ -69,7 +69,13 @@ enum AnatomyCardStyle {
     /// The clear space between a leader's end and the first glyph of its label.
     static let labelGap: CGFloat = 8
     /// How much room a label column is given. Two-line labels wrap inside it.
-    static let labelColumn: CGFloat = 168
+    ///
+    /// `270` rather than `168` since the two figures took a shared page width:
+    /// the room that buys goes to the labels, and every one of them now stands
+    /// on a single line. It is bounded by the trailing column, which has the
+    /// less of the two margins — `274` before a label would reach past the
+    /// page's own padding.
+    static let labelColumn: CGFloat = 270
     static let stackedLabelColumn: CGFloat = 190
 }
 
@@ -434,20 +440,51 @@ struct ReadmeAnatomyCard: View {
     let compact: MonitorStore
     let expanded: MonitorStore
 
-    /// The pill is `241.5 × 46`, which is too small an object to name six parts
-    /// around. It is drawn at twice its size — the same drawing at the same
-    /// proportions, with the labels given room to stand apart.
-    static let compactScale: CGFloat = 2
+    /// The pill is `238 × 32`, which is too small an object to name six parts
+    /// around, and too narrow to sit under the panel without leaving a third of
+    /// its row empty. It is drawn at **the panel's own width** — the same
+    /// drawing at the same proportions — so the two specimens share a left and
+    /// a right edge and the page reads as a grid rather than as two figures
+    /// that happen to be stacked.
+    private var compactScale: CGFloat {
+        expandedAnchors.windowWidth / compactAnchors.windowWidth
+    }
 
     static let padding: CGFloat = 56
-    /// The room a figure's labels stand in, either side of the specimen.
+
+    /// The width both README figures are drawn at.
     ///
-    /// Asymmetric, because the labels are: the leading column is right-aligned
-    /// and hugs the drawing, so its longest label reaches `184` out from the
-    /// panel, while the trailing column is left-aligned and its longest reaches
-    /// `144`. One figure for both left the page visibly heavier on the left.
-    static let leadingMargin: CGFloat = 192
-    static let trailingMargin: CGFloat = 156
+    /// **Set by the answering figure, which cannot be narrower.** Two request
+    /// plates side by side are twice the panel's own width whatever else
+    /// happens, so a page that holds them is `1364`; drawing the anatomy at
+    /// anything less would put the two figures on the README at two widths and
+    /// two scales, and a reader comparing a plate with the panel it opens on
+    /// would be comparing two zoom levels.
+    static let pageWidth: CGFloat = 1364
+
+    /// The room a figure's labels stand in, either side of the specimen: what
+    /// the page has left once the widest specimen has taken its share.
+    ///
+    /// Split `55 : 45`, because the labels are: the leading column is
+    /// right-aligned and hugs the drawing while the trailing column is
+    /// left-aligned and its longest label is shorter. One figure for both left
+    /// the page visibly heavier on the left.
+    static func margins(specimenWidth: CGFloat) -> (leading: CGFloat, trailing: CGFloat) {
+        let slack = max(0, pageWidth - padding * 2 - specimenWidth)
+        // `47 : 53`, measured against the labels themselves rather than
+        // guessed: with both columns at ``AnatomyCardStyle/labelColumn`` and
+        // every label on one line, the longest trailing label is the longer of
+        // the two, so the page balances a little the other way from the split
+        // the narrow columns wanted.
+        return (leading: slack * 0.47, trailing: slack * 0.53)
+    }
+
+    /// One margin pair for both figures, taken from the wider of the two
+    /// specimens — so the pill and the panel stand on one left edge rather than
+    /// each being centred on a block of its own.
+    private var margins: (leading: CGFloat, trailing: CGFloat) {
+        Self.margins(specimenWidth: max(compactSize.width, expandedSize.width))
+    }
     /// And above and below it, for the labels that stand there. The panel
     /// carries none below it and gives that room back.
     static let stackMargin: CGFloat = 46
@@ -464,8 +501,8 @@ struct ReadmeAnatomyCard: View {
 
     private var compactSize: CGSize {
         CGSize(
-            width: compactAnchors.windowWidth * Self.compactScale,
-            height: compactAnchors.band * Self.compactScale
+            width: compactAnchors.windowWidth * compactScale,
+            height: compactAnchors.band * compactScale
         )
     }
 
@@ -476,11 +513,9 @@ struct ReadmeAnatomyCard: View {
         )
     }
 
-    /// One width for the page: whichever figure needs more, margins included.
+    /// One width for the page, shared with the answering figure.
     static func width(compact: MonitorStore, expanded: MonitorStore) -> CGFloat {
-        let card = ReadmeAnatomyCard(compact: compact, expanded: expanded)
-        let widest = max(card.compactSize.width, card.expandedSize.width)
-        return widest + leadingMargin + trailingMargin + padding * 2
+        pageWidth
     }
 
     var body: some View {
@@ -492,9 +527,9 @@ struct ReadmeAnatomyCard: View {
                 callouts: compactCallouts,
                 margin: EdgeInsets(
                     top: Self.stackMargin,
-                    leading: Self.leadingMargin,
+                    leading: margins.leading,
                     bottom: Self.stackMargin + Self.stackedRowStep,
-                    trailing: Self.trailingMargin
+                    trailing: margins.trailing
                 )
             ) {
                 NotchOverlayView()
@@ -503,7 +538,7 @@ struct ReadmeAnatomyCard: View {
                         width: compactAnchors.windowWidth,
                         height: compactAnchors.band
                     )
-                    .scaleEffect(Self.compactScale, anchor: .topLeading)
+                    .scaleEffect(compactScale, anchor: .topLeading)
                     .frame(
                         width: compactSize.width,
                         height: compactSize.height,
@@ -519,9 +554,9 @@ struct ReadmeAnatomyCard: View {
                 callouts: expandedCallouts,
                 margin: EdgeInsets(
                     top: Self.stackMargin,
-                    leading: Self.leadingMargin,
+                    leading: margins.leading,
                     bottom: 0,
-                    trailing: Self.trailingMargin
+                    trailing: margins.trailing
                 )
             ) {
                 NotchOverlayView()
@@ -561,7 +596,7 @@ struct ReadmeAnatomyCard: View {
                 margin: margin,
                 specimen: specimen
             )
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -570,7 +605,7 @@ struct ReadmeAnatomyCard: View {
 
     private var compactCallouts: [AnatomyCallout] {
         let a = compactAnchors
-        let s = Self.compactScale
+        let s = compactScale
         return [
             AnatomyCallout(
                 id: 1,
@@ -672,14 +707,14 @@ struct ReadmeAnatomyCard: View {
             ),
             AnatomyCallout(
                 id: 7,
-                text: "Answer an approval\nwithout leaving",
+                text: "Answer an approval without leaving",
                 side: .trailing,
                 target: CGPoint(x: a.rowTextRight, y: a.rowTitleY(0)),
                 stem: 26
             ),
             AnatomyCallout(
                 id: 8,
-                text: "How long the turn\nhas been running",
+                text: "How long the turn has been running",
                 side: .trailing,
                 target: CGPoint(x: a.rowTextRight, y: a.rowTitleY(1)),
                 stem: 26
@@ -737,7 +772,7 @@ struct ReadmeAnatomyCard: View {
             ),
             AnatomyCallout(
                 id: 16,
-                text: "Each product's own\nquota windows",
+                text: "Each product's own quota windows",
                 side: .leading,
                 target: CGPoint(x: a.windowLineLeft, y: a.windowLineY),
                 stem: 34
