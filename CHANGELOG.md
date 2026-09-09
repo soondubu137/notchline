@@ -4,19 +4,28 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
-## Unreleased
+## 0.2.4 Alpha — 2026-09-09
+
+**The app can say what it is, and a blank quota rule can say why it is blank.** A second control on the band opens the first region here that reports on this application rather than on the work passing through it — name, version, licence, repository. Underneath it, Claude Code's two rules had gone blank on a machine using Claude Code all day, and the app was right to draw them that way.
 
 ### Added
 
-- **The panel can say what it is.** The band's trailing side takes a second control — the Notchline mark, left of the gear — and it replaces everything under the band with a fixed-height panel carrying the horizontal lockup, `Version 0.2.3 Alpha (7)`, the bundle's own licence notice and a `Check for Updates` control. Nothing running moves its height, collapsing does not close it, and only the mark does. The control does nothing yet: no update mechanism is wired in. (`docs/panel-v2.md`.)
-
-### Fixed
-
-- **Claude Code's quota rules had gone blank, and now say why when they cannot be drawn.** `claude -p "/usage"` prints the windows only when the CLI itself is signed in; a Claude Desktop-only machine has no CLI credential, so the same run answered with its session cost and every rule read `--` with nothing anywhere saying so. The footer's diagnostic now names `claude auth login`. (`docs/adr/0021-read-the-quota-from-the-record-the-command-leaves.md`.)
+- **The panel can say what it is.** The band's trailing side takes a second control — the Notchline mark, left of the gear — and it replaces everything under the band with a fixed-height panel: the horizontal lockup, `Version 0.2.4 Alpha (8)`, the bundle's own copyright and licence notice, the repository's full address behind the GitHub mark, and a `Check for Updates` tile. Nothing running moves its height, collapsing does not close it, and only the mark does. No update mechanism is wired in, so that control is where one will land rather than a promise. (`docs/panel-v2.md`.)
 
 ### Changed
 
 - **The quota figures come from Claude Code's own record rather than the sentence it prints.** The command still runs, on the same cadence, because the run is what makes the product fetch its usage — but the numbers are read from `cachedUsageUtilization` in `~/.claude.json`, as JSON. A shape change now fails as a decode instead of a percentage quietly going missing, the per-model window's model is a field rather than a label between brackets, and the hour those figures are trusted for is counted from the product's own timestamp.
+- **Both seams draw one dot, in the label's own ink.** A `·` sits on its own x-height, `0.77` pt below the line the bar centres its contents on, so the `Recent` seam's hairline ran past its separator instead of through it. It is a drawn disc now, sized by what a retired row's own glyph rasterises to, since two sizes of one dot `36` points apart read as an accident. The block heading's disc — new in `0.2.3` at the hairline's `15%` white — gives that up for the caption's ink: one bar drawing two separators says the seams are two things. Neither count moves. (`docs/expanded-panel-v2.md` §2.2 and §4.2.)
+- **A washed row's ground stands `2` off its own frame.** A heading takes all of its slack above the chip and none below, because the row beneath brings its own top padding — until a pointer arrives, that row's ground fills the whole `72`, and the two grounds meet along one edge. Two filled shapes sharing an edge read as a single shape with a notch cut out of it, which is neither of the things they say apart. The inset is on every row that draws a wash — live, open and retired — and no metric moves. (`docs/expanded-panel-v2.md` §4.2.)
+
+### Fixed
+
+- **Claude Code's quota rules had gone blank, and now say why when they cannot be drawn.** `claude -p "/usage"` prints the windows only when the CLI itself is signed in; a Claude Desktop-only machine has no CLI credential, so the same run answered with its session cost and every rule read `--` with nothing anywhere saying so. The footer's diagnostic now names `claude auth login`. (`docs/adr/0021-read-the-quota-from-the-record-the-command-leaves.md`.)
+- **The pointing hand survives on the panel's own controls.** The `.cursorUpdate` area that makes the hand outrank the scroll view's arrow on a latched panel shared one tracking area with the background `.activeAlways` pair, and AppKit does not support that combination — so on an unlatched panel the hand was lost to whatever assigned an arrow next. They are two areas now: `.activeInKeyWindow` for the key window's cursor pass, `.activeAlways` for entry, exit and movement, with movement reasserting the hand rather than waiting for the pointer to leave and come back. Neither area polls or activates the app.
+
+### Known limitations
+
+Everything listed under `0.2.3` and earlier still stands, unchanged.
 
 ## 0.2.3 Alpha — 2026-09-08
 
