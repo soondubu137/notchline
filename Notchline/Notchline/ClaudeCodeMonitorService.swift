@@ -961,7 +961,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
             diagnostic: MonitorDiagnostics.combined(
                 watchFailure,
                 hookDiagnostic,
-                read.diagnostic
+                read.diagnostic,
+                // Last, because it is the least urgent of the four: the rows
+                // are all still there and working, and what is missing is the
+                // footer's two rules. It is here at all because nothing else
+                // reports it -- a signed-out CLI draws `--` and says nothing.
+                await usage.quotaDiagnostic()
             ),
             // Whatever is known right now. Awaiting the reading here is what
             // made a hook event's row wait on a `claude` launch.

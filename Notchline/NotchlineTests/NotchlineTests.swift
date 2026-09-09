@@ -20947,133 +20947,299 @@ for line in sys.stdin:
         #expect(await ClaudeCodeTokenCounter(projectsDirectory: empty).todayTokens() == 0)
     }
 
-    /// The quota parser reads two lines out of a paragraph written for a
-    /// person, and is not fooled by the numbers around them.
+    /// The windows come out of the product's own record of them, as JSON.
     ///
-    /// This is captured output, byte for byte, from `claude -p "/usage"` on
-    /// 2026-08-16. The free-text section below the figures is the whole reason
-    /// the parser anchors on line prefixes: `94% of your usage` sits four lines
-    /// under the ones that matter, and anything hunting for a percentage would
-    /// find it.
+    /// This is the shape `~/.claude.json` holds under `cachedUsageUtilization`,
+    /// captured on 2026-09-09: the answer Claude Code's usage endpoint last
+    /// gave, stamped with when it was fetched. It replaces the paragraph the
+    /// command prints, which stopped carrying the figures at all on a machine
+    /// whose CLI is signed out — the same run then answers with its session
+    /// cost, and every regular expression came back empty.
+    ///
+    /// Three things this record has that the paragraph did not: the per-model
+    /// cap names its model in a field rather than between a `(` and a `)`, the
+    /// resets are absolute rather than a printed month and day with the year
+    /// left off, and the answer says how old it is.
     @Test @MainActor
-    func theUsageParserAnchorsOnWholeLinesAndIgnoresTheProseBelow() throws {
-        let output = """
-        You are currently using your subscription to power your Claude Code usage
-
-        Current session: 22% used · resets Aug 16 at 7:19pm (America/Los_Angeles)
-        Current week (all models): 18% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
-        Current week (Fable): 0% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
-
-        What's contributing to your limits usage?
-        Approximate, based on local sessions on this machine.
-
-        Last 24h · 1690 requests · 15 sessions
-          94% of your usage was at >150k context
-          Top skills: /figma:figma-use 4%, /figma:figma-swiftui 2%
+    func theWindowsComeFromTheProductsOwnRecordRatherThanItsParagraph() throws {
+        let fetchedAtMs: Double = 1_788_842_193_281
+        let record = """
+        {"oauthAccount":{"organizationRateLimitTier":"default_claude_max_5x"},
+         "cachedUsageUtilization":{
+          "fetchedAtMs":\(Int(fetchedAtMs)),
+          "accountUuid":"9cc25e01-7ba6-4987-a7f3-6db13d14caef",
+          "utilization":{
+           "five_hour":{"utilization":23,"resets_at":"2026-09-08T07:10:00.303358+00:00"},
+           "seven_day":{"utilization":41,"resets_at":"2026-09-12T07:00:00.303376+00:00"},
+           "seven_day_opus":null,
+           "limits":[
+            {"kind":"session","group":"session","percent":23,"severity":"normal",
+             "resets_at":"2026-09-08T07:10:00.303358+00:00","scope":null,"is_active":false},
+            {"kind":"weekly_all","group":"weekly","percent":41,"severity":"normal",
+             "resets_at":"2026-09-12T07:00:00.303376+00:00","scope":null,"is_active":true},
+            {"kind":"weekly_scoped","group":"weekly","percent":0,"severity":"normal",
+             "resets_at":null,
+             "scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},
+             "is_active":false}
+           ]
+          }
+         }}
         """
 
-        let now = ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!
-        let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
-
-        #expect(windows.count == 3)
-        let sessionWindow = try #require(windows[checked: 0])
-        let weekWindow = try #require(windows[checked: 1])
-        let modelWindow = try #require(windows[checked: 2])
-        // Every label is the output's own word for the window, and reported as
-        // used; a rule draws what is left.
-        #expect(sessionWindow.label == "Current session")
-        #expect(sessionWindow.remainingPercent == 78)
-        #expect(weekWindow.label == "All models")
-        #expect(weekWindow.remainingPercent == 82)
-        // **The per-model window is drawn now**, named for the model rather
-        // than for a duration. It used to be dropped because which model it
-        // names varies -- and the varying part is exactly what the label
-        // says, so the objection is what makes the label right.
-        #expect(modelWindow.label == "Fable")
-        #expect(modelWindow.remainingPercent == 100)
-        // In the order the product reports them. Nothing sorts.
-        #expect(
-            windows.map(\.label) == ["Current session", "All models", "Fable"]
+        // Ten minutes after the fetch, so the reading is well inside the hour
+        // the product itself trusts it for.
+        let now = Date(timeIntervalSince1970: fetchedAtMs / 1000 + 600)
+        let windows = try #require(
+            ClaudeCodeUsageUtilization.windows(
+                in: Data(record.utf8),
+                now: now,
+                ceiling: 3600
+            )
         )
 
-        // The year is not printed. It is inferred, and every reset lands ahead.
-        let session = try #require(sessionWindow.resetsAt)
-        let week = try #require(weekWindow.resetsAt)
+        // Every label is this product's own word for the window, and the figure
+        // is reported as used; a rule draws what is left.
+        #expect(windows.map(\.label) == ["Current session", "All models", "Fable"])
+        #expect(windows.map(\.remainingPercent) == [77, 59, 100])
+
+        // In the order the product reports them. Nothing sorts.
+        let session = try #require(windows[checked: 0]?.resetsAt)
+        let week = try #require(windows[checked: 1]?.resetsAt)
         #expect(session > now)
         #expect(week > session)
-        #expect(try #require(modelWindow.resetsAt) == week)
+        // A window the record gives no reset for is a window with no reset,
+        // not one this app failed to read: the share still draws.
+        #expect(windows[checked: 2]?.resetsAt == nil)
     }
 
-    /// An account with no per-model cap draws no third line.
+    /// An account with no per-model cap draws no third line, and one with two
+    /// draws both.
     ///
-    /// The per-model window is discovered in the output rather than declared,
-    /// so it appears only where the product names one -- and `all models` is
-    /// the one parenthetical that is not a model.
+    /// The per-model window is discovered in the record rather than declared,
+    /// so it appears only where the product names one. A scoped week with no
+    /// model on it names nothing, so there is no label to draw it under and it
+    /// is dropped rather than given one.
     @Test @MainActor
-    func aPerModelWindowIsDrawnOnlyWhereTheOutputNamesOne() throws {
-        let now = ISO8601DateFormatter().date(from: "2026-08-16T20:00:00Z")!
+    func aPerModelWindowIsDrawnOnlyWhereTheRecordNamesOne() throws {
+        let fetchedAtMs: Double = 1_788_842_193_281
+        let now = Date(timeIntervalSince1970: fetchedAtMs / 1000 + 60)
 
-        let withoutCap = ClaudeCodeUsageReader.parseWindows("""
-        Current session: 22% used · resets Aug 16 at 7:19pm (America/Los_Angeles)
-        Current week (all models): 18% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
-        """, now: now)
-        #expect(withoutCap.map(\.label) == ["Current session", "All models"])
+        func windows(limits: String) throws -> [QuotaWindow] {
+            try #require(
+                ClaudeCodeUsageUtilization.windows(
+                    in: Data("""
+                    {"cachedUsageUtilization":{"fetchedAtMs":\(Int(fetchedAtMs)),
+                     "utilization":{"limits":[\(limits)]}}}
+                    """.utf8),
+                    now: now,
+                    ceiling: 3600
+                )
+            )
+        }
 
-        // Two of them, and both are drawn: a line is a line.
-        let twoCaps = ClaudeCodeUsageReader.parseWindows("""
-        Current session: 22% used · resets Aug 16 at 7:19pm (America/Los_Angeles)
-        Current week (all models): 18% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
-        Current week (Fable): 4% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
-        Current week (Opus): 40% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
-        """, now: now)
+        let session = """
+        {"kind":"session","percent":22,"resets_at":null,"scope":null}
+        """
+        let weekly = """
+        {"kind":"weekly_all","percent":18,"resets_at":null,"scope":null}
+        """
+
         #expect(
-            twoCaps.map(\.label)
-                == ["Current session", "All models", "Fable", "Opus"]
+            try windows(limits: "\(session),\(weekly)").map(\.label)
+                == ["Current session", "All models"]
+        )
+
+        let twoCaps = try windows(limits: """
+        \(session),\(weekly),
+        {"kind":"weekly_scoped","percent":4,"resets_at":null,
+         "scope":{"model":{"display_name":"Fable"}}},
+        {"kind":"weekly_scoped","percent":40,"resets_at":null,
+         "scope":{"model":{"display_name":"Opus"}}}
+        """)
+        #expect(
+            twoCaps.map(\.label) == ["Current session", "All models", "Fable", "Opus"]
         )
         #expect(twoCaps.map(\.remainingPercent) == [78, 82, 96, 60])
 
-        // The prose below the figures cannot invent one: the pattern is bound
-        // to the start of a line and to the whole shape of the label.
-        let prose = ClaudeCodeUsageReader.parseWindows("""
-        Current session: 22% used · resets Aug 16 at 7:19pm (America/Los_Angeles)
-        Current week (all models): 18% used · resets Aug 21 at 11:59pm (America/Los_Angeles)
-        94% of your usage was at >150k context (Fable): mostly
-        see Current week (Fable): in the docs
-        """, now: now)
-        #expect(prose.map(\.label) == ["Current session", "All models"])
+        // A scope with no model in it, which is what the record holds for a cap
+        // the product has not named. It is not drawn as an unlabelled rule.
+        #expect(
+            try windows(limits: """
+            \(session),\(weekly),
+            {"kind":"weekly_scoped","percent":4,"resets_at":null,"scope":{"surface":null}}
+            """).map(\.label) == ["Current session", "All models"]
+        )
     }
 
-    /// A reset printed before today's date belongs to next year.
+    /// A reading the product has itself expired is not drawn.
+    ///
+    /// Claude Code stops trusting this object at an hour, and so does this app:
+    /// a figure the product has expired is not one to draw beside it. Nil is
+    /// the answer, and the footer's `--` is what a reader sees — never the
+    /// figure that was true two days ago.
     @Test @MainActor
-    func aResetThatWouldBeInThePastRollsIntoTheFollowingYear() throws {
-        let output = "Current session: 10% used · resets Jan 2 at 9:00am (America/Los_Angeles)"
-        let now = ISO8601DateFormatter().date(from: "2026-12-30T12:00:00Z")!
-        let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
-        let reset = try #require(windows[checked: 0]?.resetsAt)
-        #expect(reset > now)
-        #expect(reset.timeIntervalSince(now) < 5 * 24 * 3600)
+    func aReadingTheProductHasAlreadyExpiredIsNotDrawn() {
+        let fetchedAtMs: Double = 1_788_842_193_281
+        let record = Data("""
+        {"cachedUsageUtilization":{"fetchedAtMs":\(Int(fetchedAtMs)),
+         "utilization":{"limits":[
+          {"kind":"session","percent":23,"resets_at":null,"scope":null}]}}}
+        """.utf8)
+        let fetchedAt = Date(timeIntervalSince1970: fetchedAtMs / 1000)
+
+        #expect(
+            ClaudeCodeUsageUtilization.windows(
+                in: record,
+                now: fetchedAt.addingTimeInterval(3_599),
+                ceiling: 3600
+            )?.first?.remainingPercent == 77
+        )
+        #expect(
+            ClaudeCodeUsageUtilization.windows(
+                in: record,
+                now: fetchedAt.addingTimeInterval(3_601),
+                ceiling: 3600
+            ) == nil
+        )
+        // A stamp ahead of now is not a fresh reading, it is a clock that
+        // disagrees, and it fails the same way a stale one does.
+        #expect(
+            ClaudeCodeUsageUtilization.windows(
+                in: record,
+                now: fetchedAt.addingTimeInterval(-60),
+                ceiling: 3600
+            ) == nil
+        )
     }
 
-    /// Output this parser does not recognise reads as unavailable, never as a
-    /// number and never as zero.
+    /// A record with no `limits` list still draws the two named windows.
+    ///
+    /// The product publishes them twice — once in the list and once on their
+    /// own — and the pair carries no per-model cap, so it is the fallback
+    /// rather than the source. Both report a percentage **used**, on the same
+    /// scale: an account reporting both had `five_hour.utilization` and the
+    /// `session` limit's `percent` as the same number.
     @Test @MainActor
-    func unrecognisedUsageOutputReportsUnavailableRatherThanZero() {
-        let now = Date(timeIntervalSince1970: 1_000)
-        for output in [
+    func aRecordWithoutTheLimitsListFallsBackToTheTwoNamedWindows() throws {
+        let fetchedAtMs: Double = 1_788_842_193_281
+        let windows = try #require(
+            ClaudeCodeUsageUtilization.windows(
+                in: Data("""
+                {"cachedUsageUtilization":{"fetchedAtMs":\(Int(fetchedAtMs)),
+                 "utilization":{
+                  "five_hour":{"utilization":23,"resets_at":"2026-09-08T07:10:00.303358+00:00"},
+                  "seven_day":{"utilization":41,"resets_at":null}}}}
+                """.utf8),
+                now: Date(timeIntervalSince1970: fetchedAtMs / 1000 + 60),
+                ceiling: 3600
+            )
+        )
+        #expect(windows.map(\.label) == ["Current session", "All models"])
+        #expect(windows.map(\.remainingPercent) == [77, 59])
+        #expect(windows[checked: 0]?.resetsAt != nil)
+    }
+
+    /// A record this app cannot read is unavailable, never a number and never
+    /// zero.
+    ///
+    /// The point of moving off the paragraph: a shape change fails as a decode
+    /// rather than as a percentage quietly gone missing. Each of these is a
+    /// different way for that to happen and all of them answer the same way.
+    @Test @MainActor
+    func aRecordThisAppCannotReadIsUnavailableRatherThanZero() {
+        let now = Date(timeIntervalSince1970: 1_788_842_253)
+        for record in [
             "",
-            "You are currently using your subscription",
-            // A shape change that keeps the words but moves the numbers.
-            "Current session — used 22% — resets soon",
-            // Only prose, with percentages in it.
-            "94% of your usage was at >150k context"
+            "not json at all",
+            // The file, without the key.
+            #"{"oauthAccount":{"organizationRateLimitTier":"default_claude_max_5x"}}"#,
+            // The key, without a stamp to date it by.
+            #"{"cachedUsageUtilization":{"utilization":{"limits":[]}}}"#,
+            // Stamped, with nothing in it.
+            #"{"cachedUsageUtilization":{"fetchedAtMs":1788842193281}}"#
         ] {
-            let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
-            #expect(windows.count == 2)
-            #expect(windows.allSatisfy { $0.remainingPercent == nil })
-            #expect(windows.allSatisfy { $0.resetsAt == nil })
+            #expect(
+                ClaudeCodeUsageUtilization.windows(
+                    in: Data(record.utf8),
+                    now: now,
+                    ceiling: 3600
+                ) == nil
+            )
         }
+
+        // And a figure outside the scale is a shape this app does not
+        // recognise, not one to round into range.
+        let windows = ClaudeCodeUsageUtilization.windows(
+            in: Data("""
+            {"cachedUsageUtilization":{"fetchedAtMs":1788842193281,
+             "utilization":{"limits":[
+              {"kind":"session","percent":140,"resets_at":null,"scope":null}]}}}
+            """.utf8),
+            now: now,
+            ceiling: 3600
+        )
+        #expect(windows?.first?.remainingPercent == nil)
     }
 
+    /// A signed-out CLI is said out loud rather than drawn as a blank.
+    ///
+    /// The product answers `/usage` with its session cost when there is no
+    /// subscription behind the CLI, and that is what a Claude Desktop-only
+    /// machine gets: Desktop injects auth into the sessions it hosts, so
+    /// `claude` itself can have no credential at all while Claude Code is in
+    /// use all day. The footer showed two `--` rules for it and nothing
+    /// anywhere said why, which left the one person who could fix it with no
+    /// way to know that.
+    ///
+    /// It is said only while there is in fact nothing to draw: an account whose
+    /// figures are on screen has no problem to report, whatever shape the last
+    /// answer took.
+    @Test @MainActor
+    func aSignedOutClaudeCodeIsSaidOutLoudRatherThanDrawnAsABlank() async {
+        let costSummary = """
+        Total cost:            $0.0000
+        Total duration (API):  0s
+        Total duration (wall): 0s
+        Total code changes:    0 lines added, 0 lines removed
+        Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+        """
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_788_842_253))
+
+        let signedOut = ClaudeCodeUsageReader(
+            clock: clock,
+            read: { costSummary },
+            readConfiguration: { nil }
+        )
+        _ = await signedOut.quota()
+        let said = await signedOut.quotaDiagnostic()
+        #expect(said?.contains("claude auth login") == true)
+
+        // The same answer, with figures behind it. Somebody else refreshed the
+        // record inside the hour, so there is nothing missing to explain.
+        let drawing = ClaudeCodeUsageReader(
+            clock: clock,
+            read: { costSummary },
+            readConfiguration: {
+                Data("""
+                {"cachedUsageUtilization":{"fetchedAtMs":1788842193281,
+                 "utilization":{"limits":[
+                  {"kind":"session","percent":23,"resets_at":null,"scope":null}]}}}
+                """.utf8)
+            }
+        )
+        #expect(await drawing.quota().windows.first?.remainingPercent == 77)
+        #expect(await drawing.quotaDiagnostic() == nil)
+
+        // And an answer that carried the windows is not called signed out, even
+        // where this app could not use it.
+        let subscribed = ClaudeCodeUsageReader(
+            clock: clock,
+            read: { "You are currently using your subscription to power your Claude Code usage" },
+            readConfiguration: { nil }
+        )
+        _ = await subscribed.quota()
+        #expect(await subscribed.quotaDiagnostic() == nil)
+    }
     /// The answer does not wait for the reading that comes with it.
     ///
     /// The snapshot used to await the reading, which put a `claude` launch --
@@ -21084,14 +21250,15 @@ for line in sys.stdin:
     func theQuotaReadingDoesNotHoldUpTheAnswerItComesWith() async throws {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
         let updates = UpdateCounter()
+        let record = StubUsageRecord(usedPercent: 20)
         let reader = ClaudeCodeUsageReader(
             clock: clock,
             onUpdate: { Task { await updates.record() } },
             read: {
                 await Task.yield()
-                return "Current session: 20% used · "
-                    + "resets Aug 16 at 7:19pm (America/Los_Angeles)"
-            }
+                return "You are currently using your subscription"
+            },
+            readConfiguration: { record.data }
         )
 
         // Answered out of what is known. The reading cannot have finished --
@@ -21309,9 +21476,9 @@ for line in sys.stdin:
             read: {
                 await held.hold()
                 await transcripts.noteReading(ours)
-                return "Current session: 20% used · "
-                    + "resets Aug 16 at 7:19pm (America/Los_Angeles)"
-            }
+                return "You are currently using your subscription"
+            },
+            readConfiguration: { nil }
         )
 
         // Before anything has asked for a quota there is still an answer, and
@@ -21361,7 +21528,8 @@ for line in sys.stdin:
             read: {
                 await held.hold()
                 return nil
-            }
+            },
+            readConfiguration: { nil }
         )
 
         async let first = reader.quota()
@@ -21410,7 +21578,8 @@ for line in sys.stdin:
                 read: {
                     await readings.hold()
                     return nil
-                }
+                },
+                readConfiguration: { nil }
             )
         )
         defer { harness.tearDown() }
@@ -21473,14 +21642,16 @@ for line in sys.stdin:
     @Test @MainActor
     func todaysTokensAreReReadWithoutRunningTheCommandAgain() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
-        let responses = TextQueue(items: [
-            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)"
-        ])
+        let responses = TextQueue(items: ["You are currently using your subscription"])
+        // The record the command's own run refreshes. What the queue counts is
+        // launches; what this holds is the figures they buy.
+        let record = StubUsageRecord(usedPercent: 20)
         let reader = ClaudeCodeUsageReader(
             clock: clock,
             freshness: 300,
             tokensFreshness: 60,
-            read: { await responses.next() }
+            read: { await responses.next() },
+            readConfiguration: { record.data }
         )
 
         #expect(await reader.quota().remainingPercent == 80)
@@ -21497,7 +21668,9 @@ for line in sys.stdin:
         #expect(await responses.remaining() == 0)
 
         // Five minutes on the windows are due too, and now the command runs --
-        // the queue is empty, so it fails, and the ceiling keeps the windows.
+        // the queue is empty, so it fails. The figures are unmoved by that: a
+        // failed launch is not evidence they went away, and the record they
+        // come from is still well inside the hour it is trusted for.
         await clock.advance(by: 240)
         #expect(await reader.quota().remainingPercent == 80)
     }
@@ -21513,17 +21686,24 @@ for line in sys.stdin:
     @Test @MainActor
     func noQuotaIsReadWhileThereIsNoScreen() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
-        let responses = TextQueue(items: [
-            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)",
-            "Current session: 30% used · resets Aug 16 at 7:19pm (America/Los_Angeles)"
-        ])
+        let responses = TextQueue(items: [20, 30].map(String.init))
+        // What a launch actually buys: the product fetches its usage and leaves
+        // the answer where this app reads it. The queue counts the launches.
+        let record = StubUsageRecord()
         let screen = StubScreenAvailability()
         let reader = ClaudeCodeUsageReader(
             clock: clock,
             freshness: 1_800,
             tokensFreshness: 60,
             screenIsAvailable: { screen.available },
-            read: { await responses.next() }
+            read: {
+                guard let used = await responses.next().flatMap(Int.init) else {
+                    return nil
+                }
+                record.set(usedPercent: used, fetchedAt: clock.now())
+                return "You are currently using your subscription"
+            },
+            readConfiguration: { record.data }
         )
 
         #expect(await reader.quota().remainingPercent == 80)
@@ -21534,7 +21714,10 @@ for line in sys.stdin:
         // advance is a busy-wait in a deadline's clothes.
         #expect(await reader.nextReadDeadline() == nil)
 
-        // Twelve hours of freshness windows going by, and not one launch.
+        // Twelve hours of freshness windows going by, and not one launch. What
+        // is already known stands: the ceiling is applied by a reading, and
+        // there is no reading, which is the point. Nobody is looking at a
+        // screen that is off.
         for _ in 0 ..< 24 {
             await clock.advance(by: 1_800)
             #expect(await reader.quota().remainingPercent == 80)
@@ -21620,32 +21803,47 @@ for line in sys.stdin:
         #expect(Date().timeIntervalSince(started) < 10)
     }
 
-    /// A reset printed on the hour carries no minutes, and still parses.
+    /// A reset lands where the record says it does, whatever the machine's
+    /// own zone is, and the fraction of a second on it is not an obstacle.
     ///
-    /// This is what the weekly window looks like almost every time it is read:
-    /// it resets at midnight, and the output writes that as `12am`. Requiring
-    /// the colon meant the 7-day rule drew a percentage next to
-    /// `Reset unavailable` while the session rule a line above -- reset at
-    /// 10:30pm, so minutes and all -- was fine.
+    /// This replaces a parser whose whole difficulty was that the printed form
+    /// left the year off and wrote midnight as `12am` — requiring the colon
+    /// once made the weekly rule, which resets on the hour nearly every time
+    /// it is read, draw a percentage with no reset beside it. The record has
+    /// none of that: the stamp is absolute and carries its own offset. What it
+    /// does carry is six digits of fraction where `ISO8601DateFormatter` is
+    /// specified for three, so the fraction is dropped before parsing rather
+    /// than parsed — a reset drawn as a countdown in hours has no use for it.
     @Test @MainActor
-    func aResetOnTheHourIsReadEvenThoughItPrintsNoMinutes() throws {
-        let output = """
-        Current session: 25% used · resets Aug 17 at 10:30pm (America/Los_Angeles)
-        Current week (all models): 25% used · resets Aug 22 at 12am (America/Los_Angeles)
-        """
-
-        let now = ISO8601DateFormatter().date(from: "2026-08-17T20:00:00Z")!
-        let windows = ClaudeCodeUsageReader.parseWindows(output, now: now)
+    func aResetIsReadFromTheRecordsOwnStampFractionAndAll() throws {
+        let fetchedAtMs: Double = 1_788_842_193_281
+        let windows = try #require(
+            ClaudeCodeUsageUtilization.windows(
+                in: Data("""
+                {"cachedUsageUtilization":{"fetchedAtMs":\(Int(fetchedAtMs)),
+                 "utilization":{"limits":[
+                  {"kind":"session","percent":25,
+                   "resets_at":"2026-09-08T07:10:00.303358+00:00","scope":null},
+                  {"kind":"weekly_all","percent":25,
+                   "resets_at":"2026-09-12T07:00:00+00:00","scope":null}]}}}
+                """.utf8),
+                now: Date(timeIntervalSince1970: fetchedAtMs / 1000 + 60),
+                ceiling: 3600
+            )
+        )
         let session = try #require(windows[checked: 0]?.resetsAt)
         let week = try #require(windows[checked: 1]?.resetsAt)
         #expect(week > session)
 
-        // Midnight where the line says it is, not where this machine is.
+        // Where the stamp says it is, not where this machine is. A stamp
+        // without a fraction reads the same as one with.
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
-        #expect(calendar.component(.hour, from: week) == 0)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        #expect(calendar.component(.hour, from: session) == 7)
+        #expect(calendar.component(.minute, from: session) == 10)
+        #expect(calendar.component(.hour, from: week) == 7)
         #expect(calendar.component(.minute, from: week) == 0)
-        #expect(calendar.component(.day, from: week) == 22)
+        #expect(calendar.component(.day, from: week) == 12)
     }
 
     /// The answer is found even when something else logs onto the same stdout.
@@ -21726,16 +21924,23 @@ for line in sys.stdin:
     @Test @MainActor
     func aFailedUsageReadingKeepsTheLastWindowsOnlyUpToTheCeiling() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
-        let responses = TextQueue(items: [
-            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)"
-            // Every reading after the first one fails.
-        ])
+        // Every reading after the first one fails, so nothing refreshes the
+        // record and it ages where it stands.
+        let responses = TextQueue(items: ["20"])
+        let record = StubUsageRecord()
         let reader = ClaudeCodeUsageReader(
             clock: clock,
             freshness: 60,
             retryInterval: 5,
             trustCeiling: 300,
-            read: { await responses.next() }
+            read: {
+                guard let used = await responses.next().flatMap(Int.init) else {
+                    return nil
+                }
+                record.set(usedPercent: used, fetchedAt: clock.now())
+                return "You are currently using your subscription"
+            },
+            readConfiguration: { record.data }
         )
 
         #expect(await reader.quota().remainingPercent == 80)
@@ -21753,29 +21958,38 @@ for line in sys.stdin:
         #expect(await reader.quota().windows.allSatisfy { $0.resetsAt == nil })
     }
 
-    /// An answer that was read and not recognised is not kept alive.
+    /// A record that stops being readable is not kept alive by the ceiling.
     ///
-    /// The ceiling covers a reading that could not be obtained. This is a
-    /// different thing: the command answered, and what it said no longer has
-    /// the lines in it. That is exactly the shape change the parser exists to
-    /// refuse, and hiding it behind the last good figures would mean the app
+    /// The ceiling covers a reading that has merely gone old. This is a
+    /// different thing: the run happened, and the record it left is a shape
+    /// this app does not know. That is exactly the change the source exists to
+    /// make loud, and hiding it behind the last good figures would mean the app
     /// went on drawing a quota through a Claude Code update that stopped
     /// reporting one.
     @Test @MainActor
-    func usageOutputThatStopsBeingRecognisedGoesUnavailableAtOnce() async {
+    func aRecordWhoseShapeMovedGoesUnavailableAtOnce() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
-        let responses = TextQueue(items: [
-            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)",
-            "Usage: 4 of 5 units"
-        ])
+        let responses = TextQueue(items: ["20", "moved"])
+        let record = StubUsageRecord()
         let reader = ClaudeCodeUsageReader(
             clock: clock,
             freshness: 60,
             trustCeiling: 300,
-            read: { await responses.next() }
+            read: {
+                guard let answer = await responses.next() else { return nil }
+                if let used = Int(answer) {
+                    record.set(usedPercent: used, fetchedAt: clock.now())
+                } else {
+                    record.setRaw(Data(#"{"cachedUsageUtilization":{"limits":42}}"#.utf8))
+                }
+                return "You are currently using your subscription"
+            },
+            readConfiguration: { record.data }
         )
 
         #expect(await reader.quota().remainingPercent == 80)
+        // One second inside the ceiling, and it makes no difference: the
+        // ceiling is about age, and this is not an ageing figure.
         await clock.advance(by: 61)
         #expect(await reader.quota().remainingPercent == nil)
     }
@@ -21784,15 +21998,20 @@ for line in sys.stdin:
     @Test @MainActor
     func aFailedUsageReadingIsRetriedSoonerThanAFreshOneIsReRead() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
-        let responses = TextQueue(items: [
-            nil,
-            "Current session: 20% used · resets Aug 16 at 7:19pm (America/Los_Angeles)"
-        ])
+        let responses = TextQueue(items: [nil, "20"])
+        let record = StubUsageRecord()
         let reader = ClaudeCodeUsageReader(
             clock: clock,
             freshness: 60,
             retryInterval: 5,
-            read: { await responses.next() }
+            read: {
+                guard let used = await responses.next().flatMap(Int.init) else {
+                    return nil
+                }
+                record.set(usedPercent: used, fetchedAt: clock.now())
+                return "You are currently using your subscription"
+            },
+            readConfiguration: { record.data }
         )
 
         #expect(await reader.quota().remainingPercent == nil)
@@ -34060,6 +34279,53 @@ private actor DiskFootprintMonitoringStub: AgentMonitoring {
     func installHooks() async throws {}
     func removeHooks() async throws {}
     func disconnect() async {}
+}
+
+/// Claude Code's own usage record, as a test can move it.
+///
+/// The windows come from `~/.claude.json` now rather than from the paragraph
+/// the command prints, so a case that used to hand the reader a sentence hands
+/// it one of these instead. It is a class with a lock for the same reason
+/// ``StubScreenAvailability`` is: the reader reads it synchronously, from
+/// inside its own actor.
+private final class StubUsageRecord: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var stored: Data?
+
+    init(usedPercent: Int? = nil, fetchedAt: Date = Date(timeIntervalSince1970: 10_000)) {
+        stored = usedPercent.map { Self.record(usedPercent: $0, fetchedAt: fetchedAt) }
+    }
+
+    var data: Data? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+    }
+
+    func set(usedPercent: Int?, fetchedAt: Date = Date(timeIntervalSince1970: 10_000)) {
+        lock.lock()
+        stored = usedPercent.map { Self.record(usedPercent: $0, fetchedAt: fetchedAt) }
+        lock.unlock()
+    }
+
+    /// Whatever bytes the case wants there, including bytes no decoder will
+    /// take. A record whose shape moved is the failure this source exists to
+    /// make loud.
+    func setRaw(_ data: Data?) {
+        lock.lock()
+        stored = data
+        lock.unlock()
+    }
+
+    /// The shape captured from a real `~/.claude.json`, cut to the one window
+    /// these cases read.
+    private static func record(usedPercent: Int, fetchedAt: Date) -> Data {
+        Data("""
+        {"cachedUsageUtilization":{
+          "fetchedAtMs":\(Int(fetchedAt.timeIntervalSince1970 * 1000)),
+          "utilization":{"limits":[
+           {"kind":"session","group":"session","percent":\(usedPercent),
+            "resets_at":null,"scope":null}]}}}
+        """.utf8)
+    }
 }
 
 private actor TextQueue {

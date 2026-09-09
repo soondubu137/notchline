@@ -4,6 +4,16 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Fixed
+
+- **Claude Code's quota rules had gone blank, and now say why when they cannot be drawn.** `claude -p "/usage"` prints the windows only when the CLI itself is signed in; a Claude Desktop-only machine has no CLI credential, so the same run answered with its session cost and every rule read `--` with nothing anywhere saying so. The footer's diagnostic now names `claude auth login`. (`docs/adr/0021-read-the-quota-from-the-record-the-command-leaves.md`.)
+
+### Changed
+
+- **The quota figures come from Claude Code's own record rather than the sentence it prints.** The command still runs, on the same cadence, because the run is what makes the product fetch its usage — but the numbers are read from `cachedUsageUtilization` in `~/.claude.json`, as JSON. A shape change now fails as a decode instead of a percentage quietly going missing, the per-model window's model is a field rather than a label between brackets, and the hour those figures are trusted for is counted from the product's own timestamp.
+
 ## 0.2.3 Alpha — 2026-09-08
 
 **Two Codex rows that told the wrong story, and a panel carrying less air.** No new capability: what changed is what a Codex row says while a question is open or a reviewer is running, and how much room the expanded panel and the collapsed bar spend saying it.

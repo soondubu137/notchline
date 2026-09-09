@@ -5,52 +5,46 @@ import os
 ///
 /// The command is public and free — `claude -p "/usage" --output-format json`
 /// makes no model request at all (measured `total_cost_usd: 0`, `num_turns: 0`,
-/// `duration_api_ms: 0`, about two seconds). What is *not* public is the shape
-/// of what it prints: the answer is a paragraph written for a person, so
-/// reading it is a private dependency and is registered as one.
+/// `duration_api_ms: 0`, about two seconds). It is still run, and it is still
+/// the reason this app has anything to draw — but **not for what it prints**.
+/// Running it makes the product fetch its usage, and the fetch leaves the
+/// answer in `~/.claude.json` as `cachedUsageUtilization`. The figures are read
+/// from there, as JSON, by ``ClaudeCodeUsageUtilization``.
 ///
-/// That makes the parser's job "refuse confidently" rather than "extract
-/// cleverly". It anchors on whole line prefixes and nothing else, because
-/// the same output continues into a free-text section full of other
-/// percentages — `94% of your usage was at >150k context` sits a few lines
-/// below the numbers this reads. Anything that scanned for a number would find
-/// that one eventually.
+/// **The paragraph is no longer parsed for numbers, and that was a real
+/// failure, not a tidy-up.** The command only prints the windows when the CLI
+/// itself is signed in to a Claude subscription; otherwise the same run answers
+/// with its session-cost summary — `Total cost: $0.0000 …`, no windows in it
+/// anywhere — and every regular expression came back empty. Measured on this
+/// machine on 2026-09-09, where `claude auth status` reports
+/// `{"loggedIn": false, "authMethod": "none"}` for the `PATH` binary *and* for
+/// both of Claude Desktop's bundled copies: Desktop hosts its own sessions with
+/// auth injected per session, so a Desktop-only machine can use Claude Code all
+/// day with a CLI that has no credential at all. What the footer showed for it
+/// was two `--` rules and no reason anywhere. The reason is now said out loud —
+/// see ``quotaDiagnostic()``.
+///
+/// The one thing still read out of the answer is that shape, and only to say
+/// so. No figure comes off prose any more.
 actor ClaudeCodeUsageReader {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeUsageReader"
     )
 
-    /// The two windows this product always reports, and what it calls them.
+    /// What the answer begins with when the product has no subscription
+    /// windows to report, and therefore prints its session cost instead.
     ///
-    /// **The labels are the output's own words.** They were `5 h` and `7 d` —
-    /// durations invented here from what the windows are, which read badly the
-    /// moment the column beside them also held a duration, and which said
-    /// nothing about the one window whose meaning is not its length. `Current
-    /// week (all models)` shortens to `All models` because the product name
-    /// stands above the group and the week is the only period that line has.
-    private static let fixedWindows: [(prefix: String, label: String)] = [
-        ("Current session:", "Current session"),
-        ("Current week (all models):", "All models")
-    ]
-
-    /// The per-model weekly cap, reported as `Current week (Fable):` under
-    /// whichever model the account is capped on.
-    ///
-    /// **It used to be dropped, and the cost was written down**: which model it
-    /// names varies, so a rule that sometimes meant one thing and sometimes
-    /// another would have to be read rather than glanced at — and a user who
-    /// exhausts it sees healthy windows and is still refused
-    /// (`dual-agent-design.md` §5.2). What that argument was missing is that
-    /// the varying part is the *answer*: label the window with the model and
-    /// the thing that moves is the thing the label says. So it is drawn, named
-    /// by whatever the output names it, and it appears only on accounts whose
-    /// output names one.
-    private static let perModelWindow = #"^Current week \([^)]+\):"#
-    /// The one parenthetical that is not a model.
-    private static let allModels = "all models"
+    /// The **only** prose this file still knows, and it produces a sentence
+    /// rather than a number. A wording change here costs the explanation and
+    /// nothing else: the windows come from JSON either way.
+    private static let costSummaryPrefix = "Total cost:"
 
     private let read: @Sendable () async -> String?
+    /// Claude Code's own configuration, where the fetch this run performs
+    /// leaves its answer. Injected so the shape can be tested against captured
+    /// bytes without a home directory.
+    private let readConfiguration: @Sendable () -> Data?
     /// Announces that a reading landed, because nothing waits for one any more.
     private let onUpdate: (@Sendable () -> Void)?
     private let tokens: ClaudeCodeTokenCounter?
@@ -70,7 +64,7 @@ actor ClaudeCodeUsageReader {
     // draw one unlabelled rule where the footer expects two labelled ones --
     // which nothing could see while every answer came from a completed
     // reading, and everything can now that answers come before one. The
-    // per-model window is not among them: it is discovered in the output
+    // per-model window is not among them: it is discovered in the reading
     // rather than declared here, so a machine that has not been read yet
     // claims nothing about whether the account has one.
     private var cachedWindows = ClaudeCodeUsageReader.unavailableWindows
@@ -79,10 +73,13 @@ actor ClaudeCodeUsageReader {
     )
     /// When the last attempt finished, successful or not. Paces the next one.
     private var attemptedAt: Date?
-    /// When the command last answered at all -- not when it last said something
-    /// recognisable. Bounds how long the windows read from that answer may go
-    /// on being drawn once the command stops answering.
-    private var answeredAt: Date?
+    /// Whether the last answer was the product's session-cost summary — the
+    /// shape it takes when the CLI has no subscription to report windows for.
+    ///
+    /// Kept as a fact about the last answer rather than as a running count:
+    /// signing in is a thing a person does between two readings, so the next
+    /// answer replaces this outright.
+    private var lastAnswerHadNoSubscription = false
     private var consecutiveFailures = 0
     private var tokensReadAt: Date?
     private var inFlight: Task<QuotaSnapshot, Never>?
@@ -127,25 +124,26 @@ actor ClaudeCodeUsageReader {
     ///     discover that is what the user saw as the figures coming and going.
     ///     That mattered more once the window became five minutes, and more
     ///     again at thirty.
-    ///   - trustCeiling: How long already-parsed windows may still be drawn
-    ///     while attempts are failing. The same split the session registry
-    ///     makes, for the same reason: `freshness` says when to read again, the
-    ///     ceiling says how long the last answer is still evidence. A quota is
-    ///     drawn to the percent and moves over hours, so one unlucky attempt is
-    ///     no reason to blank it -- but a `claude` that has been uninstalled is
-    ///     every reason, and only a ceiling tells those two apart.
+    ///   - trustCeiling: How old the product's own fetch may be and still be
+    ///     drawn. The same split the session registry makes, for the same
+    ///     reason: `freshness` says when to read again, the ceiling says how
+    ///     long the last answer is still evidence. A quota is drawn to the
+    ///     percent and moves over hours, so one unlucky attempt is no reason to
+    ///     blank it -- but a `claude` that has been uninstalled, or signed out,
+    ///     is every reason, and only a ceiling tells those two apart.
     ///
-    ///     **It has to clear `freshness`, and that is what sets it.** The
-    ///     ceiling is counted from the last *answer*, and the first failed
-    ///     attempt cannot happen until a whole freshness window after one. At
-    ///     the previous 300/900 the gap left room for two more failures before
-    ///     the windows blanked; left at 900 while freshness became 1800, the
-    ///     very first failed attempt would have arrived already past the
-    ///     ceiling and blanked the quota on one unlucky read — the exact
-    ///     behaviour the split exists to prevent. One further whole window is
-    ///     the rule, so an uninstalled `claude` still blanks: the retry
-    ///     escalation runs about ten attempts inside that hour and none of
-    ///     them answers.
+    ///     **It is now counted from the product's stamp rather than from this
+    ///     app's last answer, and the hour is theirs.** `cachedUsageUtilization`
+    ///     carries `fetchedAtMs`, and Claude Code's own reader of that object
+    ///     stops trusting it at exactly one hour. Matching that is the whole
+    ///     argument: a figure the product has expired is not one this app
+    ///     should be drawing beside it. It also closes a hole the old rule had
+    ///     — a command that answered out of a cache it had failed to refresh
+    ///     used to be dated by the run, so a stale figure could be redrawn as
+    ///     new indefinitely. The number is unchanged at `3600`; what it is
+    ///     measured from is not.
+    ///   - configurationFile: Where the product keeps that object. Overridden
+    ///     only by tests.
     init(
         clock: any MonitorClock = SystemMonitorClock(),
         freshness: TimeInterval = 1800,
@@ -153,11 +151,13 @@ actor ClaudeCodeUsageReader {
         retryInterval: TimeInterval = 5,
         trustCeiling: TimeInterval = 3600,
         workingDirectory: URL? = nil,
+        configurationFile: URL? = nil,
         screenIsAvailable: @escaping @Sendable () -> Bool = { true },
         tokens: ClaudeCodeTokenCounter? = nil,
         transcripts: ClaudeCodeUsageTranscripts? = nil,
         onUpdate: (@Sendable () -> Void)? = nil,
-        read: (@Sendable () async -> String?)? = nil
+        read: (@Sendable () async -> String?)? = nil,
+        readConfiguration: (@Sendable () -> Data?)? = nil
     ) {
         self.onUpdate = onUpdate
         self.tokens = tokens
@@ -173,6 +173,17 @@ actor ClaudeCodeUsageReader {
         self.read = read ?? {
             await Self.runUsageCommand(in: directory, clearing: cleaner)
         }
+        let configuration = configurationFile ?? Self.defaultConfigurationFile
+        self.readConfiguration = readConfiguration ?? {
+            try? Data(contentsOf: configuration)
+        }
+    }
+
+    /// `~/.claude.json`, which is the product's, not this app's. Read only;
+    /// nothing here ever writes it.
+    nonisolated static var defaultConfigurationFile: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude.json", isDirectory: false)
     }
 
     /// A reader that answers nothing and runs no command, for tests.
@@ -193,7 +204,14 @@ actor ClaudeCodeUsageReader {
     static func silent(
         clock: any MonitorClock = SystemMonitorClock()
     ) -> ClaudeCodeUsageReader {
-        ClaudeCodeUsageReader(clock: clock, read: { nil })
+        ClaudeCodeUsageReader(
+            clock: clock,
+            read: { nil },
+            // The user's own `~/.claude.json` is not this suite's business
+            // either: a case that read it would assert against whatever the
+            // machine's account happens to say today.
+            readConfiguration: { nil }
+        )
     }
 
     /// What is known now, with a reading started behind it if that has gone
@@ -343,161 +361,90 @@ actor ClaudeCodeUsageReader {
             return cached
         }
 
+        // The command is run for what it *does*, not for what it says: it makes
+        // the product fetch its usage, and the fetch writes the object read
+        // below. Its text is only asked one question, and the answer to that
+        // one is a sentence for the user rather than a figure.
         let output = await read()
         let now = clock.now()
         attemptedAt = now
         consecutiveFailures = output == nil ? consecutiveFailures + 1 : 0
-
         if let output {
-            // An answer that was read and not recognised is still an answer:
-            // its windows are unavailable, and they replace the old ones rather
-            // than hiding behind them.
-            cachedWindows = Self.parseWindows(output, now: now)
-            answeredAt = now
-        } else if let answeredAt, now.timeIntervalSince(answeredAt) < trustCeiling {
-            // Inside the ceiling: keep drawing what was last read. Never a
-            // figure invented and never one dressed up as newer than it is --
-            // the surface already draws a quota that is up to `freshness` old.
-        } else {
-            // Past it, nothing here is evidence any more. Unavailable is a
-            // thing the surface knows how to say; a stale percentage is not.
-            cachedWindows = Self.unavailableWindows
+            lastAnswerHadNoSubscription = Self.isCostSummary(output)
         }
+
+        // Read whether or not the command answered, and dated by the product's
+        // own stamp rather than by this run. A failed launch is not evidence
+        // the figures went away -- another Claude Code on this machine may have
+        // refreshed them a minute ago -- and a launch that answered is not
+        // evidence they are new.
+        cachedWindows = readConfiguration()
+            .flatMap {
+                ClaudeCodeUsageUtilization.windows(
+                    in: $0,
+                    now: now,
+                    ceiling: trustCeiling
+                )
+            }
+            ?? Self.unavailableWindows
 
         cached = QuotaSnapshot(windows: cachedWindows, todayTokens: todayTokens)
         return cached
     }
 
+    /// Why the windows are unavailable, when this app can say — and nil
+    /// whenever it cannot, which includes every case where they are fine.
+    ///
+    /// **The one state worth a sentence is a signed-out CLI**, because it is
+    /// the one the user can fix and the one nothing else reports. Claude
+    /// Desktop hosts its own sessions with auth injected per session, so a
+    /// machine can run Claude Code all day while `claude` itself has no
+    /// credential; the product then answers `/usage` with its session cost and
+    /// this app has nothing to draw. Silent `--` was the old behaviour and it
+    /// left the user with a blank and no next step.
+    ///
+    /// Said only while there is in fact nothing to draw: an account whose
+    /// figures are on screen has no problem to report, whatever shape the last
+    /// answer took.
+    func quotaDiagnostic() -> String? {
+        guard lastAnswerHadNoSubscription,
+              cachedWindows.allSatisfy({ $0.remainingPercent == nil }) else {
+            return nil
+        }
+        return "Claude Code reported no usage limits: its CLI is not signed in. "
+            + "Run `claude auth login` in a terminal — signing in to Claude "
+            + "Desktop does not sign in the CLI."
+    }
+
+    /// Whether an answer is the product's session-cost summary, which is what
+    /// it prints in place of the windows when there is no subscription behind
+    /// the CLI.
+    ///
+    /// Anchored to the first line it has, because the summary *is* the whole
+    /// answer in that state; a `Total cost:` further down belongs to something
+    /// else that decided to write to the same stream.
+    nonisolated static func isCostSummary(_ output: String) -> Bool {
+        output
+            .components(separatedBy: .newlines)
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { $0.trimmingCharacters(in: .whitespaces).hasPrefix(costSummaryPrefix) }
+            ?? false
+    }
+
     /// The windows this draws, with nothing known about any of them.
     nonisolated static var unavailableWindows: [QuotaWindow] {
-        fixedWindows.map {
-            QuotaWindow(label: $0.label, remainingPercent: nil, resetsAt: nil)
-        }
-    }
-
-    /// Pulls the windows out of the paragraph: the two fixed ones by their
-    /// whole line prefix, then any per-model week the output names.
-    ///
-    /// **The anchors are still whole line prefixes.** The same output continues
-    /// into a free-text section full of other percentages — `94% of your usage
-    /// was at >150k context` sits a few lines below — so the per-model pattern
-    /// is bound to the start of a line and to the shape of the whole label,
-    /// never to a number.
-    ///
-    /// Made `static` and pure so the whole of this — the one part most likely
-    /// to break on a Claude Code update — can be tested against captured output
-    /// without running anything.
-    nonisolated static func parseWindows(_ output: String, now: Date) -> [QuotaWindow] {
-        let lines = output
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-
-        var parsed = fixedWindows.map { fixed in
-            guard let line = lines.first(where: { $0.hasPrefix(fixed.prefix) }) else {
-                return QuotaWindow(
-                    label: fixed.label,
-                    remainingPercent: nil,
-                    resetsAt: nil
-                )
-            }
-            return window(
-                labelled: fixed.label,
-                body: line.dropFirst(fixed.prefix.count),
-                now: now
+        [
+            QuotaWindow(
+                label: ClaudeCodeUsageUtilization.sessionLabel,
+                remainingPercent: nil,
+                resetsAt: nil
+            ),
+            QuotaWindow(
+                label: ClaudeCodeUsageUtilization.allModelsLabel,
+                remainingPercent: nil,
+                resetsAt: nil
             )
-        }
-
-        // In the order the product reports them, which is the order every
-        // other surface in this app sees (`quota-footer-v2.md` §5).
-        for line in lines {
-            guard line.range(of: perModelWindow, options: .regularExpression) != nil,
-                  let open = line.firstIndex(of: "("),
-                  let close = line[open...].firstIndex(of: ")") else {
-                continue
-            }
-            let model = String(line[line.index(after: open) ..< close])
-            guard model.caseInsensitiveCompare(allModels) != .orderedSame else {
-                continue
-            }
-            parsed.append(
-                window(
-                    labelled: model,
-                    // Past the `)` and the `:` that closes the label.
-                    body: line[line.index(after: close)...].dropFirst(),
-                    now: now
-                )
-            )
-        }
-        return parsed
-    }
-
-    /// One window, read off the part of its line that follows the label.
-    nonisolated private static func window(
-        labelled label: String,
-        body: some StringProtocol,
-        now: Date
-    ) -> QuotaWindow {
-        let body = String(body)
-        return QuotaWindow(
-            label: label,
-            // Reported as used; the rule draws what is left.
-            remainingPercent: usedPercent(in: body).map { 100 - $0 },
-            resetsAt: resetDate(in: body, now: now)
-        )
-    }
-
-    nonisolated private static func usedPercent(in body: String) -> Int? {
-        guard let range = body.range(of: #"(\d{1,3})% used"#, options: .regularExpression),
-              let percent = Int(body[range].prefix { $0.isNumber }),
-              (0 ... 100).contains(percent) else {
-            return nil
-        }
-        return percent
-    }
-
-    /// Turns `resets Aug 16 at 7:19pm (America/Los_Angeles)` into an instant.
-    ///
-    /// The year is not printed, so it is inferred: the current one, rolled
-    /// forward when that would put the reset in the past. A reset is always
-    /// ahead, so a date behind us means the year turned between the two.
-    ///
-    /// The minutes are not always printed either. On the hour the time is
-    /// written `12am`, not `12:00am`, and requiring the colon is what made the
-    /// weekly window -- which resets at midnight, and so is on the hour nearly
-    /// every time it is read -- report a percentage with no reset beside it,
-    /// while the session window a line above parsed fine.
-    nonisolated private static func resetDate(in body: String, now: Date) -> Date? {
-        guard let range = body.range(
-            of: #"resets ([A-Z][a-z]{2} \d{1,2} at \d{1,2}(:\d{2})?(am|pm))"#,
-            options: .regularExpression
-        ) else {
-            return nil
-        }
-        var stamp = String(body[range].dropFirst("resets ".count))
-        if !stamp.contains(":") {
-            // `12am` -> `12:00am`, so one format string reads both.
-            stamp = stamp.replacingOccurrences(
-                of: #"(\d{1,2})(am|pm)"#,
-                with: "$1:00$2",
-                options: .regularExpression
-            )
-        }
-
-        let zone = body.range(of: #"\(([^)]+)\)"#, options: .regularExpression)
-            .map { String(body[$0].dropFirst().dropLast()) }
-            .flatMap(TimeZone.init(identifier:)) ?? .current
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = zone
-        formatter.dateFormat = "MMM d 'at' h:mma yyyy"
-
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = zone
-        let year = calendar.component(.year, from: now)
-        guard let parsed = formatter.date(from: "\(stamp) \(year)") else { return nil }
-        guard parsed < now else { return parsed }
-        return formatter.date(from: "\(stamp) \(year + 1)")
+        ]
     }
 
     /// What `--output-format json` prints around the answer.
@@ -581,9 +528,10 @@ actor ClaudeCodeUsageReader {
     /// and nothing tried again for a minute. Decoding line by line ignores
     /// company the object did not ask for.
     ///
-    /// Made `static` and non-private for the same reason ``parseWindows`` is:
-    /// it is a rule about someone else's output, so it is tested against
-    /// captured bytes rather than by running anything.
+    /// Made `static` and non-private for the same reason
+    /// ``ClaudeCodeUsageUtilization/windows(in:now:ceiling:)`` is: it is a rule
+    /// about someone else's output, so it is tested against captured bytes
+    /// rather than by running anything.
     nonisolated static func usageText(in data: Data) -> String? {
         guard let envelope = envelope(in: data), envelope.isError != true else {
             return nil
