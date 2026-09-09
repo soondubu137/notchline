@@ -119,16 +119,20 @@ struct OverlayGeometryTests {
         #expect(store.sessionGroupHeaderCount == 2)
     }
 
-    /// The heading itself is the `32` the arithmetic above spends on it, and
-    /// it draws the chip and the rule that make it one.
+    /// The heading is the `32` the arithmetic above spends on it, it draws the
+    /// chip that makes it one, and **all of its slack is above that chip**.
     ///
-    /// Hosted on its own and read off the bitmap rather than off the metric,
-    /// because the metric is the thing under test: `productGroupHeaderHeight`
-    /// is `recentSeamHeight` by definition and would agree with itself however
-    /// the bar were drawn. What cannot agree with itself is the ink — the
-    /// chip's lit text is the brightest value in the bar's own band, and a
-    /// heading that had quietly lost its badge would leave that band as dark
-    /// as the panel behind it.
+    /// Read off the bitmap rather than off the metric, because the metric is
+    /// the thing under test: `productGroupHeaderHeight` is `recentSeamHeight`
+    /// by definition and would agree with itself however the bar were drawn.
+    /// What cannot agree with itself is where the ink lands — and where it
+    /// lands is the whole of the decision. Centred, the chip stood `8` under
+    /// the band's hairline and `20.5` from the caption it heads, which is a
+    /// heading nearer to what precedes it than to what it heads; taking the
+    /// slack above inverts that to `16` and `12.5`, the second of which is the
+    /// row's own padding and nothing added. So the top third of the bar has to
+    /// be empty and the bottom `16` has to carry the chip, and this checks
+    /// both rather than only that something was drawn.
     ///
     /// No run loop is turned here: the bar is not in a `ScrollView`, so it is
     /// laid out and drawn in the same pass. See ``AnatomyFigureRenderer`` for
@@ -163,23 +167,33 @@ struct OverlayGeometryTests {
         // The rep is in backing pixels, which are not points on every machine.
         let across = CGFloat(rep.pixelsWide) / host.bounds.width
         let down = CGFloat(rep.pixelsHigh) / host.bounds.height
-        // The chip stands on the panel's own `12`, `8` down and `16` tall, so
-        // its text is inside this box wherever the product's name ends.
-        var brightest: CGFloat = 0
-        for x in stride(from: 14.0, to: 70.0, by: 1) {
-            for y in stride(from: 10.0, to: 22.0, by: 1) {
-                guard
-                    let colour = rep
-                        .colorAt(x: Int(x * across), y: Int(y * down))?
-                        .usingColorSpace(.deviceRGB)
-                else { continue }
-                brightest = max(brightest, colour.brightnessComponent)
+        func brightest(from top: CGFloat, to bottom: CGFloat) -> CGFloat {
+            var found: CGFloat = 0
+            // The chip stands on the panel's own `12` and is as wide as the
+            // product's name, so this box is inside it wherever that ends.
+            for x in stride(from: 14.0, to: 70.0, by: 1) {
+                for y in stride(from: top, to: bottom, by: 1) {
+                    guard
+                        let colour = rep
+                            .colorAt(x: Int(x * across), y: Int(y * down))?
+                            .usingColorSpace(.deviceRGB)
+                    else { continue }
+                    found = max(found, colour.brightnessComponent)
+                }
             }
+            return found
         }
+
+        let slack = PanelMetrics.productGroupHeaderHeight - PanelMetrics.productBadgeHeight
+        #expect(slack > PanelMetrics.sessionRowLineSpacing)
+        // Empty above -- the chip has not crept up into the band's own margin.
         #expect(
-            brightest > 0.8,
-            "the heading drew no chip — brightest value in its band was \(brightest)"
+            brightest(from: 1, to: slack - 1) < 0.2,
+            "the heading's slack is not all above its chip"
         )
+        // And lit below, where the chip is.
+        let lit = brightest(from: slack + 3, to: PanelMetrics.productGroupHeaderHeight - 3)
+        #expect(lit > 0.8, "the heading drew no chip — brightest value was \(lit)")
     }
 
     @Test @MainActor

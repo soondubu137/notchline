@@ -124,13 +124,27 @@ the list above the seam.
 chevron taken off:
 
 ```
-32  =  8  +  badge 16  +  8            (the seam's own 9 + 14 + 9, to the point)
+32  =  16  +  badge 16  +  0           (the seam's own bar height, unchanged)
 [Codex]  · 3  ────────────────────────────────────────────────────────  508
 ```
 
+**All of the bar's slack is above the chip, and none of it below.** Centred at
+`8 / 8` — which is what the seam does, and what this was built as on
+2026-09-08 — the chip stood `8` under the band's hairline and `20.5` from the
+caption it heads, because the row beneath brings its own `12.5` of top padding.
+A heading nearer to what precedes it than to what it heads is a heading
+attached to the wrong thing. Centring is right for a bar that *closes* a list
+and wrong for one that *opens* a block, and this is the only bar of the second
+kind on the panel. Taking the whole `16` above inverts it — `16` clear of the
+band, `12.5` to the caption, which is the row's own padding and nothing added —
+and it moves a block's rule from `16` below the panel's own hairline to `24`,
+where the two stop reading as a pair. **No figure outside the bar moves**: it
+is still `32`, still `productGroupHeaderHeight`, and every height in §4.4 is
+unchanged.
+
 - The badge is [`colour-v2.md`](colour-v2.md) §5's chip unchanged — `16` tall,
   corner `5`, `6` of padding, `10` pt Medium, `#DEE8E0` on `#1B1F1C` — on the
-  panel's own `12`.
+  panel's own `12`, and on the bar's own bottom edge.
 - `· N` is the caption idiom exactly, separator included: `11` pt Light at
   `#7C7C80`, `6` after the chip, which is the badge's own padding and the gap
   §2.3 already puts between a chip and what follows it.

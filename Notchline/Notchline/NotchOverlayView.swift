@@ -2804,6 +2804,17 @@ struct OptionRow: View {
 /// four gaps for a row's own corner to show through. Both are black, so
 /// nothing about it is visible until something slides beneath.
 ///
+/// **All of the bar's slack sits above the chip, and none below it.** Centred,
+/// the `32` put `8` over the chip and `8` under — and the row beneath brings
+/// its own `12.5` of top padding, so the chip stood `8` from the band's
+/// hairline and `20.5` from the caption it was heading. A heading nearer to
+/// what precedes it than to what it heads is a heading attached to the wrong
+/// thing; centring is right for a bar that closes a list and wrong for one
+/// that opens a block. Taking the whole `16` above inverts it — `16` clear of
+/// the band, `12.5` to the caption, which is the row's own padding and nothing
+/// added — and it moves the block's rule from `16` below the panel's own
+/// hairline to `24`, where the two no longer read as a pair.
+///
 /// Internal for the same reason ``ActiveSessionList`` is — the height it draws
 /// at against the height the panel was sized to is only checkable by laying it
 /// out.
@@ -2811,7 +2822,7 @@ struct ProductGroupHeader: View {
     let group: MonitorAggregation.SessionGroup
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             Rectangle().fill(Color.black)
 
             HStack(spacing: 8) {
