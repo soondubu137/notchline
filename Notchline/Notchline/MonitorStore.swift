@@ -311,6 +311,21 @@ enum PanelMetrics {
     /// one scroller.** Each folds on its own past its own cap — see
     /// ``recentViewportCap`` for the queue's.
     static let sessionViewportCap: CGFloat = sessionRowHeight * 3
+    /// The bar a product's block on the live list is headed with.
+    ///
+    /// **``recentSeamHeight`` rather than a constant of its own, because it is
+    /// that bar**: the same `32`, the same caption idiom, the same hairline —
+    /// with the product's badge standing where the seam's label stands, and
+    /// the chevron taken off. `8` + the badge's own ``productBadgeHeight`` +
+    /// `8` lands on the same figure the seam's `9 + 14 + 9` does, so the two
+    /// bars are one bar and nothing new is measured.
+    ///
+    /// What it does **not** take from the seam is the control: no chevron at
+    /// `492`, and so the hairline runs on to the content box's own trailing
+    /// edge instead of stopping `8` short of one. A bar that washes under the
+    /// pointer and then does nothing is a promise made quietly
+    /// (`answer-in-notch.md` §11 rule 03), and there is nothing to fold yet.
+    static var productGroupHeaderHeight: CGFloat { recentSeamHeight }
     /// The tallest the Recent queue's own viewport is ever drawn: five retired
     /// rows, half a live row each.
     static let recentViewportCap: CGFloat = retiredRowHeight * 5
@@ -1315,7 +1330,8 @@ enum PanelMetrics {
     /// back on.
     static func sessionListContentHeight(
         liveRowCount: Int,
-        openRowHeight: CGFloat? = nil
+        openRowHeight: CGFloat? = nil,
+        groupHeaderCount: Int = 0
     ) -> CGFloat {
         // One of the live rows may be open, and an open row is taller than the
         // `80` every row is billed at above. It is added as a difference rather
@@ -1324,8 +1340,15 @@ enum PanelMetrics {
         let opened = liveRowCount > 0 && openRowHeight != nil
             ? (openRowHeight ?? sessionRowHeight) - sessionRowHeight
             : 0
+        // The headers are counted here and again in the cap below, which is
+        // what "a header is chrome" means arithmetically: the list asks for
+        // more room and is given exactly that much more, so the number of rows
+        // on screen does not move. With nothing live there is no block to head
+        // and the apology stands alone.
         return liveRowCount > 0
-            ? sessionRowHeight * CGFloat(liveRowCount) + opened
+            ? sessionRowHeight * CGFloat(liveRowCount)
+                + opened
+                + productGroupHeaderHeight * CGFloat(max(groupHeaderCount, 0))
             : thinExpandedBodyHeight
     }
 
@@ -1334,14 +1357,23 @@ enum PanelMetrics {
     /// A taller open question enlarges it enough to keep its footer visible.
     static func sessionViewportHeight(
         liveRowCount: Int,
-        openRowHeight: CGFloat? = nil
+        openRowHeight: CGFloat? = nil,
+        groupHeaderCount: Int = 0
     ) -> CGFloat {
         min(
             sessionListContentHeight(
                 liveRowCount: liveRowCount,
-                openRowHeight: openRowHeight
+                openRowHeight: openRowHeight,
+                groupHeaderCount: groupHeaderCount
             ),
+            // **A header is never paid for out of rows.** The cap is whatever
+            // it was — three closed rows, or one open question — plus the bars
+            // above them, so a grouped list shows the three rows an ungrouped
+            // one shows and scrolls at the same place. The alternative was
+            // holding `240`: `32 + 80 + 32 + 80` leaves two rows visible, and
+            // a third of what this panel is for spent on chrome.
             max(sessionViewportCap, openRowHeight ?? 0)
+                + productGroupHeaderHeight * CGFloat(max(groupHeaderCount, 0))
         )
     }
 
@@ -1505,9 +1537,14 @@ enum PanelMetrics {
         openRowHeight: CGFloat? = nil,
         retiredRowCount: Int = 0,
         isRecentExpanded: Bool = false,
-        footerHeight: CGFloat = restingFooterHeight
+        footerHeight: CGFloat = restingFooterHeight,
+        groupHeaderCount: Int = 0
     ) -> CGFloat {
-        sessionViewportHeight(liveRowCount: liveRowCount, openRowHeight: openRowHeight)
+        sessionViewportHeight(
+            liveRowCount: liveRowCount,
+            openRowHeight: openRowHeight,
+            groupHeaderCount: groupHeaderCount
+        )
             + recentSectionHeight(
                 retiredRowCount: retiredRowCount,
                 isRecentExpanded: isRecentExpanded
@@ -2751,6 +2788,41 @@ final class MonitorStore: ObservableObject {
         connectedAgents.count > 1 || attributedAgents.count > 1
     }
 
+    /// Whether the live list is drawn as one block per product.
+    ///
+    /// **The badge's own gate, and deliberately the same one**, because the two
+    /// are exactly complementary: a live row draws its chip only while the list
+    /// is *not* grouped, and the block's header names the product for every row
+    /// under it while it is. Tying them to one question is what makes it
+    /// impossible for a row to end up with neither — which two gates, however
+    /// carefully written, eventually would.
+    ///
+    /// It follows that this is keyed to **presence** rather than to who has a
+    /// row this second, which is what keeps the whole structure from appearing
+    /// and vanishing as one product's rows drain while both stay open.
+    ///
+    /// **The Recent queue is not grouped and keeps its chip** — see
+    /// ``MonitorAggregation/SessionGroup``. Below the seam the reading is an
+    /// age and the ages are one descent; that column is the queue's whole
+    /// value and a header would restart it at every block.
+    var groupsSessionsByProduct: Bool { showsProductAttribution }
+
+    /// The live list as blocks, or nothing at all while it is not grouped.
+    var sessionGroups: [MonitorAggregation.SessionGroup] {
+        guard groupsSessionsByProduct else { return [] }
+        return MonitorAggregation.groups(of: sessions)
+    }
+
+    /// How many headers the live list draws, without building the blocks.
+    ///
+    /// Read by three height accessors on every pass the panel is sized on, so
+    /// it counts the products rather than allocating a row array per product
+    /// and asking how many survived.
+    var sessionGroupHeaderCount: Int {
+        guard groupsSessionsByProduct else { return 0 }
+        return Set(sessions.map(\.agent)).count
+    }
+
     /// Every product named anywhere on the list, above the rule and below it.
     private var attributedAgents: Set<AgentKind> {
         Set(sessions.map(\.agent))
@@ -2888,7 +2960,8 @@ final class MonitorStore: ObservableObject {
             openRowHeight: openRowHeight,
             retiredRowCount: recentDepartures.count,
             isRecentExpanded: isRecentExpanded,
-            footerHeight: expandedFooterHeight
+            footerHeight: expandedFooterHeight,
+            groupHeaderCount: sessionGroupHeaderCount
         )
     }
 
@@ -2903,14 +2976,16 @@ final class MonitorStore: ObservableObject {
     var sessionListContentHeight: CGFloat {
         PanelMetrics.sessionListContentHeight(
             liveRowCount: sessions.count,
-            openRowHeight: openRowHeight
+            openRowHeight: openRowHeight,
+            groupHeaderCount: sessionGroupHeaderCount
         )
     }
 
     var sessionViewportHeight: CGFloat {
         PanelMetrics.sessionViewportHeight(
             liveRowCount: sessions.count,
-            openRowHeight: openRowHeight
+            openRowHeight: openRowHeight,
+            groupHeaderCount: sessionGroupHeaderCount
         )
     }
 

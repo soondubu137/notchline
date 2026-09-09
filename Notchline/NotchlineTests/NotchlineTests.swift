@@ -487,25 +487,46 @@ struct NotchlineTests {
         let dot = shut.buriesAFinishedTurn ? PanelMetrics.buriedFinishSlotWidth : 0
         #expect(shut.compactDrawnTrailingReadingWidth == drawn + dot)
 
-        // Four Codex rows, three of them finished under a mark that is drawing
-        // something else -- which is what sets the buried-finish dot breathing.
-        // A drawn fact with no text beside it, so the key is the only place it
-        // is explained and this is the only place it is pinned.
-        let codex = shut.presenceMarks.first { $0.agent == .codex }
-        #expect((codex?.sessionCount ?? 0) > 3)
+        // A finished turn sitting under a mark that is drawing something else,
+        // which is what sets the buried-finish dot breathing. A drawn fact
+        // with no text beside it, so the key is the only place it is explained
+        // and this is the only place it is pinned.
         #expect(shut.buriesAFinishedTurn)
 
-        // Claude Code has finished with a subagent still working. That is one
-        // row drawing a badge where a reading would be -- the sixth pin on the
-        // open panel -- and it is also why this product's mark is on radar
-        // rather than lull.
-        let claude = shut.presenceMarks.first { $0.agent == .claudeCode }
-        #expect(claude?.status == .running)
-        let claudeRow = hovered.sessions.first { $0.agent == .claudeCode }
-        #expect(claudeRow?.showsSubagentBadge == true)
-        // Second, so it is inside the three rows the panel lists. The pin is
-        // placed on that row's centre and would otherwise name empty black.
-        #expect(hovered.sessions.dropFirst().first?.agent == .claudeCode)
+        // **The list is grouped, so a row's place is decided by its block.**
+        // Three Codex rows and one of Claude Code's is `32 + 240 + 32` -- the
+        // grouped viewport exactly -- which is what puts both headings on the
+        // figure with three rows between them, and the fourth row under the
+        // rail rather than under the fold with nothing to say it is there.
+        #expect(hovered.groupsSessionsByProduct)
+        let blocks = hovered.sessionGroups
+        #expect(blocks.map(\.agent) == [.codex, .claudeCode])
+        #expect(blocks.map(\.sessions.count) == [3, 1])
+        #expect(
+            hovered.sessionViewportHeight
+                == PanelMetrics.productGroupHeaderHeight * 2
+                    + PanelMetrics.sessionRowHeight * 3
+        )
+        // The first block is stopped on the approval the whole drawing is of,
+        // so its count is drawn lit -- the one thing a heading says beyond its
+        // own name.
+        #expect(blocks.first?.wantsAttention == true)
+
+        // A turn finished with subagents still working: one row drawing a
+        // badge where a reading would be, which is the pin that names it, and
+        // also why the aggregate mark is on radar rather than lull. **Second
+        // inside the first block**, so it is one of the three rows the panel
+        // lists; the pin is placed on that row's centre and would otherwise
+        // name empty black.
+        let badged = try #require(hovered.sessions.dropFirst().first)
+        #expect(badged.agent == .codex)
+        #expect(badged.showsSubagentBadge)
+        #expect(MonitorAggregation.effectiveStatus(of: badged) == .running)
+
+        // And no row draws a chip of its own while the list is grouped: the
+        // heading above it has said which product it is, and the pin naming
+        // the caption line says `Project` rather than `Product and project`.
+        #expect(hovered.showsProductAttribution)
 
         // The panel's own footer, which the second page has the room to draw:
         // today's spend, and the control that opens one group per product --
@@ -3965,6 +3986,310 @@ struct NotchlineTests {
 
         #expect(store.connectedAgents == [.codex])
         #expect(store.showsProductAttribution)
+    }
+
+    /// The live list is one block per product, in the fixed order, and no
+    /// state moves it.
+    ///
+    /// **The order is the objection, not the indication.** Ordering the blocks
+    /// by their most urgent member was written and rejected for the reason
+    /// `dual-agent-design.md` §3.1 rejected it for the collapsed marks: two
+    /// blocks trading places at the moment somebody is about to read them is a
+    /// far larger movement than two marks doing it. So the approval moves from
+    /// one product to the other here and the blocks do not move at all.
+    ///
+    /// **And a product with no rows gets no block**, which is what keeps a
+    /// heading from ever standing over nothing (`panel-v2.md` §1, rule 2).
+    @Test @MainActor
+    func theBlocksKeepTheFixedProductOrderWhateverTheRowsAreDoing() {
+        let store = MonitorStore(services: [])
+        func session(_ agent: AgentKind, _ id: String, _ status: SessionStatus) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "p", title: "t",
+                preview: nil, status: status, startedAt: nil
+            )
+        }
+
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex, availability: .ready,
+                sessions: [session(.codex, "a", .running)]
+            )
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode, availability: .ready,
+                sessions: [session(.claudeCode, "b", .approvalNeeded)]
+            )
+        )
+
+        // Claude Code holds the only thing anybody is waiting on, and is still
+        // second.
+        #expect(store.sessionGroups.map(\.agent) == [.codex, .claudeCode])
+        #expect(store.sessionGroups.map(\.wantsAttention) == [false, true])
+        #expect(store.sessionGroupHeaderCount == 2)
+
+        // And with the approval on the other side, still second.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex, availability: .ready,
+                sessions: [session(.codex, "a", .approvalNeeded)]
+            )
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode, availability: .ready,
+                sessions: [session(.claudeCode, "b", .running)]
+            )
+        )
+        #expect(store.sessionGroups.map(\.agent) == [.codex, .claudeCode])
+        #expect(store.sessionGroups.map(\.wantsAttention) == [true, false])
+
+        // Claude Code drains but stays open: one block, one heading, and the
+        // structure does not flicker back to a flat list -- the gate is
+        // presence, like the chip's.
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [])
+        )
+        #expect(store.groupsSessionsByProduct)
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
+        #expect(store.sessionGroupHeaderCount == 1)
+
+        // And with one product connected there is nothing to tell apart: no
+        // block, no heading, and the flat list the panel has always drawn.
+        store.applyForTesting(
+            makeAgentSnapshot(.claudeCode, availability: .ready, presence: .closed)
+        )
+        #expect(!store.groupsSessionsByProduct)
+        #expect(store.sessionGroups.isEmpty)
+        #expect(store.sessionGroupHeaderCount == 0)
+    }
+
+    /// A heading is chrome, and is never paid for out of rows.
+    ///
+    /// The cap is `240` plus `32` for every heading drawn, so a grouped list
+    /// shows the three rows an ungrouped one shows and scrolls in the same
+    /// place. Holding the cap at `240` instead was the alternative, and it is
+    /// what this pins against: `32 + 80 + 32 + 80` leaves two rows visible,
+    /// which is a third of what the panel is for spent on chrome.
+    ///
+    /// **The apology is exempt**, because there is no block to head: with
+    /// nothing live the list is `48` whatever is connected.
+    @Test @MainActor
+    func aHeadingIsNeverPaidForOutOfRows() {
+        let store = MonitorStore(services: [])
+        func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "p", title: "t",
+                preview: nil, status: .running, startedAt: nil
+            )
+        }
+
+        // One product: today's panel, figure for figure.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex, availability: .ready,
+                sessions: [session(.codex, "a"), session(.codex, "b"), session(.codex, "c")]
+            )
+        )
+        #expect(store.sessionViewportHeight == PanelMetrics.sessionViewportCap)
+        #expect(store.sessionListContentHeight == PanelMetrics.sessionRowHeight * 3)
+
+        // Two, and the viewport grows by exactly the two headings -- so three
+        // rows are still drawn whole rather than two and a fraction.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode, availability: .ready,
+                sessions: [session(.claudeCode, "d"), session(.claudeCode, "e")]
+            )
+        )
+        let room = PanelMetrics.productGroupHeaderHeight * 2
+        #expect(store.sessionGroupHeaderCount == 2)
+        #expect(store.sessionViewportHeight == PanelMetrics.sessionViewportCap + room)
+        #expect(
+            store.sessionViewportHeight - room >= PanelMetrics.sessionRowHeight * 3,
+            "a grouped list draws fewer rows than a flat one"
+        )
+        #expect(
+            store.sessionListContentHeight
+                == PanelMetrics.sessionRowHeight * 5 + room
+        )
+
+        // Nothing live: no block, so no heading, and the apology stands at the
+        // height it has always stood at.
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready, sessions: []))
+        store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready, sessions: []))
+        #expect(store.sessionGroupHeaderCount == 0)
+        #expect(store.sessionViewportHeight == PanelMetrics.thinExpandedBodyHeight)
+    }
+
+    /// A row is named exactly once: by its own chip, or by the heading above
+    /// it, and never by both or by neither.
+    ///
+    /// The two are gated on one question for this reason — a boundary after a
+    /// boundary is a mark doing nothing (`panel-v2.md` §3.4), and two gates,
+    /// however carefully written, eventually disagree about the row in the
+    /// middle.
+    ///
+    /// **The line does not move either way.** The caption is
+    /// ``PanelMetrics/sessionRowCaptionHeight`` whether or not a chip is in it,
+    /// so nothing on a row shifts at the instant a second product connects.
+    @Test @MainActor
+    func aRowIsNamedByItsChipOrByItsHeadingAndNeverByBoth() {
+        let store = MonitorStore(services: [])
+        func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "p", title: "t",
+                preview: nil, status: .running, startedAt: nil
+            )
+        }
+        func drawsAChip(_ store: MonitorStore) -> Bool {
+            store.showsProductAttribution && !store.groupsSessionsByProduct
+        }
+
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex, availability: .ready, sessions: [session(.codex, "a")]
+            )
+        )
+        // One product: no chip and no heading, because there is nothing to
+        // tell apart.
+        #expect(!drawsAChip(store))
+        #expect(store.sessionGroups.isEmpty)
+
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode, availability: .ready, sessions: [session(.claudeCode, "b")]
+            )
+        )
+        // Two: the heading names them, so the chip goes -- and it is the same
+        // question answered once, not two questions that happen to agree.
+        #expect(!drawsAChip(store))
+        #expect(!store.sessionGroups.isEmpty)
+        #expect(store.groupsSessionsByProduct == store.showsProductAttribution)
+
+        // Below the seam nothing is grouped, so the chip stays exactly where
+        // it was: the queue's whole reading is an age, and the ages are one
+        // descent that a heading would restart at every block. The queue asks
+        // `showsProductAttribution` alone, which is still true here, and its
+        // own viewport still answers to a row count and nothing else.
+        #expect(store.showsProductAttribution)
+        #expect(
+            PanelMetrics.recentViewportHeight(retiredRowCount: 4)
+                == PanelMetrics.retiredRowHeight * 4
+        )
+    }
+
+    /// Inside a block the order is the one the list has always kept.
+    ///
+    /// `PRD.md` §6.2's priority, then most recent, then identity -- unchanged,
+    /// and asked of the same ``MonitorAggregation/rowOrder``. What grouping
+    /// changes is only which rows are compared with which: a status change now
+    /// re-sorts a row inside its own block, and it never crosses a heading,
+    /// which is a shorter journey than the one it makes today.
+    @Test @MainActor
+    func insideABlockTheOrderIsUnchanged() {
+        let now = Date()
+        func session(
+            _ agent: AgentKind, _ id: String, _ status: SessionStatus, ago: TimeInterval
+        ) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "p", title: id,
+                preview: nil, status: status, startedAt: now.addingTimeInterval(-ago)
+            )
+        }
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex, availability: .ready,
+                sessions: [
+                    session(.codex, "old-run", .running, ago: 900),
+                    session(.codex, "done", .completed, ago: 60),
+                    session(.codex, "asks", .approvalNeeded, ago: 300),
+                    session(.codex, "new-run", .running, ago: 30)
+                ]
+            )
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode, availability: .ready,
+                sessions: [session(.claudeCode, "cc", .inputNeeded, ago: 10)]
+            )
+        )
+
+        let codex = try? #require(store.sessionGroups.first)
+        #expect(
+            codex?.sessions.map(\.title) == ["asks", "new-run", "old-run", "done"]
+        )
+        // And the blocks together are the flat list, re-cut rather than
+        // re-sorted: every row is in exactly one block, and none has gone.
+        #expect(
+            store.sessionGroups.flatMap(\.sessions).map(\.id).sorted()
+                == store.sessions.map(\.id).sorted()
+        )
+    }
+
+    /// A block's count is lit only while something in it wants a person.
+    ///
+    /// **Derived status, like the summary and the sort**: a subagent stopped
+    /// at a dialogue counts, and a turn that has finished with subagents still
+    /// working does not. Grouped, the most urgent row on the surface may be
+    /// inside the second block and below the fold, and this is the whole of
+    /// what says so -- one step of value on a figure already drawn, in the
+    /// channel `panel-v2.md` §1.1 reserves for exactly this meaning.
+    @Test @MainActor
+    func aBlockCountIsLitOnlyWhileSomethingInItWantsAPerson() {
+        let store = MonitorStore(services: [])
+        func session(
+            _ agent: AgentKind,
+            _ id: String,
+            _ status: SessionStatus,
+            subagents: Int = 0,
+            waiting: Int = 0
+        ) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "p", title: "t",
+                preview: nil, status: status, startedAt: nil,
+                runningSubagentCount: subagents,
+                subagentsAwaitingApprovalCount: waiting
+            )
+        }
+
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex, availability: .ready,
+                sessions: [
+                    session(.codex, "run", .running),
+                    // Finished with a subagent still in flight: `Running` to
+                    // the sort, and nobody is being asked anything.
+                    session(.codex, "busy", .completed, subagents: 2)
+                ]
+            )
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode, availability: .ready,
+                sessions: [session(.claudeCode, "quiet", .completed)]
+            )
+        )
+        #expect(store.sessionGroups.map(\.wantsAttention) == [false, false])
+
+        // A subagent stopped at a dialogue is the product waiting for a person,
+        // and the block says so even though the turn's own status does not.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode, availability: .ready,
+                sessions: [
+                    session(.claudeCode, "quiet", .completed, subagents: 1, waiting: 1)
+                ]
+            )
+        )
+        #expect(store.sessionGroups.map(\.wantsAttention) == [false, true])
     }
 
     /// **The badge and the mark share one ink, and it cannot drift.**

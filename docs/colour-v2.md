@@ -91,8 +91,9 @@ At the default **Sage · hint** that is ground `#1B1F1C`, text `#DEE8E0`. Every 
 
 | Surface | Today | Now |
 | --- | --- | --- |
-| Session row caption | `Codex ·` in the product's caption ink, or one of three other presentations | The badge, then the Project, with **no separator between them** ([`panel-v2.md`](panel-v2.md) §3.4) |
-| A row's breadcrumb below the seam ([`expanded-panel-v2.md`](expanded-panel-v2.md)) | All four presentations reach it | The badge, in place of the prefix |
+| Session row caption | `Codex ·` in the product's caption ink, or one of three other presentations | ~~The badge, then the Project~~ — **the Project alone, since 2026-09-08.** The live list is one block per product and the block's own heading carries the badge, so a chip on every line under it is the boundary after a boundary [`panel-v2.md`](panel-v2.md) §3.4 deleted ([`expanded-panel-v2.md`](expanded-panel-v2.md) §4). An **open** row keeps its chip: opening un-pins the headings, so the block's own is usually what has just scrolled off, and the product is what decides its answer footer |
+| A live block's heading | Did not exist | **The badge, then `· N`**, with no separator and `6` between them — the badge's own padding, and the same gap the row gave up. `#C7C7CC` on the count while that block holds a row that wants a person, `#7C7C80` otherwise |
+| A row's breadcrumb below the seam ([`expanded-panel-v2.md`](expanded-panel-v2.md)) | All four presentations reach it | The badge, in place of the prefix — **and it stays**, because the queue is not grouped: its whole reading is an age, and the ages are one descent a heading would restart at every block |
 | Quota footer, opened table's outer row | `Codex ────── 310.1M today` | ~~Badge, leader, spend~~ — **void 2026-09-06** ([`quota-footer-v2.md`](quota-footer-v2.md) §12.1): the name alone, in Medium at `#C7C7CC`, with no chip and no leader. A badge marks a product on something that is happening; here it is a heading in a table |
 | Quota footer, the spoken line | `Claude Code · 5 h · 8% left · 47m` | ~~Badge, then `5 h · 8% left · 47m`~~ — void with the line itself ([`quota-footer-v2.md`](quota-footer-v2.md) §4) |
 | Expanded header band | One column per agent, in that agent's inks | Nothing — §3 |

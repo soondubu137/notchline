@@ -6,6 +6,7 @@
 | Version | 2.2 |
 | Date | 2026-09-04, amended 2026-09-05 |
 | Amended | **§2's queue is a five-hour window, not a five-row queue.** Membership is every row that left within the past five hours; five is now the number the viewport *draws* rather than the number the store *holds*. Touched: §2.2, §2.3, §2.4 (rules 01, 02, 05, 09 and a new 11), §2.5 (new), §2.6, §4, §5, §6, §7, §8.1, §8.5, §8.6, §9, §10. **No metric moves** — `32 + 5 × 40 = 232 ≤ 240 < 272` already said "five, then scroll", and it now says it about the fold instead of the store. One thing gets worse and is stated rather than finessed: the queue is now literally the "fixed time window" [`PRD.md`](PRD.md) §3 bans, and §8.1 rewrites that sentence instead of arguing with it. |
+| Amended | **The live list is grouped by product** (2026-09-08), and the queue is not. §4 is the whole of it: one block per product that has a row, headed by the bar §2.2 already defines, in the fixed product order, with the chip coming off the live row and staying on the retired one. Nothing in §2 moves — the seam, the window, the ages, the fold and the five rows are untouched — and nothing in §3 is touched either. Built the same day. |
 | Amended | **`No active sessions` is drawn whenever nothing is live, queue or no queue** (2026-09-05). §2 let the seam take the sentence's place, on the reading that a list continuing past its own end is a better answer than an apology. It is a better answer to a different question: what has left is not what is running, and the panel was left unable to say the one thing it exists to say for as long as anything sat under the rule. The apology becomes the empty list's own first line, above the seam and inside the same scroller. Touched: §2.4 rule 02, §2.6, §4, §9, §10. **No metric moves, and the floor comes back up** — `178` again rather than `162`, with a folded queue `32` above it; the fold with nothing live is four rows rather than five, because `48 + 32 + 4 × 40` is the `240` cap exactly. |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `06 — The expanded panel` |
 | Scope | The expanded panel's session viewport only: the region between the band and the quota footer. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the footer is [`dual-agent-design.md`](dual-agent-design.md) §5, and both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None of the three is touched. |
@@ -96,6 +97,102 @@ Three things follow, and each closes something the earlier draft left loose.
 **The floor it returns to is the floor it left**, and that is the whole of what the queue costs an empty panel: `32`, and the rows under it while somebody has them open. It never buys the apology's `48` back (§4).
 
 **That is also where the discoverability cost sits**, and it is paid deliberately. With three things waiting on you, what you finished twenty minutes ago is not the question. What makes it affordable is that the seam returns exactly when it gains a member: three live rows becoming two puts it at `192`, inside the viewport, at the moment something retires into it. Pinning the seam to the foot of the viewport was evaluated and declined — §8.5 question 01.
+
+## 4. Grouping the live list by product
+
+> Numbered `4` rather than `3.x` because §3 is superseded entire and this does
+> not belong under it. It is the second thing this document's scope — the
+> session viewport between the band and the footer — has been asked to change.
+
+### 4.1 What changes, and what does not
+
+**The list is one block per product; the queue is one list in departure
+order.** That asymmetry is the design, not an omission:
+
+| | The live list | The Recent queue |
+| --- | --- | --- |
+| The question it answers | Who is waiting for me | What did I just finish |
+| Its own reading | A status, a project, a title and a preview — of which the product is one more fact | A breadcrumb and an **age**, and the age is doing nearly all of the work |
+| What a division by product costs it | Nothing it was not already paying: rows of one product were already adjacent whenever the sort put them there | The column. Today the ages run in one descent — §2.3's ceiling of `4h` exists so the reading never grows a unit and the column never moves — and a heading restarts that sequence at every block, putting the newest thing on the surface fourth |
+
+So the queue keeps its order and keeps its chip, and everything below is about
+the list above the seam.
+
+### 4.2 The heading
+
+**It is §2.2's seam with the badge standing where the label stands**, and the
+chevron taken off:
+
+```
+32  =  8  +  badge 16  +  8            (the seam's own 9 + 14 + 9, to the point)
+[Codex]  · 3  ────────────────────────────────────────────────────────  508
+```
+
+- The badge is [`colour-v2.md`](colour-v2.md) §5's chip unchanged — `16` tall,
+  corner `5`, `6` of padding, `10` pt Medium, `#DEE8E0` on `#1B1F1C` — on the
+  panel's own `12`.
+- `· N` is the caption idiom exactly, separator included: `11` pt Light at
+  `#7C7C80`, `6` after the chip, which is the badge's own padding and the gap
+  §2.3 already puts between a chip and what follows it.
+- The hairline is the seam's, `8` after the count — and it **runs to `508`**,
+  where the seam's stops `8` short of a `16 × 16` control at `492`. That is the
+  only thing on this surface distinguishing a label from a bar you can press,
+  and it is the whole visual difference between the two.
+- **No chevron, no ground, no hover, no press.** There is nothing to fold yet
+  ([`panel-v2.md`](panel-v2.md)), and a bar that washes under the pointer and
+  then does nothing is [`answer-in-notch.md`](answer-in-notch.md) §11 rule 03's
+  promise made quietly. Folding stays a pure addition: the chevron goes back at
+  `492`, the rule stops short of it again, and the seam's own ground and click
+  arrive with it.
+
+### 4.3 The rules
+
+| | Rule | |
+| --- | --- | --- |
+| 01 | **Headings are drawn on `showsProductAttribution` and nowhere else** — the same gate the chip already answers to, so the two are exactly complementary and a row can never end up with neither. Keyed to presence, so the structure does not appear and vanish as one product's rows drain while both stay open. With one product connected the list is the flat one it has always been | §8.6 |
+| 02 | **The block order is fixed** — `AgentKind`'s own, Codex then Claude Code, never re-ordered by state. The precedent is `MonitorStore.footerRules`; the argument is [`dual-agent-design.md`](dual-agent-design.md) §3.1's about the collapsed marks, on a much larger object | |
+| 03 | **Inside a block nothing changes.** `MonitorAggregation.rowOrder` as it stands ([`PRD.md`](PRD.md) §6.2). A status change re-sorts a row inside its own block and never across a heading, which is a shorter journey than the one it makes today | |
+| 04 | **A product with no rows draws no heading.** Nothing is drawn while it has nothing to say; the band already counts what is running. The cap falls by that heading's `32` at the same moment the row that emptied the block left, so the two changes are one change | |
+| 05 | **The chip comes off the live row and stays in its spoken name.** A boundary after a boundary is a mark doing nothing ([`panel-v2.md`](panel-v2.md) §3.4). The caption line is `16` with a chip and without one, so nothing moves vertically — the Project simply starts on the row's own `12`. VoiceOver keeps the product for the reason §2.3 already gives about a retired row: a reader arriving row by row has no surface to compare against | |
+| 06 | **The heading pins**, and that is what makes rule 05 safe: a row can be scrolled away from its heading but never orphaned from its name. **Except while a row is open**, where opening scrolls the row to the top of the viewport and a pinned heading would sit over its caption line — whose trailing end is the chevron that closes it. An open row is the subject and everything else is at `45%`, so the list is not being scanned, which is pinning's only job. The open row keeps its own chip for the same reason, and because the product decides what its answer footer can do ([`answer-in-notch.md`](answer-in-notch.md) §14.2) | |
+| 07 | **A heading is chrome and is never paid for out of rows.** The cap is `240 + 32 × headings drawn`, so a grouped list shows the three rows a flat one shows and scrolls in the same place. Holding the cap at `240` was the alternative and is declined: `32 + 80 + 32 + 80` leaves two rows visible, which is a third of what the panel is for spent on chrome | §4.4 |
+| 08 | **The count is lit while its block holds a row that wants a person** — `#C7C7CC` rather than `#7C7C80`, on derived status like the summary and the sort. Grouped, the most urgent row on the surface may be inside the second block and below the fold; this is the whole of what says so, in the channel [`panel-v2.md`](panel-v2.md) §1.1 reserves for exactly that meaning | §4.5 |
+| 09 | **The queue is not grouped**, keeps its chip and keeps its cap. §4.1 | |
+| 10 | **The band and both collapsed forms are untouched.** Nothing here is visible with the panel shut | |
+
+### 4.4 What it costs
+
+```
+live viewport  =  min(content,  max(240, open row) + 32 × headings)
+```
+
+| The state | Live | Panel | It was |
+| --- | --- | --- | --- |
+| One product connected | 240 | **324** | 324 |
+| Both connected, one holding rows | 272 | **356** | 324 |
+| Both connected, both holding rows | 304 | **388** | 324 |
+| …with a queue folded under it | 304 | **420** | 356 |
+
+**One number: `64`, once, at two products** — `32` while only one of them is
+holding rows, and nothing at all at one connected product. It is paid against
+[`panel-v2.md`](panel-v2.md) §4's own direction of travel, which took this panel
+from `370` to `308` by taking things off it. The difference is that this puts
+something on that the panel did not previously say.
+
+### 4.5 The guarantee that weakens
+
+Today the first row on the surface is the most urgent row on the surface.
+Grouped, it is the most urgent row **of the first product**, and an approval on
+the second can sit below the fold. Three things carry it and none is new: the
+band is unchanged and still reports the maximum across both products; the
+collapsed bar, which is the surface that actually interrupts, is untouched; and
+rule 08's lit count says which block is holding somebody.
+
+This is stated rather than solved. The two shapes that would solve it are
+declined — ordering the blocks by their most urgent member (rule 02), and a
+"needs you" band above the blocks, which is two organising axes at once and
+makes a status change move a row across the whole list rather than inside its
+own block (§2.4 rule 04's *one local exchange, nothing travelling*).
 
 ## 3. Answering in the notch
 

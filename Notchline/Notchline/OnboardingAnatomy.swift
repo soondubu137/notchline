@@ -86,10 +86,15 @@ enum NotchSpecimen {
     ///   A finished turn sitting under a mark that is drawing something else is
     ///   the condition the trailing wing's dot breathes for, so the shut bar
     ///   draws that dot.
-    /// - The Claude Code turn is **finished with a subagent still working**.
+    /// - The second Codex turn is **finished with subagents still working**.
     ///   That is the one row drawing a badge where a reading would be, and it
-    ///   is also why this product's mark is on radar rather than lull: a thread
+    ///   is also why the aggregate mark is on radar rather than lull: a thread
     ///   with a subagent in flight is still running (``MonitorAggregation``).
+    /// - The Claude Code turn has simply **finished**, and its whole job is to
+    ///   put a second block on the list. With `3` Codex rows and `1` of its
+    ///   own, the two headings and three rows are `32 + 240 + 32` — the
+    ///   grouped viewport exactly, so the figure shows both blocks, and the
+    ///   row below the second heading is what the rail is reporting.
     /// - A sixth Codex turn has **finished and left the list**, which is the
     ///   Recent seam under the rows. It is staged by the ordinary arrow rather
     ///   than placed: ``makeStore(isExpanded:at:)`` hands the store the list
@@ -103,44 +108,54 @@ enum NotchSpecimen {
         [
             .codex: [
                 approvalRow(at: now),
+                subagentRow(at: now),
                 finished(
                     id: "audit",
                     title: "Audit the hook payload paths",
                     preview: "Both products reach the reducer.",
                     at: now,
                     endedAgo: 540
-                ),
+                )
+            ]
+                + (includingDeparted ? [departing(at: now)] : []),
+            .claudeCode: [
                 finished(
+                    agent: .claudeCode,
                     id: "edges",
                     title: "Keep the collapsed bar's edges still",
                     preview: "The trailing slot is billed for a fixed width.",
                     at: now,
                     endedAgo: 1_260
-                ),
-                finished(
-                    id: "fold",
-                    title: "Fold the quota block away",
-                    preview: "The chevron leaves the totals line standing.",
-                    at: now,
-                    endedAgo: 2_400
-                )
-            ]
-                + (includingDeparted ? [departing(at: now)] : []),
-            .claudeCode: [
-                MonitoredSession(
-                    agent: .claudeCode,
-                    threadID: "specimen-claude",
-                    turnID: "specimen-claude-turn",
-                    projectName: "notchline",
-                    title: "Validate the notch positioning",
-                    preview: "Positioning tests pass on this Mac.",
-                    status: .completed,
-                    startedAt: now.addingTimeInterval(-247),
-                    runningSubagentCount: 4,
-                    finishedAt: now.addingTimeInterval(-96)
                 )
             ]
         ]
+    }
+
+    /// The row drawing a badge where a reading would be: a turn that has
+    /// finished with subagents still working, which is why it is `Running` to
+    /// the summary and the sort (``MonitorAggregation/effectiveStatus(of:)``)
+    /// while its own status stays `Completed`.
+    ///
+    /// **Codex's, and it used to be Claude Code's.** With the list grouped by
+    /// product the two products no longer interleave, so a row's place on the
+    /// drawing is decided by its block: as Claude Code's it sorted second in a
+    /// block of one, four rows below the fold, and the pin naming it pointed at
+    /// a Codex row with nothing to say. It teaches the badge, not the product,
+    /// so it moves to the block the figure can actually show — and Claude Code
+    /// keeps a row of its own, which is what the second header is drawn over.
+    private static func subagentRow(at now: Date) -> MonitoredSession {
+        MonitoredSession(
+            agent: .codex,
+            threadID: "specimen-subagents",
+            turnID: "specimen-subagents-turn",
+            projectName: "notchline",
+            title: "Validate the notch positioning",
+            preview: "Positioning tests pass on this Mac.",
+            status: .completed,
+            startedAt: now.addingTimeInterval(-247),
+            runningSubagentCount: 4,
+            finishedAt: now.addingTimeInterval(-96)
+        )
     }
 
     /// The row at the head of the list: stopped on an approval, and holding
@@ -214,8 +229,9 @@ enum NotchSpecimen {
         )
     }
 
-    /// One of the finished Codex turns stacked up under the mark.
+    /// One of the finished turns stacked up under the mark.
     private static func finished(
+        agent: AgentKind = .codex,
         id: String,
         title: String,
         preview: String?,
@@ -223,7 +239,7 @@ enum NotchSpecimen {
         endedAgo: TimeInterval
     ) -> MonitoredSession {
         MonitoredSession(
-            agent: .codex,
+            agent: agent,
             threadID: "specimen-codex-\(id)",
             turnID: "specimen-codex-\(id)-turn",
             projectName: "notchline",
@@ -1038,8 +1054,15 @@ struct ExpandedPanelAnatomy: View {
             + PanelMetrics.sessionRowLineSpacing
             + PanelMetrics.sessionRowPreviewHeight
         let inset = (PanelMetrics.sessionRowHeight - lines) / 2
-        let firstRow = header
-        let secondRow = header + PanelMetrics.sessionRowHeight
+        // **The first block's header stands between the band and the first
+        // row**, so every row pin below starts under it. Zero with one product
+        // connected, where nothing is grouped and this figure is the one it
+        // has always been.
+        let blockHeader = store.groupsSessionsByProduct
+            ? PanelMetrics.productGroupHeaderHeight
+            : 0
+        let firstRow = header + blockHeader
+        let secondRow = firstRow + PanelMetrics.sessionRowHeight
         let caption = firstRow + inset + PanelMetrics.sessionRowCaptionHeight / 2
         let title = firstRow
             + inset
@@ -1057,9 +1080,14 @@ struct ExpandedPanelAnatomy: View {
         // What the live list is given, and the two closing bars under it. They
         // are the same `32` pt bar drawn twice (`quota-footer-v2.md` §2), so
         // both pins are placed on the middle of one height.
-        let list = header + PanelMetrics.sessionViewportHeight(
-            liveRowCount: store.sessions.count
-        )
+        // **Asked of the store, not of `PanelMetrics` again.** The viewport
+        // grows by the headers it draws, and the store is where that count
+        // lives; re-deriving the height from a row count alone put this pin —
+        // and the two below it — `64` above the bars they name the moment a
+        // second product connected. It is the same fault, in the same
+        // direction, as the one ``MonitorStore/sessionViewportHeight`` was
+        // written to stop the list itself committing.
+        let list = header + store.sessionViewportHeight
         let seam = list + PanelMetrics.recentSeamHeight / 2
         let footer = list + PanelMetrics.recentSectionHeight(
             retiredRowCount: store.recentDepartures.count,
@@ -1095,13 +1123,25 @@ struct ExpandedPanelAnatomy: View {
             )
         }
 
-        return [
+        // The block heading, which is also why the rows under it no longer
+        // name their own product. Drawn only while the list is grouped, and
+        // the key renumbers behind it so the figure is never keyed `1, 2, 4`.
+        var key: [AnatomyPin] = [
             left(1, header / 2, "Same as above"),
-            right(2, header / 2, "Settings"),
+            right(2, header / 2, "Settings")
+        ]
+        if store.groupsSessionsByProduct {
+            key.append(left(3, header + blockHeader / 2, "Whose these are"))
+        }
+        let next = key.count + 1
+        return key + [
             // One pin, two feet: the Project only says which thing the title
-            // is on, so they are one reading rather than two.
+            // is on, so they are one reading rather than two. **The product is
+            // no longer one of them while the list is grouped** — the heading
+            // above has said it, and a chip repeating it on every line is the
+            // boundary after a boundary `panel-v2.md` §3.4 deleted.
             AnatomyPin(
-                id: 3,
+                id: next,
                 x: leftMargin * scale,
                 y: (caption + title) / 2 * scale,
                 leader: .forkRight(
@@ -1109,20 +1149,22 @@ struct ExpandedPanelAnatomy: View {
                     spread: (title - caption) / 2 * scale,
                     foot: forkFoot
                 ),
-                label: "Product, Project, title"
+                label: store.groupsSessionsByProduct
+                    ? "Project and title"
+                    : "Product, Project, title"
             ),
-            left(4, lastSaid, "The last thing said"),
+            left(next + 1, lastSaid, "The last thing said"),
             // The row's own control, and the one part of either drawing that
             // does something: the mark opens this Thread's request
             // (`answer-in-notch.md` §3).
-            right(5, firstMark, "Answer it here"),
-            right(6, secondMark, "Subagents"),
+            right(next + 2, firstMark, "Answer it here"),
+            right(next + 3, secondMark, "Subagents"),
             // The seam between what is running and what has been and gone.
-            left(7, seam, "Rows that have left"),
-            left(8, spend, "Today’s tokens"),
+            left(next + 4, seam, "Rows that have left"),
+            left(next + 5, spend, "Today’s tokens"),
             // The footer's other half, and the only control on it: the
             // rate-limit windows are behind this rather than drawn at rest.
-            right(9, spend, "Rate limits")
+            right(next + 6, spend, "Rate limits")
         ]
     }
 

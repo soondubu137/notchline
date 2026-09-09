@@ -25,7 +25,9 @@ struct AnatomyCallout: Identifiable {
         case above, below
     }
 
-    let id: Int
+    /// Renumbered as the key is assembled, so a callout that only appears
+    /// on some drawings cannot leave a gap in it.
+    var id: Int
     let text: String
     let side: Side
     /// The point on the figure the leader arrives at, in the figure's own
@@ -361,8 +363,42 @@ struct AnatomyAnchors {
     /// The rail stands on the panel's own `12` pt inset and never in it.
     var railLeft: CGFloat { trailingEdge - PanelMetrics.scrollRailWidth }
 
+    /// The top of the row at `index` in **drawing** order.
+    ///
+    /// **Drawing order, which is the store's only while the list is flat.**
+    /// Grouped, a heading stands ahead of each block and the row a callout
+    /// names is wherever those push it; walking the blocks is the only way to
+    /// answer that without the figure and the drawing keeping two ideas of
+    /// where a row is.
     func rowTop(_ index: Int) -> CGFloat {
-        band + PanelMetrics.sessionRowHeight * CGFloat(index)
+        let groups = store.sessionGroups
+        guard !groups.isEmpty else {
+            return band + PanelMetrics.sessionRowHeight * CGFloat(index)
+        }
+        var drawn = 0
+        var y = band
+        for group in groups {
+            y += PanelMetrics.productGroupHeaderHeight
+            for _ in group.sessions {
+                if drawn == index { return y }
+                drawn += 1
+                y += PanelMetrics.sessionRowHeight
+            }
+        }
+        return y
+    }
+
+    /// The middle of the heading standing immediately above the row at
+    /// `index`, when that row is the first of its block.
+    func headingAboveRow(_ index: Int) -> CGFloat? {
+        var drawn = 0
+        for group in store.sessionGroups {
+            if drawn == index {
+                return rowTop(index) - PanelMetrics.productGroupHeaderHeight / 2
+            }
+            drawn += group.sessions.count
+        }
+        return nil
     }
 
     /// The row's three lines, at the offsets the row's own content block puts
@@ -659,7 +695,7 @@ struct ReadmeAnatomyCard: View {
         return [
             // The band, which the collapsed bar draws identically.
             AnatomyCallout(
-                id: 1,
+                id: 0,
                 text: "Status of everything at once",
                 side: .leading,
                 target: CGPoint(x: a.matrixLeft, y: a.matrixMidY),
@@ -667,38 +703,48 @@ struct ReadmeAnatomyCard: View {
                 drop: -12
             ),
             AnatomyCallout(
-                id: 2,
+                id: 0,
                 text: "Sessions and subagents",
                 side: .above,
                 target: CGPoint(x: a.countsX, y: a.matrixTop),
                 stem: 22
             ),
             AnatomyCallout(
-                id: 3,
+                id: 0,
                 text: "Settings",
                 side: .trailing,
                 target: CGPoint(x: a.gearGlyphRight, y: a.matrixMidY),
                 stem: 26
             ),
 
+            // The heading over the first block, and the reason the row under
+            // it no longer names its own product.
+            AnatomyCallout(
+                id: 0,
+                text: "One block per product",
+                side: .leading,
+                target: CGPoint(x: a.rowTextLeft, y: a.headingAboveRow(0) ?? a.rowCaptionY(0)),
+                stem: 26
+            ),
+
             // One live row, line by line.
             AnatomyCallout(
-                id: 4,
-                text: "Product and project",
+                id: 0,
+                text: a.store.groupsSessionsByProduct ? "Project" : "Product and project",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.rowCaptionY(0)),
                 stem: 26,
                 drop: -18
             ),
             AnatomyCallout(
-                id: 5,
+                id: 0,
                 text: "What the turn is doing",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.rowTitleY(0)),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 6,
+                id: 0,
                 text: "The latest thing it said",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.rowPreviewY(0)),
@@ -706,28 +752,28 @@ struct ReadmeAnatomyCard: View {
                 drop: 18
             ),
             AnatomyCallout(
-                id: 7,
+                id: 0,
                 text: "Answer an approval without leaving",
                 side: .trailing,
                 target: CGPoint(x: a.rowTextRight, y: a.rowTitleY(0)),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 8,
+                id: 0,
                 text: "How long the turn has been running",
                 side: .trailing,
                 target: CGPoint(x: a.rowTextRight, y: a.rowTitleY(1)),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 9,
+                id: 0,
                 text: "Subagents still running",
                 side: .trailing,
                 target: CGPoint(x: a.rowTextRight, y: a.rowTitleY(2)),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 10,
+                id: 0,
                 text: "More sessions below",
                 side: .trailing,
                 target: CGPoint(x: a.railLeft, y: (a.rowTitleY(1) + a.rowTitleY(2)) / 2),
@@ -736,47 +782,56 @@ struct ReadmeAnatomyCard: View {
 
             // The two sections under the live list.
             AnatomyCallout(
-                id: 11,
+                id: 0,
                 text: "Sessions that have left the list",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.seamY),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 12,
+                id: 0,
                 text: "Fold a section away",
                 side: .trailing,
                 target: CGPoint(x: a.seamChevronRight, y: a.seamY),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 13,
+                id: 0,
                 text: "Product, project and title",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.retiredRowY(1)),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 14,
+                id: 0,
                 text: "How long ago it left",
                 side: .trailing,
                 target: CGPoint(x: a.retiredAgeRight, y: a.retiredRowY(1)),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 15,
+                id: 0,
                 text: "Tokens spent today",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.spendY),
                 stem: 26
             ),
             AnatomyCallout(
-                id: 16,
+                id: 0,
                 text: "Each product's own quota windows",
                 side: .leading,
                 target: CGPoint(x: a.windowLineLeft, y: a.windowLineY),
                 stem: 34
             )
         ]
+        // The heading callout is only on the figure while the list is grouped,
+        // so the key is numbered after the fact rather than by hand.
+        .filter { $0.text != "One block per product" || a.store.groupsSessionsByProduct }
+        .enumerated()
+        .map { index, callout in
+            var renumbered = callout
+            renumbered.id = index + 1
+            return renumbered
+        }
     }
 }

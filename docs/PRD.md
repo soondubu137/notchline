@@ -169,7 +169,7 @@ The summary order is:
 
 With the list empty, the collapsed state shows **presence** rather than our own connection health: `Connected` while any agent is connected, `Disconnected` when none is (§6.3).
 
-The list sorts by the same priority, and by most recent trustworthy update descending within a priority. Status changes re-sort immediately, but must never jerk the viewport while the user is scrolling or hovering the list; a lightweight order-updated hint is shown instead.
+The list sorts by the same priority, and by most recent trustworthy update descending within a priority. Status changes re-sort immediately, but must never jerk the viewport while the user is scrolling or hovering the list; a lightweight order-updated hint is shown instead. **Since 2026-09-08 that sort runs inside a block rather than across the whole list**: while two products are on the surface the list is one block per product, in the fixed product order, and the priority decides the order *within* each ([`expanded-panel-v2.md`](expanded-panel-v2.md) §4). The consequence is stated rather than finessed — the first row on the panel is now the most urgent row of the first product rather than of the surface — and it is the collapsed state, which is what actually interrupts, that still reports the maximum across both.
 
 **The summary and the sort read derived status, not the row's own.** The two diverge on three kinds of row, all caused by subagents, and **both products reach all three**:
 

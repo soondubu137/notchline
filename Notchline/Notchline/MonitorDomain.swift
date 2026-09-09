@@ -1264,6 +1264,63 @@ enum MonitorAggregation {
             .max { $0.actionRank < $1.actionRank } ?? .connecting
     }
 
+    /// One product's block on the live list: its rows, and whether anything in
+    /// them is stopped waiting on a person.
+    ///
+    /// **The list is grouped and the queue is not**, and that is the whole of
+    /// the asymmetry: a live row carries a status, a project, a title and a
+    /// preview, of which the product is one more fact among several; a retired
+    /// row carries a breadcrumb and an age, and the age is doing nearly all of
+    /// the work. Today the queue's ages run in one descent down the column —
+    /// `refreshRecentDepartures` sorts on `departedAt` descending precisely so
+    /// they cannot flap — and grouping would restart that sequence at every
+    /// header, putting the newest thing on the surface fourth. Product is the
+    /// useful division of "who is waiting for me"; time is the useful division
+    /// of "what did I just finish".
+    struct SessionGroup: Identifiable, Equatable, Sendable {
+        let agent: AgentKind
+        let sessions: [MonitoredSession]
+        /// Whether one of these rows is stopped waiting for a person.
+        ///
+        /// **Derived status, like the summary and the sort** (`PRD.md` §6.2),
+        /// so a subagent stuck at a dialogue counts and a finished turn whose
+        /// subagents are still working does not.
+        let wantsAttention: Bool
+
+        var id: AgentKind { agent }
+    }
+
+    /// The live list as blocks, one per product that has a row, in the fixed
+    /// product order and never in one the state can move.
+    ///
+    /// **The order is `AgentKind`'s own**, which is the order the collapsed
+    /// marks kept before they folded into one aggregate and the order
+    /// `MonitorStore.footerRules` still hands the quota table. Ordering the
+    /// blocks by their most urgent member was written and rejected for the
+    /// reason `dual-agent-design.md` §3.1 rejected it for the marks: the
+    /// objection to an order is not that it indicates something, it is that it
+    /// **moves**, and two blocks trading places is a much larger movement than
+    /// two marks doing it.
+    ///
+    /// **A product with no rows gets no block**, so it draws no header —
+    /// nothing is drawn while it has nothing to say (`panel-v2.md` §1 rule 2),
+    /// and the band above already counts what is running. Rows keep the order
+    /// they arrive in, which is ``rowOrder``'s, so a status change re-sorts a
+    /// row inside its own block and it never crosses a header.
+    nonisolated static func groups(
+        of sessions: [MonitoredSession]
+    ) -> [SessionGroup] {
+        AgentKind.allCases.compactMap { agent in
+            let own = sessions.filter { $0.agent == agent }
+            guard !own.isEmpty else { return nil }
+            return SessionGroup(
+                agent: agent,
+                sessions: own,
+                wantsAttention: own.contains { effectiveStatus(of: $0).wantsPerson }
+            )
+        }
+    }
+
     /// The order rows appear in, and a total one.
     ///
     /// Priority, then most recent, then the fixed product order, then identity.

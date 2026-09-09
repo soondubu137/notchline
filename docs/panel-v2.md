@@ -29,10 +29,12 @@ Three rules follow, and they are the whole of what the composed surface is:
 ```
 46   band       the aggregate mark, the two totals, the gear.  Leading side 53.8 at every agent count
 240  viewport   at most three live rows at 80; an open question may grow it to 400
+     +32 per product block drawn, since 2026-09-08 -- a heading is chrome and is
+     never paid for out of rows (expanded-panel-v2.md §4)
 22   footer     today's spend, and the control
 ```
 
-- **A row's caption is the badge and then the Project** — no separator (§3.4). The caption line is `16` whether or not a badge is in it, so nothing on a row moves at the moment a second product connects. The badge itself is drawn on `showsProductAttribution`: presence, not "who has threads right now".
+- ~~**A row's caption is the badge and then the Project**~~ **— on a live row, since 2026-09-08, the Project alone.** The list is one block per product and the block's heading carries the badge, so a chip on every line under it is the boundary after a boundary §3.4 deleted ([`expanded-panel-v2.md`](expanded-panel-v2.md) §4). What is unchanged is everything §3.4 was actually about: no separator anywhere, and the caption line is `16` whether or not a chip is in it, so nothing on a row moves at the moment a second product connects. A **retired** row is untouched — the queue is not grouped — and so is an open row's own caption. The clause below still governs both of those. **A row's caption is the badge and then the Project** — no separator (§3.4). The caption line is `16` whether or not a badge is in it, so nothing on a row moves at the moment a second product connects. The badge itself is drawn on `showsProductAttribution`: presence, not "who has threads right now".
 - **The reading is one slot in three outlines**: bright ground on a waiting row, bare on a running one, the dark chip on a finished one holding how long the Turn took. The badge is that same chip in the theme ink. *Since §3.5's redraw the waiting outline is not a reading at all but a `32` pt control carrying a verb; the slot is still one slot, and it is the one that is twice as tall.*
 - **The theme ink has three readers**: the mark, the badge, and — since [`answer-in-notch.md`](answer-in-notch.md) §5.5 — the `12 × 12` tick box on a question that accepts more than one answer. That box is the only coloured object anywhere inside an open row; everything else in there is white, `#C7C7CC`, `#7C7C80` or `#242424`.
 - **The footer draws one number, and then only what somebody opened.** ~~grows one line when a window crosses `15%` with more than `15%` of its time left~~ is void ([`quota-footer-v2.md`](quota-footer-v2.md) §4): there is no threshold, nothing is drawn differently for being low, and the two-level table is reached by the control alone. A field this app cannot read draws `--` in its own place and is marked in no other way.
@@ -103,6 +105,16 @@ Three consequences:
 - **Two of those nine figures are the user's own doing and the other seven are not.** Opening the quota table takes the panel to `420` or `507`, on a control that is always drawn. Everything else is `308` or below, whatever is connected, whatever is running, and whatever the machine's cut-out measures.
 - **The cap has not moved; the floor under it has.** `308` is still reached by three live rows or by one request opened at the body's cap — not by owning a second product.
 - ~~**A limit speaking is the one state neither the user nor the machine chose.** It costs `25`, once, at any product and window count, and it arrives as a line that was not there a moment ago.~~ **Void, and it makes the bullet above absolute.** With the threshold removed, the *only* thing that takes this panel past `308` is the user opening the quota table. Nothing the machine observes — no share, no reset, no unreadable reading — changes its height at all.
+
+Grouping the live list (2026-09-08): the viewport gains `32` for every product
+block it draws, so the resting two-product panel is `388` without a queue and
+`420` with one folded under it, against `324` / `356` before. **That makes the
+second bullet above conditional for the first time**: opening the quota table is
+no longer the only thing that takes this panel past its resting height —
+connecting a second product does too, once and for `64`. Nothing the machine
+*observes* still moves it: no share, no reset, no status and no row count. The
+rules, the arithmetic and the guarantee this weakens are
+[`expanded-panel-v2.md`](expanded-panel-v2.md) §4.
 
 Approval detail refinement (2026-09-07): the body retains labelled argument fields with separate prose and code treatments ([`answer-in-notch.md`](answer-in-notch.md) §4.2). Its measured content includes labels and spacing but is still capped at `140` pt; the open row remains capped at `240` pt. The header, queue and footer dimensions are unchanged.
 

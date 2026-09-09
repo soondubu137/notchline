@@ -790,7 +790,28 @@ struct ActiveSessionList: View {
     var body: some View {
         ScrollViewReader { list in
             ScrollView(.vertical) {
-                LazyVStack(spacing: 0) {
+                // **Pinned, and that is what lets the row give up its badge.**
+                // A block's header names the product for every row under it,
+                // so a row scrolled away from its heading would otherwise be a
+                // row with no product on it at all. Pinned, the heading holds
+                // the top of the viewport until the next one pushes it out, and
+                // a row can be scrolled away from its name but never orphaned
+                // from it.
+                //
+                // **Except while a row is open, and that is not a taste.**
+                // Opening a row scrolls it to the top of the viewport, and a
+                // pinned header would then sit over its first `32` — which is
+                // the caption line, and the caption line's trailing end is
+                // ``OpenRowChevron``, the control that closes it. A heading
+                // that swallows the way out of the row it heads is not a
+                // heading. Nothing is lost by letting it scroll: an open row
+                // is the subject and everything else is at `45%`, so the list
+                // is not being scanned, which is the one job pinning has. The
+                // open row keeps its own chip for the same reason (§head).
+                LazyVStack(
+                    spacing: 0,
+                    pinnedViews: store.openRowID == nil ? [.sectionHeaders] : []
+                ) {
                     // The apology is one of the list's own lines, so it
                     // scrolls with what is under it rather than pinning a
                     // sentence over rows somebody is reading.
@@ -798,24 +819,21 @@ struct ActiveSessionList: View {
                         emptyListLabel
                     }
 
-                    ForEach(store.sessions) { session in
-                        if store.openRowID == session.id {
-                            // **No `.id()` on either branch.** `ForEach`
-                            // already gives each row the identity `scrollTo`
-                            // needs, and tagging both branches with the same
-                            // one made SwiftUI treat the closed row and the
-                            // open row as the same view: the panel resized
-                            // for a row that went on drawing itself shut.
-                            OpenRow(session: session)
-                        } else {
-                            // **One row is open at a time, and it is the
-                            // subject** (§8.2): everything else on the list
-                            // drops to `45%` for as long as it is, which is
-                            // the same value an answer in flight takes and
-                            // the same statement — this is not the thing you
-                            // are looking at.
-                            SessionRow(session: session)
-                                .opacity(store.openRowID == nil ? 1 : 0.45)
+                    // With one product there is nothing to tell apart, so the
+                    // list is the flat one it has always been -- not a single
+                    // section with its header suppressed, which would be the
+                    // same drawing reached through machinery that can go
+                    // wrong.
+                    let groups = store.sessionGroups
+                    if groups.isEmpty {
+                        rows(store.sessions)
+                    } else {
+                        ForEach(groups) { group in
+                            Section {
+                                rows(group.sessions)
+                            } header: {
+                                ProductGroupHeader(group: group)
+                            }
                         }
                     }
                 }
@@ -857,6 +875,30 @@ struct ActiveSessionList: View {
                 offset: scrollOffset
             )
             .padding(.trailing, PanelMetrics.sessionRowPadding)
+        }
+    }
+
+    /// The rows themselves, drawn the same way whether they stand in a block
+    /// or in the flat list.
+    @ViewBuilder
+    private func rows(_ sessions: [MonitoredSession]) -> some View {
+        ForEach(sessions) { session in
+            if store.openRowID == session.id {
+                // **No `.id()` on either branch.** `ForEach` already gives
+                // each row the identity `scrollTo` needs, and tagging both
+                // branches with the same one made SwiftUI treat the closed row
+                // and the open row as the same view: the panel resized for a
+                // row that went on drawing itself shut.
+                OpenRow(session: session)
+            } else {
+                // **One row is open at a time, and it is the subject** (§8.2):
+                // everything else on the list drops to `45%` for as long as it
+                // is, which is the same value an answer in flight takes and
+                // the same statement — this is not the thing you are looking
+                // at.
+                SessionRow(session: session)
+                    .opacity(store.openRowID == nil ? 1 : 0.45)
+            }
         }
     }
 
@@ -1354,7 +1396,16 @@ private struct SessionRow: View {
         let blocked = session.status.keepsTiming && session.subagentsAwaitingApproval
             ? ", a subagent is waiting for approval"
             : ""
-        return "\(session.projectName), \(session.title), "
+        // **Named whether or not a chip is drawn**, and that is not the
+        // drawing's rule. A chip is dropped when the block's header has
+        // already said it; a reader arriving row by row is never inside a
+        // block, has no surface to compare this line against, and the product
+        // is the first thing that says where clicking would go -- which is the
+        // argument ``RetiredRow`` already makes one rule down.
+        let product = store.showsProductAttribution
+            ? "\(session.agent.displayName), "
+            : ""
+        return "\(product)\(session.projectName), \(session.title), "
             + "\(session.status.displayName)\(elapsed)\(took)\(subagents)\(blocked)\(preview)"
     }
 }
@@ -1431,6 +1482,17 @@ struct OpenRow: View {
     private var head: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
             HStack(spacing: 8) {
+                // **The open row keeps its chip, where a closed one gives it
+                // up.** Opening un-pins the headings (``ActiveSessionList``),
+                // and an open row is scrolled to the top of the viewport — so
+                // the block's own header is usually the thing that has just
+                // scrolled off. This is also the one row where the product is
+                // not decoration: it decides what the answer footer can do,
+                // Codex reserving the field Claude Code accepts
+                // (`answer-in-notch.md` §14.2). The duplication costs one
+                // state, where a list that fits draws the header directly
+                // above it; the alternative costs the answering row its
+                // attribution in every state that scrolls.
                 SessionRowCaption(
                     session: session,
                     showsAttribution: store.showsProductAttribution,
@@ -2720,6 +2782,87 @@ struct OptionRow: View {
     }
 }
 
+/// The bar at the head of one product's block on the live list.
+///
+/// **It is ``RecentSeam``'s bar with the badge standing where the label
+/// stands.** The same `32`, the same caption idiom for the count, the same
+/// hairline — and none of the seam's control: no chevron, no hover fill, no
+/// press, no click. Folding a block is not offered, and a bar that washes
+/// under the pointer and then does nothing is a promise made quietly
+/// (`answer-in-notch.md` §11 rule 03). What that buys, besides honesty, is
+/// that folding is a pure addition if it is ever wanted: the chevron goes back
+/// at `492`, the rule stops `8` short of it again, and the seam's own ground
+/// and `Button` arrive with it.
+///
+/// **The rule therefore runs the full content width**, where the seam's stops
+/// short of the control it sits beside. That difference is the only thing on
+/// this surface that tells a label from a thing you can press, so it is worth
+/// the two lines it costs.
+///
+/// **The ground is a square rectangle rather than the seam's rounded one**,
+/// because this bar pins: rows scroll *under* it, and a `12` pt corner leaves
+/// four gaps for a row's own corner to show through. Both are black, so
+/// nothing about it is visible until something slides beneath.
+///
+/// Internal for the same reason ``ActiveSessionList`` is — the height it draws
+/// at against the height the panel was sized to is only checkable by laying it
+/// out.
+struct ProductGroupHeader: View {
+    let group: MonitorAggregation.SessionGroup
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(Color.black)
+
+            HStack(spacing: 8) {
+                HStack(spacing: PanelMetrics.productBadgePadding) {
+                    ProductBadge(name: group.agent.displayName)
+
+                    // The caption idiom exactly, separator included -- and one
+                    // step brighter while this block holds somebody's
+                    // attention. Grouped, the most urgent row on the surface
+                    // may be inside the second block and below the fold; this
+                    // is what says so, and it says it in the channel this
+                    // panel already spends on exactly that meaning
+                    // (`panel-v2.md` §1.1): every value brighter than the
+                    // values around it is brighter because a person is wanted.
+                    Text("· \(group.sessions.count)")
+                        .font(.system(size: 11, weight: .light))
+                        .foregroundStyle(
+                            group.wantsAttention
+                                ? NotchPalette.reading
+                                : NotchPalette.label
+                        )
+                        .fixedSize()
+                }
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.15))
+                    .frame(height: 1)
+            }
+            .padding(.horizontal, PanelMetrics.sessionRowPadding)
+        }
+        .frame(
+            maxWidth: .infinity,
+            minHeight: PanelMetrics.productGroupHeaderHeight,
+            maxHeight: PanelMetrics.productGroupHeaderHeight
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenLabel)
+        .accessibilityAddTraits(.isHeader)
+        .animation(.easeInOut(duration: 0.16), value: group.wantsAttention)
+    }
+
+    /// Brightness cannot be heard, so the lit count says what it means.
+    private var spokenLabel: String {
+        let count = group.sessions.count
+        let rows = "\(count) session\(count == 1 ? "" : "s")"
+        return group.wantsAttention
+            ? "\(group.agent.displayName), \(rows), one waiting for you"
+            : "\(group.agent.displayName), \(rows)"
+    }
+}
+
 /// The rule between the list and what it has let go of.
 ///
 /// A label, a hairline and a chevron on one `32` pt line at the foot of the
@@ -3018,7 +3161,17 @@ private struct SessionRowContent: View {
                 VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                     SessionRowCaption(
                         session: session,
-                        showsAttribution: store.showsProductAttribution,
+                        // **Not `showsProductAttribution` on its own.** A
+                        // boundary after a boundary is a mark doing nothing
+                        // (`panel-v2.md` §3.4): while the list is grouped the
+                        // block's own header names this product for every row
+                        // under it, and a chip repeating it on each line is
+                        // the separator that decision already deleted. The
+                        // line stays `16` either way, so nothing moves
+                        // vertically at the moment a second product connects
+                        // -- the Project simply starts on the row's own `12`.
+                        showsAttribution: store.showsProductAttribution
+                            && !store.groupsSessionsByProduct,
                         isEmphasized: isEmphasized
                     )
 

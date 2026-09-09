@@ -124,8 +124,17 @@ struct AnatomyFigureRenderer {
             ),
             // Working, and the longest of them — which is what the collapsed
             // reading draws.
+            //
+            // **Codex's, and it used to be Claude Code's.** With the list
+            // grouped by product a row's place on the figure is decided by its
+            // block, and the key names three rows by position: the approval,
+            // the one carrying a timer, and the one carrying a subagent badge.
+            // Two rows in the first block and the badge at the head of the
+            // second is the arrangement that leaves all three drawn — and it
+            // is also `32 + 80 + 80 + 32 + 80`, the grouped viewport exactly,
+            // so the second heading is on the figure rather than under it.
             MonitoredSession(
-                agent: .claudeCode,
+                agent: .codex,
                 threadID: "anatomy-running-thread",
                 turnID: "anatomy-running-turn",
                 projectName: "acme-api",
@@ -152,8 +161,11 @@ struct AnatomyFigureRenderer {
         ]
         if buriedFinish {
             rows.append(
+                // The row the rail is reporting and the collapsed dot speaks
+                // for: last in the second block, and the one thing below the
+                // fold.
                 MonitoredSession(
-                    agent: .codex,
+                    agent: .claudeCode,
                     threadID: "anatomy-finished-thread",
                     turnID: "anatomy-finished-turn",
                     projectName: "acme-web",
