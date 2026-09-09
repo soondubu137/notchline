@@ -1488,6 +1488,12 @@ struct OpenRow: View {
                             )
                         )
                 )
+                // Standing off its own frame, like every washed row's does --
+                // see ``PanelMetrics/sessionRowGroundInset``. It matters most
+                // here: an open row is washed permanently, so a ground flush
+                // against the chip above it would not be a moment's collision
+                // but the state the row sits in.
+                .padding(.vertical, PanelMetrics.sessionRowGroundInset)
 
             VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                 head
@@ -2877,18 +2883,24 @@ struct ProductGroupHeader: View {
                     ProductBadge(name: group.agent.displayName)
 
                     // **The separator is drawn rather than set, and it is the
-                    // rule's own value.** A `·` at the caption's `#7C7C80` was
-                    // a third piece of text on a line that already carries a
-                    // chip and a figure; as a mark at ``NotchPalette/hairline``
-                    // it is the same object as the rule it sits on -- the same
-                    // value, and on the same line, because the bar centres its
-                    // contents and the rule is one of them.
+                    // seam's own dot** -- the same `2` pt in the same caption
+                    // ink (``PanelMetrics/captionSeparatorDotSize``). Drawn
+                    // because a set `·` sits on its own x-height, which is
+                    // below the line this bar centres its contents on, so the
+                    // rule ran past the mark rather than through it.
+                    //
+                    // It was `3` at the hairline's value, on the reading that
+                    // a separator is chrome rather than a reading. That reads
+                    // as two idioms on one bar: §4.2 *is* the Recent seam with
+                    // a chip standing where the label stands, and a chip and a
+                    // count are held apart by whatever holds a word and a
+                    // count apart. One bar, one mark.
                     //
                     // It stands on the **middle** of the gap the glyph held
                     // (``PanelMetrics/productBadgeCountSpacing``), so the count
-                    // has not moved by a point either side of this change.
+                    // has not moved by a point through either change.
                     Circle()
-                        .fill(NotchPalette.hairline)
+                        .fill(NotchPalette.label)
                         .frame(
                             width: PanelMetrics.captionSeparatorDotSize,
                             height: PanelMetrics.captionSeparatorDotSize
@@ -2990,15 +3002,15 @@ private struct SeamContent: View {
                 // separator is one of the bar's own contents rather than a
                 // glyph inside the label, so it stands on the hairline's line
                 // and at the size the row below sets its own separator
-                // (``PanelMetrics/seamSeparatorDotSize``).
+                // (``PanelMetrics/captionSeparatorDotSize``).
                 HStack(spacing: PanelMetrics.seamSeparatorSpacing) {
                     Text("Recent")
 
                     Circle()
                         .fill(ink)
                         .frame(
-                            width: PanelMetrics.seamSeparatorDotSize,
-                            height: PanelMetrics.seamSeparatorDotSize
+                            width: PanelMetrics.captionSeparatorDotSize,
+                            height: PanelMetrics.captionSeparatorDotSize
                         )
                         .accessibilityHidden(true)
 
@@ -3149,6 +3161,10 @@ private struct RetiredRowContent: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(NotchPalette.themeInk.on.opacity(fillOpacity))
                 )
+                // The live row's wash, at the live row's inset: nothing stands
+                // over a retired row that this could collide with, and one
+                // wash drawn two ways would still be two idioms.
+                .padding(.vertical, PanelMetrics.sessionRowGroundInset)
 
             HStack(spacing: 12) {
                 breadcrumb
@@ -3234,7 +3250,9 @@ private struct RetiredRowContent: View {
     }
 }
 
-private struct SessionRowContent: View {
+/// Internal rather than private so a figure can host it in a state a pointer
+/// would otherwise have to be in — see the geometry tests' hovered row.
+struct SessionRowContent: View {
     @Environment(\.sessionRowIsPressed) private var isPressed
 
     @EnvironmentObject private var store: MonitorStore
@@ -3244,12 +3262,17 @@ private struct SessionRowContent: View {
 
     var body: some View {
         ZStack {
+            // **The wash stands off the row's own edges** -- a block's heading
+            // gives all its slack to the chip's top and leaves the air beneath
+            // to this row's padding, and that air has to survive the row being
+            // looked at (``PanelMetrics/sessionRowGroundInset``).
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(NotchPalette.themeInk.on.opacity(fillOpacity))
                 )
+                .padding(.vertical, PanelMetrics.sessionRowGroundInset)
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {

@@ -325,6 +325,23 @@ enum PanelMetrics {
     /// centres is odd — and it lands on the pixel grid at 2x, which is the
     /// scale this panel is drawn at.
     static let sessionRowVerticalPadding: CGFloat = 8.5
+    /// The air a row's own wash leaves at the top and bottom of its frame.
+    ///
+    /// **A row's ground is not the row.** `expanded-panel-v2.md` §4.2 gives a
+    /// block's heading all of its slack above the chip and none below, on the
+    /// reading that "the row beneath brings its own top padding" — which it
+    /// does, until the row is under the pointer and its ground fills the whole
+    /// `72`, flush against the bottom edge of the chip's own ground. Two
+    /// filled shapes sharing an edge read as one shape with a notch cut out of
+    /// it, which is neither of the things they say apart.
+    ///
+    /// `2` is a seam rather than a margin: `4` pixels at the scale this panel
+    /// is drawn at, plainly not nothing and not enough to read as space the
+    /// list has left. The caption keeps `6.5` of the row's `8.5` above it, so
+    /// nothing moves and no glyph comes near the ground's edge — and two
+    /// adjacent rows, which could never both be washed at once but can now be
+    /// a washed one and an open one, stand `4` apart instead of touching.
+    static let sessionRowGroundInset: CGFloat = 2
     /// **`72` = `8.5 + 55 + 8.5`**, and it is composed in that direction now.
     ///
     /// It was `80`, a constant the row's own lines were centred in. Written
@@ -527,7 +544,7 @@ enum PanelMetrics {
     /// font. The seam's `Recent · 3` keeps its dot — a word and a figure on one
     /// line is what the idiom is for, and there is no boundary there already —
     /// and draws it rather than setting it, for the reason
-    /// ``seamSeparatorDotSize`` gives.
+    /// ``captionSeparatorDotSize`` gives.
     static var captionSeparatorWidth: CGFloat {
         textWidth("· ", font: captionFont)
     }
@@ -538,13 +555,26 @@ enum PanelMetrics {
     }
     /// The separator's own mark, back in that gap and drawn rather than set.
     ///
-    /// **`3`, which is more area than the glyph had and a third of its
-    /// brightness.** A `·` at `11` pt Light is about `1.5` pt of `#7C7C80`;
-    /// this is a `3` pt disc at `15%` white, so the ink it puts on the panel is
-    /// about what the glyph put there — and it puts it in the rule's value
-    /// rather than the caption's, which is the point of the change. A separator
-    /// is not a reading.
-    static let captionSeparatorDotSize: CGFloat = 3
+    /// **A glyph sits where its font puts it, and that is not the middle of
+    /// the bar.** A `·` is centred on the x-height, which at the caption's
+    /// `11` pt Light leaves it `0.77` below the line a bar centres its
+    /// contents on — so the bar's own hairline ran past the dot rather than
+    /// through it. Drawn, the dot is one of those contents like the rule is,
+    /// and the two land on one line by construction. That is the whole of why
+    /// this mark is drawn, on both bars that draw it.
+    ///
+    /// **`2`, in the caption's own ink, on the heading and the seam alike.**
+    /// ~~`3` at the hairline's `15%` white: a separator is not a reading, and
+    /// the mark is chrome on the rule's own layer.~~ Superseded 2026-09-09.
+    /// The two bars are one bar — §4.2 is `2.2`'s seam with a badge standing
+    /// where the label stands — and one bar draws one mark; a chip and a count
+    /// are held apart by the same thing a word and a count are. `2` is what a
+    /// `·` at the *retired row's* `13` pt Regular rasterises to: that glyph's
+    /// ink measures `1.65`, but a flat disc at `1.65` snaps to `1.5` on a `2×`
+    /// panel and comes out a third lighter than the glyph beside it. So the
+    /// panel's separator is sized by what its own text draws rather than by
+    /// what it measures, and every dot on the surface is that dot.
+    static let captionSeparatorDotSize: CGFloat = 2
     /// What stands either side of that dot, so the dot lands on the middle of
     /// the gap and the count still does not move.
     ///
@@ -555,32 +585,12 @@ enum PanelMetrics {
         (productBadgeCountGap - captionSeparatorDotSize) / 2
     }
 
-    /// The seam's separator, drawn rather than set — and drawn at the size the
-    /// row beneath it sets its own.
-    ///
-    /// **A glyph sits where its font puts it, and that is not the middle of
-    /// the bar.** A `·` is centred on the x-height, which at the caption's
-    /// `11` pt Light leaves it a point below the line the bar centres its
-    /// contents on — so the seam's own hairline ran past the dot rather than
-    /// through it. Drawn, the dot is one of those contents like the rule is,
-    /// and the two land on one line by construction. The block heading's
-    /// ``captionSeparatorDotSize`` is the same argument, reached first.
-    ///
-    /// **`2`, which is the retired row's dot rather than the caption's.** The
-    /// seam names a list, and the mark the list itself draws between a project
-    /// and a subject — a `·` at `13` pt Regular — is directly underneath this
-    /// one; two sizes of one dot within `36` points read as an accident. That
-    /// glyph's ink measures `1.65`, but a flat disc at `1.65` snaps to `1.5`
-    /// on a `2×` panel and comes out a third lighter than the glyph beside it,
-    /// which rasterises nearer `2`. The disc is therefore sized by what the
-    /// glyph *draws* rather than by what it measures.
-    static let seamSeparatorDotSize: CGFloat = 2
-
-    /// What stands either side of that dot, so neither the word nor the figure
-    /// moves: the run `" · "` held this gap at the caption's own face, and an
-    /// `HStack` of three has exactly one spacing to put half of it in.
+    /// What stands either side of that dot on the seam, so neither the word nor
+    /// the figure moves: the run `" · "` held this gap at the caption's own
+    /// face, and an `HStack` of three has exactly one spacing to put half of
+    /// it in.
     static var seamSeparatorSpacing: CGFloat {
-        (textWidth(" · ", font: captionFont) - seamSeparatorDotSize) / 2
+        (textWidth(" · ", font: captionFont) - captionSeparatorDotSize) / 2
     }
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8

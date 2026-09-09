@@ -196,23 +196,28 @@ struct OverlayGeometryTests {
         #expect(lit > 0.8, "the heading drew no chip — brightest value was \(lit)")
     }
 
-    /// The separator between the chip and the count is **the rule's own value,
+    /// The separator between the chip and the count is **the seam's own dot,
     /// on the rule's own line, in the middle of the gap the glyph held**.
     ///
     /// Three claims and one drawing, and none of the three is checkable from
     /// the metrics: `productBadgeCountSpacing` is `(gap − dot) / 2` by
     /// construction and would agree with itself however the bar were drawn.
-    /// What can be wrong is the ink — a `·` set in the caption's `#7C7C80` is
-    /// a third piece of *text* on a line that already carries a chip and a
-    /// figure, and this is a mark on the same chrome layer as the hairline it
-    /// sits on — and the placement, which is what "add the dot back without
-    /// moving the count" means.
+    /// What can be wrong is the ink and the size — this bar is the Recent seam
+    /// with a chip standing where the label stands, so the mark it draws
+    /// between a chip and a count is the mark the seam draws between a word
+    /// and a count, at `captionSeparatorDotSize` in the caption's own ink —
+    /// and the placement, which is what "add the dot back without moving the
+    /// count" means.
+    ///
+    /// ~~It was the hairline's own value, on the reading that a separator is
+    /// chrome rather than a reading.~~ Superseded 2026-09-09: that made one
+    /// bar draw two idioms, and the seam's is the one both keep.
     ///
     /// Read off the bar's own centre row, which is where the rule is: the runs
     /// of ink across it are the chip, the separator, the count and the rule, so
-    /// the second one is the mark and the fourth is what it has to match.
+    /// the second one is the mark and the fourth is the rule it stands on.
     @Test @MainActor
-    func theHeadingsSeparatorIsTheRulesOwnValueInTheMiddleOfItsGap() throws {
+    func theHeadingsSeparatorIsTheSeamsDotInTheMiddleOfItsGap() throws {
         let header = ProductGroupHeader(
             group: MonitorAggregation.SessionGroup(
                 agent: .codex,
@@ -272,22 +277,24 @@ struct OverlayGeometryTests {
         let count = try #require(runs.count > 2 ? runs[2] : nil)
         let rule = try #require(runs.last)
 
-        // The mark is the rule drawn round: the same value, to the point.
-        #expect(
-            abs(dot.peak - rule.peak) < 0.02,
-            "the separator is \(dot.peak) against the rule's \(rule.peak)"
-        )
-        // And plainly not the caption's ink, which is the thing it stopped
-        // being. Compared against that ink's own value rather than against the
-        // count's drawn peak: one row through a `11` pt glyph crosses whatever
-        // antialiasing that row happens to carry, so the numeral samples well
-        // under the `#7C7C80` it is set in and would make this a weak test of
-        // a strong claim.
+        // The mark is the caption's ink, not the rule's -- the thing that
+        // changed on 2026-09-09. Read against the ink's own value rather than
+        // against the count's drawn peak: one row through an `11` pt glyph
+        // crosses whatever antialiasing that row happens to carry, so the
+        // numeral samples well under the `#7C7C80` it is set in and would make
+        // this a weak test of a strong claim.
         let caption = try #require(
             NotchPalette.labelDrawingColor.usingColorSpace(.deviceRGB)
         )
-        #expect(dot.peak < caption.brightnessComponent / 2)
-        #expect(count.peak > dot.peak)
+        #expect(
+            abs(dot.peak - caption.brightnessComponent) < 0.05,
+            "the separator is \(dot.peak), the caption \(caption.brightnessComponent)"
+        )
+        // And plainly standing on the hairline rather than being one.
+        #expect(
+            dot.peak > rule.peak * 2,
+            "the separator is \(dot.peak) against the rule's \(rule.peak)"
+        )
 
         // Its own width, and the middle of the gap: the space it leaves on the
         // chip's side is the space it leaves on the count's.
@@ -300,12 +307,13 @@ struct OverlayGeometryTests {
         // the layout ends it.
         #expect(abs(before - PanelMetrics.productBadgeCountSpacing) < 0.7)
         // The count's glyph carries its own left bearing, so `after` is the
-        // spacing plus that -- never less than it, and within a point of it.
-        // Chasing the bearing itself is declined: it differs per digit, and a
+        // spacing plus that: `before` lands on `productBadgeCountSpacing`
+        // almost exactly and `after` runs about two points past it. Chasing
+        // the bearing itself is declined: it differs per digit, and a
         // separator that moved when a block gained a session would be worse
         // than one half a point off centre.
         #expect(after >= before)
-        #expect(after - before < 1.5)
+        #expect(after - before < 2.5)
     }
 
     /// The seam's separator is **the row's dot, standing on the rule's own
@@ -419,7 +427,7 @@ struct OverlayGeometryTests {
         // The row's dot rather than the caption's: `2` pt of ink, where a `·`
         // set at `11` pt Light draws `1.13`.
         #expect(
-            abs(dot.height - PanelMetrics.seamSeparatorDotSize) < 0.6,
+            abs(dot.height - PanelMetrics.captionSeparatorDotSize) < 0.6,
             "the separator drew \(dot.height) pt"
         )
         // Still a reading, unlike the block heading's -- that mark is chrome at
@@ -432,6 +440,102 @@ struct OverlayGeometryTests {
         // a figure's own colour space reaches this back through a file.
         #expect(dot.peak > rule.peak * 2)
         #expect(dot.peak < caption.brightnessComponent * 1.25)
+    }
+
+    /// A washed row's ground **stands off the chip above it**.
+    ///
+    /// `expanded-panel-v2.md` §4.2 gives a block's heading all of its slack
+    /// above the chip and none below, on the reading that the row beneath
+    /// brings its own top padding. It does — until the row is under the
+    /// pointer, when its ground fills the whole `72` and meets the bottom edge
+    /// of the chip's own ground, and two filled shapes sharing an edge read as
+    /// one shape with a notch cut out of it.
+    ///
+    /// Read down one column that crosses both: the chip's ground ends, the
+    /// panel's black stands for ``PanelMetrics/sessionRowGroundInset``, and the
+    /// wash begins. Without the inset the two runs are one run and the gap is
+    /// zero, which is the drawing this pins against.
+    @Test @MainActor
+    func aWashedRowsGroundStandsOffTheChipAboveIt() throws {
+        let session = MonitoredSession(
+            agent: .codex,
+            threadID: "a", turnID: "u", projectName: "notchline", title: "A title",
+            preview: nil, status: .running, startedAt: nil
+        )
+        let store = MonitorStore(preferences: nil)
+        store.isExpanded = true
+
+        let width = PanelMetrics.sessionViewportWidth(
+            panelWidth: store.currentPanelSize.width
+        )
+        let height = PanelMetrics.leadingProductGroupHeaderHeight
+            + PanelMetrics.sessionRowHeight
+        // A bare hosting view, as the heading's own figure is drawn: nothing
+        // here is sized by text, so there is no reason to spin a window and a
+        // run loop for it -- and a window that exists while the answering
+        // suite is synthesising clicks at its own offscreen views takes hits
+        // that were meant for theirs.
+        let host = NSHostingView(
+            rootView: VStack(spacing: 0) {
+                ProductGroupHeader(
+                    group: MonitorAggregation.SessionGroup(
+                        agent: .codex,
+                        sessions: [session],
+                        wantsAttention: false
+                    ),
+                    isLeading: true
+                )
+                // The state a pointer would put it in, which a figure cannot
+                // hold a pointer over -- and the state an open row is in
+                // permanently.
+                SessionRowContent(session: session, isHovered: true)
+                    .frame(height: PanelMetrics.sessionRowHeight)
+            }
+            .environmentObject(store)
+            .background(Color.black)
+            .frame(width: width, height: height)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.layoutSubtreeIfNeeded()
+
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let across = CGFloat(rep.pixelsWide) / host.bounds.width
+        let down = CGFloat(rep.pixelsHigh) / host.bounds.height
+
+        // A column well inside the chip and well past the `12` pt corner the
+        // row's ground is drawn with, so both grounds are crossed squarely.
+        let column = Int(30 * across)
+        var runs: [(from: CGFloat, to: CGFloat)] = []
+        for row in 0..<rep.pixelsHigh {
+            let value = rep
+                .colorAt(x: column, y: row)?
+                .usingColorSpace(.deviceRGB)?
+                .brightnessComponent ?? 0
+            let y = CGFloat(row) / down
+            guard value > 0.06 else { continue }
+            if var last = runs.last, y - last.to < 1 / down + 0.01 {
+                last.to = y
+                runs[runs.count - 1] = last
+            } else {
+                runs.append((from: y, to: y))
+            }
+        }
+
+        #expect(runs.count >= 2, "expected the chip's ground and the row's")
+        let chip = try #require(runs.first)
+        let ground = try #require(runs.count > 1 ? runs[1] : nil)
+        // The chip is the whole of the leading bar, and the wash is what
+        // follows it.
+        #expect(abs(chip.to - PanelMetrics.leadingProductGroupHeaderHeight) < 1)
+        #expect(ground.to > PanelMetrics.leadingProductGroupHeaderHeight + 40)
+
+        let gap = ground.from - chip.to
+        #expect(
+            abs(gap - PanelMetrics.sessionRowGroundInset) < 0.6,
+            "the wash stands \(gap) pt off the chip"
+        )
     }
 
     @Test @MainActor
