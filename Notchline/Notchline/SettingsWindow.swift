@@ -21,11 +21,30 @@ struct AppSettingsView: View {
 
             // The build version and the action that quits the app belong to
             // the window rather than to a settings group.
-            HStack(alignment: .top, spacing: 16) {
+            //
+            // The two sit at opposite ends of the closing row rather than side
+            // by side on the left: a version is a fact to read and `Quit` is
+            // the one action this window offers, and macOS puts a window's
+            // action in its bottom trailing corner — beside the version it
+            // read as a second caption someone had made pressable. Baselines
+            // align rather than tops, so the version sits on the same line as
+            // the button's label instead of riding above it.
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
                 AppVersionLine()
 
-                Button("Quit") {
+                Spacer(minLength: 16)
+
+                // Red is in the label's ink, not in the bezel. `.tint` on
+                // macOS's `.bordered` style does nothing at all — measured, the
+                // capsule came back the standard grey — and `.borderedProminent`
+                // draws its fill from the accent, which a window loses the
+                // moment it stops being key: the red would leave every time the
+                // user clicked something else. The ink holds in every state.
+                Button {
                     NSApp.terminate(nil)
+                } label: {
+                    Text("Quit")
+                        .foregroundStyle(MacOSWindowColor.destructiveAction)
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
@@ -838,6 +857,12 @@ enum MacOSWindowColor {
     static let statusPending = Color(nsColor: .systemBlue)
     static let statusBlocked = Color(nsColor: .systemPurple)
     static let statusIdle = Color(nsColor: .systemGray)
+
+    /// The ink of `Quit`, the one action in this window that ends something
+    /// rather than changing it. The system red for the status dots' reason:
+    /// it is the value macOS itself uses for exactly this, and it follows an
+    /// accessibility appearance where a literal red would not.
+    static let destructiveAction = Color(nsColor: .systemRed)
 
     private static func dynamic(
         light: Int,
