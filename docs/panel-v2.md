@@ -226,12 +226,20 @@ which is a different claim from *not built yet* — and §1 rule 2's reading of
 "absent rather than greyed out" is about a promise the panel makes about the
 work it is showing, not about the app's own furniture.
 
-**The update control stays dark.** Its theme-ink fill is `0.22` at rest and
-`0.28` on hover, with the full lit theme ink for its text. Against black these
-are approximately `#313331` and `#3E413F`. A `1` pt theme-ink edge at `0.40`
-keeps the boundary visible without making the whole button pale. The prior
-`0.40` / `0.44` fills were still too light; the darker fill and separate edge
-keep the button distinct while giving it less emphasis.
+**The update control stays dark, and it is a fill and nothing else.** Its
+theme-ink fill is `0.14` at rest and `0.18` on hover, with the full lit theme
+ink for its text. Against black these are approximately `#1E201E` and
+`#282A28` — plainly a tile on the black, and the darkest thing on this panel
+that is still a shape. ~~A `1` pt theme-ink edge at `0.40` keeps the boundary
+visible without making the whole button pale.~~ **Superseded 2026-09-09**: at
+`0.40` the edge was the brightest mark in the body, brighter than the text it
+framed, so the outline was read before the label — the tile is a shape made of
+ground, not a shape drawn with a line. With the edge gone the fill has to be
+the whole boundary, which is why `0.22` / `0.28` came down with it rather than
+staying: those weights were pale for a control that promises nothing yet, and
+they were carrying a border. The hover step is `0.04` rather than the `0.06` a
+bordered tile could afford, because the fill is now the only thing that moves
+and a larger step read as the button lighting up rather than answering.
 
 **The other elements keep the panel's existing vocabulary.** The notice is the
 caption face, the rule is the band's own —

@@ -928,18 +928,6 @@ private struct AboutUpdateControl: View {
                         )
                     )
                 )
-                .overlay {
-                    RoundedRectangle(
-                        cornerRadius: PanelMetrics.controlCornerRadius,
-                        style: .continuous
-                    )
-                    .strokeBorder(
-                        NotchPalette.themeInk.on.opacity(
-                            NotchPalette.RowEmphasis.plainControlBorderOpacity
-                        ),
-                        lineWidth: 1
-                    )
-                }
                 .overlay(PointingHandCursor())
                 .onHover { isHovered = $0 }
         }

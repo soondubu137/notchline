@@ -196,11 +196,24 @@ enum NotchPalette {
         static let controlRestFillOpacity: Double = 0.24
         static let controlHoverFillOpacity: Double = 0.18
 
-        /// A dark charcoal fill with the theme hue. A fine edge separates the
-        /// tile from black without lightening its entire surface.
-        static let plainControlRestFillOpacity: Double = 0.22
-        static let plainControlHoverFillOpacity: Double = 0.28
-        static let plainControlBorderOpacity: Double = 0.40
+        /// A dark charcoal fill with the theme hue, and nothing else — the
+        /// tile is a shape made of ground, not a shape drawn with a line.
+        ///
+        /// ~~A fine edge separates the tile from black without lightening its
+        /// entire surface.~~ **Superseded**: the edge at `0.40` was the
+        /// brightest mark in the About panel, brighter than the text it
+        /// framed, so the eye read the outline before the label. Without it
+        /// the fill has to be the whole of the boundary, and `0.22` (`#313330`)
+        /// was carrying a border rather than standing on its own — too pale
+        /// for a control that promises nothing yet.
+        ///
+        /// `0.14` lands at about `#1F201F`, `L∗ 12` against the panel's black:
+        /// plainly a tile, never a panel of its own. The hover step is `0.04`
+        /// rather than the `0.06` a bordered tile could afford, because with
+        /// the edge gone the fill is the only thing that moves and a larger
+        /// step read as the button lighting up rather than answering.
+        static let plainControlRestFillOpacity: Double = 0.14
+        static let plainControlHoverFillOpacity: Double = 0.18
 
         /// Ease-in-out both ways -- the same gentle acceleration and
         /// deceleration whether the emphasis is arriving or leaving -- and
