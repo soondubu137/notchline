@@ -309,3 +309,31 @@ It is still the wrong thing. It is `Answer in Codex` performed by a robot: the p
 - Environment variable set: none
 - Final daemon state: none was running before or after
 - Recommended next step: §6.2, then §6.4
+
+### 2026-09-09 — the routing question (§5.1) answered, and the door it opens is still shut
+
+- Executor: Claude Fable 5.1, at the user's request, as part of the [`shared-app-server`](../shared-app-server/README.md) spike (its 2026-09-09 record has the full method)
+- Desktop `26.901.51231`; bundled `codex-cli 0.153.4`
+- Scope: an isolated `CODEX_HOME`, one hand-started `app-server --listen unix://`, two direct WebSocket connections, two real Turns; no Desktop interaction
+- Result: **broadcast.** A Turn's `item/commandExecution/requestApproval` reached both the connection that started the Turn and the connection that had only `thread/resume`d it, with one request id. Either can answer; the first answer wins; a later answer for the same id is dropped without an error; the connection that ignores its copy blocks nothing and gets `serverRequest/resolved`. A connection that never subscribed gets `thread/status/changed` with `activeFlags: ["waitingOnApproval"]` and no request. So §5.1's "if it is broadcast, then answering is possible **and** two clients can race" is the case, and the race already has a rule on the server: first wins.
+- What it does not change: **Desktop is not on a daemon and cannot be put on one on this build.** The daemon branch in `app.asar` is gated on Desktop having no config overrides, and a local host always has one (the app-tools MCP override). `daemon start` itself now needs the standalone install, not the bundled CLI, and `app-server proxy` is broken against a Unix listener (openai/codex#25846). So §5.1's second obstacle got harder, not easier, and §6.4's verdict stands: the spike was worth running, and it is not something to build against.
+- Not measured: `item/tool/requestUserInput` itself, blocking or async — no Turn was driven to ask a question. It rides the same request path, so the expectation is the same broadcast, and the expectation is recorded as one.
+- Side effects: none outside the throwaway home, which was deleted.
+
+### 2026-09-09 — the async question is not a request, and its closing edge is on the hook channel after all
+
+- Executor: Claude Fable 5.1, at the user's request, no code changes
+- Desktop `26.901.51231`; bundled `codex-cli 0.153.4`; model `gpt-6-astra`
+- Scope: this machine's rollouts and Desktop's `logs_2.sqlite` (read-only); the bundle (read-only); then an isolated `CODEX_HOME` with four logging hooks trusted through `hooks/list`, one `app-server --listen unix://` and one real Turn driven over a direct WebSocket. Deleted afterwards; Desktop untouched.
+
+**§3.6.1 read the bundle's auto-resolution onto the wrong shape.** `requestUserInputAutoResolution` (60 s inactivity + 90 s, `{answers: {}}`) answers an `item/tool/requestUserInput` **server request** whose `isBlocking` is false. The async question on this CLI is not that. Driven in isolation, `request_user_input_async` produced `item/started` + `item/completed` for an `agentMessage` with `delivery: "async"` and `questions[]`, a `PreToolUse`/`PostToolUse` pair, **no server request on either connection**, `activeFlags: []` throughout, and `idle` at the Turn's end; nothing was resolved and nothing was pending 120 s later. Desktop's own log has no `item/tool/requestUserInput` in its whole history. Desktop's card is a **transcript projection**: the bundle turns every `agentMessage` with `delivery === "async"` into question ids of the form `["request_user_input_async", <item id>, <question index>]`, and marks one answered when a later `userMessage` or accepted `steeringUserMessage` parses as `<send_user_message_question_reply>…</send_user_message_question_reply>` naming that id. There is no clock on it.
+
+**The reply is a `TurnInput`, and it fires `UserPromptSubmit` inside the running Turn.** Desktop's log shows the real reply of 2026-09-09 17:24:17 Z as `op: TurnInput` with the tagged text, steered into the Turn that asked (same `turn_id`); the rollout persists it as a user message in that Turn. Reproduced in isolation: a `turn/start` with the tagged text while the Turn ran was accepted into the **same** Turn id, fired `UserPromptSubmit` with that Turn id and the tagged text as `prompt`, and the Turn went on to a single `Stop`. The question's `PreToolUse` carried `tool_use_id = call_…`, and that same id is the middle element of the reply's `questionItemId`. So the pair is exact: open on `PreToolUse(request_user_input_async)`, close on a `UserPromptSubmit` whose prompt is a question reply naming the same call id — **both on the channel this app already has**. A plain `UserPromptSubmit` (no tag) is the user moving on.
+
+**What has no edge anywhere.** Neither the bundle scan nor the rollouts show what the card's *Skip* sends; if it sends nothing to the model, it leaves no trace in Desktop's own transcript either, and the card's projection stays "unanswered" exactly as this app's would. Recorded as unmeasured, and as symmetric.
+
+**One hazard in the current reducer.** A `UserPromptSubmit` carrying the current Turn id is today rebuilt as a fresh Running Turn with a reset timer ([#73](https://github.com/soondubu137/notchline/issues/73)). The reply is precisely that event, so that path must be fixed before it can close anything; otherwise every answered question restarts the row's clock.
+
+- Result: PASS for the measurement; §3.6.1's "closing edge — unsolved" is now solved on the hook channel for the answered case, and shown to have no edge for the skipped case on any channel.
+- Side effects: none outside the throwaway home.
+

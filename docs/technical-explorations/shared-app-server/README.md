@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Unverified; not a production decision |
+| Status | Spiked in isolation on 2026-09-09 (§14 record): the protocol side holds, but Desktop cannot be attached to a daemon on the current build; not a production decision |
 | First recorded | 2026-08-13 |
 | Question | Can Codex Desktop and Notchline connect to the same local App Server instance? |
 | Audience | Whoever investigates, verifies and implements this next |
@@ -416,3 +416,47 @@ What has not changed is §9: Desktop reaches the daemon only under `CODEX_APP_SE
 - Official Codex App Server: <https://developers.openai.com/codex/app-server/>
 - Current product and integration technical design: `docs/tech-design.md`
 - The current App Server client, live monitor service, hook reducer, domain state and store: `CodexAppServerClient.swift`, `LiveCodexMonitorService.swift`, `HookIntegration.swift`, `MonitorDomain.swift`, `MonitorStore.swift`
+
+### 2026-09-09 — Phase 0, Phase 1 and the routing question, in isolation
+
+- Executor: Claude Fable 5.1, at the user's request ("do the spike, don't change code yet")
+- Desktop version/build: `26.901.51231` (`8109`)
+- Bundled Codex CLI: `codex-cli 0.153.4`
+- Daemon App Server version: none could be started (see Phase 0, item 2); the hand-started listener reported `appServerVersion 0.153.4`
+- macOS version: 26.6.2 (Darwin 25.6.0)
+- Branch and commit: `master` at `01aede6`, with the user's uncommitted edits left untouched
+- Scope of user authorisation: the spike itself, no code changes. Read as: read-only inspection of the bundle and of Desktop's process; a throwaway `CODEX_HOME` under `mktemp -d` with `auth.json` symlinked in; two real Turns on two throwaway threads inside that home. Not read as: restarting Desktop, setting any environment variable, or touching `~/.codex`.
+- Process/daemon state beforehand: Desktop's own stdio App Server (one process, `-c features.code_mode_host=true … -c mcp_servers.codex_app={…}`); no `~/.codex/app-server-control`; no daemon.
+- Commands run: `codex --version`, `app-server --help`, `app-server daemon --help`, `app-server daemon bootstrap --help`, `app-server proxy --help`, `app-server daemon start` / `version` in the throwaway home, `app-server --listen unix://<throwaway>/app-server-control/app-server-control.sock`, `app-server generate-json-schema --experimental`, `ps`, `lsof -p`, byte-scans of `app.asar` and the CLI binary, and a ~60-line Python WebSocket client over the Unix socket.
+
+**Phase 0 — PASS, with two stop conditions of its own.**
+
+1. §3.2 holds. Desktop still spawns a stdio App Server; `lsof` on it shows only the anonymous stdio pair and outbound TLS; nothing listens.
+2. **`daemon start` no longer works with the bundled binary.** It refuses with *"managed standalone Codex install not found at `$CODEX_HOME/packages/standalone/current/codex` … the daemon starts and updates app-server from that fixed path"* and tells the user to run the installer. This machine has no standalone install. §3.3's plan to start the daemon "with the same Codex binary Desktop ships" is void: the daemon is a second, self-updating Codex, not the one Desktop runs.
+3. `daemon version` recognises **any** listener on the control socket path as `status: running` — it reported the hand-started `--listen unix://` server, with `managedCodexVersion: null`. So Desktop's version probe cannot tell a managed daemon from an impostor on that path; only the Desktop-side gate below does.
+4. **§3.4's switch still exists and is unreachable.** The transport is chosen in one expression: not Windows, **and no config overrides**, and a local host, and `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`, and not `CODEX_APP_SERVER_FORCE_CLI=1`, and no `CODEX_CLI_PATH`, and no host `codex_cli_command`, and no bundled `git/bin/git`, and `daemon version` ≥ `0.141.0`. The overrides come from a function that, for a local host, **always** returns at least one string: the `mcp_servers.codex_app=…` override that carries the per-launch app-tools pipe path, or `mcp_servers.codex_app={command="",enabled=false}` when the plugin cannot be found. Every branch is non-empty, so the daemon branch is dead code on this build, environment variable or not. The reason is legible: Desktop cannot hand per-launch overrides to a daemon it did not start, so it refuses to share one.
+5. A second switch exists and is reachable: `CODEX_APP_SERVER_WS_URL` (or a host-config `websocket_url`, which nothing in the bundle assigns) makes Desktop connect to an arbitrary `ws://` App Server instead of spawning one, and it is checked **before** the stdio/daemon path. Not tried: it needs a Desktop restart under an environment variable, and a Desktop on it runs without its `codex_app` tools MCP (the pipe path is minted per launch and cannot be reproduced by whoever started the server). It is the only sharing route this build can take, and it is a degraded one. Recorded, not recommended.
+6. **Route A (§5.1) is closed: `app-server proxy` is broken against a Unix listener in 0.153.4.** Through the proxy, `initialize` is never answered and the proxy dies with *"failed to relay data between stdio and socket … Broken pipe"*, while a raw HTTP upgrade to `/rpc` on the same socket answers `101` at once. This is [openai/codex#25846](https://github.com/openai/codex/issues/25846), open since 2026-06-02. Route B (§5.2) is what worked, and it cost about sixty lines: upgrade, masked text frames, ping/pong, close.
+7. Two things found on the way that do not need sharing at all. `project/list` on a **standalone** App Server returned Desktop's Projects (id, name, roots), `Thread.projectId` is in the schema (*"Canonical project assignment owned by app-server"*), `thread/list` filters by it and `thread/project/updated` announces changes. Whether `projectId` agrees with `.codex-global-state.json`'s assignments was not measured; if it does, the private Project reader in [`non-public-codex-integration-features.md`](../../non-public-codex-integration-features.md) can retire on its own. And `codex agents` (*"Browse all agent sessions on the shared local app-server daemon"*) plus the TUI's `app_server_mode: local_daemon` telemetry say where OpenAI is going: one shared daemon, owned by the standalone install.
+
+**Phase 1 — PASS.** One hand-started listener in the throwaway home (socket `0600`, owner only), two direct WebSocket connections, A the owner and B the observer.
+
+- Both `initialize` independently; `thread/loaded/list` answers per connection.
+- A `thread/start` → B receives `thread/started` **without subscribing**.
+- **A bare connection is already a status feed.** B, never having resumed anything, received every `thread/status/changed` for the thread — `active []`, `active [waitingOnApproval]`, `active []`, `idle` — and nothing else: no `turn/*`, no `item/*`, no server request. So the four states this app draws are visible to any connection on the server; only the Turn's identity, its terminal reason and its items need a subscription.
+- B `thread/resume` **mid-Turn** answered in 50 ms with the thread and its status, and the running Turn was undisturbed. From then on B received the same `item/started` / `item/completed` / `serverRequest/resolved` / `turn/completed` as A, with the same delta count. The server sends a `deprecationNotice` on full hydration of a paginated thread and asks for `excludeTurns: true` — tested, it answers with the status and `turns: []`, which is exactly an observer's subscription and nothing more.
+- **Server requests are broadcast to every subscribed connection.** Both A and B received `item/commandExecution/requestApproval` with the same request id. A answered `decline` after three seconds; B ignored its copy; nothing blocked; both received `serverRequest/resolved` for that id and the Turn went on to `turn/completed(status: completed)`. A second answer for the same id from the other connection, a second later, was silently dropped — no error response. So the §9 NO-GO *"the observer receives a server request it must answer, where ignoring it blocks Desktop"* does **not** trigger, and [`answering-codex`](../answering-codex/README.md) §5.1's routing question is answered: broadcast, first answer wins, late answers discarded.
+- `thread/unsubscribe` → `unsubscribed`, after which B received nothing further for that thread; a second call → `notSubscribed`. B closing left the thread loaded for A; **the owner A closing left the thread loaded for B**.
+- Not measured, stated so nobody infers it: `item/tool/requestUserInput` specifically (same request path, so it should broadcast the same way, but no Turn was driven to ask a question); `turn/completed` with `interrupted` or `failed`; the 30-minute unload after the last unsubscribe.
+
+**Phase 3 — BLOCKED**, by Phase 0 item 4. There is no way to put this Desktop on a daemon, so nothing about a *shared* stream with Desktop was, or could be, measured. Everything above is two clients of this app's own server.
+
+- Result: Phase 0 PASS (two new stop conditions recorded), Phase 1 PASS, Phase 2's routing question answered, Phase 3 BLOCKED
+- Side effects observed: none outside the throwaway home. Desktop's App Server untouched; no Desktop restart; no daemon at `~/.codex`.
+- Stop conditions triggered: §Phase 0 "the current Desktop no longer has a local-daemon path" — it has the code and cannot reach it, which is the same thing for this app.
+- Rollback actions: the listener (own pid) stopped; the throwaway home deleted with its two threads; verified `~/.codex/app-server-control` absent and only Desktop's App Server left running.
+- Environment variable cleared: never set
+- Final daemon state: none was ever started
+- Related tests or log paths: none kept; the scratch logs held raw thread ids and were deleted with the scratchpad
+- Recommended next step: no code. (a) Track upstream: Desktop's daemon attachment (dead on 26.901), and openai/codex#25846 for the proxy. (b) Measure `thread/list.projectId` against the private state file — a standalone win that needs no sharing. (c) When a Desktop build takes the daemon by default, re-run Phase 1 against **that** daemon with a bare connection first: `thread/status/changed` alone may already replace the hook channel's four states.
+
