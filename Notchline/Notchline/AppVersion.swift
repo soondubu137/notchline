@@ -56,18 +56,9 @@ enum AppVersion {
         return "Version \(name), build \(build)"
     }
 
-    /// `Copyright © 2026 Yinfeng Lu. Licensed under GPL-3.0-or-later, without
-    /// warranty.` — `NSHumanReadableCopyright`, as stamped into this bundle.
-    ///
-    /// **Not a version, and here for the reason the versions are.** It is one
-    /// sentence that already exists in three places — the build settings,
-    /// Finder's Get Info, and the README's licence section — and the About
-    /// panel drawing its own copy would make a fourth that nobody updates at
-    /// the next release. This file is where the bundle is asked what it calls
-    /// itself, so this is where the notice is read.
-    static var copyrightNotice: String? {
-        infoString(for: "NSHumanReadableCopyright")
-    }
+    /// The About panel names the licence without an author credit. The full
+    /// copyright notice remains in the bundle metadata and README.
+    static let licenceNotice = "Licensed under GPL-3.0-or-later, without warranty."
 
     /// Nothing is guessed: a bundle that cannot say which version it is draws
     /// no version at all, rather than a line reading `Unknown`.

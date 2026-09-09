@@ -196,22 +196,6 @@ enum NotchPalette {
         static let controlRestFillOpacity: Double = 0.24
         static let controlHoverFillOpacity: Double = 0.18
 
-        /// The same quiet control standing on the panel's own black, where
-        /// there is no wash to clear.
-        ///
-        /// **`colour-v2.md` §15's original pair, kept because the pair above
-        /// only makes sense on a washed row.** `0.24` → `0.18` *darkens* under
-        /// the pointer, which is right against `#242524` — the tile has to
-        /// stop competing with the label as the label brightens — and wrong on
-        /// black, where it would be the one control on this surface that dims
-        /// when the pointer reaches it. On black the ladder runs the way it
-        /// was drawn: `0.08` is a tile you can see without looking for it,
-        /// `0.16` lifts to the same weight a row washes at, so the About
-        /// panel's control and the list's rows answer the pointer with one
-        /// step of one ink.
-        static let plainControlRestFillOpacity: Double = 0.08
-        static let plainControlHoverFillOpacity: Double = sessionHoverFillOpacity
-
         /// Ease-in-out both ways -- the same gentle acceleration and
         /// deceleration whether the emphasis is arriving or leaving -- and
         /// still faster to leave than to arrive, the one asymmetry worth

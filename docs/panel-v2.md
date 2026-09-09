@@ -173,7 +173,11 @@ The band's trailing side takes a second control — **the brand mark, to the lef
 of the gear** — and what it opens is not a region added to this panel but a
 **body that replaces the one below the band**. There is no list, no queue and
 no footer while it is open; there is a horizontal lockup, the version, the
-bundle's own licence notice, and one control.
+licence notice, and one control.
+
+The notice is one sentence: `Licensed under GPL-3.0-or-later, without warranty.`
+It omits the author credit; the full copyright notice remains in the bundle
+metadata and README, and `LICENSE` retains the full terms.
 
 **Why it is a body and not a sheet.** Every region in §2 answers to what is
 running, and the composed guarantee in §4 is about which of them the user
@@ -212,8 +216,11 @@ which is a different claim from *not built yet* — and §1 rule 2's reading of
 "absent rather than greyed out" is about a promise the panel makes about the
 work it is showing, not about the app's own furniture.
 
-**Three things it re-uses and one asset it adds.** The control is the quiet
-answers' ladder, the notice is the caption face, the rule is the band's own —
+**Three things it re-uses and one asset it adds.** The control uses the existing
+`brightGround` / `onBrightGround` theme pair, deepening to `requestHoverGround`
+on hover. The former `0.08` / `0.16` theme wash blended into the black panel;
+the opaque fill keeps the button visible in both states and follows the user's
+theme colour. The notice is the caption face, the rule is the band's own —
 and the mark on the band is the brand package's **menu bar template**
 (`design/assets/05-menubar`), resampled to `13 × 13` so it draws `1 : 1` at
 both scales. It is black at the level ramp's own alphas, so a template tint

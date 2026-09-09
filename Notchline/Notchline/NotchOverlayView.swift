@@ -865,16 +865,10 @@ struct AboutPanelContent: View {
                     .padding(.top, PanelMetrics.aboutLockupTextGap)
             }
 
-            // The bundle's own notice, drawn verbatim. The panel names the
-            // licence and disclaims the warranty because those are the notices
-            // the licence itself asks to travel with the program, and a
-            // paraphrase would be this app's fourth wording of one sentence.
-            if let notice = AppVersion.copyrightNotice {
-                Text(notice)
-                    .font(Font(PanelMetrics.captionFont))
-                    .foregroundStyle(NotchPalette.label)
-                    .padding(.top, PanelMetrics.aboutTextLineGap)
-            }
+            Text(AppVersion.licenceNotice)
+                .font(Font(PanelMetrics.captionFont))
+                .foregroundStyle(NotchPalette.label)
+                .padding(.top, PanelMetrics.aboutTextLineGap)
 
             AboutUpdateControl()
                 .padding(.top, PanelMetrics.aboutTextControlGap)
@@ -913,9 +907,7 @@ private struct AboutUpdateControl: View {
         } label: {
             Text("Check for Updates")
                 .font(Font(PanelMetrics.requestControlFont))
-                .foregroundStyle(
-                    isHovered ? NotchPalette.themeInk.on : NotchPalette.reading
-                )
+                .foregroundStyle(NotchPalette.onBrightGround)
                 .padding(.horizontal, PanelMetrics.controlHorizontalPadding)
                 .frame(height: PanelMetrics.answerRowHeight)
                 .background(
@@ -924,11 +916,9 @@ private struct AboutUpdateControl: View {
                         style: .continuous
                     )
                     .fill(
-                        NotchPalette.themeInk.on.opacity(
-                            isHovered
-                                ? NotchPalette.RowEmphasis.plainControlHoverFillOpacity
-                                : NotchPalette.RowEmphasis.plainControlRestFillOpacity
-                        )
+                        isHovered
+                            ? NotchPalette.requestHoverGround
+                            : NotchPalette.brightGround
                     )
                 )
                 .overlay(PointingHandCursor())
