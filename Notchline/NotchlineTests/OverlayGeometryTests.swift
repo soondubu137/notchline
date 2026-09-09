@@ -308,6 +308,132 @@ struct OverlayGeometryTests {
         #expect(after - before < 1.5)
     }
 
+    /// The seam's separator is **the row's dot, standing on the rule's own
+    /// line** — the two claims `expanded-panel-v2.md` §2.2 makes about it.
+    ///
+    /// Neither is checkable from the metrics: ``PanelMetrics``
+    /// `seamSeparatorSpacing` is `(gap − dot) / 2` by construction and would
+    /// agree with itself whatever the bar drew. What can be wrong is where the
+    /// mark lands — a `·` *set* in the caption sits on its own x-height, which
+    /// is a point below the line the bar centres its contents on, so the seam's
+    /// own hairline ran past the dot rather than through it — and how big it
+    /// is, since the caption's glyph is two thirds of the row's.
+    ///
+    /// Read out of the drawing in two windows: the gap the separator stands in,
+    /// found from the label's own measured width, and a stretch of the bar far
+    /// enough along to hold nothing but the rule.
+    @Test @MainActor
+    func theSeamsSeparatorIsTheRowsDotOnTheRulesOwnLine() throws {
+        let store = MonitorStore(preferences: nil)
+        store.isExpanded = true
+        store.isRecentExpanded = true
+        store.stageSpecimenQueue([
+            RecentDeparture(
+                session: MonitoredSession(
+                    agent: .codex,
+                    threadID: "a", turnID: "u", projectName: "p", title: "t",
+                    preview: nil, status: .completed, startedAt: nil
+                ),
+                departedAt: Date(),
+                reason: .read
+            )
+        ])
+
+        // The seam sizes itself off the store's own panel, so the figure has
+        // to be that wide: drawn narrower, the bar overflows, centres what
+        // will not fit and takes its label off the left edge.
+        let width = PanelMetrics.sessionViewportWidth(
+            panelWidth: store.currentPanelSize.width
+        )
+        let height = PanelMetrics.recentSectionHeight(
+            retiredRowCount: 1,
+            isRecentExpanded: true
+        )
+        // Drawn through the anatomy figures' own renderer, which hosts the
+        // view in a window and gives SwiftUI a turn of the loop first. A bare
+        // `cacheDisplay` catches this bar mid-layout -- its label measures
+        // zero and the whole line lands where nothing is -- for the reason a
+        // `ScrollView`'s content comes out empty there.
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("seam-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try AnatomyFigureRenderer.png(
+            RecentSessionSection()
+                .environmentObject(store)
+                .background(Color.black),
+            size: CGSize(width: width, height: height),
+            to: file
+        )
+        let rep = try #require(NSBitmapImageRep(data: try Data(contentsOf: file)))
+        let across = CGFloat(rep.pixelsWide) / width
+        let down = CGFloat(rep.pixelsHigh) / height
+
+        /// The ink in a slice of the seam: how far down its middle is, how
+        /// tall it stands and how bright it gets, in points off the bar's top.
+        func ink(from: CGFloat, to: CGFloat) -> (middle: CGFloat, height: CGFloat, peak: CGFloat) {
+            var weight: CGFloat = 0
+            var moment: CGFloat = 0
+            var top = CGFloat.greatestFiniteMagnitude
+            var bottom = -CGFloat.greatestFiniteMagnitude
+            var peak: CGFloat = 0
+            for row in 0..<Int(PanelMetrics.recentSeamHeight * down) {
+                let y = (CGFloat(row) + 0.5) / down
+                for step in 0...Int((to - from) * across) {
+                    let x = from + CGFloat(step) / across
+                    let value = rep
+                        .colorAt(x: Int(x * across), y: row)?
+                        .usingColorSpace(.deviceRGB)?
+                        .brightnessComponent ?? 0
+                    guard value > 0.06 else { continue }
+                    weight += value
+                    moment += value * y
+                    top = min(top, y)
+                    bottom = max(bottom, y)
+                    peak = max(peak, value)
+                }
+            }
+            return (moment / weight, bottom - top, peak)
+        }
+
+        // The gap the separator stands in: from the label's own right edge to
+        // where the count begins, both measured off the face the seam sets
+        // them in, and shy of each by half a point so a bearing cannot reach
+        // in. The dot is `2` pt in the middle of `9.3`, so a fraction of drift
+        // between what SwiftUI lays out and what `textWidth` measures cannot
+        // move this window off it.
+        let word = PanelMetrics.sessionRowPadding
+            + PanelMetrics.textWidth("Recent", font: PanelMetrics.captionFont)
+        let gap = PanelMetrics.textWidth(" · ", font: PanelMetrics.captionFont)
+        let dot = ink(from: word + 0.5, to: word + gap - 0.5)
+        // And the rule, well past the count and well short of the chevron.
+        let rule = ink(from: 200, to: 300)
+
+        // One line, to the pixel this is drawn at: the bar centres both, so
+        // the hairline runs through the dot rather than past it.
+        #expect(
+            abs(dot.middle - rule.middle) < 1 / down,
+            "the dot's middle is \(dot.middle) against the rule's \(rule.middle)"
+        )
+        #expect(abs(rule.middle - PanelMetrics.recentSeamHeight / 2) < 1 / down)
+
+        // The row's dot rather than the caption's: `2` pt of ink, where a `·`
+        // set at `11` pt Light draws `1.13`.
+        #expect(
+            abs(dot.height - PanelMetrics.seamSeparatorDotSize) < 0.6,
+            "the separator drew \(dot.height) pt"
+        )
+        // Still a reading, unlike the block heading's -- that mark is chrome at
+        // the rule's own value, and this one belongs to the label it separates.
+        let caption = try #require(
+            NotchPalette.labelDrawingColor.usingColorSpace(.deviceRGB)
+        )
+        // Well clear of the hairline it stands on, and no brighter than the
+        // ink it belongs to -- read as a ratio rather than as a value, because
+        // a figure's own colour space reaches this back through a file.
+        #expect(dot.peak > rule.peak * 2)
+        #expect(dot.peak < caption.brightnessComponent * 1.25)
+    }
+
     @Test @MainActor
     func aStandaloneListStillUsesItsSpecimensChosenWidth() {
         let store = MonitorStore(preferences: nil)

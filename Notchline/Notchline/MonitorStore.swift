@@ -525,7 +525,9 @@ enum PanelMetrics {
     /// (``productBadgeHeight``): the glyph is real rendered text, so a table
     /// here would be a second answer this file had to keep in step with the
     /// font. The seam's `Recent · 3` keeps its dot — a word and a figure on one
-    /// line is what the idiom is for, and there is no boundary there already.
+    /// line is what the idiom is for, and there is no boundary there already —
+    /// and draws it rather than setting it, for the reason
+    /// ``seamSeparatorDotSize`` gives.
     static var captionSeparatorWidth: CGFloat {
         textWidth("· ", font: captionFont)
     }
@@ -551,6 +553,34 @@ enum PanelMetrics {
     /// taken its own width out of the middle.
     static var productBadgeCountSpacing: CGFloat {
         (productBadgeCountGap - captionSeparatorDotSize) / 2
+    }
+
+    /// The seam's separator, drawn rather than set — and drawn at the size the
+    /// row beneath it sets its own.
+    ///
+    /// **A glyph sits where its font puts it, and that is not the middle of
+    /// the bar.** A `·` is centred on the x-height, which at the caption's
+    /// `11` pt Light leaves it a point below the line the bar centres its
+    /// contents on — so the seam's own hairline ran past the dot rather than
+    /// through it. Drawn, the dot is one of those contents like the rule is,
+    /// and the two land on one line by construction. The block heading's
+    /// ``captionSeparatorDotSize`` is the same argument, reached first.
+    ///
+    /// **`2`, which is the retired row's dot rather than the caption's.** The
+    /// seam names a list, and the mark the list itself draws between a project
+    /// and a subject — a `·` at `13` pt Regular — is directly underneath this
+    /// one; two sizes of one dot within `36` points read as an accident. That
+    /// glyph's ink measures `1.65`, but a flat disc at `1.65` snaps to `1.5`
+    /// on a `2×` panel and comes out a third lighter than the glyph beside it,
+    /// which rasterises nearer `2`. The disc is therefore sized by what the
+    /// glyph *draws* rather than by what it measures.
+    static let seamSeparatorDotSize: CGFloat = 2
+
+    /// What stands either side of that dot, so neither the word nor the figure
+    /// moves: the run `" · "` held this gap at the caption's own face, and an
+    /// `HStack` of three has exactly one spacing to put half of it in.
+    static var seamSeparatorSpacing: CGFloat {
+        (textWidth(" · ", font: captionFont) - seamSeparatorDotSize) / 2
     }
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8

@@ -9,6 +9,7 @@
 | Amended | **The live list is grouped by product** (2026-09-08), and the queue is not. §4 is the whole of it: one block per product that has a row, headed by the bar §2.2 already defines, in the fixed product order, with the chip coming off the live row and staying on the retired one. Nothing in §2 moves — the seam, the window, the ages, the fold and the five rows are untouched — and nothing in §3 is touched either. Built the same day. |
 | Amended | **`No active sessions` is drawn whenever nothing is live, queue or no queue** (2026-09-05). §2 let the seam take the sentence's place, on the reading that a list continuing past its own end is a better answer than an apology. It is a better answer to a different question: what has left is not what is running, and the panel was left unable to say the one thing it exists to say for as long as anything sat under the rule. The apology becomes the empty list's own first line, above the seam and inside the same scroller. Touched: §2.4 rule 02, §2.6, §4, §9, §10. **No metric moves, and the floor comes back up** — `178` again rather than `162`, with a folded queue `32` above it; the fold with nothing live is four rows rather than five, because `48 + 32 + 4 × 40` is the `240` cap exactly. |
 | Amended | **A row's air comes down, and the first block's heading takes the panel's own top rule over** (2026-09-08). Two changes, both cosmetic, both in §2.1 and §4.2. A live row is `72` rather than `80` — `8.5` above its three lines and `8.5` below, where it was `12.5` — so a retired row is `36`, the live viewport's cap is `216` and the queue's is `180`; nothing about what either viewport *draws* moves, still three rows and five. And the first block's heading is drawn without its `16` of slack, `16` rather than `32`: its chip's top edge stands where the panel's own hairline was, its rule stands `8` under that, and the panel stops drawing that hairline while a heading is there to draw one. The panel is `300` at every connected form where it was `324`. Touched: §2.1, §2.3, §2.4 rules 02 and 04, §4.2, §4.3 (new rule 11), §4.4, §9. **One figure follows and is not a choice:** an approval's body is the viewport less the row's fixed parts (`answer-in-notch.md` §4.1), so it is `124` where it was `140` — held at `140` a maximal approval would stand `16` taller than the list it opens in. |
+| Amended | **The seam's separator is drawn, at the retired row's size** (2026-09-09). `Recent · N` set its `·` in the caption's face, which put a `1.13` pt mark `0.77` pt off the line its own hairline runs along, and put it two thirds the size of the dot the queue draws in every row underneath it. It is a `2` pt disc now, in the caption's own ink, standing in the middle of the gap the glyph run held — so the word and the figure have not moved, the rule runs through the mark rather than past it, and the seam and the rows below it separate things the same way. §2.2 and §4.2; pinned by `theSeamsSeparatorIsTheRowsDotOnTheRulesOwnLine`. |
 | Amended | **The heading's separator becomes chrome, and a finished row's ground becomes a dot** (2026-09-08, with the row above). `Codex · 3` set its separator in the caption's ink, which made it a third piece of text on a line already carrying a chip and a figure; it is a `3` pt disc at the hairline's own `15%` white now, on the rule's own line and in the middle of the gap the glyph held, so the count does not move and the mark stops competing with what it separates (§4.2). And a finished row's reading gives up its dim tile for a still `4` pt dot in front of the digits — the mark the collapsed bar already drew for the same fact ([`compact-view-v2.md`](compact-view-v2.md) §4.2 and §4.3), in the sessions numeral's `#C7C7CC`, so the two surfaces stop saying one thing two ways. With the tile went its `6` of padding, which puts a running row's digits and a finished row's on the same column for the first time. |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `06 — The expanded panel` |
 | Scope | The expanded panel's session viewport only: the region between the band and the quota footer. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the footer is [`dual-agent-design.md`](dual-agent-design.md) §5, and both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None of the three is touched. |
@@ -49,7 +50,7 @@ is the statement it is making and not a number it happens to hold.
 
 A label, a hairline and a chevron, on one `32` pt line at the foot of the live list.
 
-- `Recent · N` in `11` pt at `#7C7C80`, at the panel's own `12` — the caption idiom exactly, separator included. **`N` is what the window holds, not a constant**: it climbs as rows retire and falls as they age out, and it is the one thing on the seam that says there is more below than is drawn. A two-digit count widens the label by about `6` and the hairline simply starts `8` further along; the hairline's trailing edge at `508` does not move, so nothing downstream of the seam is width-dependent.
+- `Recent · N` in `11` pt at `#7C7C80`, at the panel's own `12` — the caption idiom exactly, ~~separator included~~ **with the separator drawn rather than set** (amended 2026-09-09): a `2` pt disc in the caption's own ink, in the middle of the gap the `" · "` run held, so neither the word nor the figure moves. **`N` is what the window holds, not a constant**: it climbs as rows retire and falls as they age out, and it is the one thing on the seam that says there is more below than is drawn. A two-digit count widens the label by about `6` and the hairline simply starts `8` further along; the hairline's trailing edge at `508` does not move, so nothing downstream of the seam is width-dependent.
 - The hairline is **the list's own top rule drawn again**: `1` pt of white at `15%`, from `8` after the label to the content box's trailing edge at `508`. It therefore lands on the same `x` as the footer's quota rules and the band's matrix.
 - The chevron is the quota block's control unchanged — `16 × 16` at `x = 492`, a `9 × 4.5` glyph at `1.4` stroke with round caps, in `#7C7C80`, pointing down when folded and up when open.
 - The seam draws **no colour bar** in any attribution option, so it keeps the panel's own `12` margin while the rows beside it move to `20`.
@@ -195,8 +196,20 @@ its own rule exactly as it always has.
   point off centre. Pinned by
   `theHeadingsSeparatorIsTheRulesOwnValueInTheMiddleOfItsGap`.
 
-  The seam's `Recent · N` keeps its glyph: a word and a figure on one line is
-  what the idiom is for, and there is no boundary there already.
+  ~~The seam's `Recent · N` keeps its glyph: a word and a figure on one line is
+  what the idiom is for, and there is no boundary there already.~~ **The seam
+  keeps its dot and draws it too** (amended 2026-09-09, §2.2) — for the *other*
+  half of this argument rather than for this half. A set `·` sits where its
+  font puts it, on the x-height, which measures `0.77` pt below the line the
+  bar centres its contents on: the seam's own hairline ran past its dot rather
+  than through it. Drawn, the mark is one of the bar's contents like the rule
+  is and the two land on one line by construction. It keeps the caption's ink,
+  though — the seam separates a word from a figure that a reader reads, where
+  this heading separates a chip from a count, so the mark is still part of the
+  label and not chrome. And it takes the *row's* size, `2` pt rather than the
+  caption glyph's `1.13`: the mark the queue itself draws between a project and
+  a subject sits `36` points below it, and two sizes of one dot that close
+  together read as an accident.
 - The hairline is the seam's, `8` after the count — and it **runs to `508`**,
   where the seam's stops `8` short of a `16 × 16` control at `492`. That is the
   only thing on this surface distinguishing a label from a bar you can press,

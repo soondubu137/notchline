@@ -2986,11 +2986,27 @@ private struct SeamContent: View {
                 .fill(Color.black)
 
             HStack(spacing: 8) {
-                // The caption idiom exactly, separator included.
-                Text("Recent · \(count)")
-                    .font(.system(size: 11, weight: .light))
-                    .foregroundStyle(isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label)
-                    .fixedSize()
+                // The caption idiom exactly, separator included -- and the
+                // separator is one of the bar's own contents rather than a
+                // glyph inside the label, so it stands on the hairline's line
+                // and at the size the row below sets its own separator
+                // (``PanelMetrics/seamSeparatorDotSize``).
+                HStack(spacing: PanelMetrics.seamSeparatorSpacing) {
+                    Text("Recent")
+
+                    Circle()
+                        .fill(ink)
+                        .frame(
+                            width: PanelMetrics.seamSeparatorDotSize,
+                            height: PanelMetrics.seamSeparatorDotSize
+                        )
+                        .accessibilityHidden(true)
+
+                    Text(verbatim: "\(count)")
+                }
+                .font(Font(PanelMetrics.captionFont))
+                .foregroundStyle(ink)
+                .fixedSize()
 
                 FoldSeamRule(isVisible: store.isRecentExpanded)
 
@@ -3029,6 +3045,12 @@ private struct SeamContent: View {
     }
 
     private var isEmphasized: Bool { isHovered || isPressed }
+
+    /// The caption's ink, which the drawn separator takes too: the label and
+    /// its dot are one reading and brighten together.
+    private var ink: Color {
+        isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label
+    }
 }
 
 /// The rule a folding bar draws between its label and its chevron.
