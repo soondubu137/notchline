@@ -549,4 +549,79 @@ struct OverlayGeometryTests {
                 - PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)) < 0.01
         )
     }
+
+    /// **The About panel draws inside the height the window was sized to, and
+    /// spends it where the composition says.**
+    ///
+    /// ``PanelMetrics/aboutPanelHeight`` is a sum of nine terms and would
+    /// agree with itself however the body were laid out — the panel could be
+    /// the right height with its lockup pressed against the rule and its
+    /// control cropped by the bottom edge, and nothing in the arithmetic would
+    /// notice. So this lays the body out and reads the ink: nothing in the top
+    /// margin but the rule that closes the band, nothing in the bottom margin
+    /// at all, and the lockup where the composition puts it.
+    @Test @MainActor
+    func theAboutPanelSpendsItsHeightWhereItSaysItDoes() throws {
+        let width = PanelMetrics.expandedBaselineWidth
+        let height = PanelMetrics.aboutPanelHeight
+        let host = NSHostingView(rootView: AboutPanelContent().frame(width: width))
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.layoutSubtreeIfNeeded()
+
+        // The term the composition cannot check on itself: one caption line at
+        // the height ``PanelMetrics/aboutTextLineHeight`` says it is. Composed
+        // from `NSLayoutManager`'s `13` rather than the `14` SwiftUI draws,
+        // the body came out two points taller than the window and the control
+        // sat two points inside its own bottom margin — which the frame below
+        // hides, because a fixed frame reports its own height whatever it is
+        // given to hold.
+        let line = NSHostingView(
+            rootView: Text("Version 0.0.0 Alpha (0)")
+                .font(Font(PanelMetrics.captionFont))
+                .monospacedDigit()
+        )
+        line.layoutSubtreeIfNeeded()
+        #expect(abs(line.fittingSize.height - PanelMetrics.aboutTextLineHeight) < 0.01)
+
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let across = CGFloat(rep.pixelsWide) / host.bounds.width
+        let down = CGFloat(rep.pixelsHigh) / host.bounds.height
+        // Every row of the body, across its whole width: this panel is a
+        // centred column, so there is no band of it a narrow probe could sit
+        // beside and call empty.
+        func brightest(from top: CGFloat, to bottom: CGFloat) -> CGFloat {
+            var found: CGFloat = 0
+            for y in stride(from: top, to: bottom, by: 1) {
+                for x in stride(from: 1.0, to: width - 1, by: 2) {
+                    guard
+                        let colour = rep
+                            .colorAt(x: Int(x * across), y: Int(y * down))?
+                            .usingColorSpace(.deviceRGB)
+                    else { continue }
+                    found = max(found, colour.brightnessComponent)
+                }
+            }
+            return found
+        }
+
+        // The band's closing rule, and then nothing until the lockup.
+        #expect(brightest(from: 0, to: 1) > 0.05, "the band's rule is not drawn")
+        #expect(
+            brightest(from: 2, to: PanelMetrics.aboutTopMargin - 1) < 0.05,
+            "something is standing in the About panel's top margin"
+        )
+        // The lockup, whose ink is the brand's lit end.
+        let lockupTop = PanelMetrics.aboutTopMargin
+        #expect(
+            brightest(from: lockupTop + 8, to: lockupTop + PanelMetrics.aboutLockupHeight - 8) > 0.8,
+            "the lockup is not where the composition puts it"
+        )
+        // And the bottom margin, which the control has to stop above.
+        #expect(
+            brightest(from: height - PanelMetrics.aboutBottomMargin + 1, to: height - 1) < 0.05,
+            "the About panel's control runs into its bottom margin"
+        )
+    }
 }

@@ -79,14 +79,28 @@ struct NotchOverlayView: View {
 
                     if (store.isExpanded || bodyPresentation.isMounted),
                        !store.expandsToPillOnly {
-                        ExpandedPanelContent()
-                            .transaction { transaction in
-                                if !store.isExpanded { transaction.animation = nil }
+                        // One body or the other, never both: the About panel
+                        // is a mode this surface is in rather than a sheet
+                        // over the list, and its height is the panel's
+                        // (``MonitorStore/expandedContentHeight``). Swapped
+                        // without a cross-fade — the window is resizing under
+                        // it, and two bodies drawn at once during that resize
+                        // is a full overlay render per frame for a change the
+                        // user asked for and can see (`AGENTS.md` §7).
+                        Group {
+                            if store.isShowingAbout {
+                                AboutPanelContent()
+                            } else {
+                                ExpandedPanelContent()
                             }
-                            .opacity(store.isExpanded ? 1 : 0)
-                            .animation(PanelMotion.animation, value: store.isExpanded)
-                            .allowsHitTesting(store.isExpanded)
-                            .accessibilityHidden(!store.isExpanded)
+                        }
+                        .transaction { transaction in
+                            if !store.isExpanded { transaction.animation = nil }
+                        }
+                        .opacity(store.isExpanded ? 1 : 0)
+                        .animation(PanelMotion.animation, value: store.isExpanded)
+                        .allowsHitTesting(store.isExpanded)
+                        .accessibilityHidden(!store.isExpanded)
                     }
                 }
                 // The window is one shoulder wider than the panel on each side,
@@ -460,7 +474,13 @@ private struct OverlayHeader: View {
             // two products alike. The footer became three quota rules and had no
             // room left; the top bar's trailing side is empty whenever the panel
             // is open, because the compact timer only draws while collapsed.
+            //
+            // The mark stands to its left and opens the About panel. Both are
+            // controls on the app rather than on the work, so they are one
+            // group at the trailing edge, flush against each other
+            // (``PanelMetrics/expandedTrailingSideWidth``).
             if store.isExpanded {
+                AboutButton()
                 SettingsButton()
             }
         }
@@ -658,6 +678,71 @@ private struct CompactTrailingSlot: View {
     )
 }
 
+/// The mark, which puts the app itself on the panel in place of the work.
+///
+/// **It is the brand package's menu bar template, not a fresh drawing of the
+/// mark.** That file is the one the package draws for small sizes, and it is
+/// black at the level ramp's own alphas — so a template tint reproduces
+/// `1.00 / 0.80 / 0.60 / 0.40 / 0.20` in whatever ink the control is currently
+/// in. The app already carries the same five columns as a live status matrix;
+/// two drawings of one mark would be free to disagree, and one asset with one
+/// tint cannot.
+///
+/// It draws at ``PanelMetrics/bandControlGlyphSize``, which is the gear's own
+/// glyph size rather than the template's native `16`: this mark is a solid
+/// mass where `gearshape` is an outline, so matching the box would put a much
+/// heavier figure beside it — and at `16.6` it would be the status matrix on
+/// the other end of the same band, drawn a second time. The catalogue
+/// therefore carries that template resampled to `13`, so both scales are drawn
+/// `1 : 1` rather than through a resample that softens a `0.84` pt gap.
+private struct AboutButton: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    @State private var isHovered = false
+
+    private var size: CGFloat {
+        PanelMetrics.settingsButtonSize(compactHeight: store.compactHeight)
+    }
+
+    var body: some View {
+        Button(action: store.toggleAbout) {
+            Image("NotchlineMark")
+                .renderingMode(.template)
+                .interpolation(.high)
+                .resizable()
+                .frame(
+                    width: PanelMetrics.bandControlGlyphSize,
+                    height: PanelMetrics.bandControlGlyphSize
+                )
+                .frame(width: size, height: size)
+                // **The fill answers to the pointer and the ink answers to
+                // both.** A control that is *on* is bright and takes no
+                // ground: the panel underneath it is already the state it
+                // announces, so a permanent tile would be the same fact drawn
+                // twice — and a tile that stayed lit after the pointer left
+                // would be the only unhovered fill on this surface.
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.white.opacity(isHovered ? 0.12 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(
+            isHovered || store.isShowingAbout
+                ? NotchPalette.sessionTitle
+                : NotchPalette.label
+        )
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .animation(.easeOut(duration: 0.12), value: store.isShowingAbout)
+        .accessibilityLabel("About Notchline")
+        .accessibilityValue(store.isShowingAbout ? "Shown" : "Hidden")
+        .accessibilityAddTraits(store.isShowingAbout ? .isSelected : [])
+        .help(store.isShowingAbout ? "Back to sessions" : "About Notchline")
+    }
+}
+
 /// The gear, shared by the expanded top bar and the resting pill.
 private struct SettingsButton: View {
     @Environment(\.openSettings) private var openSettings
@@ -678,7 +763,10 @@ private struct SettingsButton: View {
             SettingsWindowPresenter.present { openSettings() }
         } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: 13, weight: .regular))
+                .font(.system(
+                    size: PanelMetrics.bandControlGlyphSize,
+                    weight: .regular
+                ))
                 .frame(width: size, height: size)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -726,6 +814,131 @@ private struct ExpandedPanelContent: View {
                     .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
             }
         }
+    }
+}
+
+/// The panel with the app on it instead of the work: the lockup, the version,
+/// the licence notice, and one control.
+///
+/// **It replaces the body rather than covering it** — no rows, no queue, no
+/// footer — which is what lets its height be a constant
+/// (``PanelMetrics/aboutPanelHeight``) on a surface where every other height
+/// answers to what is running. A turn starting behind an open About panel
+/// moves nothing on screen.
+///
+/// **Centred, where the rest of this panel is a left margin.** Everything else
+/// here is a list: rows, a queue and a footer that share one leading edge so
+/// the eye can run down it. This is not a list of anything — it is the app
+/// giving its name, its version and its terms — and the centred column is what
+/// says so before a word is read.
+///
+/// Internal rather than private for the reason ``ActiveSessionList`` and
+/// ``OpenRow`` are: the height it draws at against the height the panel was
+/// sized to is the thing that can go wrong, and that is only checkable by
+/// laying the body out rather than by asking the metric it was composed from.
+struct AboutPanelContent: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            // The dark-ground file, which is the one the package draws for
+            // this: on a dark ground the ramp is *blended* opaque ink
+            // (`#DEE8E0` down to `#424743`) rather than the thinned `#1B1F1C`
+            // the transparent file carries, and the thinned treatment on black
+            // is invisible by the second column. Its own ground is `#000000`,
+            // which is the black `PanelSurface` fills — the image has no edge
+            // on this panel because there is nothing for an edge to be
+            // between.
+            Image("NotchlineLockup")
+                .resizable()
+                .interpolation(.high)
+                .frame(
+                    width: PanelMetrics.aboutLockupWidth,
+                    height: PanelMetrics.aboutLockupHeight
+                )
+                .accessibilityLabel("Notchline")
+
+            if let summary = AppVersion.summary {
+                Text(summary)
+                    .font(Font(PanelMetrics.captionFont))
+                    .monospacedDigit()
+                    .foregroundStyle(NotchPalette.reading)
+                    .accessibilityLabel(AppVersion.spokenSummary ?? summary)
+                    .padding(.top, PanelMetrics.aboutLockupTextGap)
+            }
+
+            // The bundle's own notice, drawn verbatim. The panel names the
+            // licence and disclaims the warranty because those are the notices
+            // the licence itself asks to travel with the program, and a
+            // paraphrase would be this app's fourth wording of one sentence.
+            if let notice = AppVersion.copyrightNotice {
+                Text(notice)
+                    .font(Font(PanelMetrics.captionFont))
+                    .foregroundStyle(NotchPalette.label)
+                    .padding(.top, PanelMetrics.aboutTextLineGap)
+            }
+
+            AboutUpdateControl()
+                .padding(.top, PanelMetrics.aboutTextControlGap)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.top, PanelMetrics.aboutTopMargin)
+        .padding(.bottom, PanelMetrics.aboutBottomMargin)
+        .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
+        .frame(height: PanelMetrics.aboutPanelHeight, alignment: .top)
+        .overlay(alignment: .top) {
+            // The rule that closes the band off, which the list draws too
+            // (``ExpandedPanelContent``). Unconditional here: this body has no
+            // block heading to bring one of its own.
+            Rectangle()
+                .fill(NotchPalette.hairline)
+                .frame(height: 1)
+                .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
+        }
+    }
+}
+
+/// The About panel's one control.
+///
+/// **It does nothing, and that is the whole of it for now**: no update
+/// mechanism is wired in, so the button is the place one will land rather than
+/// a path to one. It is drawn live rather than disabled because disabled says
+/// *not available here*, which is a different claim from *not built yet*.
+private struct AboutUpdateControl: View {
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            // Deliberately empty until an update mechanism exists. No sheet,
+            // no alert, no "coming soon" — the panel promises nothing it
+            // cannot do.
+        } label: {
+            Text("Check for Updates")
+                .font(Font(PanelMetrics.requestControlFont))
+                .foregroundStyle(
+                    isHovered ? NotchPalette.themeInk.on : NotchPalette.reading
+                )
+                .padding(.horizontal, PanelMetrics.controlHorizontalPadding)
+                .frame(height: PanelMetrics.answerRowHeight)
+                .background(
+                    RoundedRectangle(
+                        cornerRadius: PanelMetrics.controlCornerRadius,
+                        style: .continuous
+                    )
+                    .fill(
+                        NotchPalette.themeInk.on.opacity(
+                            isHovered
+                                ? NotchPalette.RowEmphasis.plainControlHoverFillOpacity
+                                : NotchPalette.RowEmphasis.plainControlRestFillOpacity
+                        )
+                    )
+                )
+                .overlay(PointingHandCursor())
+                .onHover { isHovered = $0 }
+        }
+        .buttonStyle(.plain)
+        .animation(
+            .easeOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration),
+            value: isHovered
+        )
     }
 }
 

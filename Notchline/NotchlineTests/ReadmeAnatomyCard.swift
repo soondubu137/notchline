@@ -330,6 +330,13 @@ struct AnatomyAnchors {
         trailingEdge - (PanelMetrics.settingsButtonSize(compactHeight: band) - 13.5) / 2
     }
 
+    /// The middle of the About mark, which is the box before the gear's: the
+    /// two controls are flush, so this is one and a half boxes in from the
+    /// trailing edge.
+    var aboutGlyphMidX: CGFloat {
+        trailingEdge - PanelMetrics.settingsButtonSize(compactHeight: band) * 1.5
+    }
+
     /// A row's text column, and the trailing edge its mark ends on. The rail
     /// takes its lane out of the second for as long as the list scrolls.
     var rowTextLeft: CGFloat {
@@ -718,6 +725,16 @@ struct ReadmeAnatomyCard: View {
                 side: .trailing,
                 target: CGPoint(x: a.gearGlyphRight, y: a.matrixMidY),
                 stem: 26
+            ),
+            // The band's other control, called out from above rather than from
+            // the trailing side: the pair is flush, so two leaders on one edge
+            // would land within a button of each other.
+            AnatomyCallout(
+                id: 0,
+                text: "What this app is",
+                side: .above,
+                target: CGPoint(x: a.aboutGlyphMidX, y: a.matrixTop),
+                stem: 22
             ),
 
             // The heading over the first block, and the reason the row under

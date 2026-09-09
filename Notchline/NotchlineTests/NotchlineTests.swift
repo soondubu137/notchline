@@ -2150,7 +2150,7 @@ struct NotchlineTests {
         #expect(!store.expandsToPillOnly)
     }
 
-    /// **Nothing connected: the gear keeps its `8`, at every cut-out.**
+    /// **Nothing connected: the controls keep their `8`, at every cut-out.**
     ///
     /// This form used to add its two sides up — `leading + cut-out + trailing`
     /// — and the panel is centred while expanded, so that sum was never the
@@ -2160,15 +2160,22 @@ struct NotchlineTests {
     /// `Disconnected` put about `25` pt of that word behind the cut-out.
     /// Dropping the word is what makes the symmetric rule affordable
     /// (`expanded-header-v2.md` §5).
+    ///
+    /// **The series moved once, when the band took a second control.** The
+    /// mark that opens the About panel stands beside the gear, and this form
+    /// is composed symmetrically, so it costs twice a button: ~~`207`, `274`,
+    /// `304`, `316`~~ are the same four cut-outs with the gear alone. Nothing
+    /// about the rule changed — each side still gets half of what the cut-out
+    /// leaves, and the trailing pair still clears the hardware by `8`.
     @Test @MainActor
     func theRestingHoveredPanelClearsTheCutOutOnBothSides() {
         // The four cut-outs this app has measured, each with the menu bar it
-        // comes with — the gear tracks the bar, so the two move together.
+        // comes with — the controls track the bar, so the two move together.
         for (occlusion, bar, expected) in [
-            (CGFloat(127), CGFloat(22), CGFloat(207)),
-            (185, 32, 274),
-            (200, 46, 304),
-            (220, 38, 316)
+            (CGFloat(127), CGFloat(22), CGFloat(247)),
+            (185, 32, 323),
+            (200, 46, 368),
+            (220, 38, 371)
         ] {
             let width = PanelMetrics.restingExpandedWidth(
                 geometry: .notched,
@@ -2181,7 +2188,7 @@ struct NotchlineTests {
             let shoulder = (width - occlusion) / 2
             #expect(
                 shoulder >= PanelMetrics.expandedTrailingSideWidth(compactHeight: bar),
-                "the gear is inside the cut-out at \(occlusion)"
+                "the controls are inside the cut-out at \(occlusion)"
             )
             // And the leading side, which is a bare mark and never binds here.
             #expect(
@@ -2192,7 +2199,7 @@ struct NotchlineTests {
         }
 
         // A flat display has nothing to be symmetric about, so this form
-        // composes to itself: the mark, one clearance, the gear.
+        // composes to itself: the status mark, one clearance, and the pair.
         #expect(
             PanelMetrics.restingExpandedWidth(
                 geometry: .noNotch,
@@ -2204,6 +2211,114 @@ struct NotchlineTests {
                     + PanelMetrics.expandedTrailingSideWidth(compactHeight: 24)
             )
         )
+    }
+
+    /// **The About panel is one height, and nothing the machine does changes
+    /// it.**
+    ///
+    /// Every other body this panel has is composed from what is running — a
+    /// row count, a queue, a footer of quota rules — and moves while somebody
+    /// is reading it. This one is the app naming itself, so the claim worth
+    /// pinning is the negative: a session arriving, a row opening, the queue
+    /// unfolding and the quota table opening all move the listed panel and
+    /// none of them moves this one.
+    @Test @MainActor
+    func theAboutPanelIsOneHeightWhateverIsRunning() {
+        let store = MonitorStore(services: [])
+        store.isExpanded = true
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: [makeSession(agent: .codex, threadID: "a")]
+            )
+        )
+        let listed = store.currentPanelSize.height
+
+        store.toggleAbout()
+        let about = store.currentPanelSize.height
+        #expect(about == store.compactHeight + PanelMetrics.aboutPanelHeight)
+        #expect(about != listed, "the About panel is the listed panel's height")
+
+        // Three rows instead of one, the quota table open, and the panel has
+        // not moved.
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .codex,
+                availability: .ready,
+                sessions: [
+                    makeSession(agent: .codex, threadID: "a", status: .running),
+                    makeSession(agent: .codex, threadID: "b", status: .running),
+                    makeSession(agent: .codex, threadID: "c", status: .completed)
+                ]
+            )
+        )
+        store.isQuotaExpanded = true
+        store.isRecentExpanded = true
+        #expect(store.currentPanelSize.height == about)
+
+        // And closing it hands the height back to the list, which has grown.
+        store.toggleAbout()
+        #expect(store.currentPanelSize.height > listed)
+    }
+
+    /// **Only the mark closes the About panel.**
+    ///
+    /// The panel opens on hover and shuts the moment the pointer leaves, so a
+    /// flag cleared on collapse would put this body out of reach of anybody
+    /// who read it, moved the pointer away to think, and came back. It
+    /// survives the collapse and nothing but a second click on the mark ends
+    /// it.
+    @Test @MainActor
+    func collapsingAndReopeningLeavesTheAboutPanelWhereItWas() {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
+        store.isExpanded = true
+        #expect(!store.isShowingAbout)
+
+        store.toggleAbout()
+        #expect(store.isShowingAbout)
+        for _ in 0 ..< 3 {
+            store.isExpanded = false
+            #expect(store.isShowingAbout)
+            store.isExpanded = true
+            #expect(store.isShowingAbout)
+        }
+
+        store.toggleAbout()
+        #expect(!store.isShowingAbout)
+    }
+
+    /// **With nothing connected the pill drops into the About panel**, which
+    /// is the one body that does not need an agent to have anything in it.
+    ///
+    /// ``MonitorStore/expandsToPillOnly`` says "there would be nothing in the
+    /// panel"; the mark is the case where that stops being true, so it has to
+    /// take the pill out of that form rather than open a panel the size
+    /// arithmetic still believes is empty.
+    @Test @MainActor
+    func theRestingPillDropsIntoTheAboutPanelAndFoldsBackToAPill() {
+        let store = MonitorStore(services: [])
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, presence: .closed)
+        )
+        store.isExpanded = true
+        #expect(store.expandsToPillOnly)
+        #expect(store.currentPanelSize.height == store.compactHeight)
+
+        store.toggleAbout()
+        #expect(!store.expandsToPillOnly)
+        #expect(
+            store.currentPanelSize.height
+                == store.compactHeight + PanelMetrics.aboutPanelHeight
+        )
+        // At the full expanded width, not the widened pill's: the body is the
+        // same body a connected panel draws.
+        #expect(store.currentPanelSize.width >= PanelMetrics.expandedBaselineWidth)
+
+        store.toggleAbout()
+        #expect(store.expandsToPillOnly)
+        #expect(store.currentPanelSize.height == store.compactHeight)
     }
 
     /// A footer of the given shape, with every field filled in — what is
@@ -3559,6 +3674,8 @@ struct NotchlineTests {
                 store.removeFromRecent(store.recentDepartures[0])
             }),
             ("opening the quota table", { store.toggleQuotaTable() }),
+            ("showing the About panel", { store.toggleAbout() }),
+            ("hiding the About panel", { store.toggleAbout() }),
             ("folding the queue", { store.toggleRecent() }),
             ("closing the panel", { store.isExpanded = false }),
             ("giving up the wings", { store.hidesCompactWings.toggle() })

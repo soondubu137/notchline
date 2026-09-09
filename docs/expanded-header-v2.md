@@ -5,6 +5,7 @@
 | Status | **Superseded in part by [`colour-v2.md`](colour-v2.md), which is the current contract for §4 and was built on 2026-09-05.** The band folds the marks, drops the name and keeps the totals — and **no longer decomposes the counts**. §4 entire, §4.4's inks, §5's per-agent state rows, §6.2's sizing by agent count, §7's last row, §9's first bullet and §10 questions 02, 03 and 05 are void with the columns; §4.1 survives whole and is now the whole of the decomposition section. What is left is a band drawing one mark and two totals, `53.8` of leading side at every agent count. |
 | Version | 2.1 |
 | Date | 2026-09-04 |
+| Amended | **The trailing side takes a second control** (2026-09-09): the brand mark, to the left of the gear, opening the About panel ([`panel-v2.md`](panel-v2.md)'s dated section). One term is added to one side — `8 + mark + gear + 12`, the pair flush because each is already a `settingsButtonSize` box around a `13` pt glyph — and it changes exactly one width in this document: the **resting** form, which is the only one this side has ever bound. §2's table gains a row, §5's `304` becomes `368`, and §6's four cut-outs become `247` / `323` / `368` / `371`. Nothing on the leading side moves, `520` is untouched at every connected form, and the gear keeps its `8` from the hardware at every scaling step. |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `05 — The expanded header` |
 | Scope | The expanded panel's top band only: the two shoulders either side of the physical cut-out. The session list, the quota footer, the settings window and both collapsed forms are untouched. |
 | Supersedes | [`figma-design.md`](figma-design.md) §3.3's expanded widening rule and the fold behind it, and §4.2's expanded half. [`compact-view-v2.md`](compact-view-v2.md) §8's two parked questions and the `70.51` arithmetic that assumed per-product marks. [`compact-view-v2.md`](compact-view-v2.md) §3.2 rule 01 in this form only — see §4.3. |
@@ -17,6 +18,8 @@ The band is the last surface still drawn the V1 way. It holds one animated matri
 12 + 50.51 + 12 + 102 + 8    leading, two products  =  184.51
  8 + 32 + 12                 trailing, one gear     =   52.00
 ```
+
+~~` 8 + 32 + 12  trailing, one gear  =  52.00`~~ — the trailing side is `8 + mark + gear + 12` since 2026-09-09, which is `84` at this bar. V1's own figure is left as it was measured.
 
 | Cut-out | V1 · one product | V1 · two | V1 · three |
 | --- | --- | --- | --- |
@@ -34,9 +37,11 @@ Underneath that, the band is per-agent in the two places it should not be and fo
 ## 2. Composition
 
 ```
-12 + 16.6 + 4 + totals + 12 + columns + 8   │   cut-out   │   8 + gear + 12    expanded header
-12 + 16.6 + 4 + totals + 8                  │   cut-out   │   8 + reading + 12  collapsed bar
+12 + 16.6 + 4 + totals + 12 + columns + 8   │   cut-out   │   8 + mark + gear + 12   expanded header
+12 + 16.6 + 4 + totals + 8                  │   cut-out   │   8 + reading + 12       collapsed bar
 ```
+
+~~`8 + gear + 12`~~ — the trailing side held one control until 2026-09-09.
 
 The collapsed bar's composition entire, with two terms added in the middle and one swapped at the end.
 
@@ -50,8 +55,11 @@ The collapsed bar's composition entire, with two terms added in the middle and o
 | The columns | `19.2` per working agent, less `6` | `13.2` reserved and `6` between (§4.2) |
 | Clearance | `8` | `expandedNotchClearance`, both sides, unchanged |
 | Gear | `32` at a `46` bar, `27.6` at `38` | `settingsButtonSize`, trailing-aligned, unchanged |
+| Mark | the same, and flush against the gear | The About control (2026-09-09). `bandControlGlyphSize` is `13` for both glyphs, so each box already carries `3.5`–`9.5` of its own padding on every side and a gap between them would read as two groups rather than as this surface's controls |
 
-Two smaller things differ from the bar, and both are the panel being a panel: the columns **reserve** here and **hug** out there, because this panel is sized from a baseline while the bar is pinned to the cut-out with nothing beside it to protect; and the trailing side holds the one control this surface has, in place of a clock that is drawn in the row it belongs to. Each `8` still exists only where content stands on both sides of it.
+Two smaller things differ from the bar, and both are the panel being a panel: the columns **reserve** here and **hug** out there, because this panel is sized from a baseline while the bar is pinned to the cut-out with nothing beside it to protect; and the trailing side holds ~~the one control~~ **the controls** this surface has, in place of a clock that is drawn in the row it belongs to. Each `8` still exists only where content stands on both sides of it.
+
+**Both controls are the app rather than the work**, which is why they are one group at one end. Everything on the leading side answers to what is running; neither of these ever does, and neither is drawn at all while the panel is shut.
 
 **The mark stays folded, and it has to.** Status is ordinal — the aggregate is the most urgent status any agent is in — and a fold like that has no parts to show: its decomposition is one animated mark per agent, which is what [`compact-view-v2.md`](compact-view-v2.md) §2 removed and what four moving marks on a `46` pt band would be. The clock is a maximum and has no parts either. The counts are the one fold that is a sum.
 
@@ -133,7 +141,7 @@ True size, against the `200 × 46` reference cut-out.
 
 | State | The band draws | Width |
 | --- | --- | --- |
-| Nothing connected | Resting grey mark, gear. No total, nothing to decompose, and no word | `304` — was `396` |
+| Nothing connected | Resting grey mark, the mark and the gear. No total, nothing to decompose, and no word | `368` — was `304` with the gear alone, and `396` in V1 |
 | One agent, connected, no rows | Steady mark, gear. A zero is never drawn | `520` |
 | Two agents connected, one working | Mark, grey totals, gear. One term, so no parts (rule 07) | `520` |
 | Two agents, running · 2 and 1 | `3` grey, `2` Codex, `1` Claude Code — one row, centred | `520` — was `570` |
@@ -144,17 +152,19 @@ True size, against the `200 × 46` reference cut-out.
 
 The three- and four-agent rows are **width headroom, not a contract**: they say what the composition costs if a third product is ever monitored, and §4.4 no longer carries inks to draw them in. Everything this product ships is the rows above them.
 
-**Nothing connected** is the resting form widening in place to put the gear within reach — and **it composes symmetrically, like every other width in this document**. The panel is centred on the display while it is expanded (`MonitorStore.currentPanelTrailingAnchor` is nil there, and `OverlayPanelLayout.frame` centres what it is given), so the room beside the cut-out is `(width − cut-out) ÷ 2` on *both* sides and a width added up as `leading + cut-out + trailing` does not survive being drawn. The trailing side is the wider of the two — `8 + gear + 12`, against a bare mark's `12 + 16.6 + 8` — so this form is `cut-out + 2 × (8 + gear + 12)` and the gear keeps its `8` at every cut-out.
+**Nothing connected** is the resting form widening in place to put the controls within reach — and **it composes symmetrically, like every other width in this document**. The panel is centred on the display while it is expanded (`MonitorStore.currentPanelTrailingAnchor` is nil there, and `OverlayPanelLayout.frame` centres what it is given), so the room beside the cut-out is `(width − cut-out) ÷ 2` on *both* sides and a width added up as `leading + cut-out + trailing` does not survive being drawn. The trailing side is the wider of the two — `8 + mark + gear + 12`, against a bare mark's `12 + 16.6 + 8` — so this form is `cut-out + 2 × (8 + mark + gear + 12)` and the pair keeps its `8` at every cut-out.
 
-| Cut-out | Gear | Trailing side | Resting width |
-| --- | --- | --- | --- |
-| `127 × 22` | `20` | `40` | **207** |
-| `185 × 32` | `24.36` | `44.36` | **274** |
-| `200 × 46` | `32` | `52` | **304** |
-| `220 × 38` | `27.64` | `47.64` | **316** |
-| no cut-out | by bar height | — | `12 + 16.6 + 8 + gear + 12`, sized to itself |
+| Cut-out | Each control | Trailing side | Resting width | With the gear alone |
+| --- | --- | --- | --- | --- |
+| `127 × 22` | `20` | `60` | **247** | ~~207~~ |
+| `185 × 32` | `24.36` | `68.73` | **323** | ~~274~~ |
+| `200 × 46` | `32` | `84` | **368** | ~~304~~ |
+| `220 × 38` | `27.64` | `75.27` | **371** | ~~316~~ |
+| no cut-out | by bar height | — | `12 + 16.6 + 8 + 2 × control + 12`, sized to itself | — |
 
-The gear is `settingsButtonSize(compactHeight:)`, which tracks the menu bar, so the cut-out and the gear move together and the two columns are one machine's answer rather than two.
+Both controls are `settingsButtonSize(compactHeight:)`, which tracks the menu bar, so the cut-out and the pair move together and the two columns are one machine's answer rather than two.
+
+**The `64` this costs at the reference bar is spent in the state where it is worth most.** The About panel is the one surface that says what this app is and which build is running, and nothing being connected is what a fresh install looks like — so a mark hidden until an agent appears would put the app's own name behind having already set the app up. The panel this form drops into is not empty either: the mark takes it out of `expandsToPillOnly` and it opens at the full `610` with the About body in it ([`panel-v2.md`](panel-v2.md)).
 
 **The additive figure this section first published — `288.6 → 289` — was V1's own composition with the word taken out of it, and V1's composition is where the fault is.** `12 + 16.6 + 12 + 82.96 + 8 + 200 + 8 + 12 + 32 + 12 = 395.56 → 396` gives `98` of shoulder to a leading side wanting `123.56`, so roughly `25` pt of `Disconnected` is drawn behind the cut-out — and `drawsCompactStatusName` is `isExpanded || noNotch`, which is to say that the hovered resting pill on a notched screen is precisely where that word is drawn. **Dropping the word is what makes the symmetric rule affordable**: the leading side falls to `36.6`, the trailing side binds, and `304` is still `92` narrower than the form that had the fault. This is the last surface that drew `MonitorStatus.displayName`; with it gone the name is drawn nowhere and said everywhere (§9). [`figma-design.md`](figma-design.md) §6.4's `400` and its checklist's `400.6` are void with the rest.
 

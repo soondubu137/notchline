@@ -6,6 +6,10 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ## Unreleased
 
+### Added
+
+- **The panel can say what it is.** The band's trailing side takes a second control — the Notchline mark, left of the gear — and it replaces everything under the band with a fixed-height panel carrying the horizontal lockup, `Version 0.2.3 Alpha (7)`, the bundle's own licence notice and a `Check for Updates` control. Nothing running moves its height, collapsing does not close it, and only the mark does. The control does nothing yet: no update mechanism is wired in. (`docs/panel-v2.md`.)
+
 ### Fixed
 
 - **Claude Code's quota rules had gone blank, and now say why when they cannot be drawn.** `claude -p "/usage"` prints the windows only when the CLI itself is signed in; a Claude Desktop-only machine has no CLI credential, so the same run answered with its session cost and every rule read `--` with nothing anywhere saying so. The footer's diagnostic now names `claude auth login`. (`docs/adr/0021-read-the-quota-from-the-record-the-command-leaves.md`.)

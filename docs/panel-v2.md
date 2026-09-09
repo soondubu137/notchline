@@ -27,12 +27,17 @@ Three rules follow, and they are the whole of what the composed surface is:
 ## 2. The panel, region by region
 
 ```
-46   band       the aggregate mark, the two totals, the gear.  Leading side 53.8 at every agent count
+46   band       the aggregate mark, the two totals, the mark and the gear.
+                Leading side 53.8 at every agent count
 240  viewport   at most three live rows at 80; an open question may grow it to 400
      +32 per product block drawn, since 2026-09-08 -- a heading is chrome and is
      never paid for out of rows (expanded-panel-v2.md §4)
 22   footer     today's spend, and the control
 ```
+
+~~`the gear`~~ — the band's trailing side holds two controls since 2026-09-09,
+and the second of them replaces everything under the band with the About body
+(the dated section below).
 
 - ~~**A row's caption is the badge and then the Project**~~ **— on a live row, since 2026-09-08, the Project alone.** The list is one block per product and the block's heading carries the badge, so a chip on every line under it is the boundary after a boundary §3.4 deleted ([`expanded-panel-v2.md`](expanded-panel-v2.md) §4). What is unchanged is everything §3.4 was actually about: no separator anywhere, and the caption line is `16` whether or not a chip is in it, so nothing on a row moves at the moment a second product connects. A **retired** row is untouched — the queue is not grouped — and so is an open row's own caption. The clause below still governs both of those. **A row's caption is the badge and then the Project** — no separator (§3.4). The caption line is `16` whether or not a badge is in it, so nothing on a row moves at the moment a second product connects. The badge itself is drawn on `showsProductAttribution`: presence, not "who has threads right now".
 - **The reading is one slot in three outlines**: bright ground on a waiting row, bare on a running one, the dark chip on a finished one holding how long the Turn took. The badge is that same chip in the theme ink. *Since §3.5's redraw the waiting outline is not a reading at all but a `32` pt control carrying a verb; the slot is still one slot, and it is the one that is twice as tall.*
@@ -161,3 +166,87 @@ The opened quota footer now shares the collapsed caption's **15 pt** bottom
 clearance. Its height is **`19W + 28P + 42`**, 9 pt taller; the collapsed
 footer stays **38 pt**. This supersedes the earlier footer heights above;
 see [the quota footer specification](quota-footer-v2.md#quota-footer-bottom-clearance-2026-09-07).
+
+### The About panel (2026-09-09)
+
+The band's trailing side takes a second control — **the brand mark, to the left
+of the gear** — and what it opens is not a region added to this panel but a
+**body that replaces the one below the band**. There is no list, no queue and
+no footer while it is open; there is a horizontal lockup, the version, the
+bundle's own licence notice, and one control.
+
+**Why it is a body and not a sheet.** Every region in §2 answers to what is
+running, and the composed guarantee in §4 is about which of them the user
+controls and which the machine moves. A surface laid *over* the list would
+have to answer to both at once — a panel the height of whatever is behind it,
+with something else drawn on top. Replacing the body makes the arithmetic one
+line:
+
+```
+about panel  =  46  +  190
+```
+
+| Term | Value | Why |
+| --- | --- | --- |
+| Top margin | `28` | Measured from the rule that closes the band, which this body draws unconditionally — it has no block heading to bring one of its own |
+| The lockup | `36` | The package's whole box, clear space included: `155` of mark in a `219` frame, so `25.5` of it is drawn. Half again the band's `16.6` status matrix, deliberately — the two are the same five columns, and the one that is a logo has to be plainly the bigger or the panel reads as a second status display. The `1075.15 : 219` ratio gives `176.7` of width, well past the `110` the package sets as this lockup's floor |
+| Lockup to text | `20` | |
+| Two caption lines | `14` each | `ceil(ascent) + ceil(descent)` at `11` pt Light, which is what SwiftUI lays a single line out at. `NSLayoutManager` says `13` for the same face, and composing from that put the control two points inside its own bottom margin |
+| Between them | `4` | The version and the notice are one block of two lines, not two things |
+| Text to control | `22` | |
+| The control | `28` | `answerRowHeight` — the open row's own control height, at `controlCornerRadius` and `controlHorizontalPadding`. No new constant |
+| Bottom margin | `24` | Shorter than the top because the control carries `8.5` of its own inside the tile |
+
+**It is the only body on this panel that is a constant.** A session arriving, a
+row opening, the queue unfolding and the quota table opening all move the
+listed panel; none of them moves this one, and
+`theAboutPanelIsOneHeightWhateverIsRunning` is the assertion. `236` is also
+under §4's `308`, so **§6's second box still stands as written**: opening the
+quota table remains the only thing that takes this panel *past* its resting
+height, and nothing the machine observes moves it either way.
+
+**What the control does is nothing, and that is stated rather than hidden.** No
+update mechanism is wired in, so `Check for Updates` is where one will land. It
+is drawn live rather than disabled, because disabled says *not available here*,
+which is a different claim from *not built yet* — and §1 rule 2's reading of
+"absent rather than greyed out" is about a promise the panel makes about the
+work it is showing, not about the app's own furniture.
+
+**Three things it re-uses and one asset it adds.** The control is the quiet
+answers' ladder, the notice is the caption face, the rule is the band's own —
+and the mark on the band is the brand package's **menu bar template**
+(`design/assets/05-menubar`), resampled to `13 × 13` so it draws `1 : 1` at
+both scales. It is black at the level ramp's own alphas, so a template tint
+reproduces `1.00 / 0.80 / 0.60 / 0.40 / 0.20` in whatever ink the control is
+currently in: `#7C7C80` at rest, white at `0.98` while the panel is open or
+under the pointer. Redrawing the same five columns a second time in Swift was
+the alternative, and two drawings of one mark are free to disagree.
+
+**The ladder weight is the one place this diverges from a built value.** A
+quiet control on a washed open row rests at ink `0.24` and *darkens* to `0.18`
+under the pointer, which is right against the row's `#242524` and wrong on
+black — it would be the only control on this surface that dims when the
+pointer reaches it. On the panel's own black the ladder runs the way
+[`colour-v2.md`](colour-v2.md) §15 drew it: `0.08` at rest, `0.16` on hover,
+which is the weight a row washes at.
+
+**Only the mark closes it.** The panel opens on hover and shuts the moment the
+pointer leaves, so the flag survives the collapse: a body cleared on collapse
+would be out of reach of anybody who read it, moved the pointer away to think,
+and came back. It is not remembered across launches — the version is read once,
+and a user who checked it last week does not want the app naming itself instead
+of listing their sessions at the next launch.
+
+**With nothing connected the pill drops into it.**
+`MonitorStore.expandsToPillOnly` means "there would be nothing in the panel",
+and this is the case where that stops being true, so the mark takes the pill out
+of that form rather than opening a panel the size arithmetic still believes is
+empty. The width is the full `610`, not the widened pill's — the body is the
+same body a connected panel draws. What the second control costs that form is
+[`expanded-header-v2.md`](expanded-header-v2.md) §6's business: `64` at the
+reference bar, spent in the state where a fresh install lives.
+
+- [x] The About panel is `610 × 236` with nothing live, with three live rows, with a row open, with the queue unfolded and with the quota table open.
+- [x] Collapsing and re-expanding leaves it open; a second click on the mark is the only thing that closes it.
+- [x] The lockup stands in the composition's own place, nothing is drawn in either margin, and the band's closing rule is drawn at the top (`theAboutPanelSpendsItsHeightWhereItSaysItDoes`).
+- [x] The mark draws `#7C7C80` while the list is showing and white at `0.98` while the About panel is, with a ground under it only when the pointer is on it.

@@ -196,14 +196,21 @@ final class OverlayPanelController {
     /// that measurement on the path of every state this store holds, most of
     /// which no edge answers to.
     ///
-    /// **The enumeration is what goes wrong, and it has four times now** — the
-    /// wings, the marks, the quota table and the Recent queue each drew
-    /// themselves into a window still sized for the state before, because each
-    /// is a control nothing else republishes behind. It is not a list anybody
-    /// can be trusted to keep, so the suite drives it instead: every state that
-    /// moves the size has to arrive here, and
+    /// **The enumeration is what goes wrong, and it has five times now** — the
+    /// wings, the marks, the quota table, the Recent queue and the About panel
+    /// each drew themselves into a window still sized for the state before,
+    /// because each is a control nothing else republishes behind.
+    ///
+    /// ~~It is not a list anybody can be trusted to keep, so the suite drives
+    /// it instead: every state that moves the size has to arrive here, and
     /// `everyChangeThatMovesThePanelReachesTheWindow` fails on the first one
-    /// that does not.
+    /// that does not.~~ **That was not true, and the fifth instance proved
+    /// it.** The test is a hand-written list of mutations, so it pins the cases
+    /// somebody remembered to add to it and discovers nothing: the About mark
+    /// shipped a full suite green, hovered and highlighted correctly, and left
+    /// the window at the listed panel's height. **A new control that moves this
+    /// size is caught by nothing but this comment** — add the publish here and
+    /// the mutation to that test's list in the same change.
     ///
     /// Internal rather than private for that test alone.
     static func frameChangingPublishers(
@@ -238,6 +245,13 @@ final class OverlayPanelController {
             // whole viewport -- so without this the body would be drawn into a
             // window still sized for the closed row and clipped to nothing.
             store.$openRowID.map { _ in () }.eraseToAnyPublisher(),
+            // And the mark on the band, which replaces the whole body with one
+            // of a fixed height -- so it moves the bottom edge from wherever
+            // the list had put it, and back to wherever the list has since got
+            // to. It also takes a resting pill *out* of `expandsToPillOnly`,
+            // which is a width change as well as a height one, and nothing
+            // about the work republishes when it is clicked.
+            store.$isShowingAbout.map { _ in () }.eraseToAnyPublisher(),
             // And the question of a set on screen, which is the same height
             // change one step in: answering question two draws question three,
             // and three options are `48` points more body than one. Nothing

@@ -657,6 +657,16 @@ enum PanelMetrics {
         + footerColumnGutter
         + footerShareColumnWidth
 
+    /// What both of the band's controls draw at, inside a box that scales.
+    ///
+    /// `13`, and it is one number rather than two because the pair has to read
+    /// as one group: the gear is `gearshape` at this point size and the mark
+    /// is the brand's menu bar template resampled to exactly `13 × 13`, so the
+    /// asset in the catalogue is pinned to this constant. Changing it means
+    /// regenerating `NotchlineMark.imageset` from `design/assets/05-menubar`
+    /// at the new size, or the mark starts drawing through a resample.
+    static let bandControlGlyphSize: CGFloat = 13
+
     /// The gear scales with the menu bar: `32` under a `46pt` bar, `20` under a
     /// `24pt` one. It is trailing-aligned inside the footer's content box, which
     /// is where macOS panels put their settings control.
@@ -667,19 +677,29 @@ enum PanelMetrics {
 
     /// The resting pill once it is hovered.
     ///
-    /// It grows sideways to put the gear within reach, and does nothing else.
-    /// With nothing connected there is no content to drop into a panel, so
-    /// dropping one would open an empty box; the reason lives in Settings, and
-    /// the gear is the one action that reaches it.
+    /// It grows sideways to put the two controls within reach, and does
+    /// nothing else. With nothing connected there is no content to drop into a
+    /// panel, so dropping one would open an empty box; the reason lives in
+    /// Settings, and the gear is the one action that reaches it.
+    ///
+    /// **The mark beside the gear is reachable here too, and it costs `64`**
+    /// at the reference bar — twice a button, because the form is composed
+    /// symmetrically. That is the state where it is worth most: nothing is
+    /// connected, which is what a fresh install looks like, and the About
+    /// panel is the one surface that says what this app is and which version
+    /// of it is running. Hiding the mark until an agent appears would put the
+    /// app's own name behind having already set the app up.
     ///
     /// **Composed symmetrically, like every other width on this panel.** It was
     /// added up instead — `leading + cut-out + trailing` — and the panel is
     /// centred while expanded, so that sum was never the drawing: the room
     /// beside the cut-out is `(width − cut-out) ÷ 2` on *both* sides. The
     /// trailing side is the wider of the two here, so this form is
-    /// `cut-out + 2 × (8 + gear + 12)` and the gear keeps its `8` at every
-    /// scaling step — `207` at `127 × 22`, `274` at `185 × 32`, `304` at the
-    /// reference `200 × 46`, `316` at this machine's `220 × 38`.
+    /// `cut-out + 2 × (8 + mark + gear + 12)` and the pair keeps its `8` at
+    /// every scaling step — `247` at `127 × 22`, `323` at `185 × 32`, `368` at
+    /// the reference `200 × 46`, `371` at this machine's `220 × 38`. ~~`207`,
+    /// `274`, `304`, `316`~~ were the same series with one control on this
+    /// side.
     ///
     /// **Dropping the word is what makes that affordable.** The old sum
     /// reserved `Disconnected` on the leading side and drew it there
@@ -697,7 +717,8 @@ enum PanelMetrics {
         let trailing = expandedTrailingSideWidth(compactHeight: compactHeight)
         guard geometry == .notched, centerOcclusionWidth >= 1 else {
             // Nothing to be symmetric about: this form composes to itself, the
-            // mark and the gear with one clearance between them.
+            // status mark and the two controls with one clearance between
+            // them.
             return ceil(
                 expandedHorizontalPadding + statusMatrixSize + trailing
             )
@@ -775,6 +796,81 @@ enum PanelMetrics {
         + restingFooterHeight
     static let thinExpandedContentHeight: CGFloat = thinExpandedBodyHeight
         + restingFooterHeight
+
+    // MARK: - The About panel
+
+    /// The lockup at the top of the About panel: the full image, clear space
+    /// and all.
+    ///
+    /// `36`, which is `25.5` of drawn mark — the brand package bakes one pitch
+    /// of clear space into every lockup file (`155` of mark in a `219` box),
+    /// so the number here is the box and not the figure. That puts the mark
+    /// half again the size of the status matrix on the band above it, which is
+    /// the point: the two are the same five columns, and the one that is a
+    /// logo has to be plainly the bigger of them or the panel reads as a
+    /// second status display.
+    ///
+    /// The lockup's own ratio does the width — `1075.15 : 219`, so `36` draws
+    /// `176.7` wide, well past the `110` the package sets as this lockup's
+    /// floor.
+    static let aboutLockupHeight: CGFloat = 36
+    /// The lockup's own ratio, `1075.15 : 219`, which is the package's box and
+    /// not a crop of it: the file carries its clear space, so drawing the
+    /// image to this ratio is what keeps that space intact.
+    static let aboutLockupAspect: CGFloat = 1075.15 / 219
+    static var aboutLockupWidth: CGFloat { aboutLockupHeight * aboutLockupAspect }
+
+    /// The air above the lockup, measured from the rule that closes the band.
+    static let aboutTopMargin: CGFloat = 28
+    /// And below the control, which is the panel's own bottom edge.
+    ///
+    /// Shorter than the top, because the control already carries `8.5` of its
+    /// own inside a `28` tile around a `13` pt line: the ink stops about `24 +
+    /// 8.5` above the edge, against the lockup's flush `28`.
+    static let aboutBottomMargin: CGFloat = 24
+    /// Between the lockup and the first line under it.
+    static let aboutLockupTextGap: CGFloat = 20
+    /// Between the version and the notice, which are one block of two lines.
+    static let aboutTextLineGap: CGFloat = 4
+    /// Between that block and the control.
+    static let aboutTextControlGap: CGFloat = 22
+
+    /// One line of the About panel's text, at the height SwiftUI lays a single
+    /// line of ``captionFont`` out at.
+    ///
+    /// Measured off the face rather than picked, so a change of font moves the
+    /// panel's height with it instead of leaving two lines of `11` pt inside a
+    /// box built for a different size.
+    ///
+    /// **`ceil` on each half, not on the sum, and the difference is two
+    /// points.** `NSLayoutManager.defaultLineHeight` for this face is `13`,
+    /// and SwiftUI draws the same line `14` tall: it rounds the ascent and the
+    /// descent up separately — `10.63 → 11` and `2.32 → 3` — rather than
+    /// rounding their sum of `12.96` once. Composed from the layout manager's
+    /// figure the body came out two points taller than the window it was drawn
+    /// in, and with the body pinned to the top that put the control two points
+    /// into its own bottom margin.
+    static var aboutTextLineHeight: CGFloat {
+        ceil(captionFont.ascender) + ceil(-captionFont.descender)
+    }
+
+    /// **The one body on this panel that does not answer to what is running.**
+    ///
+    /// Every other height here is composed from a row count, a queue and a
+    /// footer, and changes while the user watches. This one is the app naming
+    /// itself: a lockup, the version, the licence notice and one control, none
+    /// of which the machine can add to or take away. So it is a constant, and
+    /// a session starting behind an open About panel moves nothing.
+    static var aboutPanelHeight: CGFloat {
+        aboutTopMargin
+            + aboutLockupHeight
+            + aboutLockupTextGap
+            + aboutTextLineHeight * 2
+            + aboutTextLineGap
+            + aboutTextControlGap
+            + answerRowHeight
+            + aboutBottomMargin
+    }
     /// The status matrix is a fixed size, not a share of the menu bar.
     ///
     /// Taken from the indicator-to-text ratio at loaders.wtf — a 92pt indicator
@@ -916,10 +1012,21 @@ enum PanelMetrics {
         + reservedCountsColumnWidth
         + expandedNotchClearance
 
-    /// The band's trailing side: the one control this surface has.
+    /// The band's trailing side: the two controls this surface has.
+    ///
+    /// **It was one control, and the second is the app naming itself.** The
+    /// mark opens the About panel (``MonitorStore/isShowingAbout``), and it
+    /// stands to the left of the gear because the gear is where macOS panels
+    /// put their settings control and moving it would move the one thing on
+    /// this side a user has already learnt the position of.
+    ///
+    /// The pair sits flush — no clearance between them — because each is a
+    /// ``settingsButtonSize`` box around a `13` pt glyph and already carries
+    /// `3.5`–`9.5` of its own padding on every side. A gap on top of that
+    /// would read as two groups rather than as this surface's controls.
     static func expandedTrailingSideWidth(compactHeight: CGFloat) -> CGFloat {
         expandedNotchClearance
-            + settingsButtonSize(compactHeight: compactHeight)
+            + settingsButtonSize(compactHeight: compactHeight) * 2
             + expandedHorizontalPadding
     }
 
@@ -2066,6 +2173,23 @@ final class MonitorStore: ObservableObject {
             preferences?.set(isQuotaExpanded, forKey: Self.quotaExpandedDefaultsKey)
         }
     }
+    /// Whether the open panel is showing the app rather than the work.
+    ///
+    /// **It outlives a collapse and it is not remembered across launches**,
+    /// and those are two different decisions.
+    ///
+    /// Surviving the collapse is what makes the mark a *mode* rather than a
+    /// peek: the panel opens on hover and shuts the moment the pointer leaves,
+    /// so a flag cleared on collapse would put the About panel out of reach of
+    /// anybody who read it, moved the pointer to think, and came back. Only
+    /// the mark that opened it closes it.
+    ///
+    /// Not persisted, because the thing it shows is read once. A user who
+    /// checked the version last week and quit does not want the app naming
+    /// itself instead of listing their sessions at the next launch — unlike
+    /// ``isQuotaExpanded``, which is a standing preference about a surface
+    /// somebody watches.
+    @Published private(set) var isShowingAbout = false
     /// Whether the collapsed surface gives up its wings and leaves the cut-out
     /// to speak for itself.
     ///
@@ -2603,11 +2727,17 @@ final class MonitorStore: ObservableObject {
 
     /// Hovering grows the pill sideways instead of dropping the panel.
     ///
-    /// True exactly when nothing is connected. The panel would have nothing in
-    /// it, and the one thing the user might want — why nothing is connected —
-    /// is in Settings, which the gear reaches in one action.
+    /// True when nothing is connected. The panel would have nothing in it, and
+    /// the one thing the user might want — why nothing is connected — is in
+    /// Settings, which the gear reaches in one action.
+    ///
+    /// **Unless the mark has been asked for**, in which case there is a body
+    /// after all and it is the one body on this surface that does not need an
+    /// agent to have something in it (``isShowingAbout``). The pill drops into
+    /// a panel of the About height, at the full expanded width, and folds back
+    /// to a pill when the mark is clicked again.
     var expandsToPillOnly: Bool {
-        isRestingOnly
+        isRestingOnly && !isShowingAbout
     }
 
     /// The name both collapsed forms and the panel read, since there is only
@@ -3165,6 +3295,10 @@ final class MonitorStore: ObservableObject {
     /// panel's bottom edge past the pointer that had just clicked.
     func toggleQuotaTable() { isQuotaExpanded.toggle() }
 
+    /// The mark on the band, both ways: it opens the About panel and it is the
+    /// only thing that closes it (``isShowingAbout``).
+    func toggleAbout() { isShowingAbout.toggle() }
+
     var expandedFooterHeight: CGFloat {
         PanelMetrics.footerHeight(
             productCount: quotaProducts.count,
@@ -3178,7 +3312,12 @@ final class MonitorStore: ObservableObject {
     }
 
     var expandedContentHeight: CGFloat {
-        PanelMetrics.expandedContentHeight(
+        // The About panel replaces the body rather than standing on top of it,
+        // so it replaces the arithmetic too: nothing below is asked, and the
+        // list, the queue and the footer stop deciding how tall the panel is
+        // for as long as the mark is lit.
+        guard !isShowingAbout else { return PanelMetrics.aboutPanelHeight }
+        return PanelMetrics.expandedContentHeight(
             liveRowCount: sessions.count,
             openRowHeight: openRowHeight,
             retiredRowCount: recentDepartures.count,
