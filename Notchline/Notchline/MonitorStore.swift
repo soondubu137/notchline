@@ -822,16 +822,15 @@ enum PanelMetrics {
 
     /// The air above the lockup, measured from the rule that closes the band.
     static let aboutTopMargin: CGFloat = 28
-    /// Below the repository link, at the panel's own bottom edge.
+    /// Below the update control, at the panel's own bottom edge.
     static let aboutBottomMargin: CGFloat = 24
     /// Between the lockup and the first line under it.
     static let aboutLockupTextGap: CGFloat = 20
-    /// Between the version and the notice, which are one block of two lines.
+    /// Between the version, copyright notice and repository link.
     static let aboutTextLineGap: CGFloat = 4
     /// Between that block and the control.
     static let aboutTextControlGap: CGFloat = 22
-    /// A separate, compact line below the update control for the repository.
-    static let aboutControlLinkGap: CGFloat = 16
+    /// The repository joins the two caption lines above the update control.
     static let aboutLinkHeight: CGFloat = 20
 
     /// One line of the About panel's text, at the height SwiftUI lays a single
@@ -865,11 +864,10 @@ enum PanelMetrics {
             + aboutLockupHeight
             + aboutLockupTextGap
             + aboutTextLineHeight * 2
-            + aboutTextLineGap
+            + aboutTextLineGap * 2
+            + aboutLinkHeight
             + aboutTextControlGap
             + answerRowHeight
-            + aboutControlLinkGap
-            + aboutLinkHeight
             + aboutBottomMargin
     }
     /// The status matrix is a fixed size, not a share of the menu bar.

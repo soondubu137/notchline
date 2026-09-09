@@ -692,8 +692,8 @@ The window's last row shows the version and the capsule `Quit` control **at oppo
 size in tertiary ink, monospaced digits, taking no indent. A version is a fact
 about the build rather than a setting, so it belongs to the window's closing
 line. Onboarding omits it (§7). The version also appears in the overlay's About
-body, with the copyright and licence notice, dark update control, and full
-GitHub address with its leading mark; [`panel-v2.md`](panel-v2.md) specifies that
+body: its copyright notice and full GitHub address with a leading mark form a
+text block above the dark update control; [`panel-v2.md`](panel-v2.md) specifies that
 composition. These additions are not on the board.
 
 **The numbers are read and the word is written.** `0.1.0` and `1` come from the bundle's `CFBundleShortVersionString` and `CFBundleVersion`, which is what `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` stamp there; a copy in Swift would be a second declaration of the release, and the copy is the one that gets forgotten. `Alpha` is hand-written in `AppVersion.stage` ([`AppVersion.swift`](../Notchline/Notchline/AppVersion.swift)) because the bundle has nowhere to put it — `CFBundleShortVersionString` is numeric components separated by dots or it is invalid, so `0.1.0 Alpha` fails validation and stops ordering against the version before it. The build number is kept rather than tidied away because this is an alpha: two people running `0.1.0` can be running different code, and the figure in brackets is the only thing in the interface that tells those builds apart in a bug report. It is spoken as `build 1` rather than as punctuation (§10). A bundle that cannot say which version it is draws no line at all, rather than one reading `Unknown`.

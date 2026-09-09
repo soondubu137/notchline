@@ -872,11 +872,11 @@ struct AboutPanelContent: View {
                     .padding(.top, PanelMetrics.aboutTextLineGap)
             }
 
+            AboutRepositoryLink()
+                .padding(.top, PanelMetrics.aboutTextLineGap)
+
             AboutUpdateControl()
                 .padding(.top, PanelMetrics.aboutTextControlGap)
-
-            AboutRepositoryLink()
-                .padding(.top, PanelMetrics.aboutControlLinkGap)
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, PanelMetrics.aboutTopMargin)
@@ -928,6 +928,18 @@ private struct AboutUpdateControl: View {
                         )
                     )
                 )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: PanelMetrics.controlCornerRadius,
+                        style: .continuous
+                    )
+                    .strokeBorder(
+                        NotchPalette.themeInk.on.opacity(
+                            NotchPalette.RowEmphasis.plainControlBorderOpacity
+                        ),
+                        lineWidth: 1
+                    )
+                }
                 .overlay(PointingHandCursor())
                 .onHover { isHovered = $0 }
         }

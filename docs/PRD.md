@@ -366,9 +366,10 @@ Settings affect Notchline only. `Update required`, `Version unsupported` and `Di
 version, a stage word while a version is unfinished, and the build number —
 `Version 0.1.0 Alpha (1)`. The same version is available in the overlay's About
 body, opened by the brand mark beside the gear. About also shows the ordinary
-copyright and GPL-3.0-or-later notice, a dark `Check for Updates` control
-(currently a placeholder), and a GitHub mark followed by the full clickable
-`https://github.com/soondubu137/notchline` address. Its fixed composition is
+copyright and GPL-3.0-or-later notice, and a GitHub mark followed by the full
+clickable `https://github.com/soondubu137/notchline` address. These three text
+lines form one block above the dark `Check for Updates` control (currently a
+placeholder), which is the last item. Its fixed composition is
 specified in [`panel-v2.md`](panel-v2.md). Onboarding omits the version line and
 all copy beside its navigation buttons (§5). The stage word stays separate
 from the numeric-dotted marketing version so version comparisons remain valid.

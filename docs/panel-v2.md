@@ -173,14 +173,15 @@ The band's trailing side takes a second control — **the brand mark, to the lef
 of the gear** — and what it opens is not a region added to this panel but a
 **body that replaces the one below the band**. There is no list, no queue and
 no footer while it is open; there is a horizontal lockup, the version, the
-copyright and licence notice, an update control, and a repository link.
+copyright and licence notice, a repository link, and an update control.
 
 The notice is the bundle's ordinary copyright line:
 `Copyright © 2026 Yinfeng Lu. Licensed under GPL-3.0-or-later, without warranty.`
 The name has the same caption styling as the licence, without a separate author
 heading. `LICENSE` retains the full terms.
 
-Below the update control, a GitHub mark precedes the full clickable address:
+The repository link joins the version and copyright notice as a third line
+above the update control. A GitHub mark precedes the full clickable address:
 `https://github.com/soondubu137/notchline`. The label and destination come from
 `AppVersion.repositoryURL`; the whole row is one link. The decorative mark is
 GitHub's unmodified white Invertocat SVG from the
@@ -195,7 +196,7 @@ with something else drawn on top. Replacing the body makes the arithmetic one
 line:
 
 ```
-about panel  =  46  +  226
+about panel  =  46  +  214
 ```
 
 | Term | Value | Why |
@@ -204,17 +205,16 @@ about panel  =  46  +  226
 | The lockup | `36` | The package's whole box, clear space included: `155` of mark in a `219` frame, so `25.5` of it is drawn. Half again the band's `16.6` status matrix, deliberately — the two are the same five columns, and the one that is a logo has to be plainly the bigger or the panel reads as a second status display. The `1075.15 : 219` ratio gives `176.7` of width, well past the `110` the package sets as this lockup's floor |
 | Lockup to text | `20` | |
 | Two caption lines | `14` each | `ceil(ascent) + ceil(descent)` at `11` pt Light, which is what SwiftUI lays a single line out at. `NSLayoutManager` says `13` for the same face, and composing from that put the control two points inside its own bottom margin |
-| Between them | `4` | The version and the notice are one block of two lines, not two things |
-| Text to control | `22` | |
-| The control | `28` | `answerRowHeight` — the open row's own control height, at `controlCornerRadius` and `controlHorizontalPadding`. No new constant |
-| Control to repository link | `16` | Separates the update action from the repository address |
+| Between text lines | `4` twice | The version, copyright notice and repository address form one block |
 | Repository link | `20` | One caption line and a `14` pt GitHub mark |
-| Bottom margin | `24` | Space below the repository link |
+| Text block to control | `22` | Separates the information from the update action |
+| The control | `28` | `answerRowHeight` — the open row's own control height, at `controlCornerRadius` and `controlHorizontalPadding`. No new constant |
+| Bottom margin | `24` | Space below the update control, which is the last item |
 
 **It is the only body on this panel that is a constant.** A session arriving, a
 row opening, the queue unfolding and the quota table opening all move the
 listed panel; none of them moves this one, and
-`theAboutPanelIsOneHeightWhateverIsRunning` is the assertion. `272` is also
+`theAboutPanelIsOneHeightWhateverIsRunning` is the assertion. `260` is also
 under §4's `308`, so **§6's second box still stands as written**: opening the
 quota table remains the only thing that takes this panel *past* its resting
 height, and nothing the machine observes moves it either way.
@@ -226,11 +226,12 @@ which is a different claim from *not built yet* — and §1 rule 2's reading of
 "absent rather than greyed out" is about a promise the panel makes about the
 work it is showing, not about the app's own furniture.
 
-**The update control stays dark.** Its theme-ink fill is `0.40` at rest and
-`0.44` on hover, with the full lit theme ink for its text. Against black these
-are approximately `#595D5A` and `#626663`, with text contrast of `5.35:1` and
-`4.65:1`. The original `0.08` / `0.16` wash was too faint; the subsequent bright
-fill was too prominent. The new pair keeps both states dark and distinguishable.
+**The update control stays dark.** Its theme-ink fill is `0.22` at rest and
+`0.28` on hover, with the full lit theme ink for its text. Against black these
+are approximately `#313331` and `#3E413F`. A `1` pt theme-ink edge at `0.40`
+keeps the boundary visible without making the whole button pale. The prior
+`0.40` / `0.44` fills were still too light; the darker fill and separate edge
+keep the button distinct while giving it less emphasis.
 
 **The other elements keep the panel's existing vocabulary.** The notice is the
 caption face, the rule is the band's own —
@@ -258,7 +259,7 @@ same body a connected panel draws. What the second control costs that form is
 [`expanded-header-v2.md`](expanded-header-v2.md) §6's business: `64` at the
 reference bar, spent in the state where a fresh install lives.
 
-- [x] The About panel is `610 × 272` with nothing live, with three live rows, with a row open, with the queue unfolded and with the quota table open.
+- [x] The About panel is `610 × 260` with nothing live, with three live rows, with a row open, with the queue unfolded and with the quota table open.
 - [x] Collapsing and re-expanding leaves it open; a second click on the mark is the only thing that closes it.
 - [x] The lockup stands in the composition's own place, nothing is drawn in either margin, and the band's closing rule is drawn at the top (`theAboutPanelSpendsItsHeightWhereItSaysItDoes`).
 - [x] The mark draws `#7C7C80` while the list is showing and white at `0.98` while the About panel is, with a ground under it only when the pointer is on it.
