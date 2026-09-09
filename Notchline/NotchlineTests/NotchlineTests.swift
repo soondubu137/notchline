@@ -11393,12 +11393,211 @@ struct NotchlineTests {
         #expect(unmoved?.status == .completed)
         #expect(unmoved?.promptPreview == "the user's own prompt")
 
-        // The user's own next prompt still opens a turn, which is what the
-        // refusal must not cost.
+        // The user's own next prompt is held on the same terms rather than
+        // opening a turn at once: after `Stop` is not proof that a prompt is
+        // this thread's either, because the reviewer's hook and the parent's
+        // can reach this app in either order. What the refusal must not cost
+        // is the turn itself, and the thread's own record gives it its row,
+        // its own start and its own text.
         try emit(["hook_event_name": "UserPromptSubmit", "turn_id": "turn-next", "prompt": "next"])
-        let next = await repository.drainDeliveredEvents().turns.first
+        let stillHeld = await repository.drainDeliveredEvents().turns.first
+        #expect(stillHeld?.turnID == "turn-real")
+        #expect(stillHeld?.status == .completed)
+        let next = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "thread-reviewed", turnID: "turn-next")
+        ]).turns.first
         #expect(next?.turnID == "turn-next")
         #expect(next?.status == .running)
+        #expect(next?.promptPreview == "next")
+        #expect(next?.startedAt == Date(timeIntervalSince1970: clock))
+    }
+
+    /// Replays the report of 2026-09-08: the reviewer's prompt reaching this
+    /// app *after* the parent turn's own `Stop`.
+    ///
+    /// The reviewer's first assessment opens a fresh turn on its own thread,
+    /// under the parent's `session_id`, so its prompt is one this thread has
+    /// never held and never retired -- and with the thread finished it went
+    /// through the one branch the hold did not cover: adopted outright, the
+    /// real turn retired, the row re-timed from 0:00 and showing *"The
+    /// following is the Codex agent history whose request action you are
+    /// assessing"*, and `Running` for ever because nothing ever ends a
+    /// reviewer's turn under this thread's id. It is held now, and the thread's
+    /// own record -- which never names a reviewer's turn -- is what keeps it
+    /// held, while still promoting the user's own next turn.
+    @Test
+    func aReviewersPromptAfterTheTurnsOwnStopIsHeldNotAdopted() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(paths: paths)
+        var clock = 9_200.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-reviewed"
+            payload["turn_id"] = payload["turn_id"] ?? "turn-real"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the user's own prompt"])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewed"
+        ])
+        try emit([
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewed"
+        ])
+        try emit(["hook_event_name": "Stop", "last_assistant_message": "Done."])
+        let finished = await repository.drainDeliveredEvents().turns.first
+        #expect(finished?.status == .completed)
+        let realStart = try #require(finished?.startedAt)
+
+        // The reviewer's first prompt, arriving late: a turn this thread has
+        // never seen, on a thread that has finished.
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-reviewer",
+            "prompt": "The following is the Codex agent history whose request action you are assessing."
+        ])
+        let held = await repository.drainDeliveredEvents().turns.first
+        #expect(held?.turnID == "turn-real")
+        #expect(held?.status == .completed)
+        #expect(held?.startedAt == realStart)
+        #expect(held?.promptPreview == "the user's own prompt")
+        #expect(held?.assistantPreview == "Done.")
+
+        // The thread's own record still names the finished turn, and a record
+        // may only redeem what is held: nothing moves.
+        let unmoved = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "thread-reviewed", turnID: "turn-real")
+        ]).turns.first
+        #expect(unmoved?.turnID == "turn-real")
+        #expect(unmoved?.status == .completed)
+
+        // Nor does the reviewer's own check, should it run one.
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "turn_id": "turn-reviewer",
+            "tool_name": "Bash",
+            "tool_use_id": "exec-reviewer"
+        ])
+        #expect(await repository.drainDeliveredEvents().turns.first?.turnID == "turn-real")
+
+        // The user's own next turn is held in the same way, and its record is
+        // what gives it the row -- with its own start and its own text.
+        try emit(["hook_event_name": "UserPromptSubmit", "turn_id": "turn-next", "prompt": "next"])
+        let nextStart = Date(timeIntervalSince1970: clock)
+        #expect(await repository.drainDeliveredEvents().turns.first?.turnID == "turn-real")
+        let next = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "thread-reviewed", turnID: "turn-next")
+        ]).turns.first
+        #expect(next?.turnID == "turn-next")
+        #expect(next?.status == .running)
+        #expect(next?.promptPreview == "next")
+        #expect(next?.startedAt == nextStart)
+
+        // And a reviewer's turn refused once stays refused, whatever the
+        // thread has done since.
+        try emit(["hook_event_name": "Stop", "turn_id": "turn-reviewer"])
+        #expect(await repository.drainDeliveredEvents().turns.first?.turnID == "turn-next")
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .running)
+    }
+
+    /// Claude Code's next prompt after `Stop` still opens its turn at once.
+    ///
+    /// The hold on a finished thread is Codex's, because the caller is and the
+    /// record is: nothing runs under a Claude Code thread's identity without
+    /// saying so, and there is no rollout to redeem a hold from -- a held
+    /// prompt there is redeemed by its own first event, and a prompt after
+    /// `Stop` has no reason to wait for one.
+    @Test
+    func claudeCodeOpensTheNextTurnAtOnceAfterStop() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(
+            paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary()
+        )
+        var clock = 9_300.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "session-finished"
+            payload["prompt_id"] = payload["prompt_id"] ?? "turn-first"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the first prompt"])
+        try emit(["hook_event_name": "Stop", "last_assistant_message": "Done."])
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .completed)
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt_id": "turn-second", "prompt": "second"])
+        let next = await repository.drainDeliveredEvents().turns.first
+        #expect(next?.turnID == "turn-second")
+        #expect(next?.status == .running)
+        #expect(next?.promptPreview == "second")
+    }
+
+    /// Holding a prompt wakes the sweep that can redeem it.
+    ///
+    /// A held prompt changes nothing a row draws, and the sweep that reads the
+    /// thread's record listens on the same edge the rows do. Without the hold
+    /// being a term of that edge, the user's own next turn on a finished
+    /// Codex thread waited for the next event, or the interval, to be given
+    /// its row -- and the record it needs is on disk before the hook.
+    @Test
+    func aHeldPromptWakesTheSweepThatCanRedeemIt() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let repository = HookEventRepository(paths: paths)
+        var clock = 9_400.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-finished"
+            payload["turn_id"] = payload["turn_id"] ?? "turn-first"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit(["hook_event_name": "UserPromptSubmit", "prompt": "the first prompt"])
+        try emit(["hook_event_name": "Stop", "last_assistant_message": "Done."])
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .completed)
+
+        let prompt = try JSONSerialization.data(withJSONObject: [
+            "received_at": clock + 1,
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-finished",
+            "turn_id": "turn-next",
+            "prompt": "next"
+        ] as [String: Any])
+        let woke = await receivesChange(repository.changeEvents()) {
+            prompt.deliver(to: repository)
+        }
+        #expect(woke, "a held prompt must wake the sweep that reads the record")
+        let held = await repository.observedState().turns.first
+        #expect(held?.turnID == "turn-first")
+        #expect(held?.heldTurnStart?.turnID == "turn-next")
     }
 
     @Test @MainActor
@@ -12499,8 +12698,11 @@ struct NotchlineTests {
         // one's, carrying the same reviewer it has held since the switch.
         //
         // After the first Turn's terminal, which is the only order a thread's
-        // own Turns arrive in: a prompt landing *during* one is held rather
-        // than adopted (``HookTurnState/heldTurnStart``).
+        // own Turns arrive in. On Codex the prompt is held either way until
+        // the thread's own record names it (``HookTurnState/heldTurnStart``);
+        // this thread is listed without a rollout, so the record is applied
+        // here the way the sweep applies it, and the reviewer this test is
+        // about stays the map's to answer.
         try deliver([
             "received_at": timestamp + 2.5,
             "hook_event_name": "Stop",
@@ -12512,6 +12714,10 @@ struct NotchlineTests {
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-1",
             "turn_id": "turn-2"
+        ])
+        _ = await repository.drainDeliveredEvents()
+        _ = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "thread-1", turnID: "turn-2")
         ])
         try recordReviewer("auto_review", writtenAt: timestamp + 3.5)
         try deliver([
@@ -13909,10 +14115,39 @@ struct NotchlineTests {
         let repository = HookEventRepository(paths: paths)
         try await installer.install()
 
+        // The thread's own rollout, which is what gives the second turn its
+        // row: a Codex prompt for a turn the thread is not on is held until
+        // this record names it (``HookTurnState/heldTurnStart``), and Codex
+        // writes the record before the hook.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let rollout = root.appendingPathComponent("rollout-thread-two.jsonl")
+        func writeRollout(naming turnIDs: [String]) throws {
+            let lines = try turnIDs.map { turnID in
+                String(
+                    decoding: try JSONSerialization.data(withJSONObject: [
+                        "timestamp": "2026-09-08T00:00:00.000Z",
+                        "type": "turn_context",
+                        "payload": ["turn_id": turnID]
+                    ]),
+                    as: UTF8.self
+                )
+            }
+            try Data(lines.joined(separator: "\n").appending("\n").utf8)
+                .write(to: rollout, options: .atomic)
+        }
+        try writeRollout(naming: ["turn-first"])
+
         let listedThread = JSONValue.object([
             "id": .string("thread-two"),
             "ephemeral": .bool(false),
             "threadSource": .string("user"),
+            "path": .string(rollout.path),
             "updatedAt": .number(Date().timeIntervalSince1970),
             "status": .object([
                 "type": .string("active"),
@@ -13956,6 +14191,8 @@ struct NotchlineTests {
         ], to: repository)
         _ = await service.fetchSnapshot()
 
+        // The record first, then the hook, in Codex's own order.
+        try writeRollout(naming: ["turn-first", "turn-second"])
         deliverHook([
             "received_at": moment + 2,
             "hook_event_name": "UserPromptSubmit",
@@ -17290,6 +17527,12 @@ for line in sys.stdin:
         await send([
             "hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "t2"
         ])
+        // Held until the thread's own record names it, as every Codex prompt
+        // for a turn the thread is not on is (``HookTurnState/heldTurnStart``);
+        // the record is what gives it the row.
+        _ = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "s", turnID: "t2")
+        ])
         turn = try #require(await repository.observedState().turns.first)
         #expect(turn.turnID == "t2")
         #expect(turn.runningSubagentIDs == ["a1", "a2"])
@@ -18142,8 +18385,11 @@ for line in sys.stdin:
             ],
             // The first turn ends before the second begins, which is the only
             // order a thread's own turns ever arrive in: Codex Desktop queues
-            // a follow-up until the running turn's terminal, and a prompt that
-            // lands *during* a turn is held rather than adopted (``HookTurnState/heldTurnStart``).
+            // a follow-up until the running turn's terminal. The order says
+            // nothing about whose the prompt is, though, so on Codex it is
+            // held either way until the thread's own record names it
+            // (``HookTurnState/heldTurnStart``) -- which is the step between
+            // the two batches below.
             [
                 "received_at": 150.0,
                 "hook_event_name": "Stop",
@@ -18155,7 +18401,17 @@ for line in sys.stdin:
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "thread-1",
                 "turn_id": "turn-2"
-            ],
+            ]
+        ]
+        for (index, event) in firstBatch.enumerated() {
+            try write(event, named: "\(index).json")
+        }
+        _ = await repository.drainDeliveredEvents()
+        _ = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "thread-1", turnID: "turn-2")
+        ])
+
+        let secondBatch: [[String: Any]] = [
             [
                 "received_at": 201.0,
                 "hook_event_name": "PreToolUse",
@@ -18190,8 +18446,8 @@ for line in sys.stdin:
                 "turn_id": "turn-1"
             ]
         ]
-        for (index, event) in firstBatch.enumerated() {
-            try write(event, named: "\(index).json")
+        for (index, event) in secondBatch.enumerated() {
+            try write(event, named: "\(index + 3).json")
         }
 
         let waiting = await repository.drainDeliveredEvents()
@@ -35333,6 +35589,11 @@ extension NotchlineTests {
         await send([
             "hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "t2"
         ], at: 95)
+        // Held until the thread's own record names it, as every Codex prompt
+        // for a turn the thread is not on is (``HookTurnState/heldTurnStart``).
+        _ = await repository.adoptTurnsOnRecord([
+            TurnOnRecord(threadID: "s", turnID: "t2")
+        ])
         turn = try #require(await repository.observedState().turns.first)
         #expect(turn.turnID == "t2")
         #expect(turn.lastSubagentBoundaryAt == epoch.addingTimeInterval(94))

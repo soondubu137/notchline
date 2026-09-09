@@ -4,6 +4,12 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Fixed
+
+- **A Codex row no longer gets taken over by the automatic reviewer after its turn has finished.** Reported on a second machine running 0.2.2: a Codex turn ended, and its row re-timed from 0:00, showed *"The following is the Codex agent history whose request action you are assessing"*, and said `Running` for ever. That text is the first prompt of the `Approve for me` reviewer, which runs under the parent thread's identity with a turn id of its own; the app held such a prompt while the parent's turn was open, but one reaching it after the parent's own `Stop` was adopted outright as the thread's next turn, and nothing ever ends a reviewer's turn under the parent's id. A finished Codex thread now holds the prompt on the same terms as an open one, and the thread's own rollout — which names the user's turns and never a reviewer's — is what promotes the user's next turn, with its own start and text. The hold wakes the refresh that reads that record, so the next turn takes its row at once rather than on the following event. Claude Code is unchanged. (`docs/tech-design.md` §9.2.)
+
 ## 0.2.2 Alpha — 2026-09-07
 
 **The licence travels with the app.** `0.2.1` put the source under the GPL and said so in the README, which is everything somebody who takes a clone needs. It said nothing to somebody handed the built app: the bundle carried neither a copyright line nor a copy of the terms, and both are asked for wherever the program itself is conveyed.

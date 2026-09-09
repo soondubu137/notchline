@@ -1729,6 +1729,20 @@ struct HookTurnState: Sendable {
     /// So a prompt whose turn is not this thread's open one is **held** rather
     /// than adopted, and held is recoverable where retiring is not.
     ///
+    /// **On Codex, a prompt arriving after this thread's turn has finished is
+    /// held on the same terms.** "A real next turn always lands after `Stop`"
+    /// is true of Codex and says nothing about the order two hook processes
+    /// reach this app in: a reviewer's prompt landing after the parent's own
+    /// `Stop` went through the one branch the hold did not cover and was
+    /// adopted outright -- the row re-timed from 0:00, showing *"The following
+    /// is the Codex agent history whose request action you are assessing"*,
+    /// and `Running` for ever because nothing ends a reviewer's turn under
+    /// this thread's id. Reported again 2026-09-08 on a Release build. The
+    /// record that redeems a hold is written before the hook, so the user's
+    /// own next turn is promoted on the sweep the hold wakes, and a reviewer's
+    /// never is. Claude Code keeps adopting at once: it has no such caller,
+    /// and no record to hold for.
+    ///
     /// **What redeems it used to be "any event arrives under that id", and
     /// that was not evidence.** The sentence it was standing in for is *this
     /// turn was this thread's after all*, and a nested agent's own events
@@ -4040,12 +4054,12 @@ actor HookEventRepository {
                 } else {
                     guard receivedAt > current.lastEventAt,
                           !current.retiredTurnIDs.contains(turnID),
-                          // **And a held turn may not start one either.** A
-                          // reviewer's next assessment arriving after this
-                          // thread's own turn had finished would otherwise be
-                          // adopted outright rather than held, which is the
-                          // same takeover reached through the one branch the
-                          // hold does not cover.
+                          // **And a turn once held may never start one.** It
+                          // was held because nothing said it was this thread's,
+                          // and nothing since has: the same refusal every other
+                          // route applies to a held id, so that a reviewer's
+                          // repeated assessment is refused by the set rather
+                          // than re-held as the candidate.
                           !(vocabulary.settlesHeldTurnsFromRecord
                             && current.heldTurnIDs.contains(turnID)) else {
                         return true
@@ -4059,6 +4073,25 @@ actor HookEventRepository {
                     // identity -- see ``HookTurnState/heldTurnStart``, which is
                     // where it goes instead of over the turn.
                     //
+                    // **And after `Stop` is not proof either, on the product
+                    // whose record can say.** The nested reviewer's prompt
+                    // reaches this app through a hook process of its own, and
+                    // the parent's `Stop` through another; the one landing
+                    // after the other is exactly the takeover the hold exists
+                    // to refuse, reached through the one branch it did not
+                    // cover -- adopted outright, retiring the real turn, timed
+                    // from the reviewer's prompt, showing its instructions,
+                    // and `Running` for ever because nothing ever ends a
+                    // reviewer's turn under this thread's id. Reported again
+                    // 2026-09-08 on a Release build with exactly that face. So
+                    // on Codex a finished thread holds the prompt too, and the
+                    // thread's own rollout -- written before the hook, and the
+                    // reason ``HookTurnState/heldTurnStart`` can be settled at
+                    // all -- promotes the user's own next turn on the sweep
+                    // this hold wakes. Claude Code has no such reviewer and no
+                    // such record, so its next prompt still opens its turn at
+                    // once.
+                    //
                     // Deliberately not conditioned on the turn sitting on an
                     // approval, which is the only window today's reviewer can
                     // appear in. What is being defended is the identity rule,
@@ -4068,7 +4101,8 @@ actor HookEventRepository {
                     // `reduceSubagentToolEvent` leaves it alone: this is not
                     // this turn's activity, so it must not fend off membership
                     // reconciliation.
-                    guard current.sessionStatus == .completed else {
+                    guard current.sessionStatus == .completed,
+                          !vocabulary.settlesHeldTurnsFromRecord else {
                         var holder = current
                         holder.heldTurnStart = HookTurnState.HeldTurnStart(
                             turnID: turnID,
@@ -4750,7 +4784,15 @@ actor HookEventRepository {
                     turn.requestAwaitingAnAnswer
                         .map {
                             "\($0.id)\u{2}\($0.form.name)\u{2}\($0.canBeAnswered)"
-                        } ?? ""
+                        } ?? "",
+                    // **Not drawn, and here so that it is settled.** A held
+                    // prompt changes nothing a row shows, but the sweep that
+                    // can redeem it listens on this same edge, and the record
+                    // it needs is on disk before the hook that carried the
+                    // prompt (``HookTurnState/heldTurnStart``). Without this
+                    // term the user's own next turn on a finished thread waited
+                    // for the next event, or the interval, to be given its row.
+                    turn.heldTurnStart?.turnID ?? ""
                 ].joined(separator: "\u{1}")
             }
             .sorted()
