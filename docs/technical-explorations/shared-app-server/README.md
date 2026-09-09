@@ -60,6 +60,7 @@ Official documentation: <https://developers.openai.com/codex/app-server/>
 - `thread/read` reads a persisted Thread without loading, resuming or subscribing.
 - `thread/unsubscribe` is scoped to "the current connection", and the protocol has "last subscriber" behaviour — so the protocol model supports several connections and subscribers on one App Server.
 - After starting or resuming a Thread, a connection can receive `thread/status/changed`, `turn/*`, `item/*` and `serverRequest/resolved`.
+- **Notifications are addressed to subscribers, and the server counts them** (observed 2026-09-08 in Desktop's own `logs_2.sqlite`, target `codex_app_server::outgoing_message`). Every outgoing notification is logged `app-server event: <name> targeted_connections=N`: `1` for `item/started`, `item/completed`, `turn/started`, `turn/completed`, `thread/status/changed` and `serverRequest/resolved` while Desktop is the only client, and `0` for `thread/closed` and `skills/changed`, which nothing was subscribed to at the time. So a fan-out to subscribers is what the implementation does, not only what the protocol permits — and the count is a **direct check** on whether a second observer is actually attached, worth asserting in Phase 3 rather than inferring. It says nothing about server *requests*, which need exactly one responder; that question is still §7 Phase 2's.
 - `turn/completed.turn.status`'s terminal values are `completed`, `interrupted` and `failed`.
 - The App Server listener, WebSocket and daemon capabilities all still carry experimental / not-guaranteed-for-production caveats.
 
@@ -208,6 +209,14 @@ anything else  -> malformed / diagnostic
 ```
 
 Responses still resume continuations by request id; notifications enter an order-preserving event stream; server requests are exposed separately to the safety policy and never mistaken for responses; unrecognised notifications may be ignored but must be counted in a redacted form and must not drop a healthy transport; and prompts, commands, paths, raw thread ids and whole envelopes are never recorded.
+
+**The question lifecycle, added 2026-09-08.** Phase 2 must also establish whether an observer sees a **question** open and close, because that is the one thing hooks demonstrably cannot deliver and it is now a known hole in the shipped product ([`answering-codex`](../answering-codex/README.md) §3.6.1). Codex's `request_user_input_async` asks a person, returns to the model in 51 ms and lets the Turn run on; the app keeps the question's words from the hook and draws them, and deliberately claims no `Input needed`, because **nothing on the hook channel ever says the question ended** — an answer arrives as the next `UserPromptSubmit`, and a Skip, a snooze and Desktop's own auto-resolution arrive as nothing. What to measure, on a thread this connection did not start:
+
+- Does the observer receive `item/started` for the `agentMessage` whose `delivery` is `async` — the same item Desktop builds its card from?
+- Does it receive `serverRequest/resolved` for that request's id? That notification carries `requestId` and `threadId` and fires **however the request ended**, which is the closing edge the hook channel has not got. `targeted_connections` (§3.1) says whether it was actually addressed to us.
+- Does the observer also receive the `item/tool/requestUserInput` **request** itself, with `isBlocking: false`? That is the NO-GO test below, read at its sharpest: this request is one Desktop answers on a 60 s-inactivity-plus-90 s clock, so an observer that receives it and ignores it may be changing what the user's Turn does rather than merely watching it.
+
+Answering any of them is out of scope in every phase; the question here is only what an observer is *told*.
 
 **Read-only server-request policy** — Notchline must never answer an approval, permission, user-input, dynamic-tool or auth-refresh request on Desktop's behalf. Experiment must establish whether a server request under multiple clients is routed only to the Desktop connection that owns the Turn, broadcast to every subscribed connection, or chosen by some capability/host-client rule. **If a request is routed to Notchline and not answering it blocks a Desktop Turn, this architecture is immediately NO-GO** unless an official observer capability or read-only subscription method exists. Automatically declining or cancelling to avoid blocking is not acceptable, because it changes the user's Turn.
 
@@ -397,6 +406,10 @@ As of 2026-08-13:
 - **Accuracy benefit: high.** Same-runtime `turn/completed` and request lifecycles would directly solve false Approval reports and the Running-to-Completed synchronisation gap.
 - **Production maturity: insufficient.** Desktop's entry point is not a public stable contract, and multi-client server-request routing and read-only subscription are unproven.
 - **Recommendation:** complete the isolated verification of daemon + proxy + notification reducer first, then run the Desktop shared-runtime experiment with the user's explicit authorisation; keep the current implementation as the default path until every success criterion is met.
+
+**Addendum, 2026-09-08 — the accuracy case got a second, sharper instance, and the blocker did not move.** Codex's async question ([`answering-codex`](../answering-codex/README.md) §3.6.1) is the first request shape where the hook channel cannot be made correct by reading it more carefully: the open edge is free and now shipped, and the closing edge does not exist there at all. `serverRequest/resolved` is exactly that edge, it needs no write path, and taking it would not touch §11's "never make Notchline an approval client" — which is worth saying plainly, because the case for revisiting that sentence in `answering-codex` §5.1 is a *different* argument and this one does not depend on it.
+
+What has not changed is §9: Desktop reaches the daemon only under `CODEX_APP_SERVER_USE_LOCAL_DAEMON`, a package detail the user must set, with a restart. So this route still cannot deliver the question lifecycle to anybody who has not opted into an experiment, and the shipped answer stays what §7 Phase 2 is now asked to improve on rather than replace.
 
 ## 16. References
 

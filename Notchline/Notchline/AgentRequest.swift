@@ -30,6 +30,23 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// §4.6 is that this app does not annotate what it was handed.
     let toolName: String?
     let form: Form
+
+    /// The single line a row shows for a question it cannot offer to answer.
+    ///
+    /// **The last question, not the first.** Codex emits an async question set
+    /// as one assistant message *per question* (measured 2026-09-06 in a
+    /// rollout, and the same split appears in Desktop's own projection), so the
+    /// newest thing the turn has said is the last of them — which is the rule
+    /// the row's preview already follows for every other sentence. A set is
+    /// never joined into one line here: inventing punctuation between two of a
+    /// product's own sentences is exactly what §2.3 refuses.
+    ///
+    /// `nil` for every other form, including a question set that is answerable:
+    /// that one is drawn in full by an opened row and needs no summary line.
+    nonisolated var lastQuestionAsked: String? {
+        guard case let .questions(questions) = form else { return nil }
+        return questions.last?.text
+    }
     /// Approval arguments projected at the hook boundary, before flattening.
     /// Empty for prose/questions and for manually constructed plain commands.
     /// The command string remains the compatibility reading, never parsed by UI.
@@ -610,15 +627,28 @@ nonisolated enum AgentRequestReading {
     /// the whole set. A question with no text is dropped, because it is nothing
     /// a row could draw; a question with no options is kept, because that is
     /// form 04 and the field is the whole answer.
+    ///
+    /// **The question's text arrives under two names**, and reading only the
+    /// first is what hid Codex's async question from this app until 2026-09-08.
+    /// `AskUserQuestion` and Codex's blocking `request_user_input` both send
+    /// `question`; `request_user_input_async` sends `title`, and its schema in
+    /// CLI `0.153.4` gives it the same `options` array as the other two —
+    /// *"Suggested answers, in display order… Omit options for a
+    /// free-text-only question"*. One field, two spellings, so both are read
+    /// and `question` wins where a payload somehow carries both.
     nonisolated static func questions(in toolInput: JSONValue) -> [AgentQuestion]? {
         guard case let .object(fields) = toolInput,
               case let .array(raw)? = fields["questions"],
               !raw.isEmpty else { return nil }
 
         let questions = raw.enumerated().compactMap { index, entry -> AgentQuestion? in
-            guard case let .object(question) = entry,
-                  case let .string(text)? = question["question"],
-                  !text.isEmpty else { return nil }
+            guard case let .object(question) = entry else { return nil }
+            let spelled: String? = switch (question["question"], question["title"]) {
+            case let (.string(value)?, _) where !value.isEmpty: value
+            case let (_, .string(value)?) where !value.isEmpty: value
+            default: nil
+            }
+            guard let text = spelled else { return nil }
             var header: String?
             if case let .string(value)? = question["header"], !value.isEmpty {
                 header = String(value.prefix(maximumHeaderCharacters))

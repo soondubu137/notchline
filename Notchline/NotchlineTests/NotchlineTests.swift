@@ -9686,6 +9686,109 @@ struct NotchlineTests {
         )
     }
 
+    /// A question the turn asked without waiting is what the running row shows.
+    ///
+    /// **The defect this pins was reported from a user's machine on
+    /// 2026-09-08**: Codex Desktop held an answerable question card while the
+    /// notch row reported the sentence *after* the question. The tool is
+    /// `request_user_input_async`, which asks a person and does not stop, and
+    /// the CLI's own system prompt tells the model to "continue useful work
+    /// that does not depend on the answer while waiting" — so the question is
+    /// overwritten within seconds by whatever the turn says next.
+    ///
+    /// Nothing here claims a wait. The status stays `running`, because this app
+    /// cannot see the question answered, skipped, snoozed or auto-resolved; all
+    /// that changes is which of the turn's own sentences the row draws.
+    @Test @MainActor
+    func aQuestionAskedWithoutWaitingIsWhatTheRunningRowShows() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+        var clock = 2_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-async"
+            payload["turn_id"] = "turn-async"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Fix the funnel comparison"
+        ])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "request_user_input_async",
+            "tool_use_id": "call-async-1",
+            "tool_input": [
+                "questions": [["title": "Which history fields should it compare?"]]
+            ]
+        ])
+        // 51 ms later, whatever the person does, and the turn carries on.
+        try emit([
+            "hook_event_name": "PostToolUse",
+            "tool_name": "request_user_input_async",
+            "tool_use_id": "call-async-1"
+        ])
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "shell",
+            "tool_use_id": "exec-1"
+        ])
+
+        let turn = try #require(await repository.drainDeliveredEvents().turns.first)
+        #expect(turn.status == .running)
+        #expect(
+            turn.questionAskedWithoutWaiting == "Which history fields should it compare?"
+        )
+
+        // The row draws the question rather than the step the turn moved on to.
+        #expect(
+            CodexSnapshotParser.session(
+                from: turn,
+                thread: codexRootThread(id: "thread-async"),
+                projectName: "notchline",
+                liveProgress: "Rewriting the query as a derived table"
+            )?.preview == "Which history fields should it compare?"
+        )
+
+        // A completed turn keeps its own last word: that sentence was written
+        // after the question, knowing what came of it.
+        var finished = turn
+        finished.sessionStatus = .completed
+        finished.assistantPreview = "Rewrote the query and left the comparison as it was"
+        #expect(
+            CodexSnapshotParser.session(
+                from: finished,
+                thread: codexRootThread(id: "thread-async"),
+                projectName: "notchline"
+            )?.preview == "Rewrote the query and left the comparison as it was"
+        )
+
+        // A turn the user stopped has no last word (ADR 0011), and the question
+        // is a better answer to "what happened" than the prompt it started from.
+        finished.assistantPreview = nil
+        #expect(
+            CodexSnapshotParser.session(
+                from: finished,
+                thread: codexRootThread(id: "thread-async"),
+                projectName: "notchline"
+            )?.preview == "Which history fields should it compare?"
+        )
+
+        // That the *next* turn does not inherit the question is pinned where
+        // the rest of that invariant lives, in
+        // `aFreshCodexTurnDoesNotInheritTheLastOnesWords` -- a Codex prompt for
+        // a turn the thread is not on is held until the rollout names it, so
+        // opening one takes a rollout and a service rather than a payload.
+    }
+
     @Test @MainActor
     func desktopUnreadStateReadsOnlyTheLocalHostMembership() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -14505,6 +14608,19 @@ struct NotchlineTests {
             "session_id": "thread-two",
             "turn_id": "turn-first",
             "prompt": "The first question."
+        ], to: repository)
+        _ = await service.fetchSnapshot()
+        // The first turn also asked something without waiting for the answer,
+        // which outranks that turn's own step while it runs and must not
+        // outrank anything once the next turn owns the row.
+        deliverHook([
+            "received_at": moment + 0.5,
+            "hook_event_name": "PreToolUse",
+            "session_id": "thread-two",
+            "turn_id": "turn-first",
+            "tool_name": "request_user_input_async",
+            "tool_use_id": "call-async-1",
+            "tool_input": ["questions": [["title": "Which of the two shall I use?"]]]
         ], to: repository)
         _ = await service.fetchSnapshot()
         deliverHook([
@@ -26263,7 +26379,7 @@ for line in sys.stdin:
     /// tool calls in this machine's own transcripts, that gate admits all of
     /// them and this one admits 56 — 0.18%.
     @Test @MainActor
-    func everyEventThatOpensAWaitCarriesItsRequestAndNoOtherEventDoes() {
+    func everyEventThatAsksAPersonCarriesItsRequestAndNoOtherEventDoes() {
         let cases: [(any AgentHookVocabulary, String, String?, Bool)] = [
             (ClaudeCodeHookVocabulary(), "PermissionRequest", "Bash", true),
             (ClaudeCodeHookVocabulary(), "PermissionRequest", "ExitPlanMode", true),
@@ -26277,10 +26393,12 @@ for line in sys.stdin:
             (ClaudeCodeHookVocabulary(), "Stop", nil, false),
             (CodexHookVocabulary(), "PermissionRequest", "shell", true),
             (CodexHookVocabulary(), "PreToolUse", "request_user_input", true),
-            // The async question opens no wait, so it carries no request
-            // either — `carriesRequest` derives from the signal table, and
-            // that is the whole point of deriving it.
-            (CodexHookVocabulary(), "PreToolUse", "request_user_input_async", false),
+            // The async question opens no wait and still carries its request
+            // (2026-09-08). The gate is "was a person asked something", not
+            // "did a wait open": this one asks and does not stop, and the body
+            // is the only place the question is written down. It stays derived
+            // from the signal table, which is the whole point of deriving it.
+            (CodexHookVocabulary(), "PreToolUse", "request_user_input_async", true),
             (CodexHookVocabulary(), "PreToolUse", "request_permissions", true),
             (CodexHookVocabulary(), "PreToolUse", "shell", false),
             (CodexHookVocabulary(), "PostToolUse", "shell", false),
@@ -26836,18 +26954,22 @@ for line in sys.stdin:
     /// `PostToolUse` arrived 51 ms later carrying `{"accepted":true}` whatever
     /// the person does, and the Turn ran on to its own `Stop`.
     ///
-    /// Before this, the exact-name match sent it to the catch-all, so the row
-    /// said *Working…* — right by accident. It is now right on purpose, and the
-    /// distinction matters: the tempting repair is to add the name to the
-    /// `.inputWaitOpened` case, which would announce *Input needed* for 51 ms
-    /// and then withdraw it.
+    /// **This test used to assert `.toolCallOpened`, and that was wrong for a
+    /// reason worth pinning (2026-09-08).** Both obvious readings are: a wait
+    /// (`.inputWaitOpened`, which would announce *Input needed* for 51 ms, and
+    /// which nothing on this channel could ever retire — a Skip, a snooze and
+    /// Desktop's own auto-resolution all arrive as silence), or an ordinary
+    /// call (which loses the question under the next sentence the turn says,
+    /// and the CLI's own system prompt tells the model to keep saying them).
+    /// The third reading is the true one: a call that also asked a person
+    /// something, whose words are kept and whose status is not claimed.
     @Test @MainActor
-    func codexsAsyncQuestionOpensNoWaitBecauseNothingIsWaiting() throws {
+    func codexsAsyncQuestionKeepsItsWordsWithoutOpeningAWait() throws {
         let vocabulary = CodexHookVocabulary()
         #expect(
             vocabulary.signal(
                 forEvent: "PreToolUse", toolName: "request_user_input_async"
-            ) == .toolCallOpened
+            ) == .questionAskedWithoutWaiting
         )
         // Its close is an ordinary close, so the pair still balances.
         #expect(
@@ -26861,14 +26983,60 @@ for line in sys.stdin:
                 forEvent: "PreToolUse", toolName: "request_user_input"
             ) == .inputWaitOpened
         )
-        // And the body it would have decoded is never asked for: the async
-        // question's `{"questions":[{"title": …}]}` has no field an answer
-        // could be written into, which is why offering one is the wrong repair.
+        // The body is now asked for, because the question is the only thing
+        // this event establishes.
         #expect(
-            !vocabulary.carriesRequest(
+            vocabulary.carriesRequest(
                 forEvent: "PreToolUse", toolName: "request_user_input_async"
             )
         )
+    }
+
+    /// The async question's own payload reads as a question set.
+    ///
+    /// Its text arrives under `title` where the other two products send
+    /// `question`, and its schema in CLI `0.153.4` gives it the same `options`
+    /// array — *"Suggested answers, in display order… Omit options for a
+    /// free-text-only question"*. Reading only the first spelling is what hid
+    /// this question from the app: the payload fell through to the arguments
+    /// and the row drew nothing a person could read.
+    @Test @MainActor
+    func codexsAsyncQuestionIsReadFromItsOwnSpellingOfTheQuestion() throws {
+        let request = try #require(
+            CodexHookVocabulary().request(
+                forEvent: "PreToolUse",
+                toolName: "request_user_input_async",
+                toolInput: .object([
+                    "questions": .array([
+                        .object([
+                            "title": .string("Which history fields should it compare?"),
+                            "options": .array([
+                                .object([
+                                    "label": .string("Use the two history fields"),
+                                    "description": .string("company_funnel_stage")
+                                ]),
+                                .object(["label": .string("Match CRM exactly")])
+                            ])
+                        ])
+                    ])
+                ]),
+                permissionSuggestions: nil,
+                openedBy: "call-async-1"
+            )
+        )
+        guard case let .questions(questions) = request.form else {
+            Issue.record("drawn as \(request.form.name), not a question set")
+            return
+        }
+        #expect(questions.count == 1)
+        #expect(questions[0].text == "Which history fields should it compare?")
+        #expect(
+            questions[0].options.map(\.label)
+                == ["Use the two history fields", "Match CRM exactly"]
+        )
+        // The one line a row shows for it, and the free-text-only form still
+        // reads, because Codex's schema makes options optional.
+        #expect(request.lastQuestionAsked == "Which history fields should it compare?")
     }
 
     /// An elicitation is named rather than drawn.

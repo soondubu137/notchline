@@ -2488,11 +2488,39 @@ enum CodexSnapshotParser {
         // seen saying, and the prompt behind that, rather than going blank at
         // the moment it stops. Reached only where `assistantPreview` is absent,
         // so a turn that did end on a `Stop` is untouched.
+        //
+        // **A question the turn asked without waiting outranks the step it is
+        // on** (2026-09-08). Codex's `request_user_input_async` asks a person
+        // and keeps working, and the CLI's own system prompt tells it to --
+        // "continue useful work that does not depend on the answer while
+        // waiting" -- so the question is overwritten within seconds by whatever
+        // the turn says next, which is how a user came to watch a row report a
+        // SQL rewrite while Codex Desktop held an unanswered question card. Of
+        // everything a *running* turn has said, the sentence addressed to a
+        // person is the one worth the row.
+        //
+        // **A completed turn keeps its own last word**, and this is the
+        // narrower half of the rule on purpose. That word is the turn's answer,
+        // written after the question and knowing what came of it, and where the
+        // question still mattered the model tends to restate it -- measured on
+        // the one async question in this machine's history, whose
+        // `last_assistant_message` was the question again. So here the question
+        // ranks *below* the final answer and above the prompt, which is where
+        // it earns its place: a turn the user stopped has no last word at all
+        // (ADR 0011), and the question is a better answer to "what happened"
+        // than the prompt it started from.
+        //
+        // Neither branch claims anybody is waiting. This app cannot see the
+        // question answered, skipped, snoozed or auto-resolved, so it says only
+        // what the turn said -- see ``HookTurnState/questionAskedWithoutWaiting``.
         let preview = status == .completed
             ? (normalizedPreview(state.assistantPreview)
+                ?? normalizedPreview(state.questionAskedWithoutWaiting)
                 ?? normalizedPreview(liveProgress)
                 ?? normalizedPreview(state.promptPreview))
-            : (normalizedPreview(liveProgress) ?? normalizedPreview(state.promptPreview))
+            : (normalizedPreview(state.questionAskedWithoutWaiting)
+                ?? normalizedPreview(liveProgress)
+                ?? normalizedPreview(state.promptPreview))
 
         return MonitoredSession(
             threadID: state.threadID,

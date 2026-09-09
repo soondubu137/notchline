@@ -389,6 +389,25 @@ nonisolated enum HookSignal: Sendable, Equatable {
     case approvalWaitInferred
     /// An ordinary tool call was announced. Not evidence a turn began.
     case toolCallOpened
+    /// A tool call was announced that also **asked the person something**,
+    /// without opening a wait for the answer.
+    ///
+    /// Codex's `request_user_input_async` is the measured instance and the
+    /// reason this case exists (2026-09-07 and 2026-09-08, CLI `0.153.4`): the
+    /// tool answers the *model* `{"accepted":true}` in 51 ms and the turn runs
+    /// on to its own `Stop`, while the *person* is left with a card in Codex
+    /// Desktop that outlives the turn. So neither of the two obvious readings
+    /// is true — it is not a wait this app could open and close, and it is not
+    /// an ordinary tool call either, because a person was asked something and
+    /// the row is the only place they may see it.
+    ///
+    /// What it establishes is exactly one thing: the question's own words, kept
+    /// on the turn so the row can draw them instead of losing them under the
+    /// next sentence the turn says. It changes no status, because a status this
+    /// app cannot retire is worse than one it never showed — the answer arrives
+    /// as a *new turn*, and a Skip, a snooze or Desktop's own auto-resolution
+    /// arrive as nothing at all.
+    case questionAskedWithoutWaiting
     /// An announced call ended, whatever the outcome.
     case toolCallClosed
     /// The turn reached its terminal.
@@ -602,9 +621,16 @@ extension AgentHookVocabulary {
     /// (p50 263 B, p99 8,951 B, max 136,560 B), that gate would copy and decode
     /// about 28 MB of arguments nobody reads, on the serial read queue. This one
     /// admits 56 of those 30,909 calls: **0.18%**.
+    ///
+    /// ``HookSignal/questionAskedWithoutWaiting`` is the one member that is not
+    /// a wait, and it is admitted for the same reason the others are: a person
+    /// has been asked something and the body is the only place it is written
+    /// down. It costs nothing measurable — Codex's async question is rarer than
+    /// the approvals above, and the 128 KiB bound applies to it unchanged.
     nonisolated func carriesRequest(forEvent name: String, toolName: String?) -> Bool {
         switch signal(forEvent: name, toolName: toolName) {
-        case .inputWaitOpened, .approvalWaitOpened, .approvalWaitInferred:
+        case .inputWaitOpened, .approvalWaitOpened, .approvalWaitInferred,
+             .questionAskedWithoutWaiting:
             return true
         default:
             return false
@@ -702,7 +728,7 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
             // person answers, carrying their answers.
             .inputWaitOpened
         case ("PreToolUse", "request_user_input_async"):
-            // **Not a wait, and this case exists to say so.** Codex ships two
+            // **Not a wait, and not an ordinary call either.** Codex ships two
             // question handlers and which one a Turn gets is decided by the
             // model, not by a setting: measured 2026-09-07 on CLI `0.153.4`,
             // `gpt-6-astra` — this machine's default — registers only this one
@@ -713,20 +739,27 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
             // **51 ms** after the open carrying `{"accepted":true}` whatever
             // the person does, and the Turn went on to run another tool and
             // reach its own `Stop`; any answer arrives later as a new user
-            // message, which is a new Turn. Reading it as `.inputWaitOpened`
-            // would therefore put *Input needed* on the row for 51 ms and take
-            // it away again — attention spent on a wait that never existed —
-            // and `carriesRequest` derives from this table, so a wait would
-            // also decode a `{"questions":[{"title": …}]}` body no answer this
-            // app could send has anywhere to go. What the person is owed is
-            // already delivered: Codex emits the question as its own assistant
-            // message, and the Turn's `Stop` carries it in
-            // `last_assistant_message`, which the Completed row draws.
+            // message, which is a new Turn. So `.inputWaitOpened` is still
+            // wrong: it would put *Input needed* on the row for 51 ms and take
+            // it away again, and nothing on this channel could ever retire it
+            // honestly — a Skip, a snooze and Desktop's own auto-resolution all
+            // arrive as silence.
             //
-            // A third variant would fall to the default below and land here
-            // too, which is the safe direction: the default never claims a
-            // wait, and only claiming one can misreport.
-            .toolCallOpened
+            // **`.toolCallOpened` was wrong too, and this case used to say it
+            // was right (corrected 2026-09-08).** It rested on "the person is
+            // owed nothing more, because the Turn's `Stop` carries the question
+            // in `last_assistant_message`" — true only when the model stops on
+            // the question, and the CLI binary's own system prompt tells it to
+            // "continue useful work that does not depend on the answer while
+            // waiting". Reported from a user's machine that same day: the model
+            // asked, went on working, and the row showed the sentence after the
+            // question with the question nowhere. So the question's own words
+            // are kept, and nothing else is claimed.
+            //
+            // A third variant would fall to the default below and land on
+            // `.toolCallOpened`, which is still the safe direction: the default
+            // never claims a wait, and only claiming one can misreport.
+            .questionAskedWithoutWaiting
         case ("PreToolUse", "request_permissions"):
             // A Desktop approval prompt is surfaced as a tool call that stays
             // open for exactly as long as the human is being asked.
@@ -790,7 +823,7 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     ) -> AgentRequest? {
         guard let toolInput else { return nil }
         let form: AgentRequest.Form? = switch (name, toolName) {
-        case ("PreToolUse", "request_user_input"):
+        case ("PreToolUse", "request_user_input"), ("PreToolUse", "request_user_input_async"):
             // The question set the tool actually sends, then the prompt where
             // some other shape put one, then its whole arguments. Failing
             // closed **to the arguments** rather than to nothing: a question in
@@ -1645,6 +1678,25 @@ struct HookTurnState: Sendable {
     var retiredTurnIDs: Set<String>
     var promptPreview: String?
     var assistantPreview: String?
+    /// The last question this turn asked without waiting for the answer.
+    ///
+    /// A turn-level fact, reset by the turn boundary like the two previews
+    /// above and unlike the thread-level sets below: the answer to a question
+    /// asked here arrives as the *next turn*, which is exactly when this stops
+    /// being the thing to show.
+    ///
+    /// **Set only by ``HookSignal/questionAskedWithoutWaiting``**, so it holds
+    /// a question nobody is waiting on — never one a row could answer, which
+    /// lives on ``pendingInput`` with the wait it opened. The newest wins,
+    /// which is also what the product does: Codex Desktop keeps at most one
+    /// pending user-input request per conversation and drops the previous one
+    /// when a new question arrives.
+    ///
+    /// Only the words are kept, not the request. A structured question is what
+    /// a row draws when it can be answered, and this one cannot be — from here
+    /// there is nowhere to send an answer, and no event that would say it had
+    /// been sent.
+    var questionAskedWithoutWaiting: String?
     /// Subagents this thread has started and not yet seen stop.
     ///
     /// **A fact about the thread, carried on whichever turn it currently
@@ -4268,7 +4320,7 @@ actor HookEventRepository {
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
             }
-        case .toolCallOpened:
+        case .toolCallOpened, .questionAskedWithoutWaiting:
             // No state change on its own, but it records the open call so an
             // approval that carries no id of its own has something to pair
             // with. It also proves the definition runs.
@@ -4276,6 +4328,22 @@ actor HookEventRepository {
             guard let toolUseID = stableIdentifier(event.toolUseID) else {
                 return true
             }
+            // Read before the mutation and deliberately **not** through
+            // `requestAsked`, which files the request on this event's reply
+            // connection: nothing here is answerable, so nothing here should
+            // hold a ticket that says it might be. Only the words survive; see
+            // ``HookTurnState/questionAskedWithoutWaiting``.
+            let questionAsked: String? = signal == .questionAskedWithoutWaiting
+                ? HookSessionPreviewStore.normalized(
+                    vocabulary.request(
+                        forEvent: eventName,
+                        toolName: event.toolName,
+                        toolInput: event.toolInput,
+                        permissionSuggestions: event.permissionSuggestions,
+                        openedBy: toolUseID
+                    )?.lastQuestionAsked
+                )
+                : nil
             mutateExactTurn(
                 threadID: threadID,
                 turnID: turnID,
@@ -4293,6 +4361,12 @@ actor HookEventRepository {
                 $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
                 if $0.pendingInputToolUseID == nil, $0.pendingApproval == nil {
                     $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
+                }
+                // A question that could not be read leaves the last one it
+                // could standing: the alternative is a row that loses the
+                // question because the product added a field.
+                if let questionAsked {
+                    $0.questionAskedWithoutWaiting = questionAsked
                 }
                 // Recorded inside the mutation rather than beside it, so it is
                 // set only where a turn this store holds was actually
@@ -4506,7 +4580,8 @@ actor HookEventRepository {
         let infersDenials = true
 
         switch signal {
-        case .toolCallOpened, .inputWaitOpened, .approvalWaitOpened:
+        case .toolCallOpened, .inputWaitOpened, .approvalWaitOpened,
+             .questionAskedWithoutWaiting:
             observedPreToolUseCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else { break }
             Self.resolveInferredApproval(
@@ -4515,6 +4590,11 @@ actor HookEventRepository {
                 whenInferring: infersDenials
             )
             slots.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
+            // `.questionAskedWithoutWaiting` lands here as an ordinary call and
+            // records nothing, for the same reason the wait below is tracked
+            // and not drawn: whether a subagent's question reaches the user at
+            // all has not been measured, and the row it would take over belongs
+            // to the parent turn, which asked nobody anything.
             switch signal {
             case .inputWaitOpened:
                 // Tracked so the pairing is right, and deliberately not drawn:

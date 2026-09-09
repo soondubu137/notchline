@@ -23,7 +23,7 @@ So the premise this exploration started from — *Notchline can only lead the us
 | An escalation — network, filesystem, a skill | On this build, the same `PermissionRequest` path (§3.4) | **Answered here** |
 | The same escalation with `request_permissions_tool` on | `PreToolUse(request_permissions)` alone, **no `PermissionRequest`** | `Answer in Codex` |
 | A question — `request_user_input` | `PreToolUse(request_user_input)` alone; Codex has no hook for a user-input request at all | `Answer in Codex` |
-| A question — `request_user_input_async` | `PreToolUse(request_user_input_async)`; the *Turn* does not stop, but ~~nobody is waiting~~ **a person is** (§3.6.1, re-measured 2026-09-08) | An ordinary tool call, and the row says `Working…` throughout. **A hole, not a reading** — the open edge is on the wire, the closing edge is the unsolved half |
+| A question — `request_user_input_async` | `PreToolUse(request_user_input_async)`; the *Turn* does not stop, but ~~nobody is waiting~~ **a person is** (§3.6.1, re-measured 2026-09-08) | **Drawn, not answered.** The question's words are kept and taken as the row's preview; the status stays `Running`, because the closing edge does not exist on this channel |
 | `Always` / `for this session` / a policy amendment | Reserved on the hook's decision, which fails closed if the field is present | Not offered, and `answer-in-notch.md` §6.5 declines to offer it anyway |
 
 The rest of this document is about the three rows that are not answered, why the hook channel cannot carry them, and what could.
@@ -177,10 +177,10 @@ Three things §3.6 asserted, checked against the shipped binaries:
 
 The card is gated on remote feature id `580984490` (`requestUserInputAsyncUiEnabled`) and built from `item/started` where `item.delivery === "async"`. **It therefore arrives by rollout**, and a machine without the gate cannot reproduce the screenshot however current its build is.
 
-**What this changes, and what it does not.** `.toolCallOpened` is still what ships, but the justification has moved from "there is nothing to draw" to "there is nothing to draw it *off* with":
+**What this changes, and what it does not.** The justification moved from "there is nothing to draw" to "there is nothing to draw it *off* with", and the two edges were then taken separately. **Built 2026-09-08**, the same day:
 
-- **Open edge — already paid for.** `PreToolUse(request_user_input_async)` carries the whole question set; the catch-all `PreToolUse` is registered; `carriesRequest` is one line of the same table.
-- **Closing edge — unsolved, and the whole problem.** `PostToolUse` closes the tool, not the question. An answer is only the next `UserPromptSubmit`. Skip, snooze and the auto-resolution are silent. `AGENTS.md` §6's *state is never guessed* rules out a bare timer standing in for evidence, and this app's existing displayed-thread and focus evidence is the nearest thing to the input Desktop's own timer uses — which makes "mirror the product's clock" a candidate to be measured rather than a design to be adopted.
+- **Open edge — already paid for, and now taken.** `PreToolUse(request_user_input_async)` carries the whole question set; the catch-all `PreToolUse` is registered; `carriesRequest` is one line of the same table. It has a signal of its own (`HookSignal.questionAskedWithoutWaiting`), its words are kept on the turn, and the row draws them instead of the sentence the turn says next. Nothing about a wait is claimed. See [`tech-design.md`](../../tech-design.md) §9.2 and [`PRD.md`](../../PRD.md) §7.
+- **Closing edge — unsolved, and the whole problem.** `PostToolUse` closes the tool, not the question. An answer is only the next `UserPromptSubmit`. Skip, snooze and the auto-resolution are silent. `AGENTS.md` §6's *state is never guessed* rules out a bare timer standing in for evidence. Two candidates, both needing measurement rather than adoption: mirroring Desktop's own clock, for which this app has the frontmost-application evidence but **not** the per-conversation focus the timer actually keys on (checked 2026-09-08: `.codex-global-state.json` carries `unread-thread-ids-by-host-v1` and no displayed-thread atom, so the Codex side has nothing equivalent to Claude Desktop's `DesktopDisplayedSession`); or a second App Server connection, where `serverRequest/resolved` closes the request however it ends — see [`shared-app-server`](../shared-app-server/README.md) §7 Phase 2.
 
 **One more shape, unmeasured.** `item/tool/requestOptionPicker` sits beside `requestUserInput` in the same bundle, answered `{action, selectedOptions, freeformAnswer}`. Nothing is known about its tool name, its payload or whether it reaches a hook at all. It is recorded here so the next survey looks for it, and deliberately kept out of `answer-in-notch.md` §2's table until a real payload is caught.
 
@@ -291,7 +291,7 @@ It is still the wrong thing. It is `Answer in Codex` performed by a robot: the p
 - Desktop bundle: `/Applications/ChatGPT.app` `26.901.51231`; bundled `codex-cli 0.153.4`
 - Scope of user authorisation: investigate, no code changes; documentation updated in a second, separate instruction
 - Read-only throughout: `strings`/byte-scan of the CLI binary and of `app.asar`, and reads of `~/.codex/sessions`, `~/.codex/.codex-global-state.json`, `~/.codex/state_5.sqlite`, `~/.codex/thread_history_1.sqlite` and `~/.codex/logs_2.sqlite` (opened `mode=ro`)
-- Result: PASS for the re-measurement; §3.6's timing confirmed, two of its conclusions overturned; **BLOCKED** on the three questions at the end of §3.6.1, all of which need a live gated card rather than a file
+- Result: PASS for the re-measurement; §3.6's timing confirmed, two of its conclusions overturned; the open edge built the same day; **BLOCKED** on the three questions at the end of §3.6.1, all of which need a live gated card rather than a file
 - Side effects observed: none. No Turn driven, no daemon started, no Desktop interaction; nothing written outside this repository but the executor's own memory notes, and the byte-scan dumps were deleted afterwards
 - Recommended next step: §6.2 as rewritten — establish the closing edge before re-mapping the signal
 
