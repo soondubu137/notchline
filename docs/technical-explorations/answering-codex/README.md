@@ -23,7 +23,7 @@ So the premise this exploration started from — *Notchline can only lead the us
 | An escalation — network, filesystem, a skill | On this build, the same `PermissionRequest` path (§3.4) | **Answered here** |
 | The same escalation with `request_permissions_tool` on | `PreToolUse(request_permissions)` alone, **no `PermissionRequest`** | `Answer in Codex` |
 | A question — `request_user_input` | `PreToolUse(request_user_input)` alone; Codex has no hook for a user-input request at all | `Answer in Codex` |
-| A question — `request_user_input_async` | `PreToolUse(request_user_input_async)`, and **nobody is waiting** (§3.6, measured) | An ordinary tool call, correctly — there is no wait to draw |
+| A question — `request_user_input_async` | `PreToolUse(request_user_input_async)`; the *Turn* does not stop, but ~~nobody is waiting~~ **a person is** (§3.6.1, re-measured 2026-09-08) | An ordinary tool call, and the row says `Working…` throughout. **A hole, not a reading** — the open edge is on the wire, the closing edge is the unsolved half |
 | `Always` / `for this session` / a policy amendment | Reserved on the hook's decision, which fails closed if the field is present | Not offered, and `answer-in-notch.md` §6.5 declines to offer it anyway |
 
 The rest of this document is about the three rows that are not answered, why the hook channel cannot carry them, and what could.
@@ -159,6 +159,33 @@ So §1's row for `request_user_input` was also wrong in a way this document inhe
 
 Fixed in `CodexHookVocabulary`, with the measurements recorded in [`system-architecture.md`](../../system-architecture.md) §3 and [`tech-design.md`](../../tech-design.md) §7.1/§9.2. This was independent of everything else here.
 
+#### 3.6.1 Re-measured 2026-09-08 — the 51 ms was the *model's* wait, not the person's
+
+A user of a second machine sent a screenshot: a Codex Desktop Turn on `gpt-6-astra`, still running, with an answerable question card in the composer — the question, two numbered options, a free-text field, `Skip` and `Send` — and Notchline's row beside it showing the Turn's *next* sentence and no `Input needed` anywhere. §3.6's reading predicts exactly that row, so the reading is what was examined.
+
+**It is `request_user_input_async`.** Identified from the screenshot itself rather than assumed: the model is `gpt-6-astra`, which registers only the async tool outside Plan mode (§3.6's table); the transcript continues *past* the question with another assistant message; and the composer still shows a running Turn. The blocking tool would have stopped there.
+
+Three things §3.6 asserted, checked against the shipped binaries:
+
+| §3.6 said | 2026-09-08 |
+| --- | --- |
+| `{"questions":[{"title": …}]}`, no options | **Wrong.** The async tool's schema in CLI `0.153.4` documents `options` — *"Suggested answers, in display order… Omit options for a free-text-only question"* — and the system prompt tells the model to **prefer** multiple choice. The `title`-only capture was a free-text question |
+| The `Stop` carries the question in `last_assistant_message` | **Only when the model stops on it.** The same prompt tells it to "continue useful work that does not depend on the answer while waiting", which is what the screenshot shows it doing. The Completed row then draws the later sentence |
+| Nobody is waiting | **Codex disagrees.** Desktop derives thread status `waiting` from an outstanding `item/tool/requestUserInput`, blocking or not |
+
+**And the wait has a clock.** Read out of `app.asar` (Desktop `26.901.51231`), both question tools reach the client as the same server request, `item/tool/requestUserInput`, carrying `isBlocking`. Desktop hands the non-blocking one to `requestUserInputAutoResolution`, which answers **`{answers:{}}` for the person**: 60 s of foreground inactivity then a 90 s countdown while that conversation is focused, or the 90 s countdown **immediately** when it is not; snooze cancels it. So a person who is not looking at that thread has about ninety seconds — which is the notch's entire case, and also the constraint on any row that claims the state.
+
+The card is gated on remote feature id `580984490` (`requestUserInputAsyncUiEnabled`) and built from `item/started` where `item.delivery === "async"`. **It therefore arrives by rollout**, and a machine without the gate cannot reproduce the screenshot however current its build is.
+
+**What this changes, and what it does not.** `.toolCallOpened` is still what ships, but the justification has moved from "there is nothing to draw" to "there is nothing to draw it *off* with":
+
+- **Open edge — already paid for.** `PreToolUse(request_user_input_async)` carries the whole question set; the catch-all `PreToolUse` is registered; `carriesRequest` is one line of the same table.
+- **Closing edge — unsolved, and the whole problem.** `PostToolUse` closes the tool, not the question. An answer is only the next `UserPromptSubmit`. Skip, snooze and the auto-resolution are silent. `AGENTS.md` §6's *state is never guessed* rules out a bare timer standing in for evidence, and this app's existing displayed-thread and focus evidence is the nearest thing to the input Desktop's own timer uses — which makes "mirror the product's clock" a candidate to be measured rather than a design to be adopted.
+
+**One more shape, unmeasured.** `item/tool/requestOptionPicker` sits beside `requestUserInput` in the same bundle, answered `{action, selectedOptions, freeformAnswer}`. Nothing is known about its tool name, its payload or whether it reaches a hook at all. It is recorded here so the next survey looks for it, and deliberately kept out of `answer-in-notch.md` §2's table until a real payload is caught.
+
+**Open questions this leaves.** (1) Does the gated card's `Send` route back as a response to the server request or as a new user message — the two differ in whether a Turn is created. (2) Does the auto-resolution clock actually run on the gated card; the numbers above are read from code, not watched. (3) How long do these questions stay open in practice: one sample on this machine is not a distribution.
+
 ### 3.7 The App Server can answer everything the hook cannot
 
 Generated from `codex app-server generate-json-schema --experimental`. The server-to-client requests are:
@@ -251,12 +278,22 @@ It is still the wrong thing. It is `Answer in Codex` performed by a robot: the p
 ## 6. Recommendation
 
 1. **Correct the record first, because two documents are now wrong.** `answer-in-notch.md` §14.2's Codex `pre-tool-use` row omits `updatedInput` (§3.3), and `system-architecture.md` §3's "a dedicated approval tool sends no `PermissionRequest`" is true of a shape that a feature flag has since taken out of the build (§3.4). Neither should be overwritten — both are correct measurements of their own date — but both need what follows them.
-2. **Confirm §3.6 and fix it.** An async question that never says `Input needed` is a hole in the reading half, which ships before any of this, and it is one payload probe away from certain.
+2. ~~**Confirm §3.6 and fix it.** … it is one payload probe away from certain.~~ **Confirmed twice, in opposite directions, and now open again (§3.6.1, 2026-09-08).** The hole is real: an async question never says `Input needed`, and the question is usually gone from the Completed row too. What it is not is one probe away — the open edge is free and the *closing* edge has no hook event at all, so the next step is to establish how the wait ends (an answer, a Skip, a snooze, or Desktop's own ~90 s auto-resolution) before any signal is re-mapped.
 3. **Do not build §4.1.** It cannot express an answer, and it puts this app in the path of every tool call to fail at it.
 4. **Run `shared-app-server` Phase 1, and add one question to it.** The existing plan already starts a daemon and opens two proxy connections with read-only methods. The addition is the server-request routing question in §5.1, which needs a Turn that actually raises an approval and a second connection watching whether it sees it. That single fact decides whether §5.1 is a route or a dead end, and everything downstream is unplanned until it is known. It needs the user's explicit authorisation, because it starts a daemon.
 5. **Keep `Answer in Codex` as the honest fallback, whatever happens.** It is not a placeholder for a feature that is late. It is the true statement for a request this app is holding no connection for, and §3.4 says Codex can put requests back in that state without warning.
 
 ## 7. Exploration record
+
+### 2026-09-08 — re-measurement of the async question (§3.6.1)
+
+- Executor: Claude Opus 5, at the user's request, from a screenshot supplied by a user of another machine
+- Desktop bundle: `/Applications/ChatGPT.app` `26.901.51231`; bundled `codex-cli 0.153.4`
+- Scope of user authorisation: investigate, no code changes; documentation updated in a second, separate instruction
+- Read-only throughout: `strings`/byte-scan of the CLI binary and of `app.asar`, and reads of `~/.codex/sessions`, `~/.codex/.codex-global-state.json`, `~/.codex/state_5.sqlite`, `~/.codex/thread_history_1.sqlite` and `~/.codex/logs_2.sqlite` (opened `mode=ro`)
+- Result: PASS for the re-measurement; §3.6's timing confirmed, two of its conclusions overturned; **BLOCKED** on the three questions at the end of §3.6.1, all of which need a live gated card rather than a file
+- Side effects observed: none. No Turn driven, no daemon started, no Desktop interaction; nothing written outside this repository but the executor's own memory notes, and the byte-scan dumps were deleted afterwards
+- Recommended next step: §6.2 as rewritten — establish the closing edge before re-mapping the signal
 
 ### 2026-09-07 — protocol and schema survey
 
