@@ -116,6 +116,13 @@ That is exactly the line between the two surfaces this document describes, which
 
 **So the process asks the window server for the right to set a cursor from the background, and that is all it asks for.** It does not activate, take key status, or take the keyboard. The property carrying that permission is not in a public header, so it is asked for through `dlsym`: if a release of macOS stops offering it the answer is simply no, and the panel returns to the arrow it drew before — the mark still lifts, still takes the click, and only the pointer stops agreeing. That is the one degradation, and a test asserts the permission is still granted so the day it stops is a failing suite rather than a silence.
 
+**The two tracking scopes are separate (2026-09-09).** The always-active area
+handles entry, exit and movement, so a background control can repair an arrow
+set after its entry. A second area handles `.cursorUpdate` only in the key
+window, where it outranks the scroll view's cursor. AppKit excludes that event
+from `.activeAlways`; combining them was unsupported. Neither path activates
+the app or runs while the pointer is idle.
+
 Drawing the word under keyboard focus as well as under the pointer would be **a correction to §6** of the superseded document, and it is **not made**: with no keyboard path there is no focus to draw it under, and §9.3 — which would have created one — is declined. If the chord is ever wanted, this is one of the three clauses that comes back with it.
 
 ## 4. The body

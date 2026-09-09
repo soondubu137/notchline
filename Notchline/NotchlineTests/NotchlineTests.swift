@@ -8063,31 +8063,44 @@ struct NotchlineTests {
         #expect(BackgroundCursor.isAllowed)
     }
 
-    /// Both mechanisms the hand needs, and neither is the other's fallback.
-    ///
-    /// `.mouseEnteredAndExited` is what carries it on a closed row, where no
-    /// cursor pass runs at all; `.cursorUpdate` is what wins it on an open one,
-    /// where the panel is key and the request body's scroll view owns the
-    /// rectangle under the pointer and would otherwise hand back an arrow.
-    /// Drop either and one of the two surfaces silently loses its pointer.
+    /// Background tracking and the key-window cursor pass have different
+    /// activation scopes: AppKit does not support cursorUpdate in activeAlways.
     @Test @MainActor
     func thePointingHandTracksForBothTheCrossingAndTheCursorPass() {
         let view = PointingHandView()
         view.frame = NSRect(x: 0, y: 0, width: 76, height: 24)
         view.updateTrackingAreas()
+        view.updateTrackingAreas()
 
-        // One area, replaced rather than stacked on every layout pass.
-        #expect(view.trackingAreas.count == 1)
-        let options = view.trackingAreas.first?.options
-        #expect(options?.contains(.mouseEnteredAndExited) == true)
-        #expect(options?.contains(.cursorUpdate) == true)
-        // Delivered to a panel that is neither key nor in the active app, and
-        // kept in step with the row as the list scrolls under it.
-        #expect(options?.contains(.activeAlways) == true)
-        #expect(options?.contains(.inVisibleRect) == true)
-        // It says what the pointer looks like and never takes the click; the
-        // chip underneath is the target.
+        #expect(view.trackingAreas.count == 2, "layout must replace, not accumulate, areas")
+        let background = view.trackingAreas.first { $0.options.contains(.activeAlways) }?.options
+        #expect(background?.contains(.mouseEnteredAndExited) == true)
+        #expect(background?.contains(.mouseMoved) == true)
+        #expect(background?.contains(.cursorUpdate) == false)
+        #expect(background?.contains(.inVisibleRect) == true)
+
+        let keyWindow = view.trackingAreas.first { $0.options.contains(.activeInKeyWindow) }?.options
+        #expect(keyWindow?.contains(.cursorUpdate) == true)
+        #expect(keyWindow?.contains(.activeAlways) == false)
+        #expect(keyWindow?.contains(.inVisibleRect) == true)
         #expect(view.hitTest(.zero) == nil)
+    }
+
+    /// A competing cursor assignment after entry must not leave the control
+    /// showing an arrow for the rest of the crossing.
+    @Test @MainActor
+    func movingInsideAHandRegionRepairsACompetingArrow() throws {
+        let previous = NSCursor.current
+        defer { previous.set() }
+        let view = PointingHandView()
+        let event = try #require(NSEvent.mouseEvent(
+            with: .mouseMoved, location: NSPoint(x: 30, y: 2),
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 0, clickCount: 0, pressure: 0
+        ))
+        NSCursor.arrow.set()
+        view.mouseMoved(with: event)
+        #expect(NSCursor.current == NSCursor.pointingHand)
     }
 
     /// Recheck must report what is true now, not what was true before.

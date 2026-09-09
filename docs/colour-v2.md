@@ -66,10 +66,11 @@ It can no longer say **how the work is split across agents**. That is a real los
 
 > **The same pair now fills the panel's bright ground, inverted** (2026-09-06, [`answer-in-notch.md`](answer-in-notch.md) §3.3). Every ground this surface fills bright — the waiting row's mark, the subagent badge behind it, and the ground `⏎` sits on inside an open row — was `#FFFFFF` with `#0D0D0F` on it and is now `themeInk`'s lit `#DEE8E0` with its unlit `#1B1F1C`, as `NotchPalette.brightGround` / `onBrightGround`. So the ink this section chose is drawn two ways rather than one: **dark ground with light text names a product, light ground with dark text says a row wants a person** — one pair, mirrored, and the second use adds no value the palette did not already have. §1's clause that no product owns a hue is untouched, since neither presentation says *which* product anything is. Request controls now keep that hue under the pointer: `requestHoverGround` multiplies the lit RGB channels by `0.85` at full opacity (approximately `#BDC5BE` for this theme). Quiet request buttons reduce their theme wash from `0.24` to `0.18` on hover. Neither treatment introduces a white fill.
 
-The About panel's `Check for Updates` control also uses this bright pair and
-its same-hue hover (2026-09-09, [`panel-v2.md`](panel-v2.md)). On that separate
-body the fill identifies its sole action; it says nothing about a Turn. The
-previous faint wash disappeared against the panel's black ground.
+The About panel's `Check for Updates` control uses a dark theme fill instead
+(2026-09-09, [`panel-v2.md`](panel-v2.md)): lit ink at `0.40` on black at rest,
+`0.44` on hover, and full lit ink for the label. The original `0.08` / `0.16`
+wash disappeared against black; the bright pair tried next was too prominent.
+The dark pair keeps at least `3:1` fill-to-panel and `4.5:1` text contrast.
 
 One presentation, everywhere, drawn from the existing `Badge` option's geometry:
 

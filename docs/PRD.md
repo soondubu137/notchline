@@ -362,7 +362,16 @@ The V1 settings window contains three confirmed groups:
 
 Settings affect Notchline only. `Update required`, `Version unsupported` and `Disconnected` offer no actions; they have left the collapsed state and appear only in the expanded panel and Settings' product rows (§6.3).
 
-**Settings is also where the app says which build it is**, on the closing line: the marketing version, a stage word while a version is unfinished, and the build number — `Version 0.1.0 Alpha (1)`. This app has no menu bar (below) and therefore no `About Notchline`, so without this line there is nowhere a user can find out what they are running, and no way for a bug report to say which build it is about. Onboarding omits this line and all copy beside its navigation buttons (§5). The stage word is not part of the marketing version, which stays numeric-dotted so it remains valid and comparable ([`figma-design.md`](figma-design.md) §8.0).
+**Settings shows the build version on its closing line**: the marketing
+version, a stage word while a version is unfinished, and the build number —
+`Version 0.1.0 Alpha (1)`. The same version is available in the overlay's About
+body, opened by the brand mark beside the gear. About also shows the ordinary
+copyright and GPL-3.0-or-later notice, a dark `Check for Updates` control
+(currently a placeholder), and a GitHub mark followed by the full clickable
+`https://github.com/soondubu137/notchline` address. Its fixed composition is
+specified in [`panel-v2.md`](panel-v2.md). Onboarding omits the version line and
+all copy beside its navigation buttons (§5). The stage word stays separate
+from the numeric-dotted marketing version so version comparisons remain valid.
 
 **The settings window always opens frontmost, centred on the display Notchline is on.** This product's only permanent interface is in the notch, so the request almost always comes while another app is frontmost, and SwiftUI only orders the window within this app — from outside, clicking the gear appears to do nothing. It lands on **the display the component is currently on** (the one selected in `Show Notchline on`), not the one with keyboard focus: every control in that window changes something the user can only see in the notch, one of them chooses which screen that is, and a change should be in the same glance as what it changes. It is also an answer that cannot change during window ordering, which the focused screen never is — read a step late, it reads Settings' own screen. **It centres on every open, not only when the screen changes**: the cost is overriding a position the user dragged, deliberately chosen, because a window that is sometimes centred and sometimes where it was last is a window you have to look for every time. **And it is a clean appearance**: the window is always positioned while still invisible — moved to the currently correct screen the moment it closes — so the next open is already correct on its first frame. Positioning it after it appears is the flash the user sees: it appears on the screen it was last closed on and jumps a frame or two later (measured about 50 ms). If it is on another Space it is brought to the current one, rather than sending the user there.
 

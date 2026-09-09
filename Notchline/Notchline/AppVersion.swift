@@ -56,9 +56,10 @@ enum AppVersion {
         return "Version \(name), build \(build)"
     }
 
-    /// The About panel names the licence without an author credit. The full
-    /// copyright notice remains in the bundle metadata and README.
-    static let licenceNotice = "Licensed under GPL-3.0-or-later, without warranty."
+    /// The About panel keeps the author credit in the ordinary copyright line.
+    static var copyrightNotice: String? { infoString(for: "NSHumanReadableCopyright") }
+
+    static let repositoryURL = URL(string: "https://github.com/soondubu137/notchline")!
 
     /// Nothing is guessed: a bundle that cannot say which version it is draws
     /// no version at all, rather than a line reading `Unknown`.

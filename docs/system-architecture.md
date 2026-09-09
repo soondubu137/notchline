@@ -833,6 +833,26 @@ So latching activates this app for as long as a row is open and activates the pr
 
 ### The cursor is the same rule, and hover cannot pay that price (2026-09-06)
 
+**Tracking scopes are separate (2026-09-09).** `PointingHandView` uses one
+`.activeAlways` area for entry, exit and movement, and one `.activeInKeyWindow`
+area for `.cursorUpdate`. AppKit explicitly excludes `.cursorUpdate` from
+`.activeAlways`; the earlier combined area relied on an unsupported pairing.
+Movement inside the background area reasserts the hand if another cursor
+assignment followed entry. The key-window area participates in AppKit's cursor
+pass above scroll-view cursor rectangles. Both areas follow the visible rect,
+are replaced on layout, and pass clicks through. There is no timer or activation.
+The tracking-scope and competing-arrow tests pin these two responsibilities.
+
+A bounded native probe exercised the actual `NotchOverlayView` in a
+non-activating panel, entering both About controls from all four sides, first
+with the app inactive and the panel non-key, then with both active/key. Entry,
+movement and exit had the expected cursor state in all 16 crossings. The same
+probe also passed with the old tracking configuration, so it did not isolate
+the reported bottom-entry failure. The correction removes the unsupported
+scope pairing and adds recovery from a competing arrow; the regression test
+pins that recovery independently of reproducing the original event ordering.
+
+
 **`NSCursor.set()` is ignored outside the active application**, exactly as keys are. Measured on a panel built like `OverlayPanel` — non-activating, level `25`, accessory app: `mouseEntered` lands on time, `set()` returns, and the pointer in the next screenshot is unchanged; activate the application and the same call takes **with the panel still not key**, so the gate is activation rather than key status. It is why `PointingHandCursor` was right on every control inside an open row — those are latched, and latching activates — and wrong on the mark of a closed row, where the panel only ever hovers. Verifying the fixed half is what let the broken half ship.
 
 The answer above is not available here. Hover browses (`answer-in-notch.md` §9.4), and taking the keyboard off the application the person is typing in to change a pointer image is not a trade this surface makes. So `BackgroundCursor` asks the window server's connection for the right to set a cursor from the background instead, and asks for nothing else: no activation, no key status, no keyboard. **The property is private** — `CGSSetConnectionProperty(_:_:"SetsCursorInBackground":_:)`, resolved through `dlsym` so a macOS that withdraws it answers `false` and the panel returns to the arrow it drew before, rather than failing to launch. `theWindowServerLetsAnInactiveApplicationSetTheCursor()` is what makes that withdrawal a failing suite instead of a silence, because nothing else about the panel would change.

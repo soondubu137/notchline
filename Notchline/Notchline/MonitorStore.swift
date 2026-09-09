@@ -822,11 +822,7 @@ enum PanelMetrics {
 
     /// The air above the lockup, measured from the rule that closes the band.
     static let aboutTopMargin: CGFloat = 28
-    /// And below the control, which is the panel's own bottom edge.
-    ///
-    /// Shorter than the top, because the control already carries `8.5` of its
-    /// own inside a `28` tile around a `13` pt line: the ink stops about `24 +
-    /// 8.5` above the edge, against the lockup's flush `28`.
+    /// Below the repository link, at the panel's own bottom edge.
     static let aboutBottomMargin: CGFloat = 24
     /// Between the lockup and the first line under it.
     static let aboutLockupTextGap: CGFloat = 20
@@ -834,6 +830,9 @@ enum PanelMetrics {
     static let aboutTextLineGap: CGFloat = 4
     /// Between that block and the control.
     static let aboutTextControlGap: CGFloat = 22
+    /// A separate, compact line below the update control for the repository.
+    static let aboutControlLinkGap: CGFloat = 16
+    static let aboutLinkHeight: CGFloat = 20
 
     /// One line of the About panel's text, at the height SwiftUI lays a single
     /// line of ``captionFont`` out at.
@@ -858,7 +857,7 @@ enum PanelMetrics {
     ///
     /// Every other height here is composed from a row count, a queue and a
     /// footer, and changes while the user watches. This one is the app naming
-    /// itself: a lockup, the version, the licence notice and one control, none
+    /// itself: a lockup, the version, the copyright notice and two controls, none
     /// of which the machine can add to or take away. So it is a constant, and
     /// a session starting behind an open About panel moves nothing.
     static var aboutPanelHeight: CGFloat {
@@ -869,6 +868,8 @@ enum PanelMetrics {
             + aboutTextLineGap
             + aboutTextControlGap
             + answerRowHeight
+            + aboutControlLinkGap
+            + aboutLinkHeight
             + aboutBottomMargin
     }
     /// The status matrix is a fixed size, not a share of the menu bar.

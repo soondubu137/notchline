@@ -173,11 +173,19 @@ The band's trailing side takes a second control — **the brand mark, to the lef
 of the gear** — and what it opens is not a region added to this panel but a
 **body that replaces the one below the band**. There is no list, no queue and
 no footer while it is open; there is a horizontal lockup, the version, the
-licence notice, and one control.
+copyright and licence notice, an update control, and a repository link.
 
-The notice is one sentence: `Licensed under GPL-3.0-or-later, without warranty.`
-It omits the author credit; the full copyright notice remains in the bundle
-metadata and README, and `LICENSE` retains the full terms.
+The notice is the bundle's ordinary copyright line:
+`Copyright © 2026 Yinfeng Lu. Licensed under GPL-3.0-or-later, without warranty.`
+The name has the same caption styling as the licence, without a separate author
+heading. `LICENSE` retains the full terms.
+
+Below the update control, a GitHub mark precedes the full clickable address:
+`https://github.com/soondubu137/notchline`. The label and destination come from
+`AppVersion.repositoryURL`; the whole row is one link. The decorative mark is
+GitHub's unmodified white Invertocat SVG from the
+[official logo package](https://brand.github.com/foundations/logo), bundled as
+`GitHubMark` and drawn at its original aspect ratio inside a `14 × 14` box.
 
 **Why it is a body and not a sheet.** Every region in §2 answers to what is
 running, and the composed guarantee in §4 is about which of them the user
@@ -187,7 +195,7 @@ with something else drawn on top. Replacing the body makes the arithmetic one
 line:
 
 ```
-about panel  =  46  +  190
+about panel  =  46  +  226
 ```
 
 | Term | Value | Why |
@@ -199,12 +207,14 @@ about panel  =  46  +  190
 | Between them | `4` | The version and the notice are one block of two lines, not two things |
 | Text to control | `22` | |
 | The control | `28` | `answerRowHeight` — the open row's own control height, at `controlCornerRadius` and `controlHorizontalPadding`. No new constant |
-| Bottom margin | `24` | Shorter than the top because the control carries `8.5` of its own inside the tile |
+| Control to repository link | `16` | Separates the update action from the repository address |
+| Repository link | `20` | One caption line and a `14` pt GitHub mark |
+| Bottom margin | `24` | Space below the repository link |
 
 **It is the only body on this panel that is a constant.** A session arriving, a
 row opening, the queue unfolding and the quota table opening all move the
 listed panel; none of them moves this one, and
-`theAboutPanelIsOneHeightWhateverIsRunning` is the assertion. `236` is also
+`theAboutPanelIsOneHeightWhateverIsRunning` is the assertion. `272` is also
 under §4's `308`, so **§6's second box still stands as written**: opening the
 quota table remains the only thing that takes this panel *past* its resting
 height, and nothing the machine observes moves it either way.
@@ -216,11 +226,14 @@ which is a different claim from *not built yet* — and §1 rule 2's reading of
 "absent rather than greyed out" is about a promise the panel makes about the
 work it is showing, not about the app's own furniture.
 
-**Three things it re-uses and one asset it adds.** The control uses the existing
-`brightGround` / `onBrightGround` theme pair, deepening to `requestHoverGround`
-on hover. The former `0.08` / `0.16` theme wash blended into the black panel;
-the opaque fill keeps the button visible in both states and follows the user's
-theme colour. The notice is the caption face, the rule is the band's own —
+**The update control stays dark.** Its theme-ink fill is `0.40` at rest and
+`0.44` on hover, with the full lit theme ink for its text. Against black these
+are approximately `#595D5A` and `#626663`, with text contrast of `5.35:1` and
+`4.65:1`. The original `0.08` / `0.16` wash was too faint; the subsequent bright
+fill was too prominent. The new pair keeps both states dark and distinguishable.
+
+**The other elements keep the panel's existing vocabulary.** The notice is the
+caption face, the rule is the band's own —
 and the mark on the band is the brand package's **menu bar template**
 (`design/assets/05-menubar`), resampled to `13 × 13` so it draws `1 : 1` at
 both scales. It is black at the level ramp's own alphas, so a template tint
@@ -228,14 +241,6 @@ reproduces `1.00 / 0.80 / 0.60 / 0.40 / 0.20` in whatever ink the control is
 currently in: `#7C7C80` at rest, white at `0.98` while the panel is open or
 under the pointer. Redrawing the same five columns a second time in Swift was
 the alternative, and two drawings of one mark are free to disagree.
-
-**The ladder weight is the one place this diverges from a built value.** A
-quiet control on a washed open row rests at ink `0.24` and *darkens* to `0.18`
-under the pointer, which is right against the row's `#242524` and wrong on
-black — it would be the only control on this surface that dims when the
-pointer reaches it. On the panel's own black the ladder runs the way
-[`colour-v2.md`](colour-v2.md) §15 drew it: `0.08` at rest, `0.16` on hover,
-which is the weight a row washes at.
 
 **Only the mark closes it.** The panel opens on hover and shuts the moment the
 pointer leaves, so the flag survives the collapse: a body cleared on collapse
@@ -253,7 +258,7 @@ same body a connected panel draws. What the second control costs that form is
 [`expanded-header-v2.md`](expanded-header-v2.md) §6's business: `64` at the
 reference bar, spent in the state where a fresh install lives.
 
-- [x] The About panel is `610 × 236` with nothing live, with three live rows, with a row open, with the queue unfolded and with the quota table open.
+- [x] The About panel is `610 × 272` with nothing live, with three live rows, with a row open, with the queue unfolded and with the quota table open.
 - [x] Collapsing and re-expanding leaves it open; a second click on the mark is the only thing that closes it.
 - [x] The lockup stands in the composition's own place, nothing is drawn in either margin, and the band's closing rule is drawn at the top (`theAboutPanelSpendsItsHeightWhereItSaysItDoes`).
 - [x] The mark draws `#7C7C80` while the list is showing and white at `0.98` while the About panel is, with a ground under it only when the pointer is on it.

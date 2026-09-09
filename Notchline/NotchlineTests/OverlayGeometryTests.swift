@@ -553,7 +553,7 @@ struct OverlayGeometryTests {
     /// **The About panel draws inside the height the window was sized to, and
     /// spends it where the composition says.**
     ///
-    /// ``PanelMetrics/aboutPanelHeight`` is a sum of nine terms and would
+    /// ``PanelMetrics/aboutPanelHeight`` is a sum of layout metrics and would
     /// agree with itself however the body were laid out — the panel could be
     /// the right height with its lockup pressed against the rule and its
     /// control cropped by the bottom edge, and nothing in the arithmetic would
@@ -621,7 +621,7 @@ struct OverlayGeometryTests {
         // And the bottom margin, which the control has to stop above.
         #expect(
             brightest(from: height - PanelMetrics.aboutBottomMargin + 1, to: height - 1) < 0.05,
-            "the About panel's control runs into its bottom margin"
+            "the About panel's content runs into its bottom margin"
         )
     }
 }

@@ -196,6 +196,13 @@ enum NotchPalette {
         static let controlRestFillOpacity: Double = 0.24
         static let controlHoverFillOpacity: Double = 0.18
 
+        /// Dark controls on the panel's black ground. The old `0.08` / `0.16`
+        /// pair disappeared into it; the bright theme fill was too prominent.
+        /// This pair keeps the fill distinct from black (at least 3:1) and
+        /// the lit theme label legible (at least 4.5:1), including on hover.
+        static let plainControlRestFillOpacity: Double = 0.40
+        static let plainControlHoverFillOpacity: Double = 0.44
+
         /// Ease-in-out both ways -- the same gentle acceleration and
         /// deceleration whether the emphasis is arriving or leaving -- and
         /// still faster to leave than to arrive, the one asymmetry worth

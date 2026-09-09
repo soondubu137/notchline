@@ -865,13 +865,18 @@ struct AboutPanelContent: View {
                     .padding(.top, PanelMetrics.aboutLockupTextGap)
             }
 
-            Text(AppVersion.licenceNotice)
-                .font(Font(PanelMetrics.captionFont))
-                .foregroundStyle(NotchPalette.label)
-                .padding(.top, PanelMetrics.aboutTextLineGap)
+            if let notice = AppVersion.copyrightNotice {
+                Text(notice)
+                    .font(Font(PanelMetrics.captionFont))
+                    .foregroundStyle(NotchPalette.label)
+                    .padding(.top, PanelMetrics.aboutTextLineGap)
+            }
 
             AboutUpdateControl()
                 .padding(.top, PanelMetrics.aboutTextControlGap)
+
+            AboutRepositoryLink()
+                .padding(.top, PanelMetrics.aboutControlLinkGap)
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, PanelMetrics.aboutTopMargin)
@@ -890,7 +895,7 @@ struct AboutPanelContent: View {
     }
 }
 
-/// The About panel's one control.
+/// The About panel's update control.
 ///
 /// **It does nothing, and that is the whole of it for now**: no update
 /// mechanism is wired in, so the button is the place one will land rather than
@@ -907,7 +912,7 @@ private struct AboutUpdateControl: View {
         } label: {
             Text("Check for Updates")
                 .font(Font(PanelMetrics.requestControlFont))
-                .foregroundStyle(NotchPalette.onBrightGround)
+                .foregroundStyle(NotchPalette.themeInk.on)
                 .padding(.horizontal, PanelMetrics.controlHorizontalPadding)
                 .frame(height: PanelMetrics.answerRowHeight)
                 .background(
@@ -916,9 +921,11 @@ private struct AboutUpdateControl: View {
                         style: .continuous
                     )
                     .fill(
-                        isHovered
-                            ? NotchPalette.requestHoverGround
-                            : NotchPalette.brightGround
+                        NotchPalette.themeInk.on.opacity(
+                            isHovered
+                                ? NotchPalette.RowEmphasis.plainControlHoverFillOpacity
+                                : NotchPalette.RowEmphasis.plainControlRestFillOpacity
+                        )
                     )
                 )
                 .overlay(PointingHandCursor())
@@ -929,6 +936,31 @@ private struct AboutUpdateControl: View {
             .easeOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration),
             value: isHovered
         )
+    }
+}
+
+/// The complete address is both the label and the destination.
+private struct AboutRepositoryLink: View {
+    @State private var isHovered = false
+
+    var body: some View {
+        Link(destination: AppVersion.repositoryURL) {
+            HStack(spacing: 6) {
+                Image("GitHubMark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 14, height: 14)
+                    .accessibilityHidden(true)
+                Text(AppVersion.repositoryURL.absoluteString)
+                    .font(Font(PanelMetrics.captionFont))
+            }
+            .foregroundStyle(isHovered ? NotchPalette.themeInk.on : NotchPalette.reading)
+            .frame(height: PanelMetrics.aboutLinkHeight)
+            .contentShape(Rectangle())
+            .overlay(PointingHandCursor())
+            .onHover { isHovered = $0 }
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -3935,8 +3967,11 @@ private struct ProductBadge: View {
 /// 2026-09-06, an option row washed correctly under the pointer and handed
 /// back an arrow, because `mouseEntered` had set the hand once and the next
 /// mouse-moved reset it. A `.cursorUpdate` area takes part in that same pass
-/// and outranks the rectangle, so the hand survives; the entered/exited pair
-/// stays for the unlatched panel, where the pass never runs at all.
+/// and outranks the rectangle, so the hand survives. It has its own
+/// `.activeInKeyWindow` area: AppKit does not support `.cursorUpdate` with
+/// `.activeAlways`. The background area handles entry, exit and movement;
+/// movement repairs a competing arrow after entry without waiting for the
+/// pointer to leave and re-enter. Neither area polls or activates the app.
 ///
 /// **`set()` rather than `push()`/`pop()`**, deliberately: the cursor stack is
 /// global to the process and this view lives on a row that can retire, and on
@@ -4010,6 +4045,7 @@ enum BackgroundCursor {
 
 final class PointingHandView: NSView {
     private var tracking: NSTrackingArea?
+    private var cursorTracking: NSTrackingArea?
 
     /// `.inVisibleRect` keeps the area in step with the row as the list
     /// scrolls; without it the rectangle is the one captured here and a
@@ -4017,15 +4053,24 @@ final class PointingHandView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
+        if let cursorTracking { removeTrackingArea(cursorTracking) }
         let area = NSTrackingArea(
             rect: .zero,
-            options: [
-                .activeAlways, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect
-            ],
+            options: [.activeAlways, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
             owner: self
         )
         addTrackingArea(area)
         tracking = area
+
+        // AppKit explicitly excludes cursorUpdate from activeAlways. Keep its
+        // key-window cursor pass separate from background pointer tracking.
+        let cursorArea = NSTrackingArea(
+            rect: .zero,
+            options: [.activeInKeyWindow, .cursorUpdate, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(cursorArea)
+        cursorTracking = cursorArea
     }
 
     /// The key window's own cursor pass, which is the one the scroll view under
@@ -4042,6 +4087,12 @@ final class PointingHandView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func mouseEntered(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    /// Reassert the hand after entry while moving within a background panel,
+    /// where the key-window cursor pass cannot repair a competing arrow.
+    override func mouseMoved(with event: NSEvent) {
         NSCursor.pointingHand.set()
     }
 
